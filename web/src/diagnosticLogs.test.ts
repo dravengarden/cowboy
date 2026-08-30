@@ -25,6 +25,12 @@ Deno.test("diagnostic logs default to serious events without narrowing kind or r
   assertEquals(DEFAULT_DIAGNOSTIC_LOG_FILTERS.agents, []);
 });
 
+Deno.test("diagnostic logs do not poll or render an empty state beside request errors", async () => {
+  const source = await Deno.readTextFile(new URL("./UsageLogs.tsx", import.meta.url));
+  assertEquals(source.includes("globalThis.setInterval"), false);
+  assertEquals(source.includes("!error && !loading && logs.length === 0"), true);
+});
+
 Deno.test("critical and error use distinct severity accents across log dots and filters", async () => {
   const source = await Deno.readTextFile(new URL("./UsageLogs.tsx", import.meta.url));
   assertEquals(source.includes('critical: (theme) => theme.palette.mode === "dark" ? "#ff4d6d" : "#c9184a"'), true);

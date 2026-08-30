@@ -3351,7 +3351,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         "/api/metrics" | "/api/logs" | "/api/observability/incidents"
     ) || path.starts_with("/api/logs/")
     {
-        return RouteAuth::AdminOperator;
+        return RouteAuth::ProductOrAdminOperator;
     }
     if path == "/api/auth/setup"
         || path == "/api/auth/oidc/start"
@@ -15190,10 +15190,18 @@ mod product_auth_api_tests {
             classify_route(&Method::GET, "/api/machines/m-123/deployment-health"),
             RouteAuth::Public
         );
-        assert_eq!(
-            classify_route(&Method::GET, "/api/metrics"),
-            RouteAuth::AdminOperator
-        );
+        for path in [
+            "/api/metrics",
+            "/api/logs",
+            "/api/logs/log-123",
+            "/api/observability/incidents",
+        ] {
+            assert_eq!(
+                classify_route(&Method::GET, path),
+                RouteAuth::ProductOrAdminOperator,
+                "observability route {path} must accept product and legacy admin operators",
+            );
+        }
         assert_eq!(
             classify_route(&Method::GET, "/api/auth/tokens"),
             RouteAuth::Product

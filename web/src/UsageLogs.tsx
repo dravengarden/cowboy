@@ -287,11 +287,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
     const controller = new AbortController();
     setExpandedId(null);
     void loadPage(undefined, false, controller.signal);
-    const timer = globalThis.setInterval(() => void loadPage(undefined, false), 30_000);
-    return () => {
-      controller.abort();
-      globalThis.clearInterval(timer);
-    };
+    return () => controller.abort();
   }, [loadPage]);
 
   const openFilters = (): void => {
@@ -426,7 +422,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
       </Sheet>
       <Divider />
       {error && <Typography variant="caption" color="error.main">{error}</Typography>}
-      {!loading && logs.length === 0 && (
+      {!error && !loading && logs.length === 0 && (
         <Typography variant="body2" color="text.secondary">No diagnostic activity matches these filters.</Typography>
       )}
       <Stack spacing={0.75}>
