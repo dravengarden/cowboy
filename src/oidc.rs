@@ -1,6 +1,6 @@
 //! Cardea OIDC Authorization Code + PKCE consumer profile.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read as _;
 use std::net::IpAddr;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
@@ -37,6 +37,9 @@ const MAX_SECRET_BYTES: u64 = 8_192;
 const MAX_TOKEN_RESPONSE_BYTES: usize = 32 * 1_024;
 const MAX_PAR_RESPONSE_BYTES: usize = 8 * 1_024;
 const MAX_JWT_BYTES: usize = 8_192;
+const MAX_AUTHENTICATION_METHODS: usize = 16;
+const MAX_AUTHENTICATION_METHOD_BYTES: usize = 64;
+const MAX_AUTHENTICATION_CONTEXT_BYTES: usize = 256;
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
 #[derive(Debug, Deserialize)]
@@ -275,8 +278,12 @@ struct TokenResponse {
 
 #[derive(Debug)]
 pub struct VerifiedIdentity {
+    pub issuer: String,
     pub subject: String,
-    pub authenticated_at: u64,
+    pub issued_at: u64,
+    pub authenticated_at: Option<u64>,
+    pub authentication_context: Option<String>,
+    pub authentication_methods: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -325,6 +332,10 @@ struct IdTokenClaims {
     exp: u64,
     #[serde(default)]
     auth_time: Option<u64>,
+    #[serde(default)]
+    acr: Option<String>,
+    #[serde(default)]
+    amr: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -999,10 +1010,7 @@ impl OidcProvider {
                 }
             }
         }
-        Some(VerifiedIdentity {
-            subject: decoded.claims.sub,
-            authenticated_at: decoded.claims.auth_time.unwrap_or(decoded.claims.iat),
-        })
+        Some(verified_identity(decoded.claims))
     }
 }
 
@@ -1616,6 +1624,16 @@ fn decode_id_token(
         || claims_value
             .auth_time
             .is_some_and(|authenticated_at| authenticated_at > claims_value.iat)
+        || claims_value
+            .acr
+            .as_deref()
+            .is_some_and(|value| !valid_label(value, MAX_AUTHENTICATION_CONTEXT_BYTES))
+        || claims_value.amr.len() > MAX_AUTHENTICATION_METHODS
+        || claims_value
+            .amr
+            .iter()
+            .any(|value| !valid_label(value, MAX_AUTHENTICATION_METHOD_BYTES))
+        || claims_value.amr.iter().collect::<BTreeSet<_>>().len() != claims_value.amr.len()
         || claims_value.exp <= now
         || claims_value.exp > claims_value.iat.checked_add(3_600)?
     {
@@ -1652,10 +1670,18 @@ fn verify_id_token(
         .ok()?
         .verify(decoded.signing_input.as_bytes(), &signature)
         .ok()?;
-    Some(VerifiedIdentity {
-        subject: decoded.claims.sub,
-        authenticated_at: decoded.claims.auth_time.unwrap_or(decoded.claims.iat),
-    })
+    Some(verified_identity(decoded.claims))
+}
+
+fn verified_identity(claims: IdTokenClaims) -> VerifiedIdentity {
+    VerifiedIdentity {
+        issuer: claims.iss,
+        subject: claims.sub,
+        issued_at: claims.iat,
+        authenticated_at: claims.auth_time,
+        authentication_context: claims.acr,
+        authentication_methods: claims.amr,
+    }
 }
 
 fn encode_json<T: Serialize>(value: &T) -> Option<String> {
@@ -1711,7 +1737,7 @@ fn valid_oidc_token(value: &str, maximum: usize) -> bool {
 }
 
 fn valid_label(value: &str, maximum: usize) -> bool {
-    (1..=maximum).contains(&value.chars().count())
+    (1..=maximum).contains(&value.len())
         && value.trim() == value
         && !value.chars().any(char::is_control)
 }
@@ -2137,6 +2163,8 @@ mod tests {
             "iat": 1_000,
             "exp": 1_300,
             "auth_time": 900,
+            "acr": "urn:cardea:assurance:manual-approval",
+            "amr": ["pwd", "hwk"],
         }))
         .unwrap();
         let input = format!("{header}.{claims}");
@@ -2154,8 +2182,18 @@ mod tests {
             1_100,
         )
         .unwrap();
+        assert_eq!(identity.issuer, "https://cardea.example");
         assert_eq!(identity.subject, "draven");
-        assert_eq!(identity.authenticated_at, 900);
+        assert_eq!(identity.issued_at, 1_000);
+        assert_eq!(identity.authenticated_at, Some(900));
+        assert_eq!(
+            identity.authentication_context.as_deref(),
+            Some("urn:cardea:assurance:manual-approval")
+        );
+        assert_eq!(
+            identity.authentication_methods,
+            vec!["pwd".to_owned(), "hwk".to_owned()]
+        );
         assert!(
             super::verify_id_token(
                 &token,
@@ -2210,18 +2248,19 @@ mod tests {
         let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(signing.sign(input.as_bytes()).to_bytes());
         let token = format!("{input}.{signature}");
-        assert!(
-            super::verify_id_token(
-                &token,
-                signing.verifying_key().as_bytes(),
-                "cardea-2026",
-                "https://cardea.example",
-                "cowboy-production",
-                &"a".repeat(64),
-                1_100,
-            )
-            .is_some()
-        );
+        let identity = super::verify_id_token(
+            &token,
+            signing.verifying_key().as_bytes(),
+            "cardea-2026",
+            "https://cardea.example",
+            "cowboy-production",
+            &"a".repeat(64),
+            1_100,
+        )
+        .unwrap();
+        assert_eq!(identity.authenticated_at, None);
+        assert_eq!(identity.authentication_context, None);
+        assert!(identity.authentication_methods.is_empty());
 
         let claims_without_azp = super::encode_json(&serde_json::json!({
             "iss": "https://cardea.example",
@@ -2247,6 +2286,69 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn oidc_id_token_rejects_ambiguous_or_unbounded_assurance_claims() {
+        let signing = SigningKey::from_bytes(&[10; 32]);
+        let header = super::encode_json(&serde_json::json!({
+            "alg": "EdDSA",
+            "kid": "cardea-2026",
+        }))
+        .unwrap();
+        let sign = |claims| {
+            let claims = super::encode_json(&claims).unwrap();
+            let input = format!("{header}.{claims}");
+            let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(signing.sign(input.as_bytes()).to_bytes());
+            format!("{input}.{signature}")
+        };
+        let verify = |token: &str| {
+            super::verify_id_token(
+                token,
+                signing.verifying_key().as_bytes(),
+                "cardea-2026",
+                "https://cardea.example",
+                "cowboy-production",
+                &"a".repeat(64),
+                1_100,
+            )
+        };
+
+        let duplicate_methods = sign(serde_json::json!({
+            "iss": "https://cardea.example",
+            "sub": "draven",
+            "aud": "cowboy-production",
+            "nonce": "a".repeat(64),
+            "iat": 1_000,
+            "exp": 1_300,
+            "amr": ["pwd", "pwd"],
+        }));
+        assert!(verify(&duplicate_methods).is_none());
+
+        let oversized_context = sign(serde_json::json!({
+            "iss": "https://cardea.example",
+            "sub": "draven",
+            "aud": "cowboy-production",
+            "nonce": "a".repeat(64),
+            "iat": 1_000,
+            "exp": 1_300,
+            "acr": "x".repeat(super::MAX_AUTHENTICATION_CONTEXT_BYTES + 1),
+        }));
+        assert!(verify(&oversized_context).is_none());
+
+        let too_many_methods = sign(serde_json::json!({
+            "iss": "https://cardea.example",
+            "sub": "draven",
+            "aud": "cowboy-production",
+            "nonce": "a".repeat(64),
+            "iat": 1_000,
+            "exp": 1_300,
+            "amr": (0..=super::MAX_AUTHENTICATION_METHODS)
+                .map(|index| format!("method-{index}"))
+                .collect::<Vec<_>>(),
+        }));
+        assert!(verify(&too_many_methods).is_none());
     }
 
     #[test]

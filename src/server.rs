@@ -4426,9 +4426,14 @@ async fn api_auth_oidc_callback_inner(
         }
     };
     tracing::info!(
+        provider_id,
         username = user.username,
+        issuer = identity.issuer,
         subject = identity.subject,
-        authenticated_at = identity.authenticated_at,
+        issued_at = identity.issued_at,
+        authenticated_at = ?identity.authenticated_at,
+        authentication_context = ?identity.authentication_context,
+        authentication_methods = ?identity.authentication_methods,
         ok = true,
         "product_oidc_login"
     );

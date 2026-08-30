@@ -116,6 +116,14 @@ time, signature, and configured subject. JWKS responses are HTTPS-only and
 size-bounded. A provider email claim is descriptive and never becomes the
 identity key.
 
+After verification, the built-in driver normalizes only security evidence that
+Cowboy can independently validate: Provider ID, exact issuer and subject,
+ID-token issuance time, optional `auth_time`, optional `acr`, and a bounded set
+of unique `amr` values. Missing `auth_time` remains unknown; token issuance time
+must never be substituted as proof of a recent upstream authentication. These
+claims are audit and policy inputs only. The package still cannot select a
+Cowboy account, assert a role, or issue or extend a Cowboy session.
+
 Apple `form_post` callbacks are accepted in addition to query callbacks.
 Provider discovery is deliberately not trusted at runtime in v1: endpoints are
 reviewable signed package data, while rotating public signing keys still come
@@ -132,6 +140,46 @@ release the one-time OIDC code. A Cardea login session alone is not approval.
 Other approval systems should expose the same security properties behind OIDC
 rather than asking Cowboy to execute provider code or accept a
 provider-specific session token.
+
+## Custom logic and provider state
+
+Authentication Provider packages remain data-only in v1. A custom email,
+Google, Apple, enterprise, or private identity system should expose an OIDC
+facade and keep its provider-owned database behind that service. This gives the
+provider full freedom over enrollment, mail delivery, approval, account
+recovery, and upstream credentials without placing that code or its database
+authority inside Cowboy's session-signing process.
+
+Cowboy deliberately does not expose generic `save JSON`, `get JSON`, SQL, or
+database-handle APIs to these packages. Such an API would turn a presentation
+and protocol manifest into Controller code execution, make package compromise a
+Cowboy database compromise, and create an ambiguous second source of truth for
+accounts and sessions.
+
+If a future protocol has a demonstrated need that cannot be represented by a
+built-in driver or a provider-side OIDC facade, its executable adapter must be
+isolated out of process or in a restricted WebAssembly runtime. The only
+eligible persistent interface is a host-owned, versioned state service with all
+of these properties:
+
+- the namespace is fixed by plugin ID, exact artifact digest, deployment, and
+  optional upstream subject; the adapter cannot choose or enumerate another
+  namespace;
+- the closed operations are `get`, compare-and-swap `put`, and
+  compare-and-swap `delete`; no SQL, joins, prefix scans, or database handles;
+- keys and canonical JSON values are size-bounded, writes have a per-plugin
+  quota, and authentication-transaction records require a short expiry;
+- values are encrypted and integrity-bound to the namespace by the host, while
+  every mutation is audited without logging secrets;
+- Cowboy account, grant, role, credential, token, Passkey, and session records
+  are never addressable; and
+- stored JSON is always untrusted state. It can never itself mean
+  `authenticated`, select a local user, or authorize session issuance.
+
+This state service is a reserved extension boundary, not a v1 package
+capability. It will be added only with a concrete non-OIDC protocol, a separate
+versioned contract, quotas, lifecycle semantics, and adversarial tests. Until
+then, a provider service owns provider state and Cowboy owns Cowboy state.
 
 ## Login UI
 
