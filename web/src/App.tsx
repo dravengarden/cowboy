@@ -5890,9 +5890,11 @@ function SettingsShell({
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
-                    <ProductTokensPanel />
-                    <ProductPasskeysPanel />
-                    <ProductAccountMenu />
+                    <Stack data-mobile-account-sections spacing={2}>
+                        <ProductTokensPanel />
+                        <ProductPasskeysPanel />
+                        <ProductAccountMenu />
+                    </Stack>
                 </MobileSettingsRoute>
             </Stack>
             )}

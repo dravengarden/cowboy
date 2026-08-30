@@ -59,3 +59,17 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes('id="account"'));
   assert(appSource.includes('data-settings-section="code"'));
 });
+
+Deno.test("mobile Account keeps its independent cards visibly separated", () => {
+  const routeStart = appSource.indexOf(
+    '<MobileSettingsRoute\n                    id="account"',
+  );
+  const routeEnd = appSource.indexOf("</MobileSettingsRoute>", routeStart);
+  assert(routeStart >= 0);
+  assert(routeEnd > routeStart);
+  const accountRoute = appSource.slice(routeStart, routeEnd);
+  assert(
+    /<Stack data-mobile-account-sections spacing=\{2\}>[\s\S]*<ProductTokensPanel \/>[\s\S]*<ProductPasskeysPanel \/>[\s\S]*<ProductAccountMenu \/>[\s\S]*<\/Stack>/u
+      .test(accountRoute),
+  );
+});
