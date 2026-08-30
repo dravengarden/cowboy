@@ -3,7 +3,7 @@ import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
   NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
-  openAuthenticationUrl,
+  openAuthenticationUrlConfirmed,
 } from "../openExternal";
 import {
   authApi,
@@ -200,13 +200,14 @@ export async function runNativeOidc(
   );
   try {
     if (flow.signal.aborted) throw new DOMException("Cancelled", "AbortError");
-    openAuthenticationUrl(
+    await openAuthenticationUrlConfirmed(
       nativeOidcStartUrl(
         location.origin,
         provider,
         codeBinding.challenge,
         handoffBinding.challenge,
       ),
+      flow.signal,
     );
     return await waitForNativeOidc(
       provider,

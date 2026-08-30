@@ -1,9 +1,13 @@
+import { assertEquals, assertRejects } from "jsr:@std/assert";
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
   hasNativeExternalOpener,
   openAuthenticationUrl,
+  openAuthenticationUrlConfirmed,
   openExternalUrl,
+  NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
+  NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
   safeAuthenticationUrl,
   safeExternalUrl,
   shouldRouteAuthenticationClick,
@@ -77,6 +81,57 @@ Deno.test("Provider authentication prefers and closes the native Safari sheet", 
   } finally {
     delete root.__cowboyOpenAuthenticationBrowser;
     delete root.__cowboyCloseAuthenticationBrowser;
+  }
+});
+
+Deno.test("bridge v2 confirms that UIKit presented the authentication sheet", async () => {
+  let opened = "";
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+    __cowboyAuthenticationBrowserBridgeVersion?: number;
+  };
+  root.__cowboyAuthenticationBrowserBridgeVersion = 2;
+  root.__cowboyOpenAuthenticationBrowser = (url) => {
+    opened = url;
+    queueMicrotask(() =>
+      globalThis.dispatchEvent(
+        new Event(NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT),
+      )
+    );
+    return true;
+  };
+  try {
+    await openAuthenticationUrlConfirmed("https://example.com/authorize");
+    assertEquals(opened, "https://example.com/authorize");
+  } finally {
+    delete root.__cowboyOpenAuthenticationBrowser;
+    delete root.__cowboyAuthenticationBrowserBridgeVersion;
+  }
+});
+
+Deno.test("bridge v2 rejects a silently failed UIKit presentation", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+    __cowboyAuthenticationBrowserBridgeVersion?: number;
+  };
+  root.__cowboyAuthenticationBrowserBridgeVersion = 2;
+  root.__cowboyOpenAuthenticationBrowser = () => {
+    queueMicrotask(() =>
+      globalThis.dispatchEvent(
+        new Event(NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT),
+      )
+    );
+    return true;
+  };
+  try {
+    await assertRejects(
+      () => openAuthenticationUrlConfirmed("https://example.com/authorize"),
+      Error,
+      "could not open",
+    );
+  } finally {
+    delete root.__cowboyOpenAuthenticationBrowser;
+    delete root.__cowboyAuthenticationBrowserBridgeVersion;
   }
 });
 

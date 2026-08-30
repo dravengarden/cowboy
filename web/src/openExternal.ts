@@ -15,11 +15,17 @@ type NativeGlobals = {
   __TAURI_INTERNALS__?: TauriInternals;
   __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
   __cowboyCloseAuthenticationBrowser?: () => void;
+  __cowboyAuthenticationBrowserBridgeVersion?: number;
 };
 
 export const NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT =
   "cowboy:native-authentication-browser-closed";
+export const NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT =
+  "cowboy:native-authentication-browser-opened";
+export const NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT =
+  "cowboy:native-authentication-browser-open-failed";
 export const NATIVE_APP_RESUMED_EVENT = "cowboy:native-resume";
+const NATIVE_AUTHENTICATION_BROWSER_OPEN_TIMEOUT_MS = 5_000;
 
 /** True only for a native shell that can hand an URL to the operating system.
  * Browser/PWA links must retain native anchor navigation instead of being
@@ -83,6 +89,78 @@ export function openAuthenticationUrl(url: string): void {
     // An older or partially initialized shell can still use the Tauri opener.
   }
   openExternalUrl(resolved);
+}
+
+/** Open an authentication sheet and, on bridge v2+, wait until UIKit confirms
+ * that it is actually presented. Older shells keep their existing immediate
+ * handoff behavior and receive the web lifecycle recovery path. */
+export async function openAuthenticationUrlConfirmed(
+  url: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resolved = safeAuthenticationUrl(url);
+  if (!resolved) throw new Error("Authentication URL is invalid");
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  if (
+    typeof root.__cowboyOpenAuthenticationBrowser !== "function" ||
+    (root.__cowboyAuthenticationBrowserBridgeVersion ?? 0) < 2
+  ) {
+    openAuthenticationUrl(resolved);
+    return;
+  }
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Cancelled", "AbortError");
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (reason?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      globalThis.removeEventListener(
+        NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
+        onOpened,
+      );
+      globalThis.removeEventListener(
+        NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
+        onFailed,
+      );
+      if (reason === undefined) resolve();
+      else reject(reason);
+    };
+    const onOpened = (): void => finish();
+    const onFailed = (): void =>
+      finish(new Error("Cowboy could not open the authentication browser"));
+    const onAbort = (): void =>
+      finish(signal?.reason ?? new DOMException("Cancelled", "AbortError"));
+    const timeout = setTimeout(
+      () =>
+        finish(new Error("Cowboy could not open the authentication browser")),
+      NATIVE_AUTHENTICATION_BROWSER_OPEN_TIMEOUT_MS,
+    );
+    signal?.addEventListener("abort", onAbort, { once: true });
+    globalThis.addEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
+      onOpened,
+      { once: true },
+    );
+    globalThis.addEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
+      onFailed,
+      { once: true },
+    );
+    try {
+      if (root.__cowboyOpenAuthenticationBrowser?.(resolved) === false) {
+        finish();
+        openExternalUrl(resolved);
+      }
+    } catch {
+      finish();
+      openExternalUrl(resolved);
+    }
+  });
 }
 
 export function closeAuthenticationBrowser(): void {

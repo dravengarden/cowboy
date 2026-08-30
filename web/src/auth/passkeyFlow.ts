@@ -3,7 +3,7 @@ import {
   closeAuthenticationBrowser,
   NATIVE_APP_RESUMED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
-  openAuthenticationUrl,
+  openAuthenticationUrlConfirmed,
 } from "../openExternal";
 import {
   authApi,
@@ -126,6 +126,8 @@ export async function waitForExternalPasskeyEvent(
         NATIVE_APP_RESUMED_EVENT,
         onNativeAppResumed,
       );
+      globalThis.removeEventListener("focus", onInitiatorVisible);
+      globalThis.removeEventListener("pageshow", onInitiatorVisible);
       socket.close();
       if ("status" in result) resolve(result.status);
       else reject(result.error);
@@ -142,6 +144,12 @@ export async function waitForExternalPasskeyEvent(
     // the shell before it emits this second, idempotent wake-up signal.
     const onNativeAppResumed = (): void =>
       finish({ status: "initiator-resumed" });
+    // SFSafariViewController stays inside the same UIApplication, so UIKit does
+    // not necessarily emit didBecomeActive when its sheet closes. WebKit's
+    // standard focus/pageshow signals provide a second push-style wake-up;
+    // reconciliation remains one bounded finalize and never becomes polling.
+    const onInitiatorVisible = (): void =>
+      finish({ status: "initiator-resumed" });
     signal.addEventListener("abort", onAbort, { once: true });
     globalThis.addEventListener(
       NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
@@ -153,6 +161,8 @@ export async function waitForExternalPasskeyEvent(
       onNativeAppResumed,
       { once: true },
     );
+    globalThis.addEventListener("focus", onInitiatorVisible, { once: true });
+    globalThis.addEventListener("pageshow", onInitiatorVisible, { once: true });
     timeout = setTimeout(
       () =>
         finish({
@@ -337,8 +347,9 @@ async function runExternalPasskey(
     Math.max(1, started.expires_in_seconds) * 1_000,
   );
   try {
-    openAuthenticationUrl(
+    await openAuthenticationUrlConfirmed(
       externalPasskeyUrl(location.origin, started.transaction_id),
+      flow.signal,
     );
     return await waitForExternalPasskey(
       started.transaction_id,
@@ -347,6 +358,7 @@ async function runExternalPasskey(
       flow.signal,
     );
   } catch (reason) {
+    if (!flow.signal.aborted) flow.abort(reason);
     await externalPasskeyApi.fail(started.transaction_id).catch(() =>
       undefined
     );

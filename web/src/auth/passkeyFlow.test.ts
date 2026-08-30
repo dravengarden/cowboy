@@ -82,6 +82,23 @@ Deno.test("native foreground resume wakes a suspended Passkey event wait", async
   assertEquals(socket.closeCalls, 1);
 });
 
+Deno.test("returning focus from an in-app Safari sheet wakes Passkey reconciliation", async () => {
+  const socket = new SilentWebSocket();
+  const waiting = waitForExternalPasskeyEvent(
+    "a".repeat(64),
+    "v".repeat(64),
+    new AbortController().signal,
+    10_000,
+    {
+      createSocket: () => socket as unknown as WebSocket,
+      origin: "https://cowboy.example",
+    },
+  );
+  globalThis.dispatchEvent(new Event("focus"));
+  assertEquals(await waiting, "initiator-resumed");
+  assertEquals(socket.closeCalls, 1);
+});
+
 Deno.test("Passkey failures preserve server errors and explain browser cancellation", () => {
   assertEquals(
     passkeyErrorMessage(
