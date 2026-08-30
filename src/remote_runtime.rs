@@ -1470,9 +1470,9 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             // TurnEnded is the authoritative clean-completion edge. Do not rely
             // solely on a following Busy -> Running status transition to release
             // the dispatch guard: reconnect/snapshot ordering can already have
-            // projected Running, making that later status a no-op and trapping
-            // every queued prompt until the Machine reconnects again.
-            hub.clear_in_flight(session_id);
+            // projected Running. `complete_turn` also latches this edge so the
+            // trailing idle status cannot release the next prompt's guard.
+            hub.complete_turn(session_id);
         }
         RuntimeEvent::AgentSessionId { agent_session_id } => {
             hub.set_agent_session_id(session_id, agent_session_id);

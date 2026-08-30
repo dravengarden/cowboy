@@ -665,13 +665,19 @@ struct Session {
     editing_epoch: u64,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
-    /// so a same-tick re-drain can't double-send and overlap turns. Cleared on
-    /// the `Busy`→`Running` turn-end edge or on death (see `set_status`).
+    /// so a same-tick re-drain can't double-send and overlap turns. Cleared once
+    /// per completed turn or on death (see `complete_turn` / `set_status`).
     in_flight: bool,
     /// Monotonic identity for the current in-flight dispatch guard. Runtime
     /// reconciliation captures this before applying an idle lifecycle edge so
     /// it cannot clear a newer guard created while that edge drains the queue.
     in_flight_epoch: u64,
+    /// A worker reports the same completed turn through both `TurnEnded` and a
+    /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
+    /// next prompt before the second arrives. Latch that completion until the
+    /// next authoritative `Busy` edge so the duplicate completion cannot clear
+    /// the newly-created in-flight guard and dispatch a second queued prompt.
+    turn_completion_latched: bool,
     /// Monotonic identity for the current lifecycle edge. Bumped only when the
     /// status actually changes, so duplicate worker snapshots do not disguise a
     /// stuck turn while a Busy -> Running -> Busy replacement invalidates every
@@ -1991,6 +1997,7 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         in_flight_epoch: 0,
+                        turn_completion_latched: false,
                         lifecycle_epoch: 0,
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
@@ -2436,6 +2443,7 @@ impl Hub {
                     editing_epoch: 0,
                     in_flight: false,
                     in_flight_epoch: 0,
+                    turn_completion_latched: false,
                     lifecycle_epoch: 0,
                     mobile_review: MobileReviewState::default(),
                 },
@@ -3276,22 +3284,29 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            // Clear the in-flight guard on a true turn-end (Busy → Running) or on
-            // death — NOT on Starting → Running (a revive passes through that
-            // edge while our dispatched prompt is still queued downstream, so
-            // clearing there would release the next prompt early and overlap
-            // turns). Mirrors the old client-side drain edge logic.
+            // A completed turn is reported twice: first as `TurnEnded`, then as
+            // Busy -> Running. Whichever arrives first owns releasing the guard;
+            // the completion latch keeps the duplicate edge from releasing the
+            // NEXT prompt that the first edge may already have drained. A fresh
+            // Busy edge is the authoritative start of the next turn and rearms
+            // the latch. Starting -> Running must never release a guard because a
+            // revived worker can still have our prompt queued downstream.
             let was = s.meta.status;
             if expected.is_some_and(|expected| expected != (was, s.lifecycle_epoch)) {
                 return false;
             }
-            if (was == Status::Busy && status == Status::Running)
-                || matches!(
-                    status,
-                    Status::Exited | Status::Crashed | Status::Interrupted
-                )
-            {
+            if status == Status::Busy && was != Status::Busy {
+                s.turn_completion_latched = false;
+            }
+            let completed_turn =
+                was == Status::Busy && status == Status::Running && !s.turn_completion_latched;
+            let terminated = matches!(
+                status,
+                Status::Exited | Status::Crashed | Status::Interrupted
+            );
+            if completed_turn || terminated {
                 s.in_flight = false;
+                s.turn_completion_latched = true;
             }
             if was != status {
                 s.lifecycle_epoch = s.lifecycle_epoch.wrapping_add(1);
@@ -3736,6 +3751,31 @@ impl Hub {
         self.try_drain(session_id);
     }
 
+    /// Complete one agent turn and release at most one dispatch guard.
+    ///
+    /// Runtime transports publish both `TurnEnded` and a trailing idle status.
+    /// The first completion drains the next prompt; the second must be a no-op
+    /// until that prompt reports its own `Busy` start, otherwise two queued
+    /// prompts can be handed to the same worker at once.
+    pub fn complete_turn(&self, session_id: &str) {
+        let first_completion = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.turn_completion_latched {
+                false
+            } else {
+                s.in_flight = false;
+                s.turn_completion_latched = true;
+                true
+            }
+        };
+        if first_completion {
+            self.try_drain(session_id);
+        }
+    }
+
     /// Reconcile an authoritative runtime snapshot that says the worker is idle.
     ///
     /// Remote worker lifecycle events can straddle a Machine broker reconnect.
@@ -3757,6 +3797,7 @@ impl Hub {
                 false
             } else {
                 s.in_flight = false;
+                s.turn_completion_latched = true;
                 true
             }
         };
@@ -6475,6 +6516,121 @@ mod core_tests {
 
         assert_eq!(rx.recv().await.expect("turn-end dispatch").text, "second");
         assert!(queue_texts(&hub, "queue-after-turn").is_empty());
+    }
+
+    #[tokio::test]
+    async fn turn_end_then_idle_status_dispatches_only_the_force_pushed_prompt() {
+        let hub = hub_with_session("force-turn-end-first");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("force-turn-end-first", Status::Running, None);
+
+        hub.submit(
+            "force-turn-end-first",
+            "active turn".to_owned(),
+            vec![],
+            None,
+        );
+        assert_eq!(
+            rx.recv().await.expect("active dispatch").text,
+            "active turn"
+        );
+        hub.set_status("force-turn-end-first", Status::Busy, None);
+        hub.submit(
+            "force-turn-end-first",
+            "old queue head".to_owned(),
+            vec![],
+            None,
+        );
+        assert!(hub.force_submit(
+            "force-turn-end-first",
+            "forced prompt".to_owned(),
+            vec![],
+            None,
+            true,
+        ));
+        assert_eq!(
+            queue_texts(&hub, "force-turn-end-first"),
+            vec!["forced prompt", "old queue head"]
+        );
+
+        hub.complete_turn("force-turn-end-first");
+        hub.set_status("force-turn-end-first", Status::Running, None);
+        assert_eq!(
+            rx.recv().await.expect("forced dispatch").text,
+            "forced prompt"
+        );
+
+        assert!(rx.try_recv().is_err(), "old queue head must remain parked");
+        assert_eq!(
+            queue_texts(&hub, "force-turn-end-first"),
+            vec!["old queue head"]
+        );
+        assert!(hub.session_has_in_flight_prompt("force-turn-end-first"));
+
+        hub.set_status("force-turn-end-first", Status::Busy, None);
+        hub.complete_turn("force-turn-end-first");
+        hub.set_status("force-turn-end-first", Status::Running, None);
+        assert_eq!(
+            rx.recv().await.expect("old head dispatch").text,
+            "old queue head"
+        );
+        assert!(queue_texts(&hub, "force-turn-end-first").is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_status_then_turn_end_dispatches_only_the_force_pushed_prompt() {
+        let hub = hub_with_session("force-idle-first");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("force-idle-first", Status::Running, None);
+
+        hub.submit("force-idle-first", "active turn".to_owned(), vec![], None);
+        assert_eq!(
+            rx.recv().await.expect("active dispatch").text,
+            "active turn"
+        );
+        hub.set_status("force-idle-first", Status::Busy, None);
+        hub.submit(
+            "force-idle-first",
+            "old queue head".to_owned(),
+            vec![],
+            None,
+        );
+        assert!(hub.force_submit(
+            "force-idle-first",
+            "forced prompt".to_owned(),
+            vec![],
+            None,
+            true,
+        ));
+
+        hub.set_status("force-idle-first", Status::Running, None);
+        assert_eq!(
+            rx.recv().await.expect("forced dispatch").text,
+            "forced prompt"
+        );
+        hub.complete_turn("force-idle-first");
+
+        assert!(rx.try_recv().is_err(), "old queue head must remain parked");
+        assert_eq!(
+            queue_texts(&hub, "force-idle-first"),
+            vec!["old queue head"]
+        );
+        assert!(hub.session_has_in_flight_prompt("force-idle-first"));
+
+        hub.set_status("force-idle-first", Status::Busy, None);
+        hub.set_status("force-idle-first", Status::Running, None);
+        assert_eq!(
+            rx.recv().await.expect("old head dispatch").text,
+            "old queue head"
+        );
+        hub.complete_turn("force-idle-first");
+        assert!(
+            rx.try_recv().is_err(),
+            "duplicate turn end must stay a no-op"
+        );
+        assert!(queue_texts(&hub, "force-idle-first").is_empty());
     }
 
     #[tokio::test]
