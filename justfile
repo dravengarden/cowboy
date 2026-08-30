@@ -3,14 +3,23 @@
 default:
     @just --list
 
-toolchain-check:
+toolchain-check: worktree-deps-check
     required="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cowboy") | .rust_version')"; actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; test "$required" = "$actual" || { echo "rust-version $required does not match pinned rustc $actual" >&2; exit 1; }
+    actual="$(deno --version | awk 'NR == 1 { print $2 }')"; test "$actual" = "$COWBOY_DENO_VERSION" || { echo "Deno $actual does not match pinned Deno $COWBOY_DENO_VERSION" >&2; exit 1; }
 
-# Install frontend deps. `deno install` reads package.json + deno.json and
-# populates web/node_modules (nodeModulesDir = "manual") so Vite resolves
-# `vite`, `tsc`, etc. from there as it always did.
+# Reject dependency views borrowed from another checkout. Deno's global cache
+# may be shared, but node_modules and file: package links belong to this tree.
+worktree-deps-check:
+    deno check tools/check-worktree-dependencies.ts tools/check-worktree-dependencies_test.ts
+    deno test --allow-read --allow-write tools/check-worktree-dependencies_test.ts
+    deno run --allow-read tools/check-worktree-dependencies.ts
+
+# Install a checkout-local frontend dependency view. DENO_DIR may be shared
+# across worktrees; web/node_modules itself must never be shared or symlinked.
 install:
-    cd web && deno install
+    deno run --allow-read --allow-write=web tools/check-worktree-dependencies.ts --repair-borrowed-state
+    cd web && deno install --frozen
+    deno run --allow-read tools/check-worktree-dependencies.ts --require-installed
 
 # Run the daemon in the foreground (dev). Pair with `just dev-web` for HMR.
 # Default SQLite so /admin can create a product user; override with

@@ -4,10 +4,10 @@
 # Delete this derivation once nixpkgs supplies the exact supported Deno release.
 pkgs.stdenvNoCC.mkDerivation rec {
   pname = "deno";
-  version = "2.8.1";
+  version = "2.9.5";
   src = pkgs.fetchurl {
     url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
-    hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
+    hash = "sha256-iwEKOxpKAYimfNuKeic0iypQGveK7H/HTyrOFnNo1TA=";
   };
   nativeBuildInputs = [ pkgs.unzip pkgs.autoPatchelfHook ];
   buildInputs = [ pkgs.stdenv.cc.cc.lib pkgs.zlib ];

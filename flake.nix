@@ -523,8 +523,9 @@
         # scripts; rustc keeps the profile selected by Cargo.
         CFLAGS = "-O1";
         # Rust toolchain plus opt-in sccache, and the frontend toolchain
-        # (Cowboy's pinned deno 2.8.1 + node 24 for any node-shaped tool that
+        # (Cowboy's pinned Deno + node 24 for any node-shaped tool that
         # deno's npm interop can't shim).
+        COWBOY_DENO_VERSION = deno.version;
         nativeBuildInputs = with pkgs; [
           rustToolchain
           sccache

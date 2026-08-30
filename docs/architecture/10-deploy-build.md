@@ -44,7 +44,7 @@ The `justfile` is the task surface (run inside `nix develop`):
 
 | Task | Does |
 |---|---|
-| `just install` | `deno install` → `web/node_modules` |
+| `just install` | Verify isolation, then install a checkout-local `web/node_modules` |
 | `just dev` | `cargo run --locked -- serve` (foreground daemon) |
 | `just dev-web` | Vite dev server with HMR, proxying `/ws` + `/healthz` to the daemon |
 | `just build-web` | build the SPA bundle |
@@ -57,6 +57,18 @@ clean-rebuild experiments at a stable target path. On 2026-07-18, a full
 `--all-targets --all-features` cold build took 28.20s with plain Cargo; rebuilding
 the cleared same-path target took 16.41s with 282 Rust cache hits. The hermetic
 `nix build` uses Nix's own Cargo dependency caching instead.
+
+Deno's global cache (`DENO_DIR`) is safe to share between same-user worktrees,
+but every worktree owns its real `web/node_modules` directory and its `file:`
+links back into that worktree's `components/`. `just install` rejects a
+checkout-level `node_modules` symlink during checks; the install path removes
+only that borrowed link, leaves its target untouched, and creates a local
+dependency view. It then verifies every local package link after installation.
+The same preflight rejects and the install path removes the obsolete,
+gitignored `web/src/_shell` link left by the retired cross-repository UI seam.
+Deno 2.9.5 is pinned because it includes the upstream hardlink-overwrite
+repair needed before a same-filesystem cache can populate worktrees with clone
+or hardlink fallbacks.
 
 ## CLI / daemon flags
 
