@@ -25,6 +25,44 @@ export interface ProductOidcProvider {
   start_url: string;
 }
 
+export const PASSWORD_LOGIN_METHOD = "password";
+
+export function defaultProductLoginMethodOrder(
+  passwordEnabled: boolean,
+  providers: ProductOidcProvider[],
+): string[] {
+  const providerIds = [...new Set(providers.map((provider) => provider.id))];
+  const order: string[] = [];
+  if (providerIds.includes("cardea")) order.push("cardea");
+  if (passwordEnabled) order.push(PASSWORD_LOGIN_METHOD);
+  order.push(...providerIds.filter((id) => id !== "cardea"));
+  return order;
+}
+
+export function resolveProductLoginMethodOrder(
+  configured: unknown,
+  passwordEnabled: boolean,
+  providers: ProductOidcProvider[],
+): string[] {
+  const fallback = defaultProductLoginMethodOrder(passwordEnabled, providers);
+  if (!Array.isArray(configured) || configured.length !== fallback.length) {
+    return fallback;
+  }
+  if (!configured.every((method): method is string => typeof method === "string")) {
+    return fallback;
+  }
+  const configuredSet = new Set(configured);
+  const availableSet = new Set(fallback);
+  if (
+    configuredSet.size !== configured.length ||
+    configuredSet.size !== availableSet.size ||
+    ![...configuredSet].every((method) => availableSet.has(method))
+  ) {
+    return fallback;
+  }
+  return [...configured];
+}
+
 export type NativeOidcPoll = { status: "pending" } | ProductMe;
 
 export function nativeOidcPollPath(provider: ProductOidcProvider): string {
@@ -56,6 +94,7 @@ export interface AuthStatus {
   setup_required?: boolean;
   setup_pending?: boolean;
   password_enabled?: boolean;
+  login_method_order?: string[];
   passkeys?: ProductPasskeyServerPolicy;
   providers?: ProductOidcProvider[];
   me?: ProductMe;
@@ -72,6 +111,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     setup_required?: boolean;
     setup_pending?: boolean;
     password_enabled?: boolean;
+    login_method_order?: unknown;
     passkeys?: Partial<ProductPasskeyServerPolicy>;
     providers?: unknown;
     me?: Partial<ProductMe>;
@@ -115,6 +155,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
         if (provider == null || typeof provider !== "object") return [];
         const candidate = provider as Partial<ProductOidcProvider>;
         return typeof candidate.id === "string" &&
+            candidate.id !== PASSWORD_LOGIN_METHOD &&
             /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.id) &&
             typeof candidate.display_name === "string" &&
             candidate.display_name.length > 0 &&
@@ -134,6 +175,11 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
       },
     );
   }
+  status.login_method_order = resolveProductLoginMethodOrder(
+    record.login_method_order,
+    status.password_enabled !== false,
+    status.providers ?? [],
+  );
   const me = record.me;
   if (me && typeof me.account === "string" && me.account.length > 0) {
     const role = me.role;

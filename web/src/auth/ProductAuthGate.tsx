@@ -276,6 +276,7 @@ export function ProductAuthGate({
   const [setupPending, setSetupPending] = useState(false);
   const [providers, setProviders] = useState<ProductOidcProvider[]>([]);
   const [passwordEnabled, setPasswordEnabled] = useState(true);
+  const [loginMethodOrder, setLoginMethodOrder] = useState<string[]>([]);
   const [passkeyPolicy, setPasskeyPolicy] = useState<
     ProductPasskeyServerPolicy
   >();
@@ -338,6 +339,7 @@ export function ProductAuthGate({
     if (probe.kind === "ok") {
       setProviders(probe.body.providers ?? []);
       setPasswordEnabled(probe.body.password_enabled !== false);
+      setLoginMethodOrder(probe.body.login_method_order ?? []);
       setPasskeyPolicy(probe.body.passkeys);
     }
     const decision = classifyAuthStatus(probe);
@@ -472,6 +474,7 @@ export function ProductAuthGate({
           me={me}
           providers={providers}
           passwordEnabled={passwordEnabled}
+          loginMethodOrder={loginMethodOrder}
           onVerified={completeRecentAuth}
           onCancel={cancelRecentAuth}
         />
@@ -485,12 +488,14 @@ export function ProductAuthGate({
         setupPending={setupPending}
         providers={providers}
         passwordEnabled={passwordEnabled}
+        loginMethodOrder={loginMethodOrder}
         onAuthed={handleAuthed}
         onStatus={(status) => {
           setSetupRequired(status.setup_required === true);
           setSetupPending(status.setup_pending === true);
           setProviders(status.providers ?? []);
           setPasswordEnabled(status.password_enabled !== false);
+          setLoginMethodOrder(status.login_method_order ?? []);
           setPasskeyPolicy(status.passkeys);
         }}
       />

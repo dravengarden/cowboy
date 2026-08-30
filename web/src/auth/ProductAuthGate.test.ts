@@ -114,7 +114,9 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("nativeOidcFlowSupported"));
   assert(login.includes("runNativeOidc"));
   assert(login.includes("href={useNativeProviderFlow ? undefined"));
-  assert(login.includes('id: "password", label: "Password"'));
+  assert(login.includes("resolveProductLoginMethodOrder"));
+  assert(login.includes("orderedMethodIds[0]"));
+  assert(gate.includes("status.login_method_order"));
   assert(gate.includes("<ConfirmSheet"));
   assertEquals(gate.includes("<Dialog"), false);
   assert(gate.includes("Periodic Passkey verification stays off"));
@@ -167,7 +169,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1589"'));
+  assert(sw.includes('const VERSION = "cowboy-v1590"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -196,6 +198,7 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("selectedProvider.button_label"));
+  assert(sheet.includes("orderedLoginMethodIds"));
   const addHandler = panel.slice(
     panel.indexOf("const add ="),
     panel.indexOf("const revoke ="),

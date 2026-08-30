@@ -396,6 +396,7 @@ Deno.test("auth status JSON requires the public registration shape", () => {
       setup_required: false,
       setup_pending: false,
       password_enabled: true,
+      login_method_order: ["password"],
       providers: [],
       me: { account: "draven", role: "operator", auth_enabled: false },
     },
@@ -411,6 +412,7 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         accepts_registration: false,
       },
       password_enabled: false,
+      login_method_order: ["google", "cardea"],
       passkeys: {
         enabled: true,
         prompt_after_login: true,
@@ -446,6 +448,7 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
       setup_required: false,
       setup_pending: false,
       password_enabled: false,
+      login_method_order: ["google", "cardea"],
       passkeys: {
         enabled: true,
         prompt_after_login: true,
@@ -466,6 +469,49 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         },
       ],
     },
+  );
+});
+
+Deno.test("auth status defaults Cardea first and rejects incomplete method orders", () => {
+  const base = {
+    registration: {
+      enabled: false,
+      mode: "disabled",
+      accepts_registration: false,
+    },
+    password_enabled: true,
+    providers: [
+      {
+        id: "cardea",
+        display_name: "Cardea",
+        button_label: "Continue with Cardea",
+        start_url: "/api/auth/oidc/start",
+      },
+      {
+        id: "google",
+        display_name: "Google",
+        button_label: "Continue with Google",
+        start_url: "/api/auth/providers/google/start",
+      },
+    ],
+  } as const;
+  assertEquals(
+    authStatusFromJson(base)?.login_method_order,
+    ["cardea", "password", "google"],
+  );
+  assertEquals(
+    authStatusFromJson({
+      ...base,
+      login_method_order: ["password", "google", "cardea"],
+    })?.login_method_order,
+    ["password", "google", "cardea"],
+  );
+  assertEquals(
+    authStatusFromJson({
+      ...base,
+      login_method_order: ["cardea", "password"],
+    })?.login_method_order,
+    ["cardea", "password", "google"],
   );
 });
 

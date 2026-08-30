@@ -3797,6 +3797,7 @@ async fn api_auth_status(
             },
             "setup_required": false,
             "setup_pending": false,
+            "login_method_order": [],
             "providers": [],
             "me": {
                 "account": "local",
@@ -3818,6 +3819,7 @@ async fn api_auth_status(
         "setup_required": setup_required,
         "setup_pending": setup_pending,
         "password_enabled": state.product_authentication.password_enabled,
+        "login_method_order": state.product_authentication.login_method_order(),
         "passkeys": {
             "enabled": state.product_authentication.passkeys.enabled,
             "prompt_after_login": state.product_authentication.passkeys.prompt_after_login,
@@ -15572,6 +15574,10 @@ mod product_auth_api_tests {
             .await
             .unwrap();
         assert_eq!(product_status["me"]["account"], "owner");
+        assert_eq!(
+            product_status["login_method_order"],
+            serde_json::json!(["cardea", "password"])
+        );
         assert_eq!(admin_status["authenticated"], true);
 
         handle.abort();
@@ -16300,6 +16306,7 @@ mod product_auth_api_tests {
         let body: serde_json::Value = status.json().await.unwrap();
         assert_eq!(body["setup_required"], true);
         assert_eq!(body["setup_pending"], false);
+        assert_eq!(body["login_method_order"], serde_json::json!(["password"]));
         assert_eq!(body["registration"]["accepts_registration"], false);
         assert!(body.get("setup_token").is_none());
         assert!(!body.to_string().contains(&setup_token));
@@ -16401,6 +16408,7 @@ mod product_auth_api_tests {
         let body: serde_json::Value = status.json().await.unwrap();
         assert_eq!(body["setup_required"], false);
         assert_eq!(body["setup_pending"], false);
+        assert_eq!(body["login_method_order"], serde_json::json!([]));
         assert_eq!(body["me"]["account"], "local");
         assert_eq!(body["me"]["role"], "owner");
         assert_eq!(body["me"]["auth_enabled"], false);

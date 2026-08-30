@@ -1,6 +1,6 @@
 //! Product authentication configuration over signed, data-only Plugins.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::Path;
@@ -26,6 +26,7 @@ pub(crate) struct PasskeyServerPolicy {
 pub(crate) struct ProductAuthentication {
     pub password_enabled: bool,
     pub passkeys: PasskeyServerPolicy,
+    login_method_order: Vec<String>,
     providers: BTreeMap<String, Arc<OidcProvider>>,
 }
 
@@ -37,6 +38,8 @@ struct AuthenticationDocument {
     password: LoginMethodPolicy,
     #[serde(default)]
     passkeys: PasskeyPolicyDocument,
+    #[serde(default)]
+    login_method_order: Option<Vec<String>>,
     #[serde(default)]
     providers: Vec<AuthenticationProviderSelection>,
 }
@@ -93,6 +96,7 @@ impl ProductAuthentication {
                 prompt_after_login: false,
                 session_refresh_enabled: false,
             },
+            login_method_order: Vec::new(),
             providers: BTreeMap::new(),
         }
     }
@@ -103,6 +107,7 @@ impl ProductAuthentication {
         if let Some(provider) = provider {
             providers.insert(provider.id().to_owned(), provider);
         }
+        let provider_ids = providers.keys().cloned().collect::<Vec<_>>();
         Self {
             password_enabled: true,
             passkeys: PasskeyServerPolicy {
@@ -110,6 +115,8 @@ impl ProductAuthentication {
                 prompt_after_login: true,
                 session_refresh_enabled: true,
             },
+            login_method_order: resolve_login_method_order(None, true, &provider_ids)
+                .expect("default login method order"),
             providers,
         }
     }
@@ -126,6 +133,7 @@ impl ProductAuthentication {
                 schema: CONFIG_SCHEMA.to_owned(),
                 password: LoginMethodPolicy::default(),
                 passkeys: PasskeyPolicyDocument::default(),
+                login_method_order: None,
                 providers: Vec::new(),
             });
         ensure!(
@@ -172,6 +180,12 @@ impl ProductAuthentication {
             document.passkeys.enabled || !document.passkeys.session_refresh_enabled,
             "Passkey session refresh requires Passkeys to be enabled"
         );
+        let provider_ids = providers.keys().cloned().collect::<Vec<_>>();
+        let login_method_order = resolve_login_method_order(
+            document.login_method_order,
+            document.password.enabled,
+            &provider_ids,
+        )?;
         Ok(Self {
             password_enabled: document.password.enabled,
             passkeys: PasskeyServerPolicy {
@@ -179,6 +193,7 @@ impl ProductAuthentication {
                 prompt_after_login: document.passkeys.prompt_after_login,
                 session_refresh_enabled: document.passkeys.session_refresh_enabled,
             },
+            login_method_order,
             providers,
         })
     }
@@ -193,6 +208,49 @@ impl ProductAuthentication {
             .map(|provider| provider.public())
             .collect()
     }
+
+    pub(crate) fn login_method_order(&self) -> &[String] {
+        &self.login_method_order
+    }
+}
+
+fn resolve_login_method_order(
+    configured: Option<Vec<String>>,
+    password_enabled: bool,
+    provider_ids: &[String],
+) -> Result<Vec<String>> {
+    ensure!(
+        provider_ids.iter().all(|id| id != "password"),
+        "Authentication Provider ID password is reserved"
+    );
+    let mut default_order = Vec::with_capacity(provider_ids.len() + usize::from(password_enabled));
+    if provider_ids.iter().any(|id| id == "cardea") {
+        default_order.push("cardea".to_owned());
+    }
+    if password_enabled {
+        default_order.push("password".to_owned());
+    }
+    default_order.extend(
+        provider_ids
+            .iter()
+            .filter(|id| id.as_str() != "cardea")
+            .cloned(),
+    );
+
+    let Some(configured) = configured else {
+        return Ok(default_order);
+    };
+    let configured_set = configured.iter().cloned().collect::<BTreeSet<_>>();
+    ensure!(
+        configured_set.len() == configured.len(),
+        "login method order contains a duplicate"
+    );
+    let available_set = default_order.iter().cloned().collect::<BTreeSet<_>>();
+    ensure!(
+        configured_set == available_set,
+        "login method order must contain every enabled method exactly once"
+    );
+    Ok(configured)
 }
 
 fn default_true() -> bool {
@@ -245,5 +303,62 @@ mod tests {
         assert!(passkeys.enabled);
         assert!(passkeys.prompt_after_login);
         assert!(passkeys.session_refresh_enabled);
+    }
+
+    #[test]
+    fn default_login_order_prefers_cardea_without_reordering_other_servers() {
+        assert_eq!(
+            resolve_login_method_order(None, true, &["cardea".to_owned(), "google".to_owned()],)
+                .unwrap(),
+            ["cardea", "password", "google"]
+        );
+        assert_eq!(
+            resolve_login_method_order(None, true, &["google".to_owned()]).unwrap(),
+            ["password", "google"]
+        );
+    }
+
+    #[test]
+    fn configured_login_order_is_an_exact_permutation() {
+        let providers = ["cardea".to_owned(), "google".to_owned()];
+        assert_eq!(
+            resolve_login_method_order(
+                Some(vec![
+                    "google".to_owned(),
+                    "cardea".to_owned(),
+                    "password".to_owned(),
+                ]),
+                true,
+                &providers,
+            )
+            .unwrap(),
+            ["google", "cardea", "password"]
+        );
+        assert!(
+            resolve_login_method_order(
+                Some(vec!["cardea".to_owned(), "cardea".to_owned()]),
+                false,
+                &providers,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate")
+        );
+        assert!(
+            resolve_login_method_order(
+                Some(vec!["cardea".to_owned(), "password".to_owned()]),
+                true,
+                &providers,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("every enabled method")
+        );
+        assert!(
+            resolve_login_method_order(None, true, &["password".to_owned()])
+                .unwrap_err()
+                .to_string()
+                .contains("reserved")
+        );
     }
 }

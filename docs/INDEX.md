@@ -39,7 +39,7 @@ primary phone/desktop product path.
 - [`architecture/14-zed-code-provider.md`](architecture/14-zed-code-provider.md) — Isolated Zed code-provider integration
 - [`architecture/15-multi-machine.md`](architecture/15-multi-machine.md) — Enrollment, outbound connectivity, placement, and Machine lifecycle
 - [`architecture/16-product-auth.md`](architecture/16-product-auth.md) — Feature-gated product login and self-host identity
-- [`architecture/17-authentication-plugins.md`](architecture/17-authentication-plugins.md) — Signed authentication packages, protocol drivers, login selection, and Passkey lifetime policy
+- [`architecture/17-authentication-plugins.md`](architecture/17-authentication-plugins.md) — Signed authentication packages, protocol drivers, configurable login ordering, and Passkey lifetime policy
 - [`../examples/authentication/README.md`](../examples/authentication/README.md) — Google, Apple, and Cloudflare Email Authentication Provider examples
 - [`architecture/runtime-incident-ledger.md`](architecture/runtime-incident-ledger.md) — Runtime failure evidence and resolved invariants
 

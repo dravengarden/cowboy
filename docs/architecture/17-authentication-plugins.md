@@ -45,6 +45,7 @@ Example server configuration:
 {
   "schema": "dravengarden.cowboy.authentication/v1",
   "password": { "enabled": true },
+  "login_method_order": ["google", "password"],
   "passkeys": {
     "enabled": true,
     "prompt_after_login": true,
@@ -79,6 +80,11 @@ Set `COWBOY_AUTH_CONFIG` to this protected file. The legacy
 Password login is enabled when `password` is omitted. It may be disabled only
 when at least one signed provider is configured. Initial instance setup still
 creates the local account and grant to which upstream subjects are mapped.
+When present, `login_method_order` must list `password` (when enabled) and every
+configured provider ID exactly once. Without it, Cardea is first when available,
+then Password, followed by the remaining providers in stable ID order. Servers
+without Cardea retain Password first. A malformed, duplicate, missing, or unknown
+entry fails Controller startup instead of silently hiding a login method.
 
 ## OpenID Connect driver
 
@@ -129,10 +135,14 @@ provider-specific session token.
 
 ## Login UI
 
-`GET /api/auth/status` returns `password_enabled`, the Passkey server policy,
-and every enabled provider's stable ID, display label, button label, and start
-URL. When more than one method exists, Web renders a generic tab per method.
-Password is selected first when enabled; no provider ID is hard-coded in Web.
+`GET /api/auth/status` returns `password_enabled`, `login_method_order`, the
+Passkey server policy, and every enabled provider's stable ID, display label,
+button label, and start URL. When more than one method exists, Web renders a
+generic tab per method in the server-provided order and selects the first one.
+The built-in fallback gives Cardea priority when it is available. Web rejects an
+incomplete or duplicate response order and reconstructs the same safe default so
+a malformed response cannot hide an enabled login method. Native clients can
+consume the same explicit order without inferring it from the Provider array.
 
 Native clients derive all follow-up routes from the provider's fixed returned
 start URL; packages cannot supply a callback or return destination. Cowboy

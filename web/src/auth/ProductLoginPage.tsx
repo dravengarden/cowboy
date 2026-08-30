@@ -12,12 +12,14 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { PasswordStrength } from "../admin/PasswordStrength";
 import { assessAdminPassword } from "../admin/passwordStrength";
 import {
   authApi,
   AuthApiError,
+  PASSWORD_LOGIN_METHOD,
+  resolveProductLoginMethodOrder,
   type AuthStatus,
   type ProductMe,
   type ProductOidcProvider,
@@ -29,6 +31,7 @@ export function ProductLoginPage({
   setupPending,
   providers,
   passwordEnabled,
+  loginMethodOrder,
   onAuthed,
   onStatus,
 }: {
@@ -36,6 +39,7 @@ export function ProductLoginPage({
   setupPending: boolean;
   providers: ProductOidcProvider[];
   passwordEnabled: boolean;
+  loginMethodOrder: string[];
   onAuthed: (me: ProductMe) => void;
   onStatus?: (status: AuthStatus) => void;
 }): React.JSX.Element {
@@ -49,9 +53,16 @@ export function ProductLoginPage({
   const [busy, setBusy] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const providerAbort = useRef<AbortController | null>(null);
-  const [method, setMethod] = useState(() =>
-    passwordEnabled ? "password" : providers[0]?.id ?? ""
+  const orderedMethodIds = useMemo(
+    () =>
+      resolveProductLoginMethodOrder(
+        loginMethodOrder,
+        passwordEnabled,
+        providers,
+      ),
+    [loginMethodOrder, passwordEnabled, providers],
   );
+  const [method, setMethod] = useState(() => orderedMethodIds[0] ?? "");
   useEffect(() => {
     if (creating) setPasswordVisible(true);
   }, [creating]);
@@ -62,24 +73,23 @@ export function ProductLoginPage({
   }, []);
   useEffect(() => {
     if (setupRequired) return;
-    const available = passwordEnabled && method === "password" ||
-      providers.some((provider) => provider.id === method);
+    const available = orderedMethodIds.includes(method);
     if (!available) {
-      setMethod(passwordEnabled ? "password" : providers[0]?.id ?? "");
+      setMethod(orderedMethodIds[0] ?? "");
     }
-  }, [method, passwordEnabled, providers, setupRequired]);
+  }, [method, orderedMethodIds, setupRequired]);
   const passwordScore = assessAdminPassword(password, account);
   const canCreate = account.trim() !== "" && passwordScore.acceptable &&
     password === confirm;
   const confirmMismatch = confirm.length > 0 && password !== confirm;
   const canLogin = account.trim() !== "" && password !== "";
-  const loginMethods = [
-    ...(passwordEnabled ? [{ id: "password", label: "Password" }] : []),
-    ...providers.map((provider) => ({
-      id: provider.id,
-      label: provider.display_name,
-    })),
-  ];
+  const loginMethods = orderedMethodIds.flatMap((id) => {
+    if (id === PASSWORD_LOGIN_METHOD) {
+      return [{ id, label: "Password" }];
+    }
+    const provider = providers.find((candidate) => candidate.id === id);
+    return provider ? [{ id, label: provider.display_name }] : [];
+  });
   const selectedProvider = providers.find((provider) => provider.id === method);
   const useNativeProviderFlow = selectedProvider !== undefined &&
     nativeOidcFlowSupported();
@@ -256,7 +266,7 @@ export function ProductLoginPage({
               fullWidth
             />
           )
-          : method === "password" || setupRequired
+          : method === PASSWORD_LOGIN_METHOD || setupRequired
           ? (
             <>
               <TextField
@@ -331,7 +341,7 @@ export function ProductLoginPage({
             </>
           )
           : null}
-        {(setupRequired || method === "password") && (
+        {(setupRequired || method === PASSWORD_LOGIN_METHOD) && (
           <Button
             type="submit"
             variant="contained"

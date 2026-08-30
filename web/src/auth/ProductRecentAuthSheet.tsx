@@ -8,11 +8,13 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
 import {
   authApi,
   AuthApiError,
+  PASSWORD_LOGIN_METHOD,
+  resolveProductLoginMethodOrder,
   type ProductMe,
   type ProductOidcProvider,
 } from "./authApi";
@@ -25,7 +27,6 @@ import {
 } from "./passkeyFlow";
 
 const PASSKEY_METHOD = "passkey";
-const PASSWORD_METHOD = "password";
 const PROVIDER_PREFIX = "provider:";
 
 function providerMethod(provider: ProductOidcProvider): string {
@@ -36,12 +37,19 @@ function initialMethod(
   me: ProductMe,
   passwordEnabled: boolean,
   providers: ProductOidcProvider[],
+  loginMethodOrder: string[],
 ): string {
   if ((me.passkey_count ?? 0) > 0 && passkeyFlowSupported()) {
     return PASSKEY_METHOD;
   }
-  if (passwordEnabled) return PASSWORD_METHOD;
-  return providers[0] ? providerMethod(providers[0]) : "";
+  const first = resolveProductLoginMethodOrder(
+    loginMethodOrder,
+    passwordEnabled,
+    providers,
+  )[0];
+  if (first === PASSWORD_LOGIN_METHOD) return PASSWORD_LOGIN_METHOD;
+  const provider = providers.find((candidate) => candidate.id === first);
+  return provider ? providerMethod(provider) : "";
 }
 
 export function ProductRecentAuthSheet({
@@ -49,6 +57,7 @@ export function ProductRecentAuthSheet({
   me,
   providers,
   passwordEnabled,
+  loginMethodOrder,
   onVerified,
   onCancel,
 }: {
@@ -56,11 +65,21 @@ export function ProductRecentAuthSheet({
   me: ProductMe;
   providers: ProductOidcProvider[];
   passwordEnabled: boolean;
+  loginMethodOrder: string[];
   onVerified: (me: ProductMe) => void;
   onCancel: () => void;
 }): React.JSX.Element {
+  const orderedLoginMethodIds = useMemo(
+    () =>
+      resolveProductLoginMethodOrder(
+        loginMethodOrder,
+        passwordEnabled,
+        providers,
+      ),
+    [loginMethodOrder, passwordEnabled, providers],
+  );
   const [method, setMethod] = useState(() =>
-    initialMethod(me, passwordEnabled, providers)
+    initialMethod(me, passwordEnabled, providers, orderedLoginMethodIds)
   );
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,11 +89,15 @@ export function ProductRecentAuthSheet({
     passkeyFlowSupported();
   const methods = [
     ...(passkeyAvailable ? [{ id: PASSKEY_METHOD, label: "Passkey" }] : []),
-    ...(passwordEnabled ? [{ id: PASSWORD_METHOD, label: "Password" }] : []),
-    ...providers.map((provider) => ({
-      id: providerMethod(provider),
-      label: provider.display_name,
-    })),
+    ...orderedLoginMethodIds.flatMap((id) => {
+      if (id === PASSWORD_LOGIN_METHOD) {
+        return [{ id: PASSWORD_LOGIN_METHOD, label: "Password" }];
+      }
+      const provider = providers.find((candidate) => candidate.id === id);
+      return provider
+        ? [{ id: providerMethod(provider), label: provider.display_name }]
+        : [];
+    }),
   ];
   const selectedProvider = providers.find((provider) =>
     providerMethod(provider) === method
@@ -87,12 +110,16 @@ export function ProductRecentAuthSheet({
     if (!open) return;
     setPassword("");
     setError(null);
-    setMethod(initialMethod(me, passwordEnabled, providers));
-  }, [me, open, passwordEnabled, providers]);
+    setMethod(
+      initialMethod(me, passwordEnabled, providers, orderedLoginMethodIds),
+    );
+  }, [me, open, orderedLoginMethodIds, passwordEnabled, providers]);
   useEffect(() => {
     if (methods.some((candidate) => candidate.id === method)) return;
-    setMethod(initialMethod(me, passwordEnabled, providers));
-  }, [me, method, methods, passwordEnabled, providers]);
+    setMethod(
+      initialMethod(me, passwordEnabled, providers, orderedLoginMethodIds),
+    );
+  }, [me, method, methods, orderedLoginMethodIds, passwordEnabled, providers]);
 
   const finish = (
     request: () => Promise<ProductMe>,
@@ -145,7 +172,7 @@ export function ProductRecentAuthSheet({
         component="form"
         onSubmit={(event) => {
           event.preventDefault();
-          if (method !== PASSWORD_METHOD || password === "") return;
+          if (method !== PASSWORD_LOGIN_METHOD || password === "") return;
           finish(
             () => authApi.login(me.account, password),
             "Could not verify your password",
@@ -189,7 +216,7 @@ export function ProductRecentAuthSheet({
               Verify with Passkey
             </Button>
           )}
-          {method === PASSWORD_METHOD && (
+          {method === PASSWORD_LOGIN_METHOD && (
             <>
               <TextField
                 label="Account"
