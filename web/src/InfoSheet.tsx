@@ -1838,7 +1838,6 @@ export function InfoContent({
       </Box>
       {!desktop && <Divider />}
       <Stack spacing={desktop ? 1.25 : 2.5}>
-        {!desktop && <Divider />}
         <Stack
           spacing={1}
           sx={desktop

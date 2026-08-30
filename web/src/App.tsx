@@ -213,6 +213,7 @@ import {
     setActiveSessionId,
     useActiveSessionId,
 } from "./controlPlane";
+import { defaultNewSessionProvider } from "./newSessionProvider";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
@@ -1417,8 +1418,10 @@ function NewSessionDialog({
     };
     useEffect(() => {
         if (!providerAvailable(provider)) {
-            const fallback = providerEntries.find((entry) => providerAvailable(entry.provider_id));
-            setProvider(fallback?.provider_id ?? "");
+            const availableProviderIds = providerEntries
+                .map((entry) => entry.provider_id)
+                .filter(providerAvailable);
+            setProvider(defaultNewSessionProvider(availableProviderIds));
         }
     }, [machineId, machines, machineProviders, provider, providerEntries]);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find(

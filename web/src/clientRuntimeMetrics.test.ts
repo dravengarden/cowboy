@@ -54,4 +54,11 @@ Deno.test("About storage distinguishes service and current-device metrics", asyn
   assert(source.includes("heap === undefined ? []"));
   assert(source.includes('[["JS heap", heap] as const]'));
   assert(!source.includes('"Not exposed by browser"'));
+  const infoStart = source.indexOf("export function InfoContent");
+  const storageStart = source.indexOf("\n            Storage\n", infoStart);
+  const usageStorageBoundary = source.slice(infoStart, storageStart);
+  assertEquals(
+    usageStorageBoundary.match(/\{!desktop && <Divider \/>\}/gu)?.length,
+    1,
+  );
 });

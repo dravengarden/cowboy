@@ -30,26 +30,32 @@ const ACCOUNT_PROVIDER_LABELS: Record<string, string> = {
   xai: "xAI",
 };
 
+const USAGE_CARD_ORDER = new Map([
+  ["openai", 0],
+  ["xai", 1],
+  ["anthropic", 2],
+  ["deepseek", 3],
+  ["gemini", 4],
+]);
+
 /** Display name for an account-usage provider id. Unknown ids pass through. */
 export function accountProviderLabel(provider: string): string {
   return ACCOUNT_PROVIDER_LABELS[provider] ?? provider;
 }
 
-/** Keep xAI beside OpenAI without disturbing the order of other usage cards. */
+/** Keep first-party account cards in product order and unknown cards stable. */
 export function usageCardProviders(
   snapshot: UsageSnapshot | null,
 ): ProviderUsage[] {
   if (!snapshot) return [];
-  const xai = snapshot.providers.filter((usage) => usage.provider === "xai");
-  const providers = snapshot.providers.filter((usage) =>
-    usage.provider !== "xai"
-  );
-  const openaiIndex = providers.findIndex((usage) =>
-    usage.provider === "openai"
-  );
-  if (openaiIndex < 0 || xai.length === 0) return [...snapshot.providers];
-  providers.splice(openaiIndex + 1, 0, ...xai);
-  return providers;
+  return snapshot.providers
+    .map((usage, index) => ({ usage, index }))
+    .sort((left, right) =>
+      (USAGE_CARD_ORDER.get(left.usage.provider) ?? Number.MAX_SAFE_INTEGER) -
+        (USAGE_CARD_ORDER.get(right.usage.provider) ?? Number.MAX_SAFE_INTEGER) ||
+      left.index - right.index
+    )
+    .map(({ usage }) => usage);
 }
 
 export type UsageResetProvider = "codex" | "xai";
