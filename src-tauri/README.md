@@ -73,9 +73,12 @@ The point of the native shell is doing what a pure-web PWA can't. What's wired u
 - **Provider sign-in browser** — browser-code authentication opens in a native
   `SFSafariViewController` page sheet with a visible grabber plus system
   Done/back/forward controls. Done or swipe-down dispatches a native dismissal
-  event to Cowboy, which immediately cancels the PKCE-bound server handoff and
-  clears the waiting state. A successful flow closes the sheet programmatically
-  without emitting a false cancellation event.
+  event only after UIKit has revealed Cowboy again, so the WKWebView cannot miss
+  it while covered. Consecutive Provider and Passkey sheets are serialized across
+  their presentation animations, and the bridge acknowledges presentation or a
+  bounded failure instead of leaving the web UI waiting indefinitely. A
+  successful flow closes the sheet programmatically without emitting a false
+  cancellation event.
 - **File-picker permissions** — `src-tauri/Info.ios.plist` carries
   `NSCameraUsageDescription` / `NSPhotoLibraryUsageDescription` (+ encryption
   declaration). Tauri **merges** this file into the app Info.plist on every build.

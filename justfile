@@ -58,6 +58,10 @@ native-shell-check:
     rg -q '\[gCowboyAuthenticationURL isEqual:url\]' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     rg -q 'SFSafariViewControllerDelegate, UIAdaptivePresentationControllerDelegate' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     rg -q 'cowboy:native-authentication-browser-closed' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'cowboy:native-authentication-browser-opened' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'cowboy:native-authentication-browser-open-failed' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q '__cowboyAuthenticationBrowserBridgeVersion=2' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
+    rg -q 'cowboyFinishAuthenticationBrowserDismissal' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     ! rg -q 'temporary collapse|resumes the same Safari page' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm src-tauri/README.md
     ! rg -q 'static __weak SFSafariViewController \*gCowboyAuthenticationBrowser' src-tauri/gen/apple/Sources/cowboy-app/CowboyNativeTweaks.mm
     tools/check-keyboard-geometry.sh

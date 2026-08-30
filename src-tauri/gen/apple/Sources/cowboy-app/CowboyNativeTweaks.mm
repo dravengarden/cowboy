@@ -477,11 +477,26 @@ static void cowboyScheduleDocumentScrollView(WKWebView *webView) {
 // with native Done, back, forward, and Open in Safari controls without replacing
 // the shell's one WKWebView or losing its authentication state.
 // A user-initiated Done or swipe-down is a real cancellation. Notify the WebView
-// immediately so it can remove the PKCE-bound server handoff instead of leaving
-// a misleading waiting state behind. Programmatic close after success clears the
-// tracked browser before dismissal and therefore emits no cancellation event.
+// only after UIKit has finished dismissing the sheet: evaluating JavaScript from
+// safariViewControllerDidFinish races the covered/suspended WKWebView and can lose
+// the only completion signal. Presentation and dismissal are serialized so a
+// Passkey sheet opened immediately after Provider reauthentication cannot collide
+// with the previous sheet's closing animation.
 static SFSafariViewController *gCowboyAuthenticationBrowser = nil;
 static NSURL *gCowboyAuthenticationURL = nil;
+static NSURL *gCowboyPendingAuthenticationURL = nil;
+
+typedef NS_ENUM(NSInteger, CowboyAuthenticationBrowserTransition) {
+    CowboyAuthenticationBrowserTransitionIdle = 0,
+    CowboyAuthenticationBrowserTransitionPresenting,
+    CowboyAuthenticationBrowserTransitionDismissing,
+};
+
+static CowboyAuthenticationBrowserTransition gCowboyAuthenticationBrowserTransition =
+    CowboyAuthenticationBrowserTransitionIdle;
+static BOOL gCowboyAuthenticationBrowserCloseAfterPresentation = NO;
+static BOOL gCowboyAuthenticationBrowserNotifyAfterDismissal = NO;
+static NSUInteger gCowboyAuthenticationBrowserPresentationGeneration = 0;
 
 @interface CowboyAuthenticationBrowserDelegate
     : NSObject <SFSafariViewControllerDelegate, UIAdaptivePresentationControllerDelegate>
@@ -490,16 +505,79 @@ static NSURL *gCowboyAuthenticationURL = nil;
 
 static CowboyAuthenticationBrowserDelegate *gCowboyAuthenticationBrowserDelegate = nil;
 
+static void cowboyPresentAuthenticationBrowser(NSURL *url);
+
+static void cowboyDispatchAuthenticationBrowserEvent(NSString *eventName) {
+    if (eventName.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        WKWebView *webView = gCowboyWebView;
+        if (webView == nil) return;
+        NSString *script = [NSString stringWithFormat:
+            @"window.dispatchEvent(new Event('%@'));", eventName];
+        [webView evaluateJavaScript:script completionHandler:nil];
+    });
+}
+
+static void cowboyClearAuthenticationBrowser(SFSafariViewController *browser) {
+    if (browser == nil || browser != gCowboyAuthenticationBrowser) return;
+    gCowboyAuthenticationBrowser = nil;
+    gCowboyAuthenticationURL = nil;
+    gCowboyAuthenticationBrowserDelegate = nil;
+}
+
+static void cowboyPresentPendingAuthenticationBrowser(void) {
+    NSURL *pending = gCowboyPendingAuthenticationURL;
+    gCowboyPendingAuthenticationURL = nil;
+    if (pending != nil) cowboyPresentAuthenticationBrowser(pending);
+}
+
+static void cowboyFinishAuthenticationBrowserDismissal(
+    SFSafariViewController *browser
+) {
+    if (browser == nil || browser != gCowboyAuthenticationBrowser) return;
+    BOOL notify = gCowboyAuthenticationBrowserNotifyAfterDismissal;
+    gCowboyAuthenticationBrowserNotifyAfterDismissal = NO;
+    gCowboyAuthenticationBrowserCloseAfterPresentation = NO;
+    gCowboyAuthenticationBrowserTransition =
+        CowboyAuthenticationBrowserTransitionIdle;
+    cowboyClearAuthenticationBrowser(browser);
+    if (notify) {
+        cowboyDispatchAuthenticationBrowserEvent(
+            @"cowboy:native-authentication-browser-closed"
+        );
+    }
+    cowboyPresentPendingAuthenticationBrowser();
+}
+
+static void cowboyBeginAuthenticationBrowserDismissal(
+    SFSafariViewController *browser,
+    BOOL notify,
+    BOOL animated
+) {
+    if (browser == nil || browser != gCowboyAuthenticationBrowser) return;
+    if (gCowboyAuthenticationBrowserTransition ==
+        CowboyAuthenticationBrowserTransitionDismissing) return;
+    if (gCowboyAuthenticationBrowserTransition ==
+        CowboyAuthenticationBrowserTransitionPresenting) {
+        gCowboyAuthenticationBrowserCloseAfterPresentation = YES;
+        gCowboyAuthenticationBrowserNotifyAfterDismissal = notify;
+        return;
+    }
+    gCowboyAuthenticationBrowserTransition =
+        CowboyAuthenticationBrowserTransitionDismissing;
+    gCowboyAuthenticationBrowserNotifyAfterDismissal = notify;
+    if (browser.presentingViewController == nil) {
+        cowboyFinishAuthenticationBrowserDismissal(browser);
+        return;
+    }
+    [browser dismissViewControllerAnimated:animated completion:^{
+        cowboyFinishAuthenticationBrowserDismissal(browser);
+    }];
+}
+
 static void cowboyAuthenticationBrowserDidDismiss(SFSafariViewController *browser) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (browser == nil || browser != gCowboyAuthenticationBrowser) return;
-        gCowboyAuthenticationBrowser = nil;
-        gCowboyAuthenticationURL = nil;
-        gCowboyAuthenticationBrowserDelegate = nil;
-        [gCowboyWebView
-            evaluateJavaScript:
-                @"window.dispatchEvent(new Event('cowboy:native-authentication-browser-closed'));"
-            completionHandler:nil];
+        cowboyBeginAuthenticationBrowserDismissal(browser, YES, YES);
     });
 }
 
@@ -538,13 +616,12 @@ static UIViewController *cowboyTopViewController(void) {
 
 static void cowboyDismissAuthenticationBrowser(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        // A close belongs to the web flow that requested it. Do not allow an
+        // older queued open to appear after that flow has already completed.
+        gCowboyPendingAuthenticationURL = nil;
         SFSafariViewController *browser = gCowboyAuthenticationBrowser;
-        gCowboyAuthenticationBrowser = nil;
-        gCowboyAuthenticationURL = nil;
-        gCowboyAuthenticationBrowserDelegate = nil;
-        if (browser.presentingViewController != nil) {
-            [browser dismissViewControllerAnimated:YES completion:nil];
-        }
+        if (browser == nil) return;
+        cowboyBeginAuthenticationBrowserDismissal(browser, NO, YES);
     });
 }
 
@@ -569,46 +646,112 @@ static SFSafariViewController *cowboyNewAuthenticationBrowser(NSURL *url) {
     return browser;
 }
 
+static void cowboyFinishAuthenticationBrowserPresentation(
+    SFSafariViewController *browser,
+    CowboyAuthenticationBrowserDelegate *delegate,
+    NSUInteger generation
+) {
+    if (browser == nil || browser != gCowboyAuthenticationBrowser ||
+        generation != gCowboyAuthenticationBrowserPresentationGeneration ||
+        gCowboyAuthenticationBrowserTransition !=
+            CowboyAuthenticationBrowserTransitionPresenting) return;
+
+    BOOL presented = browser.presentingViewController != nil;
+    gCowboyAuthenticationBrowserTransition =
+        CowboyAuthenticationBrowserTransitionIdle;
+    if (!presented) {
+        cowboyClearAuthenticationBrowser(browser);
+        cowboyDispatchAuthenticationBrowserEvent(
+            @"cowboy:native-authentication-browser-open-failed"
+        );
+        cowboyPresentPendingAuthenticationBrowser();
+        return;
+    }
+
+    browser.presentationController.delegate = delegate;
+    cowboyDispatchAuthenticationBrowserEvent(
+        @"cowboy:native-authentication-browser-opened"
+    );
+    if (gCowboyAuthenticationBrowserCloseAfterPresentation) {
+        BOOL notify = gCowboyAuthenticationBrowserNotifyAfterDismissal;
+        gCowboyAuthenticationBrowserCloseAfterPresentation = NO;
+        cowboyBeginAuthenticationBrowserDismissal(browser, notify, YES);
+        return;
+    }
+    cowboyPresentPendingAuthenticationBrowser();
+}
+
+static void cowboyPresentAuthenticationBrowserNow(NSURL *url) {
+    UIViewController *presenter = cowboyTopViewController();
+    if (presenter == nil) {
+        cowboyDispatchAuthenticationBrowserEvent(
+            @"cowboy:native-authentication-browser-open-failed"
+        );
+        return;
+    }
+    SFSafariViewController *browser = cowboyNewAuthenticationBrowser(url);
+    CowboyAuthenticationBrowserDelegate *delegate =
+        [[CowboyAuthenticationBrowserDelegate alloc] init];
+    delegate.browser = browser;
+    browser.delegate = delegate;
+    gCowboyAuthenticationBrowser = browser;
+    gCowboyAuthenticationURL = url;
+    gCowboyAuthenticationBrowserDelegate = delegate;
+    gCowboyAuthenticationBrowserTransition =
+        CowboyAuthenticationBrowserTransitionPresenting;
+    NSUInteger generation = ++gCowboyAuthenticationBrowserPresentationGeneration;
+    [presenter presentViewController:browser animated:YES completion:^{
+        cowboyFinishAuthenticationBrowserPresentation(
+            browser,
+            delegate,
+            generation
+        );
+    }];
+    // UIKit logs a rejected presentation without returning an error. Bound that
+    // silent path so the WebView can stop its spinner instead of waiting for the
+    // two-minute server ceremony timeout.
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            cowboyFinishAuthenticationBrowserPresentation(
+                browser,
+                delegate,
+                generation
+            );
+        }
+    );
+}
+
 static void cowboyPresentAuthenticationBrowser(NSURL *url) {
     if (url == nil ||
         !([url.scheme.lowercaseString isEqualToString:@"https"] ||
-          [url.scheme.lowercaseString isEqualToString:@"http"])) return;
+          [url.scheme.lowercaseString isEqualToString:@"http"])) {
+        cowboyDispatchAuthenticationBrowserEvent(
+            @"cowboy:native-authentication-browser-open-failed"
+        );
+        return;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
-        void (^present)(void) = ^{
-            UIViewController *presenter = cowboyTopViewController();
-            if (presenter == nil) return;
-            SFSafariViewController *browser = cowboyNewAuthenticationBrowser(url);
-            CowboyAuthenticationBrowserDelegate *delegate =
-                [[CowboyAuthenticationBrowserDelegate alloc] init];
-            delegate.browser = browser;
-            browser.delegate = delegate;
-            gCowboyAuthenticationBrowser = browser;
-            gCowboyAuthenticationURL = url;
-            gCowboyAuthenticationBrowserDelegate = delegate;
-            [presenter presentViewController:browser animated:YES completion:^{
-                if (browser == gCowboyAuthenticationBrowser) {
-                    browser.presentationController.delegate = delegate;
-                }
-            }];
-        };
+        if (gCowboyAuthenticationBrowserTransition !=
+            CowboyAuthenticationBrowserTransitionIdle) {
+            gCowboyPendingAuthenticationURL = url;
+            return;
+        }
         SFSafariViewController *existing = gCowboyAuthenticationBrowser;
         if (existing != nil && [gCowboyAuthenticationURL isEqual:url] &&
             existing.presentingViewController != nil) {
+            cowboyDispatchAuthenticationBrowserEvent(
+                @"cowboy:native-authentication-browser-opened"
+            );
             return;
         }
-        if (existing.presentingViewController != nil) {
-            gCowboyAuthenticationBrowser = nil;
-            gCowboyAuthenticationURL = nil;
-            gCowboyAuthenticationBrowserDelegate = nil;
-            [existing dismissViewControllerAnimated:NO completion:^{
-                present();
-            }];
-        } else {
-            gCowboyAuthenticationBrowser = nil;
-            gCowboyAuthenticationURL = nil;
-            gCowboyAuthenticationBrowserDelegate = nil;
-            present();
+        if (existing != nil) {
+            gCowboyPendingAuthenticationURL = url;
+            cowboyBeginAuthenticationBrowserDismissal(existing, NO, NO);
+            return;
         }
+        cowboyPresentAuthenticationBrowserNow(url);
     });
 }
 
@@ -649,6 +792,7 @@ static CowboyAuthenticationBrowserHandler *cowboyAuthenticationBrowserHandler(vo
 
 static NSString *cowboyAuthenticationBrowserScript(void) {
     return
+        @"window.__cowboyAuthenticationBrowserBridgeVersion=2;"
         @"window.__cowboyOpenAuthenticationBrowser=function(url){try{"
         @"window.webkit.messageHandlers.cowboyAuthenticationBrowser."
         @"postMessage({action:'open',url:url});return true}"
