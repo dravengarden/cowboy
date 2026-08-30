@@ -78,7 +78,10 @@ async function performPasskey(): Promise<void> {
       : await assertPasskey(ceremony);
     await externalPasskeyApi.complete(transactionId, credential);
     terminal = true;
-    setCopy("Passkey verified", "Returning to Cowboy…");
+    setCopy(
+      ceremony.action === "register" ? "Passkey created" : "Passkey verified",
+      "Tap Done to return to Cowboy. Your account will update automatically.",
+    );
     if (actions) actions.hidden = true;
   } catch (reason) {
     if (passkeyFlowCancelled(reason)) {
@@ -131,7 +134,10 @@ async function run(): Promise<void> {
     const options = await externalPasskeyApi.options(transactionId);
     if (options.status === "complete") {
       terminal = true;
-      setCopy("Passkey verified", "Returning to Cowboy…");
+      setCopy(
+        "Passkey is ready",
+        "Tap Done to return to Cowboy. Your account will update automatically.",
+      );
       return;
     }
     if (options.status === "failed") {

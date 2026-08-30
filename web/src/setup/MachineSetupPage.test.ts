@@ -47,6 +47,8 @@ Deno.test("product sign out keeps destructive action styling", async () => {
     new URL("../auth/ProductAccountMenu.tsx", import.meta.url),
   );
   assert(source.includes('color="error"'));
+  assert(source.includes('variant="outlined"'));
+  assert(source.includes("Sign out on this device"));
   assertEquals(source.includes('color="inherit"'), false);
 });
 

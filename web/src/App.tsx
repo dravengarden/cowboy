@@ -4262,23 +4262,9 @@ function DesktopSettingsSectionTabs({
 function DesktopAccountSettingsBlock(): React.JSX.Element {
     return (
         <DesktopModalBlock label="Account">
-            <Stack
-                direction="row"
-                alignItems="center"
-                justifyContent="space-between"
-                spacing={2}
-                sx={{ px: 1.5, py: 1 }}
-            >
-                <Box sx={{ minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={700}>
-                        Product account
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                        Sign out of this Cowboy Service on this device
-                    </Typography>
-                </Box>
+            <Box sx={{ px: 1.5, py: 1 }}>
                 <ProductAccountMenu />
-            </Stack>
+            </Box>
         </DesktopModalBlock>
     );
 }

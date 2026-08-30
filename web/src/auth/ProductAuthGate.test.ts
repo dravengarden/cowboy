@@ -167,7 +167,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1587"'));
+  assert(sw.includes('const VERSION = "cowboy-v1588"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -204,8 +204,8 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
     panel.indexOf("const revoke ="),
     panel.indexOf("const toggle ="),
   );
-  assert(addHandler.includes("if (passkeyFlowCancelled(err)) return;"));
-  assert(revokeHandler.includes("if (passkeyFlowCancelled(err)) return;"));
+  assert(addHandler.includes("Passkey setup was cancelled. Nothing changed."));
+  assert(revokeHandler.includes("Revocation was cancelled."));
 });
 
 Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
@@ -234,4 +234,26 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   assert(idleLock.includes("globalThis.setTimeout(arm, delay)"));
   assert(lock.includes('backdropFilter: "blur(24px) saturate(65%)"'));
   assert(lock.includes("Unlock with Passkey"));
+});
+
+Deno.test("Passkey settings use a progressive, visible mobile account hierarchy", async () => {
+  const panel = await Deno.readTextFile(
+    new URL("ProductPasskeysPanel.tsx", authDir),
+  );
+  const account = await Deno.readTextFile(
+    new URL("ProductAccountMenu.tsx", authDir),
+  );
+  const externalPage = await Deno.readTextFile(
+    new URL("passkeyExternalPage.ts", authDir),
+  );
+  assert(panel.includes("Add your first Passkey"));
+  assert(panel.includes("Registered Passkeys"));
+  assert(panel.includes("Periodic verification"));
+  assert(panel.includes("Not set up"));
+  assert(panel.includes('variant="outlined"'));
+  assertEquals(panel.includes("No passkeys yet."), false);
+  assert(account.includes("Sign out on this device"));
+  assert(account.includes('variant="outlined"'));
+  assert(account.includes("Running agents keep"));
+  assert(externalPage.includes("Tap Done to return to Cowboy"));
 });

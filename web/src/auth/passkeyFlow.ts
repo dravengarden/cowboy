@@ -22,8 +22,23 @@ import { newPkceBinding } from "./pkce";
 
 const RECONNECT_INITIAL_MS = 250;
 const RECONNECT_MAX_MS = 4_000;
+const NATIVE_CLOSE_RECONCILE_ATTEMPTS = 10;
+const NATIVE_CLOSE_RECONCILE_DELAY_MS = 250;
 
-type ExternalPasskeyEventStatus = "complete" | "failed" | "unavailable";
+type ExternalPasskeyEventStatus =
+  | "complete"
+  | "failed"
+  | "unavailable"
+  | "browser-closed";
+
+interface ExternalPasskeyCloseReconcileDependencies {
+  finalize: (
+    transactionId: string,
+    verifier: string,
+  ) => Promise<ExternalPasskeyFinalize>;
+  fail: (transactionId: string) => Promise<unknown>;
+  wait: (delayMs: number, signal: AbortSignal) => Promise<void>;
+}
 
 export function externalPasskeyUrl(
   origin: string,
@@ -81,13 +96,27 @@ async function waitForExternalPasskeyEvent(
       if (settled) return;
       settled = true;
       signal.removeEventListener("abort", onAbort);
+      globalThis.removeEventListener(
+        NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+        onNativeBrowserClosed,
+      );
       socket.close();
       if ("status" in result) resolve(result.status);
       else reject(result.error);
     };
     const onAbort = (): void =>
       finish({ error: new DOMException("Cancelled", "AbortError") });
+    // SFSafariViewController backgrounds the WKWebView that owns this socket.
+    // Closing a successfully completed ceremony must wake the initiator so it
+    // can perform the PKCE-bound durable finalize, not be treated as cancel.
+    const onNativeBrowserClosed = (): void =>
+      finish({ status: "browser-closed" });
     signal.addEventListener("abort", onAbort, { once: true });
+    globalThis.addEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+      onNativeBrowserClosed,
+      { once: true },
+    );
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({
         transaction_id: transactionId,
@@ -118,6 +147,42 @@ async function waitForExternalPasskeyEvent(
   });
 }
 
+export async function reconcileExternalPasskeyAfterBrowserClose(
+  transactionId: string,
+  verifier: string,
+  signal: AbortSignal,
+  dependencies: Partial<ExternalPasskeyCloseReconcileDependencies> = {},
+): Promise<ExternalPasskeyFinalize> {
+  const finalize = dependencies.finalize ?? authApi.finalizeExternalPasskey;
+  const fail = dependencies.fail ?? externalPasskeyApi.fail;
+  const wait = dependencies.wait ?? waitForDelay;
+  let lastRetryableError: unknown;
+
+  for (let attempt = 0; attempt < NATIVE_CLOSE_RECONCILE_ATTEMPTS; attempt++) {
+    if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+    try {
+      const result = await finalize(transactionId, verifier);
+      if (result.status === "complete") return result;
+      lastRetryableError = undefined;
+    } catch (reason) {
+      if (!retryableEventError(reason)) throw reason;
+      lastRetryableError = reason;
+    }
+    if (attempt + 1 < NATIVE_CLOSE_RECONCILE_ATTEMPTS) {
+      await wait(NATIVE_CLOSE_RECONCILE_DELAY_MS, signal);
+    }
+  }
+
+  await fail(transactionId).catch(() => undefined);
+  if (lastRetryableError) {
+    throw new AuthApiError(
+      "Cowboy could not confirm the completed Passkey. Please try again.",
+      503,
+    );
+  }
+  throw new DOMException("Cancelled", "AbortError");
+}
+
 async function waitForExternalPasskey(
   transactionId: string,
   verifier: string,
@@ -139,6 +204,13 @@ async function waitForExternalPasskey(
       }
       if (status === "unavailable") {
         throw new AuthApiError("Passkey setup is no longer active.", 410);
+      }
+      if (status === "browser-closed") {
+        return await reconcileExternalPasskeyAfterBrowserClose(
+          transactionId,
+          verifier,
+          signal,
+        );
       }
       if (status === "complete") {
         const result = await authApi.finalizeExternalPasskey(
@@ -169,11 +241,6 @@ async function runExternalPasskey(
     nickname,
   );
   const flow = new AbortController();
-  const cancel = (): void => flow.abort();
-  globalThis.addEventListener(
-    NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
-    cancel,
-  );
   try {
     openAuthenticationUrl(
       externalPasskeyUrl(location.origin, started.transaction_id),
@@ -190,10 +257,6 @@ async function runExternalPasskey(
     );
     throw reason;
   } finally {
-    globalThis.removeEventListener(
-      NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
-      cancel,
-    );
     closeAuthenticationBrowser();
   }
 }

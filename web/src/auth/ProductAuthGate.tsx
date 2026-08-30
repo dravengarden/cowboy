@@ -188,6 +188,7 @@ function PasskeySetupPrompt({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [nickname, setNickname] = useState("");
   const open = policy?.enabled === true && policy.prompt_after_login &&
     (me.passkey_count ?? 0) === 0 && !dismissed && !suspended;
@@ -203,14 +204,22 @@ function PasskeySetupPrompt({
     if (busy || !passkeyFlowSupported() || nickname.trim() === "") return;
     setBusy(true);
     setError(null);
+    setNotice(null);
     void (async () => {
       await retryWithRecentProductAuth(
         () => registerPasskey(nickname.trim()),
         reauthenticate,
       );
-      onCreated(await authApi.me());
+      onCreated({
+        ...me,
+        passkey_count: Math.max(1, me.passkey_count ?? 0),
+      });
+      void authApi.me().then(onCreated).catch(() => undefined);
     })().catch((reason: unknown) => {
-      if (passkeyFlowCancelled(reason)) return;
+      if (passkeyFlowCancelled(reason)) {
+        setNotice("Passkey setup was cancelled. Nothing changed.");
+        return;
+      }
       setError(passkeyErrorMessage(reason, "Could not add a Passkey"));
     }).finally(() => setBusy(false));
   };
@@ -249,6 +258,7 @@ function PasskeySetupPrompt({
         {!passkeyFlowSupported() && (
           <Alert severity="info">This browser cannot create a Passkey.</Alert>
         )}
+        {notice && <Alert severity="info">{notice}</Alert>}
         {error && <Alert severity="error">{error}</Alert>}
       </Stack>
     </ConfirmSheet>
