@@ -12,6 +12,7 @@ async function readAuthSources(): Promise<string> {
     "ProductAccountMenu.tsx",
     "ProductTokensPanel.tsx",
     "ProductPasskeysPanel.tsx",
+    "ProductRecentAuthSheet.tsx",
     "PasskeyReauthLock.tsx",
     "passkeyReauthSchedule.ts",
     "passkeyBrowser.ts",
@@ -19,6 +20,7 @@ async function readAuthSources(): Promise<string> {
     "passkeyFlow.ts",
     "pkce.ts",
     "nativeOidcFlow.ts",
+    "recentAuth.ts",
     "idleLock.ts",
     "useIdlePasskeyLock.ts",
   ];
@@ -165,7 +167,7 @@ Deno.test("desktop can sign out through authApi without importing store", async 
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1583"'));
+  assert(sw.includes('const VERSION = "cowboy-v1584"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -174,6 +176,26 @@ Deno.test("service worker does not cache /api/auth and bumped VERSION", async ()
   assert(authBranch.includes("event.respondWith(fetch(request))"));
   assertEquals(authBranch.includes("caches."), false);
   assertEquals(authBranch.includes("caches.match"), false);
+});
+
+Deno.test("Passkey changes recover from an expired recent-auth window", async () => {
+  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+  const panel = await Deno.readTextFile(
+    new URL("ProductPasskeysPanel.tsx", authDir),
+  );
+  const sheet = await Deno.readTextFile(
+    new URL("ProductRecentAuthSheet.tsx", authDir),
+  );
+  const retry = await Deno.readTextFile(new URL("recentAuth.ts", authDir));
+  assert(gate.includes("reauthenticate: () => Promise<ProductMe>"));
+  assert(gate.includes("<ProductRecentAuthSheet"));
+  assert(panel.includes("retryWithRecentProductAuth"));
+  assert(retry.includes("isRecentProductAuthRequired"));
+  assert(sheet.includes("Verify it’s you"));
+  assert(sheet.includes("authApi.login(me.account, password)"));
+  assert(sheet.includes("verifyPasskey"));
+  assert(sheet.includes("runNativeOidc"));
+  assert(sheet.includes("selectedProvider.button_label"));
 });
 
 Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
@@ -193,9 +215,9 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   assertEquals(`${gate}\n${panel}\n${admin}`.includes('"This device"'), false);
   assert(gate.includes('const [nickname, setNickname] = useState("")'));
   assert(panel.includes('const [nickname, setNickname] = useState("")'));
-  assert(panel.includes('Every 3 days · Default'));
-  assert(panel.includes('Every 4 hours'));
-  assert(lock.includes('globalThis.setTimeout(arm, delay)'));
+  assert(panel.includes("Every 3 days · Default"));
+  assert(panel.includes("Every 4 hours"));
+  assert(lock.includes("globalThis.setTimeout(arm, delay)"));
   assert(lock.includes('addEventListener("visibilitychange", arm)'));
   assertEquals(lock.includes("setInterval"), false);
   assertEquals(idleLock.includes("setInterval"), false);

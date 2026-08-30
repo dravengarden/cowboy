@@ -161,6 +161,15 @@ session-local login or Passkey step-up from the last five minutes; a long-lived
 cookie alone cannot replace credential state. Enabling refresh does not extend
 a session until the separate WebAuthn assertion succeeds.
 
+If that five-minute window has elapsed, Web presents the server-configured
+Passkey, password, and Authentication Provider methods. Verification completed
+inside a native shell or the current browser window repeats the pending
+operation once; a full-page provider redirect asks the user to repeat it after
+returning. Cancellation and failed verification leave credential state
+unchanged. Cowboy never converts the HTTP 428 gate into a client-side bypass,
+and a provider response for a different account clears cached product data
+instead of continuing the original operation under another identity.
+
 Without a Passkey assertion, password and provider sessions last one day. A
 successful explicit WebAuthn user-verification ceremony may atomically replace
 only the current browser cookie with a session lasting at most 30 days. It does

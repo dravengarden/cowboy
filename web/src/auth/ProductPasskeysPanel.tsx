@@ -26,6 +26,7 @@ import {
   verifyPasskey,
 } from "./passkeyFlow";
 import { useProductAuth } from "./ProductAuthGate";
+import { retryWithRecentProductAuth } from "./recentAuth";
 
 const REFRESH_INTERVALS = [
   { label: "Every 4 hours", value: 4 * 60 * 60 * 1_000 },
@@ -43,7 +44,7 @@ export function ProductPasskeysPanel({
 }: {
   onMe?: (me: ProductMe) => void;
 }): React.JSX.Element {
-  const { me, passkeys: policy, updateMe } = useProductAuth();
+  const { me, passkeys: policy, reauthenticate, updateMe } = useProductAuth();
   const [passkeys, setPasskeys] = useState<ProductPasskey[]>([]);
   const [nickname, setNickname] = useState("");
   const [enabled, setEnabled] = useState(me.passkey_reauth_enabled === true);
@@ -73,7 +74,10 @@ export function ProductPasskeysPanel({
     setBusy(true);
     setError(null);
     void (async () => {
-      await registerPasskey(nickname.trim());
+      await retryWithRecentProductAuth(
+        () => registerPasskey(nickname.trim()),
+        reauthenticate,
+      );
       setNickname("");
       await load();
       updateMe(await authApi.me());
@@ -88,8 +92,10 @@ export function ProductPasskeysPanel({
     if (busy) return;
     setBusy(true);
     setError(null);
-    void authApi
-      .deletePasskey(id)
+    void retryWithRecentProductAuth(
+      () => authApi.deletePasskey(id),
+      reauthenticate,
+    )
       .then(async () => {
         await load();
         const updated = await authApi.me();
@@ -237,8 +243,8 @@ export function ProductPasskeysPanel({
         ? (
           <Typography variant="body2" color="text.secondary">
             No passkeys yet. Add one, then turn on periodic verification when
-            you want it. The name is required so you can identify and revoke
-            the right device later.
+            you want it. The name is required so you can identify and revoke the
+            right device later.
           </Typography>
         )
         : (

@@ -176,6 +176,10 @@ export class AuthApiError extends Error {
   }
 }
 
+export function isRecentProductAuthRequired(reason: unknown): boolean {
+  return reason instanceof AuthApiError && reason.status === 428;
+}
+
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,

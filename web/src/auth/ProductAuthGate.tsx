@@ -34,6 +34,7 @@ import {
   shouldMountProductApp,
 } from "./authStatus";
 import { PasskeyReauthLock } from "./PasskeyReauthLock";
+import { ProductRecentAuthSheet } from "./ProductRecentAuthSheet";
 import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
@@ -41,11 +42,13 @@ import {
   registerPasskey,
 } from "./passkeyFlow";
 import { ProductLoginPage } from "./ProductLoginPage";
+import { retryWithRecentProductAuth } from "./recentAuth";
 import { ConfirmSheet } from "../Sheet";
 
 export interface ProductAuthValue {
   me: ProductMe;
   passkeys: ProductPasskeyServerPolicy | undefined;
+  reauthenticate: () => Promise<ProductMe>;
   updateMe: (me: ProductMe) => void;
   signOut: () => Promise<void>;
 }
@@ -166,10 +169,14 @@ function PasskeySetupPrompt({
   me,
   policy,
   onCreated,
+  reauthenticate,
+  suspended,
 }: {
   me: ProductMe;
   policy: ProductPasskeyServerPolicy | undefined;
   onCreated: (me: ProductMe) => void;
+  reauthenticate: () => Promise<ProductMe>;
+  suspended: boolean;
 }): React.JSX.Element {
   const dismissalKey = `cowboy-passkey-setup-dismissed:${me.account}`;
   const [dismissed, setDismissed] = useState(() => {
@@ -183,7 +190,7 @@ function PasskeySetupPrompt({
   const [error, setError] = useState<string | null>(null);
   const [nickname, setNickname] = useState("");
   const open = policy?.enabled === true && policy.prompt_after_login &&
-    (me.passkey_count ?? 0) === 0 && !dismissed;
+    (me.passkey_count ?? 0) === 0 && !dismissed && !suspended;
   const dismiss = (): void => {
     try {
       globalThis.localStorage.setItem(dismissalKey, "1");
@@ -197,7 +204,10 @@ function PasskeySetupPrompt({
     setBusy(true);
     setError(null);
     void (async () => {
-      await registerPasskey(nickname.trim());
+      await retryWithRecentProductAuth(
+        () => registerPasskey(nickname.trim()),
+        reauthenticate,
+      );
       onCreated(await authApi.me());
     })().catch((reason: unknown) => {
       if (passkeyFlowCancelled(reason)) return;
@@ -214,9 +224,7 @@ function PasskeySetupPrompt({
           <Button color="inherit" onClick={dismiss}>Not now</Button>
           <Button
             variant="contained"
-            disabled={
-              busy || !passkeyFlowSupported() || nickname.trim() === ""
-            }
+            disabled={busy || !passkeyFlowSupported() || nickname.trim() === ""}
             onClick={add}
           >
             Add Passkey
@@ -264,6 +272,14 @@ export function ProductAuthGate({
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
+  const recentAuthRef = useRef<
+    {
+      promise: Promise<ProductMe>;
+      resolve: (me: ProductMe) => void;
+      reject: (reason: unknown) => void;
+    } | null
+  >(null);
+  const [recentAuthOpen, setRecentAuthOpen] = useState(false);
 
   const applyDecision = useCallback(
     async (decision: AuthGateDecision): Promise<void> => {
@@ -365,10 +381,63 @@ export function ProductAuthGate({
     setMe(next);
   }, []);
 
+  const reauthenticate = useCallback((): Promise<ProductMe> => {
+    if (recentAuthRef.current) return recentAuthRef.current.promise;
+    let resolve!: (me: ProductMe) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<ProductMe>((accept, decline) => {
+      resolve = accept;
+      reject = decline;
+    });
+    recentAuthRef.current = { promise, resolve, reject };
+    setRecentAuthOpen(true);
+    return promise;
+  }, []);
+
+  const completeRecentAuth = useCallback((next: ProductMe): void => {
+    const pending = recentAuthRef.current;
+    if (!pending) return;
+    recentAuthRef.current = null;
+    if (meRef.current?.account !== next.account) {
+      pending.reject(new Error("Verification returned a different account"));
+      setRecentAuthOpen(false);
+      generationRef.current += 1;
+      void (async () => {
+        await deleteProductHistoryCache();
+        announceProductSessionEnd();
+        globalThis.location.reload();
+      })();
+      return;
+    }
+    updateMe(next);
+    setRecentAuthOpen(false);
+    pending.resolve(next);
+  }, [updateMe]);
+
+  const cancelRecentAuth = useCallback((): void => {
+    const pending = recentAuthRef.current;
+    if (!pending) return;
+    recentAuthRef.current = null;
+    setRecentAuthOpen(false);
+    pending.reject(new DOMException("Cancelled", "AbortError"));
+  }, []);
+
+  useEffect(() => () => {
+    const pending = recentAuthRef.current;
+    recentAuthRef.current = null;
+    pending?.reject(new DOMException("Cancelled", "AbortError"));
+  }, []);
+
   if (view === "ready" && me) {
     return (
       <ProductAuthContext.Provider
-        value={{ me, passkeys: passkeyPolicy, updateMe, signOut }}
+        value={{
+          me,
+          passkeys: passkeyPolicy,
+          reauthenticate,
+          updateMe,
+          signOut,
+        }}
       >
         {children}
         {me.auth_enabled !== false &&
@@ -384,8 +453,18 @@ export function ProductAuthGate({
             me={me}
             policy={passkeyPolicy}
             onCreated={updateMe}
+            reauthenticate={reauthenticate}
+            suspended={recentAuthOpen}
           />
         )}
+        <ProductRecentAuthSheet
+          open={recentAuthOpen}
+          me={me}
+          providers={providers}
+          passwordEnabled={passwordEnabled}
+          onVerified={completeRecentAuth}
+          onCancel={cancelRecentAuth}
+        />
       </ProductAuthContext.Provider>
     );
   }
