@@ -241,7 +241,7 @@ impl PasskeyCeremonies {
         );
         Ok((
             challenge_id,
-            serde_json::to_value(ccr).context("encoding registration options")?,
+            serde_json::to_value(ccr.public_key).context("encoding registration options")?,
         ))
     }
 
@@ -300,7 +300,7 @@ impl PasskeyCeremonies {
         );
         Ok((
             challenge_id,
-            serde_json::to_value(rcr).context("encoding assertion options")?,
+            serde_json::to_value(rcr.public_key).context("encoding assertion options")?,
         ))
     }
 
@@ -359,8 +359,8 @@ impl PasskeyCeremonies {
         let (ccr, state) = webauthn
             .start_passkey_registration(uuid, username, username, Some(exclude))
             .context("starting external passkey registration")?;
-        let public_key =
-            serde_json::to_value(ccr).context("encoding external registration options")?;
+        let public_key = serde_json::to_value(ccr.public_key)
+            .context("encoding external registration options")?;
         self.issue_external(
             binding.user_id,
             binding.session_token_hash,
@@ -390,7 +390,7 @@ impl PasskeyCeremonies {
             .start_passkey_authentication(&passkeys)
             .context("starting external passkey assertion")?;
         let public_key =
-            serde_json::to_value(rcr).context("encoding external assertion options")?;
+            serde_json::to_value(rcr.public_key).context("encoding external assertion options")?;
         self.issue_external(
             binding.user_id,
             binding.session_token_hash,

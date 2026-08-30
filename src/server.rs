@@ -17833,7 +17833,19 @@ mod product_auth_api_tests {
         let options_body: serde_json::Value = options.json().await.unwrap();
         assert_eq!(options_body["status"], "ready");
         assert_eq!(options_body["action"], "register");
-        assert!(options_body.get("publicKey").is_some());
+        let public_key = options_body["publicKey"].as_object().unwrap();
+        assert!(
+            public_key
+                .get("challenge")
+                .is_some_and(|value| value.is_string())
+        );
+        assert!(public_key.get("rp").is_some_and(|value| value.is_object()));
+        assert!(
+            public_key
+                .get("user")
+                .is_some_and(|value| value.is_object())
+        );
+        assert!(public_key.get("publicKey").is_none());
 
         let wrong_session = post_json(
             &format!("{base}/api/auth/passkeys/external/finalize"),
