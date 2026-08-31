@@ -142,6 +142,7 @@ async function waitForNativeOidc(
   handoffToken: string,
   codeVerifier: string,
   signal?: AbortSignal,
+  onReady?: () => void,
 ): Promise<ProductMe> {
   const startedAt = Date.now();
   const deadline = startedAt + AUTHORIZATION_TIMEOUT_MS;
@@ -165,6 +166,7 @@ async function waitForNativeOidc(
         throw new AuthApiError("External authorization is no longer active.", 401);
       }
       if (status === "ready") {
+        onReady?.();
         const result = await authApi.pollNativeOidc(
           provider,
           handoffToken,
@@ -202,6 +204,22 @@ export async function runNativeOidc(
     NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
     cancel,
   );
+  let browserCompleted = false;
+  const completeBrowser = (): void => {
+    if (browserCompleted) return;
+    browserCompleted = true;
+    // A PKCE-bound ready event means the Provider callback has completed.
+    // Dismiss before the cookie exchange: iPad can suspend the covered
+    // WKWebView again while that request finishes and lose a later one-shot
+    // native message. Older shells may report programmatic dismissal as a
+    // user close, so detach that cancellation signal before asking UIKit to
+    // close the sheet.
+    globalThis.removeEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+      cancel,
+    );
+    closeAuthenticationBrowser();
+  };
   try {
     if (flow.signal.aborted) throw new DOMException("Cancelled", "AbortError");
     await openAuthenticationUrlConfirmed(
@@ -218,6 +236,7 @@ export async function runNativeOidc(
       handoffBinding.verifier,
       codeBinding.verifier,
       flow.signal,
+      completeBrowser,
     );
   } catch (reason) {
     void authApi.cancelNativeOidc(

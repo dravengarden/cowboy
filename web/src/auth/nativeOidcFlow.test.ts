@@ -167,6 +167,7 @@ Deno.test("native OIDC waits on push and exchanges cookies exactly once", async 
   const socketUrls: string[] = [];
   const socketMessages: string[] = [];
   const authenticationUrls: string[] = [];
+  const completionOrder: string[] = [];
   let closes = 0;
 
   class FakeWebSocket extends EventTarget {
@@ -207,9 +208,19 @@ Deno.test("native OIDC waits on push and exchanges cookies exactly once", async 
     authenticationUrls.push(url);
     return true;
   };
-  root.__cowboyCloseAuthenticationBrowser = () => closes += 1;
+  root.__cowboyCloseAuthenticationBrowser = () => {
+    closes += 1;
+    completionOrder.push("close");
+    // Bridge v1 could report every dismissal as if the user closed the sheet.
+    // Once the bound ready event arrives, that late signal must not cancel the
+    // cookie exchange.
+    globalThis.dispatchEvent(
+      new Event(NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT),
+    );
+  };
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const path = typeof input === "string" ? input : input.toString();
+    completionOrder.push("poll");
     fetches.push({ input: path, init });
     return Promise.resolve(Response.json({ account: "draven", role: "owner" }));
   }) as typeof fetch;
@@ -233,7 +244,8 @@ Deno.test("native OIDC waits on push and exchanges cookies exactly once", async 
     assertEquals(fetches.length, 1);
     assertEquals(fetches[0]?.input, "/api/auth/oidc/native/poll");
     assertEquals(JSON.parse(String(fetches[0]?.init?.body)), proofs);
-    assertEquals(closes, 1);
+    assertEquals(closes, 2);
+    assertEquals(completionOrder, ["close", "poll", "close"]);
   } finally {
     globalThis.fetch = previousFetch;
     delete root.__cowboyNativeShell;
