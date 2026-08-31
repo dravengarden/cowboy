@@ -493,43 +493,7 @@ impl MachinePluginStore {
         let auth = &package.manifest.authentication;
         let home = if auth.required {
             let generation = auth_generation.context("session has no Provider auth generation")?;
-            let materialized = self
-                .auth_provider_root(provider_id)
-                .join("materialized/generations")
-                .join(generation.to_string());
-            let metadata: MaterializationMetadata = serde_json::from_slice(
-                &fs::read(materialized.join("metadata.json")).context("reading auth projection")?,
-            )?;
-            ensure!(
-                metadata.auth_generation == generation,
-                "session Provider auth generation is not materialized"
-            );
-            ensure!(
-                metadata.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint,
-                "session Provider auth generation uses a different contract"
-            );
-            let envelope = self
-                .latest_auth_envelope(provider_id)?
-                .context("session Provider auth replica is missing")?;
-            ensure!(
-                envelope.auth_generation == generation,
-                "session Provider auth replica uses a different generation"
-            );
-            ensure!(
-                self.materialization_is_current(&package, &envelope)?,
-                "session Provider auth generation is missing projected credentials"
-            );
-            let plaintext = self.encryption.open(&envelope)?;
-            let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
-                .context("decoding Provider runtime credential bundle")?;
-            self.ensure_runtime_projection(&package, generation, &bundle)?;
-            Some(
-                self.auth_provider_root(provider_id)
-                    .join("runtime/generations")
-                    .join(generation.to_string())
-                    .join("home"),
-            )
+            Some(self.prepare_launch_auth_home(provider_id, &package, generation)?)
         } else {
             None
         };
@@ -582,6 +546,66 @@ impl MachinePluginStore {
                 .clone(),
             home,
         })
+    }
+
+    fn prepare_launch_auth_home(
+        &self,
+        provider_id: &str,
+        package: &ProviderPackage,
+        generation: u64,
+    ) -> Result<PathBuf> {
+        let auth = &package.manifest.authentication;
+        let envelope = self
+            .latest_auth_envelope(provider_id)?
+            .context("session Provider auth replica is missing")?;
+        ensure!(
+            envelope.auth_generation == generation,
+            "session Provider auth replica uses a different generation"
+        );
+        ensure!(
+            envelope.action == ProviderAuthAction::Apply,
+            "session Provider auth replica has no credentials"
+        );
+        ensure!(
+            envelope.auth_contract_fingerprint
+                == package.manifest.compatibility.auth_contract_fingerprint
+                && envelope.projection_schema == auth.projection_schema,
+            "session Provider auth replica uses a different contract"
+        );
+        let plaintext = self.encryption.open(&envelope)?;
+        let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
+            .context("decoding Provider runtime credential bundle")?;
+        validate_portable_bundle(auth, &bundle)?;
+        // A Machine upgrade or interrupted projection may leave the durable
+        // sealed replica ahead of its local projections. Repair those
+        // projections before admitting the session so recovery does not
+        // depend on a later Controller retry or filesystem event.
+        self.materialize_bundle(package, generation, &bundle)?;
+        let materialized = self
+            .auth_provider_root(provider_id)
+            .join("materialized/generations")
+            .join(generation.to_string());
+        let metadata: MaterializationMetadata = serde_json::from_slice(
+            &fs::read(materialized.join("metadata.json")).context("reading auth projection")?,
+        )?;
+        ensure!(
+            metadata.auth_generation == generation,
+            "session Provider auth generation is not materialized"
+        );
+        ensure!(
+            metadata.auth_contract_fingerprint
+                == package.manifest.compatibility.auth_contract_fingerprint,
+            "session Provider auth generation uses a different contract"
+        );
+        ensure!(
+            self.materialization_is_current(package, &envelope)?,
+            "session Provider auth generation is missing projected credentials"
+        );
+        Ok(self
+            .auth_provider_root(provider_id)
+            .join("runtime/generations")
+            .join(generation.to_string())
+            .join("home"))
     }
 
     /// Export credentials created by a temporary login executor into the
@@ -1487,13 +1511,9 @@ impl MachinePluginStore {
     /// deliberately excluded so ordinary agent activity never causes an auth
     /// scan.
     pub fn auth_event_is_relevant(&self, paths: &[PathBuf]) -> bool {
-        self.auth_credential_watch_paths().is_ok_and(|credentials| {
-            paths.iter().any(|changed| {
-                credentials.iter().any(|credential| {
-                    changed == credential || credential.parent() == Some(changed.as_path())
-                })
-            })
-        })
+        let root = self.auth_watch_root();
+        self.auth_credential_watch_paths()
+            .is_ok_and(|credentials| auth_event_paths_intersect(&root, &credentials, paths))
     }
 
     /// Compare each writable Machine projection with its signed Service
@@ -1654,6 +1674,21 @@ impl MachinePluginStore {
         }
         Ok(())
     }
+}
+
+fn auth_event_paths_intersect(
+    root: &Path,
+    credentials: &[PathBuf],
+    changed_paths: &[PathBuf],
+) -> bool {
+    changed_paths.iter().any(|changed| {
+        changed.starts_with(root)
+            && credentials.iter().any(|credential| {
+                changed == credential
+                    || credential.starts_with(changed)
+                    || changed.parent() == credential.parent()
+            })
+    })
 }
 
 fn projected_credential_bundle(
@@ -2718,6 +2753,61 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn seal_auth_for_test(
+        store: &MachinePluginStore,
+        package: &ProviderPackage,
+        signer: &crate::machine_auth::MachineIdentity,
+        auth_generation: u64,
+        bundle: &PortableCredentialBundle,
+    ) -> SealedProviderAuth {
+        let recipient = decode_fixed::<32>(
+            store.encryption.public_key(),
+            "Machine encryption public key",
+        )
+        .unwrap();
+        let ephemeral = StaticSecret::from([7_u8; 32]);
+        let ephemeral_public = PublicKey::from(&ephemeral);
+        let shared = ephemeral.diffie_hellman(&PublicKey::from(recipient));
+        let key = derive_seal_key(shared.as_bytes());
+        let nonce = [9_u8; 24];
+        let mut envelope = SealedProviderAuth {
+            envelope_schema: 1,
+            provider_id: package.manifest.id.clone(),
+            auth_generation,
+            auth_contract_fingerprint: package
+                .manifest
+                .compatibility
+                .auth_contract_fingerprint
+                .clone(),
+            projection_schema: package.manifest.authentication.projection_schema.clone(),
+            action: ProviderAuthAction::Apply,
+            ephemeral_public_key: base64::engine::general_purpose::STANDARD
+                .encode(ephemeral_public.as_bytes()),
+            nonce: base64::engine::general_purpose::STANDARD.encode(nonce),
+            ciphertext: String::new(),
+            service_public_key: signer.public_key().to_owned(),
+            signature: String::new(),
+        };
+        let plaintext = serde_json::to_vec(bundle).unwrap();
+        let ciphertext = XChaCha20Poly1305::new(Key::from_slice(&key))
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: &provider_auth_aad(&envelope),
+                },
+            )
+            .unwrap();
+        envelope.ciphertext = base64::engine::general_purpose::STANDARD.encode(ciphertext);
+        envelope.signature = signer
+            .sign_namespaced(
+                crate::machine_auth::PROVIDER_AUTH_SIGNATURE_NAMESPACE,
+                &envelope.proof(),
+            )
+            .unwrap();
+        envelope
+    }
+
     // This end-to-end test intentionally retains the complete signed install,
     // runtime, auth, uninstall, and rollback story in one fixture.
     #[allow(clippy::too_many_lines)]
@@ -2888,6 +2978,31 @@ mod tests {
                 .unwrap();
         let installed = store.install(&desired).await.unwrap();
         assert_eq!(installed.generation_digest, release.artifact_digest);
+        let service_signer =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("service")).unwrap();
+        let bundle = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "api-key".to_owned(),
+            values: BTreeMap::from([(
+                "api_key".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(b"fixture-api-key"),
+            )]),
+        };
+        let envelope = seal_auth_for_test(&store, &package, &service_signer, 1, &bundle);
+        store.apply_auth(&envelope).await.unwrap();
+        let auth_root = root.join("machine/provider-auth/providers/gemini");
+        fs::remove_dir_all(auth_root.join("materialized/generations/1")).unwrap();
+        fs::remove_dir_all(auth_root.join("runtime/generations/1")).unwrap();
+        let context = store
+            .launch_context("gemini", &release.artifact_digest, Some(1))
+            .unwrap();
+        assert_eq!(context.environment["GEMINI_API_KEY"], "fixture-api-key");
+        assert!(context.home.unwrap().is_dir());
+        assert!(
+            auth_root
+                .join("materialized/generations/1/metadata.json")
+                .is_file()
+        );
         let command = store
             .authentication_component_command(
                 "gemini",
@@ -3168,6 +3283,32 @@ mod tests {
         assert!(digest_generation_name(&format!("sha512:{}", "ab".repeat(32))).is_err());
         assert!(validate_plugin_id(".").is_err());
         assert!(validate_plugin_id("..").is_err());
+    }
+
+    #[test]
+    fn auth_events_include_atomic_generation_switches_but_exclude_other_state() {
+        let root = PathBuf::from("/state/provider-auth/providers");
+        let credential = root.join("grok/runtime/generations/3/home/.grok/auth.json");
+        assert!(auth_event_paths_intersect(
+            &root,
+            std::slice::from_ref(&credential),
+            std::slice::from_ref(&credential)
+        ));
+        assert!(auth_event_paths_intersect(
+            &root,
+            std::slice::from_ref(&credential),
+            &[credential.parent().unwrap().join(".auth.json.partial")]
+        ));
+        assert!(auth_event_paths_intersect(
+            &root,
+            std::slice::from_ref(&credential),
+            &[root.join("grok/runtime/generations/3")]
+        ));
+        assert!(!auth_event_paths_intersect(
+            &root,
+            std::slice::from_ref(&credential),
+            &[PathBuf::from("/state/plugins/grok/runtime.log")]
+        ));
     }
 
     #[test]

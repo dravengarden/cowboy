@@ -1940,10 +1940,12 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                             materialization_state: receipt.materialization_state,
                             detail: None,
                         });
-                        let _ = events.send(MachineEvent::PluginInventory {
-                            plugins: providers.inventory().unwrap_or_default(),
-                            observed_at_ms: unix_ms(),
-                        });
+                        // Applying an authoritative generation can migrate a
+                        // complete legacy refresh into the writable runtime
+                        // projection via an atomic directory rename. Publish
+                        // observations directly instead of relying on a
+                        // platform-specific filesystem event shape.
+                        publish_provider_auth_observations(&providers, &events);
                         let _ = events.send(MachineEvent::CommandResult {
                             request_id,
                             accepted: true,
