@@ -37,8 +37,8 @@ function EnabledDesktopAccountCommands({
   }), [me.account, signOut]);
   const devicesCommand = useMemo<DesktopCommand>(() => ({
     id: "account.devices",
-    title: "Authorized clients",
-    description: "Review or revoke signed-in Cowboy clients",
+    title: "CLI & ACP access",
+    description: "Review or revoke browser-approved client credentials",
     group: "Account",
     run: () => setDevicesOpen(true),
   }), []);
@@ -57,8 +57,8 @@ function EnabledDesktopAccountCommands({
     <DesktopModal
       open={devicesOpen}
       onClose={() => setDevicesOpen(false)}
-      title="Authorized clients"
-      description={`CLI and ACP clients signed in as ${me.account}. Browser sessions and Passkeys are managed separately.`}
+      title="CLI & ACP access"
+      description={`Browser-approved CLI and ACP credentials for ${me.account}. Browser sessions and Passkeys are managed separately.`}
       width={520}
     >
       <Box sx={{ px: 2.25, py: 2 }}>

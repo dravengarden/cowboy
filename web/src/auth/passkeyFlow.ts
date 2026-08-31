@@ -1,8 +1,10 @@
 import {
   closeAuthenticationBrowser,
+  hasNativePasskeyAuthenticationBrowser,
   NATIVE_APP_RESUMED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
   openAuthenticationUrlConfirmed,
+  openPasskeyAuthenticationUrl,
 } from "../openExternal";
 import {
   authApi,
@@ -59,9 +61,12 @@ interface ExternalPasskeyCloseReconcileDependencies {
 export function externalPasskeyUrl(
   origin: string,
   transactionId: string,
+  nativeCallback = false,
 ): string {
   const url = new URL("/passkey.html", origin);
-  url.hash = new URLSearchParams({ transaction: transactionId }).toString();
+  const fragment = new URLSearchParams({ transaction: transactionId });
+  if (nativeCallback) fragment.set("callback", "native");
+  url.hash = fragment.toString();
   return url.href;
 }
 
@@ -354,6 +359,36 @@ async function runExternalPasskey(
     Math.max(1, started.expires_in_seconds) * 1_000,
   );
   try {
+    if (hasNativePasskeyAuthenticationBrowser()) {
+      const nativeStatus = await openPasskeyAuthenticationUrl(
+        externalPasskeyUrl(
+          location.origin,
+          started.transaction_id,
+          true,
+        ),
+        flow.signal,
+      );
+      if (nativeStatus === "cancelled") {
+        throw new DOMException("Cancelled", "AbortError");
+      }
+      if (nativeStatus === "failed") {
+        throw new AuthApiError("Passkey verification failed.", 400);
+      }
+      if (nativeStatus === "complete") {
+        const result = await reconcileExternalPasskeyAfterResume(
+          started.transaction_id,
+          binding.verifier,
+          flow.signal,
+        );
+        if (result.status === "complete") return result;
+        throw new AuthApiError(
+          "Cowboy could not confirm the completed Passkey. Please try again.",
+          503,
+        );
+      }
+      // A partially initialized native shell stays usable through the proven
+      // SFSafariViewController + WebSocket path below.
+    }
     await openAuthenticationUrlConfirmed(
       externalPasskeyUrl(location.origin, started.transaction_id),
       flow.signal,

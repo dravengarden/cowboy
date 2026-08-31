@@ -3,9 +3,11 @@ import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
   hasNativeExternalOpener,
+  hasNativePasskeyAuthenticationBrowser,
   openAuthenticationUrl,
   openAuthenticationUrlConfirmed,
   openExternalUrl,
+  openPasskeyAuthenticationUrl,
   NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
   safeAuthenticationUrl,
@@ -24,6 +26,65 @@ Deno.test("external links allow explicit network and contact protocols", () => {
     if (safeExternalUrl(url) !== new URL(url).href) {
       throw new Error(`expected allowed external URL: ${url}`);
     }
+  }
+});
+
+Deno.test("native Passkey browser returns its terminal callback without a suspended WebSocket", async () => {
+  let opened = "";
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenPasskeyBrowser?: (url: string) => Promise<unknown>;
+    __cowboyPasskeyBrowserBridgeVersion?: number;
+  };
+  root.__cowboyPasskeyBrowserBridgeVersion = 1;
+  root.__cowboyOpenPasskeyBrowser = (url) => {
+    opened = url;
+    return Promise.resolve({ ok: true, status: "complete" });
+  };
+  try {
+    if (!hasNativePasskeyAuthenticationBrowser()) {
+      throw new Error("expected native Passkey browser detection");
+    }
+    assertEquals(
+      await openPasskeyAuthenticationUrl("https://example.com/passkey.html"),
+      "complete",
+    );
+    assertEquals(opened, "https://example.com/passkey.html");
+  } finally {
+    delete root.__cowboyOpenPasskeyBrowser;
+    delete root.__cowboyPasskeyBrowserBridgeVersion;
+  }
+});
+
+Deno.test("missing native Passkey browser falls back without opening a page", async () => {
+  assertEquals(
+    await openPasskeyAuthenticationUrl("https://example.com/passkey.html"),
+    "unavailable",
+  );
+});
+
+Deno.test("aborting a native Passkey browser closes the system session", async () => {
+  let closes = 0;
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenPasskeyBrowser?: () => Promise<unknown>;
+    __cowboyClosePasskeyBrowser?: () => void;
+    __cowboyPasskeyBrowserBridgeVersion?: number;
+  };
+  root.__cowboyPasskeyBrowserBridgeVersion = 1;
+  root.__cowboyOpenPasskeyBrowser = () => new Promise(() => undefined);
+  root.__cowboyClosePasskeyBrowser = () => closes += 1;
+  const controller = new AbortController();
+  try {
+    const pending = openPasskeyAuthenticationUrl(
+      "https://example.com/passkey.html",
+      controller.signal,
+    );
+    controller.abort(new DOMException("Cancelled", "AbortError"));
+    await assertRejects(() => pending, DOMException, "Cancelled");
+    assertEquals(closes, 1);
+  } finally {
+    delete root.__cowboyOpenPasskeyBrowser;
+    delete root.__cowboyClosePasskeyBrowser;
+    delete root.__cowboyPasskeyBrowserBridgeVersion;
   }
 });
 

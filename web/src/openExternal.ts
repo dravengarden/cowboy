@@ -16,7 +16,16 @@ type NativeGlobals = {
   __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
   __cowboyCloseAuthenticationBrowser?: () => void;
   __cowboyAuthenticationBrowserBridgeVersion?: number;
+  __cowboyOpenPasskeyBrowser?: (url: string) => Promise<unknown>;
+  __cowboyClosePasskeyBrowser?: () => void;
+  __cowboyPasskeyBrowserBridgeVersion?: number;
 };
+
+export type NativePasskeyBrowserStatus =
+  | "complete"
+  | "cancelled"
+  | "failed"
+  | "unavailable";
 
 export const NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT =
   "cowboy:native-authentication-browser-closed";
@@ -170,6 +179,76 @@ export function closeAuthenticationBrowser(): void {
   } catch {
     // Closing the Cowboy dialog must never depend on the optional native sheet.
   }
+}
+
+export function hasNativePasskeyAuthenticationBrowser(): boolean {
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  return (root.__cowboyPasskeyBrowserBridgeVersion ?? 0) >= 1 &&
+    typeof root.__cowboyOpenPasskeyBrowser === "function";
+}
+
+/** Run Cowboy's fixed-origin external Passkey page in an iOS web
+ * authentication session. Its callback closes the system sheet even while the
+ * underlying WKWebView is suspended. An unavailable or partial bridge falls
+ * back to the existing Safari-sheet transport; cancellation never does. */
+export async function openPasskeyAuthenticationUrl(
+  url: string,
+  signal?: AbortSignal,
+): Promise<NativePasskeyBrowserStatus> {
+  const resolved = safeAuthenticationUrl(url);
+  if (!resolved) throw new Error("Passkey URL is invalid");
+  const root = globalThis as typeof globalThis & NativeGlobals;
+  const open = root.__cowboyOpenPasskeyBrowser;
+  if (!hasNativePasskeyAuthenticationBrowser() || typeof open !== "function") {
+    return "unavailable";
+  }
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Cancelled", "AbortError");
+  }
+
+  let request: Promise<unknown>;
+  try {
+    request = open(resolved);
+  } catch {
+    return "unavailable";
+  }
+
+  const raw = await new Promise<unknown>((resolve, reject) => {
+    let settled = false;
+    const finish = (result: { value: unknown } | { error: unknown }): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      if ("value" in result) resolve(result.value);
+      else reject(result.error);
+    };
+    const onAbort = (): void => {
+      try {
+        root.__cowboyClosePasskeyBrowser?.();
+      } catch {
+        // The AbortSignal remains authoritative if the optional close fails.
+      }
+      finish({
+        error: signal?.reason ?? new DOMException("Cancelled", "AbortError"),
+      });
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void Promise.resolve(request).then(
+      (value) => finish({ value }),
+      () => finish({ value: { ok: false } }),
+    );
+  });
+
+  if (raw == null || typeof raw !== "object") return "unavailable";
+  const reply = raw as { ok?: unknown; status?: unknown };
+  if (reply.ok !== true) return "unavailable";
+  if (
+    reply.status === "complete" || reply.status === "cancelled" ||
+    reply.status === "failed"
+  ) {
+    return reply.status;
+  }
+  return "unavailable";
 }
 
 export function hasNativeAuthenticationBrowser(): boolean {

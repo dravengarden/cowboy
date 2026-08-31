@@ -16,6 +16,11 @@ AuthenticationServices independently enforces both requirements.
 SideStore/free-team builds leave the key absent. The shared web transport
 registry then uses Cowboy's PKCE-bound system-Safari ceremony. This is an
 intentional secure fallback, not a local-biometric substitute for WebAuthn.
+The same bridge owns that fallback through `ASWebAuthenticationSession` so the
+fixed Cowboy callback closes the sheet after success or cancellation even when
+the underlying WKWebView is suspended. WebAuthn still requires the explicit
+gesture on the trusted Cowboy page; only an Associated-Domains-capable build
+may skip that page and invoke the native Passkey prompt directly.
 
 The sibling `../tauri/tauri.macos.conf.json` is merged automatically by
 Tauri's macOS build. Development bundles use Tauri's `-` pseudo-identity and

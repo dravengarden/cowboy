@@ -26,7 +26,11 @@ function activityLabel(device: ProductDevice): string {
 
 /** Browser-approved CLI and ACP clients. Browser cookie sessions and Passkeys
  * are separate account resources and intentionally do not appear here. */
-export function ProductDevicesPanel(): React.JSX.Element {
+export function ProductDevicesPanel({
+  hideWhenEmpty = false,
+}: {
+  hideWhenEmpty?: boolean;
+}): React.JSX.Element {
   const { me, reauthenticate } = useProductAuth();
   const [devices, setDevices] = useState<ProductDevice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +76,12 @@ export function ProductDevicesPanel(): React.JSX.Element {
   };
 
   if (me.auth_enabled === false) return <></>;
+  if (
+    hideWhenEmpty &&
+    (loading || error === null && devices.length === 0)
+  ) {
+    return <></>;
+  }
 
   return (
     <Stack spacing={2}>
@@ -91,9 +101,9 @@ export function ProductDevicesPanel(): React.JSX.Element {
           <DevicesOutlined />
         </Box>
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography sx={{ fontWeight: 700 }}>Authorized clients</Typography>
+          <Typography sx={{ fontWeight: 700 }}>CLI &amp; ACP access</Typography>
           <Typography variant="body2" color="text.secondary">
-            Cowboy CLI and ACP connections for this account
+            Browser-approved client credentials
           </Typography>
         </Box>
         <Chip
@@ -106,10 +116,9 @@ export function ProductDevicesPanel(): React.JSX.Element {
       </Stack>
 
       <Typography variant="body2" color="text.secondary">
-        This browser session and your Passkeys are managed under Session
-        protection, so they are not counted here. New clients open Cowboy’s
-        normal sign-in page and ask for approval; revoke anything you no longer
-        recognize.
+        CLI and ACP clients request their own revocable credential through
+        Cowboy’s normal sign-in page. Browser sessions and Passkeys are managed
+        under Session protection and are intentionally separate.
       </Typography>
 
       {error && <Alert severity="error">{error}</Alert>}
@@ -130,13 +139,12 @@ export function ProductDevicesPanel(): React.JSX.Element {
             }}
           >
             <Typography sx={{ fontWeight: 650 }}>
-              No authorized clients yet
+              No CLI or ACP access yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
               Run{" "}
               <code>cowboy login {globalThis.location.origin}</code>, or start a
-              Cowboy ACP client, to authorize a separate client. This browser
-              remains signed in.
+              Cowboy ACP client, to authorize a separate client.
             </Typography>
           </Box>
         )

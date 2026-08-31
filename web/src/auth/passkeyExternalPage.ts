@@ -21,6 +21,17 @@ let ceremony: Extract<ExternalPasskeyBrowserState, { status: "ready" }> | null =
 let transactionId = "";
 let busy = false;
 let terminal = false;
+let nativeCallback = false;
+
+type NativeCallbackStatus = "complete" | "cancelled" | "failed";
+
+function finishNative(status: NativeCallbackStatus): boolean {
+  if (!nativeCallback) return false;
+  const callback = new URL("cowboy-passkey://complete");
+  callback.searchParams.set("status", status);
+  location.replace(callback.href);
+  return true;
+}
 
 function setCopy(nextTitle: string, nextStatus: string): void {
   if (title) title.textContent = nextTitle;
@@ -62,6 +73,7 @@ function showTerminalError(message: string): void {
   }
   if (actions) actions.hidden = true;
   setBusy(false);
+  finishNative("failed");
 }
 
 async function performPasskey(): Promise<void> {
@@ -78,10 +90,12 @@ async function performPasskey(): Promise<void> {
       : await assertPasskey(ceremony);
     await externalPasskeyApi.complete(transactionId, credential);
     terminal = true;
-    setCopy(
-      ceremony.action === "register" ? "Passkey created" : "Passkey verified",
-      "Tap Done to return to Cowboy. Your account will update automatically.",
-    );
+    if (!finishNative("complete")) {
+      setCopy(
+        ceremony.action === "register" ? "Passkey created" : "Passkey verified",
+        "Tap Done to return to Cowboy. Your account will update automatically.",
+      );
+    }
     if (actions) actions.hidden = true;
   } catch (reason) {
     if (passkeyFlowCancelled(reason)) {
@@ -99,6 +113,7 @@ async function performPasskey(): Promise<void> {
 
 async function run(): Promise<void> {
   const fragment = new URLSearchParams(location.hash.slice(1));
+  nativeCallback = fragment.get("callback") === "native";
   transactionId = fragment.get("transaction") ?? "";
   if (!/^[a-f0-9]{64}$/.test(transactionId)) {
     showTerminalError("This Passkey request is invalid or has expired.");
@@ -110,7 +125,9 @@ async function run(): Promise<void> {
     setBusy(true);
     void externalPasskeyApi.fail(transactionId).then(() => {
       terminal = true;
-      setCopy("Passkey request cancelled", "Return to Cowboy when ready.");
+      if (!finishNative("cancelled")) {
+        setCopy("Passkey request cancelled", "Return to Cowboy when ready.");
+      }
       if (actions) actions.hidden = true;
     }).catch(() => {
       showRetryableError("Could not cancel this Passkey request.");
@@ -129,10 +146,12 @@ async function run(): Promise<void> {
     const options = await externalPasskeyApi.options(transactionId);
     if (options.status === "complete") {
       terminal = true;
-      setCopy(
-        "Passkey is ready",
-        "Tap Done to return to Cowboy. Your account will update automatically.",
-      );
+      if (!finishNative("complete")) {
+        setCopy(
+          "Passkey is ready",
+          "Tap Done to return to Cowboy. Your account will update automatically.",
+        );
+      }
       return;
     }
     if (options.status === "failed") {

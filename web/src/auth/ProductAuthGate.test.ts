@@ -201,9 +201,10 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
   assert(desktop.includes("account.signOut"));
   assert(desktop.includes("account.devices"));
   assert(desktop.includes("ProductDevicesPanel"));
-  assert(desktop.includes("Authorized clients"));
+  assert(desktop.includes("CLI & ACP access"));
   assert(clients.includes("Browser cookie sessions and Passkeys"));
-  assert(/This browser\s+remains signed in/u.test(clients));
+  assert(clients.includes("hideWhenEmpty"));
+  assert(clients.includes("Browser-approved client credentials"));
   assertEquals(clients.includes("Authorized devices"), false);
   assertEquals(desktop.includes("ProductTokensPanel"), false);
   assertEquals(desktop.includes('from "../store"'), false);
@@ -230,7 +231,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1605"'));
+  assert(sw.includes('const VERSION = "cowboy-v1606"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -333,6 +334,8 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(account.includes('variant="outlined"'));
   assert(account.includes("Running agents keep"));
   assert(externalPage.includes("Tap Done to return to Cowboy"));
+  assert(externalPage.includes("cowboy-passkey://complete"));
+  assert(externalPage.includes('finishNative("cancelled")'));
 });
 
 Deno.test("session reauthentication is pushed and stays compact until required", async () => {

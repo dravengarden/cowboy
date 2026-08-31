@@ -35,6 +35,14 @@ Deno.test("external Passkey URL carries only the opaque transaction in a fragmen
     transactionId,
   );
   assertEquals(url.href.includes("verifier"), false);
+
+  const nativeUrl = new URL(
+    externalPasskeyUrl("https://cowboy.example", transactionId, true),
+  );
+  const nativeFragment = new URLSearchParams(nativeUrl.hash.slice(1));
+  assertEquals(nativeFragment.get("transaction"), transactionId);
+  assertEquals(nativeFragment.get("callback"), "native");
+  assertEquals(nativeUrl.search, "");
 });
 
 Deno.test("external Passkey events use a same-origin WebSocket without secrets", () => {

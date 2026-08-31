@@ -5871,7 +5871,7 @@ function SettingsShell({
                 >
                     <Stack data-mobile-account-sections spacing={2}>
                         <ProductPasskeysPanel />
-                        <ProductDevicesPanel />
+                        <ProductDevicesPanel hideWhenEmpty />
                         <ProductAccountMenu />
                     </Stack>
                 </MobileSettingsRoute>
