@@ -200,6 +200,13 @@ The built-in fallback gives Cardea priority when it is available. Web rejects an
 incomplete or duplicate response order and reconstructs the same safe default so
 a malformed response cannot hide an enabled login method. Native clients can
 consume the same explicit order without inferring it from the Provider array.
+That ordering applies only to a fresh login. Cowboy persists the exact method
+used by each browser session and primary reauthentication exposes and accepts
+only that method. Password and provider proofs remain independent even when
+their configured identities resolve to the same Cowboy account; changing proof
+sources requires an explicit sign-out and fresh login. A legacy session with no
+recorded source shows all enabled methods once, tells the user to choose its
+original method, and binds the successful choice server-side.
 Cowboy owns the full-page gate, tabs, warning bar, responsive dialog or bottom
 sheet, locked backdrop, cancellation, and recovery path. A package contributes
 signed protocol and presentation data only; it cannot render arbitrary UI or

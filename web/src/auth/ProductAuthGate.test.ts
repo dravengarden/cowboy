@@ -14,6 +14,7 @@ async function readAuthSources(): Promise<string> {
     "DeviceAuthorizationPage.tsx",
     "ProductPasskeysPanel.tsx",
     "ProductRecentAuthSheet.tsx",
+    "productReauthMethods.ts",
     "ProductSessionGuard.tsx",
     "productSessionAlertHost.ts",
     "sessionSchedule.ts",
@@ -231,7 +232,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1606"'));
+  assert(sw.includes('const VERSION = "cowboy-v1607"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -381,6 +382,10 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assert(sheet.includes('purpose === "primary"'));
   assert(sheet.includes("primary-login deadline is approaching"));
   assert(sheet.includes("primary-login limit has been reached"));
+  assert(sheet.includes("same method that started this browser session"));
+  assert(sheet.includes("session predates sign-in-method tracking"));
+  assert(sheet.includes("Sign out to start a new session"));
+  assert(sheet.includes("resolvePrimaryReauthMethods"));
   assert(sheet.includes("scheduled Passkey check is approaching"));
   assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
   assert(panel.includes("Session protection"));

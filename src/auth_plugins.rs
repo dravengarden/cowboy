@@ -14,6 +14,7 @@ use crate::plugin_catalog::PluginCatalog;
 
 const CONFIG_SCHEMA: &str = "dravengarden.cowboy.authentication/v1";
 const MAX_CONFIG_BYTES: u64 = 128 * 1_024;
+pub(crate) const PASSWORD_LOGIN_METHOD: &str = "password";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct PasskeyServerPolicy {
@@ -321,7 +322,7 @@ fn resolve_login_method_order(
     provider_ids: &[String],
 ) -> Result<Vec<String>> {
     ensure!(
-        provider_ids.iter().all(|id| id != "password"),
+        provider_ids.iter().all(|id| id != PASSWORD_LOGIN_METHOD),
         "Authentication Provider ID password is reserved"
     );
     let mut default_order = Vec::with_capacity(provider_ids.len() + usize::from(password_enabled));
@@ -329,7 +330,7 @@ fn resolve_login_method_order(
         default_order.push("cardea".to_owned());
     }
     if password_enabled {
-        default_order.push("password".to_owned());
+        default_order.push(PASSWORD_LOGIN_METHOD.to_owned());
     }
     default_order.extend(
         provider_ids

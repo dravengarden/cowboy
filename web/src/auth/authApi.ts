@@ -11,6 +11,7 @@ export interface ProductMe {
   account: string;
   role: ProductRole;
   auth_enabled?: boolean;
+  primary_auth_method?: string | null;
   passkey_count?: number;
   passkey_reauth_enabled?: boolean;
   passkey_reauth_required?: boolean;
@@ -128,6 +129,12 @@ export function productMeFromJson(value: unknown): ProductMe | undefined {
   ) return undefined;
   const next: ProductMe = { account: me.account, role: me.role };
   if (typeof me.auth_enabled === "boolean") next.auth_enabled = me.auth_enabled;
+  if (
+    typeof me.primary_auth_method === "string" ||
+    me.primary_auth_method === null
+  ) {
+    next.primary_auth_method = me.primary_auth_method;
+  }
   if (typeof me.passkey_count === "number") {
     next.passkey_count = me.passkey_count;
   }

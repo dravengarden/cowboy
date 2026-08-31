@@ -467,7 +467,12 @@ Deno.test("auth status JSON requires the public registration shape", () => {
         mode: "token",
         accepts_registration: true,
       },
-      me: { account: "draven", role: "operator", auth_enabled: false },
+      me: {
+        account: "draven",
+        role: "operator",
+        auth_enabled: false,
+        primary_auth_method: "cardea",
+      },
     }),
     {
       registration: {
@@ -480,7 +485,12 @@ Deno.test("auth status JSON requires the public registration shape", () => {
       password_enabled: true,
       login_method_order: ["password"],
       providers: [],
-      me: { account: "draven", role: "operator", auth_enabled: false },
+      me: {
+        account: "draven",
+        role: "operator",
+        auth_enabled: false,
+        primary_auth_method: "cardea",
+      },
     },
   );
 });

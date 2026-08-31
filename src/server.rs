@@ -2048,6 +2048,8 @@ struct ProductMe {
     account: String,
     role: crate::admin::AdminRole,
     #[serde(default)]
+    primary_auth_method: Option<String>,
+    #[serde(default)]
     passkey_count: u32,
     #[serde(default)]
     passkey_reauth_enabled: bool,
@@ -3192,6 +3194,7 @@ fn product_me(hub: &Hub, username: &str) -> ProductMe {
         session_expires_at_ms: None,
         session_server_now_ms: None,
         session_reauth_kind: None,
+        primary_auth_method: None,
     }
 }
 
@@ -3261,6 +3264,7 @@ fn product_me_for_user_with_policy(
         .reauth_after_ms
         .min(authentication.session.passkey_max_age_ms);
     if let Some(session) = session {
+        me.primary_auth_method = session.primary_auth_method.clone();
         let now = auth_now_ms();
         let deadlines = product_session_deadlines(
             authentication.session,
@@ -3986,7 +3990,40 @@ async fn issue_product_session(
     store: &Store,
     user: &crate::store::ProductUser,
     headers: &HeaderMap,
+    auth_method: &str,
 ) -> Response {
+    let previous_token_hash = crate::product_auth::user_cookie_token(headers)
+        .map(|token| crate::admin::hex_sha256(token.as_bytes()));
+    let previous_session = if let Some(token_hash) = previous_token_hash.as_deref() {
+        match store.user_session_by_token_hash(token_hash).await {
+            Ok(session) => session,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(previous) = previous_session.as_ref() {
+        if previous.user_id != user.id {
+            return (
+                StatusCode::CONFLICT,
+                "Sign out before changing the account for this browser session.",
+            )
+                .into_response();
+        }
+        if previous
+            .primary_auth_method
+            .as_deref()
+            .is_some_and(|method| method != auth_method)
+        {
+            return (
+                StatusCode::CONFLICT,
+                "Sign out before switching this browser session's sign-in method.",
+            )
+                .into_response();
+        }
+    }
     let token = match crate::product_auth::new_session_token() {
         Ok(token) => token,
         Err(error) => {
@@ -4007,8 +4044,19 @@ async fn issue_product_session(
             .map(ToOwned::to_owned),
         passkey_verified_at_ms: None,
         primary_authenticated_at_ms: now,
+        primary_auth_method: Some(auth_method.to_owned()),
     };
-    if let Err(error) = store.insert_user_session(&session).await {
+    let persisted = if let (Some(previous), Some(previous_token_hash)) =
+        (previous_session.as_ref(), previous_token_hash.as_deref())
+    {
+        debug_assert_eq!(previous.user_id, session.user_id);
+        store
+            .replace_user_session(previous_token_hash, &session)
+            .await
+    } else {
+        store.insert_user_session(&session).await
+    };
+    if let Err(error) = persisted {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     let me = match product_me_for_user(
@@ -4280,7 +4328,14 @@ async fn api_auth_register(
     }
     state.rate_limits.reset(&username, &ip);
     tracing::info!(username, ok = true, "instance_register");
-    let mut response = issue_product_session(&state, &store, &user, &headers).await;
+    let mut response = issue_product_session(
+        &state,
+        &store,
+        &user,
+        &headers,
+        crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+    )
+    .await;
     let secure = crate::product_auth::request_is_https(&headers);
     if let Ok(value) = crate::admin::clear_setup_cookie(secure).parse() {
         response.headers_mut().append(header::SET_COOKIE, value);
@@ -4343,7 +4398,14 @@ async fn api_auth_login(
     let user = user.expect("present after credential check");
     state.rate_limits.reset(&rate_name, &ip);
     tracing::info!(username = user.username, ok = true, "product_login");
-    issue_product_session(&state, &store, &user, &headers).await
+    issue_product_session(
+        &state,
+        &store,
+        &user,
+        &headers,
+        crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+    )
+    .await
 }
 
 async fn api_auth_oidc_start(
@@ -4642,7 +4704,10 @@ async fn api_auth_oidc_callback_inner(
             return oidc_callback_error(StatusCode::SERVICE_UNAVAILABLE, secure);
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers).await;
+    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
+    if let Ok(value) = crate::oidc::clear_transaction_cookie(secure).parse() {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
     if !response.status().is_success() {
         return response;
     }
@@ -4650,9 +4715,6 @@ async fn api_auth_oidc_callback_inner(
     response
         .headers_mut()
         .insert(header::LOCATION, header::HeaderValue::from_static("/"));
-    if let Ok(value) = crate::oidc::clear_transaction_cookie(secure).parse() {
-        response.headers_mut().append(header::SET_COOKIE, value);
-    }
     if let Some(cookie) = admin_cookie
         && let Ok(value) = cookie.parse()
     {
@@ -4797,7 +4859,7 @@ async fn api_auth_oidc_native_exchange(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers).await;
+    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
     if !response.status().is_success() {
         return response;
     }
@@ -5011,7 +5073,7 @@ async fn api_auth_oidc_native_poll(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers).await;
+    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
     if !response.status().is_success() {
         return response;
     }
@@ -5597,6 +5659,7 @@ async fn persist_product_passkey_assertion(
                 .map(ToOwned::to_owned),
             passkey_verified_at_ms: Some(now),
             primary_authenticated_at_ms: previous_session.primary_authenticated_at_ms,
+            primary_auth_method: previous_session.primary_auth_method.clone(),
         };
         if let Err(error) = store
             .rotate_user_session(&previous_token_hash, &session)
@@ -16448,6 +16511,7 @@ mod product_auth_api_tests {
                 user_agent: Some("device-authorization-test".to_owned()),
                 passkey_verified_at_ms: None,
                 primary_authenticated_at_ms: now,
+                primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
             })
             .await
             .unwrap();
@@ -16964,6 +17028,94 @@ mod product_auth_api_tests {
     }
 
     #[tokio::test]
+    async fn legacy_browser_session_binds_once_to_its_next_primary_method() {
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "owner".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let legacy_token = "b".repeat(64);
+        let legacy_hash = crate::admin::hex_sha256(legacy_token.as_bytes());
+        store
+            .insert_user_session(&crate::store::ProductUserSession {
+                token_hash: legacy_hash.clone(),
+                user_id: user.id.clone(),
+                created_at_ms: now,
+                expires_at_ms: now
+                    + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
+                last_seen_at_ms: now,
+                user_agent: Some("legacy-method-test".to_owned()),
+                passkey_verified_at_ms: None,
+                primary_authenticated_at_ms: now,
+                primary_auth_method: None,
+            })
+            .await
+            .unwrap();
+        let state = auth_state(Hub::new(), Some(store.clone()));
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            format!("{USER_SESSION_COOKIE}={legacy_token}")
+                .parse()
+                .unwrap(),
+        );
+
+        let bound = issue_product_session(
+            &state,
+            &store,
+            &user,
+            &headers,
+            crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+        )
+        .await;
+        assert_eq!(bound.status(), StatusCode::OK);
+        assert!(
+            store
+                .user_session_by_token_hash(&legacy_hash)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let replacement_cookie = bound
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with(&format!("{USER_SESSION_COOKIE}=")))
+            .expect("replacement product cookie")
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let replacement_token = replacement_cookie
+            .strip_prefix(&format!("{USER_SESSION_COOKIE}="))
+            .unwrap();
+        assert_eq!(
+            store
+                .user_session_by_token_hash(&crate::admin::hex_sha256(replacement_token.as_bytes()))
+                .await
+                .unwrap()
+                .expect("bound replacement session")
+                .primary_auth_method
+                .as_deref(),
+            Some("password")
+        );
+
+        headers.insert(header::COOKIE, replacement_cookie.parse().unwrap());
+        let switched = issue_product_session(&state, &store, &user, &headers, "cardea").await;
+        assert_eq!(switched.status(), StatusCode::CONFLICT);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn native_oidc_handoff_requires_origin_pkce_and_sets_both_account_cookies() {
         install_rustls();
         let (store, root) = test_store().await;
@@ -17059,11 +17211,54 @@ mod product_auth_api_tests {
             .await
             .unwrap();
         assert_eq!(product_status["me"]["account"], "owner");
+        assert_eq!(product_status["me"]["primary_auth_method"], "cardea");
         assert_eq!(
             product_status["login_method_order"],
             serde_json::json!(["cardea", "password"])
         );
         assert_eq!(admin_status["authenticated"], true);
+
+        let cardea_cookie = cookie_header(&user_cookie);
+        let switched_without_sign_out = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin_for(&base),
+            Some(&cardea_cookie),
+            serde_json::json!({
+                "account": "owner",
+                "password": "Correct-horse-bat1",
+            }),
+        )
+        .await;
+        assert_eq!(switched_without_sign_out.status(), StatusCode::CONFLICT);
+        assert!(
+            switched_without_sign_out
+                .text()
+                .await
+                .unwrap()
+                .contains("Sign out before switching")
+        );
+
+        let signed_out = post_json(
+            &format!("{base}/api/auth/logout"),
+            &origin_for(&base),
+            Some(&cardea_cookie),
+            serde_json::json!({}),
+        )
+        .await;
+        assert!(signed_out.status().is_success());
+        let password_login = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin_for(&base),
+            None,
+            serde_json::json!({
+                "account": "owner",
+                "password": "Correct-horse-bat1",
+            }),
+        )
+        .await;
+        assert_eq!(password_login.status(), StatusCode::OK);
+        let password_body: serde_json::Value = password_login.json().await.unwrap();
+        assert_eq!(password_body["primary_auth_method"], "password");
 
         handle.abort();
         let _ = std::fs::remove_dir_all(root);
@@ -17864,9 +18059,33 @@ mod product_auth_api_tests {
         let user_set_cookie = set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap();
         assert!(user_set_cookie.contains("Max-Age=2592000"));
 
+        let first_cookie = cookie_header(&user_set_cookie);
+        let reauthenticated = post_json(
+            &format!("{base}/api/auth/login"),
+            &origin,
+            Some(&first_cookie),
+            serde_json::json!({
+                "account": "draven",
+                "password": "Correct-horse-bat1",
+            }),
+        )
+        .await;
+        assert_eq!(reauthenticated.status(), StatusCode::OK);
+        let replacement_set_cookie =
+            set_cookie(&reauthenticated, USER_SESSION_COOKIE).expect("replacement user cookie");
+        let replacement_cookie = cookie_header(&replacement_set_cookie);
+
+        let stale = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .header(header::COOKIE, first_cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+
         let me = reqwest::Client::new()
             .get(format!("{base}/api/auth/me"))
-            .header(header::COOKIE, cookie_header(&user_set_cookie))
+            .header(header::COOKIE, replacement_cookie)
             .send()
             .await
             .unwrap();
@@ -17874,6 +18093,7 @@ mod product_auth_api_tests {
         let me_body: serde_json::Value = me.json().await.unwrap();
         assert_eq!(me_body["account"], "draven");
         assert_eq!(me_body["role"], "owner");
+        assert_eq!(me_body["primary_auth_method"], "password");
 
         server.abort();
         let _ = std::fs::remove_dir_all(root);
@@ -18355,6 +18575,7 @@ mod product_auth_api_tests {
             user_agent: None,
             passkey_verified_at_ms: Some(now - 8 * 24 * 60 * 60 * 1_000),
             primary_authenticated_at_ms: now - 8 * 24 * 60 * 60 * 1_000,
+            primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
         };
         store.insert_user_session(&extended).await.unwrap();
         let base_token = "d".repeat(64);
@@ -18419,6 +18640,7 @@ mod product_auth_api_tests {
             user_agent: None,
             passkey_verified_at_ms: None,
             primary_authenticated_at_ms: 100_000,
+            primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
         };
 
         let deadlines = product_session_deadlines(server, &policy, true, &session, 100_000);
@@ -18476,6 +18698,7 @@ mod product_auth_api_tests {
             user_agent: None,
             passkey_verified_at_ms: None,
             primary_authenticated_at_ms: now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS + 1,
+            primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
         };
         assert!(product_session_has_recent_step_up(&session, now));
         session.created_at_ms = now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS;

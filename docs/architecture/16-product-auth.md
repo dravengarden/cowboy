@@ -92,6 +92,15 @@ loading any malformed or over-broad file fails controller startup. Cardea
 proves identity only. Cowboy owns its cookie lifetime, revocation, role, and
 trusted-network auth-off switch.
 
+Every product cookie records the primary method that created that browser
+session: `password` or one exact Authentication Provider ID. A primary
+reauthentication rotates that cookie only when the same method succeeds. It
+cannot silently substitute another provider or a password, even when both map
+to the same Cowboy account. Signing out deletes the binding; the next fresh
+login may choose any enabled method. Sessions created before this field existed
+retain `NULL` and bind exactly once on their next successful primary
+reauthentication because their original source cannot be reconstructed safely.
+
 ## Session protection and optional Passkeys
 
 Controller configuration owns three independent browser-session deadlines.

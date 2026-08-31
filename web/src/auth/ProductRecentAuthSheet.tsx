@@ -32,35 +32,34 @@ import {
   verifyPasskey,
 } from "./passkeyFlow";
 import { announceProductAuthCookieChanged } from "../productAuthEvents";
+import {
+  type ProductAccountVerificationMethod,
+  productAccountVerificationMethods,
+  type ProductPrimaryReauthMethods,
+  providerVerificationMethodId,
+  resolvePrimaryReauthMethods,
+} from "./productReauthMethods";
 
 const PASSKEY_METHOD = "passkey";
-const PROVIDER_PREFIX = "provider:";
-
-function providerMethod(provider: ProductOidcProvider): string {
-  return `${PROVIDER_PREFIX}${provider.id}`;
-}
 
 function initialMethod(
   me: ProductMe,
-  passwordEnabled: boolean,
-  providers: ProductOidcProvider[],
-  loginMethodOrder: string[],
   purpose: ProductVerificationPurpose,
+  accountMethods: ProductAccountVerificationMethod[],
+  primaryMethods: ProductPrimaryReauthMethods,
 ): string {
-  if (
-    purpose !== "primary" &&
-    (me.passkey_count ?? 0) > 0 && passkeyFlowSupported()
-  ) {
+  const passkeyAvailable = (me.passkey_count ?? 0) > 0 &&
+    passkeyFlowSupported();
+  if (purpose === "passkey") {
+    return passkeyAvailable ? PASSKEY_METHOD : "";
+  }
+  if (purpose === "recent" && passkeyAvailable) {
     return PASSKEY_METHOD;
   }
-  const first = resolveProductLoginMethodOrder(
-    loginMethodOrder,
-    passwordEnabled,
-    providers,
-  )[0];
-  if (first === PASSWORD_LOGIN_METHOD) return PASSWORD_LOGIN_METHOD;
-  const provider = providers.find((candidate) => candidate.id === first);
-  return provider ? providerMethod(provider) : "";
+  const candidates = purpose === "primary"
+    ? primaryMethods.methods
+    : accountMethods;
+  return candidates[0]?.id ?? "";
 }
 
 export type ProductVerificationPurpose = "recent" | "passkey" | "primary";
@@ -102,13 +101,25 @@ export function ProductRecentAuthSheet({
       ),
     [loginMethodOrder, passwordEnabled, providers],
   );
+  const accountMethods = useMemo(
+    () =>
+      productAccountVerificationMethods(
+        orderedLoginMethodIds,
+        passwordEnabled,
+        providers,
+      ),
+    [orderedLoginMethodIds, passwordEnabled, providers],
+  );
+  const primaryMethods = useMemo(
+    () => resolvePrimaryReauthMethods(me.primary_auth_method, accountMethods),
+    [accountMethods, me.primary_auth_method],
+  );
   const [method, setMethod] = useState(() =>
     initialMethod(
       me,
-      passwordEnabled,
-      providers,
-      orderedLoginMethodIds,
       purpose,
+      accountMethods,
+      primaryMethods,
     )
   );
   const [password, setPassword] = useState("");
@@ -120,22 +131,16 @@ export function ProductRecentAuthSheet({
     passkeyFlowSupported();
   const methods = purpose === "passkey"
     ? (passkeyAvailable ? [{ id: PASSKEY_METHOD, label: "Passkey" }] : [])
+    : purpose === "primary"
+    ? primaryMethods.methods
     : [
       ...(purpose === "recent" && passkeyAvailable
         ? [{ id: PASSKEY_METHOD, label: "Passkey" }]
         : []),
-      ...orderedLoginMethodIds.flatMap((id) => {
-        if (id === PASSWORD_LOGIN_METHOD) {
-          return [{ id: PASSWORD_LOGIN_METHOD, label: "Password" }];
-        }
-        const provider = providers.find((candidate) => candidate.id === id);
-        return provider
-          ? [{ id: providerMethod(provider), label: provider.display_name }]
-          : [];
-      }),
+      ...accountMethods,
     ];
   const selectedProvider = providers.find((provider) =>
-    providerMethod(provider) === method
+    providerVerificationMethodId(provider.id) === method
   );
   const useNativeProviderFlow = selectedProvider !== undefined &&
     nativeOidcFlowSupported();
@@ -152,31 +157,28 @@ export function ProductRecentAuthSheet({
     setMethod(
       initialMethod(
         me,
-        passwordEnabled,
-        providers,
-        orderedLoginMethodIds,
         purpose,
+        accountMethods,
+        primaryMethods,
       ),
     );
-  }, [me, open, orderedLoginMethodIds, passwordEnabled, providers, purpose]);
+  }, [accountMethods, me, open, primaryMethods, purpose]);
   useEffect(() => {
     if (methods.some((candidate) => candidate.id === method)) return;
     setMethod(
       initialMethod(
         me,
-        passwordEnabled,
-        providers,
-        orderedLoginMethodIds,
         purpose,
+        accountMethods,
+        primaryMethods,
       ),
     );
   }, [
+    accountMethods,
     me,
     method,
     methods,
-    orderedLoginMethodIds,
-    passwordEnabled,
-    providers,
+    primaryMethods,
     purpose,
   ]);
 
@@ -234,8 +236,8 @@ export function ProductRecentAuthSheet({
     : "Verify it’s you";
   const description = purpose === "primary"
     ? locked
-      ? "Your service’s primary-login limit has been reached. Sign in with an enabled account method; running agents continue in the background."
-      : "Your service’s primary-login deadline is approaching. Sign in now with an enabled account method; running agents continue in the background."
+      ? "Your service’s primary-login limit has been reached. Reauthenticate with the same method that started this browser session; running agents continue in the background."
+      : "Your service’s primary-login deadline is approaching. Reauthenticate with the same method that started this browser session; running agents continue in the background."
     : purpose === "passkey"
     ? locked
       ? "Your scheduled Passkey check is due. Verify locally to unlock this view; running agents continue in the background."
@@ -279,6 +281,22 @@ export function ProductRecentAuthSheet({
             {description}
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
+          {!verifiedMe && purpose === "primary" &&
+            primaryMethods.legacySession && (
+            <Alert severity="info">
+              This session predates sign-in-method tracking. Choose the same
+              method you originally used; Cowboy will bind it to this session
+              after successful verification.
+            </Alert>
+          )}
+          {!verifiedMe && purpose === "primary" &&
+            primaryMethods.unavailableMethod && (
+            <Alert severity="warning">
+              This session was signed in with{" "}
+              {primaryMethods.unavailableMethod}, but that method is no longer
+              enabled. Sign out to start a new session with another method.
+            </Alert>
+          )}
           {verifiedMe && (
             <>
               <Alert severity="success">
@@ -388,7 +406,9 @@ export function ProductRecentAuthSheet({
           )}
           {!verifiedMe && methods.length === 0 && (
             <Alert severity="error">
-              This Cowboy Service has no verification method available.
+              {purpose === "primary" && primaryMethods.unavailableMethod
+                ? "The original sign-in method is unavailable for this session."
+                : "This Cowboy Service has no verification method available."}
             </Alert>
           )}
         </Stack>

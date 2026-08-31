@@ -29,6 +29,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0039_passkey_verification_frequency.sql",
         "45993509a173e58c7f3fdddef62e4246093375f0de1cf0006bc4475e555ac4c7",
     ),
+    (
+        "0040_session_primary_auth_method.sql",
+        "17f7251986496f5f87ad514aaf37b8c770690d540b02d8f9ad92d9822b133865",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -54,6 +58,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0013_passkey_verification_frequency.sql",
         "4abb3409463377fa4422113a82601cb0080f7bff2b94ab8ef7a82e39dc1d86eb",
+    ),
+    (
+        "0014_session_primary_auth_method.sql",
+        "83171f8df96ec003b2447643cd67b698370cc06af338f64d1e2ac0e6587ceb31",
     ),
 ];
 
@@ -140,6 +148,46 @@ fn sqlite_passkey_frequency_migration_tightens_retired_values() {
             )
             .is_err(),
         "retired seven-day values must fail the new database constraint"
+    );
+}
+
+#[test]
+fn sqlite_session_auth_method_migration_preserves_legacy_sessions() {
+    let connection = rusqlite::Connection::open_in_memory().expect("open SQLite database");
+    connection
+        .execute_batch(
+            "CREATE TABLE user_sessions (token_hash TEXT PRIMARY KEY);\
+             INSERT INTO user_sessions VALUES ('legacy');",
+        )
+        .expect("create predecessor session schema");
+    connection
+        .execute_batch(include_str!(
+            "../migrations/sqlite/0014_session_primary_auth_method.sql"
+        ))
+        .expect("apply session authentication method migration");
+
+    let legacy: Option<String> = connection
+        .query_row(
+            "SELECT primary_auth_method FROM user_sessions WHERE token_hash = 'legacy'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read legacy authentication method");
+    assert_eq!(legacy, None);
+    connection
+        .execute(
+            "UPDATE user_sessions SET primary_auth_method = 'cardea' WHERE token_hash = 'legacy'",
+            [],
+        )
+        .expect("bind legacy session to a provider");
+    assert!(
+        connection
+            .execute(
+                "UPDATE user_sessions SET primary_auth_method = 'Cardea' WHERE token_hash = 'legacy'",
+                [],
+            )
+            .is_err(),
+        "provider IDs must retain the canonical login-method shape"
     );
 }
 

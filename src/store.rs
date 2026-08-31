@@ -670,6 +670,7 @@ pub struct ProductUserSession {
     pub user_agent: Option<String>,
     pub passkey_verified_at_ms: Option<i64>,
     pub primary_authenticated_at_ms: i64,
+    pub primary_auth_method: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -733,6 +734,7 @@ struct ProductUserSessionRow {
     user_agent: Option<String>,
     passkey_verified_at: Option<DateTime<Utc>>,
     primary_authenticated_at: DateTime<Utc>,
+    primary_auth_method: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -848,6 +850,7 @@ impl ProductUserSession {
                 .passkey_verified_at
                 .map(|value| value.timestamp_millis()),
             primary_authenticated_at_ms: row.primary_authenticated_at.timestamp_millis(),
+            primary_auth_method: row.primary_auth_method,
         }
     }
 }
@@ -1503,6 +1506,15 @@ impl Store {
     /// Returns when the delete fails.
     pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
         dispatch_storage!(self, delete_user_sessions_for_user(user_id))
+    }
+
+    /// Atomically replace one cookie session after primary authentication.
+    pub async fn replace_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        dispatch_storage!(self, replace_user_session(previous_token_hash, session))
     }
 
     /// Replace one cookie session atomically after a successful Passkey assertion.
@@ -3017,12 +3029,13 @@ impl PostgresStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at) VALUES ( \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
+             primary_auth_method) VALUES ( \
              $1, $2, to_timestamp($3::double precision / 1000), \
              to_timestamp($4::double precision / 1000), \
              to_timestamp($5::double precision / 1000), $6, \
              to_timestamp($7::double precision / 1000), \
-             to_timestamp($8::double precision / 1000))",
+             to_timestamp($8::double precision / 1000), $9)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -3032,6 +3045,7 @@ impl PostgresStorage {
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
         .execute(&self.pool)
         .await
         .context("INSERT user session")?;
@@ -3044,7 +3058,7 @@ impl PostgresStorage {
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, ProductUserSessionRow>(
             "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, \
-             passkey_verified_at, primary_authenticated_at \
+             passkey_verified_at, primary_authenticated_at, primary_auth_method \
              FROM user_sessions WHERE token_hash = $1",
         )
         .bind(token_hash)
@@ -3070,6 +3084,58 @@ impl PostgresStorage {
             .await
             .with_context(|| format!("DELETE user sessions for {user_id}"))?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn replace_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session replacement")?;
+        let deleted =
+            sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1 AND user_id = $2")
+                .bind(previous_token_hash)
+                .bind(&session.user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE previous user session for primary authentication")?;
+        anyhow::ensure!(
+            deleted.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
+             primary_auth_method) VALUES ( \
+             $1, $2, to_timestamp($3::double precision / 1000), \
+             to_timestamp($4::double precision / 1000), \
+             to_timestamp($5::double precision / 1000), $6, \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), $9)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT replacement user session")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session replacement")?;
+        Ok(())
     }
 
     pub async fn rotate_user_session(
@@ -3105,12 +3171,13 @@ impl PostgresStorage {
         );
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at) VALUES ( \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
+             primary_auth_method) VALUES ( \
              $1, $2, to_timestamp($3::double precision / 1000), \
              to_timestamp($4::double precision / 1000), \
              to_timestamp($5::double precision / 1000), $6, \
              to_timestamp($7::double precision / 1000), \
-             to_timestamp($8::double precision / 1000))",
+             to_timestamp($8::double precision / 1000), $9)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -3120,6 +3187,7 @@ impl PostgresStorage {
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
         .execute(&mut *transaction)
         .await
         .context("INSERT rotated user session")?;
@@ -7184,6 +7252,7 @@ mod storage_contract_tests {
             user_agent: Some("CowboyContract/1.0".to_owned()),
             passkey_verified_at_ms: Some(created_at_ms),
             primary_authenticated_at_ms: created_at_ms,
+            primary_auth_method: Some("password".to_owned()),
         };
         store.insert_user_session(&session).await?;
         let restored_session = store
@@ -7197,6 +7266,36 @@ mod storage_contract_tests {
         );
         assert_eq!(restored_session.passkey_verified_at_ms, Some(created_at_ms));
         assert_eq!(restored_session.primary_authenticated_at_ms, created_at_ms);
+        assert_eq!(
+            restored_session.primary_auth_method.as_deref(),
+            Some("password")
+        );
+        let replacement_session = ProductUserSession {
+            token_hash: "ab".repeat(32),
+            ..session.clone()
+        };
+        store
+            .replace_user_session(&session.token_hash, &replacement_session)
+            .await?;
+        assert!(
+            store
+                .user_session_by_token_hash(&session.token_hash)
+                .await?
+                .is_none(),
+            "primary authentication must invalidate the previous cookie"
+        );
+        assert_eq!(
+            store
+                .user_session_by_token_hash(&replacement_session.token_hash)
+                .await?
+                .context("replacement product session was not restored")?
+                .primary_auth_method
+                .as_deref(),
+            Some("password")
+        );
+        store
+            .replace_user_session(&replacement_session.token_hash, &session)
+            .await?;
         assert_eq!(
             store
                 .touch_user_session_activity(&session.token_hash, created_at_ms + 60_001)

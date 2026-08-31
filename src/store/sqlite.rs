@@ -109,6 +109,7 @@ struct SqliteProductUserSessionRow {
     user_agent: Option<String>,
     passkey_verified_at_ms: Option<i64>,
     primary_authenticated_at_ms: Option<i64>,
+    primary_auth_method: Option<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -224,6 +225,7 @@ impl From<SqliteProductUserSessionRow> for ProductUserSession {
             primary_authenticated_at_ms: row
                 .primary_authenticated_at_ms
                 .unwrap_or(row.created_at_ms),
+            primary_auth_method: row.primary_auth_method,
         }
     }
 }
@@ -2707,8 +2709,9 @@ impl SqliteStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
-             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms, \
+             primary_auth_method) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2718,6 +2721,7 @@ impl SqliteStorage {
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
         .execute(&self.pool)
         .await
         .context("INSERT SQLite user session")?;
@@ -2730,7 +2734,8 @@ impl SqliteStorage {
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, SqliteProductUserSessionRow>(
             "SELECT token_hash, user_id, created_at_ms, expires_at_ms, last_seen_at_ms, \
-             user_agent, passkey_verified_at_ms, primary_authenticated_at_ms \
+             user_agent, passkey_verified_at_ms, primary_authenticated_at_ms, \
+             primary_auth_method \
              FROM user_sessions WHERE token_hash = ?1",
         )
         .bind(token_hash)
@@ -2756,6 +2761,54 @@ impl SqliteStorage {
             .await
             .with_context(|| format!("DELETE SQLite user sessions for {user_id}"))?;
         Ok(result.rows_affected())
+    }
+
+    pub(super) async fn replace_user_session(
+        &self,
+        previous_token_hash: &str,
+        session: &ProductUserSession,
+    ) -> Result<()> {
+        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite user session replacement")?;
+        let deleted =
+            sqlx::query("DELETE FROM user_sessions WHERE token_hash = ?1 AND user_id = ?2")
+                .bind(previous_token_hash)
+                .bind(&session.user_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE previous SQLite user session for primary authentication")?;
+        anyhow::ensure!(
+            deleted.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
+             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms, \
+             primary_auth_method) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.user_id)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT replacement SQLite user session")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite user session replacement")?;
+        Ok(())
     }
 
     pub(super) async fn rotate_user_session(
@@ -2795,8 +2848,9 @@ impl SqliteStorage {
         );
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
-             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms, \
+             primary_auth_method) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2806,6 +2860,7 @@ impl SqliteStorage {
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
         .execute(&mut *transaction)
         .await
         .context("INSERT rotated SQLite user session")?;
