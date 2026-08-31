@@ -116,6 +116,18 @@ agent-plugin-runtime-build PLUGIN BASE_URL:
 plugin-set-artifact-url PLUGIN URL:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"
 
+# Turn the package digest produced by plugin-build into the immutable HTTPS
+# publication URL required before a runtime matrix can be bound and signed.
+plugin-set-published-artifact-url PLUGIN BASE_URL:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
+    test -f "$release"
+    digest="$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$")) | sub("^sha256:"; "")' "$release")"
+    base="{{BASE_URL}}"
+    just plugin-set-artifact-url "{{PLUGIN}}" "${base%/}/${digest}/{{PLUGIN}}.cowboy-plugin"
+
 plugin-bind-runtime PLUGIN RUNTIME_ARTIFACTS:
     test -f "{{RUNTIME_ARTIFACTS}}"
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- bind-runtime "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{RUNTIME_ARTIFACTS}}"

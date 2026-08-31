@@ -199,13 +199,16 @@ release authority permits it.
    # Agent Plugin payloads use the capability-specific runtime builder:
    nix develop -c just agent-plugin-runtime-build <plugin-id> \
      https://artifacts.example.com/plugin-artifacts
+   nix develop -c just plugin-set-published-artifact-url <plugin-id> \
+     https://artifacts.example.com/plugin-artifacts
    nix develop -c just plugin-bind-runtime <plugin-id> \
      dist/plugins/<plugin-id>/runtime/runtime-artifacts.json
    ```
 
    This uses `components/provider-runtime-lock.json` and the isolated npm v3 lock payloads
    under `components/provider-runtime-packages/`, probes supported host artifacts, assigns
-   content-addressed HTTPS URLs, and binds the runtime-artifact matrix. A
+   content-addressed HTTPS URLs, assigns the package its own digest-bound HTTPS
+   URL, and binds the runtime-artifact matrix. A
    gateway probe must terminate without credentials; use its owned help/version
    mode, not the long-running listen command. Binding must reject a missing or
    extra target, missing or extra component, wrong
