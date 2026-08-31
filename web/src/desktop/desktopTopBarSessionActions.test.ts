@@ -9,6 +9,31 @@ const composerSource = await Deno.readTextFile(
 const embeddedControlSource = await Deno.readTextFile(
   new URL("./DesktopEmbeddedControl.ts", import.meta.url),
 );
+const shortcutDialogSource = await Deno.readTextFile(
+  new URL("./commands/DesktopShortcutsDialog.tsx", import.meta.url),
+);
+const focusContract = await Deno.readTextFile(
+  new URL("./FOCUS.md", import.meta.url),
+);
+
+Deno.test("desktop session verification lives in Top Bar with a scoped shortcut", () => {
+  const auth = topBarSource.indexOf("data-product-session-alert-control");
+  const reload = topBarSource.indexOf('data-desktop-item="topbar-reload"');
+
+  assert(auth >= 0);
+  assert(reload > auth);
+  assert(topBarSource.includes("data-product-session-alert-host"));
+  assert(topBarSource.includes('id: "topbar.reauthenticate"'));
+  assert(topBarSource.includes('shortcut: "A"'));
+  assert(topBarSource.includes('keyLabel="A"'));
+  assert(topBarSource.includes("desktopSessionActionSx({ minWidth: 112 })"));
+  assert(
+    shortcutDialogSource.includes(
+      '{ keys: ["A"], title: "Verify Product Session when prompted in Top Bar" }',
+    ),
+  );
+  assert(focusContract.includes("top-bar `R`/`U`/`A`/`L`/`C`/`X`"));
+});
 
 Deno.test("desktop session actions form one reload-to-stop cluster", () => {
   const reload = topBarSource.indexOf('data-desktop-item="topbar-reload"');

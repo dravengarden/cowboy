@@ -35,6 +35,7 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.settings], title: "Open Settings" },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
   { keys: ["U"], title: "Open Usage Limits in Top Bar" },
+  { keys: ["A"], title: "Verify Product Session when prompted in Top Bar" },
   { keys: ["L"], title: "Reload Session Runtime in Top Bar" },
   { keys: ["C"], title: "Compact Conversation in Top Bar" },
   { keys: ["X"], title: "Clear Conversation in Top Bar" },

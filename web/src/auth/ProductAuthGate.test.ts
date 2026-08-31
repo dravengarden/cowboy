@@ -15,6 +15,7 @@ async function readAuthSources(): Promise<string> {
     "ProductPasskeysPanel.tsx",
     "ProductRecentAuthSheet.tsx",
     "ProductSessionGuard.tsx",
+    "productSessionAlertHost.ts",
     "sessionSchedule.ts",
     "PasskeyReauthLock.tsx",
     "passkeyReauthSchedule.ts",
@@ -182,7 +183,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1598"'));
+  assert(sw.includes('const VERSION = "cowboy-v1599"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -280,7 +281,7 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(externalPage.includes("Tap Done to return to Cowboy"));
 });
 
-Deno.test("session reauthentication is server-pushed and responsive without polling", async () => {
+Deno.test("session reauthentication is pushed and stays compact until required", async () => {
   const guard = await Deno.readTextFile(
     new URL("ProductSessionGuard.tsx", authDir),
   );
@@ -297,15 +298,26 @@ Deno.test("session reauthentication is server-pushed and responsive without poll
 
   assert(guard.includes("useSurfaceProfile"));
   assert(guard.includes("safe-area-inset-top"));
-  assert(guard.includes("width: mobile"));
-  assert(guard.includes('"calc(100% - 24px)"'));
+  assert(guard.includes("minHeight: mobile ? 44"));
+  assert(
+    guard.includes('maxWidth: mobile ? "min(17rem, calc(100vw - 24px))"'),
+  );
+  assert(guard.includes("right: 12"));
+  assert(guard.includes("data-product-session-alert-button"));
+  assert(guard.includes("createPortal(reminder, desktopHost)"));
+  assert(guard.includes("useSyncExternalStore"));
+  assert(guard.includes("subscribeProductSessionAlertHost"));
+  assertEquals(guard.includes("MutationObserver"), false);
+  assert(guard.includes('data-desktop-topbar-action={!mobile ? "reauth"'));
   assert(guard.includes("FINAL_WARNING_MS"));
   assert(guard.includes("locked={required}"));
   assert(guard.includes('data-session-lock-backdrop="true"'));
   assert(guard.includes('backdropFilter: "blur(24px) saturate(65%)"'));
-  assert(guard.includes("Running agents keep working"));
-  assert(guard.includes('component="button"'));
-  assert(guard.includes("aria-label={`${title}. Verify now`}"));
+  assert(guard.includes("aria-label={`${title}. Open verification`}"));
+  assertEquals(guard.includes("collapsed"), false);
+  assertEquals(guard.includes("sessionStorage"), false);
+  assertEquals(guard.includes("width: mobile"), false);
+  assertEquals(guard.includes('component="button"'), false);
   assertEquals(guard.includes("setInterval"), false);
   assertEquals(guard.includes("fetch("), false);
   assert(sheet.includes("announceProductAuthCookieChanged"));

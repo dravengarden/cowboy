@@ -62,6 +62,7 @@ import { resetSession, send, submitPrompt, useStoreSelector } from "../store";
 import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
+import { setProductSessionAlertHost } from "../auth/productSessionAlertHost";
 import {
   acceptedScheduleTime,
   accountProviderLabel,
@@ -1364,6 +1365,21 @@ export function DesktopTopBarControls({
         )?.click(),
     },
     {
+      id: "topbar.reauthenticate",
+      title: "Verify Product Session",
+      group: "Top Bar",
+      shortcut: "A",
+      regions: ["topbar.controls"],
+      when: () =>
+        document.querySelector(
+          "[data-desktop-topbar-action='reauth']:not(:disabled)",
+        ) !== null,
+      run: () =>
+        document.querySelector<HTMLButtonElement>(
+          "[data-desktop-topbar-action='reauth']",
+        )?.click(),
+    },
+    {
       id: "topbar.reload",
       title: "Reload Session Runtime",
       group: "Top Bar",
@@ -1431,6 +1447,7 @@ export function DesktopTopBarControls({
   useDesktopCommand(topbarCommands[3] as DesktopCommand);
   useDesktopCommand(topbarCommands[4] as DesktopCommand);
   useDesktopCommand(topbarCommands[5] as DesktopCommand);
+  useDesktopCommand(topbarCommands[6] as DesktopCommand);
   // Lower bound for the complete session-control strip. Provider summaries own
   // their intrinsic compact width, and run configuration / session actions keep
   // their full touch targets. Auto margin restores the spacious, trailing
@@ -1734,6 +1751,41 @@ export function DesktopTopBarControls({
           )}
         </Stack>
       </DesktopModal>
+
+      <Box
+        data-product-session-alert-control
+        sx={{
+          display: "none",
+          alignItems: "center",
+          gap: 0.5,
+          flexShrink: 0,
+          "&:has([data-desktop-topbar-action='reauth'])": {
+            display: "flex",
+          },
+          "& [data-product-session-alert-button]": {
+            ...desktopSessionActionSx({ minWidth: 112 }),
+            maxWidth: 172,
+            color: "text.primary",
+          },
+          "& [data-session-alert-tone='warning'] .MuiButton-startIcon": {
+            color: "warning.main",
+          },
+          "& [data-session-alert-tone='urgent'] .MuiButton-startIcon": {
+            color: "error.main",
+          },
+        }}
+      >
+        <Box
+          ref={setProductSessionAlertHost}
+          data-product-session-alert-host
+          sx={{ display: "contents" }}
+        />
+        <ShortcutKeycap
+          keyLabel="A"
+          variant="global"
+          availability={shortcutAvailability(shortcutsActive)}
+        />
+      </Box>
 
       <Stack
         data-desktop-session-actions

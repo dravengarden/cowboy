@@ -25,7 +25,7 @@ component-local keyboard semantics.
 ### Product letters ignore case; Vim motions do not
 
 Bare contextual product shortcuts (`F` Follow, `Z` Reading, `V`
-History/Explore, top-bar `R`/`U`/`L`/`C`/`X`, run-config mnemonics) match the physical letter with
+History/Explore, top-bar `R`/`U`/`A`/`L`/`C`/`X`, run-config mnemonics) match the physical letter with
 or without Shift. They are not a second Shift-modified command. Vim regions
 keep case: `g`/`gg` versus `G`, and list/transcript `j`/`k`/`h`/`l`. Modified
 chords (`Mod+Enter`, `Shift+J`) still require their exact Shift state.
@@ -249,7 +249,7 @@ levels:
    confirmations show the real confirmation/dismissal chord next to the button.
 
 Embedded contextual shortcuts are the persistent exception to visibility
-gating. Controls such as Top Bar Run Configuration, Usage, Compact, and Clear
+gating. Controls such as Top Bar Run Configuration, Usage, session verification, Compact, and Clear
 keep their one-key badge visible for discovery, but the shared keycap
 primitive must render it as `data-shortcut-state="inactive"` whenever its
 owning region is not focused. Once the region owns focus it becomes
