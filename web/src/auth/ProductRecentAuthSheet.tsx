@@ -233,9 +233,13 @@ export function ProductRecentAuthSheet({
     ? "Unlock Cowboy"
     : "Verify it’s you";
   const description = purpose === "primary"
-    ? "Your service’s primary-login limit is due. Sign in with an enabled account method; running agents continue in the background."
+    ? locked
+      ? "Your service’s primary-login limit has been reached. Sign in with an enabled account method; running agents continue in the background."
+      : "Your service’s primary-login deadline is approaching. Sign in now with an enabled account method; running agents continue in the background."
     : purpose === "passkey"
-    ? "Your scheduled Passkey check is due. Verify locally to unlock this view; running agents continue in the background."
+    ? locked
+      ? "Your scheduled Passkey check is due. Verify locally to unlock this view; running agents continue in the background."
+      : "Your scheduled Passkey check is approaching. Verify now without interrupting running agents."
     : `Passkey changes require a sign-in or Passkey check from the last five minutes. Verify now, then ${
       requireResumeGesture
         ? "tap Continue once so Safari can open the Passkey prompt."

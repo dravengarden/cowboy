@@ -182,7 +182,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1597"'));
+  assert(sw.includes('const VERSION = "cowboy-v1598"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -304,10 +304,15 @@ Deno.test("session reauthentication is server-pushed and responsive without poll
   assert(guard.includes('data-session-lock-backdrop="true"'));
   assert(guard.includes('backdropFilter: "blur(24px) saturate(65%)"'));
   assert(guard.includes("Running agents keep working"));
+  assert(guard.includes('component="button"'));
+  assert(guard.includes("aria-label={`${title}. Verify now`}"));
   assertEquals(guard.includes("setInterval"), false);
   assertEquals(guard.includes("fetch("), false);
   assert(sheet.includes("announceProductAuthCookieChanged"));
   assert(sheet.includes('purpose === "primary"'));
+  assert(sheet.includes("primary-login deadline is approaching"));
+  assert(sheet.includes("primary-login limit has been reached"));
+  assert(sheet.includes("scheduled Passkey check is approaching"));
   assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
   assert(panel.includes("Session protection"));
   assert(panel.includes("Activity never extends either hard deadline"));

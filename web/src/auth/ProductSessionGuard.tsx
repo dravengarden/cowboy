@@ -169,18 +169,24 @@ export function ProductSessionGuard({
           {collapsed && !mandatory
             ? (
               <Paper
-                role="status"
+                component="button"
+                type="button"
+                aria-label={`${title}. Verify now`}
                 elevation={10}
                 onClick={() => setDialogOpen(true)}
                 sx={{
                   pointerEvents: "auto",
                   ml: "auto",
+                  display: "block",
                   width: "fit-content",
                   border: 1,
                   borderColor: "warning.main",
                   borderRadius: 999,
                   px: 1.25,
                   py: 0.75,
+                  color: "text.primary",
+                  bgcolor: "background.paper",
+                  font: "inherit",
                   cursor: "pointer",
                 }}
               >
