@@ -1,5 +1,6 @@
 import AddRounded from "@mui/icons-material/AddRounded";
 import KeyRounded from "@mui/icons-material/KeyRounded";
+import SecurityRounded from "@mui/icons-material/SecurityRounded";
 import {
   Alert,
   Box,
@@ -22,6 +23,7 @@ import {
   AuthApiError,
   type ProductMe,
   type ProductPasskey,
+  type ProductSessionServerPolicy,
 } from "./authApi";
 import {
   passkeyErrorMessage,
@@ -64,12 +66,98 @@ function passkeyDate(createdAtMs: number): string {
   }
 }
 
+function policyDuration(durationMs: number): string {
+  const hours = durationMs / (60 * 60 * 1_000);
+  return hours >= 24 && hours % 24 === 0
+    ? `${hours / 24} ${hours === 24 ? "day" : "days"}`
+    : `${hours} ${hours === 1 ? "hour" : "hours"}`;
+}
+
+function SessionPolicySummary({
+  policy,
+}: {
+  policy: ProductSessionServerPolicy | undefined;
+}): React.JSX.Element | null {
+  if (!policy) return null;
+  const rows = [
+    {
+      label: "Active session",
+      value: policy.activity_sliding_enabled
+        ? `${policyDuration(policy.idle_timeout_ms)} idle window`
+        : "Activity sliding off",
+    },
+    {
+      label: "Passkey check",
+      value: `At most every ${policyDuration(policy.passkey_max_age_ms)}`,
+    },
+    {
+      label: "Full sign-in",
+      value: `Required every ${policyDuration(policy.primary_max_age_ms)}`,
+    },
+  ];
+  return (
+    <Box sx={CARD_SX} data-product-session-policy>
+      <Stack spacing={1.5}>
+        <Stack direction="row" spacing={1.1} alignItems="center">
+          <SecurityRounded color="primary" />
+          <Box>
+            <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
+              Session protection
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Set by this Cowboy Service
+            </Typography>
+          </Box>
+        </Stack>
+        <Stack spacing={0}>
+          {rows.map((row, index) => (
+            <Stack
+              key={row.label}
+              direction="row"
+              spacing={2}
+              justifyContent="space-between"
+              alignItems="baseline"
+              sx={{
+                borderTop: index === 0 ? 0 : 1,
+                borderColor: "divider",
+                py: 1,
+              }}
+            >
+              <Typography variant="body2" color="text.secondary">
+                {row.label}
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 700, textAlign: "right" }}
+              >
+                {row.value}
+              </Typography>
+            </Stack>
+          ))}
+        </Stack>
+        <Typography variant="caption" color="text.secondary">
+          Cowboy warns {policyDuration(policy.passkey_warning_ms)}{" "}
+          before a Passkey check and {policyDuration(policy.primary_warning_ms)}
+          {" "}
+          before full sign-in. Activity never extends either hard deadline.
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
 export function ProductPasskeysPanel({
   onMe,
 }: {
   onMe?: (me: ProductMe) => void;
 }): React.JSX.Element {
-  const { me, passkeys: policy, reauthenticate, updateMe } = useProductAuth();
+  const {
+    me,
+    passkeys: policy,
+    session: sessionPolicy,
+    reauthenticate,
+    updateMe,
+  } = useProductAuth();
   const [passkeys, setPasskeys] = useState<ProductPasskey[]>([]);
   const [listState, setListState] = useState<ListState>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -89,7 +177,10 @@ export function ProductPasskeysPanel({
     try {
       const body = await authApi.listPasskeys();
       setPasskeys(body.passkeys);
-      setReauthAfterMs(body.reauth_after_ms);
+      setReauthAfterMs(Math.min(
+        body.reauth_after_ms,
+        sessionPolicy?.passkey_max_age_ms ?? body.reauth_after_ms,
+      ));
       setListState("ready");
     } catch (reason) {
       setListState("error");
@@ -99,7 +190,7 @@ export function ProductPasskeysPanel({
           : "Could not load registered Passkeys.",
       );
     }
-  }, []);
+  }, [sessionPolicy?.passkey_max_age_ms]);
 
   useEffect(() => {
     if (me.auth_enabled === false || policy?.enabled === false) return;
@@ -269,13 +360,20 @@ export function ProductPasskeysPanel({
   if (me.auth_enabled === false) return <></>;
   if (policy?.enabled === false) {
     return (
-      <Alert severity="info">
-        Passkeys are disabled by this Cowboy Service.
-      </Alert>
+      <Stack spacing={2}>
+        <SessionPolicySummary policy={sessionPolicy} />
+        <Alert severity="info">
+          Passkeys are disabled by this Cowboy Service.
+        </Alert>
+      </Stack>
     );
   }
 
   const refreshEnabled = policy?.session_refresh_enabled !== false;
+  const refreshIntervals = REFRESH_INTERVALS.filter((option) =>
+    option.value <=
+      (sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER)
+  );
   const canCreate = passkeyFlowSupported();
   const addForm = (
     <Box sx={CARD_SX}>
@@ -333,6 +431,7 @@ export function ProductPasskeysPanel({
 
   return (
     <Stack spacing={2} data-product-passkeys-panel>
+      <SessionPolicySummary policy={sessionPolicy} />
       <Stack
         direction="row"
         alignItems="center"
@@ -401,7 +500,11 @@ export function ProductPasskeysPanel({
         <Alert
           severity="warning"
           action={
-            <Button color="inherit" size="small" onClick={() => void load()}>
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => void load()}
+            >
               Retry
             </Button>
           }
@@ -487,7 +590,10 @@ export function ProductPasskeysPanel({
                     }
                     label={
                       <Box sx={{ pr: 1.5 }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
+                        <Typography
+                          variant="subtitle2"
+                          sx={{ fontWeight: 750 }}
+                        >
                           Periodic verification
                         </Typography>
                         <Typography
@@ -512,7 +618,7 @@ export function ProductPasskeysPanel({
                       onChange={(event) =>
                         changeInterval(Number(event.target.value))}
                     >
-                      {REFRESH_INTERVALS.map((option) => (
+                      {refreshIntervals.map((option) => (
                         <MenuItem key={option.value} value={option.value}>
                           {option.label}
                         </MenuItem>
@@ -533,18 +639,16 @@ export function ProductPasskeysPanel({
               </Alert>
             )}
 
-          {showAddAnother
-            ? addForm
-            : (
-              <Button
-                variant="outlined"
-                startIcon={<AddRounded />}
-                onClick={() => setShowAddAnother(true)}
-                sx={{ alignSelf: "flex-start" }}
-              >
-                Add another Passkey
-              </Button>
-            )}
+          {showAddAnother ? addForm : (
+            <Button
+              variant="outlined"
+              startIcon={<AddRounded />}
+              onClick={() => setShowAddAnother(true)}
+              sx={{ alignSelf: "flex-start" }}
+            >
+              Add another Passkey
+            </Button>
+          )}
         </>
       )}
     </Stack>

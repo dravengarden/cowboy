@@ -2057,6 +2057,37 @@ struct ProductMe {
     passkey_reauth_after_ms: i64,
     #[serde(default)]
     passkey_reauth_due_at_ms: Option<i64>,
+    #[serde(default)]
+    passkey_reauth_warn_at_ms: Option<i64>,
+    #[serde(default)]
+    primary_reauth_due_at_ms: Option<i64>,
+    #[serde(default)]
+    primary_reauth_warn_at_ms: Option<i64>,
+    #[serde(default)]
+    session_idle_due_at_ms: Option<i64>,
+    #[serde(default)]
+    session_expires_at_ms: Option<i64>,
+    #[serde(default)]
+    session_server_now_ms: Option<i64>,
+    #[serde(default)]
+    session_reauth_kind: Option<ProductSessionReauthKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProductSessionReauthKind {
+    Passkey,
+    Primary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProductSessionDeadlines {
+    idle_due_at_ms: Option<i64>,
+    passkey_due_at_ms: Option<i64>,
+    passkey_warn_at_ms: Option<i64>,
+    primary_due_at_ms: i64,
+    primary_warn_at_ms: i64,
+    required_kind: Option<ProductSessionReauthKind>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3154,41 +3185,140 @@ fn product_me(hub: &Hub, username: &str) -> ProductMe {
         passkey_reauth_required: false,
         passkey_reauth_after_ms: crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
         passkey_reauth_due_at_ms: None,
+        passkey_reauth_warn_at_ms: None,
+        primary_reauth_due_at_ms: None,
+        primary_reauth_warn_at_ms: None,
+        session_idle_due_at_ms: None,
+        session_expires_at_ms: None,
+        session_server_now_ms: None,
+        session_reauth_kind: None,
     }
 }
 
-fn product_passkey_due_at(
+fn product_session_deadlines(
+    server: crate::auth_plugins::SessionServerPolicy,
     policy: &crate::passkey::PasskeyPolicy,
-    session: Option<&crate::store::ProductUserSession>,
-) -> Option<i64> {
-    if !policy.reauth_eligible() {
-        return None;
+    passkey_refresh_enabled: bool,
+    session: &crate::store::ProductUserSession,
+    now_ms: i64,
+) -> ProductSessionDeadlines {
+    let primary_hard_due = session
+        .primary_authenticated_at_ms
+        .saturating_add(server.primary_max_age_ms);
+    let primary_due_at_ms = primary_hard_due.min(session.expires_at_ms);
+    let primary_warn_at_ms = primary_due_at_ms.saturating_sub(server.primary_warning_ms);
+    let idle_due_at_ms = server.activity_sliding_enabled.then(|| {
+        session
+            .last_seen_at_ms
+            .saturating_add(server.idle_timeout_ms)
+    });
+    let passkey_eligible = passkey_refresh_enabled && policy.reauth_eligible();
+    let passkey_due_at_ms = if passkey_eligible {
+        session.passkey_verified_at_ms.map(|verified_at| {
+            verified_at.saturating_add(policy.reauth_after_ms.min(server.passkey_max_age_ms))
+        })
+    } else {
+        None
+    };
+    let passkey_warn_at_ms =
+        passkey_due_at_ms.map(|due_at| due_at.saturating_sub(server.passkey_warning_ms));
+    let required_kind = if primary_due_at_ms <= now_ms {
+        Some(ProductSessionReauthKind::Primary)
+    } else if passkey_due_at_ms.is_some_and(|due_at| due_at <= now_ms)
+        || idle_due_at_ms.is_some_and(|due_at| due_at <= now_ms)
+    {
+        Some(if passkey_eligible {
+            ProductSessionReauthKind::Passkey
+        } else {
+            ProductSessionReauthKind::Primary
+        })
+    } else {
+        None
+    };
+    ProductSessionDeadlines {
+        idle_due_at_ms,
+        passkey_due_at_ms,
+        passkey_warn_at_ms,
+        primary_due_at_ms,
+        primary_warn_at_ms,
+        required_kind,
     }
-    session?
-        .passkey_verified_at_ms
-        .map(|verified_at| verified_at.saturating_add(policy.reauth_after_ms))
+}
+
+fn product_me_for_user_with_policy(
+    hub: &Hub,
+    authentication: &crate::auth_plugins::ProductAuthentication,
+    user: &crate::store::ProductUser,
+    session: Option<&crate::store::ProductUserSession>,
+    policy: &crate::passkey::PasskeyPolicy,
+) -> ProductMe {
+    let mut me = product_me(hub, &user.username);
+    let passkey_refresh_enabled =
+        authentication.passkeys.enabled && authentication.passkeys.session_refresh_enabled;
+    me.passkey_count = policy.passkey_count;
+    me.passkey_reauth_enabled = passkey_refresh_enabled && policy.enabled;
+    me.passkey_reauth_after_ms = policy
+        .reauth_after_ms
+        .min(authentication.session.passkey_max_age_ms);
+    if let Some(session) = session {
+        let now = auth_now_ms();
+        let deadlines = product_session_deadlines(
+            authentication.session,
+            policy,
+            passkey_refresh_enabled,
+            session,
+            now,
+        );
+        me.passkey_reauth_due_at_ms = deadlines.passkey_due_at_ms;
+        me.passkey_reauth_warn_at_ms = deadlines.passkey_warn_at_ms;
+        me.passkey_reauth_required =
+            deadlines.required_kind == Some(ProductSessionReauthKind::Passkey);
+        me.primary_reauth_due_at_ms = Some(deadlines.primary_due_at_ms);
+        me.primary_reauth_warn_at_ms = Some(deadlines.primary_warn_at_ms);
+        me.session_idle_due_at_ms = deadlines.idle_due_at_ms;
+        me.session_expires_at_ms = Some(session.expires_at_ms);
+        me.session_server_now_ms = Some(now);
+        me.session_reauth_kind = deadlines.required_kind;
+    }
+    me
 }
 
 async fn product_me_for_user(
     store: Option<&Store>,
     hub: &Hub,
+    authentication: &crate::auth_plugins::ProductAuthentication,
     user: &crate::store::ProductUser,
     session: Option<&crate::store::ProductUserSession>,
-) -> ProductMe {
-    let mut me = product_me(hub, &user.username);
+) -> anyhow::Result<ProductMe> {
     let Some(store) = store else {
-        return me;
+        return Ok(product_me(hub, &user.username));
     };
-    if let Ok(Some(policy)) = store.user_passkey_policy(&user.id).await {
-        me.passkey_count = policy.passkey_count;
-        me.passkey_reauth_enabled = policy.enabled;
-        me.passkey_reauth_after_ms = policy.reauth_after_ms;
-        me.passkey_reauth_due_at_ms = product_passkey_due_at(&policy, session);
-        me.passkey_reauth_required = me
-            .passkey_reauth_due_at_ms
-            .is_some_and(|due_at| due_at <= auth_now_ms());
-    }
-    me
+    let policy = store
+        .user_passkey_policy(&user.id)
+        .await
+        .context("load product session Passkey policy")?
+        .unwrap_or(crate::passkey::PasskeyPolicy {
+            enabled: false,
+            reauth_after_ms: crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
+            last_step_up_at_ms: None,
+            passkey_count: 0,
+        });
+    Ok(product_me_for_user_with_policy(
+        hub,
+        authentication,
+        user,
+        session,
+        &policy,
+    ))
+}
+
+fn product_session_policy_unavailable(error: anyhow::Error) -> Response {
+    tracing::error!(%error, "product_session_policy_unavailable");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "session protection is temporarily unavailable",
+    )
+        .into_response()
 }
 
 async fn apply_rate_limit(state: &ProductAuthState, username: &str, ip: &str) {
@@ -3599,14 +3729,11 @@ async fn product_session_and_user_from_store_cookie(
     user.disabled_at_ms.is_none().then_some((session, user))
 }
 
-async fn ensure_product_session_passkey_fresh(
+async fn ensure_product_session_fresh(
     store: &Store,
     session: &crate::store::ProductUserSession,
-    refresh_enabled: bool,
+    authentication: &crate::auth_plugins::ProductAuthentication,
 ) -> Result<(), Response> {
-    if !refresh_enabled {
-        return Ok(());
-    }
     let policy = store
         .user_passkey_policy(&session.user_id)
         .await
@@ -3614,14 +3741,30 @@ async fn ensure_product_session_passkey_fresh(
             tracing::error!(%error, user_id = session.user_id, "passkey_policy_lookup");
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         })?;
-    let required = policy
-        .as_ref()
-        .and_then(|policy| product_passkey_due_at(policy, Some(session)))
-        .is_some_and(|due_at| due_at <= auth_now_ms());
-    if required {
+    let policy = policy.unwrap_or(crate::passkey::PasskeyPolicy {
+        enabled: false,
+        reauth_after_ms: crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
+        last_step_up_at_ms: None,
+        passkey_count: 0,
+    });
+    let deadlines = product_session_deadlines(
+        authentication.session,
+        &policy,
+        authentication.passkeys.enabled && authentication.passkeys.session_refresh_enabled,
+        session,
+        auth_now_ms(),
+    );
+    if let Some(kind) = deadlines.required_kind {
+        let kind = match kind {
+            ProductSessionReauthKind::Passkey => "passkey",
+            ProductSessionReauthKind::Primary => "primary",
+        };
         Err((
             StatusCode::PRECONDITION_REQUIRED,
-            "Passkey reauthentication required",
+            Json(serde_json::json!({
+                "code": "session_reauthentication_required",
+                "kind": kind,
+            })),
         )
             .into_response())
     } else {
@@ -3792,15 +3935,8 @@ async fn enforce_product_api(
     let principal = authenticated.principal.clone();
     let cookie_session = authenticated.cookie_session.clone();
     if let (Some(store), Some(session)) = (state.store.as_ref(), cookie_session.as_ref())
-        && let Err(response) = ensure_product_session_passkey_fresh(
-            store,
-            session,
-            state
-                .product_authentication
-                .passkeys
-                .session_refresh_enabled,
-        )
-        .await
+        && let Err(response) =
+            ensure_product_session_fresh(store, session, &state.product_authentication).await
     {
         return response;
     }
@@ -3858,31 +3994,45 @@ async fn issue_product_session(
         }
     };
     let now = auth_now_ms();
+    let session_ttl_ms = state.product_authentication.session.primary_max_age_ms;
     let session = crate::store::ProductUserSession {
         token_hash: crate::admin::hex_sha256(token.as_bytes()),
         user_id: user.id.clone(),
         created_at_ms: now,
-        expires_at_ms: now.saturating_add(crate::product_auth::USER_SESSION_TTL_MS),
+        expires_at_ms: now.saturating_add(session_ttl_ms),
         last_seen_at_ms: now,
         user_agent: headers
             .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok())
             .map(ToOwned::to_owned),
         passkey_verified_at_ms: None,
+        primary_authenticated_at_ms: now,
     };
     if let Err(error) = store.insert_user_session(&session).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
+    let me = match product_me_for_user(
+        Some(store),
+        &state.hub,
+        &state.product_authentication,
+        user,
+        Some(&session),
+    )
+    .await
+    {
+        Ok(me) => me,
+        Err(error) => return product_session_policy_unavailable(error),
+    };
     (
         [(
             header::SET_COOKIE,
             crate::product_auth::session_cookie(
                 &token,
                 crate::product_auth::request_is_https(headers),
-                crate::product_auth::USER_SESSION_TTL_SECS,
+                session_ttl_ms / 1_000,
             ),
         )],
-        Json(product_me_for_user(Some(store), &state.hub, user, Some(&session)).await),
+        Json(me),
     )
         .into_response()
 }
@@ -3916,10 +4066,7 @@ async fn instance_needs_setup(state: &ProductAuthState) -> bool {
     }
 }
 
-async fn api_auth_status(
-    State(state): State<ProductAuthState>,
-    headers: HeaderMap,
-) -> Json<serde_json::Value> {
+async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
     if !state.product_auth_enabled {
         return Json(serde_json::json!({
             "registration": crate::admin::RegistrationPublicStatus {
@@ -3936,7 +4083,8 @@ async fn api_auth_status(
                 "role": "owner",
                 "auth_enabled": false,
             },
-        }));
+        }))
+        .into_response();
     }
     let setup_required = instance_needs_setup(&state).await;
     let setup_pending = setup_required
@@ -3957,15 +4105,25 @@ async fn api_auth_status(
             "prompt_after_login": state.product_authentication.passkeys.prompt_after_login,
             "session_refresh_enabled": state.product_authentication.passkeys.session_refresh_enabled,
         },
+        "session": state.product_authentication.session,
         "providers": state.product_authentication.public_providers(),
     });
     if let Some((session, user)) = product_session_and_user_from_cookie(&state, &headers).await {
-        body["me"] = serde_json::to_value(
-            product_me_for_user(state.store.as_ref(), &state.hub, &user, Some(&session)).await,
+        let me = match product_me_for_user(
+            state.store.as_ref(),
+            &state.hub,
+            &state.product_authentication,
+            &user,
+            Some(&session),
         )
-        .unwrap_or_default();
+        .await
+        {
+            Ok(me) => me,
+            Err(error) => return product_session_policy_unavailable(error),
+        };
+        body["me"] = serde_json::to_value(me).unwrap_or_default();
     }
-    Json(body)
+    Json(body).into_response()
 }
 
 async fn api_auth_setup(
@@ -5025,16 +5183,18 @@ async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) 
         None => None,
     };
     match user {
-        Some(user) => Json(
-            product_me_for_user(
-                state.store.as_ref(),
-                &state.hub,
-                &user,
-                cookie_session.as_ref(),
-            )
-            .await,
+        Some(user) => match product_me_for_user(
+            state.store.as_ref(),
+            &state.hub,
+            &state.product_authentication,
+            &user,
+            cookie_session.as_ref(),
         )
-        .into_response(),
+        .await
+        {
+            Ok(me) => Json(me).into_response(),
+            Err(error) => product_session_policy_unavailable(error),
+        },
         None => Json(product_me(&state.hub, &principal.username)).into_response(),
     }
 }
@@ -5059,15 +5219,7 @@ async fn require_fresh_product_user(
     else {
         return Err(StatusCode::UNAUTHORIZED.into_response());
     };
-    ensure_product_session_passkey_fresh(
-        store,
-        &session,
-        state
-            .product_authentication
-            .passkeys
-            .session_refresh_enabled,
-    )
-    .await?;
+    ensure_product_session_fresh(store, &session, &state.product_authentication).await?;
     Ok(user)
 }
 
@@ -5095,15 +5247,7 @@ async fn require_recent_product_user(
     else {
         return Err(StatusCode::UNAUTHORIZED.into_response());
     };
-    ensure_product_session_passkey_fresh(
-        store,
-        &session,
-        state
-            .product_authentication
-            .passkeys
-            .session_refresh_enabled,
-    )
-    .await?;
+    ensure_product_session_fresh(store, &session, &state.product_authentication).await?;
     if !product_session_has_recent_step_up(&session, auth_now_ms()) {
         return Err((
             StatusCode::PRECONDITION_REQUIRED,
@@ -5140,7 +5284,9 @@ async fn api_auth_list_passkeys(
         .ok()
         .flatten()
         .map_or(crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS, |policy| {
-            policy.reauth_after_ms
+            policy
+                .reauth_after_ms
+                .min(state.product_authentication.session.passkey_max_age_ms)
         });
     Json(serde_json::json!({
         "passkeys": passkeys
@@ -5400,15 +5546,32 @@ async fn persist_product_passkey_assertion(
         return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
     }
     let _ = store.touch_user_last_step_up(&user.id, now).await;
-    let policy = store.user_passkey_policy(&user.id).await.ok().flatten();
+    let policy = store
+        .user_passkey_policy(&user.id)
+        .await
+        .map_err(product_session_policy_unavailable)?
+        .unwrap_or(crate::passkey::PasskeyPolicy {
+            enabled: false,
+            reauth_after_ms: crate::passkey::DEFAULT_PASSKEY_REAUTH_AFTER_MS,
+            last_step_up_at_ms: None,
+            passkey_count: 0,
+        });
     if state
         .product_authentication
         .passkeys
         .session_refresh_enabled
-        && policy.as_ref().is_some_and(|policy| policy.enabled)
+        && policy.enabled
     {
         let Some(previous_token) = crate::product_auth::user_cookie_token(headers) else {
             return Err(StatusCode::UNAUTHORIZED.into_response());
+        };
+        let previous_token_hash = crate::admin::hex_sha256(previous_token.as_bytes());
+        let previous_session = match store.user_session_by_token_hash(&previous_token_hash).await {
+            Ok(Some(session)) => session,
+            Ok(None) => return Err(StatusCode::UNAUTHORIZED.into_response()),
+            Err(error) => {
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
+            }
         };
         let token = match crate::product_auth::new_session_token() {
             Ok(token) => token,
@@ -5416,33 +5579,44 @@ async fn persist_product_passkey_assertion(
                 return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
             }
         };
+        let primary_due_at_ms = previous_session
+            .primary_authenticated_at_ms
+            .saturating_add(state.product_authentication.session.primary_max_age_ms);
+        // Passkey rotates the current secret and refreshes only the local
+        // user-verification proof. It can never move the primary-login cap.
+        let expires_at_ms = primary_due_at_ms;
         let session = crate::store::ProductUserSession {
             token_hash: crate::admin::hex_sha256(token.as_bytes()),
             user_id: user.id.clone(),
             created_at_ms: now,
-            expires_at_ms: now.saturating_add(crate::product_auth::PASSKEY_SESSION_TTL_MS),
+            expires_at_ms,
             last_seen_at_ms: now,
             user_agent: headers
                 .get(header::USER_AGENT)
                 .and_then(|value| value.to_str().ok())
                 .map(ToOwned::to_owned),
             passkey_verified_at_ms: Some(now),
+            primary_authenticated_at_ms: previous_session.primary_authenticated_at_ms,
         };
         if let Err(error) = store
-            .rotate_user_session(
-                &crate::admin::hex_sha256(previous_token.as_bytes()),
-                &session,
-            )
+            .rotate_user_session(&previous_token_hash, &session)
             .await
         {
             return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
         }
+        let me = product_me_for_user_with_policy(
+            &state.hub,
+            &state.product_authentication,
+            user,
+            Some(&session),
+            &policy,
+        );
         return Ok(ProductPasskeyAssertionResult {
-            me: product_me_for_user(Some(store), &state.hub, user, Some(&session)).await,
+            me,
             set_cookie: Some(crate::product_auth::session_cookie(
                 &token,
                 crate::product_auth::request_is_https(headers),
-                crate::product_auth::PASSKEY_SESSION_TTL_SECS,
+                expires_at_ms.saturating_sub(now) / 1_000,
             )),
         });
     }
@@ -5454,8 +5628,15 @@ async fn persist_product_passkey_assertion(
             .flatten(),
         None => None,
     };
+    let me = product_me_for_user_with_policy(
+        &state.hub,
+        &state.product_authentication,
+        user,
+        current_session.as_ref(),
+        &policy,
+    );
     Ok(ProductPasskeyAssertionResult {
-        me: product_me_for_user(Some(store), &state.hub, user, current_session.as_ref()).await,
+        me,
         set_cookie: None,
     })
 }
@@ -5488,15 +5669,8 @@ async fn api_auth_passkey_external_start(
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if request.action == crate::passkey::ExternalPasskeyAction::Register {
-        if let Err(response) = ensure_product_session_passkey_fresh(
-            store,
-            &session,
-            state
-                .product_authentication
-                .passkeys
-                .session_refresh_enabled,
-        )
-        .await
+        if let Err(response) =
+            ensure_product_session_fresh(store, &session, &state.product_authentication).await
         {
             return response;
         }
@@ -5940,6 +6114,13 @@ async fn api_auth_passkey_reauth(
         }
     };
     let reauth_after_ms = request.reauth_after_ms.unwrap_or(current.reauth_after_ms);
+    if reauth_after_ms > state.product_authentication.session.passkey_max_age_ms {
+        return (
+            StatusCode::BAD_REQUEST,
+            "verification frequency exceeds the Cowboy Service maximum",
+        )
+            .into_response();
+    }
     if request.enabled && current.passkey_count == 0 {
         return (
             StatusCode::BAD_REQUEST,
@@ -5961,8 +6142,18 @@ async fn api_auth_passkey_reauth(
             .flatten(),
         None => None,
     };
-    Json(product_me_for_user(Some(store), &state.hub, &user, current_session.as_ref()).await)
-        .into_response()
+    match product_me_for_user(
+        Some(store),
+        &state.hub,
+        &state.product_authentication,
+        &user,
+        current_session.as_ref(),
+    )
+    .await
+    {
+        Ok(me) => Json(me).into_response(),
+        Err(error) => product_session_policy_unavailable(error),
+    }
 }
 
 async fn api_auth_delete_passkey(
@@ -6592,15 +6783,8 @@ async fn api_auth_list_tokens(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(
-            store,
-            session,
-            state
-                .product_authentication
-                .passkeys
-                .session_refresh_enabled,
-        )
-        .await
+        && let Err(response) =
+            ensure_product_session_fresh(store, session, &state.product_authentication).await
     {
         return response;
     }
@@ -6645,15 +6829,8 @@ async fn api_auth_create_token(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(
-            &store,
-            session,
-            state
-                .product_authentication
-                .passkeys
-                .session_refresh_enabled,
-        )
-        .await
+        && let Err(response) =
+            ensure_product_session_fresh(&store, session, &state.product_authentication).await
     {
         return response;
     }
@@ -6728,15 +6905,8 @@ async fn api_auth_delete_token(
         return missing_store();
     };
     if let Some(session) = cookie_session.as_ref()
-        && let Err(response) = ensure_product_session_passkey_fresh(
-            store,
-            session,
-            state
-                .product_authentication
-                .passkeys
-                .session_refresh_enabled,
-        )
-        .await
+        && let Err(response) =
+            ensure_product_session_fresh(store, session, &state.product_authentication).await
     {
         return response;
     }
@@ -14294,6 +14464,7 @@ fn project_outbound(
             session_id: None, ..
         }
         | Outbound::Machines { .. }
+        | Outbound::AuthSession { .. }
         | Outbound::Ping
         | Outbound::BootstrapComplete
         | Outbound::Settings { .. } => Some(message),
@@ -14383,16 +14554,9 @@ async fn principal_still_valid(
         );
         match product_session_and_user_from_store_cookie(store, &headers).await {
             Some((session, user))
-                if ensure_product_session_passkey_fresh(
-                    store,
-                    &session,
-                    state
-                        .product_authentication
-                        .passkeys
-                        .session_refresh_enabled,
-                )
-                .await
-                .is_ok() =>
+                if ensure_product_session_fresh(store, &session, &state.product_authentication)
+                    .await
+                    .is_ok() =>
             {
                 Some(product_principal(&state.hub, &user))
             }
@@ -14405,6 +14569,63 @@ async fn principal_still_valid(
     };
     current.is_some_and(|principal| {
         principal.user_id == expected.user_id && !principal.username.is_empty()
+    })
+}
+
+struct ProductAuthSessionSnapshot {
+    message: Outbound,
+    valid: bool,
+    user_id: String,
+    next_due_at_ms: i64,
+}
+
+fn product_auth_deadline_instant(due_at_ms: i64) -> tokio::time::Instant {
+    const MAX_DELAY_MS: u64 = 91 * 24 * 60 * 60 * 1_000;
+    let delay_ms = (due_at_ms.saturating_sub(auth_now_ms()).max(1) as u64).min(MAX_DELAY_MS);
+    tokio::time::Instant::now() + std::time::Duration::from_millis(delay_ms)
+}
+
+async fn product_auth_session_message(
+    state: &AppState,
+    cookie_token: &str,
+) -> Option<ProductAuthSessionSnapshot> {
+    let store = state.store.as_ref()?;
+    let session = store
+        .user_session_by_token_hash(&crate::admin::hex_sha256(cookie_token.as_bytes()))
+        .await
+        .ok()??;
+    if session.expires_at_ms <= auth_now_ms() {
+        return None;
+    }
+    let user = store.user_by_id(&session.user_id).await.ok()??;
+    if user.disabled_at_ms.is_some() {
+        return None;
+    }
+    let user_id = user.id.clone();
+    let me = product_me_for_user(
+        Some(store),
+        &state.hub,
+        &state.product_authentication,
+        &user,
+        Some(&session),
+    )
+    .await
+    .ok()?;
+    let valid = me.session_reauth_kind.is_none();
+    let next_due_at_ms = [
+        me.primary_reauth_due_at_ms,
+        me.passkey_reauth_due_at_ms,
+        me.session_idle_due_at_ms,
+    ]
+    .into_iter()
+    .flatten()
+    .min()?;
+    let session = serde_json::to_value(me).ok()?;
+    Some(ProductAuthSessionSnapshot {
+        message: Outbound::AuthSession { session },
+        valid,
+        user_id,
+        next_due_at_ms,
     })
 }
 
@@ -14422,6 +14643,27 @@ async fn handle_ws(
         device_identity,
     } = authentication;
     let (mut sink, mut stream) = socket.split();
+
+    // A cookie session must pass its current idle, Passkey, and primary-login
+    // deadlines before any transcript or Machine snapshot is disclosed. Push
+    // the required proof to the client first, then close without bootstrapping
+    // when the session is no longer fresh.
+    let initial_auth_deadline_ms = if let Some(token) = cookie_token.as_deref() {
+        let Some(snapshot) = product_auth_session_message(&state, token).await else {
+            let _ = sink.send(ws_close_auth_required()).await;
+            return;
+        };
+        if send_json(&mut sink, &snapshot.message).await.is_err() {
+            return;
+        }
+        if !snapshot.valid || snapshot.user_id != principal.user_id {
+            let _ = sink.send(ws_close_auth_required()).await;
+            return;
+        }
+        Some(snapshot.next_due_at_ms)
+    } else {
+        None
+    };
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
     // client dedups by (session_id, seq), so a brief overlap is harmless.
@@ -14442,7 +14684,6 @@ async fn handle_ws(
             return;
         }
     }
-
     // Fan-out task: broadcast events → this socket, plus a periodic app-level
     // heartbeat (Outbound::Ping) so a client can detect a HALF-OPEN socket that
     // never fires `onclose` (see Outbound::Ping). Per-client interval — a failed
@@ -14452,13 +14693,35 @@ async fn handle_ws(
     let fanout_cookie = cookie_token.clone();
     let fanout_bearer = bearer.clone();
     let fanout_device = device_identity.clone();
+    let (direct_tx, mut direct_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Option<ProductAuthSessionSnapshot>>();
     let mut fanout = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
+        let auth_deadline = tokio::time::sleep_until(product_auth_deadline_instant(
+            initial_auth_deadline_ms.unwrap_or(i64::MAX),
+        ));
+        tokio::pin!(auth_deadline);
         // The first tick fires immediately; consume it so the first ping waits a
         // full interval (the connect snapshot is fresh traffic already).
         heartbeat.tick().await;
         loop {
             tokio::select! {
+                Some(update) = direct_rx.recv() => {
+                    let Some(snapshot) = update else {
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    };
+                    if send_json(&mut sink, &snapshot.message).await.is_err() {
+                            break;
+                    }
+                    if !snapshot.valid || snapshot.user_id != fanout_principal.user_id {
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    }
+                    auth_deadline
+                        .as_mut()
+                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
+                }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         break;
@@ -14499,17 +14762,55 @@ async fn handle_ws(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 },
+                _ = &mut auth_deadline, if via_cookie => {
+                    let Some(token) = fanout_cookie.as_deref() else {
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    };
+                    let Some(snapshot) = product_auth_session_message(&fanout_state, token).await else {
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    };
+                    if send_json(&mut sink, &snapshot.message).await.is_err() {
+                        break;
+                    }
+                    if !snapshot.valid || snapshot.user_id != fanout_principal.user_id {
+                        let _ = sink.send(ws_close_auth_required()).await;
+                        break;
+                    }
+                    auth_deadline
+                        .as_mut()
+                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
+                }
                 _ = heartbeat.tick() => {
-                    if !principal_still_valid(
-                        &fanout_state,
-                        via_cookie,
-                        fanout_cookie.as_deref(),
-                        fanout_bearer.as_deref(),
-                        fanout_device.as_ref(),
-                        &fanout_principal,
-                    )
-                    .await
-                    {
+                    let valid = if via_cookie {
+                        match fanout_cookie.as_deref() {
+                            Some(token) => match product_auth_session_message(&fanout_state, token).await {
+                                Some(snapshot) => {
+                                    if send_json(&mut sink, &snapshot.message).await.is_err() {
+                                        break;
+                                    }
+                                    auth_deadline
+                                        .as_mut()
+                                        .reset(product_auth_deadline_instant(snapshot.next_due_at_ms));
+                                    snapshot.valid && snapshot.user_id == fanout_principal.user_id
+                                }
+                                None => false,
+                            },
+                            None => false,
+                        }
+                    } else {
+                        principal_still_valid(
+                            &fanout_state,
+                            false,
+                            None,
+                            fanout_bearer.as_deref(),
+                            fanout_device.as_ref(),
+                            &fanout_principal,
+                        )
+                        .await
+                    };
+                    if !valid {
                         tracing::info!(reason = "disabled", "ws_rejected");
                         let _ = sink.send(ws_close_auth_required()).await;
                         break;
@@ -14527,6 +14828,7 @@ async fn handle_ws(
     // would otherwise leave the head pinned and stall the queue forever. We
     // track what this socket held and release it after a short reload grace.
     let mut held: HashMap<String, (String, u64)> = HashMap::new();
+    let mut wait_for_auth_close = false;
 
     // Inbound command loop.
     loop {
@@ -14546,9 +14848,35 @@ async fn handle_ws(
                         .await
                         {
                             tracing::info!(reason = "expired_or_step_up_required", "ws_rejected");
+                            let _ = direct_tx.send(None);
+                            wait_for_auth_close = true;
                             break;
                         }
-                        handle_command(&state, &principal, &text, &mut held);
+                        if matches!(
+                            serde_json::from_str::<Inbound>(&text),
+                            Ok(Inbound::AuthActivity)
+                        ) {
+                            if let (Some(store), Some(token)) =
+                                (state.store.as_ref(), cookie_token.as_deref())
+                            {
+                                let token_hash = crate::admin::hex_sha256(token.as_bytes());
+                                if let Err(error) = store
+                                    .touch_user_session_activity(&token_hash, auth_now_ms())
+                                    .await
+                                {
+                                    tracing::warn!(%error, "touching user session activity");
+                                }
+                                let direct = product_auth_session_message(&state, token).await;
+                                let _ = direct_tx.send(direct);
+                            }
+                            continue;
+                        }
+                        handle_command(
+                            &state,
+                            &principal,
+                            &text,
+                            &mut held,
+                        );
                     }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
@@ -14569,7 +14897,11 @@ async fn handle_ws(
             hub.release_queue_editing_if_epoch(&session_id, &id, epoch);
         });
     }
-    fanout.abort();
+    if wait_for_auth_close {
+        let _ = fanout.await;
+    } else {
+        fanout.abort();
+    }
 }
 
 /// Derive a short session title from the first prompt: the first non-empty
@@ -14662,7 +14994,8 @@ fn handle_command(
         | Inbound::ReorderDrafts { session_id, .. } => Some(session_id.clone()),
         // Sync mutations are state-scoped (title/order), not session-scoped — a
         // failure surfaces as a daemon-level error (None).
-        Inbound::NewSession { .. }
+        Inbound::AuthActivity
+        | Inbound::NewSession { .. }
         | Inbound::ReorderSessions { .. }
         | Inbound::Sync { .. }
         | Inbound::SetSetting { .. } => None,
@@ -14715,6 +15048,7 @@ fn handle_command(
         return;
     }
     let result = match cmd {
+        Inbound::AuthActivity => Ok(()),
         Inbound::NewSession { .. } => Err(
             "legacy WebSocket session creation is disabled; use POST /api/sessions with a connected Machine"
                 .to_owned(),
@@ -16082,10 +16416,12 @@ mod product_auth_api_tests {
                 token_hash: crate::admin::hex_sha256(cookie_token.as_bytes()),
                 user_id: user.id.clone(),
                 created_at_ms: now,
-                expires_at_ms: now + crate::product_auth::USER_SESSION_TTL_MS,
+                expires_at_ms: now
+                    + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
                 last_seen_at_ms: now,
                 user_agent: Some("device-authorization-test".to_owned()),
                 passkey_verified_at_ms: None,
+                primary_authenticated_at_ms: now,
             })
             .await
             .unwrap();
@@ -16661,7 +16997,7 @@ mod product_auth_api_tests {
             .expect("product cookie");
         let admin_cookie =
             set_cookie(&exchanged, crate::admin::ADMIN_SESSION_COOKIE).expect("admin cookie");
-        assert!(user_cookie.contains("Max-Age=86400"));
+        assert!(user_cookie.contains("Max-Age=2592000"));
         assert!(admin_cookie.contains("Max-Age=43200"));
 
         let replayed = post_json(
@@ -16802,7 +17138,7 @@ mod product_auth_api_tests {
             .expect("product cookie");
         let admin_cookie =
             set_cookie(&exchanged, crate::admin::ADMIN_SESSION_COOKIE).expect("admin cookie");
-        assert!(user_cookie.contains("Max-Age=86400"));
+        assert!(user_cookie.contains("Max-Age=2592000"));
         assert!(admin_cookie.contains("Max-Age=43200"));
 
         let replayed = post_json(
@@ -17235,7 +17571,7 @@ mod product_auth_api_tests {
         assert_eq!(logged_in.status(), StatusCode::OK);
         let login_cookie = set_cookie(&logged_in, USER_SESSION_COOKIE).expect("login cookie");
         assert!(login_cookie.starts_with(&format!("{USER_SESSION_COOKIE}=")));
-        assert!(login_cookie.contains("Max-Age=86400"));
+        assert!(login_cookie.contains("Max-Age=2592000"));
 
         let me = reqwest::Client::new()
             .get(format!("{base}/api/auth/me"))
@@ -17430,6 +17766,10 @@ mod product_auth_api_tests {
         assert_eq!(body["setup_required"], true);
         assert_eq!(body["setup_pending"], false);
         assert_eq!(body["login_method_order"], serde_json::json!(["password"]));
+        assert_eq!(body["session"]["activity_sliding_enabled"], true);
+        assert_eq!(body["session"]["idle_timeout_ms"], 86_400_000_i64);
+        assert_eq!(body["session"]["primary_max_age_ms"], 2_592_000_000_i64);
+        assert_eq!(body["session"]["primary_warning_ms"], 86_400_000_i64);
         assert_eq!(body["registration"]["accepts_registration"], false);
         assert!(body.get("setup_token").is_none());
         assert!(!body.to_string().contains(&setup_token));
@@ -17495,14 +17835,12 @@ mod product_auth_api_tests {
         )
         .await;
         assert_eq!(logged_in.status(), StatusCode::OK);
-        assert!(set_cookie(&logged_in, USER_SESSION_COOKIE).is_some());
+        let user_set_cookie = set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap();
+        assert!(user_set_cookie.contains("Max-Age=2592000"));
 
         let me = reqwest::Client::new()
             .get(format!("{base}/api/auth/me"))
-            .header(
-                header::COOKIE,
-                cookie_header(&set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap()),
-            )
+            .header(header::COOKIE, cookie_header(&user_set_cookie))
             .send()
             .await
             .unwrap();
@@ -17990,13 +18328,15 @@ mod product_auth_api_tests {
             last_seen_at_ms: now,
             user_agent: None,
             passkey_verified_at_ms: Some(now - 8 * 24 * 60 * 60 * 1_000),
+            primary_authenticated_at_ms: now - 8 * 24 * 60 * 60 * 1_000,
         };
         store.insert_user_session(&extended).await.unwrap();
         let base_token = "d".repeat(64);
         let base_session = crate::store::ProductUserSession {
             token_hash: crate::admin::hex_sha256(base_token.as_bytes()),
             created_at_ms: now,
-            expires_at_ms: now + crate::product_auth::USER_SESSION_TTL_MS,
+            expires_at_ms: now
+                + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
             passkey_verified_at_ms: None,
             ..extended.clone()
         };
@@ -18036,36 +18376,66 @@ mod product_auth_api_tests {
     }
 
     #[test]
-    fn passkey_refresh_due_is_scoped_to_the_current_session() {
+    fn session_deadlines_keep_passkey_and_primary_proofs_independent() {
         let policy = crate::passkey::PasskeyPolicy {
             enabled: true,
             reauth_after_ms: 7 * 24 * 60 * 60 * 1_000,
             last_step_up_at_ms: Some(99_000),
             passkey_count: 1,
         };
+        let server = crate::auth_plugins::SessionServerPolicy::default();
         let mut session = crate::store::ProductUserSession {
             token_hash: "aa".repeat(32),
             user_id: "user-1".to_owned(),
             created_at_ms: 100_000,
-            expires_at_ms: 200_000,
+            expires_at_ms: 100_000 + server.primary_max_age_ms + 10_000,
             last_seen_at_ms: 100_000,
             user_agent: None,
             passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: 100_000,
         };
 
-        assert_eq!(product_passkey_due_at(&policy, Some(&session)), None);
+        let deadlines = product_session_deadlines(server, &policy, true, &session, 100_000);
+        assert_eq!(deadlines.passkey_due_at_ms, None);
         session.passkey_verified_at_ms = Some(100_000);
+        let deadlines = product_session_deadlines(server, &policy, true, &session, 100_000);
         assert_eq!(
-            product_passkey_due_at(&policy, Some(&session)),
-            Some(100_000 + policy.reauth_after_ms)
+            deadlines.passkey_due_at_ms,
+            Some(100_000 + server.passkey_max_age_ms)
         );
-        assert_eq!(product_passkey_due_at(&policy, None), None);
+        assert_eq!(
+            deadlines.primary_due_at_ms,
+            100_000 + server.primary_max_age_ms
+        );
+        let original = deadlines;
+        session.last_seen_at_ms += 10_000;
+        let active = product_session_deadlines(server, &policy, true, &session, 110_000);
+        assert_eq!(
+            active.idle_due_at_ms,
+            original.idle_due_at_ms.map(|due| due + 10_000)
+        );
+        assert_eq!(active.passkey_due_at_ms, original.passkey_due_at_ms);
+        assert_eq!(active.primary_due_at_ms, original.primary_due_at_ms);
+        assert_eq!(
+            product_session_deadlines(server, &policy, true, &session, active.primary_due_at_ms,)
+                .required_kind,
+            Some(ProductSessionReauthKind::Primary),
+            "activity and Passkey proof cannot move the primary-login cap"
+        );
 
         let disabled = crate::passkey::PasskeyPolicy {
             enabled: false,
             ..policy
         };
-        assert_eq!(product_passkey_due_at(&disabled, Some(&session)), None);
+        assert_eq!(
+            product_session_deadlines(server, &disabled, true, &session, 100_000).passkey_due_at_ms,
+            None
+        );
+        assert_eq!(
+            product_session_deadlines(server, &policy, false, &session, 100_000).passkey_due_at_ms,
+            None,
+            "a persisted user toggle cannot bypass the server feature flag"
+        );
     }
 
     #[test]
@@ -18079,6 +18449,7 @@ mod product_auth_api_tests {
             last_seen_at_ms: now,
             user_agent: None,
             passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS + 1,
         };
         assert!(product_session_has_recent_step_up(&session, now));
         session.created_at_ms = now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS;

@@ -51,6 +51,14 @@ Example server configuration:
     "prompt_after_login": true,
     "session_refresh_enabled": true
   },
+  "session": {
+    "activity_sliding_enabled": true,
+    "idle_timeout_ms": 86400000,
+    "passkey_max_age_ms": 604800000,
+    "passkey_warning_ms": 1800000,
+    "primary_max_age_ms": 2592000000,
+    "primary_warning_ms": 86400000
+  },
   "providers": [
     {
       "plugin_id": "google",
@@ -184,13 +192,18 @@ then, a provider service owns provider state and Cowboy owns Cowboy state.
 ## Login UI
 
 `GET /api/auth/status` returns `password_enabled`, `login_method_order`, the
-Passkey server policy, and every enabled provider's stable ID, display label,
-button label, and start URL. When more than one method exists, Web renders a
-generic tab per method in the server-provided order and selects the first one.
+Passkey and session server policies, and every enabled provider's stable ID,
+display label, button label, and start URL. When more than one method exists,
+Web renders a generic tab per method in the server-provided order and selects
+the first one.
 The built-in fallback gives Cardea priority when it is available. Web rejects an
 incomplete or duplicate response order and reconstructs the same safe default so
 a malformed response cannot hide an enabled login method. Native clients can
 consume the same explicit order without inferring it from the Provider array.
+Cowboy owns the full-page gate, tabs, warning bar, responsive dialog or bottom
+sheet, locked backdrop, cancellation, and recovery path. A package contributes
+signed protocol and presentation data only; it cannot render arbitrary UI or
+cover Cowboy's security state.
 
 Native clients derive all follow-up routes from the provider's fixed returned
 start URL; packages cannot supply a callback or return destination. Cowboy
@@ -213,11 +226,11 @@ Cardea keeps the equivalent fixed `/api/auth/oidc/*` aliases.
 
 Passkeys are a server feature flag and remain optional for each user. The
 default server policy enables registration, recommends setup once after login,
-and permits the user to turn session refresh on later. The per-user refresh
+and permits the user to turn periodic verification on later. The per-user
 toggle remains off by default. Adding or deleting a credential requires a
 session-local login or Passkey step-up from the last five minutes; a long-lived
-cookie alone cannot replace credential state. Enabling refresh does not extend
-a session until the separate WebAuthn assertion succeeds.
+cookie alone cannot replace credential state. Enabling the policy performs an
+immediate, separate WebAuthn assertion before it becomes effective.
 
 If that five-minute window has elapsed, Web presents the server-configured
 Passkey, password, and Authentication Provider methods. Verification completed
@@ -228,18 +241,33 @@ unchanged. Cowboy never converts the HTTP 428 gate into a client-side bypass,
 and a provider response for a different account clears cached product data
 instead of continuing the original operation under another identity.
 
-Without a Passkey assertion, password and provider sessions last one day. A
-successful explicit WebAuthn user-verification ceremony may atomically replace
-only the current browser cookie with a session lasting at most 30 days. It does
-not extend other devices. The configured 1, 7, or 14 day interval is a maximum
-age for the next assertion, not an unattended background refresh.
+The Controller applies three independent deadlines. Trusted visible-document
+input may slide the idle window, which defaults to 24 hours. An enabled
+periodic Passkey policy requires a fresh assertion by the user's selected
+interval, bounded by the service maximum (seven days by default). Password or
+provider login has a non-sliding hard maximum of 30 days by default. Service
+configuration also owns the warning windows: 30 minutes for Passkey and one day
+for primary login. Values are validated at startup and published read-only to
+clients.
 
-Repeated renewal is safe only because every renewal is a new, origin-bound,
-user-verifying WebAuthn assertion and the old cookie is revoked during rotation.
-Cowboy does not treat the presence of a credential, a background timer, or an
-upstream Cardea session as proof of user presence. Disabling server refresh
-immediately stops enforcing old per-user refresh settings and stops creating
-30-day replacements; revoking the Passkey does not revive an expired session.
+Repeated Passkey verification is safe only because every refresh is a new,
+origin-bound, user-verifying WebAuthn assertion and the old cookie is revoked
+during rotation. The new cookie retains the original primary-authentication
+timestamp, so Passkey never extends the service's full-login hard cap and never
+extends another device. Cowboy does not treat a stored credential, background
+timer, agent output, WebSocket heartbeat, or upstream provider session as proof
+of user presence. Disabling periodic verification or revoking the final
+Passkey removes that deadline but does not rewrite the primary cap.
+
+Controller enforces the earliest deadline for REST and WebSocket access and
+pushes per-cookie deadline snapshots over the authenticated product socket.
+The client records real input at most once per minute, updates a single local
+timer, and performs no session-policy polling. The responsive warning and lock
+surfaces are Cowboy-owned: mobile respects safe areas and avoids automatic
+keyboard focus, while Desktop uses a compact dialog and direct password focus.
+At expiry the product view is blurred and locked, but agents continue and local
+drafts plus queued prompts remain intact until verification succeeds or the
+user signs out.
 
 The iOS native shell runs the WebAuthn prompt in a system
 `SFSafariViewController`, not its embedded `WKWebView`. This keeps Passkeys

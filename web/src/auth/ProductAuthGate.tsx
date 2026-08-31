@@ -19,8 +19,10 @@ import {
 import {
   authApi,
   type ProductMe,
+  productMeFromJson,
   type ProductOidcProvider,
   type ProductPasskeyServerPolicy,
+  type ProductSessionServerPolicy,
 } from "./authApi";
 import {
   announceProductSessionEnd,
@@ -33,8 +35,9 @@ import {
   PRODUCT_AUTH_LOST_EVENT,
   shouldMountProductApp,
 } from "./authStatus";
-import { PasskeyReauthLock } from "./PasskeyReauthLock";
 import { ProductRecentAuthSheet } from "./ProductRecentAuthSheet";
+import { ProductSessionGuard } from "./ProductSessionGuard";
+import { PRODUCT_AUTH_SESSION_EVENT } from "../productAuthEvents";
 import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
@@ -52,6 +55,7 @@ import {
 export interface ProductAuthValue {
   me: ProductMe;
   passkeys: ProductPasskeyServerPolicy | undefined;
+  session: ProductSessionServerPolicy | undefined;
   reauthenticate: (options?: RecentProductAuthOptions) => Promise<ProductMe>;
   updateMe: (me: ProductMe) => void;
   signOut: () => Promise<void>;
@@ -288,6 +292,9 @@ export function ProductAuthGate({
   const [passkeyPolicy, setPasskeyPolicy] = useState<
     ProductPasskeyServerPolicy
   >();
+  const [sessionPolicy, setSessionPolicy] = useState<
+    ProductSessionServerPolicy
+  >();
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
@@ -352,6 +359,7 @@ export function ProductAuthGate({
       setPasswordEnabled(probe.body.password_enabled !== false);
       setLoginMethodOrder(probe.body.login_method_order ?? []);
       setPasskeyPolicy(probe.body.passkeys);
+      setSessionPolicy(probe.body.session);
     }
     const decision = classifyAuthStatus(probe);
     if (generation !== generationRef.current) return;
@@ -403,6 +411,17 @@ export function ProductAuthGate({
     meRef.current = next;
     setMe(next);
   }, []);
+
+  useEffect(() => {
+    const onSession = (event: Event): void => {
+      const next = productMeFromJson((event as CustomEvent).detail);
+      if (!next || next.account !== meRef.current?.account) return;
+      updateMe(next);
+    };
+    globalThis.addEventListener(PRODUCT_AUTH_SESSION_EVENT, onSession);
+    return () =>
+      globalThis.removeEventListener(PRODUCT_AUTH_SESSION_EVENT, onSession);
+  }, [updateMe]);
 
   const reauthenticate = useCallback((
     options: RecentProductAuthOptions = {},
@@ -462,27 +481,30 @@ export function ProductAuthGate({
         value={{
           me,
           passkeys: passkeyPolicy,
+          session: sessionPolicy,
           reauthenticate,
           updateMe,
           signOut,
         }}
       >
         {children}
-        {me.auth_enabled !== false &&
-          passkeyPolicy?.session_refresh_enabled !== false && (
-          <PasskeyReauthLock
-            me={me}
-            onUnlocked={updateMe}
-            onSignOut={signOut}
-          />
-        )}
+        <ProductSessionGuard
+          me={me}
+          policy={sessionPolicy}
+          providers={providers}
+          passwordEnabled={passwordEnabled}
+          loginMethodOrder={loginMethodOrder}
+          suspended={recentAuthOpen}
+          onVerified={updateMe}
+          onSignOut={signOut}
+        />
         {me.auth_enabled !== false && (
           <PasskeySetupPrompt
             me={me}
             policy={passkeyPolicy}
             onCreated={updateMe}
             reauthenticate={reauthenticate}
-            suspended={recentAuthOpen}
+            suspended={recentAuthOpen || me.session_reauth_kind != null}
           />
         )}
         <ProductRecentAuthSheet
@@ -491,9 +513,8 @@ export function ProductAuthGate({
           providers={providers}
           passwordEnabled={passwordEnabled}
           loginMethodOrder={loginMethodOrder}
-          requireResumeGesture={
-            recentAuthOptions.resumeWithUserGesture === true
-          }
+          requireResumeGesture={recentAuthOptions.resumeWithUserGesture ===
+            true}
           resumeLabel={recentAuthOptions.resumeLabel ?? "Continue"}
           onVerified={completeRecentAuth}
           onCancel={cancelRecentAuth}
@@ -517,6 +538,7 @@ export function ProductAuthGate({
           setPasswordEnabled(status.password_enabled !== false);
           setLoginMethodOrder(status.login_method_order ?? []);
           setPasskeyPolicy(status.passkeys);
+          setSessionPolicy(status.session);
         }}
       />
     );

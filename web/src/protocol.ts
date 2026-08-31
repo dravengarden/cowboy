@@ -249,6 +249,7 @@ export interface DraftSchedule {
 }
 
 export type Outbound =
+  | { type: "auth_session"; session: unknown }
   | { type: "sessions"; sessions: SessionMeta[] }
   | { type: "machines"; revision: number; machines: MachineSummary[]; resync?: boolean }
   // End of the deterministic connect snapshot. Browser clients need no action;
@@ -284,6 +285,7 @@ export interface SessionBootstrapResponse {
 }
 
 export type Inbound =
+  | { type: "auth_activity" }
   | { type: "new_session"; provider: string; cwd?: string }
   | {
       type: "prompt";

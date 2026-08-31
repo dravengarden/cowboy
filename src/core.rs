@@ -827,6 +827,9 @@ fn mobile_review_string_arg(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Inbound {
+    /// Coarse, user-gesture-only browser activity used to slide the idle
+    /// deadline. Heartbeats, agent output, and background refreshes never send it.
+    AuthActivity,
     /// Start a new agent session.
     NewSession {
         provider: String,
@@ -1071,6 +1074,9 @@ pub enum Inbound {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Outbound {
+    /// Per-cookie session deadlines. The server emits this only to the socket
+    /// authenticated by that cookie; it never enters Hub broadcast history.
+    AuthSession { session: serde_json::Value },
     /// Full session list (sent on connect and whenever it changes).
     Sessions { sessions: Vec<SessionMeta> },
     /// Full enrolled-Machine projection. `resync` marks the deterministic

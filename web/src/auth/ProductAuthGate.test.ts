@@ -14,6 +14,8 @@ async function readAuthSources(): Promise<string> {
     "DeviceAuthorizationPage.tsx",
     "ProductPasskeysPanel.tsx",
     "ProductRecentAuthSheet.tsx",
+    "ProductSessionGuard.tsx",
+    "sessionSchedule.ts",
     "PasskeyReauthLock.tsx",
     "passkeyReauthSchedule.ts",
     "passkeyBrowser.ts",
@@ -180,7 +182,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1596"'));
+  assert(sw.includes('const VERSION = "cowboy-v1597"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -210,7 +212,9 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("runBrowserOidc"));
   assert(sheet.includes("useProviderHandoff"));
-  assert(sheet.includes("Identity verified. Your pending change is still here."));
+  assert(
+    sheet.includes("Identity verified. Your pending change is still here."),
+  );
   assert(sheet.includes("selectedProvider.button_label"));
   assert(sheet.includes("orderedLoginMethodIds"));
   const addHandler = panel.slice(
@@ -274,4 +278,50 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(account.includes('variant="outlined"'));
   assert(account.includes("Running agents keep"));
   assert(externalPage.includes("Tap Done to return to Cowboy"));
+});
+
+Deno.test("session reauthentication is server-pushed and responsive without polling", async () => {
+  const guard = await Deno.readTextFile(
+    new URL("ProductSessionGuard.tsx", authDir),
+  );
+  const sheet = await Deno.readTextFile(
+    new URL("ProductRecentAuthSheet.tsx", authDir),
+  );
+  const panel = await Deno.readTextFile(
+    new URL("ProductPasskeysPanel.tsx", authDir),
+  );
+  const store = await Deno.readTextFile(new URL("store.ts", webSrc));
+  const events = await Deno.readTextFile(
+    new URL("productAuthEvents.ts", webSrc),
+  );
+
+  assert(guard.includes("useSurfaceProfile"));
+  assert(guard.includes("safe-area-inset-top"));
+  assert(guard.includes("width: mobile"));
+  assert(guard.includes('"calc(100% - 24px)"'));
+  assert(guard.includes("FINAL_WARNING_MS"));
+  assert(guard.includes("locked={required}"));
+  assert(guard.includes('data-session-lock-backdrop="true"'));
+  assert(guard.includes('backdropFilter: "blur(24px) saturate(65%)"'));
+  assert(guard.includes("Running agents keep working"));
+  assertEquals(guard.includes("setInterval"), false);
+  assertEquals(guard.includes("fetch("), false);
+  assert(sheet.includes("announceProductAuthCookieChanged"));
+  assert(sheet.includes('purpose === "primary"'));
+  assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
+  assert(panel.includes("Session protection"));
+  assert(panel.includes("Activity never extends either hard deadline"));
+  assert(store.includes('{ type: "auth_activity" }'));
+  assert(store.includes("PRODUCT_AUTH_COOKIE_CHANGED_EVENT"));
+  assert(store.includes('reconnectNow("auth_cookie_changed")'));
+  assert(store.includes("productSessionPausedForAuth"));
+  assert(store.includes("pauseProductSocketForAuth()"));
+  assert(store.includes("resumeProductSocketAfterAuthCookieChange"));
+  assertEquals(
+    store.includes(
+      "event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {\n      logoutProductSession();",
+    ),
+    false,
+  );
+  assert(events.includes("cowboy:product-auth-session"));
 });

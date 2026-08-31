@@ -412,8 +412,13 @@ Deno.test("device authorization keeps the capability off authenticated requests"
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   });
   try {
-    assertEquals((await authApi.inspectDeviceAuthorization(request)).status, "pending");
-    assertEquals(await authApi.approveDeviceAuthorization(request), { ok: true });
+    assertEquals(
+      (await authApi.inspectDeviceAuthorization(request)).status,
+      "pending",
+    );
+    assertEquals(await authApi.approveDeviceAuthorization(request), {
+      ok: true,
+    });
     assertEquals(await authApi.denyDeviceAuthorization(request), { ok: true });
     assertEquals((await authApi.listDevices()).devices[0]?.id, "device-1");
     assertEquals(await authApi.deleteDevice("device/1"), { ok: true });
@@ -495,6 +500,14 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         prompt_after_login: true,
         session_refresh_enabled: false,
       },
+      session: {
+        activity_sliding_enabled: true,
+        idle_timeout_ms: 86_400_000,
+        passkey_max_age_ms: 604_800_000,
+        passkey_warning_ms: 1_800_000,
+        primary_max_age_ms: 2_592_000_000,
+        primary_warning_ms: 86_400_000,
+      },
       providers: [
         {
           id: "cardea",
@@ -530,6 +543,14 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         enabled: true,
         prompt_after_login: true,
         session_refresh_enabled: false,
+      },
+      session: {
+        activity_sliding_enabled: true,
+        idle_timeout_ms: 86_400_000,
+        passkey_max_age_ms: 604_800_000,
+        passkey_warning_ms: 1_800_000,
+        primary_max_age_ms: 2_592_000_000,
+        primary_warning_ms: 86_400_000,
       },
       providers: [
         {

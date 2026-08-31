@@ -108,6 +108,7 @@ struct SqliteProductUserSessionRow {
     last_seen_at_ms: i64,
     user_agent: Option<String>,
     passkey_verified_at_ms: Option<i64>,
+    primary_authenticated_at_ms: Option<i64>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -220,6 +221,9 @@ impl From<SqliteProductUserSessionRow> for ProductUserSession {
             last_seen_at_ms: row.last_seen_at_ms,
             user_agent: row.user_agent,
             passkey_verified_at_ms: row.passkey_verified_at_ms,
+            primary_authenticated_at_ms: row
+                .primary_authenticated_at_ms
+                .unwrap_or(row.created_at_ms),
         }
     }
 }
@@ -2702,8 +2706,8 @@ impl SqliteStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
-             last_seen_at_ms, user_agent, passkey_verified_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2712,6 +2716,7 @@ impl SqliteStorage {
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
         .execute(&self.pool)
         .await
         .context("INSERT SQLite user session")?;
@@ -2724,7 +2729,8 @@ impl SqliteStorage {
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, SqliteProductUserSessionRow>(
             "SELECT token_hash, user_id, created_at_ms, expires_at_ms, last_seen_at_ms, \
-             user_agent, passkey_verified_at_ms FROM user_sessions WHERE token_hash = ?1",
+             user_agent, passkey_verified_at_ms, primary_authenticated_at_ms \
+             FROM user_sessions WHERE token_hash = ?1",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
@@ -2788,8 +2794,8 @@ impl SqliteStorage {
         );
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at_ms, expires_at_ms, \
-             last_seen_at_ms, user_agent, passkey_verified_at_ms) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             last_seen_at_ms, user_agent, passkey_verified_at_ms, primary_authenticated_at_ms) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -2798,6 +2804,7 @@ impl SqliteStorage {
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
         .execute(&mut *transaction)
         .await
         .context("INSERT rotated SQLite user session")?;
@@ -2806,6 +2813,23 @@ impl SqliteStorage {
             .await
             .context("COMMIT SQLite user session rotation")?;
         Ok(())
+    }
+
+    pub(super) async fn touch_user_session_activity(
+        &self,
+        token_hash: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET last_seen_at_ms = ?2 \
+             WHERE token_hash = ?1 AND last_seen_at_ms < ?2 - 60000",
+        )
+        .bind(token_hash)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .context("TOUCH SQLite user session activity")?;
+        Ok(result.rows_affected())
     }
 
     pub(super) async fn cap_user_session_expiry(
@@ -3243,16 +3267,6 @@ impl SqliteStorage {
                 .execute(&mut *transaction)
                 .await
                 .context("DISABLE SQLite Passkey refresh after final passkey deletion")?;
-                let cutoff = now_ms().saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
-                sqlx::query(
-                    "UPDATE user_sessions SET expires_at_ms = ?2 \
-                     WHERE user_id = ?1 AND expires_at_ms > ?2",
-                )
-                .bind(user_id)
-                .bind(cutoff)
-                .execute(&mut *transaction)
-                .await
-                .context("CAP SQLite sessions after final passkey deletion")?;
             }
         }
         transaction
@@ -3333,18 +3347,6 @@ impl SqliteStorage {
             result.rows_affected() == 1,
             "user not found or no Passkey is registered"
         );
-        if !enabled {
-            let cutoff = now_ms().saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
-            sqlx::query(
-                "UPDATE user_sessions SET expires_at_ms = ?2 \
-                 WHERE user_id = ?1 AND expires_at_ms > ?2",
-            )
-            .bind(user_id)
-            .bind(cutoff)
-            .execute(&mut *transaction)
-            .await
-            .context("CAP SQLite sessions after disabling Passkey refresh")?;
-        }
         transaction
             .commit()
             .await

@@ -39,7 +39,7 @@ Never mix these in one cookie.
 | Principal | Proof | Scope |
 |---|---|---|
 | `AdminPrincipal` | `cowboy_admin` cookie (12h, `SameSite=Strict`) | `/api/admin/*` only |
-| `ProductPrincipal` | one-day `cowboy_user` cookie, Passkey-extended cookie, or `Authorization: Bearer cow_…` | PWA REST, `/ws`, product APIs |
+| `ProductPrincipal` | policy-bounded `cowboy_user` cookie or `Authorization: Bearer cow_…` | PWA REST, `/ws`, product APIs |
 | `MachinePrincipal` | enrollment token, then signed challenge | machine enroll / connect |
 
 A same handle on admin and product is coincidence, not a link.
@@ -52,7 +52,8 @@ setup/bootstrap/login. See
 
 ## Cardea authorization (optional provider)
 
-Local Cowboy password login always remains available. When
+Local Cowboy password login is enabled by default and may be disabled only
+when a configured provider remains available. When the legacy
 `COWBOY_CARDEA_OIDC_CONFIG` points to a protected consumer profile,
 `GET /api/auth/status` advertises Cardea as an additional sign-in choice.
 Cowboy uses Authorization Code flow with two independent PKCE boundaries:
@@ -77,9 +78,10 @@ Cowboy uses Authorization Code flow with two independent PKCE boundaries:
   the provider in a system Safari sheet with independent S256 code and handoff
   challenges. Safari owns only the five-minute OIDC transaction cookie; after
   approval the callback marks the bounded handoff ready and redirects to a
-  fixed, no-store completion page. The original Cowboy window must poll with
-  both retained random secrets before Controller issues product and optional
-  admin cookies into that window. The handoff is single-use and a denial,
+  fixed, no-store completion page. The original Cowboy window waits for a
+  provider-scoped WebSocket invalidation and then performs exactly one exchange
+  with both retained random secrets before Controller issues product and
+  optional admin cookies into that window. The handoff is single-use and a denial,
   expiry, provider mismatch, Origin mismatch, or either PKCE mismatch fails
   closed. Neither raw secret, Cowboy cookie, Cardea token, nor client key is
   transferred through the authorization URL.
@@ -90,22 +92,49 @@ loading any malformed or over-broad file fails controller startup. Cardea
 proves identity only. Cowboy owns its cookie lifetime, revocation, role, and
 trusted-network auth-off switch.
 
-## Passkeys (optional session extension)
+## Session protection and optional Passkeys
 
-Password and Cardea login issue a one-day product session. After sign-in a
-product user may register a discoverable WebAuthn Passkey
-(`POST /api/auth/passkeys/register/*`). Passkey refresh is off by default.
-When the user enables it, the browser immediately performs a user-verifying
-assertion and atomically rotates only that cookie into a maximum 30-day
-session. The user chooses a 1-, 7-, or 14-day assertion interval.
+Controller configuration owns three independent browser-session deadlines.
+The defaults are a sliding 24-hour idle window, a seven-day maximum between
+explicit Passkey checks when the user enables periodic verification, and a
+30-day hard maximum before a password or Authentication Provider login is
+required again. The service warns 30 minutes before a Passkey deadline and one
+day before the primary-login deadline. The Account surface publishes these
+effective service values so clients never have to infer policy.
 
-Only Passkey-extended sessions are subject to that interval. Once due, the
-server rejects product REST and `/ws` with `428 Precondition Required`; the
-PWA overlay is presentation, not the security boundary. Passkey assertion,
-status, logout, and a new one-day password/Cardea login remain available for
-recovery. Disabling refresh or deleting the final Passkey transactionally
-turns the policy off and caps extended session expiry. No Passkey means the
-feature cannot be enabled. Admin keeps its separate five-minute idle-view
+Only trusted input in a visible Cowboy document slides the idle deadline.
+Pointer, touch, and keyboard activity is coalesced to at most one authenticated
+WebSocket activity message and durable database write per minute. Agent output,
+streaming events, heartbeats, background tabs, and timer wakeups never count as
+human activity. Activity never moves the Passkey or primary-login hard
+deadline.
+
+After sign-in a product user may register a discoverable WebAuthn Passkey
+(`POST /api/auth/passkeys/register/*`). Periodic verification is off by default.
+When enabled, the user chooses a supported interval up to the server maximum;
+the options are 4, 8, or 12 hours and 1, 3 (the default), 7, or 14 days. The
+default server maximum is seven days, so it filters out longer choices. Every refresh requires a new,
+origin-bound, user-verifying assertion. It rotates only the current browser's
+cookie and records new Passkey proof, but preserves the original primary-login
+timestamp. A Passkey can therefore restore the idle window without silently
+turning one primary login into an unbounded session.
+
+The earliest applicable deadline wins. When due, Controller rejects protected
+REST and `/ws` with `428 Precondition Required`; the PWA lock is presentation,
+not the security boundary. A per-cookie `AuthSession` WebSocket message pushes
+new deadlines immediately after activity or verification, so the UI uses one
+local timeout rather than network polling. During the warning window Cowboy
+shows a responsive top reminder. Once due it blurs and locks the product view
+inside Cowboy-owned chrome while running agents, drafts, and queued prompts
+continue in the background. Mobile uses a safe-area bottom sheet without
+automatic keyboard focus; Desktop uses a compact dialog and focuses the
+password field when password login is selected.
+
+If periodic Passkey verification is unavailable or disabled, an idle deadline
+requires a configured primary login method instead. Disabling the policy or
+deleting the final Passkey removes the Passkey deadline; it does not rewrite the
+primary hard cap. Status, logout, Passkey assertion, and password/provider login
+remain available for recovery. Admin keeps its separate five-minute idle-view
 lock and 12-hour cookie.
 
 The SideStore iOS shell cannot rely on the Associated Domains entitlement for
@@ -178,7 +207,7 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `GET` | `/api/auth/oidc/native/complete` | public | fixed no-store Safari completion page; carries no account or handoff data |
 | `POST` | `/api/auth/logout` | cookie optional | clear cookie |
 | `GET` | `/api/auth/me` | product | current principal |
-| `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate a Passkey-extended session |
+| `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate the current browser session within its primary hard cap |
 | `POST` | `/api/auth/passkeys/external/start` | exact product cookie + Origin | start a session-bound native Safari ceremony |
 | `POST` | `/api/auth/passkeys/external/options` | public; Origin + opaque transaction | return only staged WebAuthn options to system Safari |
 | `POST` | `/api/auth/passkeys/external/complete` | public; Origin + opaque transaction | verify and stage Safari's credential without changing account state |
@@ -210,10 +239,11 @@ Product passwords are argon2id PHC strings. Admin passwords stay iterated
 SHA-256 in this slice. Cookie `Secure` is set when the request is HTTPS or
 `X-Forwarded-Proto: https`.
 
-Password/Cardea cookies have a one-day absolute lifetime. A successful
-Passkey assertion rotates the current token rather than extending it in place,
-sets a 30-day absolute lifetime, and records the assertion time on that session
-only. One device can never refresh another device's cookie.
+Product cookies use the Controller's configured primary-login hard maximum.
+A successful Passkey assertion rotates the current token rather than extending
+it in place, records the assertion time on that session only, and retains the
+original primary-login timestamp. One device can never refresh another
+device's cookie or move another device's deadlines.
 
 `serve-acp` normally uses browser-approved, sender-constrained device
 credentials. First use opens the configured login and explicit fingerprint

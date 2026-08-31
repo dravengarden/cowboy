@@ -15,17 +15,41 @@ use crate::plugin_catalog::PluginCatalog;
 const CONFIG_SCHEMA: &str = "dravengarden.cowboy.authentication/v1";
 const MAX_CONFIG_BYTES: u64 = 128 * 1_024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct PasskeyServerPolicy {
     pub enabled: bool,
     pub prompt_after_login: bool,
     pub session_refresh_enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct SessionServerPolicy {
+    pub activity_sliding_enabled: bool,
+    pub idle_timeout_ms: i64,
+    pub passkey_max_age_ms: i64,
+    pub passkey_warning_ms: i64,
+    pub primary_max_age_ms: i64,
+    pub primary_warning_ms: i64,
+}
+
+impl Default for SessionServerPolicy {
+    fn default() -> Self {
+        Self {
+            activity_sliding_enabled: true,
+            idle_timeout_ms: 24 * 60 * 60 * 1_000,
+            passkey_max_age_ms: 7 * 24 * 60 * 60 * 1_000,
+            passkey_warning_ms: 30 * 60 * 1_000,
+            primary_max_age_ms: 30 * 24 * 60 * 60 * 1_000,
+            primary_warning_ms: 24 * 60 * 60 * 1_000,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ProductAuthentication {
     pub password_enabled: bool,
     pub passkeys: PasskeyServerPolicy,
+    pub session: SessionServerPolicy,
     login_method_order: Vec<String>,
     providers: BTreeMap<String, Arc<OidcProvider>>,
 }
@@ -38,6 +62,8 @@ struct AuthenticationDocument {
     password: LoginMethodPolicy,
     #[serde(default)]
     passkeys: PasskeyPolicyDocument,
+    #[serde(default)]
+    session: SessionPolicyDocument,
     #[serde(default)]
     login_method_order: Option<Vec<String>>,
     #[serde(default)]
@@ -80,6 +106,76 @@ impl Default for PasskeyPolicyDocument {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SessionPolicyDocument {
+    #[serde(default = "default_true")]
+    activity_sliding_enabled: bool,
+    #[serde(default = "default_idle_timeout_ms")]
+    idle_timeout_ms: i64,
+    #[serde(default = "default_passkey_max_age_ms")]
+    passkey_max_age_ms: i64,
+    #[serde(default = "default_passkey_warning_ms")]
+    passkey_warning_ms: i64,
+    #[serde(default = "default_primary_max_age_ms")]
+    primary_max_age_ms: i64,
+    #[serde(default = "default_primary_warning_ms")]
+    primary_warning_ms: i64,
+}
+
+impl Default for SessionPolicyDocument {
+    fn default() -> Self {
+        let policy = SessionServerPolicy::default();
+        Self {
+            activity_sliding_enabled: policy.activity_sliding_enabled,
+            idle_timeout_ms: policy.idle_timeout_ms,
+            passkey_max_age_ms: policy.passkey_max_age_ms,
+            passkey_warning_ms: policy.passkey_warning_ms,
+            primary_max_age_ms: policy.primary_max_age_ms,
+            primary_warning_ms: policy.primary_warning_ms,
+        }
+    }
+}
+
+impl SessionPolicyDocument {
+    fn validate(self) -> Result<SessionServerPolicy> {
+        const MINUTE_MS: i64 = 60 * 1_000;
+        const HOUR_MS: i64 = 60 * MINUTE_MS;
+        const DAY_MS: i64 = 24 * HOUR_MS;
+        ensure!(
+            (15 * MINUTE_MS..=DAY_MS).contains(&self.idle_timeout_ms),
+            "session idle timeout must be between 15 minutes and 24 hours"
+        );
+        ensure!(
+            (4 * HOUR_MS..=30 * DAY_MS).contains(&self.passkey_max_age_ms)
+                && crate::passkey::valid_reauth_interval(self.passkey_max_age_ms),
+            "Passkey maximum age must be one of the supported verification intervals"
+        );
+        ensure!(
+            (5 * MINUTE_MS..=2 * HOUR_MS).contains(&self.passkey_warning_ms)
+                && self.passkey_warning_ms < self.passkey_max_age_ms,
+            "Passkey warning must be between 5 minutes and 2 hours and shorter than its maximum age"
+        );
+        ensure!(
+            (DAY_MS..=90 * DAY_MS).contains(&self.primary_max_age_ms),
+            "primary login maximum age must be between 1 and 90 days"
+        );
+        ensure!(
+            (HOUR_MS..=7 * DAY_MS).contains(&self.primary_warning_ms)
+                && self.primary_warning_ms < self.primary_max_age_ms,
+            "primary login warning must be between 1 hour and 7 days and shorter than its maximum age"
+        );
+        Ok(SessionServerPolicy {
+            activity_sliding_enabled: self.activity_sliding_enabled,
+            idle_timeout_ms: self.idle_timeout_ms,
+            passkey_max_age_ms: self.passkey_max_age_ms,
+            passkey_warning_ms: self.passkey_warning_ms,
+            primary_max_age_ms: self.primary_max_age_ms,
+            primary_warning_ms: self.primary_warning_ms,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AuthenticationProviderSelection {
     plugin_id: String,
     plugin_version: String,
@@ -96,6 +192,7 @@ impl ProductAuthentication {
                 prompt_after_login: false,
                 session_refresh_enabled: false,
             },
+            session: SessionServerPolicy::default(),
             login_method_order: Vec::new(),
             providers: BTreeMap::new(),
         }
@@ -115,6 +212,7 @@ impl ProductAuthentication {
                 prompt_after_login: true,
                 session_refresh_enabled: true,
             },
+            session: SessionServerPolicy::default(),
             login_method_order: resolve_login_method_order(None, true, &provider_ids)
                 .expect("default login method order"),
             providers,
@@ -133,6 +231,7 @@ impl ProductAuthentication {
                 schema: CONFIG_SCHEMA.to_owned(),
                 password: LoginMethodPolicy::default(),
                 passkeys: PasskeyPolicyDocument::default(),
+                session: SessionPolicyDocument::default(),
                 login_method_order: None,
                 providers: Vec::new(),
             });
@@ -186,6 +285,7 @@ impl ProductAuthentication {
             document.password.enabled,
             &provider_ids,
         )?;
+        let session = document.session.validate()?;
         Ok(Self {
             password_enabled: document.password.enabled,
             passkeys: PasskeyServerPolicy {
@@ -193,6 +293,7 @@ impl ProductAuthentication {
                 prompt_after_login: document.passkeys.prompt_after_login,
                 session_refresh_enabled: document.passkeys.session_refresh_enabled,
             },
+            session,
             login_method_order,
             providers,
         })
@@ -257,6 +358,26 @@ fn default_true() -> bool {
     true
 }
 
+fn default_idle_timeout_ms() -> i64 {
+    SessionServerPolicy::default().idle_timeout_ms
+}
+
+fn default_passkey_max_age_ms() -> i64 {
+    SessionServerPolicy::default().passkey_max_age_ms
+}
+
+fn default_passkey_warning_ms() -> i64 {
+    SessionServerPolicy::default().passkey_warning_ms
+}
+
+fn default_primary_max_age_ms() -> i64 {
+    SessionServerPolicy::default().primary_max_age_ms
+}
+
+fn default_primary_warning_ms() -> i64 {
+    SessionServerPolicy::default().primary_warning_ms
+}
+
 fn read_document(path: &Path) -> Result<AuthenticationDocument> {
     ensure!(
         path.is_absolute(),
@@ -303,6 +424,39 @@ mod tests {
         assert!(passkeys.enabled);
         assert!(passkeys.prompt_after_login);
         assert!(passkeys.session_refresh_enabled);
+        assert_eq!(
+            SessionServerPolicy::default().passkey_warning_ms,
+            30 * 60 * 1_000
+        );
+        assert_eq!(
+            SessionServerPolicy::default().primary_warning_ms,
+            24 * 60 * 60 * 1_000
+        );
+    }
+
+    #[test]
+    fn session_policy_rejects_unsafe_or_confusing_windows() {
+        let mut document = SessionPolicyDocument::default();
+        document.passkey_warning_ms = document.passkey_max_age_ms;
+        assert!(
+            document
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("warning")
+        );
+
+        let document = SessionPolicyDocument {
+            primary_max_age_ms: 91 * 24 * 60 * 60 * 1_000,
+            ..SessionPolicyDocument::default()
+        };
+        assert!(
+            document
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("maximum age")
+        );
     }
 
     #[test]

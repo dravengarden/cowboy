@@ -81,6 +81,10 @@ import {
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
 } from "./transcriptSessionCache";
+import {
+  announceProductAuthSession,
+  PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
+} from "./productAuthEvents";
 
 /// One notification slot — the App's snackbar shows the latest. We monotonically
 /// bump `seq` even on repeat messages so the UI can re-trigger the open
@@ -213,6 +217,10 @@ let socket: WebSocket | undefined;
 // Set by `cowboy:product-sign-out`. Prevents onclose / online / foreground
 // from opening another product socket after logout.
 let productSessionAbandoned = false;
+// A 4001 can mean the cookie still exists but its session now requires a
+// Passkey or primary-login step-up. Keep local state mounted and suppress
+// reconnect churn until verification rotates the cookie.
+let productSessionPausedForAuth = false;
 // The session the user currently has open. Remembered so every (re)connect can
 // re-assert it to the daemon (revive-on-open), recovering the agent after a
 // daemon restart we reconnected across. See openSession + connect's onopen.
@@ -302,12 +310,30 @@ function clearReconnectTimer(): void {
 
 function abandonProductSocket(): void {
   productSessionAbandoned = true;
+  productSessionPausedForAuth = false;
   clearReconnectTimer();
   stopLiveness();
   const current = socket;
   socket = undefined;
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
+}
+
+function pauseProductSocketForAuth(): void {
+  productSessionPausedForAuth = true;
+  clearReconnectTimer();
+  stopLiveness();
+  const current = socket;
+  socket = undefined;
+  if (state.connected) setState({ ...state, connected: false });
+  current?.close();
+  globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
+}
+
+function resumeProductSocketAfterAuthCookieChange(): void {
+  if (productSessionAbandoned) return;
+  productSessionPausedForAuth = false;
+  reconnectNow("auth_cookie_changed");
 }
 
 // --- Liveness watchdog (half-open detection) --------------------------------
@@ -357,7 +383,7 @@ function startLiveness(ws: WebSocket): void {
 // then open the replacement immediately. This path is user-driven (foreground
 // or network return), so it intentionally bypasses outage backoff.
 function reconnectNow(reason: string): void {
-  if (productSessionAbandoned) return;
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
   const stale = socket;
   if (!shouldStartImmediateReconnect(stale?.readyState)) {
     reportClientLog("info", "websocket_reconnect_coalesced", "Cowboy WebSocket reconnect coalesced", {
@@ -423,6 +449,10 @@ if (typeof document !== "undefined") {
   globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", () => reconnectNow("network_online"));
   globalThis.addEventListener("cowboy:product-sign-out", abandonProductSocket);
+  globalThis.addEventListener(
+    PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
+    resumeProductSocketAfterAuthCookieChange,
+  );
 }
 
 function emit(): void {
@@ -957,6 +987,9 @@ function setPagination(
 
 function handle(msg: Outbound): void {
   switch (msg.type) {
+    case "auth_session":
+      announceProductAuthSession(msg.session);
+      break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
       // the liveness watchdog). Nothing to render.
@@ -1321,7 +1354,7 @@ function logoutProductSession(): void {
 }
 
 function scheduleReconnect(delay: number): void {
-  if (productSessionAbandoned) return;
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
   if (reconnectTimer !== undefined) return;
   reportClientLog("info", "websocket_reconnect_scheduled", "Cowboy WebSocket reconnect scheduled", {
     delay_ms: delay,
@@ -1340,7 +1373,7 @@ function scheduleReconnect(delay: number): void {
 // and newer than the debounce-saved cache, so re-hydrating would stomp it.
 let didHydrate = false;
 function connect(): void {
-  if (productSessionAbandoned) return;
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
   if (didHydrate) {
     openSocket();
     return;
@@ -1389,7 +1422,7 @@ function connect(): void {
 }
 
 function openSocket(): void {
-  if (productSessionAbandoned) return;
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
   // A reconnect can be triggered by several independent recovery paths
   // (backoff timer, foreground watchdog, connect guard). Never let them create
   // parallel sockets: a late close from an older socket would otherwise mark a
@@ -1517,12 +1550,15 @@ function openSocket(): void {
       network_online: navigator.onLine,
     });
     if (event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {
-      logoutProductSession();
+      pauseProductSocketForAuth();
       return;
     }
     void (async () => {
       const handshake = await probeProductAuth();
-      if (productSessionAbandoned || socket !== undefined) return;
+      if (
+        productSessionAbandoned || productSessionPausedForAuth ||
+        socket !== undefined
+      ) return;
       if (handshake === "logout") {
         logoutProductSession();
         return;
@@ -1553,6 +1589,25 @@ export function send(cmd: Inbound): boolean {
     return true;
   }
   return false;
+}
+
+let lastAuthActivityAt = 0;
+
+function reportAuthActivity(event: Event): void {
+  if ("isTrusted" in event && !event.isTrusted) return;
+  const now = Date.now();
+  if (now - lastAuthActivityAt < 60_000) return;
+  if (globalThis.document?.visibilityState === "hidden") return;
+  if (send({ type: "auth_activity" })) lastAuthActivityAt = now;
+}
+
+if (typeof globalThis.document !== "undefined") {
+  for (const type of ["pointerdown", "touchstart", "keydown"] as const) {
+    globalThis.document.addEventListener(type, reportAuthActivity, {
+      capture: true,
+      passive: true,
+    });
+  }
 }
 
 function isConnected(): boolean {
@@ -3059,7 +3114,10 @@ export function reorderDrafts(sessionId: string, order: string[]): void {
 }
 
 function subscribe(listener: () => void): () => void {
-  if (listeners.size === 0 && !socket && !productSessionAbandoned) connect();
+  if (
+    listeners.size === 0 && !socket && !productSessionAbandoned &&
+    !productSessionPausedForAuth
+  ) connect();
   listeners.add(listener);
   return () => {
     listeners.delete(listener);

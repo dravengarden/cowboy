@@ -16,6 +16,13 @@ export interface ProductMe {
   passkey_reauth_required?: boolean;
   passkey_reauth_after_ms?: number;
   passkey_reauth_due_at_ms?: number | null;
+  passkey_reauth_warn_at_ms?: number | null;
+  primary_reauth_due_at_ms?: number | null;
+  primary_reauth_warn_at_ms?: number | null;
+  session_idle_due_at_ms?: number | null;
+  session_expires_at_ms?: number | null;
+  session_server_now_ms?: number | null;
+  session_reauth_kind?: "passkey" | "primary" | null;
 }
 
 export interface ProductOidcProvider {
@@ -48,7 +55,9 @@ export function resolveProductLoginMethodOrder(
   if (!Array.isArray(configured) || configured.length !== fallback.length) {
     return fallback;
   }
-  if (!configured.every((method): method is string => typeof method === "string")) {
+  if (
+    !configured.every((method): method is string => typeof method === "string")
+  ) {
     return fallback;
   }
   const configuredSet = new Set(configured);
@@ -89,6 +98,15 @@ export interface ProductPasskeyServerPolicy {
   session_refresh_enabled: boolean;
 }
 
+export interface ProductSessionServerPolicy {
+  activity_sliding_enabled: boolean;
+  idle_timeout_ms: number;
+  passkey_max_age_ms: number;
+  passkey_warning_ms: number;
+  primary_max_age_ms: number;
+  primary_warning_ms: number;
+}
+
 export interface AuthStatus {
   registration: RegistrationPublicStatus;
   setup_required?: boolean;
@@ -96,8 +114,56 @@ export interface AuthStatus {
   password_enabled?: boolean;
   login_method_order?: string[];
   passkeys?: ProductPasskeyServerPolicy;
+  session?: ProductSessionServerPolicy;
   providers?: ProductOidcProvider[];
   me?: ProductMe;
+}
+
+export function productMeFromJson(value: unknown): ProductMe | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const me = value as Partial<ProductMe>;
+  if (
+    typeof me.account !== "string" || me.account.length === 0 ||
+    (me.role !== "owner" && me.role !== "operator" && me.role !== "viewer")
+  ) return undefined;
+  const next: ProductMe = { account: me.account, role: me.role };
+  if (typeof me.auth_enabled === "boolean") next.auth_enabled = me.auth_enabled;
+  if (typeof me.passkey_count === "number") {
+    next.passkey_count = me.passkey_count;
+  }
+  if (typeof me.passkey_reauth_enabled === "boolean") {
+    next.passkey_reauth_enabled = me.passkey_reauth_enabled;
+  }
+  if (typeof me.passkey_reauth_required === "boolean") {
+    next.passkey_reauth_required = me.passkey_reauth_required;
+  }
+  if (typeof me.passkey_reauth_after_ms === "number") {
+    next.passkey_reauth_after_ms = me.passkey_reauth_after_ms;
+  }
+  for (
+    const key of [
+      "passkey_reauth_due_at_ms",
+      "passkey_reauth_warn_at_ms",
+      "primary_reauth_due_at_ms",
+      "primary_reauth_warn_at_ms",
+      "session_idle_due_at_ms",
+      "session_expires_at_ms",
+      "session_server_now_ms",
+    ] as const
+  ) {
+    const candidate = me[key];
+    if (typeof candidate === "number" || candidate === null) {
+      next[key] = candidate;
+    }
+  }
+  if (
+    me.session_reauth_kind === "passkey" ||
+    me.session_reauth_kind === "primary" ||
+    me.session_reauth_kind === null
+  ) {
+    next.session_reauth_kind = me.session_reauth_kind;
+  }
+  return next;
 }
 
 export function isHtmlContentType(contentType: string | null): boolean {
@@ -113,6 +179,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     password_enabled?: boolean;
     login_method_order?: unknown;
     passkeys?: Partial<ProductPasskeyServerPolicy>;
+    session?: Partial<ProductSessionServerPolicy>;
     providers?: unknown;
     me?: Partial<ProductMe>;
   };
@@ -138,6 +205,23 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     password_enabled: record.password_enabled !== false,
     providers: [],
   };
+  if (
+    typeof record.session?.activity_sliding_enabled === "boolean" &&
+    typeof record.session.idle_timeout_ms === "number" &&
+    typeof record.session.passkey_max_age_ms === "number" &&
+    typeof record.session.passkey_warning_ms === "number" &&
+    typeof record.session.primary_max_age_ms === "number" &&
+    typeof record.session.primary_warning_ms === "number"
+  ) {
+    status.session = {
+      activity_sliding_enabled: record.session.activity_sliding_enabled,
+      idle_timeout_ms: record.session.idle_timeout_ms,
+      passkey_max_age_ms: record.session.passkey_max_age_ms,
+      passkey_warning_ms: record.session.passkey_warning_ms,
+      primary_max_age_ms: record.session.primary_max_age_ms,
+      primary_warning_ms: record.session.primary_warning_ms,
+    };
+  }
   if (
     typeof record.passkeys?.enabled === "boolean" &&
     typeof record.passkeys.prompt_after_login === "boolean" &&
@@ -180,35 +264,8 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     status.password_enabled !== false,
     status.providers ?? [],
   );
-  const me = record.me;
-  if (me && typeof me.account === "string" && me.account.length > 0) {
-    const role = me.role;
-    if (role === "owner" || role === "operator" || role === "viewer") {
-      const next: ProductMe = { account: me.account, role };
-      if (typeof me.auth_enabled === "boolean") {
-        next.auth_enabled = me.auth_enabled;
-      }
-      if (typeof me.passkey_count === "number") {
-        next.passkey_count = me.passkey_count;
-      }
-      if (typeof me.passkey_reauth_enabled === "boolean") {
-        next.passkey_reauth_enabled = me.passkey_reauth_enabled;
-      }
-      if (typeof me.passkey_reauth_required === "boolean") {
-        next.passkey_reauth_required = me.passkey_reauth_required;
-      }
-      if (typeof me.passkey_reauth_after_ms === "number") {
-        next.passkey_reauth_after_ms = me.passkey_reauth_after_ms;
-      }
-      if (
-        typeof me.passkey_reauth_due_at_ms === "number" ||
-        me.passkey_reauth_due_at_ms === null
-      ) {
-        next.passkey_reauth_due_at_ms = me.passkey_reauth_due_at_ms;
-      }
-      status.me = next;
-    }
-  }
+  const me = productMeFromJson(record.me);
+  if (me) status.me = me;
   return status;
 }
 

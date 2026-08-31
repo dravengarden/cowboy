@@ -669,6 +669,7 @@ pub struct ProductUserSession {
     pub last_seen_at_ms: i64,
     pub user_agent: Option<String>,
     pub passkey_verified_at_ms: Option<i64>,
+    pub primary_authenticated_at_ms: i64,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -731,6 +732,7 @@ struct ProductUserSessionRow {
     last_seen_at: DateTime<Utc>,
     user_agent: Option<String>,
     passkey_verified_at: Option<DateTime<Utc>>,
+    primary_authenticated_at: DateTime<Utc>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -845,6 +847,7 @@ impl ProductUserSession {
             passkey_verified_at_ms: row
                 .passkey_verified_at
                 .map(|value| value.timestamp_millis()),
+            primary_authenticated_at_ms: row.primary_authenticated_at.timestamp_millis(),
         }
     }
 }
@@ -1509,6 +1512,11 @@ impl Store {
         session: &ProductUserSession,
     ) -> Result<()> {
         dispatch_storage!(self, rotate_user_session(previous_token_hash, session))
+    }
+
+    /// Coarsely record real browser activity without writing on every input event.
+    pub async fn touch_user_session_activity(&self, token_hash: &str, now_ms: i64) -> Result<u64> {
+        dispatch_storage!(self, touch_user_session_activity(token_hash, now_ms))
     }
 
     /// Shorten any extended sessions when Passkey refresh is disabled or removed.
@@ -3008,11 +3016,12 @@ impl PostgresStorage {
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at) VALUES ( \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at) VALUES ( \
              $1, $2, to_timestamp($3::double precision / 1000), \
              to_timestamp($4::double precision / 1000), \
              to_timestamp($5::double precision / 1000), $6, \
-             to_timestamp($7::double precision / 1000))",
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000))",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -3021,6 +3030,7 @@ impl PostgresStorage {
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
         .execute(&self.pool)
         .await
         .context("INSERT user session")?;
@@ -3033,7 +3043,7 @@ impl PostgresStorage {
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, ProductUserSessionRow>(
             "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, \
-             passkey_verified_at \
+             passkey_verified_at, primary_authenticated_at \
              FROM user_sessions WHERE token_hash = $1",
         )
         .bind(token_hash)
@@ -3094,11 +3104,12 @@ impl PostgresStorage {
         );
         sqlx::query(
             "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at) VALUES ( \
+             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at) VALUES ( \
              $1, $2, to_timestamp($3::double precision / 1000), \
              to_timestamp($4::double precision / 1000), \
              to_timestamp($5::double precision / 1000), $6, \
-             to_timestamp($7::double precision / 1000))",
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000))",
         )
         .bind(&session.token_hash)
         .bind(&session.user_id)
@@ -3107,6 +3118,7 @@ impl PostgresStorage {
         .bind(session.last_seen_at_ms)
         .bind(user_agent.as_deref())
         .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
         .execute(&mut *transaction)
         .await
         .context("INSERT rotated user session")?;
@@ -3115,6 +3127,20 @@ impl PostgresStorage {
             .await
             .context("COMMIT user session rotation")?;
         Ok(())
+    }
+
+    pub async fn touch_user_session_activity(&self, token_hash: &str, now_ms: i64) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE user_sessions SET last_seen_at = to_timestamp($2::double precision / 1000) \
+             WHERE token_hash = $1 \
+             AND last_seen_at < to_timestamp(($2::double precision - 60000) / 1000)",
+        )
+        .bind(token_hash)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .context("TOUCH user session activity")?;
+        Ok(result.rows_affected())
     }
 
     pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
@@ -3531,18 +3557,6 @@ impl PostgresStorage {
                 .execute(&mut *transaction)
                 .await
                 .context("DISABLE Passkey refresh after final passkey deletion")?;
-                let cutoff = Utc::now()
-                    .timestamp_millis()
-                    .saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
-                sqlx::query(
-                    "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
-                     WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
-                )
-                .bind(user_id)
-                .bind(cutoff)
-                .execute(&mut *transaction)
-                .await
-                .context("CAP user sessions after final passkey deletion")?;
             }
         }
         transaction
@@ -3623,20 +3637,6 @@ impl PostgresStorage {
             result.rows_affected() == 1,
             "user not found or no Passkey is registered"
         );
-        if !enabled {
-            let cutoff = Utc::now()
-                .timestamp_millis()
-                .saturating_add(crate::product_auth::USER_SESSION_TTL_MS);
-            sqlx::query(
-                "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
-                 WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
-            )
-            .bind(user_id)
-            .bind(cutoff)
-            .execute(&mut *transaction)
-            .await
-            .context("CAP user sessions after disabling Passkey refresh")?;
-        }
         transaction
             .commit()
             .await
@@ -7176,6 +7176,7 @@ mod storage_contract_tests {
             last_seen_at_ms: created_at_ms,
             user_agent: Some("CowboyContract/1.0".to_owned()),
             passkey_verified_at_ms: Some(created_at_ms),
+            primary_authenticated_at_ms: created_at_ms,
         };
         store.insert_user_session(&session).await?;
         let restored_session = store
@@ -7188,6 +7189,20 @@ mod storage_contract_tests {
             Some("CowboyContract/1.0")
         );
         assert_eq!(restored_session.passkey_verified_at_ms, Some(created_at_ms));
+        assert_eq!(restored_session.primary_authenticated_at_ms, created_at_ms);
+        assert_eq!(
+            store
+                .touch_user_session_activity(&session.token_hash, created_at_ms + 60_001)
+                .await?,
+            1
+        );
+        assert_eq!(
+            store
+                .touch_user_session_activity(&session.token_hash, created_at_ms + 60_002)
+                .await?,
+            0,
+            "activity writes are coalesced to at most once per minute"
+        );
         let rotated = ProductUserSession {
             token_hash: "cc".repeat(32),
             expires_at_ms: created_at_ms + 30 * 24 * 60 * 60 * 1_000,
@@ -7252,6 +7267,10 @@ mod storage_contract_tests {
         assert_eq!(
             shortened.passkey_verified_at_ms,
             rotated.passkey_verified_at_ms
+        );
+        assert_eq!(
+            shortened.primary_authenticated_at_ms,
+            rotated.primary_authenticated_at_ms
         );
         assert_eq!(store.delete_user_sessions_for_user(&user.id).await?, 1);
 

@@ -21,6 +21,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0037_user_device_sessions.sql",
         "bd1cfc10078f7927d9e802fd6b9ec7dfaaa1151a66e5176e66636f9d99e25b27",
     ),
+    (
+        "0038_session_auth_deadlines.sql",
+        "863dab2d644db009484c5a374b9e428e797f17bb7b2e831eb9ace6a5230c0796",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -38,6 +42,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0011_user_device_sessions.sql",
         "e678ec9e58f7266c615b33094636077e7b963b8098e1725e7314774d5028b7ca",
+    ),
+    (
+        "0012_session_auth_deadlines.sql",
+        "528c9e20def9be826e7176e16301a4c1dfcb7d1131bf22902738ce664254b740",
     ),
 ];
 
