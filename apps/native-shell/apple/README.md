@@ -19,6 +19,8 @@ intentional secure fallback, not a local-biometric substitute for WebAuthn.
 
 The sibling `../tauri/tauri.macos.conf.json` is merged automatically by
 Tauri's macOS build and applies the tracked Associated Domains entitlement.
-Once the macOS bundle is signed by the declared Apple team, its WKWebView uses
-the same direct browser transport as the PWA; an unsigned/ad-hoc development
-bundle fails closed to the system-browser transport.
+Development bundles use Tauri's `-` pseudo-identity so every build is a valid
+ad-hoc signed app. A release pipeline overrides it with
+`APPLE_SIGNING_IDENTITY`. Once the macOS bundle is signed by the declared Apple
+team, its WKWebView uses the same direct browser transport as the PWA; an
+ad-hoc development bundle fails closed to the system-browser transport.
