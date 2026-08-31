@@ -99,13 +99,42 @@ Deno.test("system Safari Passkey page is isolated from the cached app shell", as
   assert(worker.includes("event.respondWith(fetch(request))"));
 });
 
-Deno.test("official Apple shells publish a WebAuthn association", async () => {
-  const association = JSON.parse(await Deno.readTextFile(
-    new URL("../../public/.well-known/apple-app-site-association", import.meta.url),
-  )) as { webcredentials?: { apps?: unknown } };
+Deno.test("official Apple shells isolate their WebAuthn association", async () => {
+  const association = JSON.parse(
+    await Deno.readTextFile(
+      new URL(
+        "../../public/.well-known/apple-app-site-association",
+        import.meta.url,
+      ),
+    ),
+  ) as { webcredentials?: { apps?: unknown } };
+  const defaultMacConfig = JSON.parse(
+    await Deno.readTextFile(
+      new URL(
+        "../../../apps/native-shell/tauri/tauri.macos.conf.json",
+        import.meta.url,
+      ),
+    ),
+  ) as { bundle?: { macOS?: Record<string, unknown> } };
+  const passkeyMacConfig = JSON.parse(
+    await Deno.readTextFile(
+      new URL(
+        "../../../apps/native-shell/tauri/tauri.macos.passkeys.conf.json",
+        import.meta.url,
+      ),
+    ),
+  ) as { bundle?: { macOS?: Record<string, unknown> } };
+
   assertEquals(association.webcredentials?.apps, [
     "9Z95WKM9DT.top.thundersparrow.cowboy",
   ]);
+  assertEquals(defaultMacConfig.bundle?.macOS?.signingIdentity, "-");
+  assertEquals(defaultMacConfig.bundle?.macOS?.entitlements, undefined);
+  assertEquals(
+    passkeyMacConfig.bundle?.macOS?.entitlements,
+    "./Entitlements.plist",
+  );
+  assertEquals(passkeyMacConfig.bundle?.macOS?.signingIdentity, undefined);
 });
 
 Deno.test("login page is product chrome and hides register unless accepted", async () => {

@@ -18,9 +18,20 @@ registry then uses Cowboy's PKCE-bound system-Safari ceremony. This is an
 intentional secure fallback, not a local-biometric substitute for WebAuthn.
 
 The sibling `../tauri/tauri.macos.conf.json` is merged automatically by
-Tauri's macOS build and applies the tracked Associated Domains entitlement.
-Development bundles use Tauri's `-` pseudo-identity so every build is a valid
-ad-hoc signed app. A release pipeline overrides it with
-`APPLE_SIGNING_IDENTITY`. Once the macOS bundle is signed by the declared Apple
-team, its WKWebView uses the same direct browser transport as the PWA; an
-ad-hoc development bundle fails closed to the system-browser transport.
+Tauri's macOS build. Development bundles use Tauri's `-` pseudo-identity and
+carry no restricted entitlement, so every default build remains launchable and
+fails closed to the system-browser transport.
+
+An official Passkey-enabled macOS release additionally merges
+`../tauri/tauri.macos.passkeys.conf.json` and overrides the signing identity:
+
+```sh
+APPLE_SIGNING_IDENTITY="Developer ID Application: ..." \
+  cargo tauri build --bundles app \
+  --config src-tauri/tauri.macos.passkeys.conf.json
+```
+
+That opt-in layer applies the tracked Associated Domains entitlement. Once the
+bundle is signed by the declared Apple team, its WKWebView uses the same direct
+browser transport as the PWA. Apple rejects an ad-hoc app carrying this
+restricted entitlement, so the two configurations must remain separate.
