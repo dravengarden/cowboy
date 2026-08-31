@@ -559,8 +559,8 @@ impl MachinePluginStore {
             .latest_auth_envelope(provider_id)?
             .context("session Provider auth replica is missing")?;
         ensure!(
-            envelope.auth_generation == generation,
-            "session Provider auth replica uses a different generation"
+            envelope.auth_generation >= generation,
+            "session Provider auth generation is ahead of the Machine replica"
         );
         ensure!(
             envelope.action == ProviderAuthAction::Apply,
@@ -576,36 +576,40 @@ impl MachinePluginStore {
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
             .context("decoding Provider runtime credential bundle")?;
         validate_portable_bundle(auth, &bundle)?;
-        // A Machine upgrade or interrupted projection may leave the durable
-        // sealed replica ahead of its local projections. Repair those
-        // projections before admitting the session so recovery does not
-        // depend on a later Controller retry or filesystem event.
-        self.materialize_bundle(package, generation, &bundle)?;
         let materialized = self
             .auth_provider_root(provider_id)
             .join("materialized/generations")
             .join(generation.to_string());
-        let metadata: MaterializationMetadata = serde_json::from_slice(
-            &fs::read(materialized.join("metadata.json")).context("reading auth projection")?,
-        )?;
-        ensure!(
-            metadata.auth_generation == generation,
-            "session Provider auth generation is not materialized"
-        );
-        ensure!(
-            metadata.auth_contract_fingerprint
-                == package.manifest.compatibility.auth_contract_fingerprint,
-            "session Provider auth generation uses a different contract"
-        );
-        ensure!(
-            self.materialization_is_current(package, &envelope)?,
-            "session Provider auth generation is missing projected credentials"
-        );
-        Ok(self
+        if envelope.auth_generation == generation {
+            // A Machine upgrade or interrupted projection may leave the
+            // durable sealed replica ahead of its local projections. Repair
+            // the current immutable materialization before admitting the
+            // session so recovery does not depend on a later Controller retry
+            // or filesystem event.
+            self.materialize_bundle(package, generation, &bundle)?;
+            ensure!(
+                self.materialization_is_current(package, &envelope)?,
+                "session Provider auth generation is missing projected credentials"
+            );
+        } else {
+            // Established sessions retain their recorded projection identity,
+            // while successful Service refreshes reconcile the writable
+            // runtime copy to the newest credential bundle. Rebuild only that
+            // historical runtime directory: activating its immutable
+            // materialization would move `current` backwards for new sessions.
+            validate_materialization_metadata(&materialized, package, generation)
+                .context("validating historical Provider auth materialization")?;
+            self.ensure_runtime_projection(package, generation, &bundle)?;
+        }
+        let runtime = self
             .auth_provider_root(provider_id)
             .join("runtime/generations")
-            .join(generation.to_string())
-            .join("home"))
+            .join(generation.to_string());
+        validate_materialization_metadata(&runtime, package, generation)
+            .context("validating Provider runtime credential projection")?;
+        projected_credential_bundle(auth, &runtime, &bundle.method_id)
+            .context("validating Provider runtime credentials")?;
+        Ok(runtime.join("home"))
     }
 
     /// Export credentials created by a temporary login executor into the
@@ -3002,6 +3006,35 @@ mod tests {
             auth_root
                 .join("materialized/generations/1/metadata.json")
                 .is_file()
+        );
+        let refreshed_bundle = PortableCredentialBundle {
+            portable_schema: bundle.portable_schema.clone(),
+            method_id: bundle.method_id.clone(),
+            values: BTreeMap::from([(
+                "api_key".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(b"refreshed-fixture-api-key"),
+            )]),
+        };
+        let refreshed_envelope =
+            seal_auth_for_test(&store, &package, &service_signer, 2, &refreshed_bundle);
+        store.apply_auth(&refreshed_envelope).await.unwrap();
+        assert!(!auth_root.join("replicas/1.sealed.json").exists());
+        assert_eq!(
+            read_link_name(&auth_root.join("materialized/current")).as_deref(),
+            Some("2")
+        );
+        fs::remove_dir_all(auth_root.join("runtime/generations/1")).unwrap();
+        let historical = store
+            .launch_context("gemini", &release.artifact_digest, Some(1))
+            .unwrap();
+        assert_eq!(
+            historical.environment["GEMINI_API_KEY"],
+            "refreshed-fixture-api-key"
+        );
+        assert!(historical.home.unwrap().is_dir());
+        assert_eq!(
+            read_link_name(&auth_root.join("materialized/current")).as_deref(),
+            Some("2")
         );
         let command = store
             .authentication_component_command(
