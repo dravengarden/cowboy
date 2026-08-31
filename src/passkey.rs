@@ -16,16 +16,18 @@ use webauthn_rs::prelude::{
 use crate::product_auth::{new_session_token, new_user_id};
 
 /// Default interval between product Passkey refresh assertions.
-pub const DEFAULT_PASSKEY_REAUTH_AFTER_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
+pub const DEFAULT_PASSKEY_REAUTH_AFTER_MS: i64 = 24 * 60 * 60 * 1_000;
 /// Closed set exposed by the Web and native settings surfaces.
-pub const PASSKEY_REAUTH_INTERVALS_MS: [i64; 7] = [
+pub const PASSKEY_REAUTH_INTERVALS_MS: [i64; 9] = [
+    60 * 60 * 1_000,
+    2 * 60 * 60 * 1_000,
+    3 * 60 * 60 * 1_000,
     4 * 60 * 60 * 1_000,
-    8 * 60 * 60 * 1_000,
+    6 * 60 * 60 * 1_000,
     12 * 60 * 60 * 1_000,
-    24 * 60 * 60 * 1_000,
     DEFAULT_PASSKEY_REAUTH_AFTER_MS,
-    7 * 24 * 60 * 60 * 1_000,
-    14 * 24 * 60 * 60 * 1_000,
+    2 * 24 * 60 * 60 * 1_000,
+    3 * 24 * 60 * 60 * 1_000,
 ];
 /// Admin console idle lock. Shorter because the console is break-glass.
 pub const ADMIN_PASSKEY_REAUTH_AFTER_MS: i64 = 5 * 60 * 1_000;
@@ -871,15 +873,19 @@ mod tests {
 
     #[test]
     fn product_reauth_intervals_are_closed() {
+        assert_eq!(DEFAULT_PASSKEY_REAUTH_AFTER_MS, 24 * 60 * 60 * 1_000);
+        assert!(valid_reauth_interval(60 * 60 * 1_000));
+        assert!(valid_reauth_interval(2 * 60 * 60 * 1_000));
+        assert!(valid_reauth_interval(3 * 60 * 60 * 1_000));
         assert!(valid_reauth_interval(4 * 60 * 60 * 1_000));
-        assert!(valid_reauth_interval(8 * 60 * 60 * 1_000));
+        assert!(valid_reauth_interval(6 * 60 * 60 * 1_000));
         assert!(valid_reauth_interval(12 * 60 * 60 * 1_000));
         assert!(valid_reauth_interval(24 * 60 * 60 * 1_000));
+        assert!(valid_reauth_interval(2 * 24 * 60 * 60 * 1_000));
         assert!(valid_reauth_interval(3 * 24 * 60 * 60 * 1_000));
-        assert!(valid_reauth_interval(7 * 24 * 60 * 60 * 1_000));
-        assert!(valid_reauth_interval(14 * 24 * 60 * 60 * 1_000));
-        assert!(!valid_reauth_interval(60 * 60 * 1_000));
-        assert!(!valid_reauth_interval(2 * 24 * 60 * 60 * 1_000));
+        assert!(!valid_reauth_interval(8 * 60 * 60 * 1_000));
+        assert!(!valid_reauth_interval(7 * 24 * 60 * 60 * 1_000));
+        assert!(!valid_reauth_interval(14 * 24 * 60 * 60 * 1_000));
     }
 
     #[test]

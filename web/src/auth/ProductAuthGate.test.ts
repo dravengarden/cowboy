@@ -183,7 +183,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1601"'));
+  assert(sw.includes('const VERSION = "cowboy-v1602"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -248,8 +248,15 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   assertEquals(`${gate}\n${panel}\n${admin}`.includes('"This device"'), false);
   assert(gate.includes('const [nickname, setNickname] = useState("")'));
   assert(panel.includes('const [nickname, setNickname] = useState("")'));
-  assert(panel.includes("Every 3 days · Default"));
-  assert(panel.includes("Every 4 hours"));
+  assert(panel.includes("PASSKEY_REAUTH_INTERVALS"));
+  const intervals = await Deno.readTextFile(
+    new URL("passkeyIntervals.ts", authDir),
+  );
+  assert(intervals.includes('Every day · Default'));
+  assert(intervals.includes('Every hour'));
+  assert(intervals.includes('Every 4 hours'));
+  assert(intervals.includes('Every 2 days'));
+  assertEquals(intervals.includes('Every 7 days'), false);
   assert(lock.includes("globalThis.setTimeout(arm, delay)"));
   assert(lock.includes('addEventListener("visibilitychange", arm)'));
   assertEquals(lock.includes("setInterval"), false);

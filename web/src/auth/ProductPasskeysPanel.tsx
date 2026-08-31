@@ -35,17 +35,11 @@ import {
 import { isNativeShell } from "../nativeShell";
 import { useProductAuth } from "./ProductAuthGate";
 import { retryWithRecentProductAuth } from "./recentAuth";
-
-const REFRESH_INTERVALS = [
-  { label: "Every 4 hours", value: 4 * 60 * 60 * 1_000 },
-  { label: "Every 8 hours", value: 8 * 60 * 60 * 1_000 },
-  { label: "Every 12 hours", value: 12 * 60 * 60 * 1_000 },
-  { label: "Every day", value: 24 * 60 * 60 * 1_000 },
-  { label: "Every 3 days · Default", value: 3 * 24 * 60 * 60 * 1_000 },
-  { label: "Every 7 days", value: 7 * 24 * 60 * 60 * 1_000 },
-  { label: "Every 14 days", value: 14 * 24 * 60 * 60 * 1_000 },
-] as const;
-const DEFAULT_REAUTH_INTERVAL_MS = 3 * 24 * 60 * 60 * 1_000;
+import {
+  DEFAULT_PASSKEY_REAUTH_INTERVAL_MS,
+  normalizePasskeyReauthInterval,
+  PASSKEY_REAUTH_INTERVALS,
+} from "./passkeyIntervals";
 const CARD_SX = {
   border: 1,
   borderColor: "divider",
@@ -165,7 +159,10 @@ export function ProductPasskeysPanel({
   const [showAddAnother, setShowAddAnother] = useState(false);
   const [enabled, setEnabled] = useState(me.passkey_reauth_enabled === true);
   const [reauthAfterMs, setReauthAfterMs] = useState(
-    me.passkey_reauth_after_ms ?? DEFAULT_REAUTH_INTERVAL_MS,
+    normalizePasskeyReauthInterval(
+      me.passkey_reauth_after_ms ?? DEFAULT_PASSKEY_REAUTH_INTERVAL_MS,
+      sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER,
+    ),
   );
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -177,7 +174,7 @@ export function ProductPasskeysPanel({
     try {
       const body = await authApi.listPasskeys();
       setPasskeys(body.passkeys);
-      setReauthAfterMs(Math.min(
+      setReauthAfterMs(normalizePasskeyReauthInterval(
         body.reauth_after_ms,
         sessionPolicy?.passkey_max_age_ms ?? body.reauth_after_ms,
       ));
@@ -236,7 +233,10 @@ export function ProductPasskeysPanel({
 
       void authApi.listPasskeys().then((body) => {
         setPasskeys(body.passkeys);
-        setReauthAfterMs(body.reauth_after_ms);
+        setReauthAfterMs(normalizePasskeyReauthInterval(
+          body.reauth_after_ms,
+          sessionPolicy?.passkey_max_age_ms ?? body.reauth_after_ms,
+        ));
       }).catch(() => undefined);
       void authApi.me().then(publishMe).catch(() => undefined);
     })()
@@ -340,7 +340,10 @@ export function ProductPasskeysPanel({
     void authApi
       .setPasskeyReauth(enabled, next)
       .then((updated) => {
-        setReauthAfterMs(updated.passkey_reauth_after_ms ?? next);
+        setReauthAfterMs(normalizePasskeyReauthInterval(
+          updated.passkey_reauth_after_ms ?? next,
+          sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER,
+        ));
         publishMe(updated);
         setNotice({
           severity: "success",
@@ -370,7 +373,7 @@ export function ProductPasskeysPanel({
   }
 
   const refreshEnabled = policy?.session_refresh_enabled !== false;
-  const refreshIntervals = REFRESH_INTERVALS.filter((option) =>
+  const refreshIntervals = PASSKEY_REAUTH_INTERVALS.filter((option) =>
     option.value <=
       (sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER)
   );

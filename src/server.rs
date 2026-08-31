@@ -6114,6 +6114,13 @@ async fn api_auth_passkey_reauth(
         }
     };
     let reauth_after_ms = request.reauth_after_ms.unwrap_or(current.reauth_after_ms);
+    if !crate::passkey::valid_reauth_interval(reauth_after_ms) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "verification frequency is unsupported",
+        )
+            .into_response();
+    }
     if reauth_after_ms > state.product_authentication.session.passkey_max_age_ms {
         return (
             StatusCode::BAD_REQUEST,

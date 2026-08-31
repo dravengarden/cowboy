@@ -25,6 +25,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0038_session_auth_deadlines.sql",
         "863dab2d644db009484c5a374b9e428e797f17bb7b2e831eb9ace6a5230c0796",
     ),
+    (
+        "0039_passkey_verification_frequency.sql",
+        "45993509a173e58c7f3fdddef62e4246093375f0de1cf0006bc4475e555ac4c7",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -46,6 +50,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0012_session_auth_deadlines.sql",
         "528c9e20def9be826e7176e16301a4c1dfcb7d1131bf22902738ce664254b740",
+    ),
+    (
+        "0013_passkey_verification_frequency.sql",
+        "4abb3409463377fa4422113a82601cb0080f7bff2b94ab8ef7a82e39dc1d86eb",
     ),
 ];
 
@@ -84,6 +92,55 @@ fn published_postgres_migrations_are_immutable() {
 fn published_sqlite_migrations_are_immutable() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
     assert_published_migrations_are_immutable(&directory, PUBLISHED_SQLITE_MIGRATIONS);
+}
+
+#[test]
+fn sqlite_passkey_frequency_migration_tightens_retired_values() {
+    let connection = rusqlite::Connection::open_in_memory().expect("open SQLite database");
+    connection
+        .execute_batch(
+            "CREATE TABLE users (id TEXT PRIMARY KEY, passkey_reauth_interval_ms INTEGER NOT NULL);\
+             INSERT INTO users VALUES\
+             ('a', 14400000), ('b', 28800000), ('c', 43200000),\
+             ('d', 86400000), ('e', 259200000), ('f', 604800000),\
+             ('g', 1209600000);",
+        )
+        .expect("create predecessor Passkey schema");
+    connection
+        .execute_batch(include_str!(
+            "../migrations/sqlite/0013_passkey_verification_frequency.sql"
+        ))
+        .expect("apply Passkey verification frequency migration");
+
+    let mut statement = connection
+        .prepare("SELECT passkey_verification_interval_ms FROM users ORDER BY id")
+        .expect("prepare migrated interval query");
+    let values = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .expect("query migrated intervals")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read migrated intervals");
+    assert_eq!(
+        values,
+        vec![
+            14_400_000,
+            21_600_000,
+            43_200_000,
+            86_400_000,
+            259_200_000,
+            86_400_000,
+            86_400_000,
+        ]
+    );
+    assert!(
+        connection
+            .execute(
+                "UPDATE users SET passkey_verification_interval_ms = 604800000 WHERE id = 'a'",
+                [],
+            )
+            .is_err(),
+        "retired seven-day values must fail the new database constraint"
+    );
 }
 
 #[test]

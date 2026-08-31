@@ -54,7 +54,7 @@ Example server configuration:
   "session": {
     "activity_sliding_enabled": true,
     "idle_timeout_ms": 86400000,
-    "passkey_max_age_ms": 604800000,
+    "passkey_max_age_ms": 259200000,
     "passkey_warning_ms": 1800000,
     "primary_max_age_ms": 2592000000,
     "primary_warning_ms": 86400000

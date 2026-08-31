@@ -2865,10 +2865,11 @@ impl PostgresStorage {
         );
         sqlx::query(
             "INSERT INTO users (id, username, password_algo, password_hash, created_at, \
-             updated_at, disabled_at, passkey_reauth_enabled, passkey_reauth_interval_ms) VALUES ( \
+             updated_at, disabled_at, passkey_reauth_enabled, passkey_reauth_interval_ms, \
+             passkey_verification_interval_ms) VALUES ( \
              $1, $2, $3, $4, to_timestamp($5::double precision / 1000), \
              to_timestamp($6::double precision / 1000), \
-             to_timestamp($7::double precision / 1000), false, $8)",
+             to_timestamp($7::double precision / 1000), false, $8, $8)",
         )
         .bind(&user.id)
         .bind(&username)
@@ -3594,7 +3595,8 @@ impl PostgresStorage {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let row = sqlx::query_as::<_, ProductPasskeyPolicyRow>(
-            "SELECT passkey_reauth_enabled, passkey_reauth_interval_ms, last_step_up_at, \
+            "SELECT passkey_reauth_enabled, \
+             passkey_verification_interval_ms AS passkey_reauth_interval_ms, last_step_up_at, \
              (SELECT COUNT(*) FROM user_passkeys WHERE user_id = $1)::bigint AS passkey_count \
              FROM users WHERE id = $1",
         )
@@ -3621,9 +3623,14 @@ impl PostgresStorage {
             .await
             .context("BEGIN Passkey refresh update")?;
         let result = sqlx::query(
-            "UPDATE users SET passkey_reauth_enabled = $2, passkey_reauth_interval_ms = $3, \
-             passkey_refresh_interval_ms = CASE WHEN $3 IN \
-             (86400000, 604800000, 1209600000) THEN $3 ELSE passkey_refresh_interval_ms END, \
+            "UPDATE users SET passkey_reauth_enabled = $2, \
+             passkey_verification_interval_ms = $3, \
+             passkey_reauth_interval_ms = CASE \
+             WHEN $3 IN (3600000, 7200000, 10800000, 14400000, 21600000) THEN 14400000 \
+             WHEN $3 = 43200000 THEN 43200000 \
+             WHEN $3 IN (86400000, 172800000) THEN 86400000 \
+             ELSE 259200000 END, \
+             passkey_refresh_interval_ms = 86400000, \
              updated_at = now() WHERE id = $1 AND (NOT $2 OR EXISTS ( \
              SELECT 1 FROM user_passkeys WHERE user_id = $1))",
         )
@@ -7243,6 +7250,19 @@ mod storage_contract_tests {
             .context("short Passkey policy was not restored")?;
         assert!(short_passkey_policy.enabled);
         assert_eq!(short_passkey_policy.reauth_after_ms, 4 * 60 * 60 * 1_000);
+        for interval in crate::passkey::PASSKEY_REAUTH_INTERVALS_MS {
+            store
+                .set_user_passkey_reauth(&user.id, true, interval)
+                .await?;
+            assert_eq!(
+                store
+                    .user_passkey_policy(&user.id)
+                    .await?
+                    .context("Passkey verification interval was not restored")?
+                    .reauth_after_ms,
+                interval
+            );
+        }
         store
             .rotate_user_session(&session.token_hash, &rotated)
             .await?;
@@ -8025,7 +8045,7 @@ mod storage_contract_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=36).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=39).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

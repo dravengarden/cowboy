@@ -32,12 +32,18 @@ struct SettingsView: View {
                     Toggle("Refresh browser sessions with a Passkey", isOn: passkeyRefreshBinding)
                         .disabled(refresh.registeredCount == 0)
                     Picker("Refresh frequency", selection: passkeyIntervalBinding) {
-                        Text("Every day").tag(Int64(86_400_000))
-                        Text("Every 7 days").tag(Int64(604_800_000))
-                        Text("Every 14 days").tag(Int64(1_209_600_000))
+                        Text("Every hour").tag(Int64(3_600_000))
+                        Text("Every 2 hours").tag(Int64(7_200_000))
+                        Text("Every 3 hours").tag(Int64(10_800_000))
+                        Text("Every 4 hours").tag(Int64(14_400_000))
+                        Text("Every 6 hours").tag(Int64(21_600_000))
+                        Text("Every 12 hours").tag(Int64(43_200_000))
+                        Text("Every day · Default").tag(Int64(86_400_000))
+                        Text("Every 2 days").tag(Int64(172_800_000))
+                        Text("Every 3 days").tag(Int64(259_200_000))
                     }
                     .disabled(refresh.registeredCount == 0)
-                    Text("Off by default. Password and external-provider sessions last one day. After verification in Cowboy, that browser session rotates for up to 30 days and asks again at this frequency. Cowboy Manager keeps its separate one-day session and can sign in again from macOS Keychain.")
+                    Text("Off by default. Periodic verification defaults to one day and the Cowboy Service may require it sooner, up to its three-day maximum. Cowboy Manager keeps its separate one-day session and can sign in again from macOS Keychain.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if refresh.registeredCount == 0 {
@@ -171,7 +177,7 @@ struct SettingsView: View {
     private var passkeyIntervalBinding: Binding<Int64> {
         Binding(
             get: {
-                model.accountStatus.passkeySessionRefresh?.intervalMilliseconds ?? 604_800_000
+                model.accountStatus.passkeySessionRefresh?.intervalMilliseconds ?? 86_400_000
             },
             set: { interval in
                 guard let refresh = model.accountStatus.passkeySessionRefresh else { return }

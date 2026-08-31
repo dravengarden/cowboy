@@ -37,7 +37,7 @@ impl Default for SessionServerPolicy {
         Self {
             activity_sliding_enabled: true,
             idle_timeout_ms: 24 * 60 * 60 * 1_000,
-            passkey_max_age_ms: 7 * 24 * 60 * 60 * 1_000,
+            passkey_max_age_ms: 3 * 24 * 60 * 60 * 1_000,
             passkey_warning_ms: 30 * 60 * 1_000,
             primary_max_age_ms: 30 * 24 * 60 * 60 * 1_000,
             primary_warning_ms: 24 * 60 * 60 * 1_000,
@@ -145,7 +145,7 @@ impl SessionPolicyDocument {
             "session idle timeout must be between 15 minutes and 24 hours"
         );
         ensure!(
-            (4 * HOUR_MS..=30 * DAY_MS).contains(&self.passkey_max_age_ms)
+            (HOUR_MS..=3 * DAY_MS).contains(&self.passkey_max_age_ms)
                 && crate::passkey::valid_reauth_interval(self.passkey_max_age_ms),
             "Passkey maximum age must be one of the supported verification intervals"
         );
@@ -424,6 +424,10 @@ mod tests {
         assert!(passkeys.enabled);
         assert!(passkeys.prompt_after_login);
         assert!(passkeys.session_refresh_enabled);
+        assert_eq!(
+            SessionServerPolicy::default().passkey_max_age_ms,
+            3 * 24 * 60 * 60 * 1_000
+        );
         assert_eq!(
             SessionServerPolicy::default().passkey_warning_ms,
             30 * 60 * 1_000
