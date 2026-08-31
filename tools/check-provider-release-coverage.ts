@@ -59,7 +59,11 @@ export async function checkProviderReleaseCoverage(
     let covered = false;
     for (const candidate of candidates) {
       try {
-        await validatePublishedRelease(catalogRoot, candidate.path, candidate.release);
+        await validatePublishedRelease(
+          catalogRoot,
+          candidate.path,
+          candidate.release,
+        );
         covered = true;
         failure = `signed release ${candidate.release.artifact_digest}`;
         break;
@@ -77,7 +81,9 @@ export async function checkProviderReleaseCoverage(
   return coverage;
 }
 
-async function providerRequirements(pluginRoot: string): Promise<PluginManifest[]> {
+async function providerRequirements(
+  pluginRoot: string,
+): Promise<PluginManifest[]> {
   const requirements: PluginManifest[] = [];
   for await (const entry of Deno.readDir(pluginRoot)) {
     if (!entry.isDirectory) continue;
@@ -113,7 +119,12 @@ async function validatePublishedRelease(
   const stem = releasePath.slice(0, -".release.json".length);
   const packagePath = `${stem}.cowboy-plugin`;
   assert(await exists(packagePath), "catalog package is missing");
-  await validateArtifact(catalogRoot, release.artifact_url, release.package_digest);
+  await validateFileDigest(packagePath, release.package_digest);
+  await validateArtifact(
+    catalogRoot,
+    release.artifact_url,
+    release.package_digest,
+  );
   for (const target of release.runtime_artifacts) {
     for (const component of target.components) {
       await validateArtifact(
@@ -140,17 +151,28 @@ async function validatePublishedRelease(
   );
   const receipt = await readJson<PublicationReceipt>(receiptPath);
   assert(receipt.schema_version === 1, "unsupported publication receipt");
-  for (const key of [
-    "plugin_id",
-    "plugin_version",
-    "package_digest",
-    "artifact_digest",
-    "publisher",
-  ] as const) {
-    assert(receipt[key] === release[key], `publication receipt ${key} mismatch`);
+  for (
+    const key of [
+      "plugin_id",
+      "plugin_version",
+      "package_digest",
+      "artifact_digest",
+      "publisher",
+    ] as const
+  ) {
+    assert(
+      receipt[key] === release[key],
+      `publication receipt ${key} mismatch`,
+    );
   }
-  assert(receipt.catalog_package === packagePath, "receipt package path mismatch");
-  assert(receipt.catalog_release === releasePath, "receipt release path mismatch");
+  assert(
+    receipt.catalog_package === packagePath,
+    "receipt package path mismatch",
+  );
+  assert(
+    receipt.catalog_release === releasePath,
+    "receipt release path mismatch",
+  );
 }
 
 async function validateArtifact(
@@ -162,13 +184,39 @@ async function validateArtifact(
   const url = new URL(artifactUrl);
   const parts = url.pathname.split("/").filter(Boolean);
   assert(url.protocol === "https:", "artifact URL is not HTTPS");
-  assert(parts.at(-3) === "plugin-artifacts", "artifact URL is outside publication route");
+  assert(
+    parts.at(-3) === "plugin-artifacts",
+    "artifact URL is outside publication route",
+  );
   assert(parts.at(-2) === digest, "artifact URL digest mismatch");
   const name = parts.at(-1) ?? "";
   assert(/^[A-Za-z0-9._-]+$/.test(name), "artifact URL filename is invalid");
+  const path = join(catalogRoot, "artifacts", digest, name);
+  assert(await exists(path), `published artifact is missing: ${name}`);
+  await validateFileDigest(path, artifactDigest);
+}
+
+async function validateFileDigest(
+  path: string,
+  expected: string,
+): Promise<void> {
+  const output = await new Deno.Command("sha256sum", {
+    args: ["--", path],
+    clearEnv: true,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
   assert(
-    await exists(join(catalogRoot, "artifacts", digest, name)),
-    `published artifact is missing: ${name}`,
+    output.success,
+    `could not hash published artifact: ${
+      new TextDecoder().decode(output.stderr).trim()
+    }`,
+  );
+  const actual =
+    new TextDecoder().decode(output.stdout).trim().split(/\s+/, 1)[0];
+  assert(
+    `sha256:${actual}` === expected,
+    `published artifact digest mismatch: ${path}`,
   );
 }
 
@@ -209,12 +257,15 @@ if (import.meta.main) {
     throw new Error("Catalog root must be absolute");
   }
   const coverage = await checkProviderReleaseCoverage(pluginRoot, catalogRoot);
-  console.log(JSON.stringify({ catalog_root: catalogRoot, providers: coverage }, null, 2));
+  console.log(
+    JSON.stringify({ catalog_root: catalogRoot, providers: coverage }, null, 2),
+  );
   const missing = coverage.filter((entry) => !entry.covered);
   if (missing.length > 0) {
     throw new Error(
       `missing current signed Provider releases: ${
-        missing.map((entry) => `${entry.plugin_id}@${entry.plugin_version}`).join(", ")
+        missing.map((entry) => `${entry.plugin_id}@${entry.plugin_version}`)
+          .join(", ")
       }`,
     );
   }

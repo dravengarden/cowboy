@@ -10,30 +10,38 @@ Deno.test("Provider release coverage requires the exact signed published version
     await Deno.mkdir(`${plugins}/zed`, { recursive: true });
     await Deno.mkdir(`${catalog}/trusted-publishers`, { recursive: true });
     await Deno.mkdir(`${catalog}/receipts`, { recursive: true });
-    const packageDigest = `sha256:${"1".repeat(64)}`;
+    const packageDigest = `sha256:${await sha256("package")}`;
     const artifactDigest = `sha256:${"2".repeat(64)}`;
     const artifactValue = artifactDigest.slice("sha256:".length);
     const packageValue = packageDigest.slice("sha256:".length);
     const stem = `${catalog}/example-1.2.3-${artifactValue}`;
     const packagePath = `${stem}.cowboy-plugin`;
     const releasePath = `${stem}.release.json`;
-    await Deno.writeTextFile(`${plugins}/example/plugin.json`, JSON.stringify({
-      id: "example",
-      version: "1.2.3",
-      publisher: "cowboy-first-party",
-      kind: "agent_provider",
-    }));
-    await Deno.writeTextFile(`${plugins}/zed/plugin.json`, JSON.stringify({
-      id: "zed",
-      version: "9.9.9",
-      publisher: "cowboy-first-party",
-      kind: "code_intelligence",
-    }));
+    await Deno.writeTextFile(
+      `${plugins}/example/plugin.json`,
+      JSON.stringify({
+        id: "example",
+        version: "1.2.3",
+        publisher: "cowboy-first-party",
+        kind: "agent_provider",
+      }),
+    );
+    await Deno.writeTextFile(
+      `${plugins}/zed/plugin.json`,
+      JSON.stringify({
+        id: "zed",
+        version: "9.9.9",
+        publisher: "cowboy-first-party",
+        kind: "code_intelligence",
+      }),
+    );
     await Deno.writeTextFile(
       `${catalog}/trusted-publishers/cowboy-first-party.pub`,
       "ssh-ed25519 fixture\n",
     );
-    await Deno.mkdir(`${catalog}/artifacts/${packageValue}`, { recursive: true });
+    await Deno.mkdir(`${catalog}/artifacts/${packageValue}`, {
+      recursive: true,
+    });
     await Deno.writeTextFile(
       `${catalog}/artifacts/${packageValue}/example.cowboy-plugin`,
       "package",
@@ -73,6 +81,17 @@ Deno.test("Provider release coverage requires the exact signed published version
       detail: `signed release ${artifactDigest}`,
     }]);
 
+    const publishedPackage =
+      `${catalog}/artifacts/${packageValue}/example.cowboy-plugin`;
+    await Deno.writeTextFile(publishedPackage, "tampered");
+    const [tampered] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(tampered?.covered, false);
+    assertEquals(
+      tampered?.detail,
+      `published artifact digest mismatch: ${publishedPackage}`,
+    );
+    await Deno.writeTextFile(publishedPackage, "package");
+
     await Deno.remove(releasePath);
     assertEquals(await checkProviderReleaseCoverage(plugins, catalog), [{
       plugin_id: "example",
@@ -84,3 +103,13 @@ Deno.test("Provider release coverage requires the exact signed published version
     await Deno.remove(root, { recursive: true });
   }
 });
+
+async function sha256(value: string): Promise<string> {
+  const bytes = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(bytes)].map((byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+}
