@@ -4,12 +4,12 @@ import {
   hasNativeAuthenticationBrowser,
   hasNativeExternalOpener,
   hasNativePasskeyAuthenticationBrowser,
+  NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
+  NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
   openAuthenticationUrl,
   openAuthenticationUrlConfirmed,
   openExternalUrl,
   openPasskeyAuthenticationUrl,
-  NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
-  NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
   safeAuthenticationUrl,
   safeExternalUrl,
   shouldRouteAuthenticationClick,
@@ -17,12 +17,14 @@ import {
 } from "./openExternal";
 
 Deno.test("external links allow explicit network and contact protocols", () => {
-  for (const url of [
-    "https://example.com/docs?q=1",
-    "http://127.0.0.1:4160/health",
-    "mailto:reader@example.com",
-    "tel:+15551234567",
-  ]) {
+  for (
+    const url of [
+      "https://example.com/docs?q=1",
+      "http://127.0.0.1:4160/health",
+      "mailto:reader@example.com",
+      "tel:+15551234567",
+    ]
+  ) {
     if (safeExternalUrl(url) !== new URL(url).href) {
       throw new Error(`expected allowed external URL: ${url}`);
     }
@@ -88,13 +90,34 @@ Deno.test("aborting a native Passkey browser closes the system session", async (
   }
 });
 
+Deno.test("returning to Cowboy settles a suspended native Passkey browser reply", async () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyOpenPasskeyBrowser?: () => Promise<unknown>;
+    __cowboyPasskeyBrowserBridgeVersion?: number;
+  };
+  root.__cowboyPasskeyBrowserBridgeVersion = 1;
+  root.__cowboyOpenPasskeyBrowser = () => new Promise(() => undefined);
+  try {
+    const pending = openPasskeyAuthenticationUrl(
+      "https://example.com/passkey.html",
+    );
+    globalThis.dispatchEvent(new Event("focus"));
+    assertEquals(await pending, "dismissed");
+  } finally {
+    delete root.__cowboyOpenPasskeyBrowser;
+    delete root.__cowboyPasskeyBrowserBridgeVersion;
+  }
+});
+
 Deno.test("external links reject executable and local protocols", () => {
-  for (const url of [
-    "javascript:alert(1)",
-    "data:text/html,<script>alert(1)</script>",
-    "file:///etc/passwd",
-    "custom-handler:payload",
-  ]) {
+  for (
+    const url of [
+      "javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "file:///etc/passwd",
+      "custom-handler:payload",
+    ]
+  ) {
     if (safeExternalUrl(url) !== null) {
       throw new Error(`expected rejected external URL: ${url}`);
     }
@@ -138,7 +161,9 @@ Deno.test("Provider authentication prefers and closes the native Safari sheet", 
     if (opened !== "https://example.com/authorize?code=123") {
       throw new Error(`unexpected native authentication URL: ${opened}`);
     }
-    if (closes !== 1) throw new Error(`expected one native close, got ${closes}`);
+    if (closes !== 1) {
+      throw new Error(`expected one native close, got ${closes}`);
+    }
   } finally {
     delete root.__cowboyOpenAuthenticationBrowser;
     delete root.__cowboyCloseAuthenticationBrowser;
@@ -226,7 +251,9 @@ Deno.test("Tauri fallback passes open_url its url argument", () => {
     if (args.url !== "https://example.com/authorize?code=123") {
       throw new Error(`expected url argument, got ${JSON.stringify(args)}`);
     }
-    if ("path" in args) throw new Error("open_url must not receive a path argument");
+    if ("path" in args) {
+      throw new Error("open_url must not receive a path argument");
+    }
   } finally {
     delete root.__TAURI__;
   }
@@ -237,7 +264,10 @@ Deno.test("Tauri v2 internals open native-shell links with the URL argument", ()
   let args: Record<string, unknown> = {};
   const root = globalThis as typeof globalThis & {
     __TAURI_INTERNALS__?: {
-      invoke: (nextCommand: string, nextArgs: Record<string, unknown>) => Promise<unknown>;
+      invoke: (
+        nextCommand: string,
+        nextArgs: Record<string, unknown>,
+      ) => Promise<unknown>;
     };
   };
   root.__TAURI_INTERNALS__ = {
@@ -248,11 +278,17 @@ Deno.test("Tauri v2 internals open native-shell links with the URL argument", ()
     },
   };
   try {
-    if (!hasNativeExternalOpener()) throw new Error("expected native opener detection");
+    if (!hasNativeExternalOpener()) {
+      throw new Error("expected native opener detection");
+    }
     openExternalUrl("https://example.com/native");
-    if (command !== "plugin:opener|open_url") throw new Error(`unexpected command: ${command}`);
+    if (command !== "plugin:opener|open_url") {
+      throw new Error(`unexpected command: ${command}`);
+    }
     if (args.url !== "https://example.com/native") {
-      throw new Error(`expected native URL argument, got ${JSON.stringify(args)}`);
+      throw new Error(
+        `expected native URL argument, got ${JSON.stringify(args)}`,
+      );
     }
   } finally {
     delete root.__TAURI_INTERNALS__;
@@ -271,10 +307,14 @@ Deno.test("only unmodified native primary clicks override anchor navigation", ()
     metaKey: false,
     shiftKey: false,
   };
-  if (shouldRouteExternalClick(click)) throw new Error("browser anchor must remain native");
+  if (shouldRouteExternalClick(click)) {
+    throw new Error("browser anchor must remain native");
+  }
   root.__TAURI_INTERNALS__ = { invoke: () => Promise.resolve() };
   try {
-    if (!shouldRouteExternalClick(click)) throw new Error("native primary click must use opener");
+    if (!shouldRouteExternalClick(click)) {
+      throw new Error("native primary click must use opener");
+    }
     if (shouldRouteExternalClick({ ...click, metaKey: true })) {
       throw new Error("modified clicks must retain anchor semantics");
     }

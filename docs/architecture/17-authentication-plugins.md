@@ -300,9 +300,11 @@ Secure Enclave key that is not a WebAuthn credential is never accepted as a
 Passkey or as evidence for session extension.
 
 A SideStore-signed iOS shell that cannot obtain the Associated Domains
-entitlement runs the WebAuthn prompt in a system `SFSafariViewController`, not
-its embedded `WKWebView`. This preserves the normal origin-bound Safari
-ceremony. The handoff does not transfer the product cookie:
+entitlement runs the WebAuthn prompt in an `ASWebAuthenticationSession`, not its
+embedded `WKWebView`. This preserves the normal origin-bound Safari ceremony.
+Assertion begins automatically from the user's Cowboy tap; registration still
+requires the explicit trusted-page gesture. The handoff does not transfer the
+product cookie:
 
 1. the authenticated Cowboy window creates an S256 PKCE challenge and starts a
    120-second transaction bound to the exact user and cookie-session hash;
@@ -316,8 +318,10 @@ The browser page omits credentials on its API calls, removes the fragment from
 history before invoking WebAuthn, uses a restrictive CSP and no-referrer policy,
 and cannot choose an account, return URL, or session. Transactions are bounded,
 single-use, and fail closed on expiry, cancellation, origin mismatch, session
-mismatch, or PKCE mismatch. Ordinary Safari, installed PWAs, and desktop
-browsers continue to use direct WebAuthn.
+mismatch, or PKCE mismatch. A browser close, app resume, or focus return wakes a
+single bounded finalize path, and the initiating modal retains an AbortSignal so
+user cancellation cannot strand its busy state. Ordinary Safari, installed
+PWAs, and desktop browsers continue to use direct WebAuthn.
 
 ## Public examples
 

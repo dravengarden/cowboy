@@ -28,8 +28,8 @@ import {
   browserPasskeyMayFallBack,
   currentPasskeyTransports,
   passkeyRegistrationNeedsUserGestureResume,
-  passkeyTransportSupported,
   type PasskeyTransportKind,
+  passkeyTransportSupported,
 } from "./passkeyTransport";
 import { newPkceBinding } from "./pkce";
 
@@ -146,9 +146,9 @@ export async function waitForExternalPasskeyEvent(
       if ("status" in result) resolve(result.status);
       else reject(result.error);
     };
-    const onAbort = (): void =>
-      finish({ error: passkeyAbortReason(signal) });
-    // SFSafariViewController backgrounds the WKWebView that owns this socket.
+    const onAbort = (): void => finish({ error: passkeyAbortReason(signal) });
+    // The system authentication browser backgrounds the WKWebView that owns
+    // this socket.
     // Closing a successfully completed ceremony must wake the initiator so it
     // can perform the PKCE-bound durable finalize, not be treated as cancel.
     const onNativeBrowserClosed = (): void =>
@@ -346,19 +346,32 @@ async function waitForExternalPasskey(
 async function runExternalPasskey(
   action: ExternalPasskeyAction,
   nickname?: string,
+  parentSignal?: AbortSignal,
 ): Promise<ExternalPasskeyFinalize> {
-  const binding = await newPkceBinding();
-  const started = await authApi.startExternalPasskey(
-    action,
-    binding.challenge,
-    nickname,
-  );
   const flow = new AbortController();
-  const timeout = setTimeout(
-    () => flow.abort(passkeyTimeoutError()),
-    Math.max(1, started.expires_in_seconds) * 1_000,
-  );
+  const abortFromParent = (): void =>
+    flow.abort(
+      parentSignal?.reason ?? new DOMException("Cancelled", "AbortError"),
+    );
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let transactionId: string | undefined;
   try {
+    const binding = await newPkceBinding();
+    if (flow.signal.aborted) throw passkeyAbortReason(flow.signal);
+    const started = await authApi.startExternalPasskey(
+      action,
+      binding.challenge,
+      nickname,
+      flow.signal,
+    );
+    transactionId = started.transaction_id;
+    timeout = setTimeout(
+      () => flow.abort(passkeyTimeoutError()),
+      Math.max(1, started.expires_in_seconds) * 1_000,
+    );
     if (hasNativePasskeyAuthenticationBrowser()) {
       const nativeStatus = await openPasskeyAuthenticationUrl(
         externalPasskeyUrl(
@@ -370,6 +383,13 @@ async function runExternalPasskey(
       );
       if (nativeStatus === "cancelled") {
         throw new DOMException("Cancelled", "AbortError");
+      }
+      if (nativeStatus === "dismissed") {
+        return await reconcileExternalPasskeyAfterBrowserClose(
+          started.transaction_id,
+          binding.verifier,
+          flow.signal,
+        );
       }
       if (nativeStatus === "failed") {
         throw new AuthApiError("Passkey verification failed.", 400);
@@ -387,7 +407,7 @@ async function runExternalPasskey(
         );
       }
       // A partially initialized native shell stays usable through the proven
-      // SFSafariViewController + WebSocket path below.
+      // system-authentication-browser + WebSocket path below.
     }
     await openAuthenticationUrlConfirmed(
       externalPasskeyUrl(location.origin, started.transaction_id),
@@ -405,14 +425,16 @@ async function runExternalPasskey(
     // transaction is bounded and will expire server-side, so cancellation must
     // never overwrite a credential that Safari has already created. Explicit
     // Cancel on /passkey.html still marks the transaction failed immediately.
-    if (externalPasskeyRequiresFailureSignal(reason)) {
-      await externalPasskeyApi.fail(started.transaction_id).catch(() =>
-        undefined
-      );
+    if (
+      transactionId !== undefined &&
+      externalPasskeyRequiresFailureSignal(reason)
+    ) {
+      await externalPasskeyApi.fail(transactionId).catch(() => undefined);
     }
     throw reason;
   } finally {
-    clearTimeout(timeout);
+    if (timeout !== undefined) clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
     closeAuthenticationBrowser();
   }
 }
@@ -463,22 +485,25 @@ export async function registerPasskey(
   throw new Error("Passkeys are unavailable on this device");
 }
 
-export async function verifyPasskey(): Promise<ProductMe> {
+export async function verifyPasskey(signal?: AbortSignal): Promise<ProductMe> {
   const transports = await currentPasskeyTransports();
   for (const [index, transport] of transports.entries()) {
     try {
+      if (signal?.aborted) throw passkeyAbortReason(signal);
       if (transport === "external") {
-        const result = await runExternalPasskey("assert");
+        const result = await runExternalPasskey("assert", undefined, signal);
         if (result.status === "complete" && "me" in result) return result.me;
         throw new Error("Passkey verification returned an invalid response");
       }
-      const ceremony = await authApi.startPasskeyAssert();
+      const ceremony = await authApi.startPasskeyAssert(signal);
       const credential = transport === "native"
         ? await assertPasskeyNatively(ceremony)
-        : await assertPasskeyInBrowser(ceremony);
+        : await assertPasskeyInBrowser(ceremony, signal);
+      if (signal?.aborted) throw passkeyAbortReason(signal);
       return await authApi.completePasskeyAssert(
         ceremony.challenge_id,
         credential,
+        signal,
       );
     } catch (reason) {
       if (

@@ -3,7 +3,12 @@
 // outside mdlive so the vendored engine remains framework-agnostic.
 type TauriGlobal = {
   opener?: { openUrl?: (url: string) => Promise<void> };
-  core?: { invoke?: (command: string, args: Record<string, unknown>) => Promise<unknown> };
+  core?: {
+    invoke?: (
+      command: string,
+      args: Record<string, unknown>,
+    ) => Promise<unknown>;
+  };
 };
 
 type TauriInternals = {
@@ -24,6 +29,7 @@ type NativeGlobals = {
 export type NativePasskeyBrowserStatus =
   | "complete"
   | "cancelled"
+  | "dismissed"
   | "failed"
   | "unavailable";
 
@@ -75,7 +81,9 @@ export function openExternalUrl(url: string): void {
     return;
   }
   if (root.__TAURI_INTERNALS__?.invoke) {
-    void root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", { url: resolved })
+    void root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", {
+      url: resolved,
+    })
       .catch(() => openInBrowser(resolved));
     return;
   }
@@ -219,6 +227,16 @@ export async function openPasskeyAuthenticationUrl(
       if (settled) return;
       settled = true;
       signal?.removeEventListener("abort", onAbort);
+      globalThis.removeEventListener(
+        NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+        onBrowserDismissed,
+      );
+      globalThis.removeEventListener(
+        NATIVE_APP_RESUMED_EVENT,
+        onBrowserDismissed,
+      );
+      globalThis.removeEventListener("focus", onBrowserDismissed);
+      globalThis.removeEventListener("pageshow", onBrowserDismissed);
       if ("value" in result) resolve(result.value);
       else reject(result.error);
     };
@@ -232,7 +250,23 @@ export async function openPasskeyAuthenticationUrl(
         error: signal?.reason ?? new DOMException("Cancelled", "AbortError"),
       });
     };
+    // Some WKWebView versions suspend the JavaScript reply while the system
+    // authentication session is visible. Treat the shell/focus wake-up as a
+    // dismissal signal and let the PKCE-bound finalize decide whether the
+    // Passkey completed or the user cancelled it.
+    const onBrowserDismissed = (): void =>
+      finish({ value: { ok: true, status: "dismissed" } });
     signal?.addEventListener("abort", onAbort, { once: true });
+    globalThis.addEventListener(
+      NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
+      onBrowserDismissed,
+      { once: true },
+    );
+    globalThis.addEventListener(NATIVE_APP_RESUMED_EVENT, onBrowserDismissed, {
+      once: true,
+    });
+    globalThis.addEventListener("focus", onBrowserDismissed, { once: true });
+    globalThis.addEventListener("pageshow", onBrowserDismissed, { once: true });
     void Promise.resolve(request).then(
       (value) => finish({ value }),
       () => finish({ value: { ok: false } }),
@@ -244,6 +278,7 @@ export async function openPasskeyAuthenticationUrl(
   if (reply.ok !== true) return "unavailable";
   if (
     reply.status === "complete" || reply.status === "cancelled" ||
+    reply.status === "dismissed" ||
     reply.status === "failed"
   ) {
     return reply.status;

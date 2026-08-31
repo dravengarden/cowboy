@@ -127,6 +127,8 @@ export function ProductRecentAuthSheet({
   const [error, setError] = useState<string | null>(null);
   const [verifiedMe, setVerifiedMe] = useState<ProductMe | null>(null);
   const providerAbort = useRef<AbortController | null>(null);
+  const passkeyAbort = useRef<AbortController | null>(null);
+  const requestEpoch = useRef(0);
   const passkeyAvailable = (me.passkey_count ?? 0) > 0 &&
     passkeyFlowSupported();
   const methods = purpose === "passkey"
@@ -148,7 +150,10 @@ export function ProductRecentAuthSheet({
     !useNativeProviderFlow && browserOidcFlowSupported();
   const useProviderHandoff = useNativeProviderFlow || useBrowserProviderFlow;
 
-  useEffect(() => () => providerAbort.current?.abort(), []);
+  useEffect(() => () => {
+    providerAbort.current?.abort();
+    passkeyAbort.current?.abort();
+  }, []);
   useEffect(() => {
     if (!open) return;
     setPassword("");
@@ -187,10 +192,12 @@ export function ProductRecentAuthSheet({
     fallback: string,
   ): void => {
     if (busy) return;
+    const epoch = ++requestEpoch.current;
     setBusy(true);
     setError(null);
     void request()
       .then((next) => {
+        if (requestEpoch.current !== epoch) return;
         // Password/provider login and an enabled Passkey refresh can replace
         // the cookie. Detach the old authenticated socket before it can push
         // stale deadlines back over the newly verified session.
@@ -199,6 +206,7 @@ export function ProductRecentAuthSheet({
         else onVerified(next);
       })
       .catch((reason: unknown) => {
+        if (requestEpoch.current !== epoch) return;
         if (passkeyFlowCancelled(reason)) return;
         setError(
           reason instanceof AuthApiError
@@ -206,7 +214,9 @@ export function ProductRecentAuthSheet({
             : passkeyErrorMessage(reason, fallback),
         );
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        if (requestEpoch.current === epoch) setBusy(false);
+      });
   };
 
   const verifyProvider = (): void => {
@@ -224,8 +234,24 @@ export function ProductRecentAuthSheet({
     );
   };
 
+  const verifyWithPasskey = (): void => {
+    const abort = new AbortController();
+    passkeyAbort.current = abort;
+    finish(
+      () =>
+        verifyPasskey(abort.signal).finally(() => {
+          if (passkeyAbort.current === abort) passkeyAbort.current = null;
+        }),
+      "Could not verify your Passkey",
+    );
+  };
+
   const cancel = (): void => {
-    if (busy || locked) return;
+    if (locked) return;
+    requestEpoch.current += 1;
+    setBusy(false);
+    providerAbort.current?.abort(new DOMException("Cancelled", "AbortError"));
+    passkeyAbort.current?.abort(new DOMException("Cancelled", "AbortError"));
     onCancel();
   };
 
@@ -260,7 +286,7 @@ export function ProductRecentAuthSheet({
           </Button>
         )
         : (
-          <Button color="inherit" disabled={busy} onClick={cancel}>
+          <Button color="inherit" onClick={cancel}>
             Cancel
           </Button>
         )}
@@ -336,8 +362,7 @@ export function ProductRecentAuthSheet({
               variant="contained"
               size="large"
               disabled={busy}
-              onClick={() =>
-                finish(verifyPasskey, "Could not verify your Passkey")}
+              onClick={verifyWithPasskey}
             >
               Verify with Passkey
             </Button>

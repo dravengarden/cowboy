@@ -503,16 +503,19 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challenge_id: challengeId, credential }),
     }),
-  startPasskeyAssert: () =>
+  startPasskeyAssert: (signal?: AbortSignal) =>
     readJson<PasskeyCeremony>("/api/auth/passkeys/assert/options", {
       method: "POST",
+      ...(signal === undefined ? {} : { signal }),
     }),
   completePasskeyAssert: (
     challengeId: string,
     credential: PublicKeyCredentialJSON,
+    signal?: AbortSignal,
   ) =>
     readJson<ProductMe>("/api/auth/passkeys/assert/complete", {
       method: "POST",
+      ...(signal === undefined ? {} : { signal }),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ challenge_id: challengeId, credential }),
     }),
@@ -520,9 +523,11 @@ export const authApi = {
     action: ExternalPasskeyAction,
     codeChallenge: string,
     nickname?: string,
+    signal?: AbortSignal,
   ) =>
     readJson<ExternalPasskeyStart>("/api/auth/passkeys/external/start", {
       method: "POST",
+      ...(signal === undefined ? {} : { signal }),
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action,

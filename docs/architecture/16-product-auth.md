@@ -148,14 +148,19 @@ lock and 12-hour cookie.
 
 The SideStore iOS shell cannot rely on the Associated Domains entitlement for
 WebAuthn inside `WKWebView`. It therefore opens the fixed `/passkey.html` page
-in a system Safari sheet. An authenticated start binds a 120-second transaction
-to the exact Cowboy user and cookie session plus an S256 challenge. Safari sees
-only an opaque token in the URL fragment and can stage a verified credential;
-it cannot persist the Passkey or extend a cookie. The original Cowboy window
-must finalize with the retained verifier and the same session. Success closes
-the sheet; cancellation, expiry, session replacement, and PKCE mismatch fail
-closed. The system sheet is presentation only: all account mutation and cookie
-rotation remain Controller-owned.
+in a system authentication session. For an assertion, the page invokes WebAuthn
+as soon as the initiating Cowboy tap opens it, so there is no second page-level
+Continue action before Face ID, Touch ID, or the device passcode. Registration
+keeps its explicit page gesture. An authenticated start binds a 120-second
+transaction to the exact Cowboy user and cookie session plus an S256 challenge.
+Safari sees only an opaque token in the URL fragment and can stage a verified
+credential; it cannot persist the Passkey or extend a cookie. The original
+Cowboy window must finalize with the retained verifier and the same session.
+Success closes the sheet; cancellation, expiry, session replacement, and PKCE
+mismatch fail closed. Browser dismissal and foreground recovery perform a
+bounded finalize so a suspended WebKit callback cannot leave Cowboy busy. The
+system session is presentation only: all account mutation and cookie rotation
+remain Controller-owned.
 
 Roles reuse the serde names `owner` / `operator` / `viewer`. Product roles
 live only in `cowboy.permissions` (`role_for`); there is no `users.role`

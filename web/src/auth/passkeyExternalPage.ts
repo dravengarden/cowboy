@@ -99,6 +99,15 @@ async function performPasskey(): Promise<void> {
     if (actions) actions.hidden = true;
   } catch (reason) {
     if (passkeyFlowCancelled(reason)) {
+      // Assertions do not require a second gesture. In the native shell they
+      // start as soon as this fixed-origin page loads, so cancelling Face ID /
+      // Touch ID must close the authentication session instead of exposing an
+      // intermediate browser retry page.
+      if (nativeCallback && ceremony.action === "assert") {
+        terminal = true;
+        finishNative("cancelled");
+        return;
+      }
       showRetryableError(
         passkeyErrorMessage(reason, "Passkey verification failed."),
       );
@@ -169,6 +178,11 @@ async function run(): Promise<void> {
       continueButton.textContent = options.action === "register"
         ? "Create Passkey"
         : "Verify Passkey";
+    }
+    if (nativeCallback && options.action === "assert") {
+      if (actions) actions.hidden = true;
+      await performPasskey();
+      return;
     }
     if (actions) actions.hidden = false;
   } catch (reason) {

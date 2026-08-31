@@ -86,7 +86,17 @@ Deno.test("system Safari Passkey page is isolated from the cached app shell", as
       'continueButton?.addEventListener("click", () => void performPasskey())',
     ),
   );
-  assertEquals(externalPage.match(/performPasskey\(\)/g)?.length, 2);
+  assert(
+    externalPage.includes(
+      'if (nativeCallback && options.action === "assert")',
+    ),
+  );
+  assertEquals(externalPage.match(/performPasskey\(\)/g)?.length, 3);
+  assert(
+    externalPage.includes(
+      'if (nativeCallback && ceremony.action === "assert")',
+    ),
+  );
   assert(externalPage.includes("history.replaceState"));
   assert(externalPage.includes("externalPasskeyApi.complete(transactionId"));
   const cancelHandler = externalPage.slice(
@@ -232,7 +242,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1607"'));
+  assert(sw.includes('const VERSION = "cowboy-v1609"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -368,6 +378,10 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assertEquals(guard.includes("MutationObserver"), false);
   assert(guard.includes('data-desktop-topbar-action={!mobile ? "reauth"'));
   assert(guard.includes("FINAL_WARNING_MS"));
+  assert(sheet.includes("passkeyAbort.current?.abort"));
+  assert(sheet.includes("requestEpoch.current += 1"));
+  assertEquals(sheet.match(/requestEpoch\.current !== epoch/g)?.length, 2);
+  assertEquals(sheet.includes("disabled={busy} onClick={cancel}"), false);
   assert(guard.includes("locked={required}"));
   assert(guard.includes('data-session-lock-backdrop="true"'));
   assert(guard.includes('backdropFilter: "blur(24px) saturate(65%)"'));

@@ -4,12 +4,17 @@ function bufferToBase64Url(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll(
+    "=",
+    "",
+  );
 }
 
 function base64UrlToBuffer(value: string): ArrayBuffer {
   const padded = value.replaceAll("-", "+").replaceAll("_", "/");
-  const binary = atob(padded.padEnd(padded.length + (4 - padded.length % 4) % 4, "="));
+  const binary = atob(
+    padded.padEnd(padded.length + (4 - padded.length % 4) % 4, "="),
+  );
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
     bytes[index] = binary.charCodeAt(index);
@@ -20,10 +25,12 @@ function base64UrlToBuffer(value: string): ArrayBuffer {
 function reviveCreateOptions(
   options: Record<string, unknown>,
 ): CredentialCreationOptions {
-  const publicKey = { ...options } as unknown as PublicKeyCredentialCreationOptions & {
-    challenge: BufferSource;
-    user: PublicKeyCredentialUserEntity;
-  };
+  const publicKey = { ...options } as unknown as
+    & PublicKeyCredentialCreationOptions
+    & {
+      challenge: BufferSource;
+      user: PublicKeyCredentialUserEntity;
+    };
   publicKey.challenge = base64UrlToBuffer(String(options.challenge));
   const user = { ...(options.user as PublicKeyCredentialUserEntity) };
   user.id = base64UrlToBuffer(String((options.user as { id: string }).id));
@@ -41,7 +48,9 @@ function reviveCreateOptions(
 function reviveRequestOptions(
   options: Record<string, unknown>,
 ): CredentialRequestOptions {
-  const publicKey = { ...options } as unknown as PublicKeyCredentialRequestOptions;
+  const publicKey = {
+    ...options,
+  } as unknown as PublicKeyCredentialRequestOptions;
   publicKey.challenge = base64UrlToBuffer(String(options.challenge));
   if (Array.isArray(options.allowCredentials)) {
     publicKey.allowCredentials = options.allowCredentials.map((item) => {
@@ -53,7 +62,9 @@ function reviveRequestOptions(
   return { publicKey };
 }
 
-function credentialToJson(credential: PublicKeyCredential): Record<string, unknown> {
+function credentialToJson(
+  credential: PublicKeyCredential,
+): Record<string, unknown> {
   const response = credential.response;
   const json: Record<string, unknown> = {
     id: credential.id,
@@ -98,9 +109,14 @@ export async function createPasskey(
 
 export async function assertPasskey(
   ceremony: PasskeyOptions,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  const options = reviveRequestOptions(
+    ceremony.publicKey as Record<string, unknown>,
+  );
+  if (signal !== undefined) options.signal = signal;
   const credential = await navigator.credentials.get(
-    reviveRequestOptions(ceremony.publicKey as Record<string, unknown>),
+    options,
   );
   if (!(credential instanceof PublicKeyCredential)) {
     throw new Error("Passkey was not asserted");

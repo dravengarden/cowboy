@@ -18,9 +18,12 @@ registry then uses Cowboy's PKCE-bound system-Safari ceremony. This is an
 intentional secure fallback, not a local-biometric substitute for WebAuthn.
 The same bridge owns that fallback through `ASWebAuthenticationSession` so the
 fixed Cowboy callback closes the sheet after success or cancellation even when
-the underlying WKWebView is suspended. WebAuthn still requires the explicit
-gesture on the trusted Cowboy page; only an Associated-Domains-capable build
-may skip that page and invoke the native Passkey prompt directly.
+the underlying WKWebView is suspended. Assertions start immediately from the
+user's tap in Cowboy, so the next visible interaction is the system Passkey
+prompt rather than a second web-page button. Registration retains an explicit
+gesture on the trusted Cowboy page. Only an Associated-Domains-capable build
+can omit the system authentication browser entirely and invoke
+AuthenticationServices from the app.
 
 The sibling `../tauri/tauri.macos.conf.json` is merged automatically by
 Tauri's macOS build. Development bundles use Tauri's `-` pseudo-identity and
