@@ -121,6 +121,13 @@ impl MachineControl {
     }
 
     pub fn record(&self, machine_id: &str, event: MachineEvent) {
+        // Credential refresh candidates are consumed directly by the
+        // authenticated Machine WebSocket handler. They must never enter the
+        // ordinary in-memory history exposed by the Machine events API, even
+        // if a future caller accidentally routes one through this method.
+        if matches!(&event, MachineEvent::ProviderAuthRefreshCandidate { .. }) {
+            return;
+        }
         let correlated = match &event {
             MachineEvent::AdapterResponse {
                 request_id,
@@ -268,6 +275,30 @@ mod tests {
             adapter_timeout("deepseek-cache-status"),
             std::time::Duration::from_secs(3)
         );
+    }
+
+    #[test]
+    fn provider_refresh_credentials_never_enter_machine_event_history() {
+        let control = MachineControl::default();
+        control.record(
+            "hawk",
+            MachineEvent::ProviderAuthRefreshCandidate {
+                request_id: "refresh-1".to_owned(),
+                provider_id: "grok".to_owned(),
+                expected_generation: 3,
+                provider_version: "1.1.8".to_owned(),
+                generation_digest: format!("sha256:{}", "ab".repeat(32)),
+                auth_contract_fingerprint: format!("sha256:{}", "cd".repeat(32)),
+                portable_schema: "grok-auth-v1".to_owned(),
+                auth_method: "xai-account".to_owned(),
+                bundle: std::collections::BTreeMap::from([(
+                    "auth_json".to_owned(),
+                    "c2VjcmV0".to_owned(),
+                )]),
+            },
+        );
+
+        assert!(control.events("hawk").is_empty());
     }
 
     #[test]

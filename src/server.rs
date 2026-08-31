@@ -10265,6 +10265,119 @@ async fn sync_provider_auth_to_machine(
     Ok(auth_generation)
 }
 
+fn failed_provider_auth_projection_ids(
+    plugins: &[crate::machine_protocol::PluginInventory],
+) -> Vec<String> {
+    plugins
+        .iter()
+        .filter(|plugin| {
+            plugin.state == crate::machine_protocol::PluginInstallationState::Active
+                && plugin.replica_state == crate::machine_protocol::ProviderReplicaState::Current
+                && plugin.materialization_state
+                    == crate::machine_protocol::ProviderMaterializationState::Failed
+        })
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn accept_provider_auth_refresh_candidate(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    installed: Option<crate::machine_protocol::PluginInventory>,
+    request_id: &str,
+    provider_id: &str,
+    expected_generation: u64,
+    provider_version: &str,
+    generation_digest: &str,
+    auth_contract_fingerprint: &str,
+    portable_schema: &str,
+    auth_method: &str,
+    values: BTreeMap<String, String>,
+) -> Result<(), String> {
+    let installed = installed
+        .filter(|installed| {
+            installed.plugin_id == provider_id
+                && installed.plugin_version == provider_version
+                && installed.generation_digest == generation_digest
+                && installed.state == crate::machine_protocol::PluginInstallationState::Active
+                && installed.auth_generation == Some(expected_generation)
+                && installed.replica_state == crate::machine_protocol::ProviderReplicaState::Current
+        })
+        .ok_or_else(|| {
+            "credential refresh does not match the Machine's active Provider generation".to_owned()
+        })?;
+    let package = state
+        .provider_catalog
+        .package(provider_id, provider_version, generation_digest)
+        .ok_or_else(|| {
+            "credential refresh references an untrusted Agent Plugin release".to_owned()
+        })?;
+    if package.manifest.authentication.refresh
+        != cowboy_provider_sdk::RefreshOwnership::CompareAndSwap
+    {
+        return Err("Provider does not allow Machine credential refresh".to_owned());
+    }
+    if package.manifest.compatibility.auth_contract_fingerprint != auth_contract_fingerprint
+        || package.manifest.authentication.portable_schema != portable_schema
+        || installed.auth_generation != Some(expected_generation)
+    {
+        return Err("credential refresh contract does not match the active Provider".to_owned());
+    }
+    let bundle = crate::machine_protocol::PortableCredentialBundle {
+        portable_schema: portable_schema.to_owned(),
+        method_id: auth_method.to_owned(),
+        values,
+    };
+    let packages = state
+        .provider_catalog
+        .packages_for_authentication_scope(portable_schema);
+    match state
+        .provider_auth
+        .compare_and_swap_refresh(&packages, &bundle, provider_id, expected_generation)
+        .map_err(|error| error.to_string())?
+    {
+        crate::provider_service::ProviderAuthRefreshResult::Stale { current_generation } => {
+            tracing::info!(
+                %request_id,
+                %machine_id,
+                %provider_id,
+                expected_generation,
+                current_generation,
+                "discarding stale Provider credential refresh and restoring Service generation"
+            );
+            sync_provider_auth_to_machine(state, machine_id, provider_id).await?;
+        }
+        crate::provider_service::ProviderAuthRefreshResult::Unchanged(_) => {
+            tracing::debug!(
+                %request_id,
+                %machine_id,
+                %provider_id,
+                expected_generation,
+                "ignoring unchanged Provider credential refresh"
+            );
+        }
+        crate::provider_service::ProviderAuthRefreshResult::Updated(statuses) => {
+            let next_generation = statuses
+                .iter()
+                .map(|status| status.auth_generation)
+                .max()
+                .unwrap_or(expected_generation);
+            tracing::info!(
+                %request_id,
+                %machine_id,
+                %provider_id,
+                expected_generation,
+                next_generation,
+                "promoted Machine-refreshed Provider credentials"
+            );
+            let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
+            rebind_unstarted_provider_sessions(state, &statuses, &replicas);
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn accept_service_auth_candidate(
     state: &Arc<AppState>,
@@ -11021,6 +11134,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     },
             } => {
                 current_providers = plugins;
+                let failed_provider_auth = failed_provider_auth_projection_ids(&current_providers);
                 state.machine_control.record(
                     &hello.machine_id,
                     crate::machine_protocol::MachineEvent::PluginInventory {
@@ -11041,6 +11155,26 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     .await;
                 if result.is_ok() {
                     state.machine_snapshots.publish().await;
+                    for provider_id in failed_provider_auth {
+                        let repair_state = Arc::clone(&state);
+                        let repair_machine_id = hello.machine_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) = sync_provider_auth_to_machine(
+                                &repair_state,
+                                &repair_machine_id,
+                                &provider_id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(
+                                    %error,
+                                    machine = %repair_machine_id,
+                                    %provider_id,
+                                    "repairing failed Provider credential projection"
+                                );
+                            }
+                        });
+                    }
                 }
                 result
             }
@@ -11139,6 +11273,70 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                 detail: Some(error),
                             },
                         );
+                    }
+                });
+                store
+                    .machine_seen(&hello.machine_id, &challenge_id, None)
+                    .await
+            }
+            crate::machine_protocol::MachineFrame::Event {
+                event:
+                    crate::machine_protocol::MachineEvent::ProviderAuthRefreshCandidate {
+                        request_id,
+                        provider_id,
+                        expected_generation,
+                        provider_version,
+                        generation_digest,
+                        auth_contract_fingerprint,
+                        portable_schema,
+                        auth_method,
+                        bundle,
+                    },
+            } => {
+                let refresh_state = Arc::clone(&state);
+                let refresh_machine_id = hello.machine_id.clone();
+                let installed = current_providers
+                    .iter()
+                    .find(|installed| installed.plugin_id == provider_id)
+                    .cloned();
+                tokio::spawn(async move {
+                    if let Err(error) = accept_provider_auth_refresh_candidate(
+                        &refresh_state,
+                        &refresh_machine_id,
+                        installed,
+                        &request_id,
+                        &provider_id,
+                        expected_generation,
+                        &provider_version,
+                        &generation_digest,
+                        &auth_contract_fingerprint,
+                        &portable_schema,
+                        &auth_method,
+                        bundle,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            %error,
+                            machine = %refresh_machine_id,
+                            %provider_id,
+                            expected_generation,
+                            "Machine-refreshed Provider credentials were rejected"
+                        );
+                        if let Err(reconcile_error) = sync_provider_auth_to_machine(
+                            &refresh_state,
+                            &refresh_machine_id,
+                            &provider_id,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                error = %reconcile_error,
+                                machine = %refresh_machine_id,
+                                %provider_id,
+                                "restoring authoritative Provider credentials after rejected refresh"
+                            );
+                        }
                     }
                 });
                 store
@@ -11877,9 +12075,10 @@ fn resolve_machine_workspace<'a>(
 #[cfg(test)]
 mod machine_provider_tests {
     use super::{
-        ProviderAuthExecutor, apply_workspace_inventory, provider_auth_rebind_generations,
-        rebindable_provider_auth_failure, resolve_machine_workspace,
-        resolve_scheduling_auth_generation, web_session_is_missing_machine,
+        ProviderAuthExecutor, apply_workspace_inventory, failed_provider_auth_projection_ids,
+        provider_auth_rebind_generations, rebindable_provider_auth_failure,
+        resolve_machine_workspace, resolve_scheduling_auth_generation,
+        web_session_is_missing_machine,
     };
     use crate::core::{Hub, SessionOrigin, Status};
     use std::collections::BTreeMap;
@@ -12010,6 +12209,25 @@ mod machine_provider_tests {
         assert_eq!(
             resolve_scheduling_auth_generation(&installed, false, None),
             Ok(None)
+        );
+    }
+
+    #[test]
+    fn only_failed_current_provider_projections_request_service_repair() {
+        let mut failed = installed_auth(7);
+        failed.materialization_state =
+            crate::machine_protocol::ProviderMaterializationState::Failed;
+        let mut refreshing = installed_auth(7);
+        refreshing.plugin_id = "grok".to_owned();
+        refreshing.materialization_state =
+            crate::machine_protocol::ProviderMaterializationState::Applying;
+        let mut absent = failed.clone();
+        absent.plugin_id = "codex".to_owned();
+        absent.replica_state = crate::machine_protocol::ProviderReplicaState::Absent;
+
+        assert_eq!(
+            failed_provider_auth_projection_ids(&[failed, refreshing, absent]),
+            vec!["gemini".to_owned()]
         );
     }
 

@@ -19,7 +19,7 @@ use anyhow::{Context as _, Result, ensure};
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
-use cowboy_provider_sdk::{AuthenticationContract, ProviderPackage};
+use cowboy_provider_sdk::{AuthenticationContract, ProviderPackage, RefreshOwnership};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -71,6 +71,13 @@ pub(crate) struct ProviderAuthenticationStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_label: Option<String>,
     pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProviderAuthRefreshResult {
+    Stale { current_generation: u64 },
+    Unchanged(Vec<ProviderAuthenticationStatus>),
+    Updated(Vec<ProviderAuthenticationStatus>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,6 +428,118 @@ impl ProviderAuthService {
         Ok(statuses)
     }
 
+    /// Atomically promote credentials refreshed inside one Machine projection.
+    ///
+    /// The Machine must name the exact Service generation it refreshed. Only
+    /// one concurrent writer can advance that generation; a loser receives the
+    /// current generation and rehydrates from the Service instead of forking a
+    /// second durable credential lineage.
+    pub(crate) fn compare_and_swap_refresh(
+        &self,
+        packages: &[ProviderPackage],
+        bundle: &PortableCredentialBundle,
+        requested_provider_id: &str,
+        expected_generation: u64,
+    ) -> Result<ProviderAuthRefreshResult> {
+        let (requested_package, plaintext) =
+            validate_refresh_request(packages, bundle, requested_provider_id)?;
+
+        let mut providers = self.providers.write();
+        let current = providers
+            .get(requested_provider_id)
+            .cloned()
+            .context("Provider is not authenticated at Cowboy Service scope")?;
+        let current_generation = packages
+            .iter()
+            .filter_map(|package| providers.get(&package.manifest.id))
+            .map(|stored| stored.auth_generation)
+            .max()
+            .unwrap_or(current.auth_generation);
+        if current.auth_generation != expected_generation
+            || current_generation != expected_generation
+        {
+            return Ok(ProviderAuthRefreshResult::Stale {
+                current_generation: current_generation.max(current.auth_generation),
+            });
+        }
+        ensure!(
+            current.action == ProviderAuthAction::Apply
+                && matches!(
+                    current.authentication_state,
+                    ServiceAuthenticationState::Ready | ServiceAuthenticationState::Expired
+                ),
+            "Provider authentication cannot be refreshed in its current state"
+        );
+        ensure!(
+            current.auth_contract_fingerprint
+                == requested_package
+                    .manifest
+                    .compatibility
+                    .auth_contract_fingerprint
+                && current.portable_schema
+                    == requested_package.manifest.authentication.portable_schema
+                && current.projection_schema
+                    == requested_package.manifest.authentication.projection_schema,
+            "Provider authentication contract changed; sign in again"
+        );
+        let current_bundle: PortableCredentialBundle =
+            serde_json::from_slice(&self.open_vault(&current)?)
+                .context("decoding current Provider credential bundle")?;
+        validate_bundle(&requested_package.manifest.authentication, &current_bundle)?;
+        ensure!(
+            current_bundle.method_id == bundle.method_id,
+            "credential refresh cannot change authentication method"
+        );
+        if current_bundle == *bundle {
+            let statuses = packages
+                .iter()
+                .filter_map(|package| providers.get(&package.manifest.id))
+                .map(StoredProviderAuthentication::status)
+                .collect();
+            return Ok(ProviderAuthRefreshResult::Unchanged(statuses));
+        }
+
+        let generation = expected_generation
+            .checked_add(1)
+            .context("Provider auth generation exhausted")?;
+        ensure!(generation != u64::MAX, "Provider auth generation exhausted");
+        let mut stored_values = Vec::with_capacity(packages.len());
+        for package in packages {
+            let provider_id = &package.manifest.id;
+            let auth = &package.manifest.authentication;
+            let (nonce, ciphertext) = self.seal_vault(
+                provider_id,
+                generation,
+                &package.manifest.compatibility.auth_contract_fingerprint,
+                &plaintext,
+            )?;
+            stored_values.push(StoredProviderAuthentication {
+                vault_schema: VAULT_SCHEMA,
+                provider_id: provider_id.clone(),
+                auth_generation: generation,
+                authentication_state: ServiceAuthenticationState::Ready,
+                distribution_state: ServiceDistributionState::Pending,
+                auth_contract_fingerprint: package
+                    .manifest
+                    .compatibility
+                    .auth_contract_fingerprint
+                    .clone(),
+                portable_schema: auth.portable_schema.clone(),
+                projection_schema: auth.projection_schema.clone(),
+                action: ProviderAuthAction::Apply,
+                nonce,
+                ciphertext,
+                account_label: current.account_label.clone(),
+                updated_at_ms: now_ms(),
+            });
+        }
+        let mut statuses = Vec::with_capacity(stored_values.len());
+        for stored in stored_values {
+            statuses.push(self.replace_locked(&mut providers, stored)?);
+        }
+        Ok(ProviderAuthRefreshResult::Updated(statuses))
+    }
+
     /// Publish a newer wipe generation. Old encrypted vault generations are
     /// no longer addressable and every connected Machine receives this tombstone.
     pub(crate) fn logout(&self, provider_id: &str) -> Result<ProviderAuthenticationStatus> {
@@ -757,6 +876,34 @@ fn validate_vault_plaintext(stored: &StoredProviderAuthentication, plaintext: &[
         }
     }
     Ok(())
+}
+
+fn validate_refresh_request<'a>(
+    packages: &'a [ProviderPackage],
+    bundle: &PortableCredentialBundle,
+    requested_provider_id: &str,
+) -> Result<(&'a ProviderPackage, Vec<u8>)> {
+    ensure!(
+        !packages.is_empty(),
+        "authentication scope has no Providers"
+    );
+    let requested_package = packages
+        .iter()
+        .find(|package| package.manifest.id == requested_provider_id)
+        .context("authentication scope does not contain the requested Provider")?;
+    for package in packages {
+        ensure!(
+            package.manifest.authentication.refresh == RefreshOwnership::CompareAndSwap,
+            "Provider does not allow Machine credential refresh"
+        );
+        validate_bundle(&package.manifest.authentication, bundle)?;
+    }
+    let plaintext = serde_json::to_vec(bundle)?;
+    ensure!(
+        plaintext.len() <= MAX_BUNDLE_BYTES,
+        "credential bundle is too large"
+    );
+    Ok((requested_package, plaintext))
 }
 
 fn validate_bundle(auth: &AuthenticationContract, bundle: &PortableCredentialBundle) -> Result<()> {
@@ -1145,6 +1292,94 @@ mod tests {
         assert!(service.mark_expired("gemini", 1).unwrap().is_none());
         assert_eq!(
             service.status("gemini").unwrap().authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_refresh_is_a_single_service_generation_cas() {
+        let (root, service) = service();
+        let package = package("gemini");
+        let initial = bundle(&package);
+        service
+            .commit(&package, &initial, Some("account".to_owned()), None)
+            .unwrap();
+
+        let mut winner = initial.clone();
+        winner.values.insert(
+            "oauth_creds_json".to_owned(),
+            base64::engine::general_purpose::STANDARD.encode(br#"{"token":"winner"}"#),
+        );
+        let updated = service
+            .compare_and_swap_refresh(std::slice::from_ref(&package), &winner, "gemini", 1)
+            .unwrap();
+        let ProviderAuthRefreshResult::Updated(statuses) = updated else {
+            panic!("first valid refresh did not advance the Service generation");
+        };
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].auth_generation, 2);
+        assert_eq!(
+            statuses[0].authentication_state,
+            ServiceAuthenticationState::Ready
+        );
+        assert_eq!(
+            statuses[0].distribution_state,
+            ServiceDistributionState::Pending
+        );
+
+        let mut loser = initial;
+        loser.values.insert(
+            "oauth_creds_json".to_owned(),
+            base64::engine::general_purpose::STANDARD.encode(br#"{"token":"loser"}"#),
+        );
+        assert_eq!(
+            service
+                .compare_and_swap_refresh(std::slice::from_ref(&package), &loser, "gemini", 1,)
+                .unwrap(),
+            ProviderAuthRefreshResult::Stale {
+                current_generation: 2
+            }
+        );
+
+        let stored = service.providers.read().get("gemini").cloned().unwrap();
+        let stored_bundle: PortableCredentialBundle =
+            serde_json::from_slice(&service.open_vault(&stored).unwrap()).unwrap();
+        assert_eq!(stored_bundle, winner);
+        let ProviderAuthRefreshResult::Unchanged(statuses) = service
+            .compare_and_swap_refresh(&[package], &winner, "gemini", 2)
+            .unwrap()
+        else {
+            panic!("replaying the winning credential should be idempotent");
+        };
+        assert_eq!(statuses[0].auth_generation, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn valid_runtime_refresh_can_rescue_the_exact_expired_generation() {
+        let (root, service) = service();
+        let package = package("gemini");
+        let initial = bundle(&package);
+        service
+            .commit(&package, &initial, Some("account".to_owned()), None)
+            .unwrap();
+        service.mark_expired("gemini", 1).unwrap().unwrap();
+        let mut refreshed = initial;
+        refreshed.values.insert(
+            "oauth_creds_json".to_owned(),
+            base64::engine::general_purpose::STANDARD.encode(br#"{"token":"recovered"}"#),
+        );
+
+        let ProviderAuthRefreshResult::Updated(statuses) = service
+            .compare_and_swap_refresh(&[package], &refreshed, "gemini", 1)
+            .unwrap()
+        else {
+            panic!("the exact expired generation was not rescued");
+        };
+        assert_eq!(statuses[0].auth_generation, 2);
+        assert_eq!(
+            statuses[0].authentication_state,
             ServiceAuthenticationState::Ready
         );
         fs::remove_dir_all(root).unwrap();

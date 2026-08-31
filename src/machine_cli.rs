@@ -1,6 +1,6 @@
 //! CLI for the stable Machine host.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
@@ -21,6 +22,7 @@ use crate::machine_protocol::{
     AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
     ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
     MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
+    ProviderMaterializationState,
 };
 
 struct LoginSession {
@@ -909,6 +911,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let _provider_auth_watcher = (protocol >= 6)
+        .then(|| start_provider_auth_watcher(Arc::clone(&config.providers), event_tx.clone()))
+        .transpose()?;
     let (runtime_command_tx, mut runtime_command_rx) = tokio::sync::mpsc::unbounded_channel();
     let login_sessions: LoginSessions = Arc::default();
     heartbeat.tick().await;
@@ -982,6 +987,95 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             }
         }
     }
+}
+
+fn start_provider_auth_watcher(
+    providers: Arc<MachinePluginStore>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) -> anyhow::Result<RecommendedWatcher> {
+    let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |change| {
+        let _ = changes_tx.send(change);
+    })
+    .context("creating Provider auth filesystem watcher")?;
+    watcher
+        .watch(&providers.auth_watch_root(), RecursiveMode::Recursive)
+        .context("watching Provider auth projections")?;
+
+    tokio::spawn(async move {
+        publish_provider_auth_observations(&providers, &events);
+        while let Some(change) = changes_rx.recv().await {
+            let event = match change {
+                Ok(event) => event,
+                Err(error) => {
+                    tracing::warn!(%error, "Provider auth filesystem watcher failed");
+                    continue;
+                }
+            };
+            if matches!(event.kind, EventKind::Access(_))
+                || !providers.auth_event_is_relevant(&event.paths)
+            {
+                continue;
+            }
+            // Provider CLIs commonly use a temporary file + rename. Wait for
+            // the complete atomic sequence and collapse its notifications so
+            // a partial credential can never be proposed to the Service.
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            while changes_rx.try_recv().is_ok() {}
+            publish_provider_auth_observations(&providers, &events);
+        }
+    });
+    Ok(watcher)
+}
+
+fn publish_provider_auth_observations(
+    providers: &MachinePluginStore,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let observations = providers.auth_refresh_observations();
+    let pending: BTreeSet<_> = observations
+        .candidates
+        .iter()
+        .map(|candidate| candidate.provider_id.clone())
+        .collect();
+    for (index, candidate) in observations.candidates.into_iter().enumerate() {
+        let request_id = format!(
+            "provider-auth-refresh-{}-{}-{index}",
+            std::process::id(),
+            unix_ms()
+        );
+        let _ = events.send(MachineEvent::ProviderAuthRefreshCandidate {
+            request_id,
+            provider_id: candidate.provider_id,
+            expected_generation: candidate.expected_generation,
+            provider_version: candidate.provider_version,
+            generation_digest: candidate.generation_digest,
+            auth_contract_fingerprint: candidate.auth_contract_fingerprint,
+            portable_schema: candidate.bundle.portable_schema,
+            auth_method: candidate.bundle.method_id,
+            bundle: candidate.bundle.values,
+        });
+    }
+    let mut plugins = providers.inventory().unwrap_or_default();
+    for plugin in &mut plugins {
+        if observations.failed_provider_ids.contains(&plugin.plugin_id) {
+            plugin.materialization_state = ProviderMaterializationState::Failed;
+            plugin.detail = Some(
+                "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
+                    .to_owned(),
+            );
+        } else if pending.contains(&plugin.plugin_id) {
+            plugin.materialization_state = ProviderMaterializationState::Applying;
+            plugin.detail = Some(
+                "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
+                    .to_owned(),
+            );
+        }
+    }
+    let _ = events.send(MachineEvent::PluginInventory {
+        plugins,
+        observed_at_ms: unix_ms(),
+    });
 }
 
 async fn collect_inventory(

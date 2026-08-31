@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 5;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 6;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -780,6 +780,21 @@ pub enum MachineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_label: Option<String>,
     },
+    /// A Provider rotated a credential inside its Machine-local projection.
+    /// The Controller accepts it only as a compare-and-swap against the exact
+    /// Service generation named here; credential values never enter event
+    /// history, logs, or ordinary Cowboy storage.
+    ProviderAuthRefreshCandidate {
+        request_id: String,
+        provider_id: String,
+        expected_generation: u64,
+        provider_version: String,
+        generation_digest: String,
+        auth_contract_fingerprint: String,
+        portable_schema: String,
+        auth_method: String,
+        bundle: std::collections::BTreeMap<String, String>,
+    },
     CommandResult {
         request_id: String,
         accepted: bool,
@@ -881,6 +896,32 @@ mod tests {
     fn machine_protocol_negotiates_overlap_only() {
         assert_eq!(negotiate(1, 2, 2, 3), Some(2));
         assert_eq!(negotiate(1, 1, 2, 2), None);
+        assert_eq!(negotiate(1, MACHINE_PROTOCOL_VERSION, 1, 5), Some(5));
+    }
+
+    #[test]
+    fn provider_refresh_candidate_round_trips_only_on_protocol_six() {
+        assert_eq!(MACHINE_PROTOCOL_VERSION, 6);
+        let event = MachineEvent::ProviderAuthRefreshCandidate {
+            request_id: "refresh-1".to_owned(),
+            provider_id: "grok".to_owned(),
+            expected_generation: 3,
+            provider_version: "1.1.8".to_owned(),
+            generation_digest: "sha256:release".to_owned(),
+            auth_contract_fingerprint: "sha256:contract".to_owned(),
+            portable_schema: "grok-auth-v1".to_owned(),
+            auth_method: "xai-account".to_owned(),
+            bundle: std::collections::BTreeMap::from([(
+                "auth_json".to_owned(),
+                "c2VhbGVk".to_owned(),
+            )]),
+        };
+        let encoded = serde_json::to_value(&event).unwrap();
+        assert_eq!(encoded["event"], "provider_auth_refresh_candidate");
+        assert_eq!(
+            serde_json::from_value::<MachineEvent>(encoded).unwrap(),
+            event
+        );
     }
 
     #[test]

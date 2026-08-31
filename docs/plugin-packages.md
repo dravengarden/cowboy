@@ -322,7 +322,7 @@ package:
 Plugin package/release schema 1, Provider payload schema 2, Agent runtime
 binding schema 2, UI schemas 1-2, host integration schemas 1-2, logic schema 1,
 auth schema 1, Cowboy Provider SDK 3.0, Controller contract 2, Provider Machine
-contract 4, and Machine protocol 5 are independently checked.
+contract 4, and Machine protocol 6 are independently checked.
 The SDK version is a coarse authoring filter: Cowboy accepts only the same SDK
 major and a Provider SDK version no newer than the validating host. A newer SDK
 or a different major fails the Provider build, Catalog ingestion, Machine
@@ -422,8 +422,8 @@ materializes the declared credential files and environment, and acknowledges
 materialization. Neither receipt can become an independent account or login
 state. Replica generations are monotonic and immutable: stale generations and
 same-generation envelopes with different meaning are rejected. Sessions open
-the exact immutable auth projection generation recorded at creation rather
-than following a mutable `current` link.
+a writable runtime copy of the exact immutable auth projection generation
+recorded at creation rather than following a mutable `current` link.
 
 An ACP agent that returns `AuthenticationRequired` while establishing a session
 after Cowboy projected a Service credential has rejected that projection.
@@ -455,10 +455,17 @@ never sealed to a Machine. Replica synchronization and session scheduling read
 only the durable encrypted vault state.
 
 The package authentication contract must make refresh deterministic. It either
-keeps refresh in the Service and issues bounded Machine projections, or returns
-a sealed candidate through a generation compare-and-swap. Cowboy validates the
-candidate, commits one next generation, and redistributes it. Two Machine
-replicas may never silently become different accounts.
+keeps refresh in the Service and issues bounded Machine projections, or uses
+Machine protocol 6 to return a complete runtime credential bundle through a
+generation compare-and-swap. The Machine watches only declared credential
+paths, debounces atomic file replacement, and never puts the secret-bearing
+candidate in diagnostic event history. Cowboy validates the candidate against
+the active signed package and exact Service generation, commits one next
+generation, and redistributes it to every Machine. Stale concurrent candidates
+lose the CAS and are overwritten by the Service winner. Missing, malformed, or
+partially written projections are restored from the current Service generation
+and never promoted. Two Machine replicas may never silently become different
+accounts.
 
 When an upstream credential is non-exportable or device-bound, the Provider
 must supply a safe Service broker or token-exchange projection. Otherwise the
@@ -513,10 +520,11 @@ generation's materialization acknowledgement when auth is required. If auth
 commit fails after the runtime link changes, the Machine restores the exact
 previous active and rollback links before returning the failure.
 
-Plugin install, uninstall, and retained-generation reactivation commands use
-Machine protocol 5. Agent Provider auth-replica and auth-candidate commands
-remain capability-specific. An older peer rejects the Plugin lifecycle command
-before a destructive operation begins.
+Plugin install, uninstall, retained-generation reactivation, and Provider
+refresh CAS events use Machine protocol 6. Agent Provider login commands remain
+capability-specific. Protocol negotiation keeps lifecycle commands compatible
+with protocol 5 peers while runtime refresh observation remains disabled until
+both sides negotiate protocol 6.
 
 ## Sessions and uninstall
 

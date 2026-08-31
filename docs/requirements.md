@@ -3,7 +3,7 @@
 Status: normative plugin and Provider platform contract. Plugin manifest schema
 1, component registry schema 1, Plugin package/release schema 1, Provider
 payload schema 2, Agent runtime-binding schema 2, UI schemas 1-2, host
-integration schemas 1-2, Provider SDK 3.0, Machine protocol 5,
+integration schemas 1-2, Provider SDK 3.0, Machine protocol 6,
 Machine-scoped installation, exact session generations, Service-scoped
 authentication, and bounded uninstall retention implement this boundary. The
 in-tree `LaunchSpec` registry remains only as a drain-compatible fallback for
@@ -290,7 +290,14 @@ credential schema, Machine projection schema, validation, import, refresh,
 revocation, and wipe behavior. Refresh either remains Service-owned with
 short-lived Machine projections or returns a sealed candidate through a
 compare-and-swap generation update that the Service validates and redistributes.
-Replicas may not drift into independent accounts.
+For Machine-owned refresh, the signed replica remains an immutable local
+materialization while the Provider receives a separate writable runtime
+projection. Machine protocol 6 reports a complete changed runtime bundle as a
+secret-bearing CAS candidate; the Controller commits at most one next Service
+generation, seals it to every Machine, and reconciles all runtime projections
+to that winner. Missing or partial runtime credentials are failures to repair
+from Service authority, never candidates. Replicas may not drift into
+independent accounts.
 
 If upstream credentials are non-exportable or Machine-bound, the Provider must
 implement a safe Service broker or token-exchange projection. Otherwise it is
@@ -394,7 +401,7 @@ The Provider platform is not complete until automated acceptance proves:
 
 Plugin package/release schema 1, Provider payload schema 2, Agent runtime-binding
 schema 2, UI schemas 1-2, host integration schemas 1-2, Controller contract 2,
-Provider Machine contract 4, Machine protocol 5, and Cowboy Provider SDK 3.0 in
+Provider Machine contract 4, Machine protocol 6, and Cowboy Provider SDK 3.0 in
 both Rust and TypeScript are the active contract. The Plugin Catalog embeds all
 seven independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
@@ -430,10 +437,11 @@ status, and automatically seals durable state to enrolled Machines; offline
 replicas remain pending and converge on reconnect. Uninstall uses an expiring
 exact-impact plan, active
 turn confirmation, an absolute three-day purge deadline, and reference-aware
-attachment cleanup. Machine protocol 5 carries the generic Plugin lifecycle and
-exact retained-generation reactivation; Agent auth commands remain
-capability-specific. Plugin lifecycle fences serialize install/uninstall, auth
-generations reject stale or conflicting replicas, and session launch resolves
+attachment cleanup. Machine protocol 6 carries the generic Plugin lifecycle,
+exact retained-generation reactivation, and secret-bearing Provider refresh
+CAS candidates; Agent auth commands remain capability-specific. Plugin
+lifecycle fences serialize install/uninstall, auth generations reject stale or
+conflicting replicas, and session launch resolves the writable runtime copy of
 the exact recorded auth projection.
 
 The legacy in-tree launch registry is retained only to drain old sessions that

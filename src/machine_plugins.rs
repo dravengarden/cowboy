@@ -25,7 +25,8 @@ use cowboy_plugin_sdk::{
 };
 use cowboy_provider_sdk::{
     AgentRuntimeBinding, Architecture, OperatingSystem, PlatformRuntimeArtifacts,
-    ProviderArtifactFormat, ProviderPackage, ReleasedPrivateComponent, RuntimeContract,
+    ProviderArtifactFormat, ProviderPackage, RefreshOwnership, ReleasedPrivateComponent,
+    RuntimeContract,
 };
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
@@ -66,6 +67,22 @@ pub(crate) struct ExportedAuthCandidate {
     pub generation_digest: String,
     pub auth_contract_fingerprint: String,
     pub bundle: PortableCredentialBundle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderAuthRefreshCandidate {
+    pub provider_id: String,
+    pub expected_generation: u64,
+    pub provider_version: String,
+    pub generation_digest: String,
+    pub auth_contract_fingerprint: String,
+    pub bundle: PortableCredentialBundle,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ProviderAuthRefreshObservations {
+    pub candidates: Vec<ProviderAuthRefreshCandidate>,
+    pub failed_provider_ids: BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -172,7 +189,8 @@ impl MachinePluginStore {
             })?;
         }
         let auth_root = state_dir.join("provider-auth");
-        for directory in [&root, &auth_root] {
+        let auth_providers_root = auth_root.join("providers");
+        for directory in [&root, &auth_root, &auth_providers_root] {
             fs::create_dir_all(directory)
                 .with_context(|| format!("creating {}", directory.display()))?;
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
@@ -432,6 +450,15 @@ impl MachinePluginStore {
                 )
             })?;
         }
+        let runtime = self.auth_provider_root(provider_id).join("runtime");
+        if runtime.exists() {
+            fs::remove_dir_all(&runtime).with_context(|| {
+                format!(
+                    "removing Provider runtime credential projections {}",
+                    runtime.display()
+                )
+            })?;
+        }
         Ok(())
     }
 
@@ -493,7 +520,16 @@ impl MachinePluginStore {
                 self.materialization_is_current(&package, &envelope)?,
                 "session Provider auth generation is missing projected credentials"
             );
-            Some(materialized.join("home"))
+            let plaintext = self.encryption.open(&envelope)?;
+            let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
+                .context("decoding Provider runtime credential bundle")?;
+            self.ensure_runtime_projection(&package, generation, &bundle)?;
+            Some(
+                self.auth_provider_root(provider_id)
+                    .join("runtime/generations")
+                    .join(generation.to_string())
+                    .join("home"),
+            )
         } else {
             None
         };
@@ -886,11 +922,12 @@ impl MachinePluginStore {
     ) -> Result<ProviderMaterializationState> {
         match prepared {
             PreparedProviderAuth::Wipe => {
-                let materialized = self
-                    .auth_provider_root(&envelope.provider_id)
-                    .join("materialized");
-                if materialized.exists() {
-                    fs::remove_dir_all(materialized)?;
+                let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
+                for directory in ["materialized", "runtime"] {
+                    let path = provider_auth_root.join(directory);
+                    if path.exists() {
+                        fs::remove_dir_all(path)?;
+                    }
                 }
                 Ok(ProviderMaterializationState::NotInstalled)
             }
@@ -903,9 +940,9 @@ impl MachinePluginStore {
         }
     }
 
-    // Materialization is one atomic projection transaction across files,
-    // environment, generation metadata, and activation links.
-    #[allow(clippy::too_many_lines)]
+    // The sealed Service materialization is immutable. Provider processes use
+    // a separate writable runtime projection so token rotation can be observed
+    // without letting runtime state silently redefine a signed generation.
     fn materialize_bundle(
         &self,
         package: &ProviderPackage,
@@ -913,24 +950,19 @@ impl MachinePluginStore {
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
         let auth = &package.manifest.authentication;
-        let allowed: BTreeSet<_> = auth
-            .credential_files
-            .iter()
-            .map(|file| file.bundle_key.as_str())
-            .chain(auth.environment_projection.values().map(String::as_str))
-            .collect();
-        ensure!(
-            bundle
-                .values
-                .keys()
-                .all(|key| allowed.contains(key.as_str())),
-            "portable credential bundle contains undeclared values"
-        );
+        validate_portable_bundle(auth, bundle)?;
         let provider_auth_root = self.auth_provider_root(&package.manifest.id);
-        let generations = provider_auth_root.join("materialized/generations");
+        let materialized_root = provider_auth_root.join("materialized");
+        let previous_generation = read_link_name(&materialized_root.join("current"))
+            .and_then(|value| value.parse::<u64>().ok());
+        let generations = materialized_root.join("generations");
         fs::create_dir_all(&generations)?;
         fs::set_permissions(&generations, fs::Permissions::from_mode(0o700))?;
         let generation = generations.join(auth_generation.to_string());
+        let runtime_generation = provider_auth_root
+            .join("runtime/generations")
+            .join(auth_generation.to_string());
+        let mut migrated_legacy_refresh = false;
         if generation.exists() {
             let metadata: MaterializationMetadata = serde_json::from_slice(
                 &fs::read(generation.join("metadata.json"))
@@ -942,21 +974,102 @@ impl MachinePluginStore {
                         == package.manifest.compatibility.auth_contract_fingerprint,
                 "existing Provider auth materialization has conflicting identity"
             );
-            if materialization_contains_bundle(auth, &generation, bundle)? {
-                return activate_link(
-                    &provider_auth_root.join("materialized"),
-                    &auth_generation.to_string(),
-                );
+            // Protocol-five Machines launched the Provider directly against
+            // this materialization, so a successful refresh may already live
+            // here when the runtime/materialization split is first deployed.
+            // Preserve that complete same-generation value once, then restore
+            // the materialization to the exact sealed Service bundle. The
+            // protocol-six watcher will submit the migrated runtime value via
+            // CAS instead of silently discarding a valid refresh on upgrade.
+            if previous_generation == Some(auth_generation)
+                && !runtime_generation.exists()
+                && let Ok(projected) =
+                    projected_credential_bundle(auth, &generation, &bundle.method_id)
+                && projected != *bundle
+            {
+                self.ensure_runtime_projection(package, auth_generation, &projected)?;
+                migrated_legacy_refresh = true;
             }
-            repair_materialized_bundle(auth, &generation, bundle)?;
+            restore_projected_bundle(auth, &generation, bundle)?;
             ensure!(
-                materialization_contains_bundle(auth, &generation, bundle)?,
+                materialization_contains_bundle(auth, &generation, bundle),
                 "repaired Provider auth materialization is incomplete"
             );
-            return activate_link(
-                &provider_auth_root.join("materialized"),
-                &auth_generation.to_string(),
-            );
+        } else {
+            let temporary = generations.join(format!(
+                ".{}.{}.{}.partial",
+                auth_generation,
+                std::process::id(),
+                ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let result = (|| -> Result<()> {
+                fs::create_dir_all(&temporary)?;
+                restore_projected_bundle(auth, &temporary, bundle)?;
+                let metadata = MaterializationMetadata {
+                    auth_generation,
+                    auth_contract_fingerprint: package
+                        .manifest
+                        .compatibility
+                        .auth_contract_fingerprint
+                        .clone(),
+                };
+                atomic_write(
+                    &temporary.join("metadata.json"),
+                    &serde_json::to_vec(&metadata)?,
+                    0o600,
+                )?;
+                fs::rename(&temporary, &generation).with_context(|| {
+                    format!(
+                        "activating Provider auth generation {}",
+                        generation.display()
+                    )
+                })?;
+                Ok(())
+            })();
+            if result.is_err() {
+                let _ = fs::remove_dir_all(&temporary);
+            }
+            result?;
+        }
+        activate_link(&materialized_root, &auth_generation.to_string())?;
+        if !migrated_legacy_refresh
+            && previous_generation.is_none_or(|previous| previous < auth_generation)
+        {
+            self.reconcile_runtime_projections(package, bundle)?;
+        } else {
+            self.repair_runtime_projections(package, bundle)?;
+        }
+        self.ensure_runtime_projection(package, auth_generation, bundle)
+    }
+
+    fn ensure_runtime_projection(
+        &self,
+        package: &ProviderPackage,
+        auth_generation: u64,
+        bundle: &PortableCredentialBundle,
+    ) -> Result<()> {
+        let generations = self
+            .auth_provider_root(&package.manifest.id)
+            .join("runtime/generations");
+        fs::create_dir_all(&generations)?;
+        fs::set_permissions(&generations, fs::Permissions::from_mode(0o700))?;
+        let generation = generations.join(auth_generation.to_string());
+        if generation.exists() {
+            validate_materialization_metadata(&generation, package, auth_generation)?;
+            if projected_credential_bundle(
+                &package.manifest.authentication,
+                &generation,
+                &bundle.method_id,
+            )
+            .is_err()
+            {
+                repair_missing_projected_bundle(
+                    &package.manifest.authentication,
+                    &generation,
+                    bundle,
+                )?;
+            }
+            return Ok(());
         }
         let temporary = generations.join(format!(
             ".{}.{}.{}.partial",
@@ -965,58 +1078,8 @@ impl MachinePluginStore {
             ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
         let result = (|| -> Result<()> {
-            let home = temporary.join("home");
-            fs::create_dir_all(&home)?;
-            set_tree_root_permissions(&temporary)?;
-            let mut total = 0_usize;
-            for file in &auth.credential_files {
-                let value = bundle.values.get(&file.bundle_key);
-                ensure!(
-                    !file.required || value.is_some(),
-                    "portable credential bundle is missing required value {}",
-                    file.bundle_key
-                );
-                let Some(value) = value else { continue };
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(value)
-                    .with_context(|| format!("decoding credential value {}", file.bundle_key))?;
-                ensure!(
-                    bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
-                    "credential value too large"
-                );
-                total = total.saturating_add(bytes.len());
-                ensure!(
-                    total <= MAX_CREDENTIAL_BUNDLE_BYTES,
-                    "credential bundle too large"
-                );
-                let destination = home.join(&file.relative_path);
-                ensure_within(&home, &destination)?;
-                if let Some(parent) = destination.parent() {
-                    fs::create_dir_all(parent)?;
-                    set_directory_chain_permissions(&home, parent)?;
-                }
-                atomic_write(&destination, &bytes, 0o600)?;
-            }
-            let mut environment = BTreeMap::new();
-            for (name, bundle_key) in &auth.environment_projection {
-                let Some(value) = bundle.values.get(bundle_key) else {
-                    continue;
-                };
-                let bytes = base64::engine::general_purpose::STANDARD.decode(value)?;
-                ensure!(
-                    bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
-                    "credential value too large"
-                );
-                let value =
-                    String::from_utf8(bytes).context("environment credential is not UTF-8")?;
-                ensure!(!value.contains('\0'), "environment credential contains NUL");
-                environment.insert(name.clone(), value);
-            }
-            atomic_write(
-                &temporary.join("environment.json"),
-                &serde_json::to_vec(&environment)?,
-                0o600,
-            )?;
+            fs::create_dir_all(&temporary)?;
+            restore_projected_bundle(&package.manifest.authentication, &temporary, bundle)?;
             let metadata = MaterializationMetadata {
                 auth_generation,
                 auth_contract_fingerprint: package
@@ -1030,22 +1093,78 @@ impl MachinePluginStore {
                 &serde_json::to_vec(&metadata)?,
                 0o600,
             )?;
-            fs::rename(&temporary, &generation).with_context(|| {
-                format!(
-                    "activating Provider auth generation {}",
-                    generation.display()
-                )
-            })?;
+            fs::rename(&temporary, &generation)?;
             Ok(())
         })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&temporary);
         }
-        result?;
-        activate_link(
-            &provider_auth_root.join("materialized"),
-            &auth_generation.to_string(),
-        )
+        result
+    }
+
+    fn reconcile_runtime_projections(
+        &self,
+        package: &ProviderPackage,
+        bundle: &PortableCredentialBundle,
+    ) -> Result<()> {
+        for generation in self.runtime_projection_generations(&package.manifest.id)? {
+            let metadata = read_materialization_metadata(&generation)?;
+            ensure!(
+                metadata.auth_contract_fingerprint
+                    == package.manifest.compatibility.auth_contract_fingerprint,
+                "Provider runtime projection uses a different auth contract"
+            );
+            restore_projected_bundle(&package.manifest.authentication, &generation, bundle)?;
+        }
+        Ok(())
+    }
+
+    fn repair_runtime_projections(
+        &self,
+        package: &ProviderPackage,
+        bundle: &PortableCredentialBundle,
+    ) -> Result<()> {
+        for generation in self.runtime_projection_generations(&package.manifest.id)? {
+            let metadata = read_materialization_metadata(&generation)?;
+            ensure!(
+                metadata.auth_contract_fingerprint
+                    == package.manifest.compatibility.auth_contract_fingerprint,
+                "Provider runtime projection uses a different auth contract"
+            );
+            if projected_credential_bundle(
+                &package.manifest.authentication,
+                &generation,
+                &bundle.method_id,
+            )
+            .is_err()
+            {
+                repair_missing_projected_bundle(
+                    &package.manifest.authentication,
+                    &generation,
+                    bundle,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn runtime_projection_generations(&self, provider_id: &str) -> Result<Vec<PathBuf>> {
+        let root = self
+            .auth_provider_root(provider_id)
+            .join("runtime/generations");
+        if !root.is_dir() {
+            return Ok(Vec::new());
+        }
+        let mut generations = Vec::new();
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() && !entry.file_name().to_string_lossy().starts_with('.')
+            {
+                generations.push(entry.path());
+            }
+        }
+        generations.sort();
+        Ok(generations)
     }
 
     fn inventory_one(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
@@ -1091,6 +1210,10 @@ impl MachinePluginStore {
                         ProviderMaterializationState::Failed
                     }
                 });
+        let detail = (materialization_state == ProviderMaterializationState::Failed).then(|| {
+            "Provider credential projection no longer matches its Service generation; waiting for credential reconciliation."
+                .to_owned()
+        });
         Ok(Some(PluginInventory {
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
@@ -1103,7 +1226,7 @@ impl MachinePluginStore {
             auth_generation,
             replica_state,
             materialization_state,
-            detail: None,
+            detail,
         }))
     }
 
@@ -1132,7 +1255,11 @@ impl MachinePluginStore {
         let plaintext = self.encryption.open(envelope)?;
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)?;
         validate_portable_bundle(&package.manifest.authentication, &bundle)?;
-        materialization_contains_bundle(&package.manifest.authentication, &generation, &bundle)
+        Ok(materialization_contains_bundle(
+            &package.manifest.authentication,
+            &generation,
+            &bundle,
+        ))
     }
 
     fn active_package(&self, provider_id: &str) -> Result<Option<(ProviderPackage, String)>> {
@@ -1350,6 +1477,159 @@ impl MachinePluginStore {
         self.auth_root.join("providers").join(provider_id)
     }
 
+    #[must_use]
+    pub fn auth_watch_root(&self) -> PathBuf {
+        self.auth_root.join("providers")
+    }
+
+    /// Return whether a filesystem notification can affect a declared
+    /// compare-and-swap credential. Runtime logs and other Provider state are
+    /// deliberately excluded so ordinary agent activity never causes an auth
+    /// scan.
+    pub fn auth_event_is_relevant(&self, paths: &[PathBuf]) -> bool {
+        self.auth_credential_watch_paths().is_ok_and(|credentials| {
+            paths.iter().any(|changed| {
+                credentials.iter().any(|credential| {
+                    changed == credential || credential.parent() == Some(changed.as_path())
+                })
+            })
+        })
+    }
+
+    /// Compare each writable Machine projection with its signed Service
+    /// replica. Only a complete, contract-valid changed bundle is returned;
+    /// missing or partially written credentials remain a failed
+    /// materialization and are never promoted to Service authority.
+    pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
+        let mut observations = ProviderAuthRefreshObservations::default();
+        let Ok(entries) = fs::read_dir(self.auth_watch_root()) else {
+            return observations;
+        };
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let provider_id = entry.file_name().to_string_lossy().into_owned();
+            match self.auth_refresh_candidates_for_provider(&provider_id) {
+                Ok(mut candidates) => observations.candidates.append(&mut candidates),
+                Err(error) => {
+                    observations.failed_provider_ids.insert(provider_id.clone());
+                    tracing::warn!(
+                        provider = %provider_id,
+                        %error,
+                        "Provider runtime credential projection cannot be reconciled"
+                    );
+                }
+            }
+        }
+        observations.candidates.sort_by(|left, right| {
+            left.provider_id
+                .cmp(&right.provider_id)
+                .then(left.expected_generation.cmp(&right.expected_generation))
+                .then(left.bundle.values.cmp(&right.bundle.values))
+        });
+        observations
+    }
+
+    fn auth_credential_watch_paths(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        let root = self.auth_watch_root();
+        if !root.is_dir() {
+            return Ok(paths);
+        }
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let provider_id = entry.file_name().to_string_lossy().into_owned();
+            let Some((package, _)) = self.active_package(&provider_id)? else {
+                continue;
+            };
+            if package.manifest.authentication.refresh != RefreshOwnership::CompareAndSwap {
+                continue;
+            }
+            let Some(envelope) = self.latest_auth_envelope(&provider_id)? else {
+                continue;
+            };
+            if envelope.action != ProviderAuthAction::Apply {
+                continue;
+            }
+            for generation in self.runtime_projection_generations(&provider_id)? {
+                let home = generation.join("home");
+                for credential in &package.manifest.authentication.credential_files {
+                    let path = home.join(&credential.relative_path);
+                    ensure_within(&home, &path)?;
+                    paths.push(path);
+                }
+                paths.push(generation.join("environment.json"));
+            }
+        }
+        Ok(paths)
+    }
+
+    fn auth_refresh_candidates_for_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<ProviderAuthRefreshCandidate>> {
+        let Some((package, generation_digest)) = self.active_package(provider_id)? else {
+            return Ok(Vec::new());
+        };
+        let auth = &package.manifest.authentication;
+        if auth.refresh != RefreshOwnership::CompareAndSwap {
+            return Ok(Vec::new());
+        }
+        let Some(envelope) = self.latest_auth_envelope(provider_id)? else {
+            return Ok(Vec::new());
+        };
+        if envelope.action != ProviderAuthAction::Apply {
+            return Ok(Vec::new());
+        }
+        ensure!(
+            envelope.auth_contract_fingerprint
+                == package.manifest.compatibility.auth_contract_fingerprint,
+            "Provider auth replica contract does not match the active package"
+        );
+        let baseline: PortableCredentialBundle =
+            serde_json::from_slice(&self.encryption.open(&envelope)?)
+                .context("decoding signed Provider credential replica")?;
+        validate_portable_bundle(auth, &baseline)?;
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for generation in self.runtime_projection_generations(provider_id)? {
+            let metadata = read_materialization_metadata(&generation)?;
+            ensure!(
+                metadata.auth_contract_fingerprint
+                    == package.manifest.compatibility.auth_contract_fingerprint,
+                "Provider runtime projection uses a different auth contract"
+            );
+            let projected = projected_credential_bundle(auth, &generation, &baseline.method_id)?;
+            if projected == baseline {
+                continue;
+            }
+            let identity = serde_json::to_vec(&projected)?;
+            if !seen.insert(identity) {
+                continue;
+            }
+            candidates.push(ProviderAuthRefreshCandidate {
+                provider_id: provider_id.to_owned(),
+                expected_generation: envelope.auth_generation,
+                provider_version: package.manifest.version.clone(),
+                generation_digest: generation_digest.clone(),
+                auth_contract_fingerprint: package
+                    .manifest
+                    .compatibility
+                    .auth_contract_fingerprint
+                    .clone(),
+                bundle: projected,
+            });
+        }
+        Ok(candidates)
+    }
+
     fn auth_candidate_root(&self, provider_id: &str) -> PathBuf {
         self.auth_provider_root(provider_id).join("candidates")
     }
@@ -1376,33 +1656,160 @@ impl MachinePluginStore {
     }
 }
 
+fn projected_credential_bundle(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    generation: &Path,
+    method_id: &str,
+) -> Result<PortableCredentialBundle> {
+    let home = generation.join("home");
+    ensure!(home.is_dir(), "Provider auth projection home is missing");
+    let method = auth
+        .methods
+        .iter()
+        .find(|method| method.id == method_id)
+        .context("Provider auth replica references an unknown method")?;
+    let mut values = BTreeMap::new();
+    let mut total = 0_usize;
+    for credential in &auth.credential_files {
+        let path = home.join(&credential.relative_path);
+        ensure_within(&home, &path)?;
+        match fs::read(&path) {
+            Ok(bytes) => {
+                ensure!(
+                    bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+                    "credential value is too large"
+                );
+                total = total.saturating_add(bytes.len());
+                ensure!(
+                    total <= MAX_CREDENTIAL_BUNDLE_BYTES,
+                    "credential bundle is too large"
+                );
+                values.insert(
+                    credential.bundle_key.clone(),
+                    base64::engine::general_purpose::STANDARD.encode(bytes),
+                );
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && !method.required_bundle_keys.contains(&credential.bundle_key) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                bail!("Provider auth projection is missing a method-required credential")
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("reading {}", path.display()));
+            }
+        }
+    }
+    let environment_path = generation.join("environment.json");
+    let environment: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(&environment_path).with_context(|| {
+            format!(
+                "reading Provider auth environment {}",
+                environment_path.display()
+            )
+        })?)?;
+    for (name, bundle_key) in &auth.environment_projection {
+        let Some(value) = environment.get(name) else {
+            ensure!(
+                !method.required_bundle_keys.contains(bundle_key),
+                "Provider auth projection is missing a method-required environment value"
+            );
+            continue;
+        };
+        ensure!(
+            value.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+            "credential value is too large"
+        );
+        total = total.saturating_add(value.len());
+        ensure!(
+            total <= MAX_CREDENTIAL_BUNDLE_BYTES,
+            "credential bundle is too large"
+        );
+        values.insert(
+            bundle_key.clone(),
+            base64::engine::general_purpose::STANDARD.encode(value.as_bytes()),
+        );
+    }
+    let bundle = PortableCredentialBundle {
+        portable_schema: auth.portable_schema.clone(),
+        method_id: method_id.to_owned(),
+        values,
+    };
+    validate_portable_bundle(auth, &bundle)?;
+    Ok(bundle)
+}
+
 fn materialization_contains_bundle(
     auth: &cowboy_provider_sdk::AuthenticationContract,
     generation: &Path,
     bundle: &PortableCredentialBundle,
-) -> Result<bool> {
-    let home = generation.join("home");
-    let environment_path = generation.join("environment.json");
-    if !home.is_dir() || !environment_path.is_file() {
-        return Ok(false);
-    }
-    for file in &auth.credential_files {
-        if bundle.values.contains_key(&file.bundle_key) && !home.join(&file.relative_path).is_file()
-        {
-            return Ok(false);
-        }
-    }
-    let environment: BTreeMap<String, String> =
-        serde_json::from_slice(&fs::read(environment_path)?)?;
-    Ok(auth
-        .environment_projection
-        .iter()
-        .all(|(name, bundle_key)| {
-            !bundle.values.contains_key(bundle_key) || environment.contains_key(name)
-        }))
+) -> bool {
+    projected_credential_bundle(auth, generation, &bundle.method_id)
+        .is_ok_and(|projected| projected == *bundle)
 }
 
-fn repair_materialized_bundle(
+fn restore_projected_bundle(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    generation: &Path,
+    bundle: &PortableCredentialBundle,
+) -> Result<()> {
+    validate_portable_bundle(auth, bundle)?;
+    let home = generation.join("home");
+    fs::create_dir_all(&home)?;
+    set_tree_root_permissions(generation)?;
+    let mut total = 0_usize;
+    for file in &auth.credential_files {
+        let destination = home.join(&file.relative_path);
+        ensure_within(&home, &destination)?;
+        let Some(value) = bundle.values.get(&file.bundle_key) else {
+            if destination.is_file() {
+                fs::remove_file(&destination)?;
+            }
+            continue;
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .with_context(|| format!("decoding credential value {}", file.bundle_key))?;
+        ensure!(
+            bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+            "credential value too large"
+        );
+        total = total.saturating_add(bytes.len());
+        ensure!(
+            total <= MAX_CREDENTIAL_BUNDLE_BYTES,
+            "credential bundle too large"
+        );
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+            set_directory_chain_permissions(&home, parent)?;
+        }
+        if fs::read(&destination).ok().as_deref() != Some(bytes.as_slice()) {
+            atomic_write(&destination, &bytes, 0o600)?;
+        }
+    }
+    let mut environment = BTreeMap::new();
+    for (name, bundle_key) in &auth.environment_projection {
+        let Some(value) = bundle.values.get(bundle_key) else {
+            continue;
+        };
+        let bytes = base64::engine::general_purpose::STANDARD.decode(value)?;
+        ensure!(
+            bytes.len() <= MAX_CREDENTIAL_VALUE_BYTES,
+            "credential value too large"
+        );
+        let value = String::from_utf8(bytes).context("environment credential is not UTF-8")?;
+        ensure!(!value.contains('\0'), "environment credential contains NUL");
+        environment.insert(name.clone(), value);
+    }
+    let environment_path = generation.join("environment.json");
+    let encoded_environment = serde_json::to_vec(&environment)?;
+    if fs::read(&environment_path).ok().as_deref() != Some(encoded_environment.as_slice()) {
+        atomic_write(&environment_path, &encoded_environment, 0o600)?;
+    }
+    Ok(())
+}
+
+fn repair_missing_projected_bundle(
     auth: &cowboy_provider_sdk::AuthenticationContract,
     generation: &Path,
     bundle: &PortableCredentialBundle,
@@ -1439,12 +1846,17 @@ fn repair_materialized_bundle(
         atomic_write(&destination, &bytes, 0o600)?;
     }
     let environment_path = generation.join("environment.json");
-    let mut environment: BTreeMap<String, String> = if environment_path.is_file() {
-        serde_json::from_slice(&fs::read(&environment_path)?)?
-    } else {
-        BTreeMap::new()
-    };
-    let mut environment_changed = !environment_path.is_file();
+    // A truncated environment file is equivalent to a missing projection.
+    // Rebuild declared values from the sealed Service bundle instead of
+    // leaving the Provider permanently failed after an interrupted write.
+    let (mut environment, mut environment_changed): (BTreeMap<String, String>, bool) =
+        match fs::read(&environment_path)
+            .ok()
+            .and_then(|encoded| serde_json::from_slice(&encoded).ok())
+        {
+            Some(environment) => (environment, false),
+            None => (BTreeMap::new(), true),
+        };
     for (name, bundle_key) in &auth.environment_projection {
         if environment.contains_key(name) {
             continue;
@@ -1465,6 +1877,29 @@ fn repair_materialized_bundle(
     if environment_changed {
         atomic_write(&environment_path, &serde_json::to_vec(&environment)?, 0o600)?;
     }
+    Ok(())
+}
+
+fn read_materialization_metadata(generation: &Path) -> Result<MaterializationMetadata> {
+    serde_json::from_slice(
+        &fs::read(generation.join("metadata.json"))
+            .context("reading Provider credential projection metadata")?,
+    )
+    .context("decoding Provider credential projection metadata")
+}
+
+fn validate_materialization_metadata(
+    generation: &Path,
+    package: &ProviderPackage,
+    auth_generation: u64,
+) -> Result<()> {
+    let metadata = read_materialization_metadata(generation)?;
+    ensure!(
+        metadata.auth_generation == auth_generation
+            && metadata.auth_contract_fingerprint
+                == package.manifest.compatibility.auth_contract_fingerprint,
+        "Provider runtime projection has conflicting identity"
+    );
     Ok(())
 }
 
@@ -2775,7 +3210,7 @@ mod tests {
     }
 
     #[test]
-    fn same_generation_replay_repairs_missing_method_credential() {
+    fn runtime_projection_preserves_refresh_until_service_generation_advances() {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
         let source: StandardProviderSource =
@@ -2799,19 +3234,74 @@ mod tests {
         };
 
         store.materialize_bundle(&package, 1, &bundle).unwrap();
-        let auth_path = root
+        assert!(store.auth_watch_root().is_dir());
+        let materialized_generation = root
             .join("provider-auth/providers/grok/materialized/generations/1/home/.grok/auth.json");
+        let runtime_generation = root.join("provider-auth/providers/grok/runtime/generations/1");
+        let runtime_auth_path = runtime_generation.join("home/.grok/auth.json");
+        assert_eq!(fs::read(&materialized_generation).unwrap(), original);
+        assert_eq!(fs::read(&runtime_auth_path).unwrap(), original);
         let refreshed = br#"{"account":{"key":"runtime-refreshed-token"}}"#;
-        fs::write(&auth_path, refreshed).unwrap();
-        let runtime_state = auth_path.parent().unwrap().join("active_sessions.json");
+        fs::remove_dir_all(root.join("provider-auth/providers/grok/runtime")).unwrap();
+        fs::write(&materialized_generation, refreshed).unwrap();
+        store.materialize_bundle(&package, 1, &bundle).unwrap();
+        assert_eq!(fs::read(&materialized_generation).unwrap(), original);
+        assert_eq!(fs::read(&runtime_auth_path).unwrap(), refreshed);
+        let projected = projected_credential_bundle(
+            &package.manifest.authentication,
+            &runtime_generation,
+            "xai-account",
+        )
+        .unwrap();
+        assert_eq!(
+            projected.values["auth_json"],
+            base64::engine::general_purpose::STANDARD.encode(refreshed)
+        );
+        let runtime_state = runtime_auth_path
+            .parent()
+            .unwrap()
+            .join("active_sessions.json");
         fs::write(&runtime_state, b"[]").unwrap();
         store.materialize_bundle(&package, 1, &bundle).unwrap();
-        assert_eq!(fs::read(&auth_path).unwrap(), refreshed);
+        assert_eq!(fs::read(&materialized_generation).unwrap(), original);
+        assert_eq!(fs::read(&runtime_auth_path).unwrap(), refreshed);
 
-        fs::remove_file(&auth_path).unwrap();
+        fs::remove_file(&runtime_auth_path).unwrap();
+        assert!(
+            projected_credential_bundle(
+                &package.manifest.authentication,
+                &runtime_generation,
+                "xai-account",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("method-required credential")
+        );
         store.materialize_bundle(&package, 1, &bundle).unwrap();
-        assert_eq!(fs::read(&auth_path).unwrap(), original);
-        assert_eq!(fs::read(runtime_state).unwrap(), b"[]");
+        assert_eq!(fs::read(&runtime_auth_path).unwrap(), original);
+        assert_eq!(fs::read(&runtime_state).unwrap(), b"[]");
+
+        let service_refreshed = br#"{"account":{"key":"service-generation-two"}}"#;
+        let next_bundle = PortableCredentialBundle {
+            portable_schema: bundle.portable_schema.clone(),
+            method_id: bundle.method_id.clone(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(service_refreshed),
+            )]),
+        };
+        store.materialize_bundle(&package, 2, &next_bundle).unwrap();
+        assert_eq!(fs::read(&runtime_auth_path).unwrap(), service_refreshed);
+        assert_eq!(fs::read(&runtime_state).unwrap(), b"[]");
+        assert_eq!(
+            fs::read(
+                root.join(
+                    "provider-auth/providers/grok/runtime/generations/2/home/.grok/auth.json"
+                )
+            )
+            .unwrap(),
+            service_refreshed
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
