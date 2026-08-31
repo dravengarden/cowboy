@@ -9,21 +9,23 @@ import {
 } from "@mui/material";
 import { ComputerOutlined, DevicesOutlined } from "@mui/icons-material";
 import { useCallback, useEffect, useState } from "react";
-import { AuthApiError, authApi, type ProductDevice } from "./authApi";
+import { authApi, AuthApiError, type ProductDevice } from "./authApi";
 import { useProductAuth } from "./ProductAuthGate";
 import { retryWithRecentProductAuth } from "./recentAuth";
 
 function activityLabel(device: ProductDevice): string {
   const timestamp = device.last_used_at_ms ?? device.created_at_ms;
   const label = device.last_used_at_ms ? "Last used" : "Authorized";
-  return `${label} ${new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp))}`;
+  return `${label} ${
+    new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(timestamp))
+  }`;
 }
 
-/** Browser-approved computers and apps. Long-lived secrets stay local to the
- * device; this panel only lists and revokes their public identities. */
+/** Browser-approved CLI and ACP clients. Browser cookie sessions and Passkeys
+ * are separate account resources and intentionally do not appear here. */
 export function ProductDevicesPanel(): React.JSX.Element {
   const { me, reauthenticate } = useProductAuth();
   const [devices, setDevices] = useState<ProductDevice[]>([]);
@@ -44,7 +46,7 @@ export function ProductDevicesPanel(): React.JSX.Element {
         setError(
           reason instanceof AuthApiError
             ? reason.message
-            : "Could not load authorized devices",
+            : "Could not load authorized clients",
         );
       })
       .finally(() => setLoading(false));
@@ -89,21 +91,24 @@ export function ProductDevicesPanel(): React.JSX.Element {
           <DevicesOutlined />
         </Box>
         <Box sx={{ minWidth: 0, flex: 1 }}>
-          <Typography sx={{ fontWeight: 700 }}>Authorized devices</Typography>
+          <Typography sx={{ fontWeight: 700 }}>Authorized clients</Typography>
           <Typography variant="body2" color="text.secondary">
-            Cowboy CLI and app connections for this account
+            Cowboy CLI and ACP connections for this account
           </Typography>
         </Box>
         <Chip
           size="small"
           variant="outlined"
-          label={`${devices.length} ${devices.length === 1 ? "device" : "devices"}`}
+          label={`${devices.length} ${
+            devices.length === 1 ? "client" : "clients"
+          }`}
         />
       </Stack>
 
       <Typography variant="body2" color="text.secondary">
-        New clients open Cowboy’s normal sign-in page and ask for approval.
-        No token needs to be copied or pasted. Revoke anything you no longer
+        This browser session and your Passkeys are managed under Session
+        protection, so they are not counted here. New clients open Cowboy’s
+        normal sign-in page and ask for approval; revoke anything you no longer
         recognize.
       </Typography>
 
@@ -124,10 +129,14 @@ export function ProductDevicesPanel(): React.JSX.Element {
               p: 2,
             }}
           >
-            <Typography sx={{ fontWeight: 650 }}>No client devices yet</Typography>
+            <Typography sx={{ fontWeight: 650 }}>
+              No authorized clients yet
+            </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-              Run <code>cowboy login {globalThis.location.origin}</code>, or
-              start a Cowboy ACP client, to authorize this computer.
+              Run{" "}
+              <code>cowboy login {globalThis.location.origin}</code>, or start a
+              Cowboy ACP client, to authorize a separate client. This browser
+              remains signed in.
             </Typography>
           </Box>
         )

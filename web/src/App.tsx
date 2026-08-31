@@ -5865,13 +5865,13 @@ function SettingsShell({
                 <MobileSettingsRoute
                     id="account"
                     title="Account"
-                    description="Product login, devices, Passkeys, and sign out"
+                    description="Product login, Passkeys, clients, and sign out"
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
                     <Stack data-mobile-account-sections spacing={2}>
-                        <ProductDevicesPanel />
                         <ProductPasskeysPanel />
+                        <ProductDevicesPanel />
                         <ProductAccountMenu />
                     </Stack>
                 </MobileSettingsRoute>

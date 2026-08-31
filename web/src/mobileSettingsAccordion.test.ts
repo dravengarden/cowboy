@@ -70,7 +70,7 @@ Deno.test("mobile Account keeps its independent cards visibly separated", () => 
   assert(routeEnd > routeStart);
   const accountRoute = appSource.slice(routeStart, routeEnd);
   assert(
-    /<Stack data-mobile-account-sections spacing=\{2\}>[\s\S]*<ProductDevicesPanel \/>[\s\S]*<ProductPasskeysPanel \/>[\s\S]*<ProductAccountMenu \/>[\s\S]*<\/Stack>/u
+    /<Stack data-mobile-account-sections spacing=\{2\}>[\s\S]*<ProductPasskeysPanel \/>[\s\S]*<ProductDevicesPanel \/>[\s\S]*<ProductAccountMenu \/>[\s\S]*<\/Stack>/u
       .test(accountRoute),
   );
 });

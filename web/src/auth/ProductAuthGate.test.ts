@@ -152,12 +152,19 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
   const desktop = await Deno.readTextFile(
     new URL("desktop/DesktopApp.tsx", webSrc),
   );
+  const clients = await Deno.readTextFile(
+    new URL("ProductDevicesPanel.tsx", authDir),
+  );
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
   assert(desktop.includes("account.devices"));
   assert(desktop.includes("ProductDevicesPanel"));
+  assert(desktop.includes("Authorized clients"));
+  assert(clients.includes("Browser cookie sessions and Passkeys"));
+  assert(/This browser\s+remains signed in/u.test(clients));
+  assertEquals(clients.includes("Authorized devices"), false);
   assertEquals(desktop.includes("ProductTokensPanel"), false);
   assertEquals(desktop.includes('from "../store"'), false);
   assert(gate.includes("announceProductSessionEnd"));
@@ -183,7 +190,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1602"'));
+  assert(sw.includes('const VERSION = "cowboy-v1603"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -252,11 +259,11 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   const intervals = await Deno.readTextFile(
     new URL("passkeyIntervals.ts", authDir),
   );
-  assert(intervals.includes('Every day · Default'));
-  assert(intervals.includes('Every hour'));
-  assert(intervals.includes('Every 4 hours'));
-  assert(intervals.includes('Every 2 days'));
-  assertEquals(intervals.includes('Every 7 days'), false);
+  assert(intervals.includes("Every day · Default"));
+  assert(intervals.includes("Every hour"));
+  assert(intervals.includes("Every 4 hours"));
+  assert(intervals.includes("Every 2 days"));
+  assertEquals(intervals.includes("Every 7 days"), false);
   assert(lock.includes("globalThis.setTimeout(arm, delay)"));
   assert(lock.includes('addEventListener("visibilitychange", arm)'));
   assertEquals(lock.includes("setInterval"), false);
@@ -334,7 +341,11 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assert(sheet.includes("scheduled Passkey check is approaching"));
   assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
   assert(panel.includes("Session protection"));
-  assert(panel.includes("Activity never extends either hard deadline"));
+  assert(panel.includes("Service settings"));
+  assert(panel.includes("currentSessionProtectionItems"));
+  assert(panel.includes("configuredSessionProtectionItems"));
+  assert(panel.includes("activity never extends the"));
+  assert(panel.includes("Off for this account"));
   assert(store.includes('{ type: "auth_activity" }'));
   assert(store.includes("PRODUCT_AUTH_COOKIE_CHANGED_EVENT"));
   assert(store.includes('reconnectNow("auth_cookie_changed")'));

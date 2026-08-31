@@ -23,6 +23,7 @@ import {
   AuthApiError,
   type ProductMe,
   type ProductPasskey,
+  type ProductPasskeyServerPolicy,
   type ProductSessionServerPolicy,
 } from "./authApi";
 import {
@@ -40,6 +41,12 @@ import {
   normalizePasskeyReauthInterval,
   PASSKEY_REAUTH_INTERVALS,
 } from "./passkeyIntervals";
+import {
+  configuredSessionProtectionItems,
+  currentSessionProtectionItems,
+  sessionDeadlineLabel,
+  sessionPolicyDuration,
+} from "./sessionProtection";
 const CARD_SX = {
   border: 1,
   borderColor: "divider",
@@ -60,80 +67,162 @@ function passkeyDate(createdAtMs: number): string {
   }
 }
 
-function policyDuration(durationMs: number): string {
-  const hours = durationMs / (60 * 60 * 1_000);
-  return hours >= 24 && hours % 24 === 0
-    ? `${hours / 24} ${hours === 24 ? "day" : "days"}`
-    : `${hours} ${hours === 1 ? "hour" : "hours"}`;
-}
-
 function SessionPolicySummary({
+  me,
+  passkeys,
   policy,
 }: {
+  me: ProductMe;
+  passkeys: ProductPasskeyServerPolicy | undefined;
   policy: ProductSessionServerPolicy | undefined;
 }): React.JSX.Element | null {
-  if (!policy) return null;
-  const rows = [
-    {
-      label: "Active session",
-      value: policy.activity_sliding_enabled
-        ? `${policyDuration(policy.idle_timeout_ms)} idle window`
-        : "Activity sliding off",
-    },
-    {
-      label: "Passkey check",
-      value: `At most every ${policyDuration(policy.passkey_max_age_ms)}`,
-    },
-    {
-      label: "Full sign-in",
-      value: `Required every ${policyDuration(policy.primary_max_age_ms)}`,
-    },
-  ];
+  const [serverNowMs, setServerNowMs] = useState(
+    me.session_server_now_ms ?? Date.now(),
+  );
+  useEffect(() => {
+    const offset = (me.session_server_now_ms ?? Date.now()) - Date.now();
+    let timer = 0;
+    const tick = (): void => {
+      setServerNowMs(Date.now() + offset);
+      timer = globalThis.setTimeout(tick, 60_000);
+    };
+    tick();
+    return () => globalThis.clearTimeout(timer);
+  }, [me.session_server_now_ms]);
+  if (!policy || !passkeys) return null;
+  const currentRows = currentSessionProtectionItems(
+    me,
+    passkeys,
+    policy,
+    serverNowMs,
+  );
+  const configuredRows = configuredSessionProtectionItems(passkeys, policy);
   return (
     <Box sx={CARD_SX} data-product-session-policy>
-      <Stack spacing={1.5}>
-        <Stack direction="row" spacing={1.1} alignItems="center">
-          <SecurityRounded color="primary" />
-          <Box>
-            <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
-              Session protection
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Set by this Cowboy Service
-            </Typography>
-          </Box>
-        </Stack>
-        <Stack spacing={0}>
-          {rows.map((row, index) => (
-            <Stack
-              key={row.label}
-              direction="row"
-              spacing={2}
-              justifyContent="space-between"
-              alignItems="baseline"
+      <Stack spacing={2}>
+        <Stack
+          direction="row"
+          spacing={1.25}
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Stack direction="row" spacing={1.1} alignItems="center" minWidth={0}>
+            <Box
               sx={{
-                borderTop: index === 0 ? 0 : 1,
-                borderColor: "divider",
-                py: 1,
+                alignItems: "center",
+                bgcolor: "action.hover",
+                borderRadius: 2,
+                color: "primary.main",
+                display: "flex",
+                flex: "0 0 auto",
+                height: 40,
+                justifyContent: "center",
+                width: 40,
               }}
             >
+              <SecurityRounded />
+            </Box>
+            <Box minWidth={0}>
+              <Typography variant="subtitle1" sx={{ fontWeight: 750 }}>
+                Session protection
+              </Typography>
               <Typography variant="body2" color="text.secondary">
+                This browser and the Cowboy Service policy
+              </Typography>
+            </Box>
+          </Stack>
+          <Chip
+            size="small"
+            color="success"
+            variant="outlined"
+            label="Signed in"
+          />
+        </Stack>
+
+        <Box
+          data-current-session-protection
+          sx={{
+            display: "grid",
+            gap: 1,
+            gridTemplateColumns: {
+              xs: "repeat(2, minmax(0, 1fr))",
+              md: "repeat(4, minmax(0, 1fr))",
+            },
+          }}
+        >
+          {currentRows.map((row) => (
+            <Box
+              key={row.label}
+              sx={{
+                bgcolor: "action.hover",
+                borderRadius: 2,
+                minWidth: 0,
+                px: 1.25,
+                py: 1.1,
+              }}
+            >
+              <Typography variant="caption" color="text.secondary">
                 {row.label}
               </Typography>
-              <Typography
-                variant="body2"
-                sx={{ fontWeight: 700, textAlign: "right" }}
-              >
+              <Typography variant="body2" sx={{ fontWeight: 750, mt: 0.2 }}>
                 {row.value}
               </Typography>
-            </Stack>
+            </Box>
           ))}
-        </Stack>
+        </Box>
+
+        <Box>
+          <Stack
+            direction="row"
+            alignItems="baseline"
+            justifyContent="space-between"
+            spacing={2}
+            sx={{ mb: 1 }}
+          >
+            <Typography variant="subtitle2" sx={{ fontWeight: 750 }}>
+              Service settings
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Read-only
+            </Typography>
+          </Stack>
+          <Box
+            data-session-service-settings
+            sx={{
+              display: "grid",
+              gap: 1,
+              gridTemplateColumns: {
+                xs: "repeat(2, minmax(0, 1fr))",
+                md: "repeat(3, minmax(0, 1fr))",
+              },
+            }}
+          >
+            {configuredRows.map((row) => (
+              <Box
+                key={row.label}
+                sx={{
+                  bgcolor: "action.hover",
+                  borderRadius: 2,
+                  minWidth: 0,
+                  px: 1.25,
+                  py: 1.05,
+                }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  {row.label}
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 700, mt: 0.2 }}>
+                  {row.value}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+
         <Typography variant="caption" color="text.secondary">
-          Cowboy warns {policyDuration(policy.passkey_warning_ms)}{" "}
-          before a Passkey check and {policyDuration(policy.primary_warning_ms)}
-          {" "}
-          before full sign-in. Activity never extends either hard deadline.
+          Browser sessions and Passkeys are shown here. Authorized Cowboy CLI
+          and ACP clients are listed separately; activity never extends the
+          Passkey or full sign-in hard deadlines.
         </Typography>
       </Stack>
     </Box>
@@ -193,6 +282,18 @@ export function ProductPasskeysPanel({
     if (me.auth_enabled === false || policy?.enabled === false) return;
     void load();
   }, [load, me.auth_enabled, policy?.enabled]);
+
+  useEffect(() => {
+    setEnabled(me.passkey_reauth_enabled === true);
+  }, [me.passkey_reauth_enabled]);
+
+  useEffect(() => {
+    if (typeof me.passkey_reauth_after_ms !== "number") return;
+    setReauthAfterMs(normalizePasskeyReauthInterval(
+      me.passkey_reauth_after_ms,
+      sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER,
+    ));
+  }, [me.passkey_reauth_after_ms, sessionPolicy?.passkey_max_age_ms]);
 
   const publishMe = (next: ProductMe): void => {
     updateMe(next);
@@ -364,7 +465,11 @@ export function ProductPasskeysPanel({
   if (policy?.enabled === false) {
     return (
       <Stack spacing={2}>
-        <SessionPolicySummary policy={sessionPolicy} />
+        <SessionPolicySummary
+          me={me}
+          passkeys={policy}
+          policy={sessionPolicy}
+        />
         <Alert severity="info">
           Passkeys are disabled by this Cowboy Service.
         </Alert>
@@ -378,6 +483,25 @@ export function ProductPasskeysPanel({
       (sessionPolicy?.passkey_max_age_ms ?? Number.MAX_SAFE_INTEGER)
   );
   const canCreate = passkeyFlowSupported();
+  const knownPasskeyCount = listState === "ready"
+    ? passkeys.length
+    : me.passkey_count ?? 0;
+  const passkeyStatusLabel = listState === "loading"
+    ? "Checking…"
+    : listState === "error"
+    ? "Unavailable"
+    : knownPasskeyCount === 0
+    ? "Not set up"
+    : enabled
+    ? `${knownPasskeyCount} · checks on`
+    : `${knownPasskeyCount} registered`;
+  const passkeyDescription = knownPasskeyCount === 0
+    ? "Optional phishing-resistant verification for this account."
+    : enabled
+    ? `Periodic verification is on for this account every ${
+      sessionPolicyDuration(reauthAfterMs)
+    }.`
+    : "Ready to verify this account; periodic checks are off.";
   const addForm = (
     <Box sx={CARD_SX}>
       <Stack spacing={1.5}>
@@ -434,7 +558,11 @@ export function ProductPasskeysPanel({
 
   return (
     <Stack spacing={2} data-product-passkeys-panel>
-      <SessionPolicySummary policy={sessionPolicy} />
+      <SessionPolicySummary
+        me={me}
+        passkeys={policy}
+        policy={sessionPolicy}
+      />
       <Stack
         direction="row"
         alignItems="center"
@@ -470,19 +598,14 @@ export function ProductPasskeysPanel({
           color={listState === "ready" && passkeys.length > 0
             ? "success"
             : "default"}
-          label={listState === "loading"
-            ? "Checking…"
-            : listState === "error"
-            ? "Unavailable"
-            : passkeys.length === 0
-            ? "Not set up"
-            : `${passkeys.length} registered`}
+          label={passkeyStatusLabel}
         />
       </Stack>
 
       <Typography variant="body2" color="text.secondary">
-        Sign-in is still required. A Passkey adds secure verification and can
-        extend this device&apos;s session after you explicitly unlock it.
+        {passkeyDescription}{" "}
+        Sign-in is still required, and Cowboy never receives a Passkey private
+        key.
       </Typography>
 
       {notice && <Alert severity={notice.severity}>{notice.message}</Alert>}
@@ -629,8 +752,18 @@ export function ProductPasskeysPanel({
                     </Select>
                   </FormControl>
                   <Typography variant="caption" color="text.secondary">
-                    Periodic verification is off until you enable it. Enabling
-                    it asks for the Passkey once immediately.
+                    {enabled
+                      ? `${
+                        sessionDeadlineLabel(
+                          me.passkey_reauth_due_at_ms,
+                          me.session_server_now_ms ?? Date.now(),
+                        )
+                      }. The service allows at most ${
+                        sessionPolicyDuration(
+                          sessionPolicy?.passkey_max_age_ms ?? reauthAfterMs,
+                        )
+                      } between checks.`
+                      : "Off for this account. Turning it on verifies the Passkey immediately; running agents remain active."}
                   </Typography>
                 </Stack>
               </Box>
