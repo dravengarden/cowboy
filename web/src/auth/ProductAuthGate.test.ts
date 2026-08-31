@@ -183,7 +183,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1599"'));
+  assert(sw.includes('const VERSION = "cowboy-v1600"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -298,7 +298,7 @@ Deno.test("session reauthentication is pushed and stays compact until required",
 
   assert(guard.includes("useSurfaceProfile"));
   assert(guard.includes("safe-area-inset-top"));
-  assert(guard.includes("minHeight: mobile ? 44"));
+  assert(guard.includes('mobile ? { "&&": { minHeight: 44 } }'));
   assert(
     guard.includes('maxWidth: mobile ? "min(17rem, calc(100vw - 24px))"'),
   );

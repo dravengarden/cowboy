@@ -144,7 +144,7 @@ export function ProductSessionGuard({
         : <LoginRounded fontSize="small" />}
       sx={{
         pointerEvents: "auto",
-        minHeight: mobile ? 44 : undefined,
+        ...(mobile ? { "&&": { minHeight: 44 } } : {}),
         maxWidth: mobile ? "min(17rem, calc(100vw - 24px))" : undefined,
         px: mobile ? 1.5 : 0.75,
         borderRadius: mobile ? 999 : undefined,
