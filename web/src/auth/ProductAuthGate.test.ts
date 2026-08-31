@@ -20,6 +20,8 @@ async function readAuthSources(): Promise<string> {
     "PasskeyReauthLock.tsx",
     "passkeyReauthSchedule.ts",
     "passkeyBrowser.ts",
+    "passkeyNative.ts",
+    "passkeyTransport.ts",
     "passkeyExternalPage.ts",
     "passkeyFlow.ts",
     "pkce.ts",
@@ -95,6 +97,15 @@ Deno.test("system Safari Passkey page is isolated from the cached app shell", as
   assertEquals(externalPage.includes("navigator.sendBeacon"), false);
   assert(worker.includes('url.pathname === "/passkey.html"'));
   assert(worker.includes("event.respondWith(fetch(request))"));
+});
+
+Deno.test("official Apple shells publish a WebAuthn association", async () => {
+  const association = JSON.parse(await Deno.readTextFile(
+    new URL("../../public/.well-known/apple-app-site-association", import.meta.url),
+  )) as { webcredentials?: { apps?: unknown } };
+  assertEquals(association.webcredentials?.apps, [
+    "9Z95WKM9DT.top.thundersparrow.cowboy",
+  ]);
 });
 
 Deno.test("login page is product chrome and hides register unless accepted", async () => {
@@ -190,7 +201,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1604"'));
+  assert(sw.includes('const VERSION = "cowboy-v1605"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

@@ -14156,6 +14156,16 @@ async fn resolve_static_document(
     }
 }
 
+fn static_content_type(name: &str) -> String {
+    if name == ".well-known/apple-app-site-association" {
+        "application/json".to_owned()
+    } else {
+        mime_guess::from_path(name)
+            .first_or_octet_stream()
+            .to_string()
+    }
+}
+
 /// Serve a separately deployed asset by path, falling back to `index.html` so
 /// the SPA owns client-side routing. Missing hashed assets never fall back: a
 /// module request must receive a real 404 rather than HTML with a 200 status.
@@ -14250,11 +14260,11 @@ async fn static_handler(
         // bundle. The files this covers are tiny (HTML, sw.js, manifest, icons).
         "no-store"
     };
-    let mime = mime_guess::from_path(&name).first_or_octet_stream();
+    let content_type = static_content_type(&name);
     if name == "passkey.html" {
         return Response::builder()
             .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime.as_ref())
+            .header(header::CONTENT_TYPE, content_type.as_str())
             .header(header::CACHE_CONTROL, cache_control)
             .header(header::ETAG, etag.as_str())
             .header("referrer-policy", "no-referrer")
@@ -14274,9 +14284,9 @@ async fn static_handler(
     }
     (
         [
-            (header::CONTENT_TYPE, mime.as_ref()),
-            (header::CACHE_CONTROL, cache_control),
-            (header::ETAG, etag.as_str()),
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, cache_control.to_owned()),
+            (header::ETAG, etag),
         ],
         Body::from(content),
     )
@@ -14285,7 +14295,7 @@ async fn static_handler(
 
 #[cfg(test)]
 mod static_asset_tests {
-    use super::{is_admin_console_path, resolve_static_document};
+    use super::{is_admin_console_path, resolve_static_document, static_content_type};
     use axum::http::StatusCode;
 
     #[test]
@@ -14295,6 +14305,15 @@ mod static_asset_tests {
         assert!(!is_admin_console_path("admin.html"));
         assert!(!is_admin_console_path("index.html"));
         assert!(!is_admin_console_path("sessions"));
+    }
+
+    #[test]
+    fn apple_app_site_association_is_served_as_json() {
+        assert_eq!(
+            static_content_type(".well-known/apple-app-site-association"),
+            "application/json"
+        );
+        assert_eq!(static_content_type("index.html"), "text/html");
     }
 
     #[tokio::test]

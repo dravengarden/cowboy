@@ -269,11 +269,33 @@ At expiry the product view is blurred and locked, but agents continue and local
 drafts plus queued prompts remain intact until verification succeeds or the
 user signs out.
 
-The iOS native shell runs the WebAuthn prompt in a system
-`SFSafariViewController`, not its embedded `WKWebView`. This keeps Passkeys
-available to SideStore-signed builds that cannot obtain the Associated Domains
-entitlement and preserves the normal origin-bound Safari ceremony. The handoff
-does not transfer the product cookie:
+### Passkey ceremony transports
+
+Passkeys are not Authentication Provider plugins. The Controller remains the
+Relying Party and owns challenge issuance, credential storage, verification,
+cookie rotation, and audit. Clients select one presentation transport from a
+shared ordered registry; every direct transport must return the same standard
+WebAuthn credential JSON before the existing completion endpoint accepts it:
+
+- browser/PWA uses `navigator.credentials` at the Cowboy origin;
+- an Apple shell may use AuthenticationServices only when its build explicitly
+  declares the exact Relying Party, carries the matching Associated Domains
+  entitlement, and the origin publishes the matching `webcredentials`
+  association; and
+- a native shell without that signed capability uses the PKCE-bound external
+  browser ceremony below.
+
+Transport fallback is closed. A user cancellation, invalid credential, or
+server rejection never tries a different transport. Only a missing native
+capability or a browser `SecurityError` caused by an unavailable origin-bound
+WebAuthn context may fall back to the external ceremony. A local biometric or
+Secure Enclave key that is not a WebAuthn credential is never accepted as a
+Passkey or as evidence for session extension.
+
+A SideStore-signed iOS shell that cannot obtain the Associated Domains
+entitlement runs the WebAuthn prompt in a system `SFSafariViewController`, not
+its embedded `WKWebView`. This preserves the normal origin-bound Safari
+ceremony. The handoff does not transfer the product cookie:
 
 1. the authenticated Cowboy window creates an S256 PKCE challenge and starts a
    120-second transaction bound to the exact user and cookie-session hash;

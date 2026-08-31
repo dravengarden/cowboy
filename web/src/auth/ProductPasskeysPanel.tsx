@@ -30,10 +30,10 @@ import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
   passkeyFlowSupported,
+  passkeyRegistrationNeedsUserGestureResume,
   registerPasskey,
   verifyPasskey,
 } from "./passkeyFlow";
-import { isNativeShell } from "../nativeShell";
 import { useProductAuth } from "./ProductAuthGate";
 import { retryWithRecentProductAuth } from "./recentAuth";
 import {
@@ -312,7 +312,7 @@ export function ProductPasskeysPanel({
         reauthenticate,
         {
           resumeLabel: "Continue to Passkey",
-          resumeWithUserGesture: !isNativeShell(),
+          resumeWithUserGesture: passkeyRegistrationNeedsUserGestureResume(),
         },
       );
       setPasskeys((current) => [

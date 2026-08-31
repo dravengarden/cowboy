@@ -1,4 +1,3 @@
-import { isNativeShell } from "../nativeShell";
 import {
   closeAuthenticationBrowser,
   NATIVE_APP_RESUMED_EVENT,
@@ -17,8 +16,19 @@ import {
 import {
   assertPasskey as assertPasskeyInBrowser,
   createPasskey as createPasskeyInBrowser,
-  passkeysSupported,
 } from "./passkeyBrowser";
+import {
+  assertPasskeyNatively,
+  createPasskeyNatively,
+  nativePasskeyMayFallBack,
+} from "./passkeyNative";
+import {
+  browserPasskeyMayFallBack,
+  currentPasskeyTransports,
+  passkeyRegistrationNeedsUserGestureResume,
+  passkeyTransportSupported,
+  type PasskeyTransportKind,
+} from "./passkeyTransport";
 import { newPkceBinding } from "./pkce";
 
 const RECONNECT_INITIAL_MS = 250;
@@ -373,39 +383,76 @@ async function runExternalPasskey(
 }
 
 export function passkeyFlowSupported(): boolean {
-  return isNativeShell() || passkeysSupported();
+  return passkeyTransportSupported();
+}
+
+export { passkeyRegistrationNeedsUserGestureResume };
+
+function passkeyTransportMayFallBack(
+  transport: PasskeyTransportKind,
+  reason: unknown,
+): boolean {
+  return transport === "native"
+    ? nativePasskeyMayFallBack(reason)
+    : transport === "browser" && browserPasskeyMayFallBack(reason);
 }
 
 export async function registerPasskey(
   nickname: string,
 ): Promise<ProductPasskey> {
-  if (isNativeShell()) {
-    const result = await runExternalPasskey("register", nickname);
-    if (result.status === "complete" && "passkey" in result) {
-      return result.passkey;
+  const transports = await currentPasskeyTransports();
+  for (const [index, transport] of transports.entries()) {
+    try {
+      if (transport === "external") {
+        const result = await runExternalPasskey("register", nickname);
+        if (result.status === "complete" && "passkey" in result) {
+          return result.passkey;
+        }
+        throw new Error("Passkey registration returned an invalid response");
+      }
+      const ceremony = await authApi.startPasskeyRegister(nickname);
+      const credential = transport === "native"
+        ? await createPasskeyNatively(ceremony)
+        : await createPasskeyInBrowser(ceremony);
+      return await authApi.completePasskeyRegister(
+        ceremony.challenge_id,
+        credential,
+      );
+    } catch (reason) {
+      if (
+        index + 1 >= transports.length ||
+        !passkeyTransportMayFallBack(transport, reason)
+      ) throw reason;
     }
-    throw new Error("Passkey registration returned an invalid response");
   }
-  const ceremony = await authApi.startPasskeyRegister(nickname);
-  const credential = await createPasskeyInBrowser(ceremony);
-  return await authApi.completePasskeyRegister(
-    ceremony.challenge_id,
-    credential,
-  );
+  throw new Error("Passkeys are unavailable on this device");
 }
 
 export async function verifyPasskey(): Promise<ProductMe> {
-  if (isNativeShell()) {
-    const result = await runExternalPasskey("assert");
-    if (result.status === "complete" && "me" in result) return result.me;
-    throw new Error("Passkey verification returned an invalid response");
+  const transports = await currentPasskeyTransports();
+  for (const [index, transport] of transports.entries()) {
+    try {
+      if (transport === "external") {
+        const result = await runExternalPasskey("assert");
+        if (result.status === "complete" && "me" in result) return result.me;
+        throw new Error("Passkey verification returned an invalid response");
+      }
+      const ceremony = await authApi.startPasskeyAssert();
+      const credential = transport === "native"
+        ? await assertPasskeyNatively(ceremony)
+        : await assertPasskeyInBrowser(ceremony);
+      return await authApi.completePasskeyAssert(
+        ceremony.challenge_id,
+        credential,
+      );
+    } catch (reason) {
+      if (
+        index + 1 >= transports.length ||
+        !passkeyTransportMayFallBack(transport, reason)
+      ) throw reason;
+    }
   }
-  const ceremony = await authApi.startPasskeyAssert();
-  const credential = await assertPasskeyInBrowser(ceremony);
-  return await authApi.completePasskeyAssert(
-    ceremony.challenge_id,
-    credential,
-  );
+  throw new Error("Passkeys are unavailable on this device");
 }
 
 export function passkeyErrorMessage(

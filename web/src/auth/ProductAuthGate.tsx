@@ -42,10 +42,10 @@ import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
   passkeyFlowSupported,
+  passkeyRegistrationNeedsUserGestureResume,
   registerPasskey,
 } from "./passkeyFlow";
 import { ConfirmSheet } from "../Sheet";
-import { isNativeShell } from "../nativeShell";
 import { ProductLoginPage } from "./ProductLoginPage";
 import {
   type RecentProductAuthOptions,
@@ -219,7 +219,7 @@ function PasskeySetupPrompt({
         reauthenticate,
         {
           resumeLabel: "Continue to Passkey",
-          resumeWithUserGesture: !isNativeShell(),
+          resumeWithUserGesture: passkeyRegistrationNeedsUserGestureResume(),
         },
       );
       onCreated({
