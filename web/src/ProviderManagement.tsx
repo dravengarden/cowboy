@@ -33,6 +33,7 @@ import {
   joinProviderInstallations,
   latestProviderEntries,
   providerAuthenticationExecutorEntry,
+  serviceAuthenticationProviderEntries,
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
@@ -421,8 +422,16 @@ function ProviderManagement(
     () => latestProviderEntries(catalog?.providers ?? []),
     [catalog],
   );
+  const serviceEntries = useMemo(
+    () => serviceAuthenticationProviderEntries(catalog?.providers ?? []),
+    [catalog],
+  );
   const serviceCredentialGroups = useMemo(
-    () => groupProviderAuthentications(latestEntries),
+    () => groupProviderAuthentications(serviceEntries),
+    [serviceEntries],
+  );
+  const unpublishedLatestEntries = useMemo(
+    () => latestEntries.filter((entry) => entry.release_state !== "ready"),
     [latestEntries],
   );
   const allProviderRows = useMemo(
@@ -909,6 +918,24 @@ function ProviderManagement(
       </Stack>
       )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
+      {scope === "service" && unpublishedLatestEntries.length > 0
+        ? (
+          <Alert
+            severity="warning"
+            data-provider-release-warning
+            aria-label={`Provider runtime publication pending: ${
+              unpublishedLatestEntries.map((entry) =>
+                `${entry.manifest.display.name} ${entry.provider_version}`
+              ).join(", ")
+            }`}
+          >
+            {unpublishedLatestEntries.length} Provider runtime update{
+              unpublishedLatestEntries.length === 1 ? " is" : "s are"
+            } still publishing. Existing credentials stay active; Cowboy uses
+            the newest signed release for sign-in changes.
+          </Alert>
+        )
+        : null}
       {!catalog && !catalogError
         ? <Typography variant="caption">Loading Provider Catalog…</Typography>
         : null}
@@ -1031,9 +1058,10 @@ function ProviderManagement(
           const releaseError = operationEntry.release_state === "ready"
             ? ""
             : operationEntry.release_detail || "Provider release unavailable";
-          const surfaceError = error || releaseError;
+          const surfaceError = error ||
+            (scope === "machine" ? releaseError : "");
           const host = scope === "service"
-            ? providerServiceHost(entry, auth, surfaceError)
+            ? providerServiceHost(entry, auth, error)
             : providerHost(
               entry,
               latestCompatibleEntry,
@@ -1585,7 +1613,7 @@ function providerServiceHost(
     authentication_state: auth?.authentication_state ?? "signed out",
     distribution_state: auth?.distribution_state ?? "none",
     machine_name: "",
-    error_detail: error || entry.release_detail || "",
+    error_detail: error,
     installed: false,
     auth_ready: !entry.manifest.authentication.required ||
       auth?.authentication_state === "ready",

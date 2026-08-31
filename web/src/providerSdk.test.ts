@@ -24,6 +24,7 @@ import {
   providerAuthenticationExecutorEntry,
   providerEntryForIdentity,
   providerPresentationEntry,
+  serviceAuthenticationProviderEntries,
 } from "./providerCatalogRegistry.ts";
 
 function manifest(): ProviderManifest {
@@ -906,6 +907,13 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
     release_state: "unbound" as const,
     artifact_digest: null,
   };
+  assertEquals(
+    serviceAuthenticationProviderEntries([unpublishedCurrent, legacy]),
+    [legacy],
+  );
+  assertEquals(serviceAuthenticationProviderEntries([current, legacy]), [
+    current,
+  ]);
   const [readyFallback] = latestCompatibleProviderEntries(
     [unpublishedCurrent, legacy],
     { ...target, provider_contracts: { ...legacyMachine, max_host_schema: 2 } },

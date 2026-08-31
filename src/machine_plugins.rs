@@ -2033,19 +2033,37 @@ async fn probe_released_component(
     executable: &Path,
     artifact: &ReleasedPrivateComponent,
 ) -> Result<()> {
-    let mut child = tokio::process::Command::new(executable)
-        .args(&artifact.probe.args)
-        .current_dir(
-            executable
-                .parent()
-                .context("Provider executable has no parent")?,
-        )
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .context("starting staged Provider component probe")?;
+    let parent = executable
+        .parent()
+        .context("Provider executable has no parent")?;
+    let mut child = None;
+    for attempt in 0..=4 {
+        match tokio::process::Command::new(executable)
+            .args(&artifact.probe.args)
+            .current_dir(parent)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(spawned) => {
+                child = Some(spawned);
+                break;
+            }
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
+                // Some Linux filesystems briefly retain the writer exclusion
+                // after the atomic rename even though Cowboy closed and synced
+                // its descriptor. Retry only ETXTBSY; every other exec failure
+                // remains an immediate trust-gate failure.
+                tokio::time::sleep(Duration::from_millis(5_u64 << attempt)).await;
+            }
+            Err(error) => {
+                return Err(error).context("starting staged Provider component probe");
+            }
+        }
+    }
+    let mut child = child.context("starting staged Provider component probe")?;
     let status = if let Ok(status) = tokio::time::timeout(
         Duration::from_millis(artifact.probe.timeout_ms),
         child.wait(),

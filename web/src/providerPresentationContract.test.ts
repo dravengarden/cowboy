@@ -65,8 +65,18 @@ Deno.test("incompatible Provider lifecycle actions are omitted instead of lookin
 
 Deno.test("Machine compatibility renders once in the Cowboy warning shell", () => {
   assertEquals(
-    managementSource.includes("const surfaceError = error || releaseError;"),
+    managementSource.includes(
+      '(scope === "machine" ? releaseError : "")',
+    ),
     true,
+  );
+  assertEquals(
+    managementSource.includes('data-provider-release-warning'),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("error || entry.release_detail"),
+    false,
   );
   assertEquals(managementSource.includes("{error || !releaseReady"), false);
   assertEquals(
@@ -214,7 +224,7 @@ Deno.test("session settings embed one focused Service authentication card", () =
 
 Deno.test("Service credential management renders one card per typed authentication scope", () => {
   assertEquals(
-    managementSource.includes("groupProviderAuthentications(latestEntries)"),
+    managementSource.includes("groupProviderAuthentications(serviceEntries)"),
     true,
   );
   assertEquals(

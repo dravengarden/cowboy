@@ -15,6 +15,7 @@ export {
   providerEntryForIdentity,
   providerAuthenticationExecutorEntry,
   providerPresentationEntry,
+  serviceAuthenticationProviderEntries,
 } from "./providerCatalogRegistry";
 
 export function useProviderCatalog(enabled = true): {

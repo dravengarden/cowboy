@@ -130,10 +130,17 @@ plugin-publish PLUGIN CATALOG PUBLIC_KEY:
     just plugin-verify "{{PLUGIN}}" "{{PUBLIC_KEY}}"
     deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-plugin-release.ts "{{PLUGIN}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
 
+# Deployment preflight: every embedded Agent Provider version must have an
+# exact signed publication receipt and immutable artifact set in the target
+# Service Catalog before a Controller carrying those manifests is activated.
+provider-release-coverage CATALOG:
+    deno run --allow-read tools/check-provider-release-coverage.ts "{{CATALOG}}"
+
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
-    deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
+    deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
+    deno test --allow-read --allow-write tools/check-provider-release-coverage_test.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
     deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
     deno test tools/plugin-publication-receipt_test.ts

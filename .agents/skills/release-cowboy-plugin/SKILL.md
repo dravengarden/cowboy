@@ -227,10 +227,17 @@ release authority permits it.
    do not put them in the signed Plugin trust claim.
 5. Resolve every published package and runtime URL back to immutable bytes and
    require its digest to match the bound manifest.
-6. Call the Catalog refresh endpoint and verify that Cowboy advertises that
+6. When a shared component release bumped more than one Agent Provider, require
+   exact coverage for every embedded Provider before deploying the Controller:
+
+   ```bash
+   nix develop -c just provider-release-coverage <catalog-directory>
+   ```
+
+7. Call the Catalog refresh endpoint and verify that Cowboy advertises that
    exact version and digest, including its supported Machine platforms and
    compatibility report.
-7. Stop. Report that the version is available for UI installation; do not call
+8. Stop. Report that the version is available for UI installation; do not call
    a Machine installation or upgrade endpoint unless the user separately asks
    to install it on a specific Machine.
 

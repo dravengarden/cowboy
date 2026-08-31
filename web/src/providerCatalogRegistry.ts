@@ -72,6 +72,26 @@ export function latestProviderEntries(
   );
 }
 
+/** Service authentication is an account concern, not a release-discovery
+ * surface. Prefer the newest signed release for each Provider so a newly
+ * authored but not-yet-published runtime cannot disable existing credentials
+ * or duplicate a release error inside every account card. If a Provider has
+ * never published a signed release, retain its unbound entry so the UI can
+ * still explain that the account method is not available yet. */
+export function serviceAuthenticationProviderEntries(
+  entries: readonly ProviderCatalogEntry[],
+): ProviderCatalogEntry[] {
+  const latest = latestProviderEntries(entries);
+  const latestReady = new Map(
+    latestProviderEntries(
+      entries.filter((entry) =>
+        entry.release_state === "ready" && entry.artifact_digest !== null
+      ),
+    ).map((entry) => [entry.provider_id, entry]),
+  );
+  return latest.map((entry) => latestReady.get(entry.provider_id) ?? entry);
+}
+
 export function latestCompatibleProviderEntries(
   entries: readonly ProviderCatalogEntry[],
   target: ProviderCompatibilityTarget,
