@@ -605,6 +605,17 @@ impl MachinePluginStore {
             .auth_provider_root(provider_id)
             .join("runtime/generations")
             .join(generation.to_string());
+        let migrated_entries =
+            migrate_legacy_runtime_state(auth, &materialized.join("home"), &runtime.join("home"))
+                .context("migrating legacy Provider runtime state")?;
+        if migrated_entries > 0 {
+            tracing::info!(
+                provider = %provider_id,
+                auth_generation = generation,
+                migrated_entries,
+                "migrated legacy Provider state into the writable runtime projection"
+            );
+        }
         validate_materialization_metadata(&runtime, package, generation)
             .context("validating Provider runtime credential projection")?;
         projected_credential_bundle(auth, &runtime, &bundle.method_id)
@@ -1135,7 +1146,7 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
-        for generation in self.runtime_projection_generations(&package.manifest.id)? {
+        for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
                 metadata.auth_contract_fingerprint
@@ -1152,7 +1163,7 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
-        for generation in self.runtime_projection_generations(&package.manifest.id)? {
+        for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
                 metadata.auth_contract_fingerprint
@@ -1192,6 +1203,42 @@ impl MachinePluginStore {
             }
         }
         generations.sort();
+        Ok(generations)
+    }
+
+    fn writable_auth_projection_generations(
+        &self,
+        package: &ProviderPackage,
+    ) -> Result<Vec<PathBuf>> {
+        let mut generations = self.runtime_projection_generations(&package.manifest.id)?;
+        let materialized = self
+            .auth_provider_root(&package.manifest.id)
+            .join("materialized/generations");
+        if materialized.is_dir() {
+            for entry in fs::read_dir(&materialized)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir()
+                    || entry.file_name().to_string_lossy().starts_with('.')
+                {
+                    continue;
+                }
+                let generation = entry.path();
+                let metadata = read_materialization_metadata(&generation)?;
+                ensure!(
+                    metadata.auth_contract_fingerprint
+                        == package.manifest.compatibility.auth_contract_fingerprint,
+                    "Provider materialization uses a different auth contract"
+                );
+                if home_contains_non_credential_state(
+                    &package.manifest.authentication,
+                    &generation.join("home"),
+                )? {
+                    generations.push(generation);
+                }
+            }
+        }
+        generations.sort();
+        generations.dedup();
         Ok(generations)
     }
 
@@ -1582,7 +1629,7 @@ impl MachinePluginStore {
             if envelope.action != ProviderAuthAction::Apply {
                 continue;
             }
-            for generation in self.runtime_projection_generations(&provider_id)? {
+            for generation in self.writable_auth_projection_generations(&package)? {
                 let home = generation.join("home");
                 for credential in &package.manifest.authentication.credential_files {
                     let path = home.join(&credential.relative_path);
@@ -1623,7 +1670,7 @@ impl MachinePluginStore {
         validate_portable_bundle(auth, &baseline)?;
         let mut seen = BTreeSet::new();
         let mut candidates = Vec::new();
-        for generation in self.runtime_projection_generations(provider_id)? {
+        for generation in self.writable_auth_projection_generations(&package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
                 metadata.auth_contract_fingerprint
@@ -1785,6 +1832,168 @@ fn materialization_contains_bundle(
 ) -> bool {
     projected_credential_bundle(auth, generation, &bundle.method_id)
         .is_ok_and(|projected| projected == *bundle)
+}
+
+fn credential_relative_paths(auth: &cowboy_provider_sdk::AuthenticationContract) -> Vec<PathBuf> {
+    auth.credential_files
+        .iter()
+        .map(|credential| PathBuf::from(&credential.relative_path))
+        .collect()
+}
+
+fn credential_path_relation(credentials: &[PathBuf], relative: &Path) -> (bool, bool) {
+    let exact = credentials.iter().any(|credential| credential == relative);
+    let ancestor = credentials
+        .iter()
+        .any(|credential| credential.starts_with(relative));
+    (exact, ancestor)
+}
+
+fn home_contains_non_credential_state(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    home: &Path,
+) -> Result<bool> {
+    if !home.is_dir() {
+        return Ok(false);
+    }
+    let credentials = credential_relative_paths(auth);
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        for entry in fs::read_dir(home.join(&relative))? {
+            let entry = entry?;
+            let child = relative.join(entry.file_name());
+            let (exact, ancestor) = credential_path_relation(&credentials, &child);
+            if exact {
+                continue;
+            }
+            if ancestor && entry.file_type()?.is_dir() {
+                pending.push(child);
+                continue;
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn migrate_legacy_runtime_state(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    legacy_home: &Path,
+    runtime_home: &Path,
+) -> Result<usize> {
+    if !legacy_home.is_dir() {
+        return Ok(0);
+    }
+    fs::create_dir_all(runtime_home)?;
+    let credentials = credential_relative_paths(auth);
+    migrate_legacy_runtime_directory(legacy_home, runtime_home, Path::new(""), &credentials)
+}
+
+fn migrate_legacy_runtime_directory(
+    legacy_home: &Path,
+    runtime_home: &Path,
+    relative: &Path,
+    credentials: &[PathBuf],
+) -> Result<usize> {
+    let legacy_directory = legacy_home.join(relative);
+    let runtime_directory = runtime_home.join(relative);
+    fs::create_dir_all(&runtime_directory)?;
+    let entries = fs::read_dir(&legacy_directory)?.collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut migrated = 0_usize;
+    for entry in entries {
+        let child = relative.join(entry.file_name());
+        let (exact, ancestor) = credential_path_relation(credentials, &child);
+        if exact {
+            continue;
+        }
+        let legacy = legacy_home.join(&child);
+        let runtime = runtime_home.join(&child);
+        let file_type = entry.file_type()?;
+        if ancestor {
+            ensure!(
+                file_type.is_dir(),
+                "Provider credential ancestor is not a directory: {}",
+                legacy.display()
+            );
+            migrated = migrated.saturating_add(migrate_legacy_runtime_directory(
+                legacy_home,
+                runtime_home,
+                &child,
+                credentials,
+            )?);
+            continue;
+        }
+        if legacy_state_alias_matches(&legacy, &runtime) {
+            continue;
+        }
+        if file_type.is_dir() && runtime.is_dir() {
+            migrated = migrated.saturating_add(migrate_legacy_runtime_directory(
+                legacy_home,
+                runtime_home,
+                &child,
+                credentials,
+            )?);
+            continue;
+        }
+        if runtime.symlink_metadata().is_ok() {
+            // Both sides may already contain Provider-owned state from workers
+            // that straddled the protocol-five/runtime-home rollout. Never
+            // overwrite either copy: merge directories recursively and keep
+            // conflicting leaves at their original paths.
+            continue;
+        }
+        if let Some(parent) = runtime.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if file_type.is_symlink() {
+            let target = fs::read_link(&legacy)?;
+            let target = if target.is_absolute() {
+                target
+            } else {
+                legacy
+                    .parent()
+                    .context("legacy Provider symlink has no parent")?
+                    .join(target)
+            };
+            symlink(target, &runtime)?;
+            fs::remove_file(&legacy)?;
+        } else {
+            fs::rename(&legacy, &runtime).with_context(|| {
+                format!(
+                    "moving legacy Provider state {} to {}",
+                    legacy.display(),
+                    runtime.display()
+                )
+            })?;
+        }
+        symlink(&runtime, &legacy).with_context(|| {
+            format!(
+                "linking legacy Provider state {} to {}",
+                legacy.display(),
+                runtime.display()
+            )
+        })?;
+        migrated = migrated.saturating_add(1);
+    }
+    Ok(migrated)
+}
+
+fn legacy_state_alias_matches(legacy: &Path, runtime: &Path) -> bool {
+    let Ok(target) = fs::read_link(legacy) else {
+        return false;
+    };
+    let target = if target.is_absolute() {
+        target
+    } else {
+        legacy
+            .parent()
+            .unwrap_or_else(|| Path::new("/"))
+            .join(target)
+    };
+    match (fs::canonicalize(target), fs::canonicalize(runtime)) {
+        (Ok(target), Ok(runtime)) => target == runtime,
+        _ => false,
+    }
 }
 
 fn restore_projected_bundle(
@@ -3007,6 +3216,10 @@ mod tests {
                 .join("materialized/generations/1/metadata.json")
                 .is_file()
         );
+        let legacy_session =
+            auth_root.join("materialized/generations/1/home/.gemini/sessions/native-session.json");
+        fs::create_dir_all(legacy_session.parent().unwrap()).unwrap();
+        fs::write(&legacy_session, b"legacy-native-session").unwrap();
         let refreshed_bundle = PortableCredentialBundle {
             portable_schema: bundle.portable_schema.clone(),
             method_id: bundle.method_id.clone(),
@@ -3031,7 +3244,23 @@ mod tests {
             historical.environment["GEMINI_API_KEY"],
             "refreshed-fixture-api-key"
         );
-        assert!(historical.home.unwrap().is_dir());
+        let historical_home = historical.home.unwrap();
+        assert_eq!(
+            historical_home,
+            auth_root.join("runtime/generations/1/home")
+        );
+        assert_eq!(
+            fs::read(historical_home.join(".gemini/sessions/native-session.json")).unwrap(),
+            b"legacy-native-session"
+        );
+        assert!(
+            fs::symlink_metadata(
+                auth_root.join("materialized/generations/1/home/.gemini/sessions")
+            )
+            .unwrap()
+            .file_type()
+            .is_symlink()
+        );
         assert_eq!(
             read_link_name(&auth_root.join("materialized/current")).as_deref(),
             Some("2")
@@ -3342,6 +3571,71 @@ mod tests {
             std::slice::from_ref(&credential),
             &[PathBuf::from("/state/plugins/grok/runtime.log")]
         ));
+    }
+
+    #[test]
+    fn legacy_provider_home_moves_runtime_state_without_copying_credentials() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-legacy-provider-home-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let legacy = root.join("materialized/home");
+        let runtime = root.join("runtime/home");
+        fs::create_dir_all(legacy.join(".codex/sessions/2026/08/31")).unwrap();
+        fs::create_dir_all(runtime.join(".codex")).unwrap();
+        fs::write(legacy.join(".codex/auth.json"), b"sealed-auth").unwrap();
+        fs::write(runtime.join(".codex/auth.json"), b"runtime-auth").unwrap();
+        fs::write(
+            legacy.join(".codex/sessions/2026/08/31/rollout.jsonl"),
+            b"legacy-rollout",
+        )
+        .unwrap();
+        fs::write(legacy.join(".codex/state.sqlite"), b"legacy-state").unwrap();
+        fs::write(runtime.join(".codex/state.sqlite"), b"runtime-state").unwrap();
+
+        let migrated =
+            migrate_legacy_runtime_state(&package.manifest.authentication, &legacy, &runtime)
+                .unwrap();
+        assert!(migrated > 0);
+        assert_eq!(
+            fs::read(legacy.join(".codex/auth.json")).unwrap(),
+            b"sealed-auth"
+        );
+        assert_eq!(
+            fs::read(runtime.join(".codex/auth.json")).unwrap(),
+            b"runtime-auth"
+        );
+        assert_eq!(
+            fs::read(runtime.join(".codex/sessions/2026/08/31/rollout.jsonl")).unwrap(),
+            b"legacy-rollout"
+        );
+        assert!(
+            fs::symlink_metadata(legacy.join(".codex/sessions"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            fs::read(legacy.join(".codex/state.sqlite")).unwrap(),
+            b"legacy-state"
+        );
+        assert_eq!(
+            fs::read(runtime.join(".codex/state.sqlite")).unwrap(),
+            b"runtime-state"
+        );
+        assert_eq!(
+            migrate_legacy_runtime_state(&package.manifest.authentication, &legacy, &runtime,)
+                .unwrap(),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
