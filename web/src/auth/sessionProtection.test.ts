@@ -76,5 +76,18 @@ Deno.test("current session protection distinguishes browser, Passkey, and full s
     )[2],
     { label: "Passkey check", value: "Off for this account" },
   );
+  assertEquals(
+    currentSessionProtectionItems(
+      { ...me, passkey_reauth_due_at_ms: null },
+      passkeys,
+      session,
+      0,
+    )[2],
+    { label: "Passkey check", value: "Verify this browser" },
+  );
+  assertEquals(
+    sessionDeadlineLabel(23 * 60 * 60 * 1_000 + 59 * 60 * 1_000 + 1, 0),
+    "Due in 1d",
+  );
   assertEquals(sessionDeadlineLabel(-1, 0), "Required now");
 });

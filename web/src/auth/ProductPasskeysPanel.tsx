@@ -461,6 +461,32 @@ export function ProductPasskeysPanel({
       .finally(() => setBusy(false));
   };
 
+  const verifyCurrentSession = (): void => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    void verifyPasskey()
+      .then((updated) => {
+        publishMe(updated);
+        setNotice({
+          severity: "success",
+          message: "This browser is now protected by periodic verification.",
+        });
+      })
+      .catch((reason: unknown) => {
+        if (passkeyFlowCancelled(reason)) {
+          setNotice({
+            severity: "info",
+            message: "Verification was cancelled. Nothing changed.",
+          });
+          return;
+        }
+        setError(passkeyErrorMessage(reason, "Could not verify this browser"));
+      })
+      .finally(() => setBusy(false));
+  };
+
   if (me.auth_enabled === false) return <></>;
   if (policy?.enabled === false) {
     return (
@@ -753,18 +779,33 @@ export function ProductPasskeysPanel({
                   </FormControl>
                   <Typography variant="caption" color="text.secondary">
                     {enabled
-                      ? `${
-                        sessionDeadlineLabel(
-                          me.passkey_reauth_due_at_ms,
-                          me.session_server_now_ms ?? Date.now(),
-                        )
-                      }. The service allows at most ${
-                        sessionPolicyDuration(
-                          sessionPolicy?.passkey_max_age_ms ?? reauthAfterMs,
-                        )
-                      } between checks.`
+                      ? me.passkey_reauth_due_at_ms == null
+                        ? "Verify this browser once to start its periodic schedule. Other signed-in browsers keep their own verification state."
+                        : `${
+                          sessionDeadlineLabel(
+                            me.passkey_reauth_due_at_ms,
+                            me.session_server_now_ms ?? Date.now(),
+                          )
+                        }. The service allows at most ${
+                          sessionPolicyDuration(
+                            sessionPolicy?.passkey_max_age_ms ?? reauthAfterMs,
+                          )
+                        } between checks.`
                       : "Off for this account. Turning it on verifies the Passkey immediately; running agents remain active."}
                   </Typography>
+                  {enabled && me.passkey_reauth_due_at_ms == null && (
+                    <Button
+                      variant="contained"
+                      disabled={busy}
+                      onClick={verifyCurrentSession}
+                      startIcon={busy
+                        ? <CircularProgress size={16} color="inherit" />
+                        : <KeyRounded />}
+                      sx={{ alignSelf: "flex-start" }}
+                    >
+                      Verify this browser
+                    </Button>
+                  )}
                 </Stack>
               </Box>
             )

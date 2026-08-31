@@ -63,8 +63,9 @@ export function sessionAlertState(
 export function sessionCountdownLabel(remainingMs: number): string {
   const seconds = Math.max(0, Math.ceil(remainingMs / 1_000));
   if (seconds >= 3_600) {
-    const hours = Math.floor(seconds / 3_600);
-    const minutes = Math.ceil((seconds % 3_600) / 60);
+    const totalMinutes = Math.ceil(seconds / 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
     return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
   }
   if (seconds >= 60) {

@@ -42,6 +42,7 @@ Deno.test("session schedule falls back to full login when an idle session has no
 
 Deno.test("session schedule formats a compact, stable countdown", () => {
   assertEquals(sessionCountdownLabel(3_661_000), "1h 2m");
+  assertEquals(sessionCountdownLabel(86_399_001), "24h");
   assertEquals(sessionCountdownLabel(65_000), "1m 05s");
   assertEquals(sessionCountdownLabel(-1), "0s");
 });

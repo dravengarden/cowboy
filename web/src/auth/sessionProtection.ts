@@ -39,9 +39,10 @@ export function sessionDeadlineLabel(
   const remainingMs = dueAtMs - serverNowMs;
   if (remainingMs <= 0) return "Required now";
 
-  const days = Math.floor(remainingMs / DAY_MS);
-  const hours = Math.floor((remainingMs % DAY_MS) / HOUR_MS);
-  const minutes = Math.ceil((remainingMs % HOUR_MS) / MINUTE_MS);
+  const totalMinutes = Math.ceil(remainingMs / MINUTE_MS);
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
   if (days > 0) return `Due in ${days}d${hours > 0 ? ` ${hours}h` : ""}`;
   if (hours > 0) return `Due in ${hours}h${minutes > 0 ? ` ${minutes}m` : ""}`;
   return `Due in ${Math.max(1, minutes)}m`;
@@ -63,6 +64,8 @@ export function currentSessionProtectionItems(
     passkeyValue = "Session checks disabled";
   } else if (me.passkey_reauth_enabled !== true) {
     passkeyValue = "Off for this account";
+  } else if (me.passkey_reauth_due_at_ms == null) {
+    passkeyValue = "Verify this browser";
   } else {
     passkeyValue = sessionDeadlineLabel(
       me.passkey_reauth_due_at_ms,

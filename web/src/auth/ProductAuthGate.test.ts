@@ -190,7 +190,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1603"'));
+  assert(sw.includes('const VERSION = "cowboy-v1604"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -346,6 +346,7 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assert(panel.includes("configuredSessionProtectionItems"));
   assert(panel.includes("activity never extends the"));
   assert(panel.includes("Off for this account"));
+  assert(panel.includes("Verify this browser"));
   assert(store.includes('{ type: "auth_activity" }'));
   assert(store.includes("PRODUCT_AUTH_COOKIE_CHANGED_EVENT"));
   assert(store.includes('reconnectNow("auth_cookie_changed")'));
