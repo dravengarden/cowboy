@@ -63,6 +63,7 @@ fn from_billing(mut billing: Value, account: Option<&AccountSnapshot>) -> Provid
         rate_limits: Some(billing),
         activity: None,
         error: None,
+        refresh: None,
     }
 }
 

@@ -1186,7 +1186,10 @@ function ProviderUsageCard({
     : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
   const title = accountProviderLabel(usage.provider);
-  const statusLabel = plan
+  const stale = usage.refresh?.stale === true;
+  const statusLabel = stale
+    ? "CACHED"
+    : plan
     ? plan.toUpperCase()
     : usage.provider === "deepseek" && usage.status === "available"
     ? "API"
@@ -1309,7 +1312,9 @@ function ProviderUsageCard({
           <Stack direction="row" alignItems="center" spacing={0.25}>
             <Typography
               variant="caption"
-              color={usage.status === "available"
+              color={stale
+                ? "warning.main"
+                : usage.status === "available"
                 ? "success.main"
                 : "text.secondary"}
             >
@@ -1495,7 +1500,8 @@ function ProviderUsageCard({
           </Typography>
         )}
         <Typography variant="caption" color="text.secondary">
-          {usage.source} · Updated {relativeUpdateTime(usage.observed_at_ms)}
+          {usage.source} · {stale ? "Cached" : "Updated"}{" "}
+          {relativeUpdateTime(usage.observed_at_ms)}
         </Typography>
       </Stack>
       <ConfirmSheet

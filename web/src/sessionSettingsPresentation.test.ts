@@ -156,6 +156,31 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
   assertEquals((weekly[1]?.value ?? "").length > 0, true);
   assertEquals(composerSource.includes("row.remaining"), true);
 
+  const stale = sessionProviderUsageRows({
+    provider: "openai",
+    status: "available",
+    source: "test",
+    observed_at_ms: 1,
+    rate_limits: weekly[0]
+      ? {
+        rateLimits: {
+          primary: { usedPercent: 20, windowDurationMins: 10_080 },
+        },
+      }
+      : undefined,
+    refresh: {
+      last_attempt_at_ms: 2,
+      manual_refresh_after_ms: 32_000,
+      next_auto_refresh_at_ms: 62_000,
+      stale: true,
+    },
+  });
+  assertEquals(stale[0], {
+    id: "usage-refresh",
+    label: "Usage",
+    value: "Cached · retrying automatically",
+  });
+
   assertEquals(
     sessionProviderUsageRows({
       provider: "deepseek",

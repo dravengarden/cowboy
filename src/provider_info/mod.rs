@@ -84,6 +84,7 @@ pub(crate) fn unavailable(
         rate_limits: None,
         activity: None,
         error: Some(message.to_owned()),
+        refresh: None,
     }
 }
 

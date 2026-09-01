@@ -1,6 +1,7 @@
 import {
-  providerUsageErrorMessage,
   type ProviderUsage,
+  providerUsageErrorMessage,
+  providerUsageRefreshLabel,
   shortResetTime,
   topBarUsageLimits,
 } from "./usageLimits";
@@ -94,26 +95,42 @@ export function sessionProviderUsageRows(
   usage: ProviderUsage | undefined,
 ): SessionProviderUsageRow[] {
   if (!usage) return [];
+  const freshness = providerUsageRefreshLabel(usage);
+  const freshnessRows: SessionProviderUsageRow[] = freshness
+    ? [{ id: "usage-refresh", label: "Usage", value: freshness }]
+    : [];
   const widget = usageWidgetForAccount(usage);
   if (widget?.kind === "deepseek") {
     return [
-      { id: "deepseek-balance", label: "Balance", value: compactCny(widget.balanceCny) },
-      { id: "deepseek-spend", label: "24h spend", value: compactCny(widget.spend24hCny) },
+      ...freshnessRows,
+      {
+        id: "deepseek-balance",
+        label: "Balance",
+        value: compactCny(widget.balanceCny),
+      },
+      {
+        id: "deepseek-spend",
+        label: "24h spend",
+        value: compactCny(widget.spend24hCny),
+      },
     ];
   }
-  return topBarUsageLimits(usage).flatMap((limit) => [
-    {
-      id: limit.id,
-      label: limit.label,
-      value: `${String(limit.remaining)}% remaining`,
-      remaining: limit.remaining,
-    },
-    ...(limit.resetsAt === undefined ? [] : [{
-      id: `${limit.id}-resets`,
-      label: "Resets",
-      value: shortResetTime(limit.resetsAt),
-    }]),
-  ]);
+  return [
+    ...freshnessRows,
+    ...topBarUsageLimits(usage).flatMap((limit) => [
+      {
+        id: limit.id,
+        label: limit.label,
+        value: `${String(limit.remaining)}% remaining`,
+        remaining: limit.remaining,
+      },
+      ...(limit.resetsAt === undefined ? [] : [{
+        id: `${limit.id}-resets`,
+        label: "Resets",
+        value: shortResetTime(limit.resetsAt),
+      }]),
+    ]),
+  ];
 }
 
 export function sessionProviderUsageEmptyMessage(

@@ -68,16 +68,23 @@ pub(crate) async fn collect(store: Option<&Store>) -> Result<ProviderUsage> {
         });
     let mut accounts = Vec::new();
     let mut adapter_errors = Vec::new();
+    let mut adapter_failure_details = Vec::new();
     for result in join_all(requests).await {
         match result {
             Ok(account) => accounts.push(account),
-            Err(error) => adapter_errors.push(error.to_string()),
+            Err(error) => {
+                let public_error = error.to_string();
+                let detail = format!("{error:#}");
+                tracing::warn!(provider = "deepseek", error = %detail, "balance adapter failed");
+                adapter_errors.push(public_error);
+                adapter_failure_details.push(detail);
+            }
         }
     }
     if accounts.is_empty() {
         anyhow::bail!(
             "{}",
-            adapter_errors
+            adapter_failure_details
                 .pop()
                 .unwrap_or_else(|| "no DeepSeek balance adapter configured".to_owned())
         );
@@ -138,6 +145,7 @@ pub(crate) async fn collect(store: Option<&Store>) -> Result<ProviderUsage> {
         rate_limits: None,
         activity: Some(activity),
         error: None,
+        refresh: None,
     })
 }
 

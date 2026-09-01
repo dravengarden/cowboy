@@ -72,6 +72,7 @@ import {
   num,
   type ProviderUsage,
   providerUsageErrorMessage,
+  providerUsageRefreshLabel,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
@@ -639,11 +640,17 @@ function DesktopProviderUsage({
 }): React.JSX.Element {
   const limits = usageLimits(usage);
   const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
+  const refreshLabel = providerUsageRefreshLabel(usage);
   return (
     <Stack spacing={1.25} data-usage-provider-section={usage.provider}>
       <Typography variant="subtitle2" fontWeight={750}>
         {accountProviderLabel(usage.provider)}
       </Typography>
+      {refreshLabel && (
+        <Typography variant="caption" color="warning.main">
+          {refreshLabel}
+        </Typography>
+      )}
       {limits.map((limit) => (
         <Stack key={limit.id} spacing={0.5}>
           <Stack direction="row" justifyContent="space-between">

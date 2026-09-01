@@ -1,11 +1,12 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  acceptedScheduleTime,
   accountProviderLabel,
   accountProviderUsage,
-  acceptedScheduleTime,
   nearestAvailableResetCredit,
-  providerUsageErrorMessage,
   providerUsage,
+  providerUsageErrorMessage,
+  providerUsageRefreshLabel,
   scheduledResetCountdown,
   topBarUsageLimits,
   usageCardProviders,
@@ -240,6 +241,41 @@ Deno.test("legacy Grok billing errors preserve useful text without RPC JSON", ()
   );
 });
 
+Deno.test("legacy OpenAI RPC errors never leak through the usage UI", () => {
+  const usage = {
+    provider: "openai",
+    status: "unavailable",
+    source: "OpenAI Codex app-server",
+    observed_at_ms: 1,
+    error:
+      'account/rateLimits/read: {"code":-32603,"message":"GET /wham/usage failed: 503 Service Unavailable"}',
+  };
+  const message = providerUsageErrorMessage(usage, "Waiting for usage data.");
+  assertEquals(
+    message,
+    "OpenAI usage is temporarily unavailable. Cowboy will retry automatically.",
+  );
+  assertEquals(message.includes("{"), false);
+});
+
+Deno.test("stale provider metadata has one compact cross-surface label", () => {
+  assertEquals(
+    providerUsageRefreshLabel({
+      provider: "openai",
+      status: "available",
+      source: "test",
+      observed_at_ms: 1,
+      refresh: {
+        last_attempt_at_ms: 2,
+        manual_refresh_after_ms: 32_000,
+        next_auto_refresh_at_ms: 62_000,
+        stale: true,
+      },
+    }),
+    "Cached · retrying automatically",
+  );
+});
+
 Deno.test("desktop summary excludes model buckets and keeps provider account order", () => {
   const usage = {
     provider: "openai",
@@ -322,8 +358,14 @@ Deno.test("Provider-declared account identities resolve to usage cards", () => {
     ],
   };
   assertEquals(accountProviderUsage(snapshot, "openai")?.provider, "openai");
-  assertEquals(accountProviderUsage(snapshot, "anthropic")?.provider, "anthropic");
-  assertEquals(accountProviderUsage(snapshot, "deepseek")?.provider, "deepseek");
+  assertEquals(
+    accountProviderUsage(snapshot, "anthropic")?.provider,
+    "anthropic",
+  );
+  assertEquals(
+    accountProviderUsage(snapshot, "deepseek")?.provider,
+    "deepseek",
+  );
   assertEquals(accountProviderUsage(snapshot, "gemini")?.provider, "gemini");
   assertEquals(accountProviderUsage(snapshot, "xai")?.provider, "xai");
   assertEquals(providerUsage(snapshot, "catalog-unavailable"), undefined);

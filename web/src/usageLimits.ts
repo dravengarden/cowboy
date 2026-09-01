@@ -2,6 +2,13 @@ import { currentProviderEntry } from "./providerCatalogRegistry";
 
 export type JsonRecord = Record<string, unknown>;
 
+export interface ProviderRefreshState {
+  last_attempt_at_ms: number;
+  manual_refresh_after_ms: number;
+  next_auto_refresh_at_ms: number;
+  stale: boolean;
+}
+
 export interface ProviderUsage {
   provider: string;
   status: string;
@@ -11,6 +18,7 @@ export interface ProviderUsage {
   rate_limits?: JsonRecord;
   activity?: JsonRecord;
   error?: string;
+  refresh?: ProviderRefreshState;
 }
 
 export interface UsageSnapshot {
@@ -52,7 +60,8 @@ export function usageCardProviders(
     .map((usage, index) => ({ usage, index }))
     .sort((left, right) =>
       (USAGE_CARD_ORDER.get(left.usage.provider) ?? Number.MAX_SAFE_INTEGER) -
-        (USAGE_CARD_ORDER.get(right.usage.provider) ?? Number.MAX_SAFE_INTEGER) ||
+        (USAGE_CARD_ORDER.get(right.usage.provider) ??
+          Number.MAX_SAFE_INTEGER) ||
       left.index - right.index
     )
     .map(({ usage }) => usage);
@@ -113,6 +122,29 @@ export function providerUsageErrorMessage(
 ): string {
   const error = usage?.error?.trim();
   if (!error) return fallback;
+  if (usage?.provider === "openai") {
+    if (error.startsWith("OpenAI usage ")) return error;
+    const normalized = error.toLowerCase();
+    if (
+      normalized.includes("authentication required") ||
+      normalized.includes("unauthorized") ||
+      normalized.includes("not signed in") ||
+      normalized.includes("401") || normalized.includes("403")
+    ) {
+      return "OpenAI usage authorization expired. Sign in to Codex again.";
+    }
+    if (
+      normalized.includes("service unavailable") ||
+      normalized.includes("temporarily unavailable") ||
+      normalized.includes("timed out") || normalized.includes("timeout") ||
+      normalized.includes("429") || /\b5\d\d\b/.test(normalized)
+    ) {
+      return usage.refresh?.stale
+        ? "OpenAI usage is temporarily unavailable. Showing the last update."
+        : "OpenAI usage is temporarily unavailable. Cowboy will retry automatically.";
+    }
+    return "OpenAI usage could not be refreshed.";
+  }
   if (usage?.provider !== "xai" || !error.startsWith("_x.ai/billing:")) {
     return error;
   }
@@ -134,6 +166,12 @@ export function providerUsageErrorMessage(
   } catch {
     return "Grok Build could not fetch xAI usage.";
   }
+}
+
+export function providerUsageRefreshLabel(
+  usage: ProviderUsage | undefined,
+): string | undefined {
+  return usage?.refresh?.stale ? "Cached · retrying automatically" : undefined;
 }
 
 export function record(value: unknown): JsonRecord | undefined {
@@ -366,7 +404,11 @@ export function providerUsage(
   providerDigest?: string | undefined,
 ): ProviderUsage | undefined {
   if (!provider) return undefined;
-  const accountProvider = currentProviderEntry(provider, providerVersion, providerDigest)
+  const accountProvider = currentProviderEntry(
+    provider,
+    providerVersion,
+    providerDigest,
+  )
     ?.manifest.host.account_usage?.provider;
   return accountProviderUsage(snapshot, accountProvider);
 }

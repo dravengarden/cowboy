@@ -46,8 +46,8 @@ control plane, while the web files remain an independently replaceable release.
 | `POST /api/admin/users/{id}/password` | admin owner set password |
 | `GET /api/metrics` | admin operator+ diagnostic JSON (not the scrape path) |
 | `GET /metrics` | scrape-only: loopback peer and no forwarded headers, else 404 |
-| `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
-| `POST /api/usage` | manually refresh official provider account usage, coalesced and timeout-bounded |
+| `GET /api/usage` | Cached Codex account limits, Claude Agent SDK plan-limit events, and the latest live ACP session usage. Refresh metadata is provider-local so clients can distinguish fresh, stale, and retry-scheduled values. Gemini account quota remains absent until its official ACP mode exposes it; Cowboy never reuses provider OAuth credentials against private endpoints. |
+| `POST /api/usage` | manually refresh official provider account usage; all callers share a persisted 30-second provider cooldown and one in-process single-flight |
 | `GET /api/workspaces` | selectable session roots plus matching central Columbus work items |
 | `GET /api/plugins` | Plugin Catalog plus the Agent Provider/auth capability projection |
 | `POST /api/providers/{id}/auth/start` | start a Service-owned Provider authentication flow |
@@ -129,8 +129,15 @@ ignored so a stale installed PWA cannot restore removed auto-resume behavior.
 - **store writer** — drains `StoreWrite` intents ([Storage](05-storage.md))
 - **purge sweeper** — hard-deletes soft-deleted sessions past 3 days (every 6h)
 - **dispatcher** — drains the Hub→supervisor hand-off and forwards prompts
-- **usage collector** — refreshes provider account limits every five minutes;
-  failures remain provider-local and preserve explicit unavailable/stale state
+- **usage collector** — refreshes provider account limits every five minutes.
+  OpenAI, xAI, and DeepSeek use the same provider-local refresh state for full,
+  per-card, and lazy background requests. A timeout, connection failure, 408,
+  409, 429, or 5xx keeps the last successful value, marks it stale, and becomes
+  eligible for one later background attempt after one minute. Authentication,
+  authorization, configuration, and schema failures never borrow a cached value.
+  Internal RPC/HTTP details are logged but replaced with a stable public error.
+  Reset-credit selection and consumption deliberately bypass cached usage and
+  automatic retry because they guard a provider-side mutation.
 - **Machine broker/control** — authenticates outbound Machine connections,
   reconciles inventory, and routes fenced runtime commands
 - **Provider Service** — owns authentication flows, signed catalog state, and
