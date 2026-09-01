@@ -86,7 +86,7 @@ Deno.test("inline-image actions commit reliable touch pointerup without blurring
     true,
   );
   assertEquals(
-    composerSource.includes("imageDeleteTap.onPointerDown(event);"),
+    composerSource.includes("onPointerDown={imageDeleteTap.onPointerDown}"),
     true,
   );
   assertEquals(
@@ -101,6 +101,16 @@ Deno.test("inline-image actions commit reliable touch pointerup without blurring
     composerSource.includes("onPointerUp={imagePreviewTap.onPointerUp}"),
     true,
   );
+  const imageActions = composerSource.slice(
+    composerSource.indexOf('aria-label="Image actions"'),
+    composerSource.indexOf("<SessionActionConfirmDialog", composerSource.indexOf('aria-label="Image actions"')),
+  );
+  assertEquals(
+    imageActions.match(/onMouseDown=\{\(event\): void => event\.preventDefault\(\)\}/g)?.length,
+    2,
+  );
+  assertEquals(imageActions.includes("event.preventDefault();\n                  imagePreviewTap.onPointerDown"), false);
+  assertEquals(imageActions.includes("event.preventDefault();\n                  imageDeleteTap.onPointerDown"), false);
 });
 
 Deno.test("pending cards preview token-backed images inline instead of a second chip", () => {

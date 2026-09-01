@@ -1234,9 +1234,10 @@ export function ComposerWorkspace({
     }
     closeImgSel();
   }, [closeImgSel, imgSel, setAttachments]);
-  // iOS can omit the compatibility click after a touch that also preserves
-  // the focused editor. Commit stationary image actions on pointerup while
-  // retaining ordinary mouse, keyboard, and assistive click activation.
+  // Commit stationary image actions on pointerup while retaining the native
+  // click as an independent WebKit fallback. Preventing the TOUCH pointerdown
+  // suppresses that fallback; prevent only its compatibility mousedown below
+  // so the editor keeps focus without making pointerup the sole activation path.
   const imagePreviewTap = useReliableTouchTap<HTMLButtonElement>(
     previewSelectedImage,
   );
@@ -3375,13 +3376,11 @@ export function ComposerWorkspace({
               <Button
                 color="inherit"
                 startIcon={<Visibility />}
-                onPointerDown={(event): void => {
-                  event.preventDefault();
-                  imagePreviewTap.onPointerDown(event);
-                }}
+                onPointerDown={imagePreviewTap.onPointerDown}
                 onPointerMove={imagePreviewTap.onPointerMove}
                 onPointerUp={imagePreviewTap.onPointerUp}
                 onPointerCancel={imagePreviewTap.onPointerCancel}
+                onMouseDown={(event): void => event.preventDefault()}
                 onClick={imagePreviewTap.onClick}
                 sx={INLINE_IMAGE_ACTION_BUTTON_SX}
               >
@@ -3390,13 +3389,11 @@ export function ComposerWorkspace({
               <Button
                 color="error"
                 startIcon={<DeleteOutline />}
-                onPointerDown={(event): void => {
-                  event.preventDefault();
-                  imageDeleteTap.onPointerDown(event);
-                }}
+                onPointerDown={imageDeleteTap.onPointerDown}
                 onPointerMove={imageDeleteTap.onPointerMove}
                 onPointerUp={imageDeleteTap.onPointerUp}
                 onPointerCancel={imageDeleteTap.onPointerCancel}
+                onMouseDown={(event): void => event.preventDefault()}
                 onClick={imageDeleteTap.onClick}
                 sx={INLINE_IMAGE_ACTION_BUTTON_SX}
               >
@@ -6873,6 +6870,14 @@ function ComposerSheet({
     titleInputRef.current?.blur();
     setTitleFocused(false);
   };
+  const saveTitleAndClose = (): void => {
+    if (!trimmedTitle) return;
+    saveTitle();
+    setSessionActionsExpanded(false);
+    setWorkspaceOptionsExpanded(false);
+    setCmdConfirm(null);
+    onClose();
+  };
   const cancelTitle = (): void => {
     setTitle(displayTitle);
     titleInputRef.current?.blur();
@@ -6914,7 +6919,7 @@ function ComposerSheet({
                 shelf
                 onCancel={cancelTitle}
                 confirmLabel="Save"
-                onConfirm={saveTitle}
+                onConfirm={saveTitleAndClose}
                 confirmDisabled={!trimmedTitle}
                 preserveFocus
               />

@@ -70,6 +70,10 @@ Deno.test("session title editing uses labeled Cancel and Save actions", async ()
   );
   assertEquals(settings.includes('confirmLabel="Save"'), true);
   assertEquals(settings.includes("onCancel={cancelTitle}"), true);
+  assertEquals(settings.includes("onConfirm={saveTitleAndClose}"), true);
+  assertEquals(settings.includes("const saveTitleAndClose = (): void => {"), true);
+  assertEquals(settings.includes("saveTitle();"), true);
+  assertEquals(settings.includes("setCmdConfirm(null);\n    onClose();"), true);
   assertEquals(settings.includes("preserveFocus"), true);
   assertEquals(settings.includes("MobileDecisionDock"), false);
 });
