@@ -715,8 +715,8 @@ fn unresolved_crash_detail_for_session(session: &Session) -> Option<&str> {
             Event::TurnEnd { .. } => return None,
             Event::Lifecycle {
                 status: Status::Crashed,
-                detail,
-            } => return detail.as_deref(),
+                detail: Some(detail),
+            } => return Some(detail),
             _ => {}
         }
     }
@@ -6846,7 +6846,7 @@ mod core_tests {
     }
 
     #[test]
-    fn newer_crash_without_detail_supersedes_an_older_auth_failure() {
+    fn newer_crash_without_detail_preserves_an_older_auth_failure() {
         let hub = hub_with_session("newer-detail-less-crash");
         hub.set_status(
             "newer-detail-less-crash",
@@ -6855,7 +6855,11 @@ mod core_tests {
         );
         hub.set_status("newer-detail-less-crash", Status::Crashed, None);
 
-        assert_eq!(hub.unresolved_crash_detail("newer-detail-less-crash"), None);
+        assert_eq!(
+            hub.unresolved_crash_detail("newer-detail-less-crash")
+                .as_deref(),
+            Some("login required")
+        );
     }
 
     #[tokio::test]
