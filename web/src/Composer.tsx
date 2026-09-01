@@ -4643,9 +4643,12 @@ function PendingPanel({
           data-desktop-aux-list={desktop ? "true" : undefined}
           sx={{
             // Inner padding so the rows sit INSIDE the frame with a small inset
-            // (the original framed look). The frame's OUTER edge is what aligns
-            // with the input box, not the rows.
+            // (the original framed look). Keep all four sides: the arrival ring
+            // is a 2px outer outline, and the scrollport clips a first row whose
+            // top inset is missing. The frame's OUTER edge is what aligns with
+            // the input box, not the rows.
             px: mobileFloatingEdit ? 0 : 0.5,
+            pt: mobileFloatingEdit ? 0 : 0.5,
             pb: mobileFloatingEdit ? 0 : 0.5,
             // Exclusive accordion means only one body is open, so each panel
             // owns its own cap + scrollbar. Keyboard-up floating edit is the

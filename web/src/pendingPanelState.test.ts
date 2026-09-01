@@ -52,6 +52,22 @@ Deno.test("an arrived row is anchored instead of accepting partial visibility", 
   assertEquals(composerSource.includes('addEventListener("load", onImageLoad, true)'), true);
 });
 
+Deno.test("the first pending row reserves room for its arrival focus ring", () => {
+  const scrollportStart = composerSource.indexOf(
+    "data-mobile-pending-scrollport=",
+  );
+  const rowsStart = composerSource.indexOf(
+    "{sortable.order.map((id, index) => {",
+    scrollportStart,
+  );
+  const scrollport = composerSource.slice(scrollportStart, rowsStart);
+
+  assertEquals(scrollportStart >= 0 && rowsStart > scrollportStart, true);
+  assertEquals(scrollport.includes("px: mobileFloatingEdit ? 0 : 0.5"), true);
+  assertEquals(scrollport.includes("pt: mobileFloatingEdit ? 0 : 0.5"), true);
+  assertEquals(scrollport.includes("pb: mobileFloatingEdit ? 0 : 0.5"), true);
+});
+
 Deno.test("queue and draft bulk actions live in the header kebab", () => {
   assertEquals(composerSource.includes('aria-label={kind === "draft" ? "Draft actions" : "Queue actions"}'), true);
   assertEquals(composerSource.includes("<MoreVert fontSize=\"small\" />"), true);
