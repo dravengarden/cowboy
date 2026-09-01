@@ -21,6 +21,7 @@ use sha2::{Digest as _, Sha256};
 use crate::admin::hex_sha256;
 
 pub const ACCESS_TOKEN_PREFIX: &str = "cow_access_";
+pub const AUTOMATION_ACCESS_TOKEN_PREFIX: &str = "cow_automation_";
 pub const REFRESH_TOKEN_PREFIX: &str = "cow_refresh_";
 pub const ACCESS_TOKEN_TTL_MS: i64 = 10 * 60 * 1_000;
 pub const REFRESH_TOKEN_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1_000;
@@ -322,6 +323,9 @@ struct AccessSession {
     user_id: String,
     public_key: [u8; 32],
     expires_at_ms: i64,
+    principal_class: String,
+    client_kind: String,
+    scopes: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -345,6 +349,21 @@ pub struct DeviceAccessSessions {
 pub struct DeviceAccessIdentity {
     pub device_id: String,
     pub user_id: String,
+    pub principal_class: String,
+    pub client_kind: String,
+    pub scopes: Vec<String>,
+}
+
+impl DeviceAccessIdentity {
+    #[must_use]
+    pub fn is_automation(&self) -> bool {
+        self.principal_class == "automation"
+    }
+
+    #[must_use]
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.scopes.iter().any(|candidate| candidate == scope)
+    }
 }
 
 pub struct TokenProofContext<'a> {
@@ -364,9 +383,85 @@ impl DeviceAccessSessions {
         public_key: &str,
         now_ms: i64,
     ) -> Result<(String, i64)> {
+        self.issue_bounded(
+            device_id,
+            user_id,
+            public_key,
+            now_ms,
+            ACCESS_TOKEN_TTL_MS,
+            ACCESS_TOKEN_PREFIX,
+            "human",
+            "cli",
+            Vec::new(),
+        )
+    }
+
+    pub fn issue_automation(
+        &self,
+        credential_id: &str,
+        user_id: &str,
+        public_key: &str,
+        scopes: Vec<String>,
+        now_ms: i64,
+        ttl_ms: i64,
+    ) -> Result<(String, i64)> {
+        ensure!(
+            (60_000..=ACCESS_TOKEN_TTL_MS).contains(&ttl_ms),
+            "automation credential lifetime is outside the allowed range"
+        );
+        ensure!(!scopes.is_empty(), "automation credential needs a scope");
+        ensure!(
+            scopes
+                .iter()
+                .all(|scope| matches!(scope.as_str(), "api:read" | "sessions:write" | "websocket")),
+            "automation credential has an unsupported scope"
+        );
+        let mut scopes = scopes;
+        scopes.sort();
+        scopes.dedup();
+        self.issue_bounded(
+            credential_id,
+            user_id,
+            public_key,
+            now_ms,
+            ttl_ms,
+            AUTOMATION_ACCESS_TOKEN_PREFIX,
+            "automation",
+            "automation",
+            scopes,
+        )
+    }
+
+    /// Revoke one bearer immediately. Used to roll back an in-memory issuance
+    /// when its durable security audit cannot be committed.
+    pub fn revoke_access_token(&self, token: &str) -> bool {
+        self.state
+            .lock()
+            .tokens
+            .remove(&hex_sha256(token.as_bytes()))
+            .is_some()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn issue_bounded(
+        &self,
+        device_id: &str,
+        user_id: &str,
+        public_key: &str,
+        now_ms: i64,
+        ttl_ms: i64,
+        token_prefix: &str,
+        principal_class: &str,
+        client_kind: &str,
+        scopes: Vec<String>,
+    ) -> Result<(String, i64)> {
+        ensure!(
+            valid_device_id(device_id),
+            "client credential id is invalid"
+        );
         let public_key = decode_public_key(public_key)?;
-        let token = format!("{ACCESS_TOKEN_PREFIX}{}", random_urlsafe::<32>()?);
-        let expires_at_ms = now_ms.saturating_add(ACCESS_TOKEN_TTL_MS);
+        let token = format!("{token_prefix}{}", random_urlsafe::<32>()?);
+        let expires_at_ms = now_ms.saturating_add(ttl_ms);
         let mut state = self.state.lock();
         prune_access_state(&mut state, now_ms);
         // A refresh replaces, rather than accumulates, short-lived access for
@@ -382,6 +477,9 @@ impl DeviceAccessSessions {
                 user_id: user_id.to_owned(),
                 public_key,
                 expires_at_ms,
+                principal_class: principal_class.to_owned(),
+                client_kind: client_kind.to_owned(),
+                scopes,
             },
         );
         Ok((token, expires_at_ms))
@@ -397,7 +495,9 @@ impl DeviceAccessSessions {
         let Some(token) = bearer(headers) else {
             return Ok(None);
         };
-        if !token.starts_with(ACCESS_TOKEN_PREFIX) {
+        if !token.starts_with(ACCESS_TOKEN_PREFIX)
+            && !token.starts_with(AUTOMATION_ACCESS_TOKEN_PREFIX)
+        {
             return Ok(None);
         }
         let mut state = self.state.lock();
@@ -436,6 +536,9 @@ impl DeviceAccessSessions {
         Ok(Some(DeviceAccessIdentity {
             device_id: session.device_id,
             user_id: session.user_id,
+            principal_class: session.principal_class,
+            client_kind: session.client_kind,
+            scopes: session.scopes,
         }))
     }
 
@@ -488,7 +591,11 @@ impl DeviceAccessSessions {
             .tokens
             .get(&hex_sha256(token.as_bytes()))
             .is_some_and(|session| {
-                session.device_id == expected.device_id && session.user_id == expected.user_id
+                session.device_id == expected.device_id
+                    && session.user_id == expected.user_id
+                    && session.principal_class == expected.principal_class
+                    && session.client_kind == expected.client_kind
+                    && session.scopes == expected.scopes
             })
     }
 
@@ -917,6 +1024,73 @@ mod tests {
                 .authenticate(&replacement_headers, &Method::GET, "/api/sessions", now + 1,)
                 .unwrap()
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn automation_access_is_short_lived_scoped_and_sender_constrained() {
+        let key = new_signing_key().unwrap();
+        let manager = DeviceAccessSessions::default();
+        let now = 1_900_000_000_000;
+        let credential_id = "0123456789abcdef0123456789abcdef";
+        let user_id = "abcdef0123456789abcdef0123456789";
+        let public_key = public_key_to_base64(&key);
+        let (token, expires_at_ms) = manager
+            .issue_automation(
+                credential_id,
+                user_id,
+                &public_key,
+                vec!["websocket".to_owned(), "api:read".to_owned()],
+                now,
+                5 * 60 * 1_000,
+            )
+            .unwrap();
+        assert!(token.starts_with(AUTOMATION_ACCESS_TOKEN_PREFIX));
+        assert_eq!(expires_at_ms, now + 5 * 60 * 1_000);
+
+        let headers = signed_headers(&key, credential_id, &token, "GET", "/api/sessions", now);
+        let identity = manager
+            .authenticate(&headers, &Method::GET, "/api/sessions", now)
+            .unwrap()
+            .expect("automation identity");
+        assert!(identity.is_automation());
+        assert_eq!(identity.client_kind, "automation");
+        assert_eq!(identity.scopes, vec!["api:read", "websocket"]);
+        assert!(identity.has_scope("websocket"));
+        assert!(!identity.has_scope("sessions:write"));
+        assert!(manager.token_still_valid(&token, &identity, now));
+
+        assert!(
+            manager
+                .authenticate(&headers, &Method::GET, "/api/sessions", now)
+                .is_err(),
+            "proof nonces must remain single-use for automation"
+        );
+        assert!(
+            manager
+                .issue_automation(
+                    credential_id,
+                    user_id,
+                    &public_key,
+                    vec!["api:read".to_owned()],
+                    now,
+                    ACCESS_TOKEN_TTL_MS + 1,
+                )
+                .is_err(),
+            "automation credentials cannot exceed the hard ten-minute ceiling"
+        );
+        assert!(
+            manager
+                .issue_automation(
+                    credential_id,
+                    user_id,
+                    &public_key,
+                    vec!["admin".to_owned()],
+                    now,
+                    60_000,
+                )
+                .is_err(),
+            "callers cannot mint undeclared scopes"
         );
     }
 }

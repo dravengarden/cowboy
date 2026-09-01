@@ -107,6 +107,97 @@ fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
     }
 }
 
+fn validate_product_user_session(session: &ProductUserSession) -> Result<()> {
+    anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+    anyhow::ensure!(
+        (16..=128).contains(&session.session_id.len()),
+        "session id must be between 16 and 128 characters"
+    );
+    anyhow::ensure!(
+        matches!(session.client_kind.as_str(), "browser" | "native_shell"),
+        "invalid product session client kind"
+    );
+    anyhow::ensure!(
+        matches!(
+            session.principal_class.as_str(),
+            "human" | "automation" | "system"
+        ),
+        "invalid product session principal class"
+    );
+    anyhow::ensure!(
+        session
+            .revoke_reason
+            .as_ref()
+            .is_none_or(|value| (1..=128).contains(&value.len())),
+        "session revoke reason must be between 1 and 128 characters"
+    );
+    Ok(())
+}
+
+fn validate_active_client_claim(claim: &ActiveClientClaim) -> Result<()> {
+    anyhow::ensure!(
+        (16..=128).contains(&claim.client_id.len())
+            && claim.client_id.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            }),
+        "client id must be 16-128 URL-safe characters"
+    );
+    anyhow::ensure!(
+        matches!(
+            claim.principal_class.as_str(),
+            "human" | "automation" | "system"
+        ),
+        "invalid active-client principal class"
+    );
+    anyhow::ensure!(
+        matches!(
+            claim.client_kind.as_str(),
+            "browser" | "native_shell" | "cli" | "acp" | "automation"
+        ),
+        "invalid active-client kind"
+    );
+    anyhow::ensure!(
+        claim.principal_class != "human" || claim.user_id.is_some(),
+        "human active clients require a user"
+    );
+    anyhow::ensure!(claim.lease_ms >= 10_000, "active-client lease is too short");
+    anyhow::ensure!(
+        claim.reservation_ms >= 1_000 && claim.reservation_ms <= claim.lease_ms,
+        "active-client reservation must fit within its lease"
+    );
+    anyhow::ensure!(
+        claim.per_user_limit > 0 && claim.service_limit > 0 && claim.automation_limit > 0,
+        "active-client limits must be positive"
+    );
+    Ok(())
+}
+
+fn active_client_capacity(
+    counts: (i64, i64, i64),
+    claim: &ActiveClientClaim,
+) -> ActiveClientCapacity {
+    ActiveClientCapacity {
+        active_for_user: u32::try_from(counts.0.max(0)).unwrap_or(u32::MAX),
+        active_for_service: u32::try_from(counts.1.max(0)).unwrap_or(u32::MAX),
+        active_automation: u32::try_from(counts.2.max(0)).unwrap_or(u32::MAX),
+        per_user_limit: claim.per_user_limit,
+        service_limit: claim.service_limit,
+        automation_limit: claim.automation_limit,
+    }
+}
+
+fn active_client_has_capacity(capacity: &ActiveClientCapacity, principal_class: &str) -> bool {
+    match principal_class {
+        "human" => {
+            capacity.active_for_user < capacity.per_user_limit
+                && capacity.active_for_service < capacity.service_limit
+        }
+        "automation" => capacity.active_automation < capacity.automation_limit,
+        "system" => true,
+        _ => false,
+    }
+}
+
 fn validate_device_refresh(refresh: &ProductDeviceRefreshToken) -> Result<()> {
     anyhow::ensure!(
         crate::client_auth::valid_device_id(&refresh.device_id),
@@ -166,6 +257,46 @@ async fn insert_pg_device_refresh(
     .execute(&mut **transaction)
     .await
     .context("INSERT user device refresh token")?;
+    Ok(())
+}
+
+async fn revoke_active_client_session_pg(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: &str,
+    reason: &str,
+    revoked_at_ms: Option<i64>,
+) -> Result<()> {
+    match revoked_at_ms {
+        Some(revoked_at_ms) => {
+            sqlx::query(
+                "UPDATE active_client_leases SET revoked_at = \
+                 to_timestamp($3::double precision / 1000), revoke_reason = $2 \
+                 WHERE session_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(session_id)
+            .bind(reason)
+            .bind(revoked_at_ms)
+            .execute(&mut **transaction)
+            .await
+            .context("REVOKE active-client leases for session")?;
+        }
+        None => {
+            sqlx::query(
+                "UPDATE active_client_leases SET revoked_at = now(), revoke_reason = $2 \
+                 WHERE session_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(session_id)
+            .bind(reason)
+            .execute(&mut **transaction)
+            .await
+            .context("REVOKE active-client leases for session")?;
+        }
+    }
+    sqlx::query("DELETE FROM capacity_waiters WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut **transaction)
+        .await
+        .context("DELETE capacity waiter for session")?;
     Ok(())
 }
 
@@ -663,7 +794,10 @@ pub struct ProductUser {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductUserSession {
     pub token_hash: String,
+    pub session_id: String,
     pub user_id: String,
+    pub client_kind: String,
+    pub principal_class: String,
     pub created_at_ms: i64,
     pub expires_at_ms: i64,
     pub last_seen_at_ms: i64,
@@ -671,6 +805,109 @@ pub struct ProductUserSession {
     pub passkey_verified_at_ms: Option<i64>,
     pub primary_authenticated_at_ms: i64,
     pub primary_auth_method: Option<String>,
+    pub revoked_at_ms: Option<i64>,
+    pub revoke_reason: Option<String>,
+    pub auth_provider_id: Option<String>,
+    pub auth_issuer: Option<String>,
+    pub auth_subject: Option<String>,
+    pub auth_sid: Option<String>,
+    pub id_token_ciphertext: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductSessionAdmission {
+    Admitted {
+        active_sessions: u32,
+        limit: u32,
+        observed_overflow: bool,
+        revoked_session_ids: Vec<String>,
+    },
+    CapacityFull {
+        active_sessions: u32,
+        limit: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProductDeviceAdmission {
+    Admitted {
+        active_clients: u32,
+        limit: u32,
+        observed_overflow: bool,
+    },
+    CapacityFull {
+        active_clients: u32,
+        limit: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OidcBackchannelLogout {
+    Applied { revoked_sessions: u64 },
+    Replay,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveClientClaim {
+    pub client_id: String,
+    pub user_id: Option<String>,
+    pub principal_class: String,
+    pub session_id: Option<String>,
+    pub client_kind: String,
+    pub now_ms: i64,
+    pub lease_ms: i64,
+    pub reservation_ms: i64,
+    pub per_user_limit: u32,
+    pub service_limit: u32,
+    pub automation_limit: u32,
+    pub enforce: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveClientRelease<'a> {
+    pub client_id: &'a str,
+    pub fencing_token: i64,
+    pub reason: &'a str,
+    pub now_ms: i64,
+    pub reservation_ms: i64,
+    pub per_user_limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActiveClientCapacity {
+    pub active_for_user: u32,
+    pub active_for_service: u32,
+    pub active_automation: u32,
+    pub per_user_limit: u32,
+    pub service_limit: u32,
+    pub automation_limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ActiveClientLease {
+    pub client_id: String,
+    pub user_id: Option<String>,
+    pub principal_class: String,
+    pub session_id: Option<String>,
+    pub client_kind: String,
+    pub fencing_token: i64,
+    pub acquired_at_ms: i64,
+    pub heartbeat_at_ms: i64,
+    pub expires_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveClientAdmission {
+    Granted {
+        lease: ActiveClientLease,
+        capacity: ActiveClientCapacity,
+        observed_overflow: bool,
+    },
+    Waiting {
+        position: u32,
+        retry_after_ms: i64,
+        capacity: ActiveClientCapacity,
+    },
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -727,7 +964,10 @@ struct ProductUserRow {
 #[derive(sqlx::FromRow)]
 struct ProductUserSessionRow {
     token_hash: String,
+    session_id: String,
     user_id: String,
+    client_kind: String,
+    principal_class: String,
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     last_seen_at: DateTime<Utc>,
@@ -735,6 +975,42 @@ struct ProductUserSessionRow {
     passkey_verified_at: Option<DateTime<Utc>>,
     primary_authenticated_at: DateTime<Utc>,
     primary_auth_method: Option<String>,
+    revoked_at: Option<DateTime<Utc>>,
+    revoke_reason: Option<String>,
+    auth_provider_id: Option<String>,
+    auth_issuer: Option<String>,
+    auth_subject: Option<String>,
+    auth_sid: Option<String>,
+    id_token_ciphertext: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ActiveClientLeaseRow {
+    client_id: String,
+    user_id: Option<String>,
+    principal_class: String,
+    session_id: Option<String>,
+    client_kind: String,
+    fencing_token: i64,
+    acquired_at: DateTime<Utc>,
+    heartbeat_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+impl ActiveClientLeaseRow {
+    fn into_lease(self) -> ActiveClientLease {
+        ActiveClientLease {
+            client_id: self.client_id,
+            user_id: self.user_id,
+            principal_class: self.principal_class,
+            session_id: self.session_id,
+            client_kind: self.client_kind,
+            fencing_token: self.fencing_token,
+            acquired_at_ms: self.acquired_at.timestamp_millis(),
+            heartbeat_at_ms: self.heartbeat_at.timestamp_millis(),
+            expires_at_ms: self.expires_at.timestamp_millis(),
+        }
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -841,7 +1117,10 @@ impl ProductUserSession {
     fn from_pg(row: ProductUserSessionRow) -> Self {
         Self {
             token_hash: row.token_hash,
+            session_id: row.session_id,
             user_id: row.user_id,
+            client_kind: row.client_kind,
+            principal_class: row.principal_class,
             created_at_ms: row.created_at.timestamp_millis(),
             expires_at_ms: row.expires_at.timestamp_millis(),
             last_seen_at_ms: row.last_seen_at.timestamp_millis(),
@@ -851,6 +1130,13 @@ impl ProductUserSession {
                 .map(|value| value.timestamp_millis()),
             primary_authenticated_at_ms: row.primary_authenticated_at.timestamp_millis(),
             primary_auth_method: row.primary_auth_method,
+            revoked_at_ms: row.revoked_at.map(|value| value.timestamp_millis()),
+            revoke_reason: row.revoke_reason,
+            auth_provider_id: row.auth_provider_id,
+            auth_issuer: row.auth_issuer,
+            auth_subject: row.auth_subject,
+            auth_sid: row.auth_sid,
+            id_token_ciphertext: row.id_token_ciphertext,
         }
     }
 }
@@ -1470,6 +1756,23 @@ impl Store {
         dispatch_storage!(self, insert_user_session(session))
     }
 
+    /// Atomically admit a new browser/native session under the configured
+    /// per-user limit. Existing sessions above a reduced limit drain naturally;
+    /// a normal exact-cap admission may replace the least recently active row.
+    #[allow(clippy::too_many_lines)] // one backend-neutral admission contract dispatch
+    pub async fn admit_user_session(
+        &self,
+        session: &ProductUserSession,
+        limit: u32,
+        enforce: bool,
+        newest_wins: bool,
+    ) -> Result<ProductSessionAdmission> {
+        dispatch_storage!(
+            self,
+            admit_user_session(session, limit, enforce, newest_wins)
+        )
+    }
+
     /// Load a login session by stored token hash.
     ///
     /// # Errors
@@ -1495,6 +1798,147 @@ impl Store {
     /// Returns when the delete fails.
     pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
         dispatch_storage!(self, delete_user_sessions_for_user(user_id))
+    }
+
+    /// List live login sessions for one product user, newest activity first.
+    pub async fn list_user_sessions_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ProductUserSession>> {
+        dispatch_storage!(self, list_user_sessions_for_user(user_id, now_ms))
+    }
+
+    /// Revoke one stable login-session identity owned by the caller.
+    pub async fn revoke_user_session_for_user(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_session_for_user(user_id, session_id, reason, now_ms)
+        )
+    }
+
+    /// Revoke every live Cowboy session for one user and one configured
+    /// external identity provider. Password sessions and other providers stay
+    /// independent.
+    pub async fn revoke_user_sessions_for_provider(
+        &self,
+        user_id: &str,
+        provider_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        dispatch_storage!(
+            self,
+            revoke_user_sessions_for_provider(user_id, provider_id, reason, now_ms)
+        )
+    }
+
+    /// Atomically consume a provider Logout Token jti and revoke only sessions
+    /// bound to that provider identity. Replays never repeat logout effects.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one replay-safe provider logout transaction
+    pub async fn apply_oidc_backchannel_logout(
+        &self,
+        provider_id: &str,
+        issuer: &str,
+        subject: Option<&str>,
+        provider_session_id: Option<&str>,
+        token_id: &str,
+        token_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<OidcBackchannelLogout> {
+        dispatch_storage!(
+            self,
+            apply_oidc_backchannel_logout(
+                provider_id,
+                issuer,
+                subject,
+                provider_session_id,
+                token_id,
+                token_expires_at_ms,
+                now_ms
+            )
+        )
+    }
+
+    /// Persist the security audit record for one short-lived, sender-bound
+    /// automation credential. No token or public key is written to storage.
+    pub async fn record_automation_credential_issued(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        name: &str,
+        scopes: &[String],
+        expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<()> {
+        dispatch_storage!(
+            self,
+            record_automation_credential_issued(
+                user_id,
+                credential_id,
+                name,
+                scopes,
+                expires_at_ms,
+                now_ms
+            )
+        )
+    }
+
+    /// Claim or renew one logical interactive-client lease. Admission is
+    /// serialized by the storage backend so every Controller process observes
+    /// the same service and per-user limits.
+    #[allow(clippy::too_many_lines)] // one serialized fairness, reservation, and lease transaction
+    pub async fn claim_active_client(
+        &self,
+        claim: &ActiveClientClaim,
+    ) -> Result<ActiveClientAdmission> {
+        dispatch_storage!(self, claim_active_client(claim))
+    }
+
+    /// Extend a live lease only when its fencing token still matches.
+    pub async fn heartbeat_active_client(
+        &self,
+        client_id: &str,
+        fencing_token: i64,
+        now_ms: i64,
+        lease_ms: i64,
+    ) -> Result<bool> {
+        dispatch_storage!(
+            self,
+            heartbeat_active_client(client_id, fencing_token, now_ms, lease_ms)
+        )
+    }
+
+    /// Release a live lease using fencing, then reserve the freed slot for the
+    /// next fair waiter. Returns whether this caller owned the lease.
+    pub async fn release_active_client(&self, release: &ActiveClientRelease<'_>) -> Result<bool> {
+        dispatch_storage!(self, release_active_client(release))
+    }
+
+    /// Release one of this account's live logical clients. The user predicate
+    /// and fencing token are checked in the same database update so a stale UI
+    /// cannot disconnect a replacement lease or another account's client.
+    pub async fn release_active_client_for_user(
+        &self,
+        user_id: &str,
+        release: &ActiveClientRelease<'_>,
+    ) -> Result<bool> {
+        dispatch_storage!(self, release_active_client_for_user(user_id, release))
+    }
+
+    /// List this account's live logical clients for account/security UI.
+    pub async fn list_active_clients_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ActiveClientLease>> {
+        dispatch_storage!(self, list_active_clients_for_user(user_id, now_ms))
     }
 
     /// Atomically replace one cookie session after primary authentication.
@@ -1582,6 +2026,19 @@ impl Store {
         refresh: &ProductDeviceRefreshToken,
     ) -> Result<()> {
         dispatch_storage!(self, insert_user_device(device, refresh))
+    }
+
+    /// Atomically admit a new authorized CLI/ACP client. Existing clients are
+    /// never evicted implicitly: when a configured limit is reached the user
+    /// must revoke a client they recognize before enrolling another one.
+    pub async fn admit_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+        limit: u32,
+        enforce: bool,
+    ) -> Result<ProductDeviceAdmission> {
+        dispatch_storage!(self, admit_user_device(device, refresh, limit, enforce))
     }
 
     /// List a user's active device sessions without returning credential hashes.
@@ -1860,6 +2317,159 @@ impl PostgresStorage {
         .await
         .context("cancelling Machine enrollment")?;
         Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one atomic PostgreSQL admission, eviction, fencing, and insert transaction
+    pub async fn admit_user_session(
+        &self,
+        session: &ProductUserSession,
+        limit: u32,
+        enforce: bool,
+        newest_wins: bool,
+    ) -> Result<ProductSessionAdmission> {
+        validate_product_user_session(session)?;
+        anyhow::ensure!(limit > 0, "signed-in session limit must be positive");
+        let user_agent = truncate_user_agent(session.user_agent.as_deref());
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user session admission")?;
+        let locked =
+            sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+                .bind(&session.user_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .context("LOCK user for session admission")?;
+        anyhow::ensure!(locked.is_some(), "user is unavailable");
+        let expired_session_ids = sqlx::query_scalar::<_, String>(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'expired' \
+             WHERE user_id = $1 AND revoked_at IS NULL AND expires_at <= now() \
+             RETURNING session_id",
+        )
+        .bind(&session.user_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .context("REVOKE expired sessions before admission")?;
+        for expired_session_id in expired_session_ids {
+            revoke_active_client_session_pg(&mut transaction, &expired_session_id, "expired", None)
+                .await?;
+        }
+
+        let mut revoked_session_ids = Vec::new();
+        if newest_wins {
+            revoked_session_ids = sqlx::query_scalar::<_, String>(
+                "UPDATE user_sessions SET revoked_at = now(), \
+                 revoke_reason = 'single_session_replaced' WHERE user_id = $1 \
+                 AND revoked_at IS NULL RETURNING session_id",
+            )
+            .bind(&session.user_id)
+            .fetch_all(&mut *transaction)
+            .await
+            .context("REVOKE sessions for newest-wins admission")?;
+            for revoked_session_id in &revoked_session_ids {
+                revoke_active_client_session_pg(
+                    &mut transaction,
+                    revoked_session_id,
+                    "single_session_replaced",
+                    None,
+                )
+                .await?;
+            }
+        }
+        let mut active = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM user_sessions WHERE user_id = $1 \
+             AND revoked_at IS NULL AND expires_at > now()",
+        )
+        .bind(&session.user_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active user sessions")?;
+        let limit_i64 = i64::from(limit);
+        if enforce && active > limit_i64 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT over-limit session drain")?;
+            return Ok(ProductSessionAdmission::CapacityFull {
+                active_sessions: u32::try_from(active).unwrap_or(u32::MAX),
+                limit,
+            });
+        }
+        let observed_overflow = active >= limit_i64;
+        if enforce && active == limit_i64 {
+            let revoked = sqlx::query_scalar::<_, String>(
+                "UPDATE user_sessions SET revoked_at = now(), \
+                 revoke_reason = 'session_capacity_replaced' WHERE session_id = ( \
+                   SELECT session_id FROM user_sessions WHERE user_id = $1 \
+                   AND revoked_at IS NULL AND expires_at > now() \
+                   ORDER BY last_seen_at ASC, created_at ASC, session_id ASC LIMIT 1 \
+                   FOR UPDATE \
+                 ) RETURNING session_id",
+            )
+            .bind(&session.user_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("REVOKE least-active user session")?;
+            let Some(revoked) = revoked else {
+                anyhow::bail!("session capacity changed during admission");
+            };
+            revoke_active_client_session_pg(
+                &mut transaction,
+                &revoked,
+                "session_capacity_replaced",
+                None,
+            )
+            .await?;
+            revoked_session_ids.push(revoked);
+            active -= 1;
+        }
+        sqlx::query(
+            "INSERT INTO user_sessions (token_hash, session_id, user_id, client_kind, \
+             principal_class, created_at, expires_at, last_seen_at, user_agent, \
+             passkey_verified_at, primary_authenticated_at, primary_auth_method, revoked_at, \
+             revoke_reason, auth_provider_id, auth_issuer, auth_subject, auth_sid, \
+             id_token_ciphertext) VALUES ($1, $2, $3, $4, $5, \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000), \
+             to_timestamp($8::double precision / 1000), $9, \
+             to_timestamp($10::double precision / 1000), \
+             to_timestamp($11::double precision / 1000), $12, \
+             to_timestamp($13::double precision / 1000), $14, $15, $16, $17, $18, $19)",
+        )
+        .bind(&session.token_hash)
+        .bind(&session.session_id)
+        .bind(&session.user_id)
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.created_at_ms)
+        .bind(session.expires_at_ms)
+        .bind(session.last_seen_at_ms)
+        .bind(user_agent.as_deref())
+        .bind(session.passkey_verified_at_ms)
+        .bind(session.primary_authenticated_at_ms)
+        .bind(session.primary_auth_method.as_deref())
+        .bind(session.revoked_at_ms)
+        .bind(session.revoke_reason.as_deref())
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT admitted user session")?;
+        active += 1;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user session admission")?;
+        Ok(ProductSessionAdmission::Admitted {
+            active_sessions: u32::try_from(active).unwrap_or(u32::MAX),
+            limit,
+            observed_overflow,
+            revoked_session_ids,
+        })
     }
 
     /// Load the active public key for a Machine.
@@ -3014,20 +3624,26 @@ impl PostgresStorage {
     }
 
     pub async fn insert_user_session(&self, session: &ProductUserSession) -> Result<()> {
-        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        validate_product_user_session(session)?;
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         sqlx::query(
-            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
+            "INSERT INTO user_sessions (token_hash, session_id, user_id, client_kind, \
+             principal_class, created_at, expires_at, \
              last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
-             primary_auth_method) VALUES ( \
-             $1, $2, to_timestamp($3::double precision / 1000), \
-             to_timestamp($4::double precision / 1000), \
-             to_timestamp($5::double precision / 1000), $6, \
+             primary_auth_method, revoked_at, revoke_reason, auth_provider_id, auth_issuer, \
+             auth_subject, auth_sid, id_token_ciphertext) VALUES ( \
+             $1, $2, $3, $4, $5, to_timestamp($6::double precision / 1000), \
              to_timestamp($7::double precision / 1000), \
-             to_timestamp($8::double precision / 1000), $9)",
+             to_timestamp($8::double precision / 1000), $9, \
+             to_timestamp($10::double precision / 1000), \
+             to_timestamp($11::double precision / 1000), $12, \
+             to_timestamp($13::double precision / 1000), $14, $15, $16, $17, $18, $19)",
         )
         .bind(&session.token_hash)
+        .bind(&session.session_id)
         .bind(&session.user_id)
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
         .bind(session.created_at_ms)
         .bind(session.expires_at_ms)
         .bind(session.last_seen_at_ms)
@@ -3035,6 +3651,13 @@ impl PostgresStorage {
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
         .bind(session.primary_auth_method.as_deref())
+        .bind(session.revoked_at_ms)
+        .bind(session.revoke_reason.as_deref())
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
         .execute(&self.pool)
         .await
         .context("INSERT user session")?;
@@ -3046,9 +3669,11 @@ impl PostgresStorage {
         token_hash: &str,
     ) -> Result<Option<ProductUserSession>> {
         let row = sqlx::query_as::<_, ProductUserSessionRow>(
-            "SELECT token_hash, user_id, created_at, expires_at, last_seen_at, user_agent, \
-             passkey_verified_at, primary_authenticated_at, primary_auth_method \
-             FROM user_sessions WHERE token_hash = $1",
+            "SELECT token_hash, session_id, user_id, client_kind, principal_class, \
+             created_at, expires_at, last_seen_at, user_agent, passkey_verified_at, \
+             primary_authenticated_at, primary_auth_method, revoked_at, revoke_reason, \
+             auth_provider_id, auth_issuer, auth_subject, auth_sid, id_token_ciphertext \
+             FROM user_sessions WHERE token_hash = $1 AND revoked_at IS NULL",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
@@ -3058,21 +3683,811 @@ impl PostgresStorage {
     }
 
     pub async fn delete_user_session(&self, token_hash: &str) -> Result<()> {
-        sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1")
-            .bind(token_hash)
-            .execute(&self.pool)
-            .await
-            .context("DELETE user session")?;
+        let mut transaction = self.pool.begin().await.context("BEGIN local logout")?;
+        let session_id = sqlx::query_scalar::<_, String>(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'local_logout' \
+             WHERE token_hash = $1 AND revoked_at IS NULL RETURNING session_id",
+        )
+        .bind(token_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("DELETE user session")?;
+        if let Some(session_id) = session_id {
+            revoke_active_client_session_pg(&mut transaction, &session_id, "local_logout", None)
+                .await?;
+        }
+        transaction.commit().await.context("COMMIT local logout")?;
         Ok(())
     }
 
     pub async fn delete_user_sessions_for_user(&self, user_id: &str) -> Result<u64> {
-        let result = sqlx::query("DELETE FROM user_sessions WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&self.pool)
+        let mut transaction = self
+            .pool
+            .begin()
             .await
-            .with_context(|| format!("DELETE user sessions for {user_id}"))?;
+            .context("BEGIN all-sessions logout")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = now(), \
+             revoke_reason = 'all_sessions_logout' WHERE revoked_at IS NULL AND session_id IN \
+             (SELECT session_id FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE all active-client leases for user")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN \
+             (SELECT session_id FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE all capacity waiters for user")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = now(), revoke_reason = 'all_sessions_logout' \
+             WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("DELETE user sessions for {user_id}"))?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT all-sessions logout")?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn list_user_sessions_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ProductUserSession>> {
+        let rows = sqlx::query_as::<_, ProductUserSessionRow>(
+            "SELECT token_hash, session_id, user_id, client_kind, principal_class, \
+             created_at, expires_at, last_seen_at, user_agent, passkey_verified_at, \
+             primary_authenticated_at, primary_auth_method, revoked_at, revoke_reason, \
+             auth_provider_id, auth_issuer, auth_subject, auth_sid, id_token_ciphertext \
+             FROM user_sessions WHERE user_id = $1 AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($2::double precision / 1000) \
+             ORDER BY last_seen_at DESC, created_at DESC, session_id",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("LIST live user sessions for {user_id}"))?;
+        Ok(rows.into_iter().map(ProductUserSession::from_pg).collect())
+    }
+
+    pub async fn revoke_user_session_for_user(
+        &self,
+        user_id: &str,
+        session_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        anyhow::ensure!((1..=128).contains(&reason.len()), "invalid revoke reason");
+        let mut transaction = self.pool.begin().await.context("BEGIN session revoke")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE user_id = $1 AND session_id = $2 AND revoked_at IS NULL \
+             RETURNING session_id",
+        )
+        .bind(user_id)
+        .bind(session_id)
+        .bind(reason)
+        .bind(now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE user session {session_id}"))?;
+        if result.is_some() {
+            revoke_active_client_session_pg(&mut transaction, session_id, reason, Some(now_ms))
+                .await?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT session revoke")?;
+        Ok(u64::from(result.is_some()))
+    }
+
+    pub async fn revoke_user_sessions_for_provider(
+        &self,
+        user_id: &str,
+        provider_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<u64> {
+        anyhow::ensure!(
+            (1..=128).contains(&provider_id.len()),
+            "invalid provider id"
+        );
+        anyhow::ensure!((1..=128).contains(&reason.len()), "invalid revoke reason");
+        let mut transaction = self.pool.begin().await.context("BEGIN provider logout")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE revoked_at IS NULL AND session_id IN (SELECT session_id FROM user_sessions \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(reason)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE provider active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN (SELECT session_id FROM user_sessions \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL)",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE provider capacity waiters")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE user_id = $1 AND auth_provider_id = $2 AND revoked_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(reason)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("REVOKE sessions for provider {provider_id}"))?;
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+             principal_class, detail) VALUES (to_timestamp($3::double precision / 1000), \
+             'provider_sessions_revoked', $1, 'human', jsonb_build_object('provider_id', $2, \
+             'revoked_sessions', $4::bigint))",
+        )
+        .bind(user_id)
+        .bind(provider_id)
+        .bind(now_ms)
+        .bind(i64::try_from(result.rows_affected()).unwrap_or(i64::MAX))
+        .execute(&mut *transaction)
+        .await
+        .context("AUDIT provider logout")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT provider logout")?;
+        Ok(result.rows_affected())
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // one replay-safe PostgreSQL provider logout transaction
+    pub async fn apply_oidc_backchannel_logout(
+        &self,
+        provider_id: &str,
+        issuer: &str,
+        subject: Option<&str>,
+        provider_session_id: Option<&str>,
+        token_id: &str,
+        token_expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<OidcBackchannelLogout> {
+        anyhow::ensure!(
+            (1..=128).contains(&provider_id.len()),
+            "invalid provider id"
+        );
+        anyhow::ensure!((1..=2_048).contains(&issuer.len()), "invalid OIDC issuer");
+        anyhow::ensure!(
+            subject.is_some() || provider_session_id.is_some(),
+            "OIDC logout needs sub or sid"
+        );
+        anyhow::ensure!(
+            (1..=512).contains(&token_id.len()),
+            "invalid OIDC logout jti"
+        );
+        anyhow::ensure!(token_expires_at_ms > now_ms, "expired OIDC logout token");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN OIDC back-channel logout")?;
+        sqlx::query("DELETE FROM oidc_logout_jtis WHERE expires_at <= to_timestamp($1::double precision / 1000)")
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("DELETE expired OIDC logout jtis")?;
+        let inserted = sqlx::query(
+            "INSERT INTO oidc_logout_jtis (provider_id, jti, expires_at) VALUES \
+             ($1, $2, to_timestamp($3::double precision / 1000)) ON CONFLICT DO NOTHING",
+        )
+        .bind(provider_id)
+        .bind(token_id)
+        .bind(token_expires_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT OIDC logout jti")?;
+        if inserted.rows_affected() == 0 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT OIDC logout replay")?;
+            return Ok(OidcBackchannelLogout::Replay);
+        }
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($5::double precision / 1000), revoke_reason = 'oidc_backchannel_logout' \
+             WHERE revoked_at IS NULL AND session_id IN (SELECT session_id FROM user_sessions \
+             WHERE revoked_at IS NULL AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4))",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE OIDC active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE session_id IN (SELECT session_id FROM user_sessions \
+             WHERE revoked_at IS NULL AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4))",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE OIDC capacity waiters")?;
+        let result = sqlx::query(
+            "UPDATE user_sessions SET revoked_at = to_timestamp($5::double precision / 1000), \
+             revoke_reason = 'oidc_backchannel_logout' WHERE revoked_at IS NULL \
+             AND auth_provider_id = $1 AND auth_issuer = $2 \
+             AND ($3::text IS NULL OR auth_subject = $3) \
+             AND ($4::text IS NULL OR auth_sid = $4)",
+        )
+        .bind(provider_id)
+        .bind(issuer)
+        .bind(subject)
+        .bind(provider_session_id)
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE OIDC sessions")?;
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, principal_class, detail) \
+             VALUES (to_timestamp($3::double precision / 1000), 'oidc_backchannel_logout', \
+             'system', jsonb_build_object('provider_id', $1, 'revoked_sessions', $2::bigint))",
+        )
+        .bind(provider_id)
+        .bind(i64::try_from(result.rows_affected()).unwrap_or(i64::MAX))
+        .bind(now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("AUDIT OIDC back-channel logout")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT OIDC back-channel logout")?;
+        Ok(OidcBackchannelLogout::Applied {
+            revoked_sessions: result.rows_affected(),
+        })
+    }
+
+    pub async fn record_automation_credential_issued(
+        &self,
+        user_id: &str,
+        credential_id: &str,
+        name: &str,
+        scopes: &[String],
+        expires_at_ms: i64,
+        now_ms: i64,
+    ) -> Result<()> {
+        anyhow::ensure!(valid_product_user_id(user_id), "invalid product user id");
+        anyhow::ensure!(
+            valid_product_user_id(credential_id),
+            "invalid credential id"
+        );
+        anyhow::ensure!(
+            (1..=64).contains(&name.chars().count()),
+            "invalid credential name"
+        );
+        anyhow::ensure!(expires_at_ms > now_ms, "expired automation credential");
+        anyhow::ensure!(
+            !scopes.is_empty()
+                && scopes.iter().all(|scope| {
+                    matches!(scope.as_str(), "api:read" | "sessions:write" | "websocket")
+                }),
+            "invalid automation credential scopes"
+        );
+        sqlx::query(
+            "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+             principal_class, detail) VALUES (to_timestamp($6::double precision / 1000), \
+             'automation_credential_issued', $1, 'human', jsonb_build_object( \
+             'credential_id', $2, 'name', $3, 'scopes', to_jsonb($4::text[]), \
+             'expires_at_ms', $5::bigint))",
+        )
+        .bind(user_id)
+        .bind(credential_id)
+        .bind(name)
+        .bind(scopes)
+        .bind(expires_at_ms)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await
+        .context("AUDIT automation credential issuance")?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)] // one serialized PostgreSQL fairness, reservation, and lease transaction
+    pub async fn claim_active_client(
+        &self,
+        claim: &ActiveClientClaim,
+    ) -> Result<ActiveClientAdmission> {
+        validate_active_client_claim(claim)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN active-client admission")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK active-client capacity")?;
+        sqlx::query(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($1::double precision / 1000), revoke_reason = 'lease_expired' \
+             WHERE revoked_at IS NULL AND expires_at <= \
+             to_timestamp($1::double precision / 1000)",
+        )
+        .bind(claim.now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("REVOKE expired active-client leases")?;
+        sqlx::query(
+            "DELETE FROM capacity_waiters WHERE expires_at <= \
+             to_timestamp($1::double precision / 1000) OR (reserved_until IS NOT NULL AND \
+             reserved_until <= to_timestamp($1::double precision / 1000))",
+        )
+        .bind(claim.now_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("DELETE expired active-client waiters")?;
+
+        let existing = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "SELECT client_id, user_id, principal_class, session_id, client_kind, \
+             fencing_token, acquired_at, heartbeat_at, expires_at FROM active_client_leases \
+             WHERE client_id = $1 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000) FOR UPDATE",
+        )
+        .bind(&claim.client_id)
+        .bind(claim.now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("SELECT existing active-client lease")?;
+        if let Some(existing) = existing {
+            anyhow::ensure!(
+                existing.user_id == claim.user_id
+                    && existing.principal_class == claim.principal_class
+                    && existing.session_id == claim.session_id,
+                "active-client identity changed while its lease is live"
+            );
+            let lease = sqlx::query_as::<_, ActiveClientLeaseRow>(
+                "UPDATE active_client_leases SET heartbeat_at = \
+                 to_timestamp($3::double precision / 1000), expires_at = \
+                 to_timestamp(($3 + $4)::double precision / 1000), client_kind = $5 \
+                 WHERE client_id = $1 AND fencing_token = $2 RETURNING client_id, user_id, \
+                 principal_class, session_id, client_kind, fencing_token, acquired_at, \
+                 heartbeat_at, expires_at",
+            )
+            .bind(&claim.client_id)
+            .bind(existing.fencing_token)
+            .bind(claim.now_ms)
+            .bind(claim.lease_ms)
+            .bind(&claim.client_kind)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("RENEW existing active-client lease")?
+            .into_lease();
+            sqlx::query("DELETE FROM capacity_waiters WHERE client_id = $1")
+                .bind(&claim.client_id)
+                .execute(&mut *transaction)
+                .await
+                .context("DELETE waiter for renewed active client")?;
+            let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+                "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+                 count(*) FILTER (WHERE principal_class = 'human'), \
+                 count(*) FILTER (WHERE principal_class = 'automation') \
+                 FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+                 to_timestamp($2::double precision / 1000)",
+            )
+            .bind(claim.user_id.as_deref())
+            .bind(claim.now_ms)
+            .fetch_one(&mut *transaction)
+            .await
+            .context("COUNT active clients after renewal")?;
+            let capacity = active_client_capacity(counts, claim);
+            let observed_overflow = match claim.principal_class.as_str() {
+                "human" => {
+                    capacity.active_for_user > capacity.per_user_limit
+                        || capacity.active_for_service > capacity.service_limit
+                }
+                "automation" => capacity.active_automation > capacity.automation_limit,
+                _ => false,
+            };
+            transaction
+                .commit()
+                .await
+                .context("COMMIT active-client renewal")?;
+            return Ok(ActiveClientAdmission::Granted {
+                lease,
+                capacity,
+                observed_overflow,
+            });
+        }
+
+        let counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+             count(*) FILTER (WHERE principal_class = 'human'), \
+             count(*) FILTER (WHERE principal_class = 'automation') \
+             FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000)",
+        )
+        .bind(claim.user_id.as_deref())
+        .bind(claim.now_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active clients before admission")?;
+        let capacity = active_client_capacity(counts, claim);
+        let has_capacity = active_client_has_capacity(&capacity, &claim.principal_class);
+
+        let waiter_expires_at_ms = claim
+            .now_ms
+            .saturating_add(claim.lease_ms.saturating_mul(3).max(300_000));
+        if claim.enforce && claim.principal_class != "system" {
+            let waiter_id = format!(
+                "wait-{}",
+                crate::admin::hex_sha256(claim.client_id.as_bytes())
+            );
+            sqlx::query(
+                "INSERT INTO capacity_waiters (waiter_id, client_id, user_id, principal_class, \
+                 session_id, client_kind, requested_at, expires_at, reserved_until) VALUES ( \
+                 $1, $2, $3, $4, $5, $6, to_timestamp($7::double precision / 1000), \
+                 to_timestamp($8::double precision / 1000), NULL) ON CONFLICT (client_id) \
+                 DO UPDATE SET user_id = EXCLUDED.user_id, principal_class = \
+                 EXCLUDED.principal_class, session_id = EXCLUDED.session_id, client_kind = \
+                 EXCLUDED.client_kind, expires_at = EXCLUDED.expires_at",
+            )
+            .bind(waiter_id)
+            .bind(&claim.client_id)
+            .bind(claim.user_id.as_deref())
+            .bind(&claim.principal_class)
+            .bind(claim.session_id.as_deref())
+            .bind(&claim.client_kind)
+            .bind(claim.now_ms)
+            .bind(waiter_expires_at_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("UPSERT active-client waiter")?;
+            let ordered = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT client_id, requested_at, waiter_id, \
+                 row_number() OVER (PARTITION BY COALESCE(user_id, client_id) \
+                 ORDER BY requested_at, waiter_id) AS lane_position FROM capacity_waiters \
+                 WHERE principal_class = $1 AND expires_at > \
+                 to_timestamp($2::double precision / 1000)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id",
+            )
+            .bind(&claim.principal_class)
+            .bind(claim.now_ms)
+            .fetch_all(&mut *transaction)
+            .await
+            .context("ORDER active-client waiters")?;
+            let first_eligible = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.principal_class = $1 AND waiters.expires_at > \
+                 to_timestamp($2::double precision / 1000) AND ($1 <> 'human' OR (SELECT \
+                 count(*) FROM active_client_leases AS leases WHERE leases.principal_class = \
+                 'human' AND leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($2::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(&claim.principal_class)
+            .bind(claim.now_ms)
+            .bind(i64::from(claim.per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT first eligible active-client waiter")?;
+            let position = ordered
+                .iter()
+                .position(|client_id| client_id == &claim.client_id)
+                .map_or(u32::MAX, |position| {
+                    u32::try_from(position + 1).unwrap_or(u32::MAX)
+                });
+            if !has_capacity || first_eligible.as_deref() != Some(claim.client_id.as_str()) {
+                transaction
+                    .commit()
+                    .await
+                    .context("COMMIT active-client waiter")?;
+                return Ok(ActiveClientAdmission::Waiting {
+                    position,
+                    retry_after_ms: claim.reservation_ms,
+                    capacity,
+                });
+            }
+        }
+
+        sqlx::query("DELETE FROM capacity_waiters WHERE client_id = $1")
+            .bind(&claim.client_id)
+            .execute(&mut *transaction)
+            .await
+            .context("DELETE admitted active-client waiter")?;
+        let lease = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "INSERT INTO active_client_leases (client_id, user_id, principal_class, session_id, \
+             client_kind, fencing_token, acquired_at, heartbeat_at, expires_at, revoked_at, \
+             revoke_reason) VALUES ($1, $2, $3, $4, $5, 1, \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp(($6 + $7)::double precision / 1000), NULL, NULL) \
+             ON CONFLICT (client_id) DO UPDATE SET user_id = EXCLUDED.user_id, \
+             principal_class = EXCLUDED.principal_class, session_id = EXCLUDED.session_id, \
+             client_kind = EXCLUDED.client_kind, fencing_token = \
+             active_client_leases.fencing_token + 1, acquired_at = EXCLUDED.acquired_at, \
+             heartbeat_at = EXCLUDED.heartbeat_at, expires_at = EXCLUDED.expires_at, \
+             revoked_at = NULL, revoke_reason = NULL RETURNING client_id, user_id, \
+             principal_class, session_id, client_kind, fencing_token, acquired_at, \
+             heartbeat_at, expires_at",
+        )
+        .bind(&claim.client_id)
+        .bind(claim.user_id.as_deref())
+        .bind(&claim.principal_class)
+        .bind(claim.session_id.as_deref())
+        .bind(&claim.client_kind)
+        .bind(claim.now_ms)
+        .bind(claim.lease_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("UPSERT admitted active-client lease")?
+        .into_lease();
+        let final_counts = sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT count(*) FILTER (WHERE principal_class = 'human' AND user_id = $1), \
+             count(*) FILTER (WHERE principal_class = 'human'), \
+             count(*) FILTER (WHERE principal_class = 'automation') \
+             FROM active_client_leases WHERE revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000)",
+        )
+        .bind(claim.user_id.as_deref())
+        .bind(claim.now_ms)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active clients after admission")?;
+        let final_capacity = active_client_capacity(final_counts, claim);
+        transaction
+            .commit()
+            .await
+            .context("COMMIT active-client admission")?;
+        Ok(ActiveClientAdmission::Granted {
+            lease,
+            capacity: final_capacity,
+            observed_overflow: !has_capacity,
+        })
+    }
+
+    pub async fn heartbeat_active_client(
+        &self,
+        client_id: &str,
+        fencing_token: i64,
+        now_ms: i64,
+        lease_ms: i64,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE active_client_leases SET heartbeat_at = \
+             to_timestamp($3::double precision / 1000), expires_at = \
+             to_timestamp(($3 + $4)::double precision / 1000) WHERE client_id = $1 \
+             AND fencing_token = $2 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($3::double precision / 1000)",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(now_ms)
+        .bind(lease_ms)
+        .execute(&self.pool)
+        .await
+        .context("HEARTBEAT active-client lease")?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn release_active_client(&self, release: &ActiveClientRelease<'_>) -> Result<bool> {
+        let ActiveClientRelease {
+            client_id,
+            fencing_token,
+            reason,
+            now_ms,
+            reservation_ms,
+            per_user_limit,
+        } = *release;
+        anyhow::ensure!(
+            (1..=128).contains(&reason.len()),
+            "invalid lease release reason"
+        );
+        anyhow::ensure!(per_user_limit > 0, "invalid per-user active-client limit");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN active-client release")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK active-client release")?;
+        let released_class = sqlx::query_scalar::<_, String>(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE client_id = $1 AND fencing_token = $2 AND revoked_at IS NULL \
+             RETURNING principal_class",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(reason)
+        .bind(now_ms)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("RELEASE active-client lease")?;
+        if let Some(released_class) = released_class.as_deref() {
+            let next = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.expires_at > to_timestamp($1::double precision / 1000) AND \
+                 waiters.principal_class = $2 AND ($2 <> 'human' OR (SELECT count(*) FROM \
+                 active_client_leases AS leases WHERE leases.principal_class = 'human' AND \
+                 leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($1::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(now_ms)
+            .bind(released_class)
+            .bind(i64::from(per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT next active-client waiter")?;
+            if let Some(next) = next {
+                sqlx::query(
+                    "UPDATE capacity_waiters SET reserved_until = \
+                     to_timestamp(($2 + $3)::double precision / 1000) WHERE client_id = $1",
+                )
+                .bind(next)
+                .bind(now_ms)
+                .bind(reservation_ms)
+                .execute(&mut *transaction)
+                .await
+                .context("RESERVE released active-client slot")?;
+            }
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT active-client release")?;
+        Ok(released_class.is_some())
+    }
+
+    pub async fn release_active_client_for_user(
+        &self,
+        user_id: &str,
+        release: &ActiveClientRelease<'_>,
+    ) -> Result<bool> {
+        let ActiveClientRelease {
+            client_id,
+            fencing_token,
+            reason,
+            now_ms,
+            reservation_ms,
+            per_user_limit,
+        } = *release;
+        anyhow::ensure!(!user_id.is_empty(), "invalid active-client owner");
+        anyhow::ensure!(
+            (1..=128).contains(&reason.len()),
+            "invalid lease release reason"
+        );
+        anyhow::ensure!(per_user_limit > 0, "invalid per-user active-client limit");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user active-client release")?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtext('cowboy-active-client-capacity-v1'))")
+            .execute(&mut *transaction)
+            .await
+            .context("LOCK user active-client release")?;
+        let released_class = sqlx::query_scalar::<_, String>(
+            "UPDATE active_client_leases SET revoked_at = \
+             to_timestamp($4::double precision / 1000), revoke_reason = $3 \
+             WHERE client_id = $1 AND fencing_token = $2 AND user_id = $5 \
+             AND revoked_at IS NULL RETURNING principal_class",
+        )
+        .bind(client_id)
+        .bind(fencing_token)
+        .bind(reason)
+        .bind(now_ms)
+        .bind(user_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("RELEASE user active-client lease")?;
+        if let Some(released_class) = released_class.as_deref() {
+            let next = sqlx::query_scalar::<_, String>(
+                "SELECT client_id FROM (SELECT waiters.client_id, waiters.requested_at, \
+                 waiters.waiter_id, row_number() OVER (PARTITION BY \
+                 COALESCE(waiters.user_id, waiters.client_id) ORDER BY waiters.requested_at, \
+                 waiters.waiter_id) AS lane_position FROM capacity_waiters AS waiters WHERE \
+                 waiters.expires_at > to_timestamp($1::double precision / 1000) AND \
+                 waiters.principal_class = $2 AND ($2 <> 'human' OR (SELECT count(*) FROM \
+                 active_client_leases AS leases WHERE leases.principal_class = 'human' AND \
+                 leases.user_id = waiters.user_id AND leases.revoked_at IS NULL AND \
+                 leases.expires_at > to_timestamp($1::double precision / 1000)) < $3)) ranked \
+                 ORDER BY lane_position, requested_at, waiter_id LIMIT 1",
+            )
+            .bind(now_ms)
+            .bind(released_class)
+            .bind(i64::from(per_user_limit))
+            .fetch_optional(&mut *transaction)
+            .await
+            .context("SELECT next waiter after user release")?;
+            if let Some(next) = next {
+                sqlx::query(
+                    "UPDATE capacity_waiters SET reserved_until = \
+                     to_timestamp(($2 + $3)::double precision / 1000) WHERE client_id = $1",
+                )
+                .bind(next)
+                .bind(now_ms)
+                .bind(reservation_ms)
+                .execute(&mut *transaction)
+                .await
+                .context("RESERVE slot after user active-client release")?;
+            }
+            sqlx::query(
+                "INSERT INTO auth_audit_events (occurred_at, event_type, actor_user_id, \
+                 principal_class, detail) VALUES (to_timestamp($3::double precision / 1000), \
+                 'active_client_reclaimed', $1, 'human', jsonb_build_object('client_id', $2))",
+            )
+            .bind(user_id)
+            .bind(client_id)
+            .bind(now_ms)
+            .execute(&mut *transaction)
+            .await
+            .context("AUDIT user active-client release")?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user active-client release")?;
+        Ok(released_class.is_some())
+    }
+
+    pub async fn list_active_clients_for_user(
+        &self,
+        user_id: &str,
+        now_ms: i64,
+    ) -> Result<Vec<ActiveClientLease>> {
+        let rows = sqlx::query_as::<_, ActiveClientLeaseRow>(
+            "SELECT client_id, user_id, principal_class, session_id, client_kind, \
+             fencing_token, acquired_at, heartbeat_at, expires_at FROM active_client_leases \
+             WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > \
+             to_timestamp($2::double precision / 1000) ORDER BY heartbeat_at DESC, client_id",
+        )
+        .bind(user_id)
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("LIST active clients for {user_id}"))?;
+        Ok(rows
+            .into_iter()
+            .map(ActiveClientLeaseRow::into_lease)
+            .collect())
     }
 
     pub async fn replace_user_session(
@@ -3080,36 +4495,29 @@ impl PostgresStorage {
         previous_token_hash: &str,
         session: &ProductUserSession,
     ) -> Result<()> {
-        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        validate_product_user_session(session)?;
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         let mut transaction = self
             .pool
             .begin()
             .await
             .context("BEGIN user session replacement")?;
-        let deleted =
-            sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1 AND user_id = $2")
-                .bind(previous_token_hash)
-                .bind(&session.user_id)
-                .execute(&mut *transaction)
-                .await
-                .context("DELETE previous user session for primary authentication")?;
-        anyhow::ensure!(
-            deleted.rows_affected() == 1,
-            "previous user session is unavailable"
-        );
-        sqlx::query(
-            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
-             primary_auth_method) VALUES ( \
-             $1, $2, to_timestamp($3::double precision / 1000), \
-             to_timestamp($4::double precision / 1000), \
-             to_timestamp($5::double precision / 1000), $6, \
-             to_timestamp($7::double precision / 1000), \
-             to_timestamp($8::double precision / 1000), $9)",
+        let replaced = sqlx::query(
+            "UPDATE user_sessions SET token_hash = $3, created_at = \
+             to_timestamp($4::double precision / 1000), expires_at = \
+             to_timestamp($5::double precision / 1000), last_seen_at = \
+             to_timestamp($6::double precision / 1000), user_agent = $7, \
+             passkey_verified_at = to_timestamp($8::double precision / 1000), \
+             primary_authenticated_at = to_timestamp($9::double precision / 1000), \
+             primary_auth_method = $10, client_kind = $11, principal_class = $12, \
+             auth_provider_id = $13, auth_issuer = $14, auth_subject = $15, auth_sid = $16, \
+             id_token_ciphertext = $17, revoked_at = NULL, revoke_reason = NULL \
+             WHERE token_hash = $1 AND user_id = $2 AND session_id = $18 \
+             AND revoked_at IS NULL",
         )
-        .bind(&session.token_hash)
+        .bind(previous_token_hash)
         .bind(&session.user_id)
+        .bind(&session.token_hash)
         .bind(session.created_at_ms)
         .bind(session.expires_at_ms)
         .bind(session.last_seen_at_ms)
@@ -3117,9 +4525,21 @@ impl PostgresStorage {
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
         .bind(session.primary_auth_method.as_deref())
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .bind(&session.session_id)
         .execute(&mut *transaction)
         .await
-        .context("INSERT replacement user session")?;
+        .context("UPDATE user session for primary authentication")?;
+        anyhow::ensure!(
+            replaced.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
         transaction
             .commit()
             .await
@@ -3132,7 +4552,7 @@ impl PostgresStorage {
         previous_token_hash: &str,
         session: &ProductUserSession,
     ) -> Result<()> {
-        anyhow::ensure!(!session.token_hash.is_empty(), "token hash cannot be empty");
+        validate_product_user_session(session)?;
         let user_agent = truncate_user_agent(session.user_agent.as_deref());
         let mut transaction = self
             .pool
@@ -3147,29 +4567,21 @@ impl PostgresStorage {
         .await
         .context("LOCK user Passkey refresh policy")?;
         anyhow::ensure!(refresh_enabled == Some(true), "Passkey refresh is disabled");
-        let deleted =
-            sqlx::query("DELETE FROM user_sessions WHERE token_hash = $1 AND user_id = $2")
-                .bind(previous_token_hash)
-                .bind(&session.user_id)
-                .execute(&mut *transaction)
-                .await
-                .context("DELETE previous user session")?;
-        anyhow::ensure!(
-            deleted.rows_affected() == 1,
-            "previous user session is unavailable"
-        );
-        sqlx::query(
-            "INSERT INTO user_sessions (token_hash, user_id, created_at, expires_at, \
-             last_seen_at, user_agent, passkey_verified_at, primary_authenticated_at, \
-             primary_auth_method) VALUES ( \
-             $1, $2, to_timestamp($3::double precision / 1000), \
-             to_timestamp($4::double precision / 1000), \
-             to_timestamp($5::double precision / 1000), $6, \
-             to_timestamp($7::double precision / 1000), \
-             to_timestamp($8::double precision / 1000), $9)",
+        let rotated = sqlx::query(
+            "UPDATE user_sessions SET token_hash = $3, created_at = \
+             to_timestamp($4::double precision / 1000), expires_at = \
+             to_timestamp($5::double precision / 1000), last_seen_at = \
+             to_timestamp($6::double precision / 1000), user_agent = $7, \
+             passkey_verified_at = to_timestamp($8::double precision / 1000), \
+             primary_authenticated_at = to_timestamp($9::double precision / 1000), \
+             primary_auth_method = $10, client_kind = $11, principal_class = $12, \
+             auth_provider_id = $13, auth_issuer = $14, auth_subject = $15, auth_sid = $16, \
+             id_token_ciphertext = $17 WHERE token_hash = $1 AND user_id = $2 \
+             AND session_id = $18 AND revoked_at IS NULL",
         )
-        .bind(&session.token_hash)
+        .bind(previous_token_hash)
         .bind(&session.user_id)
+        .bind(&session.token_hash)
         .bind(session.created_at_ms)
         .bind(session.expires_at_ms)
         .bind(session.last_seen_at_ms)
@@ -3177,9 +4589,21 @@ impl PostgresStorage {
         .bind(session.passkey_verified_at_ms)
         .bind(session.primary_authenticated_at_ms)
         .bind(session.primary_auth_method.as_deref())
+        .bind(&session.client_kind)
+        .bind(&session.principal_class)
+        .bind(session.auth_provider_id.as_deref())
+        .bind(session.auth_issuer.as_deref())
+        .bind(session.auth_subject.as_deref())
+        .bind(session.auth_sid.as_deref())
+        .bind(session.id_token_ciphertext.as_deref())
+        .bind(&session.session_id)
         .execute(&mut *transaction)
         .await
-        .context("INSERT rotated user session")?;
+        .context("ROTATE user session")?;
+        anyhow::ensure!(
+            rotated.rows_affected() == 1,
+            "previous user session is unavailable"
+        );
         transaction
             .commit()
             .await
@@ -3190,7 +4614,7 @@ impl PostgresStorage {
     pub async fn touch_user_session_activity(&self, token_hash: &str, now_ms: i64) -> Result<u64> {
         let result = sqlx::query(
             "UPDATE user_sessions SET last_seen_at = to_timestamp($2::double precision / 1000) \
-             WHERE token_hash = $1 \
+             WHERE token_hash = $1 AND revoked_at IS NULL \
              AND last_seen_at < to_timestamp(($2::double precision - 60000) / 1000)",
         )
         .bind(token_hash)
@@ -3204,7 +4628,8 @@ impl PostgresStorage {
     pub async fn cap_user_session_expiry(&self, user_id: &str, expires_at_ms: i64) -> Result<u64> {
         let result = sqlx::query(
             "UPDATE user_sessions SET expires_at = to_timestamp($2::double precision / 1000) \
-             WHERE user_id = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+             WHERE user_id = $1 AND revoked_at IS NULL \
+             AND expires_at > to_timestamp($2::double precision / 1000)",
         )
         .bind(user_id)
         .bind(expires_at_ms)
@@ -3343,6 +4768,74 @@ impl PostgresStorage {
             .await
             .context("COMMIT user device insert")?;
         Ok(())
+    }
+
+    pub async fn admit_user_device(
+        &self,
+        device: &ProductDevice,
+        refresh: &ProductDeviceRefreshToken,
+        limit: u32,
+        enforce: bool,
+    ) -> Result<ProductDeviceAdmission> {
+        validate_user_device(device, refresh)?;
+        anyhow::ensure!(limit > 0, "authorized client limit must be positive");
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN user device admission")?;
+        let locked =
+            sqlx::query_scalar::<_, String>("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+                .bind(&device.user_id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .context("LOCK user for device admission")?;
+        anyhow::ensure!(locked.is_some(), "user is unavailable");
+        let active = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM user_devices WHERE user_id = $1 AND revoked_at IS NULL",
+        )
+        .bind(&device.user_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("COUNT active user devices")?;
+        let limit_i64 = i64::from(limit);
+        if enforce && active >= limit_i64 {
+            transaction
+                .commit()
+                .await
+                .context("COMMIT full device admission")?;
+            return Ok(ProductDeviceAdmission::CapacityFull {
+                active_clients: u32::try_from(active).unwrap_or(u32::MAX),
+                limit,
+            });
+        }
+        sqlx::query(
+            "INSERT INTO user_devices (id, user_id, name, public_key, created_at, \
+             last_used_at, revoked_at) VALUES ($1, $2, $3, $4, \
+             to_timestamp($5::double precision / 1000), \
+             to_timestamp($6::double precision / 1000), \
+             to_timestamp($7::double precision / 1000))",
+        )
+        .bind(&device.id)
+        .bind(&device.user_id)
+        .bind(&device.name)
+        .bind(&device.public_key)
+        .bind(device.created_at_ms)
+        .bind(device.last_used_at_ms)
+        .bind(device.revoked_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("INSERT admitted user device")?;
+        insert_pg_device_refresh(&mut transaction, refresh).await?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT user device admission")?;
+        Ok(ProductDeviceAdmission::Admitted {
+            active_clients: u32::try_from(active.saturating_add(1)).unwrap_or(u32::MAX),
+            limit,
+            observed_overflow: active >= limit_i64,
+        })
     }
 
     pub async fn list_user_devices_for_user(&self, user_id: &str) -> Result<Vec<ProductDevice>> {
@@ -7161,6 +8654,30 @@ mod storage_contract_tests {
         assert_eq!(loaded.password_algo, "argon2id");
         assert_eq!(loaded.password_hash, user.password_hash);
         assert_eq!(loaded.disabled_at_ms, None);
+        store
+            .record_automation_credential_issued(
+                &user.id,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "CI smoke",
+                &["api:read".to_owned(), "websocket".to_owned()],
+                created_at_ms + 300_000,
+                created_at_ms,
+            )
+            .await?;
+        assert!(
+            store
+                .record_automation_credential_issued(
+                    &user.id,
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "CI smoke",
+                    &["admin".to_owned()],
+                    created_at_ms + 300_000,
+                    created_at_ms,
+                )
+                .await
+                .is_err(),
+            "automation audit must reject unknown scopes"
+        );
         assert_eq!(
             store.user_by_id(&user.id).await?.map(|row| row.username),
             Some("draven".to_owned())
@@ -7211,7 +8728,10 @@ mod storage_contract_tests {
 
         let session = ProductUserSession {
             token_hash: "aa".repeat(32),
+            session_id: "01aa01aa01aa01aa01aa01aa01aa01aa".to_owned(),
             user_id: user.id.clone(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
             created_at_ms,
             expires_at_ms: created_at_ms + 14 * 24 * 60 * 60 * 1_000,
             last_seen_at_ms: created_at_ms,
@@ -7219,6 +8739,13 @@ mod storage_contract_tests {
             passkey_verified_at_ms: Some(created_at_ms),
             primary_authenticated_at_ms: created_at_ms,
             primary_auth_method: Some("password".to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
         };
         store.insert_user_session(&session).await?;
         let restored_session = store
@@ -7504,7 +9031,233 @@ mod storage_contract_tests {
         assert_eq!(revoked_device.revoked_at_ms, Some(created_at_ms + 5));
         assert_eq!(revoked_refresh.revoked_at_ms, Some(created_at_ms + 5));
 
+        let admitted_device = ProductDevice {
+            id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            created_at_ms: created_at_ms + 6,
+            last_used_at_ms: Some(created_at_ms + 6),
+            revoked_at_ms: None,
+            ..device.clone()
+        };
+        let admitted_refresh = ProductDeviceRefreshToken {
+            token_hash: "ab".repeat(32),
+            device_id: admitted_device.id.clone(),
+            family_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+            created_at_ms: created_at_ms + 6,
+            expires_at_ms: created_at_ms + crate::client_auth::REFRESH_TOKEN_TTL_MS,
+            used_at_ms: None,
+            revoked_at_ms: None,
+        };
+        assert!(matches!(
+            store
+                .admit_user_device(&admitted_device, &admitted_refresh, 1, true)
+                .await?,
+            ProductDeviceAdmission::Admitted {
+                active_clients: 1,
+                observed_overflow: false,
+                ..
+            }
+        ));
+        let blocked_device = ProductDevice {
+            id: "cccccccccccccccccccccccccccccccc".to_owned(),
+            created_at_ms: created_at_ms + 7,
+            last_used_at_ms: Some(created_at_ms + 7),
+            ..admitted_device.clone()
+        };
+        let blocked_refresh = ProductDeviceRefreshToken {
+            token_hash: "cd".repeat(32),
+            device_id: blocked_device.id.clone(),
+            family_id: "dddddddddddddddddddddddddddddddd".to_owned(),
+            created_at_ms: created_at_ms + 7,
+            ..admitted_refresh.clone()
+        };
+        assert!(matches!(
+            store
+                .admit_user_device(&blocked_device, &blocked_refresh, 1, true)
+                .await?,
+            ProductDeviceAdmission::CapacityFull {
+                active_clients: 1,
+                limit: 1,
+            }
+        ));
+        assert_eq!(store.list_user_devices_for_user(&user.id).await?.len(), 1);
+        assert_eq!(
+            store
+                .revoke_user_device_for_user(&user.id, &admitted_device.id, created_at_ms + 8,)
+                .await?,
+            1
+        );
+
+        let capacity_claim = |client_id: &str| ActiveClientClaim {
+            client_id: client_id.to_owned(),
+            user_id: Some(user.id.clone()),
+            principal_class: "human".to_owned(),
+            session_id: Some(rotated.session_id.clone()),
+            client_kind: "browser".to_owned(),
+            now_ms: created_at_ms,
+            lease_ms: 120_000,
+            reservation_ms: 30_000,
+            per_user_limit: 1,
+            service_limit: 1,
+            automation_limit: 1,
+            enforce: true,
+        };
+        let first = store
+            .claim_active_client(&capacity_claim("client-aaaaaaaaaaaaaaaa"))
+            .await?;
+        let first_fence = match first {
+            ActiveClientAdmission::Granted {
+                lease, capacity, ..
+            } => {
+                assert_eq!(capacity.active_for_user, 1);
+                assert_eq!(capacity.active_for_service, 1);
+                lease.fencing_token
+            }
+            ActiveClientAdmission::Waiting { .. } => {
+                anyhow::bail!("first active client unexpectedly waited")
+            }
+        };
+        let renewed = store
+            .claim_active_client(&capacity_claim("client-aaaaaaaaaaaaaaaa"))
+            .await?;
+        assert!(matches!(
+            renewed,
+            ActiveClientAdmission::Granted { ref lease, .. }
+                if lease.fencing_token == first_fence
+        ));
+        let waiting = store
+            .claim_active_client(&capacity_claim("client-bbbbbbbbbbbbbbbb"))
+            .await?;
+        assert!(matches!(
+            waiting,
+            ActiveClientAdmission::Waiting { position: 1, .. }
+        ));
+        assert!(
+            store
+                .release_active_client(&ActiveClientRelease {
+                    client_id: "client-aaaaaaaaaaaaaaaa",
+                    fencing_token: first_fence,
+                    reason: "contract_release",
+                    now_ms: created_at_ms + 1,
+                    reservation_ms: 30_000,
+                    per_user_limit: 1,
+                })
+                .await?
+        );
+        let second = store
+            .claim_active_client(&ActiveClientClaim {
+                now_ms: created_at_ms + 2,
+                ..capacity_claim("client-bbbbbbbbbbbbbbbb")
+            })
+            .await?;
+        let second_fence = match second {
+            ActiveClientAdmission::Granted { lease, .. } => lease.fencing_token,
+            ActiveClientAdmission::Waiting { .. } => {
+                anyhow::bail!("reserved active client did not acquire the released seat")
+            }
+        };
+        assert_eq!(
+            store
+                .list_active_clients_for_user(&user.id, created_at_ms + 2)
+                .await?
+                .len(),
+            1
+        );
+        assert!(
+            store
+                .heartbeat_active_client(
+                    "client-bbbbbbbbbbbbbbbb",
+                    second_fence,
+                    created_at_ms + 3,
+                    120_000,
+                )
+                .await?
+        );
+        assert!(
+            store
+                .release_active_client(&ActiveClientRelease {
+                    client_id: "client-bbbbbbbbbbbbbbbb",
+                    fencing_token: second_fence,
+                    reason: "contract_release",
+                    now_ms: created_at_ms + 4,
+                    reservation_ms: 30_000,
+                    per_user_limit: 1,
+                })
+                .await?
+        );
+        let reacquired = store
+            .claim_active_client(&ActiveClientClaim {
+                now_ms: created_at_ms + 5,
+                ..capacity_claim("client-bbbbbbbbbbbbbbbb")
+            })
+            .await?;
+        let reacquired_fence = match reacquired {
+            ActiveClientAdmission::Granted { lease, .. } => lease.fencing_token,
+            ActiveClientAdmission::Waiting { .. } => {
+                anyhow::bail!("released active client did not reacquire")
+            }
+        };
+        assert!(reacquired_fence > second_fence);
+        assert!(
+            !store
+                .heartbeat_active_client(
+                    "client-bbbbbbbbbbbbbbbb",
+                    second_fence,
+                    created_at_ms + 6,
+                    120_000,
+                )
+                .await?,
+            "a stale fencing token must never extend a replacement lease"
+        );
+        assert!(
+            !store
+                .release_active_client_for_user(
+                    "another-user",
+                    &ActiveClientRelease {
+                        client_id: "client-bbbbbbbbbbbbbbbb",
+                        fencing_token: reacquired_fence,
+                        reason: "user_reclaimed",
+                        now_ms: created_at_ms + 7,
+                        reservation_ms: 30_000,
+                        per_user_limit: 1,
+                    },
+                )
+                .await?,
+            "an account cannot reclaim another account's active client"
+        );
+        assert!(
+            !store
+                .release_active_client_for_user(
+                    &user.id,
+                    &ActiveClientRelease {
+                        client_id: "client-bbbbbbbbbbbbbbbb",
+                        fencing_token: second_fence,
+                        reason: "user_reclaimed",
+                        now_ms: created_at_ms + 7,
+                        reservation_ms: 30_000,
+                        per_user_limit: 1,
+                    },
+                )
+                .await?,
+            "a stale UI cannot reclaim a replacement lease"
+        );
+        assert!(
+            store
+                .release_active_client_for_user(
+                    &user.id,
+                    &ActiveClientRelease {
+                        client_id: "client-bbbbbbbbbbbbbbbb",
+                        fencing_token: reacquired_fence,
+                        reason: "user_reclaimed",
+                        now_ms: created_at_ms + 7,
+                        reservation_ms: 30_000,
+                        per_user_limit: 1,
+                    },
+                )
+                .await?
+        );
+
         let password_session = ProductUserSession {
+            session_id: "session-password-contract".to_owned(),
             token_hash: "12".repeat(32),
             ..rotated.clone()
         };
@@ -8024,6 +9777,391 @@ mod storage_contract_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[allow(clippy::too_many_lines)] // end-to-end provider scoping, fencing, and replay contract
+    #[tokio::test]
+    async fn sqlite_oidc_logout_is_provider_scoped_fenced_and_replay_safe() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-oidc-logout-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let now = 1_900_000_000_000_i64;
+        let user = ProductUser {
+            id: "0123456789abcdef0123456789abcdef".to_owned(),
+            username: "draven".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: "test-hash".to_owned(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let make_session = |token_byte: &str,
+                            session_id: &str,
+                            provider: Option<&str>,
+                            issuer: Option<&str>,
+                            subject: Option<&str>,
+                            sid: Option<&str>| ProductUserSession {
+            token_hash: token_byte.repeat(64),
+            session_id: session_id.to_owned(),
+            user_id: user.id.clone(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
+            created_at_ms: now,
+            expires_at_ms: now + 86_400_000,
+            last_seen_at_ms: now,
+            user_agent: None,
+            passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: now,
+            primary_auth_method: Some(provider.unwrap_or("password").to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: provider.map(ToOwned::to_owned),
+            auth_issuer: issuer.map(ToOwned::to_owned),
+            auth_subject: subject.map(ToOwned::to_owned),
+            auth_sid: sid.map(ToOwned::to_owned),
+            id_token_ciphertext: None,
+        };
+        let password = make_session("1", "session-password-00000001", None, None, None, None);
+        let cardea_a = make_session(
+            "2",
+            "session-cardea-a-00000001",
+            Some("cardea"),
+            Some("https://cardea.example"),
+            Some("draven"),
+            Some("sid-a"),
+        );
+        let cardea_b = make_session(
+            "3",
+            "session-cardea-b-00000001",
+            Some("cardea"),
+            Some("https://cardea.example"),
+            Some("draven"),
+            Some("sid-b"),
+        );
+        let google = make_session(
+            "4",
+            "session-google-00000001",
+            Some("google"),
+            Some("https://accounts.google.com"),
+            Some("draven-google"),
+            Some("google-sid"),
+        );
+        for session in [&password, &cardea_a, &cardea_b, &google] {
+            store.insert_user_session(session).await.unwrap();
+        }
+        let lease = match store
+            .claim_active_client(&ActiveClientClaim {
+                client_id: "client-cardea-a-00000001".to_owned(),
+                user_id: Some(user.id.clone()),
+                principal_class: "human".to_owned(),
+                session_id: Some(cardea_a.session_id.clone()),
+                client_kind: "browser".to_owned(),
+                now_ms: now,
+                lease_ms: 120_000,
+                reservation_ms: 30_000,
+                per_user_limit: 4,
+                service_limit: 32,
+                automation_limit: 32,
+                enforce: true,
+            })
+            .await
+            .unwrap()
+        {
+            ActiveClientAdmission::Granted { lease, .. } => lease,
+            ActiveClientAdmission::Waiting { .. } => panic!("test lease unexpectedly waited"),
+        };
+        assert_eq!(
+            store
+                .apply_oidc_backchannel_logout(
+                    "cardea",
+                    "https://cardea.example",
+                    None,
+                    Some("sid-a"),
+                    "logout-jti-1",
+                    now + 60_000,
+                    now + 1,
+                )
+                .await
+                .unwrap(),
+            OidcBackchannelLogout::Applied {
+                revoked_sessions: 1
+            }
+        );
+        assert!(
+            store
+                .user_session_by_token_hash(&cardea_a.token_hash)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !store
+                .heartbeat_active_client(&lease.client_id, lease.fencing_token, now + 2, 120_000,)
+                .await
+                .unwrap(),
+            "back-channel logout must fence an already connected client"
+        );
+        assert_eq!(
+            store
+                .apply_oidc_backchannel_logout(
+                    "cardea",
+                    "https://cardea.example",
+                    None,
+                    Some("sid-a"),
+                    "logout-jti-1",
+                    now + 60_000,
+                    now + 2,
+                )
+                .await
+                .unwrap(),
+            OidcBackchannelLogout::Replay
+        );
+        assert_eq!(
+            store
+                .revoke_user_sessions_for_provider(&user.id, "cardea", "provider_logout", now + 3,)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(
+            store
+                .user_session_by_token_hash(&cardea_b.token_hash)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .user_session_by_token_hash(&password.token_hash)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .user_session_by_token_hash(&google.token_hash)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[allow(clippy::too_many_lines)] // end-to-end replacement fencing and waiter cleanup contract
+    #[tokio::test]
+    async fn sqlite_session_replacement_fences_lease_and_removes_waiter() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-session-replacement-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let now = 1_900_000_000_000_i64;
+        let user = ProductUser {
+            id: "11111111111111111111111111111111".to_owned(),
+            username: "capacity-replacement".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: "test-hash".to_owned(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let session = |token: &str, session_id: &str, created_at_ms: i64| ProductUserSession {
+            token_hash: token.repeat(64),
+            session_id: session_id.to_owned(),
+            user_id: user.id.clone(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
+            created_at_ms,
+            expires_at_ms: created_at_ms + 86_400_000,
+            last_seen_at_ms: created_at_ms,
+            user_agent: None,
+            passkey_verified_at_ms: None,
+            primary_authenticated_at_ms: created_at_ms,
+            primary_auth_method: Some("password".to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
+        };
+        let old_session = session("1", "session-capacity-old-0001", now);
+        assert!(matches!(
+            store
+                .admit_user_session(&old_session, 1, true, false)
+                .await
+                .unwrap(),
+            ProductSessionAdmission::Admitted {
+                active_sessions: 1,
+                ..
+            }
+        ));
+        let claim = |client_id: &str, session_id: &str, now_ms: i64| ActiveClientClaim {
+            client_id: client_id.to_owned(),
+            user_id: Some(user.id.clone()),
+            principal_class: "human".to_owned(),
+            session_id: Some(session_id.to_owned()),
+            client_kind: "browser".to_owned(),
+            now_ms,
+            lease_ms: 120_000,
+            reservation_ms: 30_000,
+            per_user_limit: 1,
+            service_limit: 2,
+            automation_limit: 2,
+            enforce: true,
+        };
+        let old_lease = match store
+            .claim_active_client(&claim(
+                "client-capacity-old-active",
+                &old_session.session_id,
+                now,
+            ))
+            .await
+            .unwrap()
+        {
+            ActiveClientAdmission::Granted { lease, .. } => lease,
+            ActiveClientAdmission::Waiting { .. } => panic!("old session did not get a seat"),
+        };
+        assert!(matches!(
+            store
+                .claim_active_client(&claim(
+                    "client-capacity-old-waiter",
+                    &old_session.session_id,
+                    now + 1,
+                ))
+                .await
+                .unwrap(),
+            ActiveClientAdmission::Waiting { position: 1, .. }
+        ));
+
+        let new_session = session("2", "session-capacity-new-0001", now + 2);
+        let admission = store
+            .admit_user_session(&new_session, 1, true, false)
+            .await
+            .unwrap();
+        assert!(matches!(
+            admission,
+            ProductSessionAdmission::Admitted {
+                active_sessions: 1,
+                ref revoked_session_ids,
+                ..
+            } if revoked_session_ids == std::slice::from_ref(&old_session.session_id)
+        ));
+        assert!(
+            !store
+                .heartbeat_active_client(
+                    &old_lease.client_id,
+                    old_lease.fencing_token,
+                    now + 3,
+                    120_000,
+                )
+                .await
+                .unwrap(),
+            "replaced sessions must immediately fence their active leases"
+        );
+        assert!(
+            store
+                .list_active_clients_for_user(&user.id, now + 3)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            store
+                .claim_active_client(&claim(
+                    "client-capacity-new-active",
+                    &new_session.session_id,
+                    now + 3,
+                ))
+                .await
+                .unwrap(),
+            ActiveClientAdmission::Granted { .. }
+        ));
+
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn sqlite_capacity_queue_skips_per_user_full_lane() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-sqlite-capacity-fairness-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let store = Store::connect("sqlite::memory:", root.join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let now = 1_900_000_000_000_i64;
+        let user = |id: &str, username: &str| ProductUser {
+            id: id.to_owned(),
+            username: username.to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: "test-hash".to_owned(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        let user_a = user("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "capacity-user-a");
+        let user_b = user("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "capacity-user-b");
+        store.insert_user(&user_a).await.unwrap();
+        store.insert_user(&user_b).await.unwrap();
+        let claim = |client_id: &str, user_id: &str, now_ms: i64| ActiveClientClaim {
+            client_id: client_id.to_owned(),
+            user_id: Some(user_id.to_owned()),
+            principal_class: "human".to_owned(),
+            session_id: None,
+            client_kind: "cli".to_owned(),
+            now_ms,
+            lease_ms: 120_000,
+            reservation_ms: 30_000,
+            per_user_limit: 1,
+            service_limit: 3,
+            automation_limit: 3,
+            enforce: true,
+        };
+        assert!(matches!(
+            store
+                .claim_active_client(&claim("client-user-a-active", &user_a.id, now))
+                .await
+                .unwrap(),
+            ActiveClientAdmission::Granted { .. }
+        ));
+        assert!(matches!(
+            store
+                .claim_active_client(&claim("client-user-a-waiter", &user_a.id, now + 1))
+                .await
+                .unwrap(),
+            ActiveClientAdmission::Waiting { position: 1, .. }
+        ));
+        assert!(matches!(
+            store
+                .claim_active_client(&claim("client-user-b-active", &user_b.id, now + 2))
+                .await
+                .unwrap(),
+            ActiveClientAdmission::Granted { .. }
+        ));
+
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn sqlite_do_shaped_restore_keeps_compact_working_set() {
         let root = std::env::temp_dir().join(format!(
@@ -8109,7 +10247,7 @@ mod storage_contract_tests {
                 .fetch_all(&storage.pool)
                 .await
                 .unwrap();
-        assert_eq!(versions, (1_i64..=39).collect::<Vec<_>>());
+        assert_eq!(versions, (1_i64..=41).collect::<Vec<_>>());
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await

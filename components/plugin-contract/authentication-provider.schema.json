@@ -75,6 +75,7 @@
         "pushed_authorization_request_endpoint": { "$ref": "#/$defs/httpsUrl" },
         "token_endpoint": { "$ref": "#/$defs/httpsUrl" },
         "jwks_uri": { "$ref": "#/$defs/httpsUrl" },
+        "end_session_endpoint": { "$ref": "#/$defs/httpsUrl" },
         "scopes": {
           "type": "array",
           "minItems": 1,

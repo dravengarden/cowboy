@@ -1243,6 +1243,7 @@ impl Bridge {
             }
             Outbound::BootstrapComplete
             | Outbound::AuthSession { .. }
+            | Outbound::ClientCapacity { .. }
             | Outbound::Machines { .. }
             | Outbound::Ping
             | Outbound::SyncPatch { .. }
@@ -1586,6 +1587,7 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         }
         Outbound::BootstrapComplete
         | Outbound::AuthSession { .. }
+        | Outbound::ClientCapacity { .. }
         | Outbound::Machines { .. }
         | Outbound::Ping
         | Outbound::SyncPatch { .. }

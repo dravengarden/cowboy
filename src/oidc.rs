@@ -51,6 +51,8 @@ pub(crate) struct OidcProviderRuntimeDocument {
     pub account: String,
     #[serde(default)]
     pub admin_account: Option<String>,
+    #[serde(default)]
+    pub post_logout_redirect_uri: Option<String>,
     pub client_authentication: OidcRuntimeClientAuthentication,
 }
 
@@ -87,6 +89,10 @@ struct ProviderDocument {
     #[serde(default)]
     admin_account: Option<String>,
     redirect_uri: String,
+    #[serde(default)]
+    end_session_endpoint: Option<String>,
+    #[serde(default)]
+    post_logout_redirect_uri: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +129,8 @@ pub struct OidcProvider {
     pushed_authorization_request_endpoint: Option<String>,
     token_endpoint: String,
     jwks_uri: Option<String>,
+    end_session_endpoint: Option<Url>,
+    post_logout_redirect_uri: Option<Url>,
     scopes: String,
     authorization_parameters: BTreeMap<String, String>,
     client_id: String,
@@ -166,6 +174,7 @@ pub struct PublicProvider {
     pub display_name: String,
     pub button_label: String,
     pub start_url: String,
+    pub provider_logout_supported: bool,
 }
 
 #[derive(Debug)]
@@ -215,6 +224,7 @@ pub struct OidcTransactions {
 struct StoredNativeHandoff {
     provider_id: String,
     user_id: String,
+    identity: VerifiedIdentity,
     code_challenge: String,
     expires: Instant,
     created: Instant,
@@ -223,7 +233,10 @@ struct StoredNativeHandoff {
 #[derive(Debug, Clone)]
 enum BrowserHandoffState {
     Pending,
-    Ready { user_id: String },
+    Ready {
+        user_id: String,
+        identity: VerifiedIdentity,
+    },
     Failed,
 }
 
@@ -258,7 +271,10 @@ pub struct StartedNativeHandoff {
 #[derive(Debug, PartialEq, Eq)]
 pub enum BrowserHandoffPoll {
     Pending,
-    Ready { user_id: String },
+    Ready {
+        user_id: String,
+        identity: VerifiedIdentity,
+    },
     Failed,
 }
 
@@ -276,14 +292,25 @@ struct TokenResponse {
     id_token: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedIdentity {
     pub issuer: String,
     pub subject: String,
+    pub session_id: Option<String>,
     pub issued_at: u64,
     pub authenticated_at: Option<u64>,
     pub authentication_context: Option<String>,
     pub authentication_methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedLogout {
+    pub issuer: String,
+    pub subject: Option<String>,
+    pub session_id: Option<String>,
+    pub token_id: String,
+    pub issued_at: u64,
+    pub expires_at: u64,
 }
 
 #[derive(Serialize)]
@@ -336,6 +363,24 @@ struct IdTokenClaims {
     acr: Option<String>,
     #[serde(default)]
     amr: Vec<String>,
+    #[serde(default)]
+    sid: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LogoutTokenClaims {
+    iss: String,
+    #[serde(default)]
+    sub: Option<String>,
+    aud: Audience,
+    iat: u64,
+    exp: u64,
+    jti: String,
+    events: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    sid: Option<String>,
+    #[serde(default)]
+    nonce: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -467,6 +512,20 @@ impl OidcProvider {
         let issuer = issuer.as_str().trim_end_matches('/').to_owned();
         let authorization_endpoint = Url::parse(&format!("{issuer}/oauth2/authorize"))?;
         let token_endpoint = format!("{issuer}/oauth2/token");
+        let end_session_endpoint = document
+            .end_session_endpoint
+            .as_deref()
+            .map(exact_https_url)
+            .transpose()?;
+        let post_logout_redirect_uri = document
+            .post_logout_redirect_uri
+            .as_deref()
+            .map(|value| validate_post_logout_redirect_uri(value, &redirect))
+            .transpose()?;
+        anyhow::ensure!(
+            post_logout_redirect_uri.is_none() || end_session_endpoint.is_some(),
+            "OIDC post-logout redirect requires an end-session endpoint"
+        );
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(10))
@@ -481,6 +540,8 @@ impl OidcProvider {
             pushed_authorization_request_endpoint: None,
             token_endpoint,
             jwks_uri: None,
+            end_session_endpoint,
+            post_logout_redirect_uri,
             scopes: "openid".to_owned(),
             authorization_parameters: BTreeMap::new(),
             client_id: document.client_id,
@@ -532,6 +593,11 @@ impl OidcProvider {
             .map(Into::into);
         let token_endpoint = exact_https_url(&protocol.token_endpoint)?.into();
         let jwks_uri = exact_https_url(&protocol.jwks_uri)?.into();
+        let end_session_endpoint = protocol
+            .end_session_endpoint
+            .as_deref()
+            .map(exact_https_url)
+            .transpose()?;
         let redirect = exact_https_url(&runtime.redirect_uri)?;
         let scoped_callback = format!("/api/auth/providers/{}/callback", contract.id);
         let legacy_cardea_callback =
@@ -540,6 +606,15 @@ impl OidcProvider {
             (redirect.path() == scoped_callback || legacy_cardea_callback)
                 && redirect.query().is_none(),
             "OIDC redirect_uri must use the configured provider callback"
+        );
+        let post_logout_redirect_uri = runtime
+            .post_logout_redirect_uri
+            .as_deref()
+            .map(|value| validate_post_logout_redirect_uri(value, &redirect))
+            .transpose()?;
+        anyhow::ensure!(
+            post_logout_redirect_uri.is_none() || end_session_endpoint.is_some(),
+            "OIDC post-logout redirect requires an end-session endpoint"
         );
         let account = crate::product_auth::normalize_username(&runtime.account)
             .context("normalizing OIDC account mapping")?;
@@ -642,6 +717,8 @@ impl OidcProvider {
             pushed_authorization_request_endpoint,
             token_endpoint,
             jwks_uri: Some(jwks_uri),
+            end_session_endpoint,
+            post_logout_redirect_uri,
             scopes: protocol.scopes.join(" "),
             authorization_parameters: protocol.authorization_parameters.clone(),
             client_id: runtime.client_id,
@@ -672,6 +749,7 @@ impl OidcProvider {
             display_name: self.display_name.clone(),
             button_label: self.button_label.clone(),
             start_url,
+            provider_logout_supported: self.end_session_endpoint.is_some(),
         }
     }
 
@@ -690,6 +768,26 @@ impl OidcProvider {
     #[must_use]
     pub fn account(&self) -> &str {
         &self.account
+    }
+
+    #[must_use]
+    pub fn accepts_identity(&self, identity: &VerifiedIdentity) -> bool {
+        constant_time_equal(identity.issuer.as_bytes(), self.issuer.as_bytes())
+            && constant_time_equal(identity.subject.as_bytes(), self.subject.as_bytes())
+    }
+
+    #[must_use]
+    pub fn rp_logout_location(&self) -> Option<String> {
+        let mut endpoint = self.end_session_endpoint.clone()?;
+        endpoint
+            .query_pairs_mut()
+            .append_pair("client_id", &self.client_id);
+        if let Some(redirect) = self.post_logout_redirect_uri.as_ref() {
+            endpoint
+                .query_pairs_mut()
+                .append_pair("post_logout_redirect_uri", redirect.as_str());
+        }
+        Some(endpoint.into())
     }
 
     #[must_use]
@@ -931,25 +1029,50 @@ impl OidcProvider {
         now: u64,
     ) -> Option<VerifiedIdentity> {
         let decoded = decode_id_token(token, &self.issuer, &self.client_id, nonce, now)?;
+        self.verify_signature(&decoded.header, &decoded.signature, &decoded.signing_input)
+            .await?;
+        Some(verified_identity(decoded.claims))
+    }
+
+    pub async fn verify_logout_token(&self, token: &str, now: u64) -> Option<VerifiedLogout> {
+        let decoded = decode_logout_token(token, &self.issuer, &self.client_id, now)?;
+        self.verify_signature(&decoded.header, &decoded.signature, &decoded.signing_input)
+            .await?;
+        Some(VerifiedLogout {
+            issuer: decoded.claims.iss,
+            subject: decoded.claims.sub,
+            session_id: decoded.claims.sid,
+            token_id: decoded.claims.jti,
+            issued_at: decoded.claims.iat,
+            expires_at: decoded.claims.exp,
+        })
+    }
+
+    async fn verify_signature(
+        &self,
+        header: &IdTokenHeader,
+        signature: &[u8],
+        signing_input: &str,
+    ) -> Option<()> {
         match &self.id_token_verifier {
             IdTokenVerifier::PinnedEd25519 {
                 key_id,
                 verifying_key,
             } => {
-                if decoded.header.alg != "EdDSA" || decoded.header.kid != *key_id {
+                if header.alg != "EdDSA" || header.kid != *key_id {
                     return None;
                 }
-                let signature_bytes: [u8; 64] = decoded.signature.try_into().ok()?;
+                let signature_bytes: [u8; 64] = signature.try_into().ok()?;
                 VerifyingKey::from_bytes(verifying_key)
                     .ok()?
                     .verify(
-                        decoded.signing_input.as_bytes(),
+                        signing_input.as_bytes(),
                         &Signature::from_bytes(&signature_bytes),
                     )
                     .ok()?;
             }
             IdTokenVerifier::Jwks { allowed_algorithms } => {
-                let algorithm = match decoded.header.alg.as_str() {
+                let algorithm = match header.alg.as_str() {
                     "EdDSA" => OidcIdTokenAlgorithm::EdDSA,
                     "RS256" => OidcIdTokenAlgorithm::RS256,
                     _ => return None,
@@ -970,18 +1093,18 @@ impl OidcProvider {
                     return None;
                 }
                 let set: JsonWebKeySet = serde_json::from_slice(&bytes).ok()?;
-                let key = set.signing_key(&decoded.header.kid, &decoded.header.alg)?;
+                let key = set.signing_key(&header.kid, &header.alg)?;
                 match algorithm {
                     OidcIdTokenAlgorithm::EdDSA => {
                         if key.kty != "OKP" || key.crv.as_deref() != Some("Ed25519") {
                             return None;
                         }
                         let verifying_key = decode_32(key.x.as_deref()?, "OIDC JWKS key").ok()?;
-                        let signature_bytes: [u8; 64] = decoded.signature.try_into().ok()?;
+                        let signature_bytes: [u8; 64] = signature.try_into().ok()?;
                         VerifyingKey::from_bytes(&verifying_key)
                             .ok()?
                             .verify(
-                                decoded.signing_input.as_bytes(),
+                                signing_input.as_bytes(),
                                 &Signature::from_bytes(&signature_bytes),
                             )
                             .ok()?;
@@ -1002,15 +1125,15 @@ impl OidcProvider {
                         }
                         .verify(
                             &RSA_PKCS1_2048_8192_SHA256,
-                            decoded.signing_input.as_bytes(),
-                            &decoded.signature,
+                            signing_input.as_bytes(),
+                            signature,
                         )
                         .ok()?;
                     }
                 }
             }
         }
-        Some(verified_identity(decoded.claims))
+        Some(())
     }
 }
 
@@ -1204,6 +1327,7 @@ impl NativeHandoffs {
         provider_id: &str,
         handoff_challenge: &str,
         user_id: &str,
+        identity: &VerifiedIdentity,
     ) -> Result<()> {
         anyhow::ensure!(
             valid_identifier(provider_id),
@@ -1226,6 +1350,7 @@ impl NativeHandoffs {
         );
         stored.state = BrowserHandoffState::Ready {
             user_id: user_id.to_owned(),
+            identity: identity.clone(),
         };
         stored.events.send_replace(BrowserHandoffEvent::Ready);
         Ok(())
@@ -1317,7 +1442,9 @@ impl NativeHandoffs {
                 entries.insert(key, stored);
                 Ok(BrowserHandoffPoll::Pending)
             }
-            BrowserHandoffState::Ready { user_id } => Ok(BrowserHandoffPoll::Ready { user_id }),
+            BrowserHandoffState::Ready { user_id, identity } => {
+                Ok(BrowserHandoffPoll::Ready { user_id, identity })
+            }
             BrowserHandoffState::Failed => Ok(BrowserHandoffPoll::Failed),
         }
     }
@@ -1358,6 +1485,7 @@ impl NativeHandoffs {
         provider_id: &str,
         user_id: &str,
         code_challenge: &str,
+        identity: &VerifiedIdentity,
     ) -> Result<StartedNativeHandoff> {
         anyhow::ensure!(
             valid_identifier(provider_id),
@@ -1385,6 +1513,7 @@ impl NativeHandoffs {
             StoredNativeHandoff {
                 provider_id: provider_id.to_owned(),
                 user_id: user_id.to_owned(),
+                identity: identity.clone(),
                 code_challenge: code_challenge.to_owned(),
                 expires: now + NATIVE_HANDOFF_TTL,
                 created: now,
@@ -1398,7 +1527,12 @@ impl NativeHandoffs {
         })
     }
 
-    pub fn consume(&self, provider_id: &str, code: &str, verifier: &str) -> Result<String> {
+    pub fn consume(
+        &self,
+        provider_id: &str,
+        code: &str,
+        verifier: &str,
+    ) -> Result<(String, VerifiedIdentity)> {
         anyhow::ensure!(
             valid_identifier(provider_id),
             "invalid native handoff provider"
@@ -1419,7 +1553,7 @@ impl NativeHandoffs {
             constant_time_equal(challenge.as_bytes(), stored.code_challenge.as_bytes()),
             "native PKCE mismatch"
         );
-        Ok(stored.user_id)
+        Ok((stored.user_id, stored.identity))
     }
 }
 
@@ -1577,6 +1711,77 @@ struct DecodedIdToken {
     signing_input: String,
 }
 
+struct DecodedLogoutToken {
+    header: IdTokenHeader,
+    claims: LogoutTokenClaims,
+    signature: Vec<u8>,
+    signing_input: String,
+}
+
+fn decode_logout_token(
+    token: &str,
+    issuer: &str,
+    client_id: &str,
+    now: u64,
+) -> Option<DecodedLogoutToken> {
+    const BACKCHANNEL_LOGOUT_EVENT: &str = "http://schemas.openid.net/event/backchannel-logout";
+    if token.len() > MAX_JWT_BYTES
+        || !valid_oidc_token(client_id, 255)
+        || exact_https_url(issuer).is_err()
+    {
+        return None;
+    }
+    let mut segments = token.split('.');
+    let (header, claims, signature, None) = (
+        segments.next()?,
+        segments.next()?,
+        segments.next()?,
+        segments.next(),
+    ) else {
+        return None;
+    };
+    let header_value: IdTokenHeader = decode_json(header)?;
+    if header_value.kid.is_empty()
+        || header_value
+            .typ
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "JWT" | "logout+jwt"))
+    {
+        return None;
+    }
+    let claims_value: LogoutTokenClaims = decode_json(claims)?;
+    let event = claims_value.events.get(BACKCHANNEL_LOGOUT_EVENT)?;
+    if claims_value.iss != issuer
+        || !claims_value.aud.contains(client_id)
+        || claims_value.nonce.is_some()
+        || !event.as_object().is_some_and(serde_json::Map::is_empty)
+        || !valid_oidc_token(&claims_value.jti, 512)
+        || claims_value
+            .sub
+            .as_deref()
+            .is_some_and(|subject| !valid_subject(subject))
+        || claims_value
+            .sid
+            .as_deref()
+            .is_some_and(|session_id| !valid_oidc_token(session_id, 255))
+        || (claims_value.sub.is_none() && claims_value.sid.is_none())
+        || claims_value.iat > now.saturating_add(60)
+        || claims_value.exp <= claims_value.iat
+        || claims_value.exp <= now
+        || claims_value.exp > claims_value.iat.checked_add(3_600)?
+    {
+        return None;
+    }
+    Some(DecodedLogoutToken {
+        header: header_value,
+        claims: claims_value,
+        signature: base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature)
+            .ok()?,
+        signing_input: format!("{header}.{claims}"),
+    })
+}
+
 fn decode_id_token(
     token: &str,
     issuer: &str,
@@ -1620,6 +1825,10 @@ fn decode_id_token(
             .is_some_and(|authorized_party| authorized_party != client_id)
         || claims_value.nonce != nonce
         || !valid_subject(&claims_value.sub)
+        || claims_value
+            .sid
+            .as_deref()
+            .is_some_and(|value| !valid_oidc_token(value, 255))
         || claims_value.iat > now.saturating_add(60)
         || claims_value
             .auth_time
@@ -1677,6 +1886,7 @@ fn verified_identity(claims: IdTokenClaims) -> VerifiedIdentity {
     VerifiedIdentity {
         issuer: claims.iss,
         subject: claims.sub,
+        session_id: claims.sid,
         issued_at: claims.iat,
         authenticated_at: claims.auth_time,
         authentication_context: claims.acr,
@@ -1715,6 +1925,21 @@ fn exact_https_url(value: &str) -> Result<Url> {
             && url.password().is_none()
             && url.fragment().is_none(),
         "OIDC URLs must use HTTPS without credentials or fragments"
+    );
+    Ok(url)
+}
+
+fn validate_post_logout_redirect_uri(value: &str, login_redirect: &Url) -> Result<Url> {
+    let url = exact_https_url(value)?;
+    anyhow::ensure!(
+        url.path() == "/api/auth/logout/complete" && url.query().is_none(),
+        "OIDC post-logout redirect must use the fixed Cowboy completion path"
+    );
+    anyhow::ensure!(
+        url.scheme() == login_redirect.scheme()
+            && url.host_str() == login_redirect.host_str()
+            && url.port_or_known_default() == login_redirect.port_or_known_default(),
+        "OIDC post-logout redirect must use the Cowboy login callback origin"
     );
     Ok(url)
 }
@@ -1794,6 +2019,71 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::os::unix::fs::{PermissionsExt as _, symlink};
 
+    fn identity() -> super::VerifiedIdentity {
+        super::VerifiedIdentity {
+            issuer: "https://cardea.example".to_owned(),
+            subject: "draven".to_owned(),
+            session_id: Some("provider-session".to_owned()),
+            issued_at: 1_000,
+            authenticated_at: Some(999),
+            authentication_context: None,
+            authentication_methods: vec!["passkey".to_owned()],
+        }
+    }
+
+    fn provider_with_pinned_key(signing: &SigningKey) -> OidcProvider {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        OidcProvider {
+            id: "cardea".to_owned(),
+            display_name: "Cardea".to_owned(),
+            button_label: "Continue with Cardea".to_owned(),
+            issuer: "https://cardea.example".to_owned(),
+            authorization_endpoint: url::Url::parse("https://cardea.example/oauth2/authorize")
+                .unwrap(),
+            pushed_authorization_request_endpoint: None,
+            token_endpoint: "https://cardea.example/oauth2/token".to_owned(),
+            jwks_uri: None,
+            end_session_endpoint: Some(
+                url::Url::parse("https://cardea.example/oauth2/logout").unwrap(),
+            ),
+            post_logout_redirect_uri: Some(
+                url::Url::parse("https://cowboy.example/api/auth/logout/complete").unwrap(),
+            ),
+            scopes: "openid".to_owned(),
+            authorization_parameters: BTreeMap::new(),
+            client_id: "cowboy-production".to_owned(),
+            client_authentication: RuntimeClientAuthentication::ClientSecretPost(
+                "not-used-by-this-test".to_owned(),
+            ),
+            id_token_verifier: IdTokenVerifier::PinnedEd25519 {
+                key_id: "cardea-2026".to_owned(),
+                verifying_key: signing.verifying_key().to_bytes(),
+            },
+            subject: "draven".to_owned(),
+            account: "draven".to_owned(),
+            admin_account: Some("draven".to_owned()),
+            redirect_uri: "https://cowboy.example/api/auth/oidc/callback".to_owned(),
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+        }
+    }
+
+    fn sign_logout_token(signing: &SigningKey, claims: serde_json::Value) -> String {
+        let header = super::encode_json(&serde_json::json!({
+            "alg": "EdDSA",
+            "kid": "cardea-2026",
+            "typ": "logout+jwt",
+        }))
+        .unwrap();
+        let claims = super::encode_json(&claims).unwrap();
+        let input = format!("{header}.{claims}");
+        let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing.sign(input.as_bytes()).to_bytes());
+        format!("{input}.{signature}")
+    }
+
     #[test]
     fn transaction_cookie_is_callback_scoped() {
         let cleared = clear_transaction_cookie(true);
@@ -1812,6 +2102,121 @@ mod tests {
         assert!(ordinary.contains("SameSite=Lax"));
     }
 
+    #[tokio::test]
+    async fn backchannel_logout_requires_signed_exact_event_without_nonce() {
+        let signing = SigningKey::from_bytes(&[12; 32]);
+        let provider = provider_with_pinned_key(&signing);
+        let claims = serde_json::json!({
+            "iss": "https://cardea.example",
+            "aud": "cowboy-production",
+            "iat": 1_000,
+            "exp": 1_300,
+            "jti": "logout-0001",
+            "sub": "draven",
+            "sid": "provider-session",
+            "events": {
+                "http://schemas.openid.net/event/backchannel-logout": {}
+            },
+        });
+        let verified = provider
+            .verify_logout_token(&sign_logout_token(&signing, claims.clone()), 1_100)
+            .await
+            .expect("valid signed logout token");
+        assert_eq!(verified.issuer, "https://cardea.example");
+        assert_eq!(verified.subject.as_deref(), Some("draven"));
+        assert_eq!(verified.session_id.as_deref(), Some("provider-session"));
+        assert_eq!(verified.token_id, "logout-0001");
+
+        for invalid in [
+            serde_json::json!({
+                "iss": "https://cardea.example",
+                "aud": "another-client",
+                "iat": 1_000,
+                "exp": 1_300,
+                "jti": "logout-wrong-aud",
+                "sub": "draven",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+            }),
+            serde_json::json!({
+                "iss": "https://cardea.example",
+                "aud": "cowboy-production",
+                "iat": 1_000,
+                "exp": 1_300,
+                "jti": "logout-with-nonce",
+                "sub": "draven",
+                "nonce": "forbidden",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+            }),
+            serde_json::json!({
+                "iss": "https://cardea.example",
+                "aud": "cowboy-production",
+                "iat": 1_000,
+                "exp": 1_300,
+                "jti": "logout-no-event",
+                "sub": "draven",
+                "events": {},
+            }),
+            serde_json::json!({
+                "iss": "https://cardea.example",
+                "aud": "cowboy-production",
+                "iat": 1_000,
+                "exp": 1_300,
+                "jti": "logout-nonempty-event",
+                "sub": "draven",
+                "events": {
+                    "http://schemas.openid.net/event/backchannel-logout": {"unexpected": true}
+                },
+            }),
+            serde_json::json!({
+                "iss": "https://cardea.example",
+                "aud": "cowboy-production",
+                "iat": 1_200,
+                "exp": 1_100,
+                "jti": "logout-invalid-lifetime",
+                "sub": "draven",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+            }),
+        ] {
+            assert!(
+                provider
+                    .verify_logout_token(&sign_logout_token(&signing, invalid), 1_100)
+                    .await
+                    .is_none()
+            );
+        }
+
+        let location = url::Url::parse(&provider.rp_logout_location().unwrap()).unwrap();
+        let query = location
+            .query_pairs()
+            .into_owned()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(
+            query.get("client_id").map(String::as_str),
+            Some("cowboy-production")
+        );
+        assert_eq!(
+            query.get("post_logout_redirect_uri").map(String::as_str),
+            Some("https://cowboy.example/api/auth/logout/complete")
+        );
+
+        let login_redirect =
+            url::Url::parse("https://cowboy.example/api/auth/oidc/callback").unwrap();
+        assert!(
+            super::validate_post_logout_redirect_uri(
+                "https://cowboy.example/api/auth/logout/complete",
+                &login_redirect,
+            )
+            .is_ok()
+        );
+        assert!(
+            super::validate_post_logout_redirect_uri(
+                "https://another.example/api/auth/logout/complete",
+                &login_redirect,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn pushed_authorization_is_signed_and_browser_url_contains_only_request_uri() {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1827,6 +2232,8 @@ mod tests {
             pushed_authorization_request_endpoint: Some(par_endpoint.clone()),
             token_endpoint: "https://cardea.example/oauth2/token".to_owned(),
             jwks_uri: None,
+            end_session_endpoint: None,
+            post_logout_redirect_uri: None,
             scopes: "openid".to_owned(),
             authorization_parameters: BTreeMap::from([(
                 "approval_mode".to_owned(),
@@ -1927,7 +2334,7 @@ mod tests {
         let verifier = "a".repeat(64);
         let challenge = super::pkce_challenge(&verifier).unwrap();
         let started = handoffs
-            .issue("cardea", &"b".repeat(32), &challenge)
+            .issue("cardea", &"b".repeat(32), &challenge, &identity())
             .unwrap();
         let callback = url::Url::parse(&started.location).unwrap();
         assert_eq!(callback.scheme(), NATIVE_CALLBACK_SCHEME);
@@ -1940,7 +2347,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             handoffs.consume("cardea", &code, &verifier).unwrap(),
-            "b".repeat(32)
+            ("b".repeat(32), identity())
         );
         assert!(handoffs.consume("cardea", &code, &verifier).is_err());
     }
@@ -1951,7 +2358,7 @@ mod tests {
         let verifier = "a".repeat(64);
         let challenge = super::pkce_challenge(&verifier).unwrap();
         let started = handoffs
-            .issue("cardea", &"b".repeat(32), &challenge)
+            .issue("cardea", &"b".repeat(32), &challenge, &identity())
             .unwrap();
         let callback = url::Url::parse(&started.location).unwrap();
         let code = callback
@@ -1980,14 +2387,15 @@ mod tests {
             super::BrowserHandoffPoll::Pending
         );
         handoffs
-            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32), &identity())
             .unwrap();
         assert_eq!(
             handoffs
                 .poll_browser("cardea", &handoff_token, &verifier)
                 .unwrap(),
             super::BrowserHandoffPoll::Ready {
-                user_id: "b".repeat(32)
+                user_id: "b".repeat(32),
+                identity: identity(),
             }
         );
         assert!(
@@ -2020,7 +2428,7 @@ mod tests {
             super::BrowserHandoffEvent::Pending
         );
         handoffs
-            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32), &identity())
             .unwrap();
         events.changed().await.unwrap();
         assert_eq!(
@@ -2032,7 +2440,8 @@ mod tests {
                 .poll_browser("cardea", &handoff_token, &verifier)
                 .unwrap(),
             super::BrowserHandoffPoll::Ready {
-                user_id: "b".repeat(32)
+                user_id: "b".repeat(32),
+                identity: identity(),
             }
         );
     }
@@ -2048,7 +2457,7 @@ mod tests {
             .begin_browser("cardea", &code_challenge, &handoff_challenge)
             .unwrap();
         handoffs
-            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32))
+            .complete_browser("cardea", &handoff_challenge, &"b".repeat(32), &identity())
             .unwrap();
         assert!(
             handoffs

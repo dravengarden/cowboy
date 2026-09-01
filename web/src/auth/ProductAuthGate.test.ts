@@ -206,12 +206,21 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
   const clients = await Deno.readTextFile(
     new URL("ProductDevicesPanel.tsx", authDir),
   );
+  const capacity = await Deno.readTextFile(
+    new URL("ProductSessionCapacityPanel.tsx", authDir),
+  );
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   assert(desktop.includes("useProductAuth"));
   assert(desktop.includes("account.signOut"));
   assert(desktop.includes("account.devices"));
+  assert(desktop.includes("account.sessions"));
   assert(desktop.includes("ProductDevicesPanel"));
+  assert(desktop.includes("ProductSessionCapacityPanel"));
+  assert(capacity.includes('["Authorized clients", inventory'));
+  assert(capacity.includes("capacity.authorized_clients_per_user"));
+  assert(capacity.includes("Effective server policy"));
+  assert(capacity.includes("Automation credentials and their separate client pool are disabled"));
   assert(desktop.includes("CLI & ACP access"));
   assert(clients.includes("Browser cookie sessions and Passkeys"));
   assert(clients.includes("hideWhenEmpty"));
@@ -242,7 +251,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1616"'));
+  assert(sw.includes('const VERSION = "cowboy-v1617"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -344,6 +353,12 @@ Deno.test("Passkey settings use a progressive, visible mobile account hierarchy"
   assert(account.includes("Sign out on this device"));
   assert(account.includes('variant="outlined"'));
   assert(account.includes("Running agents keep"));
+  assert(account.includes("retryWithRecentProductAuth"));
+  assert(account.includes("reauthenticate"));
+  const gate = await Deno.readTextFile(
+    new URL("ProductAuthGate.tsx", authDir),
+  );
+  assert(gate.includes("isRecentProductAuthRequired(reason)"));
   assert(externalPage.includes("Tap Done to return to Cowboy"));
   assert(externalPage.includes("cowboy-passkey://complete"));
   assert(externalPage.includes('finishNative("cancelled")'));

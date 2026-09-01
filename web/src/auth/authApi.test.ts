@@ -444,14 +444,80 @@ Deno.test("logout is a same-origin POST", async () => {
   let seen: FetchArgs | undefined;
   const restore = withFetch((args) => {
     seen = args;
-    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    return new Response(
+      JSON.stringify({ ok: true, scope: "current", revoked_sessions: 1 }),
+      { status: 200 },
+    );
   });
   try {
-    assertEquals(await authApi.logout(), { ok: true });
+    assertEquals(await authApi.logout(), {
+      ok: true,
+      scope: "current",
+      revoked_sessions: 1,
+    });
     assertEquals(seen?.input, "/api/auth/logout");
     assertEquals(seen?.init?.method, "POST");
     assertEquals(seen?.init?.credentials, "same-origin");
     assertEquals(seen?.init?.cache, "no-store");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("session capacity inventory and reclaim requests preserve fencing", async () => {
+  const calls: FetchArgs[] = [];
+  const restore = withFetch((args) => {
+    calls.push(args);
+    if (args.input === "/api/auth/sessions") {
+      return new Response(
+        JSON.stringify({
+          sessions: [{
+            id: "session-1",
+            current: true,
+            client_kind: "browser",
+            principal_class: "human",
+            created_at_ms: 1,
+            expires_at_ms: 10,
+            last_seen_at_ms: 2,
+          }],
+          active_clients: [{
+            client_id: "client/a",
+            user_id: "user-1",
+            principal_class: "human",
+            session_id: "session-1",
+            client_kind: "browser",
+            fencing_token: 17,
+            acquired_at_ms: 1,
+            heartbeat_at_ms: 2,
+            expires_at_ms: 10,
+          }],
+          authorized_clients: 2,
+          limit: 10,
+          active_limit: 4,
+          enforcement: "enforce",
+        }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  try {
+    const inventory = await authApi.listSessions();
+    assertEquals(inventory.active_clients[0]?.fencing_token, 17);
+    assertEquals(inventory.authorized_clients, 2);
+    assertEquals(await authApi.deleteSession("session/2"), { ok: true });
+    assertEquals(await authApi.releaseActiveClient("client/a", 17), {
+      ok: true,
+    });
+    assertEquals(calls[0]?.input, "/api/auth/sessions");
+    assertEquals(calls[0]?.init?.credentials, "same-origin");
+    assertEquals(calls[1]?.input, "/api/auth/sessions/session%2F2");
+    assertEquals(calls[1]?.init?.method, "DELETE");
+    assertEquals(
+      calls[2]?.input,
+      "/api/auth/active-clients/client%2Fa?fencing_token=17",
+    );
+    assertEquals(calls[2]?.init?.method, "DELETE");
   } finally {
     restore();
   }
@@ -518,6 +584,29 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         primary_max_age_ms: 2_592_000_000,
         primary_warning_ms: 86_400_000,
       },
+      capacity: {
+        enforcement: "enforce",
+        authorized_clients_per_user: 12,
+        signed_in_sessions_per_user: 10,
+        active_clients_per_user: 4,
+        active_clients_service: 32,
+        websocket_channels_per_client: 8,
+        active_lease_ms: 120_000,
+        heartbeat_ms: 30_000,
+        reservation_ms: 30_000,
+        session_overflow: "revoke_oldest_inactive",
+        active_overflow: "wait_or_reclaim_own",
+        single_session_mode: "off",
+      },
+      logout: {
+        provider_logout: "offer",
+        backchannel_logout: true,
+      },
+      automation: {
+        enabled: false,
+        active_clients: 32,
+        credential_max_age_ms: 600_000,
+      },
       providers: [
         {
           id: "cardea",
@@ -561,6 +650,29 @@ Deno.test("auth status accepts pinned provider routes and server Passkey policy"
         passkey_warning_ms: 1_800_000,
         primary_max_age_ms: 2_592_000_000,
         primary_warning_ms: 86_400_000,
+      },
+      capacity: {
+        enforcement: "enforce",
+        authorized_clients_per_user: 12,
+        signed_in_sessions_per_user: 10,
+        active_clients_per_user: 4,
+        active_clients_service: 32,
+        websocket_channels_per_client: 8,
+        active_lease_ms: 120_000,
+        heartbeat_ms: 30_000,
+        reservation_ms: 30_000,
+        session_overflow: "revoke_oldest_inactive",
+        active_overflow: "wait_or_reclaim_own",
+        single_session_mode: "off",
+      },
+      logout: {
+        provider_logout: "offer",
+        backchannel_logout: true,
+      },
+      automation: {
+        enabled: false,
+        active_clients: 32,
+        credential_max_age_ms: 600_000,
       },
       providers: [
         {

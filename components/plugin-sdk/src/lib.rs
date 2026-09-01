@@ -119,6 +119,8 @@ pub struct OpenIdConnectContract {
     pub pushed_authorization_request_endpoint: Option<String>,
     pub token_endpoint: String,
     pub jwks_uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_session_endpoint: Option<String>,
     pub scopes: Vec<String>,
     pub client_authentication_methods: Vec<OidcClientAuthenticationMethod>,
     pub id_token_signing_algorithms: Vec<OidcIdTokenAlgorithm>,
@@ -684,6 +686,9 @@ fn validate_oidc_contract(contract: &OpenIdConnectContract) -> Result<()> {
     }
     validate_https_url(&contract.token_endpoint, "OIDC token endpoint")?;
     validate_https_url(&contract.jwks_uri, "OIDC JWKS endpoint")?;
+    if let Some(endpoint) = contract.end_session_endpoint.as_deref() {
+        validate_https_url(endpoint, "OIDC end-session endpoint")?;
+    }
     ensure!(
         contract
             .scopes
@@ -883,6 +888,7 @@ mod tests {
                 pushed_authorization_request_endpoint: None,
                 token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
                 jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
+                end_session_endpoint: None,
                 scopes: vec!["openid".to_owned(), "email".to_owned()],
                 client_authentication_methods: vec![
                     OidcClientAuthenticationMethod::ClientSecretPost,

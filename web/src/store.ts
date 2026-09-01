@@ -62,6 +62,7 @@ import {
 } from "./machineState";
 import {
   type ConfigOption,
+  type ClientCapacity,
   type ContentBlock,
   type Delivery,
   type DraftSchedule,
@@ -138,6 +139,7 @@ export interface QueuedMessage {
 
 export interface State {
   connected: boolean;
+  activeCapacity?: ClientCapacity;
   sessions: SessionMeta[];
   // Durable Machine registry projected by the Controller over the same product
   // WebSocket. Retain it across disconnects: transport loss is not evidence
@@ -214,6 +216,10 @@ let state: State = {
 let presentedState = state;
 const listeners = new Set<() => void>();
 let socket: WebSocket | undefined;
+// OPEN means only that the transport handshake completed. Cowboy becomes
+// command-ready after server-side active-client admission and the deterministic
+// bootstrap_complete marker.
+let socketReady = false;
 // Set by `cowboy:product-sign-out`. Prevents onclose / online / foreground
 // from opening another product socket after logout.
 let productSessionAbandoned = false;
@@ -315,6 +321,7 @@ function abandonProductSocket(): void {
   stopLiveness();
   const current = socket;
   socket = undefined;
+  socketReady = false;
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
 }
@@ -325,6 +332,7 @@ function pauseProductSocketForAuth(): void {
   stopLiveness();
   const current = socket;
   socket = undefined;
+  socketReady = false;
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
   globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
@@ -405,6 +413,7 @@ function reconnectNow(reason: string): void {
   });
   outageStartedAt ??= Date.now();
   socket = undefined;
+  socketReady = false;
   clearReconnectTimer();
   stopLiveness();
   if (state.connected) setState({ ...state, connected: false });
@@ -990,6 +999,11 @@ function handle(msg: Outbound): void {
     case "auth_session":
       announceProductAuthSession(msg.session);
       break;
+    case "client_capacity":
+      setState({ ...state, activeCapacity: msg.capacity });
+      break;
+    case "bootstrap_complete":
+      break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
       // the liveness watchdog). Nothing to render.
@@ -1326,6 +1340,7 @@ export function notify(message: string, severity: "error" | "warning" = "error")
 // computed off the consecutive-failure count). One pending attempt at a time.
 const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
 const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
+const WS_CAPACITY_REQUIRED_CLOSE_CODE = 4429;
 
 type MeHandshake = "reconnect" | "logout" | "keep";
 
@@ -1408,7 +1423,7 @@ function connect(): void {
       // completed, onopen could not see the restored outbox. Re-send now as
       // well. Mutation ids make the overlap with a simultaneous onopen safe and
       // idempotent; this closes the visible-pending-but-never-runs window.
-      if (socket?.readyState === WebSocket.OPEN) {
+      if (socketReady && socket?.readyState === WebSocket.OPEN) {
         for (const entry of syncClients.values()) entry.resend();
         for (const store of qClients.values()) store.resend();
       }
@@ -1419,6 +1434,35 @@ function connect(): void {
       openOnce();
     }
   })();
+}
+
+function stableInteractiveClientId(): string {
+  const key = "cowboy:interactive-client-id";
+  try {
+    const existing = globalThis.localStorage.getItem(key);
+    if (existing !== null && existing.length >= 16 && existing.length <= 128) {
+      return existing;
+    }
+    const created = newUuid();
+    globalThis.localStorage.setItem(key, created);
+    return created;
+  } catch {
+    // Storage may be unavailable in a private or transient WebView. The server
+    // still namespaces this ephemeral id to the authenticated account.
+    return `ephemeral-${newUuid()}`;
+  }
+}
+
+function interactiveClientKind(): "browser" | "native_shell" {
+  const runtime = globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown };
+  const navigator = globalThis.navigator;
+  return isAppleTouchWebView(
+      navigator?.userAgent ?? "",
+      navigator?.platform ?? "",
+      navigator?.maxTouchPoints ?? 0,
+    ) || runtime.__TAURI_INTERNALS__ !== undefined
+    ? "native_shell"
+    : "browser";
 }
 
 function openSocket(): void {
@@ -1446,9 +1490,16 @@ function openSocket(): void {
     visibility: document.visibilityState,
   });
   nextConnectReason = "unspecified";
-  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?bootstrap=lazy`);
+  const params = new URLSearchParams({
+    bootstrap: "lazy",
+    client_id: stableInteractiveClientId(),
+    client_kind: interactiveClientKind(),
+  });
+  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?${params.toString()}`);
   socket = ws;
+  socketReady = false;
   let openedAt: number | undefined;
+  let ready = false;
   // A socket wedged in CONNECTING (a half-open proxy / network that completes the
   // TCP handshake but never the WS upgrade) fires NEITHER onopen NOR onclose, so
   // without this it strands the UI on "Connecting…" forever with no reconnect.
@@ -1464,16 +1515,15 @@ function openSocket(): void {
       ws.close();
     }
   }, 8000);
-  ws.onopen = (): void => {
-    clearTimeout(connectGuard);
-    if (socket !== ws) {
-      ws.close();
-      return;
-    }
-    clearReconnectTimer();
-    openedAt = performance.now();
-    const connectDurationMs = openedAt - connectStartedAt;
-    const outageDurationMs = outageStartedAt === undefined ? 0 : Math.max(0, Date.now() - outageStartedAt);
+  const markSocketReady = (): void => {
+    if (ready || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+    ready = true;
+    socketReady = true;
+    const readyAt = performance.now();
+    const connectDurationMs = readyAt - connectStartedAt;
+    const outageDurationMs = outageStartedAt === undefined
+      ? 0
+      : Math.max(0, Date.now() - outageStartedAt);
     reportClientMetric("websocket_connect_duration_ms", connectDurationMs, {
       connection: reconnecting ? "reconnect" : "initial",
     });
@@ -1481,7 +1531,7 @@ function openSocket(): void {
       reportClientMetric("websocket_reconnect_duration_ms", outageDurationMs);
       reportClientMetric("websocket_reconnect_success", 1, { reason: connectReason });
     }
-    reportClientLog("info", "websocket_open", "Cowboy WebSocket connected", {
+    reportClientLog("info", "websocket_ready", "Cowboy WebSocket admitted and ready", {
       reason: connectReason,
       attempt: reconnecting ? reconnectAttempts : 0,
       reconnecting,
@@ -1490,44 +1540,49 @@ function openSocket(): void {
     });
     outageStartedAt = undefined;
     reconnectAttempts = 0;
-    markAlive(); // seed liveness so the watchdog doesn't fire before the snapshot
-    startLiveness(ws);
     setState({ ...state, connected: true });
-    // Clears the failure count, flashes green if an outage was surfaced, and
-    // probes /version for a redeploy (banner state lives in `conn`).
     conn.connectionReady();
-    // Re-assert the open session so the daemon revives its agent if it died
-    // with a restart we just reconnected across (revive-on-open, design §7).
-    // Idempotent server-side when the agent is still alive.
     if (openedSessionId) {
       send({ type: "open_session", session_id: openedSessionId });
       void hydrateSession(openedSessionId, true);
     }
-    // Re-send sync mutations the arbiter never confirmed (sent while the socket
-    // was down). Each store re-sends its pending via its own `send` callback (a
-    // generic `sync` frame for title/order, the add_draft/submit command for a
-    // queue). The mutation id makes the daemon idempotent; the resync
-    // `sync_patch` that follows drops them from pending once confirmed.
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
-    // The daemon pushes the session snapshot exactly once, right after connect.
-    // If that first frame is somehow lost (a WKWebView reload race), the UI would
-    // sit at "Loading…" forever — the socket is open, so no reconnect fires. Net:
-    // if the snapshot hasn't landed a few seconds after open, close to force a
-    // fresh reconnect (→ a fresh snapshot). No-op once any list has arrived.
     if (!state.sessionsLoaded) {
       setTimeout(() => {
-        if (socket === ws && ws.readyState === WebSocket.OPEN && !state.sessionsLoaded) {
+        if (
+          socket === ws && socketReady && ws.readyState === WebSocket.OPEN &&
+          !state.sessionsLoaded
+        ) {
           ws.close();
         }
       }, 6000);
     }
   };
+  ws.onopen = (): void => {
+    clearTimeout(connectGuard);
+    if (socket !== ws) {
+      ws.close();
+      return;
+    }
+    clearReconnectTimer();
+    openedAt = performance.now();
+    reportClientLog("info", "websocket_transport_open", "Cowboy WebSocket transport opened", {
+      reason: connectReason,
+      attempt: reconnecting ? reconnectAttempts : 0,
+      reconnecting,
+      transport_duration_ms: openedAt - connectStartedAt,
+    });
+    markAlive();
+    startLiveness(ws);
+  };
   ws.onmessage = (e: MessageEvent<string>): void => {
     if (socket !== ws) return;
     markAlive(); // any frame (incl. the heartbeat) proves the socket is alive
     try {
-      handle(JSON.parse(e.data) as Outbound);
+      const message = JSON.parse(e.data) as Outbound;
+      handle(message);
+      if (message.type === "bootstrap_complete") markSocketReady();
     } catch (err) {
       console.warn("bad message", err);
     }
@@ -1539,6 +1594,7 @@ function openSocket(): void {
     // schedule another reconnect.
     if (socket !== ws) return;
     socket = undefined;
+    socketReady = false;
     stopLiveness();
     setState({ ...state, connected: false });
     outageStartedAt ??= Date.now();
@@ -1551,6 +1607,11 @@ function openSocket(): void {
     });
     if (event.code === WS_AUTH_REQUIRED_CLOSE_CODE) {
       pauseProductSocketForAuth();
+      return;
+    }
+    if (event.code === WS_CAPACITY_REQUIRED_CLOSE_CODE) {
+      const retryAfter = state.activeCapacity?.retry_after_ms ?? 5_000;
+      scheduleReconnect(Math.max(1_000, retryAfter));
       return;
     }
     void (async () => {
@@ -1584,7 +1645,7 @@ function openSocket(): void {
 /** Returns whether the command actually went out (socket OPEN). Durable queue
  *  mutations remain pending on `false`; ephemeral transcript sends fail. */
 export function send(cmd: Inbound): boolean {
-  if (socket && socket.readyState === WebSocket.OPEN) {
+  if (socketReady && socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(cmd));
     return true;
   }
@@ -1611,7 +1672,7 @@ if (typeof globalThis.document !== "undefined") {
 }
 
 function isConnected(): boolean {
-  return socket?.readyState === WebSocket.OPEN;
+  return socketReady && socket?.readyState === WebSocket.OPEN;
 }
 
 // --- Optimistic sends (local, never synced) ---------------------------------

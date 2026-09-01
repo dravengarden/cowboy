@@ -33,6 +33,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0040_session_primary_auth_method.sql",
         "17f7251986496f5f87ad514aaf37b8c770690d540b02d8f9ad92d9822b133865",
     ),
+    (
+        "0041_auth_capacity.sql",
+        "de54f933e0868c9ee5a8c470dab5ebcda65d70cd28371062dca0c729b044741a",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -62,6 +66,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0014_session_primary_auth_method.sql",
         "83171f8df96ec003b2447643cd67b698370cc06af338f64d1e2ac0e6587ceb31",
+    ),
+    (
+        "0015_auth_capacity.sql",
+        "18267cbafe8c1b633bd91938739c5098a71e0a8f11fccee226022de074e832bb",
     ),
 ];
 

@@ -11,12 +11,18 @@ control plane, while the web files remain an independently replaceable release.
 |---|---|
 | `GET /healthz` | readiness → `"ok"`, or 503 after persistence loss / exhausted retries |
 | `GET /version` | `{ version }` = SHA-256 of `index.html`, for build-id / stale-bundle detection |
-| `GET /api/auth/status` | public `{ registration, setup_required, setup_pending, me? }` — no lan/exposure enum |
+| `GET /api/auth/status` | public login state, configured methods, session deadlines, capacity policy, and current principal summary |
 | `POST /api/auth/setup` | prove host setup code; 10-minute setup cookie; 403 once a user exists |
 | `POST /api/auth/register` | setup-cookie first-run; creates the only user; 403 afterward |
 | `POST /api/auth/login` | product login; dummy-verifies unknown users; `cowboy_user` cookie |
-| `POST /api/auth/logout` | best-effort clear cookie + delete `user_sessions` row |
+| `POST /api/auth/logout` | transactionally revoke the current, all, or one Provider's stable sessions; broader scopes require recent step-up and return an optional RP-initiated logout URL |
+| `GET /api/auth/logout/complete` | fixed same-origin completion page for Provider RP-initiated logout |
+| `POST /api/auth/providers/{id}/backchannel-logout` | verify a signed OIDC logout token, reject replay, then revoke only the matching Provider sessions |
 | `GET /api/auth/me` | current product principal (cookie or Bearer) |
+| `POST /api/auth/automation/credentials` | recent-login operator+; issue a short-lived sender-constrained credential from the separate automation pool |
+| `GET /api/auth/sessions` | list this account's stable signed sessions and their active-client state |
+| `DELETE /api/auth/sessions/{id}` | revoke one owned signed session and fence its leases/waiters |
+| `DELETE /api/auth/active-clients/{id}` | manually reclaim one owned active-client lease using its fencing generation |
 | `POST /api/auth/tokens` | product operator+; create a `cow_…` token (secret shown once) |
 | `GET /api/auth/tokens` | list own token prefixes, names, timestamps |
 | `DELETE /api/auth/tokens/{id}` | revoke own token; other users' ids are 404 |

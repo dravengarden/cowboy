@@ -18,6 +18,11 @@ import {
 } from "react";
 import {
   authApi,
+  isRecentProductAuthRequired,
+  type ProductAutomationServerPolicy,
+  type ProductCapacityServerPolicy,
+  type ProductLogoutScope,
+  type ProductLogoutServerPolicy,
   type ProductMe,
   productMeFromJson,
   type ProductOidcProvider,
@@ -46,6 +51,7 @@ import {
   registerPasskey,
 } from "./passkeyFlow";
 import { ConfirmSheet } from "../Sheet";
+import { ProductActiveCapacityGuard } from "../capacity/ProductActiveCapacityGuard";
 import { ProductLoginPage } from "./ProductLoginPage";
 import {
   type RecentProductAuthOptions,
@@ -56,9 +62,15 @@ export interface ProductAuthValue {
   me: ProductMe;
   passkeys: ProductPasskeyServerPolicy | undefined;
   session: ProductSessionServerPolicy | undefined;
+  capacity: ProductCapacityServerPolicy | undefined;
+  logout: ProductLogoutServerPolicy | undefined;
+  automation: ProductAutomationServerPolicy | undefined;
   reauthenticate: (options?: RecentProductAuthOptions) => Promise<ProductMe>;
   updateMe: (me: ProductMe) => void;
-  signOut: () => Promise<void>;
+  signOut: (options?: {
+    scope?: ProductLogoutScope;
+    providerLogout?: boolean;
+  }) => Promise<void>;
 }
 
 const ProductAuthContext = createContext<ProductAuthValue | null>(null);
@@ -71,15 +83,28 @@ export function useProductAuth(): ProductAuthValue {
   return value;
 }
 
-export async function signOutProductSession(): Promise<void> {
+export async function signOutProductSession(options: {
+  scope?: ProductLogoutScope;
+  providerLogout?: boolean;
+} = {}): Promise<void> {
+  let providerLogoutUrl: string | null | undefined;
   try {
-    await authApi.logout();
-  } catch {
+    const result = await authApi.logout(
+      options.scope ?? "current",
+      options.providerLogout === true,
+    );
+    providerLogoutUrl = result.provider_logout_url;
+  } catch (reason) {
+    if (isRecentProductAuthRequired(reason)) throw reason;
     // Logout is best-effort: still drop the socket graph and local history.
   }
   await deleteProductHistoryCache();
   announceProductSessionEnd();
-  globalThis.location.reload();
+  if (providerLogoutUrl) {
+    globalThis.location.assign(providerLogoutUrl);
+  } else {
+    globalThis.location.reload();
+  }
 }
 
 function ProductAuthSplash({ label }: { label: string }): React.JSX.Element {
@@ -295,6 +320,15 @@ export function ProductAuthGate({
   const [sessionPolicy, setSessionPolicy] = useState<
     ProductSessionServerPolicy
   >();
+  const [capacityPolicy, setCapacityPolicy] = useState<
+    ProductCapacityServerPolicy
+  >();
+  const [logoutPolicy, setLogoutPolicy] = useState<
+    ProductLogoutServerPolicy
+  >();
+  const [automationPolicy, setAutomationPolicy] = useState<
+    ProductAutomationServerPolicy
+  >();
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
@@ -360,6 +394,9 @@ export function ProductAuthGate({
       setLoginMethodOrder(probe.body.login_method_order ?? []);
       setPasskeyPolicy(probe.body.passkeys);
       setSessionPolicy(probe.body.session);
+      setCapacityPolicy(probe.body.capacity);
+      setLogoutPolicy(probe.body.logout);
+      setAutomationPolicy(probe.body.automation);
     }
     const decision = classifyAuthStatus(probe);
     if (generation !== generationRef.current) return;
@@ -402,9 +439,12 @@ export function ProductAuthGate({
     })();
   }, []);
 
-  const signOut = useCallback(async (): Promise<void> => {
+  const signOut = useCallback(async (options: {
+    scope?: ProductLogoutScope;
+    providerLogout?: boolean;
+  } = {}): Promise<void> => {
     generationRef.current += 1;
-    await signOutProductSession();
+    await signOutProductSession(options);
   }, []);
 
   const updateMe = useCallback((next: ProductMe): void => {
@@ -482,12 +522,16 @@ export function ProductAuthGate({
           me,
           passkeys: passkeyPolicy,
           session: sessionPolicy,
+          capacity: capacityPolicy,
+          logout: logoutPolicy,
+          automation: automationPolicy,
           reauthenticate,
           updateMe,
           signOut,
         }}
       >
         {children}
+        <ProductActiveCapacityGuard />
         <ProductSessionGuard
           me={me}
           policy={sessionPolicy}
@@ -539,6 +583,9 @@ export function ProductAuthGate({
           setLoginMethodOrder(status.login_method_order ?? []);
           setPasskeyPolicy(status.passkeys);
           setSessionPolicy(status.session);
+          setCapacityPolicy(status.capacity);
+          setLogoutPolicy(status.logout);
+          setAutomationPolicy(status.automation);
         }}
       />
     );

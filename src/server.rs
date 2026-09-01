@@ -52,7 +52,7 @@ use crate::product_auth::{ProductPrincipal, WS_AUTH_REQUIRED_CLOSE_CODE};
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
-use crate::store::Store;
+use crate::store::{ActiveClientRelease, Store};
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
 use crate::web_push::{NotificationCategory, WebPushService, WebPushSubscription};
@@ -199,6 +199,93 @@ struct AppState {
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
     device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
     device_access: Arc<crate::client_auth::DeviceAccessSessions>,
+    capacity_runtime: Arc<ActiveCapacityRuntime>,
+}
+
+#[derive(Default)]
+struct ActiveCapacityRuntime {
+    channels: parking_lot::Mutex<HashMap<String, LocalActiveClient>>,
+    changed: tokio::sync::Notify,
+}
+
+#[derive(Debug, Default)]
+struct LocalActiveClient {
+    channels: u32,
+    fencing_token: Option<i64>,
+}
+
+impl ActiveCapacityRuntime {
+    fn open_channel(&self, client_id: &str, limit: u32, enforce: bool) -> Result<u32, u32> {
+        let mut clients = self.channels.lock();
+        let client = clients.entry(client_id.to_owned()).or_default();
+        let next = client.channels.saturating_add(1);
+        if enforce && next > limit {
+            return Err(client.channels);
+        }
+        client.channels = next;
+        Ok(next)
+    }
+
+    fn record_fence(&self, client_id: &str, fencing_token: i64) {
+        if let Some(client) = self.channels.lock().get_mut(client_id) {
+            client.fencing_token = Some(fencing_token);
+        }
+    }
+
+    fn close_channel(&self, client_id: &str) -> Option<i64> {
+        let mut clients = self.channels.lock();
+        let client = clients.get_mut(client_id)?;
+        client.channels = client.channels.saturating_sub(1);
+        if client.channels > 0 {
+            return None;
+        }
+        clients
+            .remove(client_id)
+            .and_then(|client| client.fencing_token)
+    }
+
+    fn notify_changed(&self) {
+        self.changed.notify_waiters();
+    }
+}
+
+struct ActiveCapacityChannel {
+    runtime: Arc<ActiveCapacityRuntime>,
+    store: Option<Store>,
+    client_id: String,
+    reservation_ms: i64,
+    per_user_limit: u32,
+}
+
+impl Drop for ActiveCapacityChannel {
+    fn drop(&mut self) {
+        let Some(fencing_token) = self.runtime.close_channel(&self.client_id) else {
+            return;
+        };
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let client_id = self.client_id.clone();
+        let reservation_ms = self.reservation_ms;
+        let per_user_limit = self.per_user_limit;
+        tokio::spawn(async move {
+            if let Err(error) = store
+                .release_active_client(&ActiveClientRelease {
+                    client_id: &client_id,
+                    fencing_token,
+                    reason: "channel_closed",
+                    now_ms: auth_now_ms(),
+                    reservation_ms,
+                    per_user_limit,
+                })
+                .await
+            {
+                tracing::warn!(%error, %client_id, "releasing active-client lease");
+            }
+            runtime.notify_changed();
+        });
+    }
 }
 
 #[derive(Clone)]
@@ -983,6 +1070,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
             device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
             device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
+            capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
         },
         shutdown_tx,
     )
@@ -1958,6 +2046,7 @@ struct ProductAuthState {
     oidc_native_handoffs: Arc<crate::oidc::NativeHandoffs>,
     device_authorizations: Arc<crate::client_auth::DeviceAuthorizations>,
     device_access: Arc<crate::client_auth::DeviceAccessSessions>,
+    capacity_runtime: Arc<ActiveCapacityRuntime>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1972,6 +2061,46 @@ struct RegisterRequest {
 struct LoginRequest {
     account: String,
     password: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LogoutScope {
+    #[default]
+    Current,
+    Provider,
+    All,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogoutRequest {
+    #[serde(default)]
+    scope: LogoutScope,
+    #[serde(default)]
+    provider_logout: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OidcBackchannelLogoutRequest {
+    logout_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutomationCredentialRequest {
+    name: String,
+    public_key: String,
+    ttl_seconds: Option<i64>,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActiveClientReleaseQuery {
+    fencing_token: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2145,8 +2274,17 @@ fn product_auth_router(state: ProductAuthState) -> Router {
             "/api/auth/providers/{provider_id}/native/cancel",
             post(api_auth_oidc_native_cancel),
         )
+        .route(
+            "/api/auth/providers/{provider_id}/backchannel-logout",
+            post(api_auth_oidc_backchannel_logout),
+        )
         .route("/api/auth/logout", post(api_auth_logout))
+        .route("/api/auth/logout/complete", get(api_auth_logout_complete))
         .route("/api/auth/me", get(api_auth_me))
+        .route(
+            "/api/auth/automation/credentials",
+            post(api_auth_create_automation_credential),
+        )
         .route(
             "/api/auth/device/authorizations",
             post(api_auth_device_authorization_start),
@@ -2169,6 +2307,12 @@ fn product_auth_router(state: ProductAuthState) -> Router {
         )
         .route("/api/auth/device/exchange", post(api_auth_device_exchange))
         .route("/api/auth/device/refresh", post(api_auth_device_refresh))
+        .route("/api/auth/sessions", get(api_auth_list_sessions))
+        .route("/api/auth/sessions/{id}", delete(api_auth_delete_session))
+        .route(
+            "/api/auth/active-clients/{id}",
+            delete(api_auth_release_active_client),
+        )
         .route("/api/auth/devices", get(api_auth_list_devices))
         .route("/api/auth/devices/{id}", delete(api_auth_delete_device))
         .route(
@@ -3398,7 +3542,16 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             RouteAuth::Product
         };
     }
+    if path == "/api/auth/automation/credentials" {
+        return RouteAuth::ProductOperator;
+    }
     if path.starts_with("/api/auth/tokens/") {
+        return RouteAuth::Product;
+    }
+    if path == "/api/auth/sessions"
+        || path.starts_with("/api/auth/sessions/")
+        || path.starts_with("/api/auth/active-clients/")
+    {
         return RouteAuth::Product;
     }
     if matches!(
@@ -3543,6 +3696,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         || authentication_provider_id(path, "native/poll").is_some()
         || authentication_provider_id(path, "native/events").is_some()
         || authentication_provider_id(path, "native/cancel").is_some()
+        || authentication_provider_id(path, "backchannel-logout").is_some()
+        || path == "/api/auth/logout"
+        || path == "/api/auth/logout/complete"
         || path == "/api/admin/auth"
         || path == "/api/admin/auth/setup"
         || path == "/api/admin/auth/bootstrap"
@@ -3657,10 +3813,10 @@ async fn resolve_product_api_request_principal(
         }));
     }
     let bearer = crate::product_auth::bearer_token(headers);
-    if bearer
-        .as_deref()
-        .is_some_and(|token| token.starts_with(crate::client_auth::ACCESS_TOKEN_PREFIX))
-    {
+    if bearer.as_deref().is_some_and(|token| {
+        token.starts_with(crate::client_auth::ACCESS_TOKEN_PREFIX)
+            || token.starts_with(crate::client_auth::AUTOMATION_ACCESS_TOKEN_PREFIX)
+    }) {
         let path_and_query = uri
             .path_and_query()
             .map_or(uri.path(), axum::http::uri::PathAndQuery::as_str);
@@ -3671,6 +3827,18 @@ async fn resolve_product_api_request_principal(
                 tracing::info!(%error, "device_access_rejected");
             })?
             .ok_or(())?;
+        if identity.is_automation()
+            && (!state.product_authentication.automation.enabled
+                || !automation_route_allowed(&identity, method, uri.path()))
+        {
+            tracing::info!(
+                credential_id = identity.device_id,
+                method = %method,
+                path = uri.path(),
+                "automation_access_scope_rejected"
+            );
+            return Err(());
+        }
         let Some(store) = state.store.as_ref() else {
             return Ok(None);
         };
@@ -3685,13 +3853,15 @@ async fn resolve_product_api_request_principal(
             state.device_access.revoke_device(&identity.device_id);
             return Ok(None);
         };
-        let store = store.clone();
-        let device_id = identity.device_id.clone();
-        tokio::spawn(async move {
-            let _ = store
-                .touch_user_device_last_used(&device_id, auth_now_ms())
-                .await;
-        });
+        if !identity.is_automation() {
+            let store = store.clone();
+            let device_id = identity.device_id.clone();
+            tokio::spawn(async move {
+                let _ = store
+                    .touch_user_device_last_used(&device_id, auth_now_ms())
+                    .await;
+            });
+        }
         return Ok(Some(AuthenticatedProductRequest {
             principal: product_principal(&state.hub, &user),
             cookie_session: None,
@@ -3710,6 +3880,31 @@ async fn resolve_product_api_request_principal(
         cookie_session,
         device_identity: None,
     }))
+}
+
+fn automation_route_allowed(
+    identity: &crate::client_auth::DeviceAccessIdentity,
+    method: &Method,
+    path: &str,
+) -> bool {
+    if !identity.is_automation() {
+        return true;
+    }
+    if path == "/ws" {
+        return identity.has_scope("websocket");
+    }
+    if matches!(*method, Method::GET | Method::HEAD)
+        && identity.has_scope("api:read")
+        && (matches!(path, "/api/auth/status" | "/api/auth/me")
+            || (!path.starts_with("/api/auth/") && !path.starts_with("/api/admin/")))
+    {
+        return true;
+    }
+    identity.has_scope("sessions:write")
+        && ((method == Method::POST && path == "/api/sessions")
+            || session_id_from_path(path).is_some()
+            || path == "/api/artifacts"
+            || path.starts_with("/api/artifacts/"))
 }
 
 #[derive(Clone)]
@@ -4003,6 +4198,7 @@ async fn issue_product_session(
     user: &crate::store::ProductUser,
     headers: &HeaderMap,
     auth_method: &str,
+    external_identity: Option<&crate::oidc::VerifiedIdentity>,
 ) -> Response {
     let previous_token_hash = crate::product_auth::user_cookie_token(headers)
         .map(|token| crate::admin::hex_sha256(token.as_bytes()));
@@ -4035,6 +4231,36 @@ async fn issue_product_session(
             )
                 .into_response();
         }
+        if let Some(identity) = external_identity
+            && (previous
+                .auth_issuer
+                .as_deref()
+                .is_some_and(|issuer| issuer != identity.issuer)
+                || previous
+                    .auth_subject
+                    .as_deref()
+                    .is_some_and(|subject| subject != identity.subject))
+        {
+            return (
+                StatusCode::CONFLICT,
+                "Sign out before changing this browser session's external identity.",
+            )
+                .into_response();
+        }
+    }
+    let password_login = auth_method == crate::auth_plugins::PASSWORD_LOGIN_METHOD;
+    if password_login != external_identity.is_none() {
+        tracing::error!(auth_method, "product session identity binding mismatch");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if let Some(identity) = external_identity {
+        let Some(provider) = state.product_authentication.provider(auth_method) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        if !provider.accepts_identity(identity) {
+            tracing::warn!(auth_method, "product session external identity mismatch");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
     let token = match crate::product_auth::new_session_token() {
         Ok(token) => token,
@@ -4044,9 +4270,24 @@ async fn issue_product_session(
     };
     let now = auth_now_ms();
     let session_ttl_ms = state.product_authentication.session.primary_max_age_ms;
+    let session_id = match previous_session.as_ref() {
+        Some(previous) => previous.session_id.clone(),
+        None => match crate::product_auth::new_user_id() {
+            Ok(session_id) => session_id,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+    };
     let session = crate::store::ProductUserSession {
         token_hash: crate::admin::hex_sha256(token.as_bytes()),
+        session_id,
         user_id: user.id.clone(),
+        client_kind: previous_session.as_ref().map_or_else(
+            || "browser".to_owned(),
+            |session| session.client_kind.clone(),
+        ),
+        principal_class: "human".to_owned(),
         created_at_ms: now,
         expires_at_ms: now.saturating_add(session_ttl_ms),
         last_seen_at_ms: now,
@@ -4057,6 +4298,16 @@ async fn issue_product_session(
         passkey_verified_at_ms: None,
         primary_authenticated_at_ms: now,
         primary_auth_method: Some(auth_method.to_owned()),
+        revoked_at_ms: None,
+        revoke_reason: None,
+        auth_provider_id: (auth_method != crate::auth_plugins::PASSWORD_LOGIN_METHOD)
+            .then(|| auth_method.to_owned()),
+        auth_issuer: external_identity.map(|identity| identity.issuer.clone()),
+        auth_subject: external_identity.map(|identity| identity.subject.clone()),
+        auth_sid: external_identity.and_then(|identity| identity.session_id.clone()),
+        id_token_ciphertext: previous_session
+            .as_ref()
+            .and_then(|session| session.id_token_ciphertext.clone()),
     };
     let persisted = if let (Some(previous), Some(previous_token_hash)) =
         (previous_session.as_ref(), previous_token_hash.as_deref())
@@ -4065,11 +4316,66 @@ async fn issue_product_session(
         store
             .replace_user_session(previous_token_hash, &session)
             .await
+            .map(|()| None)
     } else {
-        store.insert_user_session(&session).await
+        store
+            .admit_user_session(
+                &session,
+                state
+                    .product_authentication
+                    .capacity
+                    .signed_in_sessions_per_user,
+                state.product_authentication.capacity.enforcement
+                    == crate::auth_plugins::CapacityEnforcement::Enforce,
+                state.product_authentication.capacity.single_session_mode
+                    == crate::auth_plugins::SingleSessionMode::NewestWins,
+            )
+            .await
+            .map(Some)
     };
-    if let Err(error) = persisted {
-        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    let admission = match persisted {
+        Ok(admission) => admission,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    match admission {
+        Some(crate::store::ProductSessionAdmission::CapacityFull {
+            active_sessions,
+            limit,
+        }) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "code": "signed_in_session_capacity_full",
+                    "active": active_sessions,
+                    "limit": limit,
+                    "retryable": true,
+                })),
+            )
+                .into_response();
+        }
+        Some(crate::store::ProductSessionAdmission::Admitted {
+            observed_overflow,
+            revoked_session_ids,
+            ..
+        }) => {
+            if observed_overflow {
+                tracing::warn!(
+                    user_id = user.id,
+                    "signed-in session capacity exceeded in observation mode"
+                );
+            }
+            for revoked_session_id in revoked_session_ids {
+                tracing::info!(
+                    user_id = user.id,
+                    session_id = revoked_session_id,
+                    "product_session_replaced"
+                );
+            }
+            state.capacity_runtime.notify_changed();
+        }
+        None => {}
     }
     let me = match product_me_for_user(
         Some(store),
@@ -4166,6 +4472,9 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
             "session_refresh_enabled": state.product_authentication.passkeys.session_refresh_enabled,
         },
         "session": state.product_authentication.session,
+        "capacity": state.product_authentication.capacity,
+        "logout": state.product_authentication.logout,
+        "automation": state.product_authentication.automation,
         "providers": state.product_authentication.public_providers(),
     });
     if let Some((session, user)) = product_session_and_user_from_cookie(&state, &headers).await {
@@ -4184,6 +4493,116 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
         body["me"] = serde_json::to_value(me).unwrap_or_default();
     }
     Json(body).into_response()
+}
+
+async fn api_auth_create_automation_credential(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<AutomationCredentialRequest>,
+) -> Response {
+    if !state.product_auth_enabled || !state.product_authentication.automation.enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let peer = peer_addr(peer);
+    if let Some(rejected) = reject_bad_origin(&headers, peer, &state.public_origins) {
+        return rejected;
+    }
+    let user = match require_recent_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    if !product_principal(&state.hub, &user)
+        .role
+        .at_least(crate::admin::AdminRole::Operator)
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let name = request.name.trim();
+    if name.is_empty()
+        || name.chars().count() > 64
+        || name.chars().any(char::is_control)
+        || request.scopes.is_empty()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "invalid automation credential request",
+        )
+            .into_response();
+    }
+    let maximum_age_ms = state
+        .product_authentication
+        .automation
+        .credential_max_age_ms;
+    let ttl_ms = match request.ttl_seconds {
+        Some(seconds) => seconds.checked_mul(1_000),
+        None => Some(maximum_age_ms),
+    };
+    let Some(ttl_ms) = ttl_ms.filter(|ttl| (60_000..=maximum_age_ms).contains(ttl)) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "automation credential lifetime exceeds the service policy",
+        )
+            .into_response();
+    };
+    let credential_id = match crate::product_auth::new_user_id() {
+        Ok(credential_id) => credential_id,
+        Err(error) => {
+            tracing::error!(%error, "automation_credential_id_generation");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let mut scopes = request.scopes;
+    scopes.sort();
+    scopes.dedup();
+    let now_ms = auth_now_ms();
+    let (access_token, expires_at_ms) = match state.device_access.issue_automation(
+        &credential_id,
+        &user.id,
+        &request.public_key,
+        scopes.clone(),
+        now_ms,
+        ttl_ms,
+    ) {
+        Ok(credential) => credential,
+        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    };
+    if let Err(error) = store
+        .record_automation_credential_issued(
+            &user.id,
+            &credential_id,
+            name,
+            &scopes,
+            expires_at_ms,
+            now_ms,
+        )
+        .await
+    {
+        state.device_access.revoke_access_token(&access_token);
+        tracing::error!(%error, user_id = user.id, credential_id, "automation credential audit");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    tracing::info!(
+        user_id = user.id,
+        credential_id,
+        credential_name = name,
+        expires_at_ms,
+        scopes = ?scopes,
+        "automation_credential_issued"
+    );
+    no_store_json(
+        StatusCode::CREATED,
+        serde_json::json!({
+            "credential_id": credential_id,
+            "access_token": access_token,
+            "expires_at_ms": expires_at_ms,
+            "scopes": scopes,
+            "principal_class": "automation",
+        }),
+    )
 }
 
 async fn api_auth_setup(
@@ -4346,6 +4765,7 @@ async fn api_auth_register(
         &user,
         &headers,
         crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+        None,
     )
     .await;
     let secure = crate::product_auth::request_is_https(&headers);
@@ -4416,6 +4836,7 @@ async fn api_auth_login(
         &user,
         &headers,
         crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+        None,
     )
     .await
 }
@@ -4671,17 +5092,18 @@ async fn api_auth_oidc_callback_inner(
     );
     match &target {
         crate::oidc::AuthorizationTarget::MacOs { code_challenge } => {
-            let handoff =
-                match state
-                    .oidc_native_handoffs
-                    .issue(provider_id, &user.id, code_challenge)
-                {
-                    Ok(handoff) => handoff,
-                    Err(error) => {
-                        tracing::error!(%error, "oidc_native_handoff_issue");
-                        return oidc_callback_error(StatusCode::INTERNAL_SERVER_ERROR, secure);
-                    }
-                };
+            let handoff = match state.oidc_native_handoffs.issue(
+                provider_id,
+                &user.id,
+                code_challenge,
+                &identity,
+            ) {
+                Ok(handoff) => handoff,
+                Err(error) => {
+                    tracing::error!(%error, "oidc_native_handoff_issue");
+                    return oidc_callback_error(StatusCode::INTERNAL_SERVER_ERROR, secure);
+                }
+            };
             return (
                 StatusCode::SEE_OTHER,
                 [
@@ -4701,6 +5123,7 @@ async fn api_auth_oidc_callback_inner(
                 provider_id,
                 handoff_challenge,
                 &user.id,
+                &identity,
             ) {
                 tracing::error!(%error, "oidc_browser_handoff_complete");
                 return oidc_callback_error(StatusCode::INTERNAL_SERVER_ERROR, secure);
@@ -4716,7 +5139,15 @@ async fn api_auth_oidc_callback_inner(
             return oidc_callback_error(StatusCode::SERVICE_UNAVAILABLE, secure);
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
+    let mut response = issue_product_session(
+        &state,
+        &store,
+        &user,
+        &headers,
+        provider_id,
+        Some(&identity),
+    )
+    .await;
     if let Ok(value) = crate::oidc::clear_transaction_cookie(secure).parse() {
         response.headers_mut().append(header::SET_COOKIE, value);
     }
@@ -4839,12 +5270,12 @@ async fn api_auth_oidc_native_exchange(
     };
     let source_ip = crate::product_auth::client_ip(&headers, peer).to_string();
     apply_rate_limit(&state, "oidc:native", &source_ip).await;
-    let user_id =
+    let (user_id, identity) =
         match state
             .oidc_native_handoffs
             .consume(provider_id, &request.code, &request.code_verifier)
         {
-            Ok(user_id) => user_id,
+            Ok(handoff) => handoff,
             Err(error) => {
                 state.rate_limits.record_failure("oidc:native", &source_ip);
                 tracing::info!(%error, "oidc_native_exchange_rejected");
@@ -4871,7 +5302,15 @@ async fn api_auth_oidc_native_exchange(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
+    let mut response = issue_product_session(
+        &state,
+        &store,
+        &user,
+        &headers,
+        provider_id,
+        Some(&identity),
+    )
+    .await;
     if !response.status().is_success() {
         return response;
     }
@@ -5045,7 +5484,7 @@ async fn api_auth_oidc_native_poll(
     let Some(store) = durable_store(&state.store).cloned() else {
         return missing_store();
     };
-    let user_id = match state.oidc_native_handoffs.poll_browser(
+    let (user_id, identity) = match state.oidc_native_handoffs.poll_browser(
         provider_id,
         &request.handoff_token,
         &request.code_verifier,
@@ -5057,7 +5496,7 @@ async fn api_auth_oidc_native_poll(
             )
                 .into_response();
         }
-        Ok(crate::oidc::BrowserHandoffPoll::Ready { user_id }) => user_id,
+        Ok(crate::oidc::BrowserHandoffPoll::Ready { user_id, identity }) => (user_id, identity),
         Ok(crate::oidc::BrowserHandoffPoll::Failed) => {
             return (StatusCode::GONE, "external authorization failed").into_response();
         }
@@ -5085,7 +5524,15 @@ async fn api_auth_oidc_native_poll(
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
-    let mut response = issue_product_session(&state, &store, &user, &headers, provider_id).await;
+    let mut response = issue_product_session(
+        &state,
+        &store,
+        &user,
+        &headers,
+        provider_id,
+        Some(&identity),
+    )
+    .await;
     if !response.status().is_success() {
         return response;
     }
@@ -5197,6 +5644,7 @@ async fn api_auth_logout(
     State(state): State<ProductAuthState>,
     peer: ConnectInfo<SocketAddr>,
     headers: HeaderMap,
+    request: Option<Json<LogoutRequest>>,
 ) -> Response {
     let peer = peer_addr(peer);
     if crate::product_auth::user_cookie_token(&headers).is_some()
@@ -5204,26 +5652,229 @@ async fn api_auth_logout(
     {
         return rejected;
     }
-    if let (Some(store), Some(token)) = (
-        state.store.as_ref(),
-        crate::product_auth::user_cookie_token(&headers),
-    ) && let Ok(Some(session)) = store
+    let request = request.map_or_else(LogoutRequest::default, |Json(request)| request);
+    let secure = crate::product_auth::request_is_https(&headers);
+    let Some(store) = state.store.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authentication storage is unavailable",
+        )
+            .into_response();
+    };
+    let Some(token) = crate::product_auth::user_cookie_token(&headers) else {
+        return (
+            [(
+                header::SET_COOKIE,
+                crate::product_auth::clear_session_cookie(secure),
+            )],
+            Json(serde_json::json!({
+                "ok": true,
+                "scope": request.scope,
+                "revoked_sessions": 0,
+                "provider_logout_url": null,
+            })),
+        )
+            .into_response();
+    };
+    let session = match store
         .user_session_by_token_hash(&crate::admin::hex_sha256(token.as_bytes()))
         .await
     {
-        let _ = store.delete_user_session(&session.token_hash).await;
-        tracing::info!(user_id = session.user_id, "product_logout");
+        Ok(session) => session,
+        Err(error) => {
+            tracing::error!(%error, "product_logout_session_lookup_failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authentication storage is unavailable",
+            )
+                .into_response();
+        }
+    };
+    let Some(session) = session else {
+        return (
+            [(
+                header::SET_COOKIE,
+                crate::product_auth::clear_session_cookie(secure),
+            )],
+            Json(serde_json::json!({
+                "ok": true,
+                "scope": request.scope,
+                "revoked_sessions": 0,
+                "provider_logout_url": null,
+            })),
+        )
+            .into_response();
+    };
+    let provider_id = session.auth_provider_id.as_deref();
+    let offer_provider_logout = match state.product_authentication.logout.provider_logout {
+        crate::auth_plugins::ProviderLogoutPolicy::Never => false,
+        crate::auth_plugins::ProviderLogoutPolicy::Offer => request.provider_logout,
+        crate::auth_plugins::ProviderLogoutPolicy::Always => provider_id.is_some(),
+    };
+    let provider_logout_url = offer_provider_logout
+        .then_some(provider_id)
+        .flatten()
+        .and_then(|provider_id| state.product_authentication.provider(provider_id))
+        .and_then(|provider| provider.rp_logout_location());
+    let effective_scope =
+        if provider_logout_url.is_some() && matches!(request.scope, LogoutScope::Current) {
+            LogoutScope::Provider
+        } else {
+            request.scope
+        };
+    if matches!(effective_scope, LogoutScope::Provider | LogoutScope::All)
+        && !product_session_has_recent_step_up(&session, auth_now_ms())
+    {
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            "Recent login or Passkey verification required",
+        )
+            .into_response();
     }
+    let revoked_sessions = match effective_scope {
+        LogoutScope::Current => store
+            .delete_user_session(&session.token_hash)
+            .await
+            .map(|()| 1),
+        LogoutScope::All => store.delete_user_sessions_for_user(&session.user_id).await,
+        LogoutScope::Provider => {
+            let Some(provider_id) = provider_id else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "the current session does not belong to an external provider",
+                )
+                    .into_response();
+            };
+            store
+                .revoke_user_sessions_for_provider(
+                    &session.user_id,
+                    provider_id,
+                    "provider_logout",
+                    auth_now_ms(),
+                )
+                .await
+        }
+    };
+    let revoked_sessions = match revoked_sessions {
+        Ok(revoked_sessions) => revoked_sessions,
+        Err(error) => {
+            tracing::error!(%error, "product_logout_failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authentication storage is unavailable",
+            )
+                .into_response();
+        }
+    };
+    state.capacity_runtime.notify_changed();
+    tracing::info!(
+        user_id = session.user_id,
+        ?effective_scope,
+        revoked_sessions,
+        provider_logout = provider_logout_url.is_some(),
+        "product_logout"
+    );
     (
         [(
             header::SET_COOKIE,
-            crate::product_auth::clear_session_cookie(crate::product_auth::request_is_https(
-                &headers,
-            )),
+            crate::product_auth::clear_session_cookie(secure),
         )],
-        Json(serde_json::json!({ "ok": true })),
+        Json(serde_json::json!({
+            "ok": true,
+            "scope": effective_scope,
+            "revoked_sessions": revoked_sessions,
+            "provider_logout_url": provider_logout_url,
+        })),
     )
         .into_response()
+}
+
+async fn api_auth_logout_complete(headers: HeaderMap) -> Response {
+    (
+        StatusCode::SEE_OTHER,
+        [
+            (header::LOCATION, "/".to_owned()),
+            (header::CACHE_CONTROL, "no-store".to_owned()),
+            (
+                header::SET_COOKIE,
+                crate::product_auth::clear_session_cookie(crate::product_auth::request_is_https(
+                    &headers,
+                )),
+            ),
+        ],
+    )
+        .into_response()
+}
+
+async fn api_auth_oidc_backchannel_logout(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    uri: Uri,
+    Form(request): Form<OidcBackchannelLogoutRequest>,
+) -> Response {
+    if !state.product_auth_enabled || !state.product_authentication.logout.backchannel_logout {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(provider_id) = authentication_provider_id(uri.path(), "backchannel-logout") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(provider) = state.product_authentication.provider(provider_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let source_ip = peer_addr(peer).ip().to_string();
+    let rate_name = format!("oidc:logout:{provider_id}");
+    apply_rate_limit(&state, &rate_name, &source_ip).await;
+    let now_ms = auth_now_ms();
+    let Some(verified) = provider
+        .verify_logout_token(
+            &request.logout_token,
+            u64::try_from(now_ms.div_euclid(1_000)).unwrap_or_default(),
+        )
+        .await
+    else {
+        state.rate_limits.record_failure(&rate_name, &source_ip);
+        tracing::warn!(provider_id, "oidc_backchannel_logout_rejected");
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let expires_at_ms = i64::try_from(verified.expires_at)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(1_000);
+    match store
+        .apply_oidc_backchannel_logout(
+            provider_id,
+            &verified.issuer,
+            verified.subject.as_deref(),
+            verified.session_id.as_deref(),
+            &verified.token_id,
+            expires_at_ms,
+            now_ms,
+        )
+        .await
+    {
+        Ok(crate::store::OidcBackchannelLogout::Applied { revoked_sessions }) => {
+            state.rate_limits.reset(&rate_name, &source_ip);
+            state.capacity_runtime.notify_changed();
+            tracing::info!(
+                provider_id,
+                issued_at = verified.issued_at,
+                revoked_sessions,
+                "oidc_backchannel_logout_applied"
+            );
+            StatusCode::OK.into_response()
+        }
+        Ok(crate::store::OidcBackchannelLogout::Replay) => {
+            state.rate_limits.record_failure(&rate_name, &source_ip);
+            tracing::warn!(provider_id, "oidc_backchannel_logout_replay");
+            StatusCode::BAD_REQUEST.into_response()
+        }
+        Err(error) => {
+            tracing::error!(provider_id, %error, "oidc_backchannel_logout_failed");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
 }
 
 async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
@@ -5661,7 +6312,10 @@ async fn persist_product_passkey_assertion(
         let expires_at_ms = primary_due_at_ms;
         let session = crate::store::ProductUserSession {
             token_hash: crate::admin::hex_sha256(token.as_bytes()),
+            session_id: previous_session.session_id.clone(),
             user_id: user.id.clone(),
+            client_kind: previous_session.client_kind.clone(),
+            principal_class: previous_session.principal_class.clone(),
             created_at_ms: now,
             expires_at_ms,
             last_seen_at_ms: now,
@@ -5672,6 +6326,13 @@ async fn persist_product_passkey_assertion(
             passkey_verified_at_ms: Some(now),
             primary_authenticated_at_ms: previous_session.primary_authenticated_at_ms,
             primary_auth_method: previous_session.primary_auth_method.clone(),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: previous_session.auth_provider_id.clone(),
+            auth_issuer: previous_session.auth_issuer.clone(),
+            auth_subject: previous_session.auth_subject.clone(),
+            auth_sid: previous_session.auth_sid.clone(),
+            id_token_ciphertext: previous_session.id_token_ciphertext.clone(),
         };
         if let Err(error) = store
             .rotate_user_session(&previous_token_hash, &session)
@@ -6594,10 +7255,51 @@ async fn api_auth_device_exchange(
         used_at_ms: None,
         revoked_at_ms: None,
     };
-    if let Err(error) = store.insert_user_device(&device, &refresh).await {
-        finish_failed();
-        tracing::error!(%error, "device_authorization_persist");
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    let admission = store
+        .admit_user_device(
+            &device,
+            &refresh,
+            state
+                .product_authentication
+                .capacity
+                .authorized_clients_per_user,
+            state.product_authentication.capacity.enforcement
+                == crate::auth_plugins::CapacityEnforcement::Enforce,
+        )
+        .await;
+    match admission {
+        Ok(crate::store::ProductDeviceAdmission::Admitted {
+            observed_overflow, ..
+        }) => {
+            if observed_overflow {
+                tracing::warn!(
+                    user_id = user.id,
+                    "authorized-client capacity exceeded in observation mode"
+                );
+            }
+        }
+        Ok(crate::store::ProductDeviceAdmission::CapacityFull {
+            active_clients,
+            limit,
+        }) => {
+            finish_failed();
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "code": "authorized_client_capacity_full",
+                    "active": active_clients,
+                    "limit": limit,
+                    "retryable": false,
+                    "action": "revoke_an_authorized_client",
+                })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            finish_failed();
+            tracing::error!(%error, "device_authorization_persist");
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
     }
     let (access_token, access_expires_at_ms) =
         match state
@@ -6776,6 +7478,177 @@ fn device_public_json(device: crate::store::ProductDevice) -> serde_json::Value 
         "created_at_ms": device.created_at_ms,
         "last_used_at_ms": device.last_used_at_ms,
     })
+}
+
+fn session_public_json(
+    session: crate::store::ProductUserSession,
+    current_session_id: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": session.session_id,
+        "current": current_session_id.is_some_and(|id| id == session.session_id),
+        "client_kind": session.client_kind,
+        "principal_class": session.principal_class,
+        "created_at_ms": session.created_at_ms,
+        "expires_at_ms": session.expires_at_ms,
+        "last_seen_at_ms": session.last_seen_at_ms,
+        "user_agent": session.user_agent,
+        "primary_auth_method": session.primary_auth_method,
+        "provider_id": session.auth_provider_id,
+    })
+}
+
+async fn api_auth_list_sessions(
+    State(state): State<ProductAuthState>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some((session, user)) = product_session_and_user_from_store_cookie(store, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if let Err(response) =
+        ensure_product_session_fresh(store, &session, &state.product_authentication).await
+    {
+        return response;
+    }
+    let now_ms = auth_now_ms();
+    match tokio::try_join!(
+        store.list_user_sessions_for_user(&user.id, now_ms),
+        store.list_active_clients_for_user(&user.id, now_ms),
+        store.list_user_devices_for_user(&user.id),
+    ) {
+        Ok((sessions, active_clients, authorized_clients)) => no_store_json(
+            StatusCode::OK,
+            serde_json::json!({
+                "sessions": sessions
+                    .into_iter()
+                    .map(|item| session_public_json(item, Some(&session.session_id)))
+                    .collect::<Vec<_>>(),
+                "active_clients": active_clients,
+                "authorized_clients": authorized_clients.len(),
+                "limit": state.product_authentication.capacity.signed_in_sessions_per_user,
+                "active_limit": state.product_authentication.capacity.active_clients_per_user,
+                "enforcement": state.product_authentication.capacity.enforcement,
+            }),
+        ),
+        Err(error) => {
+            tracing::error!(%error, "user_session_list");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
+async fn api_auth_delete_session(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    let Some((current_session, user)) =
+        product_session_and_user_from_store_cookie(store, &headers).await
+    else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    if let Err(response) =
+        ensure_product_session_fresh(store, &current_session, &state.product_authentication).await
+    {
+        return response;
+    }
+    if !product_session_has_recent_step_up(&current_session, auth_now_ms()) {
+        return (
+            StatusCode::PRECONDITION_REQUIRED,
+            "Recent login or Passkey verification required",
+        )
+            .into_response();
+    }
+    match store
+        .revoke_user_session_for_user(&user.id, &id, "user_revoked", auth_now_ms())
+        .await
+    {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => {
+            tracing::info!(
+                user_id = user.id,
+                session_id = id,
+                current = id == current_session.session_id,
+                "user_session_revoked"
+            );
+            state.capacity_runtime.notify_changed();
+            let mut response = no_store_json(StatusCode::OK, serde_json::json!({ "ok": true }));
+            if id == current_session.session_id
+                && let Ok(value) = crate::product_auth::clear_session_cookie(
+                    crate::product_auth::request_is_https(&headers),
+                )
+                .parse()
+            {
+                response.headers_mut().append(header::SET_COOKIE, value);
+            }
+            response
+        }
+        Err(error) => {
+            tracing::error!(%error, "user_session_revoke");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
+}
+
+async fn api_auth_release_active_client(
+    State(state): State<ProductAuthState>,
+    peer: ConnectInfo<SocketAddr>,
+    Path(id): Path<String>,
+    Query(query): Query<ActiveClientReleaseQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
+        return rejected;
+    }
+    if query.fencing_token <= 0 {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let user = match require_fresh_product_user(&state, &headers).await {
+        Ok(user) => user,
+        Err(response) => return response,
+    };
+    let Some(store) = durable_store(&state.store) else {
+        return missing_store();
+    };
+    match store
+        .release_active_client_for_user(
+            &user.id,
+            &ActiveClientRelease {
+                client_id: &id,
+                fencing_token: query.fencing_token,
+                reason: "user_reclaimed",
+                now_ms: auth_now_ms(),
+                reservation_ms: state.product_authentication.capacity.reservation_ms,
+                per_user_limit: state
+                    .product_authentication
+                    .capacity
+                    .active_clients_per_user,
+            },
+        )
+        .await
+    {
+        Ok(false) => StatusCode::NOT_FOUND.into_response(),
+        Ok(true) => {
+            tracing::info!(user_id = user.id, client_id = id, "active_client_reclaimed");
+            state.capacity_runtime.notify_changed();
+            no_store_json(StatusCode::OK, serde_json::json!({ "ok": true }))
+        }
+        Err(error) => {
+            tracing::error!(%error, "active_client_reclaim");
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    }
 }
 
 async fn api_auth_list_devices(
@@ -7181,6 +8054,7 @@ async fn serve_axum(
         oidc_native_handoffs: state.oidc_native_handoffs.clone(),
         device_authorizations: state.device_authorizations.clone(),
         device_access: state.device_access.clone(),
+        capacity_runtime: state.capacity_runtime.clone(),
     };
 
     let app = Router::new()
@@ -14730,6 +15604,8 @@ const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
 #[derive(Debug, Default, Deserialize)]
 struct WebSocketQuery {
     bootstrap: Option<String>,
+    client_id: Option<String>,
+    client_kind: Option<String>,
 }
 
 #[derive(Clone)]
@@ -14739,6 +15615,104 @@ struct WebSocketAuthentication {
     cookie_token: Option<String>,
     bearer: Option<String>,
     device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+    capacity: WebSocketCapacityIdentity,
+}
+
+#[derive(Clone, Debug)]
+struct WebSocketCapacityIdentity {
+    client_id: String,
+    user_id: Option<String>,
+    principal_class: String,
+    session_id: Option<String>,
+    client_kind: String,
+}
+
+fn websocket_capacity_identity(
+    product_auth_enabled: bool,
+    authenticated: &AuthenticatedProductRequest,
+    query: &WebSocketQuery,
+) -> Result<WebSocketCapacityIdentity, StatusCode> {
+    let requested = query.client_id.as_deref().map(str::trim);
+    if requested.is_some_and(|value| {
+        !(16..=128).contains(&value.len())
+            || !value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+            })
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let requested_kind = query.client_kind.as_deref().map(str::trim);
+    if requested_kind.is_some_and(|kind| {
+        !matches!(
+            kind,
+            "browser" | "native_shell" | "cli" | "acp" | "automation"
+        )
+    }) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let (fallback, session_id, principal_class, default_kind, allowed_kinds) =
+        if !product_auth_enabled {
+            (
+                "local-default-client".to_owned(),
+                None,
+                "system".to_owned(),
+                "browser".to_owned(),
+                &["browser", "native_shell", "cli", "acp"][..],
+            )
+        } else if let Some(session) = authenticated.cookie_session.as_ref() {
+            (
+                format!("session:{}", session.session_id),
+                Some(session.session_id.clone()),
+                session.principal_class.clone(),
+                session.client_kind.clone(),
+                &["browser", "native_shell"][..],
+            )
+        } else if let Some(identity) = authenticated.device_identity.as_ref() {
+            if identity.is_automation() {
+                (
+                    format!("device:{}", identity.device_id),
+                    None,
+                    identity.principal_class.clone(),
+                    identity.client_kind.clone(),
+                    &["automation"][..],
+                )
+            } else {
+                (
+                    format!("device:{}", identity.device_id),
+                    None,
+                    identity.principal_class.clone(),
+                    identity.client_kind.clone(),
+                    &["cli", "acp"][..],
+                )
+            }
+        } else {
+            (
+                format!("principal:{}", authenticated.principal.user_id),
+                None,
+                "human".to_owned(),
+                "cli".to_owned(),
+                &["cli", "acp"][..],
+            )
+        };
+    let client_kind = requested_kind.unwrap_or(&default_kind);
+    if !allowed_kinds.contains(&client_kind) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let seed = requested.unwrap_or(&fallback);
+    // Namespace untrusted client labels by the authenticated account. A client
+    // may reconnect under its own stable label, but cannot collide with or
+    // release another account's logical client by guessing that label.
+    let client_id = format!(
+        "client-{}",
+        crate::admin::hex_sha256(format!("{}:{seed}", authenticated.principal.user_id).as_bytes())
+    );
+    Ok(WebSocketCapacityIdentity {
+        client_id,
+        user_id: (principal_class == "human").then(|| authenticated.principal.user_id.clone()),
+        principal_class,
+        session_id,
+        client_kind: client_kind.to_owned(),
+    })
 }
 
 async fn ws_upgrade(
@@ -14749,6 +15723,11 @@ async fn ws_upgrade(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Response {
+    let capacity =
+        match websocket_capacity_identity(state.product_auth_enabled, &authenticated, &query) {
+            Ok(capacity) => capacity,
+            Err(status) => return status.into_response(),
+        };
     let principal = match authorize_ws_upgrade(
         &headers,
         peer,
@@ -14776,6 +15755,7 @@ async fn ws_upgrade(
                 cookie_token,
                 bearer,
                 device_identity,
+                capacity,
             },
         )
     })
@@ -14848,6 +15828,7 @@ fn project_outbound(
         }
         | Outbound::Machines { .. }
         | Outbound::AuthSession { .. }
+        | Outbound::ClientCapacity { .. }
         | Outbound::Ping
         | Outbound::BootstrapComplete
         | Outbound::Settings { .. } => Some(message),
@@ -14892,6 +15873,40 @@ fn ws_close_auth_required() -> Message {
         code: WS_AUTH_REQUIRED_CLOSE_CODE,
         reason: "auth_required".into(),
     }))
+}
+
+const WS_CAPACITY_REQUIRED_CLOSE_CODE: u16 = 4429;
+
+fn ws_close_capacity_required() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: WS_CAPACITY_REQUIRED_CLOSE_CODE,
+        reason: "active_client_capacity".into(),
+    }))
+}
+
+fn active_capacity_message(
+    status: &str,
+    capacity: Option<&crate::store::ActiveClientCapacity>,
+    position: Option<u32>,
+    retry_after_ms: Option<i64>,
+    channel_count: Option<u32>,
+    channel_limit: u32,
+) -> Outbound {
+    Outbound::ClientCapacity {
+        capacity: serde_json::json!({
+            "status": status,
+            "position": position,
+            "retry_after_ms": retry_after_ms,
+            "channels": channel_count,
+            "channel_limit": channel_limit,
+            "active_for_user": capacity.map(|value| value.active_for_user),
+            "active_for_service": capacity.map(|value| value.active_for_service),
+            "active_automation": capacity.map(|value| value.active_automation),
+            "per_user_limit": capacity.map(|value| value.per_user_limit),
+            "service_limit": capacity.map(|value| value.service_limit),
+            "automation_limit": capacity.map(|value| value.automation_limit),
+        }),
+    }
 }
 
 async fn principal_still_valid(
@@ -15024,8 +16039,48 @@ async fn handle_ws(
         cookie_token,
         bearer,
         device_identity,
+        capacity,
     } = authentication;
     let (mut sink, mut stream) = socket.split();
+
+    let capacity_policy = state.product_authentication.capacity;
+    let enforce_capacity =
+        capacity_policy.enforcement == crate::auth_plugins::CapacityEnforcement::Enforce;
+    let channel_count = match state.capacity_runtime.open_channel(
+        &capacity.client_id,
+        capacity_policy.websocket_channels_per_client,
+        enforce_capacity,
+    ) {
+        Ok(count) => count,
+        Err(count) => {
+            let message = active_capacity_message(
+                "channel_limit",
+                None,
+                None,
+                None,
+                Some(count),
+                capacity_policy.websocket_channels_per_client,
+            );
+            let _ = send_json(&mut sink, &message).await;
+            let _ = sink.send(ws_close_capacity_required()).await;
+            return;
+        }
+    };
+    if !enforce_capacity && channel_count > capacity_policy.websocket_channels_per_client {
+        tracing::warn!(
+            client_id = capacity.client_id,
+            channel_count,
+            limit = capacity_policy.websocket_channels_per_client,
+            "observed logical-client WebSocket channel overflow"
+        );
+    }
+    let _capacity_channel = ActiveCapacityChannel {
+        runtime: state.capacity_runtime.clone(),
+        store: state.store.clone(),
+        client_id: capacity.client_id.clone(),
+        reservation_ms: capacity_policy.reservation_ms,
+        per_user_limit: capacity_policy.active_clients_per_user,
+    };
 
     // A cookie session must pass its current idle, Passkey, and primary-login
     // deadlines before any transcript or Machine snapshot is disclosed. Push
@@ -15046,6 +16101,130 @@ async fn handle_ws(
         Some(snapshot.next_due_at_ms)
     } else {
         None
+    };
+
+    let capacity_fencing_token = if capacity.principal_class == "system" {
+        None
+    } else {
+        let Some(store) = state.store.as_ref() else {
+            let message = active_capacity_message(
+                "unavailable",
+                None,
+                None,
+                Some(capacity_policy.reservation_ms),
+                Some(channel_count),
+                capacity_policy.websocket_channels_per_client,
+            );
+            let _ = send_json(&mut sink, &message).await;
+            let _ = sink.send(ws_close_capacity_required()).await;
+            return;
+        };
+        let mut capacity_shutdown = state.shutdown.clone();
+        loop {
+            if !principal_still_valid(
+                &state,
+                via_cookie,
+                cookie_token.as_deref(),
+                bearer.as_deref(),
+                device_identity.as_ref(),
+                &principal,
+            )
+            .await
+            {
+                let _ = sink.send(ws_close_auth_required()).await;
+                return;
+            }
+            let claim = crate::store::ActiveClientClaim {
+                client_id: capacity.client_id.clone(),
+                user_id: capacity.user_id.clone(),
+                principal_class: capacity.principal_class.clone(),
+                session_id: capacity.session_id.clone(),
+                client_kind: capacity.client_kind.clone(),
+                now_ms: auth_now_ms(),
+                lease_ms: capacity_policy.active_lease_ms,
+                reservation_ms: capacity_policy.reservation_ms,
+                per_user_limit: capacity_policy.active_clients_per_user,
+                service_limit: capacity_policy.active_clients_service,
+                automation_limit: state.product_authentication.automation.active_clients,
+                enforce: enforce_capacity,
+            };
+            match store.claim_active_client(&claim).await {
+                Ok(crate::store::ActiveClientAdmission::Granted {
+                    lease,
+                    capacity: counts,
+                    observed_overflow,
+                }) => {
+                    state
+                        .capacity_runtime
+                        .record_fence(&capacity.client_id, lease.fencing_token);
+                    if observed_overflow {
+                        tracing::warn!(
+                            client_id = capacity.client_id,
+                            user_id = capacity.user_id,
+                            "observed active-client capacity overflow"
+                        );
+                    }
+                    let message = active_capacity_message(
+                        "active",
+                        Some(&counts),
+                        None,
+                        None,
+                        Some(channel_count),
+                        capacity_policy.websocket_channels_per_client,
+                    );
+                    if send_json(&mut sink, &message).await.is_err() {
+                        return;
+                    }
+                    break Some(lease.fencing_token);
+                }
+                Ok(crate::store::ActiveClientAdmission::Waiting {
+                    position,
+                    retry_after_ms,
+                    capacity: counts,
+                }) => {
+                    let message = active_capacity_message(
+                        "waiting",
+                        Some(&counts),
+                        Some(position),
+                        Some(retry_after_ms),
+                        Some(channel_count),
+                        capacity_policy.websocket_channels_per_client,
+                    );
+                    if send_json(&mut sink, &message).await.is_err() {
+                        return;
+                    }
+                    tokio::select! {
+                        () = state.capacity_runtime.changed.notified() => {}
+                        () = tokio::time::sleep(std::time::Duration::from_millis(
+                            u64::try_from(retry_after_ms.max(1_000)).unwrap_or(1_000),
+                        )) => {}
+                        changed = capacity_shutdown.changed() => {
+                            if changed.is_err() || *capacity_shutdown.borrow() {
+                                return;
+                            }
+                        }
+                        frame = stream.next() => match frame {
+                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                            Some(Ok(_)) => {}
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(%error, client_id = capacity.client_id, "active-client admission");
+                    let message = active_capacity_message(
+                        "unavailable",
+                        None,
+                        None,
+                        Some(capacity_policy.reservation_ms),
+                        Some(channel_count),
+                        capacity_policy.websocket_channels_per_client,
+                    );
+                    let _ = send_json(&mut sink, &message).await;
+                    let _ = sink.send(ws_close_capacity_required()).await;
+                    return;
+                }
+            }
+        }
     };
 
     // Subscribe BEFORE snapshotting so no event slips through the gap; the
@@ -15076,10 +16255,20 @@ async fn handle_ws(
     let fanout_cookie = cookie_token.clone();
     let fanout_bearer = bearer.clone();
     let fanout_device = device_identity.clone();
+    let fanout_capacity_store = state.store.clone();
+    let fanout_capacity_runtime = state.capacity_runtime.clone();
+    let fanout_capacity_client_id = capacity.client_id.clone();
+    let fanout_capacity_fencing_token = capacity_fencing_token;
+    let capacity_lease_ms = capacity_policy.active_lease_ms;
+    let capacity_heartbeat_ms = capacity_policy.heartbeat_ms;
+    let capacity_channel_limit = capacity_policy.websocket_channels_per_client;
     let (direct_tx, mut direct_rx) =
         tokio::sync::mpsc::unbounded_channel::<Option<ProductAuthSessionSnapshot>>();
     let mut fanout = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(HEARTBEAT);
+        let mut capacity_heartbeat = tokio::time::interval(std::time::Duration::from_millis(
+            u64::try_from(capacity_heartbeat_ms.max(1_000)).unwrap_or(1_000),
+        ));
         let auth_deadline = tokio::time::sleep_until(product_auth_deadline_instant(
             initial_auth_deadline_ms.unwrap_or(i64::MAX),
         ));
@@ -15087,6 +16276,7 @@ async fn handle_ws(
         // The first tick fires immediately; consume it so the first ping waits a
         // full interval (the connect snapshot is fresh traffic already).
         heartbeat.tick().await;
+        capacity_heartbeat.tick().await;
         loop {
             tokio::select! {
                 Some(update) = direct_rx.recv() => {
@@ -15108,6 +16298,51 @@ async fn handle_ws(
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         break;
+                    }
+                }
+                _ = async {
+                    tokio::select! {
+                        _ = capacity_heartbeat.tick() => {}
+                        () = fanout_capacity_runtime.changed.notified() => {}
+                    }
+                }, if fanout_capacity_fencing_token.is_some() => {
+                    let Some(store) = fanout_capacity_store.as_ref() else {
+                        let _ = sink.send(ws_close_capacity_required()).await;
+                        break;
+                    };
+                    let fencing_token = fanout_capacity_fencing_token.unwrap_or_default();
+                    match store
+                        .heartbeat_active_client(
+                            &fanout_capacity_client_id,
+                            fencing_token,
+                            auth_now_ms(),
+                            capacity_lease_ms,
+                        )
+                        .await
+                    {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            let message = active_capacity_message(
+                                "lost",
+                                None,
+                                None,
+                                Some(capacity_heartbeat_ms),
+                                None,
+                                capacity_channel_limit,
+                            );
+                            let _ = send_json(&mut sink, &message).await;
+                            let _ = sink.send(ws_close_capacity_required()).await;
+                            fanout_capacity_runtime.notify_changed();
+                            break;
+                        }
+                        Err(error) => {
+                            // A transient database outage must not silently let
+                            // a client mutate beyond its fenced lease. Close and
+                            // let the normal reconnect path re-admit it.
+                            tracing::warn!(%error, client_id = fanout_capacity_client_id, "heartbeating active-client lease");
+                            let _ = sink.send(ws_close_capacity_required()).await;
+                            break;
+                        }
                     }
                 }
                 msg = rx.recv() => match msg {
@@ -16504,6 +17739,189 @@ mod provider_auth_resume_tests {
 }
 
 #[cfg(test)]
+mod auth_capacity_boundary_tests {
+    use super::*;
+
+    fn principal(user_id: &str) -> ProductPrincipal {
+        ProductPrincipal {
+            user_id: user_id.to_owned(),
+            username: user_id.to_owned(),
+            role: crate::admin::AdminRole::Operator,
+        }
+    }
+
+    fn cookie_request(user_id: &str) -> AuthenticatedProductRequest {
+        AuthenticatedProductRequest {
+            principal: principal(user_id),
+            cookie_session: Some(crate::store::ProductUserSession {
+                token_hash: "aa".repeat(32),
+                session_id: "browser-session-0000000000000001".to_owned(),
+                user_id: user_id.to_owned(),
+                client_kind: "browser".to_owned(),
+                principal_class: "human".to_owned(),
+                created_at_ms: 1,
+                expires_at_ms: 2,
+                last_seen_at_ms: 1,
+                user_agent: None,
+                passkey_verified_at_ms: None,
+                primary_authenticated_at_ms: 1,
+                primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+                revoked_at_ms: None,
+                revoke_reason: None,
+                auth_provider_id: None,
+                auth_issuer: None,
+                auth_subject: None,
+                auth_sid: None,
+                id_token_ciphertext: None,
+            }),
+            device_identity: None,
+        }
+    }
+
+    fn device_request(
+        user_id: &str,
+        principal_class: &str,
+        client_kind: &str,
+        scopes: &[&str],
+    ) -> AuthenticatedProductRequest {
+        AuthenticatedProductRequest {
+            principal: principal(user_id),
+            cookie_session: None,
+            device_identity: Some(crate::client_auth::DeviceAccessIdentity {
+                device_id: "device-000000000000000000000001".to_owned(),
+                user_id: user_id.to_owned(),
+                principal_class: principal_class.to_owned(),
+                client_kind: client_kind.to_owned(),
+                scopes: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
+            }),
+        }
+    }
+
+    fn websocket_query(kind: &str) -> WebSocketQuery {
+        WebSocketQuery {
+            bootstrap: None,
+            client_id: Some("stable-client-0000000000000001".to_owned()),
+            client_kind: Some(kind.to_owned()),
+        }
+    }
+
+    #[test]
+    fn websocket_client_kind_is_bounded_by_authenticated_credential_class() {
+        let cookie = cookie_request("user-a");
+        for kind in ["browser", "native_shell"] {
+            assert!(websocket_capacity_identity(true, &cookie, &websocket_query(kind)).is_ok());
+        }
+        for kind in ["cli", "acp", "automation"] {
+            assert_eq!(
+                websocket_capacity_identity(true, &cookie, &websocket_query(kind)).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+
+        let device = device_request("user-a", "human", "cli", &[]);
+        for kind in ["cli", "acp"] {
+            assert!(websocket_capacity_identity(true, &device, &websocket_query(kind)).is_ok());
+        }
+        for kind in ["browser", "native_shell", "automation"] {
+            assert_eq!(
+                websocket_capacity_identity(true, &device, &websocket_query(kind)).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+
+        let automation = device_request("user-a", "automation", "automation", &["websocket"]);
+        assert!(
+            websocket_capacity_identity(true, &automation, &websocket_query("automation")).is_ok()
+        );
+        for kind in ["browser", "native_shell", "cli", "acp"] {
+            assert_eq!(
+                websocket_capacity_identity(true, &automation, &websocket_query(kind)).unwrap_err(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+
+    #[test]
+    fn websocket_client_labels_are_namespaced_by_authenticated_user() {
+        let first = websocket_capacity_identity(
+            true,
+            &cookie_request("user-a"),
+            &websocket_query("browser"),
+        )
+        .unwrap();
+        let second = websocket_capacity_identity(
+            true,
+            &cookie_request("user-b"),
+            &websocket_query("browser"),
+        )
+        .unwrap();
+        assert_ne!(first.client_id, second.client_id);
+        assert_eq!(first.principal_class, "human");
+        assert_eq!(first.user_id.as_deref(), Some("user-a"));
+    }
+
+    #[test]
+    fn automation_credentials_are_confined_to_declared_route_scopes() {
+        let websocket = device_request("user-a", "automation", "automation", &["websocket"]);
+        let websocket = websocket.device_identity.as_ref().unwrap();
+        assert!(automation_route_allowed(websocket, &Method::GET, "/ws"));
+        assert!(!automation_route_allowed(
+            websocket,
+            &Method::GET,
+            "/api/auth/me"
+        ));
+
+        let reader = device_request("user-a", "automation", "automation", &["api:read"]);
+        let reader = reader.device_identity.as_ref().unwrap();
+        assert!(automation_route_allowed(
+            reader,
+            &Method::GET,
+            "/api/auth/status"
+        ));
+        assert!(automation_route_allowed(
+            reader,
+            &Method::GET,
+            "/api/sessions/example/events"
+        ));
+        assert!(!automation_route_allowed(
+            reader,
+            &Method::GET,
+            "/api/admin/accounts"
+        ));
+        assert!(!automation_route_allowed(
+            reader,
+            &Method::POST,
+            "/api/auth/logout"
+        ));
+
+        let writer = device_request("user-a", "automation", "automation", &["sessions:write"]);
+        let writer = writer.device_identity.as_ref().unwrap();
+        assert!(automation_route_allowed(
+            writer,
+            &Method::POST,
+            "/api/sessions"
+        ));
+        assert!(automation_route_allowed(
+            writer,
+            &Method::DELETE,
+            "/api/sessions/example"
+        ));
+        assert!(!automation_route_allowed(
+            writer,
+            &Method::POST,
+            "/api/auth/automation/credentials"
+        ));
+
+        let human = device_request("user-a", "human", "cli", &[]);
+        assert!(automation_route_allowed(
+            human.device_identity.as_ref().unwrap(),
+            &Method::POST,
+            "/api/auth/logout"
+        ));
+    }
+}
+
+#[cfg(test)]
 mod product_auth_api_tests {
     use super::*;
     use crate::admin::{
@@ -16559,6 +17977,7 @@ mod product_auth_api_tests {
             oidc_native_handoffs: Arc::new(crate::oidc::NativeHandoffs::default()),
             device_authorizations: Arc::new(crate::client_auth::DeviceAuthorizations::default()),
             device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
+            capacity_runtime: Arc::new(ActiveCapacityRuntime::default()),
         }
     }
 
@@ -16636,6 +18055,18 @@ mod product_auth_api_tests {
 
     fn install_rustls() {
         let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    fn test_verified_identity() -> crate::oidc::VerifiedIdentity {
+        crate::oidc::VerifiedIdentity {
+            issuer: "https://cardea.example".to_owned(),
+            subject: "draven".to_owned(),
+            session_id: Some("cardea-session".to_owned()),
+            issued_at: 1_000,
+            authenticated_at: Some(999),
+            authentication_context: None,
+            authentication_methods: vec!["passkey".to_owned()],
+        }
     }
 
     async fn spawn_auth(state: ProductAuthState) -> (String, tokio::task::JoinHandle<()>) {
@@ -16797,7 +18228,10 @@ mod product_auth_api_tests {
         store
             .insert_user_session(&crate::store::ProductUserSession {
                 token_hash: crate::admin::hex_sha256(cookie_token.as_bytes()),
+                session_id: "device-session-000000000000000001".to_owned(),
                 user_id: user.id.clone(),
+                client_kind: "browser".to_owned(),
+                principal_class: "human".to_owned(),
                 created_at_ms: now,
                 expires_at_ms: now
                     + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
@@ -16806,6 +18240,13 @@ mod product_auth_api_tests {
                 passkey_verified_at_ms: None,
                 primary_authenticated_at_ms: now,
                 primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+                revoked_at_ms: None,
+                revoke_reason: None,
+                auth_provider_id: None,
+                auth_issuer: None,
+                auth_subject: None,
+                auth_sid: None,
+                id_token_ciphertext: None,
             })
             .await
             .unwrap();
@@ -17358,7 +18799,10 @@ mod product_auth_api_tests {
         store
             .insert_user_session(&crate::store::ProductUserSession {
                 token_hash: legacy_hash.clone(),
+                session_id: "legacy-session-000000000000000001".to_owned(),
                 user_id: user.id.clone(),
+                client_kind: "browser".to_owned(),
+                principal_class: "human".to_owned(),
                 created_at_ms: now,
                 expires_at_ms: now
                     + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
@@ -17367,6 +18811,13 @@ mod product_auth_api_tests {
                 passkey_verified_at_ms: None,
                 primary_authenticated_at_ms: now,
                 primary_auth_method: None,
+                revoked_at_ms: None,
+                revoke_reason: None,
+                auth_provider_id: None,
+                auth_issuer: None,
+                auth_subject: None,
+                auth_sid: None,
+                id_token_ciphertext: None,
             })
             .await
             .unwrap();
@@ -17385,6 +18836,7 @@ mod product_auth_api_tests {
             &user,
             &headers,
             crate::auth_plugins::PASSWORD_LOGIN_METHOD,
+            None,
         )
         .await;
         assert_eq!(bound.status(), StatusCode::OK);
@@ -17421,7 +18873,7 @@ mod product_auth_api_tests {
         );
 
         headers.insert(header::COOKIE, replacement_cookie.parse().unwrap());
-        let switched = issue_product_session(&state, &store, &user, &headers, "cardea").await;
+        let switched = issue_product_session(&state, &store, &user, &headers, "cardea", None).await;
         assert_eq!(switched.status(), StatusCode::CONFLICT);
 
         let _ = std::fs::remove_dir_all(root);
@@ -17453,7 +18905,7 @@ mod product_auth_api_tests {
         let challenge = crate::oidc::pkce_challenge(&verifier).unwrap();
         let handoff = state
             .oidc_native_handoffs
-            .issue("cardea", &user.id, &challenge)
+            .issue("cardea", &user.id, &challenge, &test_verified_identity())
             .unwrap();
         let callback = url::Url::parse(&handoff.location).unwrap();
         let code = callback
@@ -17657,7 +19109,12 @@ mod product_auth_api_tests {
         );
 
         handoffs
-            .complete_browser("cardea", &handoff_challenge, &user.id)
+            .complete_browser(
+                "cardea",
+                &handoff_challenge,
+                &user.id,
+                &test_verified_identity(),
+            )
             .unwrap();
         let exchanged = post_json(
             &format!("{base}/api/auth/providers/cardea/native/poll"),
@@ -17852,7 +19309,12 @@ mod product_auth_api_tests {
             .await
             .unwrap();
         handoffs
-            .complete_browser("cardea", &handoff_challenge, &"a".repeat(32))
+            .complete_browser(
+                "cardea",
+                &handoff_challenge,
+                &"a".repeat(32),
+                &test_verified_identity(),
+            )
             .unwrap();
         let message = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
             .await
@@ -18880,7 +20342,10 @@ mod product_auth_api_tests {
         let extended_token = "c".repeat(64);
         let extended = crate::store::ProductUserSession {
             token_hash: crate::admin::hex_sha256(extended_token.as_bytes()),
+            session_id: "extended-session-0000000000000001".to_owned(),
             user_id: user.id.clone(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
             created_at_ms: now - 8 * 24 * 60 * 60 * 1_000,
             expires_at_ms: now + 22 * 24 * 60 * 60 * 1_000,
             last_seen_at_ms: now,
@@ -18888,11 +20353,19 @@ mod product_auth_api_tests {
             passkey_verified_at_ms: Some(now - 8 * 24 * 60 * 60 * 1_000),
             primary_authenticated_at_ms: now - 8 * 24 * 60 * 60 * 1_000,
             primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
         };
         store.insert_user_session(&extended).await.unwrap();
         let base_token = "d".repeat(64);
         let base_session = crate::store::ProductUserSession {
             token_hash: crate::admin::hex_sha256(base_token.as_bytes()),
+            session_id: "base-session-00000000000000000001".to_owned(),
             created_at_ms: now,
             expires_at_ms: now
                 + crate::auth_plugins::SessionServerPolicy::default().primary_max_age_ms,
@@ -18934,6 +20407,112 @@ mod product_auth_api_tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[tokio::test]
+    async fn all_session_logout_requires_recent_proof_before_revoking_anything() {
+        let (store, root) = test_store().await;
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "a".repeat(32),
+            username: "draven".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            password_hash: crate::product_auth::hash_password("Correct-horse-bat1").unwrap(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        };
+        store.insert_user(&user).await.unwrap();
+        let stale_token = "stale-logout-token-0000000000000000000000000000000000000001";
+        let recent_token = "recent-logout-token-000000000000000000000000000000000000001";
+        let other_token = "other-logout-token-0000000000000000000000000000000000000001";
+        let session =
+            |token: &str, id: &str, created_at_ms: i64| crate::store::ProductUserSession {
+                token_hash: crate::admin::hex_sha256(token.as_bytes()),
+                session_id: id.to_owned(),
+                user_id: user.id.clone(),
+                client_kind: "browser".to_owned(),
+                principal_class: "human".to_owned(),
+                created_at_ms,
+                expires_at_ms: now + 24 * 60 * 60 * 1_000,
+                last_seen_at_ms: now,
+                user_agent: None,
+                passkey_verified_at_ms: None,
+                primary_authenticated_at_ms: created_at_ms,
+                primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+                revoked_at_ms: None,
+                revoke_reason: None,
+                auth_provider_id: None,
+                auth_issuer: None,
+                auth_subject: None,
+                auth_sid: None,
+                id_token_ciphertext: None,
+            };
+        store
+            .insert_user_session(&session(
+                stale_token,
+                "stale-logout-session-000000000001",
+                now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS - 1,
+            ))
+            .await
+            .unwrap();
+        store
+            .insert_user_session(&session(
+                recent_token,
+                "recent-logout-session-00000000001",
+                now,
+            ))
+            .await
+            .unwrap();
+        store
+            .insert_user_session(&session(
+                other_token,
+                "other-logout-session-000000000001",
+                now - 1,
+            ))
+            .await
+            .unwrap();
+
+        let (base, server) = spawn_auth(auth_state(Hub::new(), Some(store.clone()))).await;
+        let origin = origin_for(&base);
+        let rejected = post_json(
+            &format!("{base}/api/auth/logout"),
+            &origin,
+            Some(&format!("{USER_SESSION_COOKIE}={stale_token}")),
+            serde_json::json!({ "scope": "all" }),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::PRECONDITION_REQUIRED);
+        assert_eq!(
+            store
+                .list_user_sessions_for_user(&user.id, now)
+                .await
+                .unwrap()
+                .len(),
+            3,
+            "a rejected all-session logout must not partially revoke sessions"
+        );
+
+        let accepted = post_json(
+            &format!("{base}/api/auth/logout"),
+            &origin,
+            Some(&format!("{USER_SESSION_COOKIE}={recent_token}")),
+            serde_json::json!({ "scope": "all" }),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let body: serde_json::Value = accepted.json().await.unwrap();
+        assert_eq!(body["revoked_sessions"], 3);
+        assert!(
+            store
+                .list_user_sessions_for_user(&user.id, now)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn session_deadlines_keep_passkey_and_primary_proofs_independent() {
         let policy = crate::passkey::PasskeyPolicy {
@@ -18945,7 +20524,10 @@ mod product_auth_api_tests {
         let server = crate::auth_plugins::SessionServerPolicy::default();
         let mut session = crate::store::ProductUserSession {
             token_hash: "aa".repeat(32),
+            session_id: "deadline-session-0000000000000001".to_owned(),
             user_id: "user-1".to_owned(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
             created_at_ms: 100_000,
             expires_at_ms: 100_000 + server.primary_max_age_ms + 10_000,
             last_seen_at_ms: 100_000,
@@ -18953,6 +20535,13 @@ mod product_auth_api_tests {
             passkey_verified_at_ms: None,
             primary_authenticated_at_ms: 100_000,
             primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
         };
 
         let deadlines = product_session_deadlines(server, &policy, true, &session, 100_000);
@@ -19003,7 +20592,10 @@ mod product_auth_api_tests {
         let now = 1_000_000;
         let mut session = crate::store::ProductUserSession {
             token_hash: "aa".repeat(32),
+            session_id: "step-up-session-0000000000000001".to_owned(),
             user_id: "user-1".to_owned(),
+            client_kind: "browser".to_owned(),
+            principal_class: "human".to_owned(),
             created_at_ms: now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS + 1,
             expires_at_ms: now + 1_000,
             last_seen_at_ms: now,
@@ -19011,6 +20603,13 @@ mod product_auth_api_tests {
             passkey_verified_at_ms: None,
             primary_authenticated_at_ms: now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS + 1,
             primary_auth_method: Some(crate::auth_plugins::PASSWORD_LOGIN_METHOD.to_owned()),
+            revoked_at_ms: None,
+            revoke_reason: None,
+            auth_provider_id: None,
+            auth_issuer: None,
+            auth_subject: None,
+            auth_sid: None,
+            id_token_ciphertext: None,
         };
         assert!(product_session_has_recent_step_up(&session, now));
         session.created_at_ms = now - PASSKEY_MANAGEMENT_STEP_UP_MAX_AGE_MS;

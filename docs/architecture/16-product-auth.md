@@ -104,7 +104,7 @@ reauthentication because their original source cannot be reconstructed safely.
 ## Session protection and optional Passkeys
 
 Controller configuration owns three independent browser-session deadlines.
-The defaults are a sliding 24-hour idle window, a seven-day maximum between
+The defaults are a sliding 24-hour idle window, a three-day maximum between
 explicit Passkey checks when the user enables periodic verification, and a
 30-day hard maximum before a password or Authentication Provider login is
 required again. The service warns 30 minutes before a Passkey deadline and one
@@ -121,8 +121,9 @@ deadline.
 After sign-in a product user may register a discoverable WebAuthn Passkey
 (`POST /api/auth/passkeys/register/*`). Periodic verification is off by default.
 When enabled, the user chooses a supported interval up to the server maximum;
-the options are 4, 8, or 12 hours and 1, 3 (the default), 7, or 14 days. The
-default server maximum is seven days, so it filters out longer choices. Every refresh requires a new,
+the closed options are 1, 2, 3, 4, 6, or 12 hours and 1 (the default), 2, or 3
+days. The default server maximum is three days, so it filters out longer
+choices. Every refresh requires a new,
 origin-bound, user-verifying assertion. It rotates only the current browser's
 cookie and records new Passkey proof, but preserves the original primary-login
 timestamp. A Passkey can therefore restore the idle window without silently
@@ -219,8 +220,14 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `POST` | `/api/auth/oidc/native/exchange` | same-origin; one-time handoff + PKCE | issue Manager product/admin cookies |
 | `POST` | `/api/auth/oidc/native/poll` | same-origin; two retained secrets | poll and consume an iOS browser-shell handoff; issue product/admin cookies only in the original app window |
 | `GET` | `/api/auth/oidc/native/complete` | public | fixed no-store Safari completion page; carries no account or handoff data |
-| `POST` | `/api/auth/logout` | cookie optional | clear cookie |
+| `POST` | `/api/auth/logout` | cookie optional; recent proof for `all` / `provider` | revoke `current`, `all`, or current-Provider Cowboy sessions; optionally return the pinned Provider logout URL |
+| `GET` | `/api/auth/logout/complete` | public | fixed no-store RP-logout return that clears the local cookie and redirects to `/` |
+| `POST` | `/api/auth/providers/{id}/backchannel-logout` | signed Provider Logout Token | replay-safe Provider-scoped session revocation |
 | `GET` | `/api/auth/me` | product | current principal |
+| `GET` | `/api/auth/sessions` | fresh product session | list current account sessions, active leases, effective limits, and fencing tokens |
+| `DELETE` | `/api/auth/sessions/{id}` | recent product login + Origin | revoke one own logical session |
+| `DELETE` | `/api/auth/active-clients/{id}?fencing_token=…` | fresh product session + Origin | reclaim one own active lease only when the fencing token still matches |
+| `POST` | `/api/auth/automation/credentials` | recent product operator + Origin; feature-gated | issue one audited, scoped, sender-constrained credential bounded by server policy |
 | `POST` | `/api/auth/passkeys/assert/*` | product session | verify and rotate the current browser session within its primary hard cap |
 | `POST` | `/api/auth/passkeys/external/start` | exact product cookie + Origin | start a session-bound native Safari ceremony |
 | `POST` | `/api/auth/passkeys/external/options` | public; Origin + opaque transaction | return only staged WebAuthn options to system Safari |

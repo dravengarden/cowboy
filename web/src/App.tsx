@@ -226,6 +226,7 @@ import {
 } from "./desktop/controlCenterTabs";
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
+import { ProductSessionCapacityPanel } from "./auth/ProductSessionCapacityPanel";
 import { ProductDevicesPanel } from "./auth/ProductDevicesPanel";
 import {
     sessionNotificationsMuted,
@@ -5880,6 +5881,7 @@ function SettingsShell({
                     onChange={changeMobileSettingsSection}
                 >
                     <Stack data-mobile-account-sections spacing={2}>
+                        <ProductSessionCapacityPanel />
                         <ProductPasskeysPanel />
                         <ProductDevicesPanel hideWhenEmpty />
                         <ProductAccountMenu />

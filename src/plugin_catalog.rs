@@ -372,6 +372,7 @@ mod tests {
                     pushed_authorization_request_endpoint: None,
                     token_endpoint: "https://oauth2.googleapis.com/token".to_owned(),
                     jwks_uri: "https://www.googleapis.com/oauth2/v3/certs".to_owned(),
+                    end_session_endpoint: None,
                     scopes: vec!["openid".to_owned()],
                     client_authentication_methods: vec![
                         cowboy_plugin_sdk::OidcClientAuthenticationMethod::ClientSecretPost,

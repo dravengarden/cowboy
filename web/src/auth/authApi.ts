@@ -108,6 +108,32 @@ export interface ProductSessionServerPolicy {
   primary_warning_ms: number;
 }
 
+export interface ProductCapacityServerPolicy {
+  enforcement: "observe" | "enforce";
+  authorized_clients_per_user: number;
+  signed_in_sessions_per_user: number;
+  active_clients_per_user: number;
+  active_clients_service: number;
+  websocket_channels_per_client: number;
+  active_lease_ms: number;
+  heartbeat_ms: number;
+  reservation_ms: number;
+  session_overflow: "revoke_oldest_inactive";
+  active_overflow: "wait_or_reclaim_own";
+  single_session_mode: "off" | "newest_wins";
+}
+
+export interface ProductLogoutServerPolicy {
+  provider_logout: "never" | "offer" | "always";
+  backchannel_logout: boolean;
+}
+
+export interface ProductAutomationServerPolicy {
+  enabled: boolean;
+  active_clients: number;
+  credential_max_age_ms: number;
+}
+
 export interface AuthStatus {
   registration: RegistrationPublicStatus;
   setup_required?: boolean;
@@ -116,6 +142,9 @@ export interface AuthStatus {
   login_method_order?: string[];
   passkeys?: ProductPasskeyServerPolicy;
   session?: ProductSessionServerPolicy;
+  capacity?: ProductCapacityServerPolicy;
+  logout?: ProductLogoutServerPolicy;
+  automation?: ProductAutomationServerPolicy;
   providers?: ProductOidcProvider[];
   me?: ProductMe;
 }
@@ -187,6 +216,9 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     login_method_order?: unknown;
     passkeys?: Partial<ProductPasskeyServerPolicy>;
     session?: Partial<ProductSessionServerPolicy>;
+    capacity?: Partial<ProductCapacityServerPolicy>;
+    logout?: Partial<ProductLogoutServerPolicy>;
+    automation?: Partial<ProductAutomationServerPolicy>;
     providers?: unknown;
     me?: Partial<ProductMe>;
   };
@@ -228,6 +260,42 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
       primary_max_age_ms: record.session.primary_max_age_ms,
       primary_warning_ms: record.session.primary_warning_ms,
     };
+  }
+  const capacity = record.capacity;
+  if (
+    (capacity?.enforcement === "observe" ||
+      capacity?.enforcement === "enforce") &&
+    typeof capacity.authorized_clients_per_user === "number" &&
+    typeof capacity.signed_in_sessions_per_user === "number" &&
+    typeof capacity.active_clients_per_user === "number" &&
+    typeof capacity.active_clients_service === "number" &&
+    typeof capacity.websocket_channels_per_client === "number" &&
+    typeof capacity.active_lease_ms === "number" &&
+    typeof capacity.heartbeat_ms === "number" &&
+    typeof capacity.reservation_ms === "number" &&
+    capacity.session_overflow === "revoke_oldest_inactive" &&
+    capacity.active_overflow === "wait_or_reclaim_own" &&
+    (capacity.single_session_mode === "off" ||
+      capacity.single_session_mode === "newest_wins")
+  ) {
+    status.capacity = capacity as ProductCapacityServerPolicy;
+  }
+  const logout = record.logout;
+  if (
+    (logout?.provider_logout === "never" ||
+      logout?.provider_logout === "offer" ||
+      logout?.provider_logout === "always") &&
+    typeof logout.backchannel_logout === "boolean"
+  ) {
+    status.logout = logout as ProductLogoutServerPolicy;
+  }
+  const automation = record.automation;
+  if (
+    typeof automation?.enabled === "boolean" &&
+    typeof automation.active_clients === "number" &&
+    typeof automation.credential_max_age_ms === "number"
+  ) {
+    status.automation = automation as ProductAutomationServerPolicy;
   }
   if (
     typeof record.passkeys?.enabled === "boolean" &&
@@ -375,6 +443,49 @@ export interface ProductDevice {
   last_used_at_ms?: number | null;
 }
 
+export interface ProductBrowserSession {
+  id: string;
+  current: boolean;
+  client_kind: "browser" | "native_shell";
+  principal_class: "human";
+  created_at_ms: number;
+  expires_at_ms: number;
+  last_seen_at_ms: number;
+  user_agent?: string | null;
+  primary_auth_method?: string | null;
+  provider_id?: string | null;
+}
+
+export interface ProductActiveClient {
+  client_id: string;
+  user_id?: string | null;
+  principal_class: "human";
+  session_id?: string | null;
+  client_kind: "browser" | "native_shell" | "cli" | "acp";
+  fencing_token: number;
+  acquired_at_ms: number;
+  heartbeat_at_ms: number;
+  expires_at_ms: number;
+}
+
+export interface ProductSessionInventory {
+  sessions: ProductBrowserSession[];
+  active_clients: ProductActiveClient[];
+  authorized_clients: number;
+  limit: number;
+  active_limit: number;
+  enforcement: "observe" | "enforce";
+}
+
+export type ProductLogoutScope = "current" | "provider" | "all";
+
+export interface ProductLogoutResult {
+  ok: boolean;
+  scope: ProductLogoutScope;
+  revoked_sessions: number;
+  provider_logout_url?: string | null;
+}
+
 export interface DeviceAuthorizationRequest {
   request_id: string;
   approval_token: string;
@@ -441,8 +552,29 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ account, password }),
     }),
-  logout: () =>
-    readJson<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  logout: (
+    scope: ProductLogoutScope = "current",
+    providerLogout = false,
+  ) =>
+    readJson<ProductLogoutResult>("/api/auth/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope, provider_logout: providerLogout }),
+    }),
+  listSessions: () =>
+    readJson<ProductSessionInventory>("/api/auth/sessions"),
+  deleteSession: (id: string) =>
+    readJson<{ ok: boolean }>(
+      `/api/auth/sessions/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  releaseActiveClient: (clientId: string, fencingToken: number) =>
+    readJson<{ ok: boolean }>(
+      `/api/auth/active-clients/${encodeURIComponent(clientId)}?fencing_token=${
+        encodeURIComponent(String(fencingToken))
+      }`,
+      { method: "DELETE" },
+    ),
   listTokens: () => readJson<{ tokens: ProductApiToken[] }>("/api/auth/tokens"),
   createToken: (name: string, ttlSeconds?: number) =>
     readJson<CreatedProductApiToken>("/api/auth/tokens", {

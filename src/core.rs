@@ -1095,6 +1095,10 @@ pub enum Outbound {
     /// Per-cookie session deadlines. The server emits this only to the socket
     /// authenticated by that cookie; it never enters Hub broadcast history.
     AuthSession { session: serde_json::Value },
+    /// Admission state for this logical interactive client. This is sent
+    /// directly while a client waits for, acquires, or loses an active seat;
+    /// it is never broadcast to another account or client.
+    ClientCapacity { capacity: serde_json::Value },
     /// Full session list (sent on connect and whenever it changes).
     Sessions { sessions: Vec<SessionMeta> },
     /// Full enrolled-Machine projection. `resync` marks the deterministic

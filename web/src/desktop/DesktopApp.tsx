@@ -4,6 +4,7 @@ import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
 import { ProductDevicesPanel } from "../auth/ProductDevicesPanel";
+import { ProductSessionCapacityPanel } from "../auth/ProductSessionCapacityPanel";
 import type { Mode as ThemeMode } from "../theme";
 import {
   type DesktopCommand,
@@ -26,6 +27,7 @@ function EnabledDesktopAccountCommands({
 }: Pick<ReturnType<typeof useProductAuth>, "me" | "signOut">): React.JSX.Element {
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const signOutCommand = useMemo<DesktopCommand>(() => ({
     id: "account.signOut",
     title: "Sign out",
@@ -49,11 +51,30 @@ function EnabledDesktopAccountCommands({
     group: "Account",
     run: () => setPasskeysOpen(true),
   }), []);
+  const sessionsCommand = useMemo<DesktopCommand>(() => ({
+    id: "account.sessions",
+    title: "Sessions & capacity",
+    description: "Review active seats and signed-in browser sessions",
+    group: "Account",
+    run: () => setSessionsOpen(true),
+  }), []);
   useDesktopCommand(signOutCommand);
   useDesktopCommand(devicesCommand);
   useDesktopCommand(passkeysCommand);
+  useDesktopCommand(sessionsCommand);
   return (
     <>
+    <DesktopModal
+      open={sessionsOpen}
+      onClose={() => setSessionsOpen(false)}
+      title="Sessions & capacity"
+      description="Service-enforced limits, live client leases, and signed-in sessions."
+      width={620}
+    >
+      <Box sx={{ px: 2.25, py: 2 }}>
+        <ProductSessionCapacityPanel />
+      </Box>
+    </DesktopModal>
     <DesktopModal
       open={devicesOpen}
       onClose={() => setDevicesOpen(false)}

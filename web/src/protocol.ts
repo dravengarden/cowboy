@@ -248,8 +248,23 @@ export interface DraftSchedule {
   delivery: Delivery;
 }
 
+export interface ClientCapacity {
+  status: "active" | "waiting" | "channel_limit" | "lost" | "unavailable";
+  position?: number;
+  retry_after_ms?: number;
+  channels?: number;
+  channel_limit: number;
+  active_for_user?: number;
+  active_for_service?: number;
+  active_automation?: number;
+  per_user_limit?: number;
+  service_limit?: number;
+  automation_limit?: number;
+}
+
 export type Outbound =
   | { type: "auth_session"; session: unknown }
+  | { type: "client_capacity"; capacity: ClientCapacity }
   | { type: "sessions"; sessions: SessionMeta[] }
   | { type: "machines"; revision: number; machines: MachineSummary[]; resync?: boolean }
   // End of the deterministic connect snapshot. Browser clients need no action;

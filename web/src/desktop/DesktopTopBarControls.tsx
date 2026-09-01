@@ -63,6 +63,7 @@ import { useCompactionContext } from "../useCompactionContext";
 import { NetworkButton } from "../NetworkActionFeedback";
 import { SessionReloadDialog } from "../SessionReloadDialog";
 import { setProductSessionAlertHost } from "../auth/productSessionAlertHost";
+import { setProductCapacityAlertHost } from "../capacity/productCapacityAlertHost";
 import {
   acceptedScheduleTime,
   accountProviderLabel,
@@ -1758,6 +1759,29 @@ export function DesktopTopBarControls({
           )}
         </Stack>
       </DesktopModal>
+
+      <Box
+        data-product-capacity-alert-control
+        sx={{
+          display: "none",
+          alignItems: "center",
+          flexShrink: 0,
+          "&:has([data-desktop-topbar-action='capacity'])": {
+            display: "flex",
+          },
+          "& [data-product-capacity-alert-button]": {
+            ...desktopSessionActionSx({ minWidth: 112 }),
+            maxWidth: 172,
+            color: "text.primary",
+          },
+        }}
+      >
+        <Box
+          ref={setProductCapacityAlertHost}
+          data-product-capacity-alert-host
+          sx={{ display: "contents" }}
+        />
+      </Box>
 
       <Box
         data-product-session-alert-control

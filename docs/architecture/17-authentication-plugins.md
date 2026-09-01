@@ -43,7 +43,7 @@ Example server configuration:
 
 ```json
 {
-  "schema": "dravengarden.cowboy.authentication/v1",
+  "schema": "dravengarden.cowboy.authentication/v2",
   "password": { "enabled": true },
   "login_method_order": ["google", "password"],
   "passkeys": {
@@ -58,6 +58,29 @@ Example server configuration:
     "passkey_warning_ms": 1800000,
     "primary_max_age_ms": 2592000000,
     "primary_warning_ms": 86400000
+  },
+  "capacity": {
+    "enforcement": "enforce",
+    "authorized_clients_per_user": 12,
+    "signed_in_sessions_per_user": 10,
+    "active_clients_per_user": 4,
+    "active_clients_service": 32,
+    "websocket_channels_per_client": 8,
+    "active_lease_ms": 120000,
+    "heartbeat_ms": 30000,
+    "reservation_ms": 30000,
+    "session_overflow": "revoke_oldest_inactive",
+    "active_overflow": "wait_or_reclaim_own",
+    "single_session_mode": "off"
+  },
+  "logout": {
+    "provider_logout": "offer",
+    "backchannel_logout": true
+  },
+  "automation": {
+    "enabled": false,
+    "active_clients": 32,
+    "credential_max_age_ms": 600000
   },
   "providers": [
     {
@@ -84,6 +107,12 @@ Set `COWBOY_AUTH_CONFIG` to this protected file. The legacy
 `COWBOY_CARDEA_OIDC_CONFIG` remains accepted and is projected as provider ID
 `cardea`; it can coexist during migration but does not override a signed
 `cardea` selection.
+
+Schema v1 remains readable with capacity forced to observation mode. Schema v2
+owns enforced authorized-client, signed-session, active-client, WebSocket,
+logout, and automation policies. See
+[Authentication capacity, SSO logout, and automation](18-auth-capacity-sso.md)
+for the admission and upgrade contract.
 
 Password login is enabled when `password` is omitted. It may be disabled only
 when at least one signed provider is configured. Initial instance setup still
@@ -251,7 +280,7 @@ instead of continuing the original operation under another identity.
 The Controller applies three independent deadlines. Trusted visible-document
 input may slide the idle window, which defaults to 24 hours. An enabled
 periodic Passkey policy requires a fresh assertion by the user's selected
-interval, bounded by the service maximum (seven days by default). Password or
+interval, bounded by the service maximum (three days by default). Password or
 provider login has a non-sliding hard maximum of 30 days by default. Service
 configuration also owns the warning windows: 30 minutes for Passkey and one day
 for primary login. Values are validated at startup and published read-only to
