@@ -237,6 +237,7 @@ export async function openPasskeyAuthenticationUrl(
       );
       globalThis.removeEventListener("focus", onBrowserDismissed);
       globalThis.removeEventListener("pageshow", onBrowserDismissed);
+      globalThis.removeEventListener("visibilitychange", onVisibilityChange);
       if ("value" in result) resolve(result.value);
       else reject(result.error);
     };
@@ -256,6 +257,9 @@ export async function openPasskeyAuthenticationUrl(
     // Passkey completed or the user cancelled it.
     const onBrowserDismissed = (): void =>
       finish({ value: { ok: true, status: "dismissed" } });
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "visible") onBrowserDismissed();
+    };
     signal?.addEventListener("abort", onAbort, { once: true });
     globalThis.addEventListener(
       NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
@@ -267,6 +271,7 @@ export async function openPasskeyAuthenticationUrl(
     });
     globalThis.addEventListener("focus", onBrowserDismissed, { once: true });
     globalThis.addEventListener("pageshow", onBrowserDismissed, { once: true });
+    globalThis.addEventListener("visibilitychange", onVisibilityChange);
     void Promise.resolve(request).then(
       (value) => finish({ value }),
       () => finish({ value: { ok: false } }),

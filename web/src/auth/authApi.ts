@@ -346,11 +346,13 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
 
 export class AuthApiError extends Error {
   readonly status: number;
+  readonly code: string | undefined;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "AuthApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -367,7 +369,7 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new AuthApiError(text || response.statusText, response.status);
+    throw authApiError(response.status, response.statusText, text);
   }
   return (text ? JSON.parse(text) as T : {}) as T;
 }
@@ -382,9 +384,31 @@ async function readPublicJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new AuthApiError(text || response.statusText, response.status);
+    throw authApiError(response.status, response.statusText, text);
   }
   return (text ? JSON.parse(text) as T : {}) as T;
+}
+
+function authApiError(
+  status: number,
+  statusText: string,
+  text: string,
+): AuthApiError {
+  if (text !== "") {
+    try {
+      const body = JSON.parse(text) as { message?: unknown; code?: unknown };
+      if (typeof body.message === "string") {
+        return new AuthApiError(
+          body.message,
+          status,
+          typeof body.code === "string" ? body.code : undefined,
+        );
+      }
+    } catch {
+      // Preserve plain-text errors from older Cowboy services and plugins.
+    }
+  }
+  return new AuthApiError(text || statusText, status);
 }
 
 export type AuthStatusProbe =

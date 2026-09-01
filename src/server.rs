@@ -4253,7 +4253,13 @@ async fn enforce_product_api(
     };
     let principal = authenticated.principal.clone();
     let cookie_session = authenticated.cookie_session.clone();
-    if let (Some(store), Some(session)) = (state.store.as_ref(), cookie_session.as_ref())
+    // Let the WebSocket handler report an expired product session over the
+    // authenticated protocol before closing with 4001. Rejecting the HTTP
+    // upgrade here surfaces as an opaque 1006 in browsers and is
+    // indistinguishable from a network outage. `handle_ws` performs the same
+    // freshness check before sending any bootstrap or session data.
+    if enforce_product_session_freshness_before_dispatch(&path)
+        && let (Some(store), Some(session)) = (state.store.as_ref(), cookie_session.as_ref())
         && let Err(response) =
             ensure_product_session_fresh(store, session, &state.product_authentication).await
     {
@@ -4298,6 +4304,10 @@ async fn enforce_product_api(
     }
     request.extensions_mut().insert(authenticated);
     next.run(request).await
+}
+
+fn enforce_product_session_freshness_before_dispatch(path: &str) -> bool {
+    path != "/ws"
 }
 
 async fn issue_product_session(
@@ -6235,6 +6245,24 @@ async fn persist_product_passkey_registration(
     passkey_json: String,
 ) -> Result<crate::passkey::PasskeyView, Response> {
     let now = auth_now_ms();
+    match store.list_user_passkeys(&user.id).await {
+        Ok(existing) => {
+            if let Some(existing) = existing
+                .into_iter()
+                .find(|passkey| passkey.credential_id == credential_id)
+            {
+                return Ok(crate::passkey::PasskeyView {
+                    id: existing.id,
+                    nickname: existing.nickname,
+                    created_at_ms: existing.created_at_ms,
+                    last_used_at_ms: existing.last_used_at_ms,
+                });
+            }
+        }
+        Err(error) => {
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response());
+        }
+    }
     let passkey = crate::passkey::UserPasskey {
         id: match crate::product_auth::new_user_id() {
             Ok(id) => id,
@@ -6492,6 +6520,81 @@ fn product_passkey_assertion_response(result: ProductPasskeyAssertionResult) -> 
     }
 }
 
+async fn restore_external_passkey_ceremony(
+    state: &ProductAuthState,
+    transaction_id: &str,
+) -> anyhow::Result<()> {
+    if state.passkeys.external_record(transaction_id).is_ok() {
+        return Ok(());
+    }
+    let transaction_hash = crate::passkey::external_transaction_hash(transaction_id)?;
+    let store = state
+        .store
+        .as_ref()
+        .context("product store is unavailable")?;
+    let record = store
+        .external_passkey_ceremony(&transaction_hash, auth_now_ms())
+        .await?
+        .context("external passkey ceremony expired")?;
+    state.passkeys.restore_external_record(&record)
+}
+
+async fn persist_external_passkey_ceremony(
+    state: &ProductAuthState,
+    transaction_id: &str,
+) -> anyhow::Result<()> {
+    let store = state
+        .store
+        .as_ref()
+        .context("product store is unavailable")?;
+    let record = state.passkeys.external_record(transaction_id)?;
+    store.upsert_external_passkey_ceremony(&record).await
+}
+
+fn external_passkey_error_response(error: &anyhow::Error) -> Response {
+    let detail = error.to_string();
+    let (status, code, message) = if detail.contains("expired") {
+        (
+            StatusCode::GONE,
+            "passkey_transaction_expired",
+            "Passkey verification expired. Try again.",
+        )
+    } else if detail.contains("session mismatch") {
+        (
+            StatusCode::UNAUTHORIZED,
+            "passkey_session_changed",
+            "This Cowboy session changed. Start Passkey verification again.",
+        )
+    } else if detail.contains("PKCE mismatch") {
+        (
+            StatusCode::BAD_REQUEST,
+            "passkey_transaction_mismatch",
+            "Passkey verification could not be matched to this request.",
+        )
+    } else if detail.contains("unavailable") || detail.contains("type mismatch") {
+        (
+            StatusCode::CONFLICT,
+            "passkey_transaction_unavailable",
+            "Passkey verification is no longer active. Try again.",
+        )
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            "passkey_transaction_invalid",
+            "Passkey verification did not complete. Try again.",
+        )
+    };
+    tracing::info!(%error, code, "external_passkey_transaction_rejected");
+    (
+        status,
+        Json(serde_json::json!({
+            "code": code,
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
 async fn api_auth_passkey_external_start(
     State(state): State<ProductAuthState>,
     peer: ConnectInfo<SocketAddr>,
@@ -6550,6 +6653,7 @@ async fn api_auth_passkey_external_start(
             state.passkeys.start_external_registration(
                 crate::passkey::ExternalPasskeyBinding {
                     user_id: &user.id,
+                    session_id: &session.session_id,
                     session_token_hash: &session.token_hash,
                     code_challenge: &request.code_challenge,
                 },
@@ -6566,6 +6670,7 @@ async fn api_auth_passkey_external_start(
             state.passkeys.start_external_assertion(
                 crate::passkey::ExternalPasskeyBinding {
                     user_id: &user.id,
+                    session_id: &session.session_id,
                     session_token_hash: &session.token_hash,
                     code_challenge: &request.code_challenge,
                 },
@@ -6575,11 +6680,25 @@ async fn api_auth_passkey_external_start(
         }
     };
     match transaction_id {
-        Ok(transaction_id) => Json(serde_json::json!({
-            "transaction_id": transaction_id,
-            "expires_in_seconds": crate::passkey::EXTERNAL_CEREMONY_TTL_SECS,
-        }))
-        .into_response(),
+        Ok(transaction_id) => {
+            if let Err(error) = persist_external_passkey_ceremony(&state, &transaction_id).await {
+                let _ = state.passkeys.discard_external(&transaction_id);
+                tracing::error!(%error, "external_passkey_start_persist");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "code": "passkey_transaction_unavailable",
+                        "message": "Cowboy could not start secure Passkey verification. Try again.",
+                    })),
+                )
+                    .into_response();
+            }
+            Json(serde_json::json!({
+                "transaction_id": transaction_id,
+                "expires_in_seconds": crate::passkey::EXTERNAL_CEREMONY_TTL_SECS,
+            }))
+            .into_response()
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -6595,6 +6714,9 @@ async fn api_auth_passkey_external_options(
     }
     if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
         return rejected;
+    }
+    if let Err(error) = restore_external_passkey_ceremony(&state, &request.transaction_id).await {
+        return external_passkey_error_response(&error);
     }
     match state
         .passkeys
@@ -6614,7 +6736,7 @@ async fn api_auth_passkey_external_options(
         Ok(crate::passkey::ExternalBrowserState::Failed) => {
             Json(serde_json::json!({ "status": "failed" })).into_response()
         }
-        Err(_) => (StatusCode::GONE, "Passkey setup expired").into_response(),
+        Err(error) => external_passkey_error_response(&error),
     }
 }
 
@@ -6630,9 +6752,20 @@ async fn api_auth_passkey_external_complete(
     if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
         return rejected;
     }
+    if let Err(error) = restore_external_passkey_ceremony(&state, &request.transaction_id).await {
+        return external_passkey_error_response(&error);
+    }
+    if matches!(
+        state
+            .passkeys
+            .external_browser_state(&request.transaction_id),
+        Ok(crate::passkey::ExternalBrowserState::Complete)
+    ) {
+        return Json(serde_json::json!({ "status": "complete" })).into_response();
+    }
     let (action, user_id) = match state.passkeys.external_subject(&request.transaction_id) {
         Ok(subject) => subject,
-        Err(_) => return (StatusCode::GONE, "Passkey setup expired").into_response(),
+        Err(error) => return external_passkey_error_response(&error),
     };
     let webauthn = match crate::passkey::webauthn_for_request(&headers) {
         Ok(webauthn) => webauthn,
@@ -6676,7 +6809,15 @@ async fn api_auth_passkey_external_complete(
         }
     };
     match completed {
-        Ok(()) => Json(serde_json::json!({ "status": "complete" })).into_response(),
+        Ok(()) => {
+            if let Err(error) =
+                persist_external_passkey_ceremony(&state, &request.transaction_id).await
+            {
+                tracing::error!(%error, "external_passkey_complete_persist");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            Json(serde_json::json!({ "status": "complete" })).into_response()
+        }
         Err(error) => {
             tracing::warn!(%error, "external_passkey_rejected");
             (StatusCode::UNAUTHORIZED, "Passkey verification failed").into_response()
@@ -6696,15 +6837,27 @@ async fn api_auth_passkey_external_fail(
     if let Some(rejected) = reject_bad_origin(&headers, peer_addr(peer), &state.public_origins) {
         return rejected;
     }
+    if let Err(error) = restore_external_passkey_ceremony(&state, &request.transaction_id).await {
+        return external_passkey_error_response(&error);
+    }
     match state.passkeys.fail_external(&request.transaction_id) {
-        Ok(()) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Err(_) => (StatusCode::GONE, "Passkey setup expired").into_response(),
+        Ok(()) => {
+            if let Err(error) =
+                persist_external_passkey_ceremony(&state, &request.transaction_id).await
+            {
+                tracing::error!(%error, "external_passkey_fail_persist");
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            Json(serde_json::json!({ "ok": true })).into_response()
+        }
+        Err(error) => external_passkey_error_response(&error),
     }
 }
 
 const PASSKEY_EXTERNAL_EVENTS_HANDSHAKE_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(10);
-const PASSKEY_EXTERNAL_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(2 * 60);
+const PASSKEY_EXTERNAL_EVENTS_TTL: std::time::Duration =
+    std::time::Duration::from_secs(crate::passkey::EXTERNAL_CEREMONY_TTL_SECS);
 const PASSKEY_EXTERNAL_EVENTS_HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
 
 async fn api_auth_passkey_external_events(
@@ -6730,7 +6883,13 @@ async fn api_auth_passkey_external_events(
     ws.max_message_size(4 * 1_024)
         .max_frame_size(4 * 1_024)
         .on_upgrade(move |socket| {
-            handle_passkey_external_events(socket, state, user.id, session.token_hash)
+            handle_passkey_external_events(
+                socket,
+                state,
+                user.id,
+                session.session_id,
+                session.token_hash,
+            )
         })
 }
 
@@ -6738,6 +6897,7 @@ async fn handle_passkey_external_events(
     mut socket: WebSocket,
     state: ProductAuthState,
     user_id: String,
+    session_id: String,
     session_token_hash: String,
 ) {
     let request = match tokio::time::timeout(
@@ -6755,9 +6915,22 @@ async fn handle_passkey_external_events(
         let _ = socket.close().await;
         return;
     };
+    if let Err(error) = restore_external_passkey_ceremony(&state, &request.transaction_id).await {
+        tracing::info!(%error, "external_passkey_events_restore_rejected");
+        let _ = send_json(
+            &mut socket,
+            &PasskeyExternalEventStatus {
+                status: "unavailable",
+            },
+        )
+        .await;
+        let _ = socket.close().await;
+        return;
+    }
     let mut events = match state.passkeys.subscribe_external(
         &request.transaction_id,
         &user_id,
+        &session_id,
         &session_token_hash,
         &request.code_verifier,
     ) {
@@ -6853,20 +7026,18 @@ async fn api_auth_passkey_external_finalize(
     else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
+    if let Err(error) = restore_external_passkey_ceremony(&state, &request.transaction_id).await {
+        return external_passkey_error_response(&error);
+    }
     let outcome = match state.passkeys.finalize_external(
         &request.transaction_id,
         &user.id,
+        &session.session_id,
         &session.token_hash,
         &request.code_verifier,
     ) {
         Ok(outcome) => outcome,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "Passkey setup expired or did not complete",
-            )
-                .into_response();
-        }
+        Err(error) => return external_passkey_error_response(&error),
     };
     match outcome {
         crate::passkey::ExternalFinalizeResult::Pending => (
@@ -6874,9 +7045,14 @@ async fn api_auth_passkey_external_finalize(
             Json(serde_json::json!({ "status": "pending" })),
         )
             .into_response(),
-        crate::passkey::ExternalFinalizeResult::Failed => {
-            (StatusCode::BAD_REQUEST, "Passkey setup was cancelled").into_response()
-        }
+        crate::passkey::ExternalFinalizeResult::Failed => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "code": "passkey_transaction_cancelled",
+                "message": "Passkey verification was cancelled.",
+            })),
+        )
+            .into_response(),
         crate::passkey::ExternalFinalizeResult::Registration {
             nickname,
             credential_id,
@@ -6890,11 +7066,24 @@ async fn api_auth_passkey_external_finalize(
         )
         .await
         {
-            Ok(passkey) => Json(serde_json::json!({
-                "status": "complete",
-                "passkey": passkey,
-            }))
-            .into_response(),
+            Ok(passkey) => {
+                let response = serde_json::json!({
+                    "status": "complete",
+                    "passkey": passkey,
+                });
+                if let Err(error) = state.passkeys.mark_external_applied(
+                    &request.transaction_id,
+                    crate::passkey::ExternalPasskeyAction::Register,
+                    response.clone(),
+                ) {
+                    tracing::error!(%error, "external_passkey_registration_mark_applied");
+                } else if let Err(error) =
+                    persist_external_passkey_ceremony(&state, &request.transaction_id).await
+                {
+                    tracing::error!(%error, "external_passkey_registration_result_persist");
+                }
+                Json(response).into_response()
+            }
             Err(response) => response,
         },
         crate::passkey::ExternalFinalizeResult::Assertion {
@@ -6911,10 +7100,22 @@ async fn api_auth_passkey_external_finalize(
         .await
         {
             Ok(result) => {
-                let body = Json(serde_json::json!({
+                let response = serde_json::json!({
                     "status": "complete",
                     "me": result.me,
-                }));
+                });
+                if let Err(error) = state.passkeys.mark_external_applied(
+                    &request.transaction_id,
+                    crate::passkey::ExternalPasskeyAction::Assert,
+                    response.clone(),
+                ) {
+                    tracing::error!(%error, "external_passkey_assertion_mark_applied");
+                } else if let Err(error) =
+                    persist_external_passkey_ceremony(&state, &request.transaction_id).await
+                {
+                    tracing::error!(%error, "external_passkey_assertion_result_persist");
+                }
+                let body = Json(response);
                 match result.set_cookie {
                     Some(cookie) => ([(header::SET_COOKIE, cookie)], body).into_response(),
                     None => body.into_response(),
@@ -6922,6 +7123,9 @@ async fn api_auth_passkey_external_finalize(
             }
             Err(response) => response,
         },
+        crate::passkey::ExternalFinalizeResult::Applied { response } => {
+            Json(response).into_response()
+        }
     }
 }
 
@@ -18932,6 +19136,17 @@ mod product_auth_api_tests {
     }
 
     #[test]
+    fn websocket_auth_deadline_is_reported_by_the_protocol_handler() {
+        assert!(enforce_product_session_freshness_before_dispatch(
+            "/api/sessions/session-1/bootstrap"
+        ));
+        assert!(enforce_product_session_freshness_before_dispatch(
+            "/api/auth/me"
+        ));
+        assert!(!enforce_product_session_freshness_before_dispatch("/ws"));
+    }
+
+    #[test]
     fn device_authorization_prefers_the_configured_public_browser_origin() {
         assert_eq!(
             device_verification_url(
@@ -20337,7 +20552,10 @@ mod product_auth_api_tests {
         let started_body: serde_json::Value = serde_json::from_str(&started_text).unwrap();
         let transaction_id = started_body["transaction_id"].as_str().unwrap();
         assert_eq!(transaction_id.len(), 64);
-        assert_eq!(started_body["expires_in_seconds"], 120);
+        assert_eq!(
+            started_body["expires_in_seconds"],
+            crate::passkey::EXTERNAL_CEREMONY_TTL_SECS
+        );
 
         let evil_options = post_json(
             &format!("{base}/api/auth/passkeys/external/options"),
@@ -20382,7 +20600,7 @@ mod product_auth_api_tests {
             }),
         )
         .await;
-        assert_eq!(wrong_session.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(wrong_session.status(), StatusCode::UNAUTHORIZED);
         let pending = post_json(
             &format!("{base}/api/auth/passkeys/external/finalize"),
             &origin,
@@ -20462,8 +20680,11 @@ mod product_auth_api_tests {
         .await;
         assert_eq!(finalized.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
-            finalized.text().await.unwrap(),
-            "Passkey setup was cancelled"
+            finalized.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({
+                "code": "passkey_transaction_cancelled",
+                "message": "Passkey verification was cancelled.",
+            })
         );
         let _ = socket.close(None).await;
 

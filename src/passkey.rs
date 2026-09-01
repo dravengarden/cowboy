@@ -1,7 +1,7 @@
 //! Product-plane WebAuthn / Passkey registration and step-up.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use axum::http::HeaderMap;
@@ -32,7 +32,7 @@ pub const PASSKEY_REAUTH_INTERVALS_MS: [i64; 9] = [
 /// Admin console idle lock. Shorter because the console is break-glass.
 pub const ADMIN_PASSKEY_REAUTH_AFTER_MS: i64 = 5 * 60 * 1_000;
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
-pub const EXTERNAL_CEREMONY_TTL_SECS: u64 = 120;
+pub const EXTERNAL_CEREMONY_TTL_SECS: u64 = 300;
 const EXTERNAL_CEREMONY_TTL: Duration = Duration::from_secs(EXTERNAL_CEREMONY_TTL_SECS);
 const MAX_PASSKEYS_PER_USER: usize = 8;
 const MAX_EXTERNAL_CEREMONIES: usize = 128;
@@ -131,11 +131,13 @@ pub enum ExternalPasskeyAction {
 #[derive(Debug, Clone, Copy)]
 pub struct ExternalPasskeyBinding<'a> {
     pub user_id: &'a str,
+    pub session_id: &'a str,
     pub session_token_hash: &'a str,
     pub code_challenge: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum ExternalPasskeyState {
     RegistrationReady {
         nickname: String,
@@ -155,6 +157,10 @@ enum ExternalPasskeyState {
         passkey_id: String,
         passkey_json: String,
     },
+    Applied {
+        action: ExternalPasskeyAction,
+        response: serde_json::Value,
+    },
     Failed,
 }
 
@@ -168,12 +174,33 @@ pub enum ExternalPasskeyEvent {
 #[derive(Debug)]
 struct StoredExternalPasskey {
     user_id: String,
+    session_id: String,
     session_token_hash: String,
     code_challenge: String,
     state: ExternalPasskeyState,
     events: tokio::sync::watch::Sender<ExternalPasskeyEvent>,
-    expires: Instant,
-    created: Instant,
+    expires_at_ms: i64,
+    created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PersistedExternalPasskey {
+    version: u8,
+    user_id: String,
+    session_id: String,
+    session_token_hash: String,
+    code_challenge: String,
+    state: ExternalPasskeyState,
+    expires_at_ms: i64,
+    created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalPasskeyCeremonyRecord {
+    pub transaction_hash: String,
+    pub ceremony_json: String,
+    pub expires_at_ms: i64,
+    pub created_at_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,6 +225,9 @@ pub enum ExternalFinalizeResult {
     Assertion {
         passkey_id: String,
         passkey_json: String,
+    },
+    Applied {
+        response: serde_json::Value,
     },
 }
 
@@ -365,6 +395,7 @@ impl PasskeyCeremonies {
             .context("encoding external registration options")?;
         self.issue_external(
             binding.user_id,
+            binding.session_id,
             binding.session_token_hash,
             binding.code_challenge,
             ExternalPasskeyState::RegistrationReady {
@@ -395,6 +426,7 @@ impl PasskeyCeremonies {
             serde_json::to_value(rcr.public_key).context("encoding external assertion options")?;
         self.issue_external(
             binding.user_id,
+            binding.session_id,
             binding.session_token_hash,
             binding.code_challenge,
             ExternalPasskeyState::AssertionReady { state, public_key },
@@ -422,7 +454,8 @@ impl PasskeyCeremonies {
                 }
             }
             ExternalPasskeyState::RegistrationVerified { .. }
-            | ExternalPasskeyState::AssertionVerified { .. } => ExternalBrowserState::Complete,
+            | ExternalPasskeyState::AssertionVerified { .. }
+            | ExternalPasskeyState::Applied { .. } => ExternalBrowserState::Complete,
             ExternalPasskeyState::Failed => ExternalBrowserState::Failed,
         })
     }
@@ -437,9 +470,12 @@ impl PasskeyCeremonies {
         let stored = entries
             .get(&key)
             .context("external passkey ceremony expired")?;
-        let action = match stored.state {
+        let action = match &stored.state {
             ExternalPasskeyState::RegistrationReady { .. } => ExternalPasskeyAction::Register,
             ExternalPasskeyState::AssertionReady { .. } => ExternalPasskeyAction::Assert,
+            ExternalPasskeyState::RegistrationVerified { .. } => ExternalPasskeyAction::Register,
+            ExternalPasskeyState::AssertionVerified { .. } => ExternalPasskeyAction::Assert,
+            ExternalPasskeyState::Applied { action, .. } => *action,
             _ => bail!("external passkey ceremony is unavailable"),
         };
         Ok((action, stored.user_id.clone()))
@@ -550,6 +586,7 @@ impl PasskeyCeremonies {
         &self,
         transaction_id: &str,
         user_id: &str,
+        session_id: &str,
         session_token_hash: &str,
         code_verifier: &str,
     ) -> Result<tokio::sync::watch::Receiver<ExternalPasskeyEvent>> {
@@ -564,13 +601,7 @@ impl PasskeyCeremonies {
             stored.user_id == user_id,
             "external passkey ceremony expired"
         );
-        anyhow::ensure!(
-            constant_time_equal(
-                stored.session_token_hash.as_bytes(),
-                session_token_hash.as_bytes()
-            ),
-            "external passkey session mismatch"
-        );
+        ensure_external_session_binding(stored, session_id, session_token_hash)?;
         anyhow::ensure!(
             constant_time_equal(challenge.as_bytes(), stored.code_challenge.as_bytes()),
             "external passkey PKCE mismatch"
@@ -582,13 +613,14 @@ impl PasskeyCeremonies {
         &self,
         transaction_id: &str,
         user_id: &str,
+        session_id: &str,
         session_token_hash: &str,
         code_verifier: &str,
     ) -> Result<ExternalFinalizeResult> {
         let key = external_transaction_key(transaction_id)?;
         let challenge = pkce_challenge(code_verifier)?;
         self.gc_external();
-        let mut entries = self.external.lock();
+        let entries = self.external.lock();
         let stored = entries
             .get(&key)
             .context("external passkey ceremony expired")?;
@@ -596,13 +628,7 @@ impl PasskeyCeremonies {
             stored.user_id == user_id,
             "external passkey ceremony expired"
         );
-        anyhow::ensure!(
-            constant_time_equal(
-                stored.session_token_hash.as_bytes(),
-                session_token_hash.as_bytes()
-            ),
-            "external passkey session mismatch"
-        );
+        ensure_external_session_binding(stored, session_id, session_token_hash)?;
         anyhow::ensure!(
             constant_time_equal(challenge.as_bytes(), stored.code_challenge.as_bytes()),
             "external passkey PKCE mismatch"
@@ -614,65 +640,173 @@ impl PasskeyCeremonies {
         ) {
             return Ok(ExternalFinalizeResult::Pending);
         }
-        let stored = entries
-            .remove(&key)
-            .context("external passkey ceremony expired")?;
-        Ok(match stored.state {
+        Ok(match &stored.state {
             ExternalPasskeyState::RegistrationVerified {
                 nickname,
                 credential_id,
                 passkey_json,
             } => ExternalFinalizeResult::Registration {
-                nickname,
-                credential_id,
-                passkey_json,
+                nickname: nickname.clone(),
+                credential_id: credential_id.clone(),
+                passkey_json: passkey_json.clone(),
             },
             ExternalPasskeyState::AssertionVerified {
                 passkey_id,
                 passkey_json,
             } => ExternalFinalizeResult::Assertion {
-                passkey_id,
-                passkey_json,
+                passkey_id: passkey_id.clone(),
+                passkey_json: passkey_json.clone(),
+            },
+            ExternalPasskeyState::Applied { response, .. } => ExternalFinalizeResult::Applied {
+                response: response.clone(),
             },
             ExternalPasskeyState::Failed => ExternalFinalizeResult::Failed,
             ExternalPasskeyState::RegistrationReady { .. }
             | ExternalPasskeyState::AssertionReady { .. } => {
-                unreachable!("pending external ceremonies return before removal")
+                unreachable!("pending external ceremonies return before finalization")
             }
         })
+    }
+
+    pub fn mark_external_applied(
+        &self,
+        transaction_id: &str,
+        action: ExternalPasskeyAction,
+        response: serde_json::Value,
+    ) -> Result<()> {
+        let key = external_transaction_key(transaction_id)?;
+        self.gc_external();
+        let mut entries = self.external.lock();
+        let stored = entries
+            .get_mut(&key)
+            .context("external passkey ceremony expired")?;
+        anyhow::ensure!(
+            matches!(
+                (&stored.state, action),
+                (
+                    ExternalPasskeyState::RegistrationVerified { .. },
+                    ExternalPasskeyAction::Register
+                ) | (
+                    ExternalPasskeyState::AssertionVerified { .. },
+                    ExternalPasskeyAction::Assert
+                ) | (ExternalPasskeyState::Applied { .. }, _)
+            ),
+            "external passkey ceremony type mismatch"
+        );
+        stored.state = ExternalPasskeyState::Applied { action, response };
+        stored.events.send_replace(ExternalPasskeyEvent::Complete);
+        Ok(())
+    }
+
+    pub fn external_record(&self, transaction_id: &str) -> Result<ExternalPasskeyCeremonyRecord> {
+        let transaction_hash = external_transaction_key(transaction_id)?;
+        self.gc_external();
+        let entries = self.external.lock();
+        let stored = entries
+            .get(&transaction_hash)
+            .context("external passkey ceremony expired")?;
+        let persisted = PersistedExternalPasskey {
+            version: 1,
+            user_id: stored.user_id.clone(),
+            session_id: stored.session_id.clone(),
+            session_token_hash: stored.session_token_hash.clone(),
+            code_challenge: stored.code_challenge.clone(),
+            state: stored.state.clone(),
+            expires_at_ms: stored.expires_at_ms,
+            created_at_ms: stored.created_at_ms,
+        };
+        Ok(ExternalPasskeyCeremonyRecord {
+            transaction_hash,
+            ceremony_json: serde_json::to_string(&persisted)
+                .context("encoding external passkey ceremony")?,
+            expires_at_ms: persisted.expires_at_ms,
+            created_at_ms: persisted.created_at_ms,
+        })
+    }
+
+    pub fn restore_external_record(&self, record: &ExternalPasskeyCeremonyRecord) -> Result<()> {
+        anyhow::ensure!(
+            record.transaction_hash.len() == 64
+                && record
+                    .transaction_hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "invalid external passkey ceremony"
+        );
+        let persisted: PersistedExternalPasskey = serde_json::from_str(&record.ceremony_json)
+            .context("decoding external passkey ceremony")?;
+        anyhow::ensure!(
+            persisted.version == 1,
+            "unsupported external passkey ceremony"
+        );
+        anyhow::ensure!(
+            persisted.expires_at_ms == record.expires_at_ms
+                && persisted.created_at_ms == record.created_at_ms,
+            "external passkey ceremony metadata mismatch"
+        );
+        anyhow::ensure!(
+            persisted.expires_at_ms > unix_now_ms(),
+            "external passkey ceremony expired"
+        );
+        validate_external_binding(&persisted.session_token_hash, &persisted.code_challenge)?;
+        validate_external_session_id(&persisted.session_id)?;
+        let initial_event = external_event_for_state(&persisted.state);
+        let (events, _initial_receiver) = tokio::sync::watch::channel(initial_event);
+        let mut entries = self.external.lock();
+        if entries.contains_key(&record.transaction_hash) {
+            return Ok(());
+        }
+        trim_external_entries(&mut entries, unix_now_ms());
+        entries.insert(
+            record.transaction_hash.clone(),
+            StoredExternalPasskey {
+                user_id: persisted.user_id,
+                session_id: persisted.session_id,
+                session_token_hash: persisted.session_token_hash,
+                code_challenge: persisted.code_challenge,
+                state: persisted.state,
+                events,
+                expires_at_ms: persisted.expires_at_ms,
+                created_at_ms: persisted.created_at_ms,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn discard_external(&self, transaction_id: &str) -> Result<()> {
+        let key = external_transaction_key(transaction_id)?;
+        self.external.lock().remove(&key);
+        Ok(())
     }
 
     fn issue_external(
         &self,
         user_id: &str,
+        session_id: &str,
         session_token_hash: &str,
         code_challenge: &str,
         state: ExternalPasskeyState,
     ) -> Result<String> {
+        validate_external_session_id(session_id)?;
         let transaction_id = new_session_token()?;
-        let now = Instant::now();
+        let now_ms = unix_now_ms();
         let (events, _initial_receiver) =
             tokio::sync::watch::channel(ExternalPasskeyEvent::Pending);
         let mut entries = self.external.lock();
-        entries.retain(|_, row| row.expires > now);
-        if entries.len() >= MAX_EXTERNAL_CEREMONIES
-            && let Some(oldest) = entries
-                .iter()
-                .min_by_key(|(_, row)| row.created)
-                .map(|(key, _)| key.clone())
-        {
-            entries.remove(&oldest);
-        }
+        trim_external_entries(&mut entries, now_ms);
         entries.insert(
             crate::admin::hex_sha256(transaction_id.as_bytes()),
             StoredExternalPasskey {
                 user_id: user_id.to_owned(),
+                session_id: session_id.to_owned(),
                 session_token_hash: session_token_hash.to_owned(),
                 code_challenge: code_challenge.to_owned(),
                 state,
                 events,
-                expires: now + EXTERNAL_CEREMONY_TTL,
-                created: now,
+                expires_at_ms: now_ms.saturating_add(
+                    i64::try_from(EXTERNAL_CEREMONY_TTL.as_millis()).unwrap_or(i64::MAX),
+                ),
+                created_at_ms: now_ms,
             },
         );
         Ok(transaction_id)
@@ -698,14 +832,72 @@ impl PasskeyCeremonies {
     }
 
     fn gc_external(&self) {
-        let now = Instant::now();
-        self.external.lock().retain(|_, row| row.expires > now);
+        let now_ms = unix_now_ms();
+        self.external
+            .lock()
+            .retain(|_, row| row.expires_at_ms > now_ms);
     }
 
     fn gc(&self) {
         let now = std::time::Instant::now();
         self.registrations.lock().retain(|_, row| row.expires > now);
         self.assertions.lock().retain(|_, row| row.expires > now);
+    }
+}
+
+fn unix_now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn validate_external_session_id(session_id: &str) -> Result<()> {
+    anyhow::ensure!(
+        (16..=128).contains(&session_id.len())
+            && session_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "invalid external passkey session"
+    );
+    Ok(())
+}
+
+fn ensure_external_session_binding(
+    stored: &StoredExternalPasskey,
+    session_id: &str,
+    session_token_hash: &str,
+) -> Result<()> {
+    let stable_session_matches =
+        constant_time_equal(stored.session_id.as_bytes(), session_id.as_bytes());
+    let original_token_matches = constant_time_equal(
+        stored.session_token_hash.as_bytes(),
+        session_token_hash.as_bytes(),
+    );
+    anyhow::ensure!(
+        stable_session_matches || original_token_matches,
+        "external passkey session mismatch"
+    );
+    Ok(())
+}
+
+fn external_event_for_state(state: &ExternalPasskeyState) -> ExternalPasskeyEvent {
+    match state {
+        ExternalPasskeyState::RegistrationReady { .. }
+        | ExternalPasskeyState::AssertionReady { .. } => ExternalPasskeyEvent::Pending,
+        ExternalPasskeyState::RegistrationVerified { .. }
+        | ExternalPasskeyState::AssertionVerified { .. }
+        | ExternalPasskeyState::Applied { .. } => ExternalPasskeyEvent::Complete,
+        ExternalPasskeyState::Failed => ExternalPasskeyEvent::Failed,
+    }
+}
+
+fn trim_external_entries(entries: &mut HashMap<String, StoredExternalPasskey>, now_ms: i64) {
+    entries.retain(|_, row| row.expires_at_ms > now_ms);
+    if entries.len() >= MAX_EXTERNAL_CEREMONIES
+        && let Some(oldest) = entries
+            .iter()
+            .min_by_key(|(_, row)| row.created_at_ms)
+            .map(|(key, _)| key.clone())
+    {
+        entries.remove(&oldest);
     }
 }
 
@@ -724,7 +916,7 @@ fn validate_external_binding(session_token_hash: &str, code_challenge: &str) -> 
     Ok(())
 }
 
-fn external_transaction_key(transaction_id: &str) -> Result<String> {
+pub fn external_transaction_hash(transaction_id: &str) -> Result<String> {
     anyhow::ensure!(
         transaction_id.len() == 64
             && transaction_id
@@ -733,6 +925,10 @@ fn external_transaction_key(transaction_id: &str) -> Result<String> {
         "invalid external passkey ceremony"
     );
     Ok(crate::admin::hex_sha256(transaction_id.as_bytes()))
+}
+
+fn external_transaction_key(transaction_id: &str) -> Result<String> {
+    external_transaction_hash(transaction_id)
 }
 
 fn valid_pkce_challenge(value: &str) -> bool {
@@ -889,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn external_registration_is_session_bound_pkce_and_single_use() {
+    fn external_registration_is_session_bound_pkce_and_idempotent() {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::ORIGIN,
@@ -899,11 +1095,13 @@ mod tests {
         let verifier = "a".repeat(64);
         let challenge = pkce_challenge(&verifier).unwrap();
         let session_hash = "b".repeat(64);
+        let session_id = "session-browser-0001";
         let ceremonies = PasskeyCeremonies::default();
         let transaction_id = ceremonies
             .start_external_registration(
                 ExternalPasskeyBinding {
                     user_id: "user-1",
+                    session_id,
                     session_token_hash: &session_hash,
                     code_challenge: &challenge,
                 },
@@ -923,42 +1121,130 @@ mod tests {
         ));
         assert!(
             ceremonies
-                .finalize_external(&transaction_id, "user-1", &"c".repeat(64), &verifier)
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    "different-session-1",
+                    &"c".repeat(64),
+                    &verifier,
+                )
                 .is_err()
         );
         assert!(
             ceremonies
-                .finalize_external(&transaction_id, "user-1", &session_hash, &"d".repeat(64))
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &session_hash,
+                    &"d".repeat(64),
+                )
                 .is_err()
         );
         assert_eq!(
             ceremonies
-                .finalize_external(&transaction_id, "user-1", &session_hash, &verifier)
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &session_hash,
+                    &verifier,
+                )
                 .unwrap(),
             ExternalFinalizeResult::Pending
         );
 
         let events = ceremonies
-            .subscribe_external(&transaction_id, "user-1", &session_hash, &verifier)
+            .subscribe_external(
+                &transaction_id,
+                "user-1",
+                session_id,
+                &session_hash,
+                &verifier,
+            )
             .unwrap();
         assert_eq!(*events.borrow(), ExternalPasskeyEvent::Pending);
         assert!(
             ceremonies
-                .subscribe_external(&transaction_id, "user-1", &session_hash, &"e".repeat(64))
+                .subscribe_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &session_hash,
+                    &"e".repeat(64),
+                )
                 .is_err()
         );
         ceremonies.fail_external(&transaction_id).unwrap();
         assert_eq!(*events.borrow(), ExternalPasskeyEvent::Failed);
         assert_eq!(
             ceremonies
-                .finalize_external(&transaction_id, "user-1", &session_hash, &verifier)
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &session_hash,
+                    &verifier,
+                )
                 .unwrap(),
             ExternalFinalizeResult::Failed
         );
-        assert!(
+        assert_eq!(
             ceremonies
-                .finalize_external(&transaction_id, "user-1", &session_hash, &verifier)
-                .is_err()
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &session_hash,
+                    &verifier,
+                )
+                .unwrap(),
+            ExternalFinalizeResult::Failed
+        );
+    }
+
+    #[test]
+    fn external_ceremony_restores_after_restart_and_accepts_rotated_session_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://cowboy.example"),
+        );
+        let webauthn = webauthn_for_request(&headers).unwrap();
+        let verifier = "a".repeat(64);
+        let challenge = pkce_challenge(&verifier).unwrap();
+        let session_hash = "b".repeat(64);
+        let session_id = "session-browser-0001";
+        let original = PasskeyCeremonies::default();
+        let transaction_id = original
+            .start_external_registration(
+                ExternalPasskeyBinding {
+                    user_id: "user-1",
+                    session_id,
+                    session_token_hash: &session_hash,
+                    code_challenge: &challenge,
+                },
+                "draven",
+                "Travel phone".to_owned(),
+                &[],
+                &webauthn,
+            )
+            .unwrap();
+        let record = original.external_record(&transaction_id).unwrap();
+
+        let restored = PasskeyCeremonies::default();
+        restored.restore_external_record(&record).unwrap();
+        assert_eq!(
+            restored
+                .finalize_external(
+                    &transaction_id,
+                    "user-1",
+                    session_id,
+                    &"c".repeat(64),
+                    &verifier,
+                )
+                .unwrap(),
+            ExternalFinalizeResult::Pending
         );
     }
 

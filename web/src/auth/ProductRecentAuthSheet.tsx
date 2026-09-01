@@ -2,6 +2,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Stack,
   Tab,
   Tabs,
@@ -125,6 +126,7 @@ export function ProductRecentAuthSheet({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [verifiedMe, setVerifiedMe] = useState<ProductMe | null>(null);
   const providerAbort = useRef<AbortController | null>(null);
   const passkeyAbort = useRef<AbortController | null>(null);
@@ -158,6 +160,7 @@ export function ProductRecentAuthSheet({
     if (!open) return;
     setPassword("");
     setError(null);
+    setNotice(null);
     setVerifiedMe(null);
     setMethod(
       initialMethod(
@@ -195,6 +198,7 @@ export function ProductRecentAuthSheet({
     const epoch = ++requestEpoch.current;
     setBusy(true);
     setError(null);
+    setNotice(null);
     void request()
       .then((next) => {
         if (requestEpoch.current !== epoch) return;
@@ -207,7 +211,10 @@ export function ProductRecentAuthSheet({
       })
       .catch((reason: unknown) => {
         if (requestEpoch.current !== epoch) return;
-        if (passkeyFlowCancelled(reason)) return;
+        if (passkeyFlowCancelled(reason)) {
+          setNotice("Passkey verification was cancelled. Try again when ready.");
+          return;
+        }
         setError(
           reason instanceof AuthApiError
             ? reason.message
@@ -307,6 +314,7 @@ export function ProductRecentAuthSheet({
             {description}
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
+          {notice && <Alert severity="info">{notice}</Alert>}
           {!verifiedMe && purpose === "primary" &&
             primaryMethods.legacySession && (
             <Alert severity="info">
@@ -363,8 +371,11 @@ export function ProductRecentAuthSheet({
               size="large"
               disabled={busy}
               onClick={verifyWithPasskey}
+              startIcon={busy
+                ? <CircularProgress color="inherit" size={18} />
+                : undefined}
             >
-              Verify with Passkey
+              {busy ? "Waiting for Passkey…" : "Verify with Passkey"}
             </Button>
           )}
           {!verifiedMe && method === PASSWORD_LOGIN_METHOD && (

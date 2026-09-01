@@ -251,7 +251,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1617"'));
+  assert(sw.includes('const VERSION = "cowboy-v1618"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
@@ -278,6 +278,8 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(sheet.includes("Verify it’s you"));
   assert(sheet.includes("authApi.login(me.account, password)"));
   assert(sheet.includes("verifyPasskey"));
+  assert(sheet.includes("Waiting for Passkey…"));
+  assert(sheet.includes("Passkey verification was cancelled. Try again when ready."));
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("runBrowserOidc"));
   assert(sheet.includes("useProviderHandoff"));

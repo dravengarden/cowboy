@@ -2142,6 +2142,21 @@ impl Store {
         )
     }
 
+    pub async fn upsert_external_passkey_ceremony(
+        &self,
+        ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
+    ) -> Result<()> {
+        dispatch_storage!(self, upsert_external_passkey_ceremony(ceremony))
+    }
+
+    pub async fn external_passkey_ceremony(
+        &self,
+        transaction_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        dispatch_storage!(self, external_passkey_ceremony(transaction_hash, now_ms))
+    }
+
     pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
         dispatch_storage!(self, touch_user_last_step_up(user_id, now_ms))
     }
@@ -5199,6 +5214,58 @@ impl PostgresStorage {
             .await
             .context("COMMIT Passkey refresh update")?;
         Ok(())
+    }
+
+    pub async fn upsert_external_passkey_ceremony(
+        &self,
+        ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
+    ) -> Result<()> {
+        sqlx::query(
+            "WITH purged AS (DELETE FROM external_passkey_ceremonies WHERE expires_at <= now()) \
+             INSERT INTO external_passkey_ceremonies \
+             (transaction_hash, ceremony_json, expires_at, created_at) \
+             VALUES ($1, $2::jsonb, to_timestamp($3::double precision / 1000), \
+             to_timestamp($4::double precision / 1000)) \
+             ON CONFLICT (transaction_hash) DO UPDATE SET \
+             ceremony_json = EXCLUDED.ceremony_json, expires_at = EXCLUDED.expires_at",
+        )
+        .bind(&ceremony.transaction_hash)
+        .bind(&ceremony.ceremony_json)
+        .bind(ceremony.expires_at_ms)
+        .bind(ceremony.created_at_ms)
+        .execute(&self.pool)
+        .await
+        .context("UPSERT external Passkey ceremony")?;
+        Ok(())
+    }
+
+    pub async fn external_passkey_ceremony(
+        &self,
+        transaction_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        let row = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json::text, \
+             (extract(epoch FROM expires_at) * 1000)::bigint, \
+             (extract(epoch FROM created_at) * 1000)::bigint \
+             FROM external_passkey_ceremonies \
+             WHERE transaction_hash = $1 AND expires_at > to_timestamp($2::double precision / 1000)",
+        )
+        .bind(transaction_hash)
+        .bind(now_ms)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT external Passkey ceremony")?;
+        Ok(row.map(
+            |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                crate::passkey::ExternalPasskeyCeremonyRecord {
+                    transaction_hash,
+                    ceremony_json,
+                    expires_at_ms,
+                    created_at_ms,
+                }
+            },
+        ))
     }
 
     pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
@@ -8681,6 +8748,31 @@ mod storage_contract_tests {
         assert_eq!(
             store.user_by_id(&user.id).await?.map(|row| row.username),
             Some("draven".to_owned())
+        );
+        let external_ceremony = crate::passkey::ExternalPasskeyCeremonyRecord {
+            transaction_hash: "ef".repeat(32),
+            ceremony_json: serde_json::json!({ "contract": true }).to_string(),
+            expires_at_ms: created_at_ms + 300_000,
+            created_at_ms,
+        };
+        store
+            .upsert_external_passkey_ceremony(&external_ceremony)
+            .await?;
+        assert_eq!(
+            store
+                .external_passkey_ceremony(&external_ceremony.transaction_hash, created_at_ms + 1,)
+                .await?,
+            Some(external_ceremony.clone())
+        );
+        assert!(
+            store
+                .external_passkey_ceremony(
+                    &external_ceremony.transaction_hash,
+                    external_ceremony.expires_at_ms,
+                )
+                .await?
+                .is_none(),
+            "expired external Passkey ceremonies must not be restored"
         );
         assert_eq!(store.list_users().await?.len(), 1);
         let initial_passkey_policy = store

@@ -154,6 +154,29 @@ Deno.test("auth API surfaces HTTP error text", async () => {
   }
 });
 
+Deno.test("auth API surfaces structured safe errors", async () => {
+  const restore = withFetch(() =>
+    new Response(
+      JSON.stringify({
+        code: "passkey_transaction_expired",
+        message: "Passkey verification expired. Try again.",
+      }),
+      { status: 410, headers: { "content-type": "application/json" } },
+    )
+  );
+  try {
+    const error = await assertRejects(
+      () => authApi.finalizeExternalPasskey("a".repeat(64), "v".repeat(64)),
+      AuthApiError,
+      "Passkey verification expired. Try again.",
+    );
+    assertEquals(error.status, 410);
+    assertEquals(error.code, "passkey_transaction_expired");
+  } finally {
+    restore();
+  }
+});
+
 Deno.test("external Passkey handoff keeps the verifier in the signed-in client", async () => {
   const calls: FetchArgs[] = [];
   const restore = withFetch((args) => {

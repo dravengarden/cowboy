@@ -4540,6 +4540,68 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn upsert_external_passkey_ceremony(
+        &self,
+        ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
+    ) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("BEGIN SQLite external Passkey ceremony upsert")?;
+        sqlx::query("DELETE FROM external_passkey_ceremonies WHERE expires_at_ms <= ?1")
+            .bind(now_ms())
+            .execute(&mut *transaction)
+            .await
+            .context("PURGE SQLite external Passkey ceremonies")?;
+        sqlx::query(
+            "INSERT INTO external_passkey_ceremonies \
+             (transaction_hash, ceremony_json, expires_at_ms, created_at_ms) \
+             VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT (transaction_hash) DO UPDATE SET \
+             ceremony_json = excluded.ceremony_json, expires_at_ms = excluded.expires_at_ms",
+        )
+        .bind(&ceremony.transaction_hash)
+        .bind(&ceremony.ceremony_json)
+        .bind(ceremony.expires_at_ms)
+        .bind(ceremony.created_at_ms)
+        .execute(&mut *transaction)
+        .await
+        .context("UPSERT SQLite external Passkey ceremony")?;
+        transaction
+            .commit()
+            .await
+            .context("COMMIT SQLite external Passkey ceremony upsert")?;
+        Ok(())
+    }
+
+    pub(super) async fn external_passkey_ceremony(
+        &self,
+        transaction_hash: &str,
+        now_ms: i64,
+    ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        let row = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json, expires_at_ms, created_at_ms \
+             FROM external_passkey_ceremonies \
+             WHERE transaction_hash = ?1 AND expires_at_ms > ?2",
+        )
+        .bind(transaction_hash)
+        .bind(now_ms)
+        .fetch_optional(&self.pool)
+        .await
+        .context("SELECT SQLite external Passkey ceremony")?;
+        Ok(row.map(
+            |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                crate::passkey::ExternalPasskeyCeremonyRecord {
+                    transaction_hash,
+                    ceremony_json,
+                    expires_at_ms,
+                    created_at_ms,
+                }
+            },
+        ))
+    }
+
     pub(super) async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
         sqlx::query("UPDATE users SET last_step_up_at_ms = ?2 WHERE id = ?1")
             .bind(user_id)

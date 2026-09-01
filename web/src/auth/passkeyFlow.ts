@@ -539,7 +539,9 @@ export function passkeyFlowCancelled(reason: unknown): boolean {
     return reason.name === "AbortError" || reason.name === "NotAllowedError";
   }
   return reason instanceof AuthApiError &&
-    reason.message === "Passkey setup was cancelled";
+    (reason.code === "passkey_transaction_cancelled" ||
+      reason.message === "Passkey setup was cancelled" ||
+      reason.message === "Passkey verification was cancelled.");
 }
 
 export function externalPasskeyRequiresFailureSignal(

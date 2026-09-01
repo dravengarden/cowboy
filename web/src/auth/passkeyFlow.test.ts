@@ -150,6 +150,16 @@ Deno.test("Passkey cancellation is a normal user outcome", () => {
     true,
   );
   assertEquals(
+    passkeyFlowCancelled(
+      new AuthApiError(
+        "Passkey verification was cancelled.",
+        400,
+        "passkey_transaction_cancelled",
+      ),
+    ),
+    true,
+  );
+  assertEquals(
     passkeyFlowCancelled(new AuthApiError("Passkey setup expired", 400)),
     false,
   );

@@ -37,6 +37,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0041_auth_capacity.sql",
         "de54f933e0868c9ee5a8c470dab5ebcda65d70cd28371062dca0c729b044741a",
     ),
+    (
+        "0042_external_passkey_ceremonies.sql",
+        "35db4fea677f551e76fdf142909adaa13f9d575912bd5f91686b6d02cf60db2a",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -70,6 +74,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0015_auth_capacity.sql",
         "18267cbafe8c1b633bd91938739c5098a71e0a8f11fccee226022de074e832bb",
+    ),
+    (
+        "0016_external_passkey_ceremonies.sql",
+        "86158d233ffb5a5e4764defee6599d5262ae2a6b07c56fa52261589cb342e2ae",
     ),
 ];
 
