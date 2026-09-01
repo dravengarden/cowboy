@@ -11,10 +11,13 @@ test -x "$app_bundle/Contents/Resources/bin/cowboy"
 test -x "$app_bundle/Contents/Resources/bin/cowboy-machine"
 test -x "$app_bundle/Contents/Resources/bin/cowboy-machine-install"
 test -x "$app_bundle/Contents/Resources/bin/cowboy-code-adapter"
+test -s "$app_bundle/Contents/Resources/Cowboy.icns"
 test "$(plutil -extract CFBundleIdentifier raw "$app_bundle/Contents/Info.plist")" = \
     "xyz.stormbird.cowboy.manager"
 test "$(plutil -extract CFBundleDisplayName raw "$app_bundle/Contents/Info.plist")" = \
     "Cowboy Manager"
+test "$(plutil -extract CFBundleIconFile raw "$app_bundle/Contents/Info.plist")" = \
+    "Cowboy.icns"
 test "$(plutil -extract LSUIElement raw "$app_bundle/Contents/Info.plist")" = "true"
 test "$(plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$app_bundle/Contents/Info.plist")" = \
     "xyz.stormbird.cowboy.manager"

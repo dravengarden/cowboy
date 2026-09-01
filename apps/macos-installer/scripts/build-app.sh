@@ -36,6 +36,7 @@ rm -rf -- "$app_bundle"
 mkdir -p "$app_bundle/Contents/MacOS" "$app_bundle/Contents/Resources/bin"
 cp "$binary_path" "$app_bundle/Contents/MacOS/CowboyInstaller"
 cp "$app_root/Resources/Info.plist" "$app_bundle/Contents/Info.plist"
+cp "$app_root/Resources/Cowboy.icns" "$app_bundle/Contents/Resources/Cowboy.icns"
 for executable in cowboy cowboy-machine cowboy-machine-install cowboy-code-adapter; do
     cp "$backend_dir/$executable" "$app_bundle/Contents/Resources/bin/$executable"
 done

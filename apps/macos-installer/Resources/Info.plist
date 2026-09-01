@@ -12,6 +12,8 @@
     <string>xyz.stormbird.cowboy.manager</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>Cowboy.icns</string>
     <key>CFBundleName</key>
     <string>Cowboy Manager</string>
     <key>CFBundleURLTypes</key>
