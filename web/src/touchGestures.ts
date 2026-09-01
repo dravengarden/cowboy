@@ -30,6 +30,35 @@ export function isPairedTouchClick(
   return pendingTouchClick && (pointerType === "touch" || clickDetail !== 0);
 }
 
+export interface RetargetedTouchClickGuard {
+  arm: () => void;
+  reset: () => void;
+  consume: (clickDetail: number, pointerType?: string) => boolean;
+}
+
+/**
+ * Keep a completed touch gesture's compatibility click attached to that
+ * gesture even when React reflows or replaces the original target before the
+ * click arrives. A fresh pointerdown explicitly transfers ownership to the new
+ * gesture; keyboard and assistive clicks never consume the touch claim.
+ */
+export function createRetargetedTouchClickGuard(): RetargetedTouchClickGuard {
+  let pending = false;
+  return {
+    arm: (): void => {
+      pending = true;
+    },
+    reset: (): void => {
+      pending = false;
+    },
+    consume: (clickDetail: number, pointerType = ""): boolean => {
+      const suppress = isPairedTouchClick(pending, clickDetail, pointerType);
+      if (suppress) pending = false;
+      return suppress;
+    },
+  };
+}
+
 /** Lock a touch gesture to the horizontal axis only after intent is clear. */
 export function horizontalSwipe(
   deltaX: number,

@@ -1167,6 +1167,41 @@ Deno.test("mobile delivery taps preserve native editor focus until click", () =>
   );
 });
 
+Deno.test("mobile send quarantines its compatibility click across action-row reflow", () => {
+  const sendTapStart = composerSource.indexOf(
+    "const mobileActionClickGuard = useRetargetedTouchClickGuard",
+  );
+  const sendTapEnd = composerSource.indexOf(
+    "const fileInputRef",
+    sendTapStart,
+  );
+  const sendTap = composerSource.slice(sendTapStart, sendTapEnd);
+  const actionRowStart = composerSource.indexOf(
+    "data-mobile-action-row={touchInput",
+  );
+  const actionRowEnd = composerSource.indexOf("<Stack", actionRowStart);
+  const actionRow = composerSource.slice(actionRowStart, actionRowEnd);
+
+  assertEquals(sendTapStart >= 0 && sendTapEnd > sendTapStart, true);
+  assertEquals(
+    sendTap.includes("mobileActionClickGuard.arm"),
+    true,
+  );
+  assertEquals(actionRowStart >= 0 && actionRowEnd > actionRowStart, true);
+  assertEquals(
+    actionRow.includes(
+      "onPointerDownCapture={mobileActionClickGuard.onPointerDownCapture}",
+    ),
+    true,
+  );
+  assertEquals(
+    actionRow.includes(
+      "onClickCapture={mobileActionClickGuard.onClickCapture}",
+    ),
+    true,
+  );
+});
+
 Deno.test("Page delivery closes only after the authoritative acknowledgement", () => {
   const submitStart = composerSource.indexOf("const submitWithFeedback");
   const submitEnd = composerSource.indexOf("const sendTap", submitStart);

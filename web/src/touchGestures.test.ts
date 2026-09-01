@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
+  createRetargetedTouchClickGuard,
   expandedSelection,
   horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
@@ -21,6 +22,23 @@ Deno.test("keyboard and assistive clicks are not swallowed by a touch claim", ()
   assertEquals(isPairedTouchClick(true, 0), false);
   assertEquals(isPairedTouchClick(false, 1), false);
   assertEquals(isPairedTouchClick(false, 0), false);
+});
+
+Deno.test("retargeted touch click guard consumes only the completed gesture click", () => {
+  const guard = createRetargetedTouchClickGuard();
+
+  guard.arm();
+  assertEquals(guard.consume(0), false);
+  assertEquals(guard.consume(1, "touch"), true);
+  assertEquals(guard.consume(1, "touch"), false);
+});
+
+Deno.test("a fresh pointer gesture releases the retargeted click guard", () => {
+  const guard = createRetargetedTouchClickGuard();
+
+  guard.arm();
+  guard.reset();
+  assertEquals(guard.consume(1, "touch"), false);
 });
 
 Deno.test("expanded native text selection owns horizontal handle drags", () => {

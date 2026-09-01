@@ -266,7 +266,10 @@ import { haptic, importantHaptic, navigationHaptic } from "./haptic";
 import { useSortable } from "./useSortable";
 import { useNavbarAtBottom } from "./navbarSettings";
 import { useReadingSettings } from "./readingSettings";
-import { useReliableTouchTap } from "./useReliableTouchTap";
+import {
+  useReliableTouchTap,
+  useRetargetedTouchClickGuard,
+} from "./useReliableTouchTap";
 import {
   NetworkButton,
   NetworkIconButton,
@@ -1124,8 +1127,10 @@ export function ComposerWorkspace({
     submitFeedback,
     submitTracked,
   ]);
-  const sendTap = useReliableTouchTap<HTMLButtonElement>(() =>
-    submitWithFeedback()
+  const mobileActionClickGuard = useRetargetedTouchClickGuard<HTMLDivElement>();
+  const sendTap = useReliableTouchTap<HTMLButtonElement>(
+    () => submitWithFeedback(),
+    mobileActionClickGuard.arm,
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftList = useStoreSelector((snapshot) =>
@@ -2804,6 +2809,8 @@ export function ComposerWorkspace({
               )}
               <Box
                 data-mobile-action-row={touchInput ? "true" : undefined}
+                onPointerDownCapture={mobileActionClickGuard.onPointerDownCapture}
+                onClickCapture={mobileActionClickGuard.onClickCapture}
                 sx={{
                   order: touchInput ? 1 : undefined,
                   display: "flex",

@@ -1020,6 +1020,9 @@ fullscreen editor:
 - [ ] With the software keyboard visible, open Clear all, cancel it, reopen it,
       and confirm it: the keyboard stays visible throughout, text clears only on
       confirm, and the same editor retains its caret (pitfall #43).
+- [ ] With the software keyboard/action rail settling, tap Send once: exactly
+      one message is submitted and the delayed compatibility click never opens
+      Clear conversation (pitfall #100).
 - [ ] Long-press → the Paste/Select menu appears; Paste works (pitfall #3).
 - [ ] In fullscreen, long-press near text and in an empty canvas both use the
       same native iOS edit menu; no Cowboy-drawn Paste pill appears.
@@ -2298,3 +2301,18 @@ Desktop Vim + IME checks:
     editor's hold. These are transaction and lifecycle rules only—do not remount
     the native textarea/CM6 host or write focus, selection, or IME state to make
     persistence appear reliable.
+
+100. **A Mobile Send touch owns its compatibility click across action-row
+    reflow.** Send commits a stationary touch on `pointerup` so iOS cannot lose
+    the action while scroll momentum or the software keyboard settles. That
+    commit immediately clears the draft and can replace or move the Send button
+    before WebKit delivers its later synthetic `click`. Button-local suppression
+    then never runs when WebKit retargets that click to a sibling such as Clear,
+    which opens the destructive confirmation from one Send gesture. Arm a
+    one-shot guard on the stable action-row owner immediately before the
+    pointerup activation and consume the paired click in capture phase before a
+    sibling action sees it. A fresh primary pointerdown resets the claim so the
+    user's next deliberate action remains native; keyboard and assistive clicks
+    (`detail === 0`) pass through without consuming it. Do not use a timeout,
+    defer the submit, remove the pointerup fallback, or intercept touches on the
+    editor canvas.
