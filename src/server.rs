@@ -1594,14 +1594,6 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
                 .update_agent_session_id(session_id, agent_session_id.as_deref())
                 .await
         }
-        StoreWrite::UpdateProviderAuthGeneration {
-            session_id,
-            provider_auth_generation,
-        } => {
-            store
-                .update_provider_auth_generation(session_id, *provider_auth_generation)
-                .await
-        }
         StoreWrite::UpdateConfigOptions {
             session_id,
             options,
@@ -10135,7 +10127,7 @@ impl ProviderDistributionOutcome {
     }
 }
 
-fn provider_auth_rebind_generations(
+fn provider_auth_recovery_generations(
     session: &crate::core::SessionMeta,
     status: &crate::provider_service::ProviderAuthenticationStatus,
     synchronized_generations: &BTreeMap<String, u64>,
@@ -10151,7 +10143,7 @@ fn provider_auth_rebind_generations(
         .then_some((expected_generation, status.auth_generation))
 }
 
-fn rebindable_provider_auth_failure(
+fn recoverable_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
 ) -> Option<((Status, u64), String)> {
@@ -10168,10 +10160,10 @@ fn recover_failed_provider_sessions(
     statuses: &[crate::provider_service::ProviderAuthenticationStatus],
     replicas: &BTreeMap<String, ProviderDistributionOutcome>,
 ) -> Vec<String> {
-    let mut rebound = Vec::new();
+    let mut recovered = Vec::new();
     for session in state.hub.session_list() {
         let Some((status_revision, crash_detail)) =
-            rebindable_provider_auth_failure(&state.hub, &session.id)
+            recoverable_provider_auth_failure(&state.hub, &session.id)
         else {
             continue;
         };
@@ -10191,7 +10183,7 @@ fn recover_failed_provider_sessions(
         ) else {
             continue;
         };
-        let Some((expected_generation, next_generation)) = provider_auth_rebind_generations(
+        let Some((expected_generation, next_generation)) = provider_auth_recovery_generations(
             &session,
             status,
             &outcome.synchronized_generations,
@@ -10199,7 +10191,7 @@ fn recover_failed_provider_sessions(
         ) else {
             continue;
         };
-        match state.hub.rebind_provider_auth_generation(
+        match state.hub.begin_provider_auth_recovery(
             &session.id,
             status_revision,
             &crash_detail,
@@ -10214,22 +10206,25 @@ fn recover_failed_provider_sessions(
                         %error,
                         "reloading session after Provider reauthorization"
                     );
+                    state
+                        .hub
+                        .set_status(&session.id, Status::Crashed, Some(crash_detail.clone()));
                 }
-                rebound.push(session.id);
+                recovered.push(session.id);
             }
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 session = %session.id,
                 provider = %session.provider,
                 %error,
-                "rebinding refreshed Provider authentication"
+                "reserving refreshed Provider authentication recovery"
             ),
         }
     }
-    if !rebound.is_empty() {
-        tracing::info!(sessions = ?rebound, "recovered failed sessions with refreshed Provider authentication");
+    if !recovered.is_empty() {
+        tracing::info!(sessions = ?recovered, "recovered failed sessions with refreshed Provider authentication");
     }
-    rebound
+    recovered
 }
 
 async fn distribute_provider_auth(
@@ -12136,7 +12131,7 @@ fn resolve_machine_workspace<'a>(
 mod machine_provider_tests {
     use super::{
         ProviderAuthExecutor, apply_workspace_inventory, failed_provider_auth_projection_ids,
-        provider_auth_rebind_generations, rebindable_provider_auth_failure,
+        provider_auth_recovery_generations, recoverable_provider_auth_failure,
         resolve_machine_workspace, resolve_scheduling_auth_generation,
         web_session_is_missing_machine,
     };
@@ -12292,7 +12287,7 @@ mod machine_provider_tests {
     }
 
     #[test]
-    fn auth_refresh_rebind_requires_newer_ready_credentials_on_the_selected_machine() {
+    fn auth_refresh_recovery_requires_newer_ready_credentials_on_the_selected_machine() {
         let hub = Hub::new();
         hub.create_session(crate::core::SessionRegistration {
             id: "s".to_owned(),
@@ -12320,7 +12315,7 @@ mod machine_provider_tests {
         let synchronized = BTreeMap::from([("hawk".to_owned(), 8)]);
 
         hub.set_status("s", Status::Crashed, Some("unrelated failure".to_owned()));
-        assert!(rebindable_provider_auth_failure(&hub, "s").is_none());
+        assert!(recoverable_provider_auth_failure(&hub, "s").is_none());
         hub.set_status(
             "s",
             Status::Crashed,
@@ -12328,15 +12323,15 @@ mod machine_provider_tests {
                 "gemini", true,
             )),
         );
-        assert!(rebindable_provider_auth_failure(&hub, "s").is_some());
+        assert!(recoverable_provider_auth_failure(&hub, "s").is_some());
         hub.set_status("s", Status::Running, None);
         assert!(
-            rebindable_provider_auth_failure(&hub, "s").is_some(),
+            recoverable_provider_auth_failure(&hub, "s").is_some(),
             "an idle worker snapshot must not erase the unresolved auth failure"
         );
         hub.set_status("s", Status::Exited, None);
         assert!(
-            rebindable_provider_auth_failure(&hub, "s").is_none(),
+            recoverable_provider_auth_failure(&hub, "s").is_none(),
             "an explicitly exited session must remain stopped"
         );
         hub.set_status("s", Status::Running, None);
@@ -12347,12 +12342,12 @@ mod machine_provider_tests {
             },
         );
         assert!(
-            rebindable_provider_auth_failure(&hub, "s").is_none(),
+            recoverable_provider_auth_failure(&hub, "s").is_none(),
             "a clean turn completion resolves the prior auth failure"
         );
 
         assert_eq!(
-            provider_auth_rebind_generations(
+            provider_auth_recovery_generations(
                 &session,
                 &ready,
                 &synchronized,
@@ -12361,7 +12356,7 @@ mod machine_provider_tests {
             Some((7, 8))
         );
         assert_eq!(
-            provider_auth_rebind_generations(
+            provider_auth_recovery_generations(
                 &session,
                 &ready,
                 &BTreeMap::new(),
@@ -12371,7 +12366,7 @@ mod machine_provider_tests {
         );
         let stale_projection = BTreeMap::from([("hawk".to_owned(), 7)]);
         assert_eq!(
-            provider_auth_rebind_generations(
+            provider_auth_recovery_generations(
                 &session,
                 &ready,
                 &stale_projection,
@@ -12380,7 +12375,7 @@ mod machine_provider_tests {
             None
         );
         assert_eq!(
-            provider_auth_rebind_generations(&session, &ready, &synchronized, "sha256:different",),
+            provider_auth_recovery_generations(&session, &ready, &synchronized, "sha256:different",),
             None
         );
         let expired = service_auth(
@@ -12388,7 +12383,7 @@ mod machine_provider_tests {
             crate::provider_service::ServiceAuthenticationState::Expired,
         );
         assert_eq!(
-            provider_auth_rebind_generations(
+            provider_auth_recovery_generations(
                 &session,
                 &expired,
                 &synchronized,

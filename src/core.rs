@@ -1258,10 +1258,6 @@ pub enum StoreWrite {
         session_id: String,
         agent_session_id: Option<String>,
     },
-    UpdateProviderAuthGeneration {
-        session_id: String,
-        provider_auth_generation: u64,
-    },
     /// Persist the latest agent-advertised config option snapshot so a fresh
     /// device can render session controls before the worker is warm.
     UpdateConfigOptions {
@@ -3139,14 +3135,13 @@ impl Hub {
             .flatten()
     }
 
-    /// Move an idle session with an unresolved failure onto a newer compatible
-    /// Service-auth generation. The caller proves an explicit CAS replacement
-    /// of the same Service credential slot, that the selected Machine has the
-    /// new generation, and that the failure is authentication-related.
-    /// Preserving the native session id is intentional: an explicit
-    /// reauthorization must recover the existing conversation instead of
-    /// orphaning it.
-    pub fn rebind_provider_auth_generation(
+    /// Reserve an idle session with an unresolved authentication failure for
+    /// recovery after a newer compatible Service-auth generation reaches its
+    /// Machine. The session deliberately retains its original auth generation:
+    /// that generation owns the Provider runtime home containing the native
+    /// session database and rollout. Machine credential reconciliation updates
+    /// only the declared credential files in that home.
+    pub fn begin_provider_auth_recovery(
         &self,
         session_id: &str,
         expected_status_revision: (Status, u64),
@@ -3157,7 +3152,7 @@ impl Hub {
         if next_generation <= expected_generation {
             return Err("Provider auth generation must advance".to_owned());
         }
-        let rebound = {
+        let reserved = {
             let mut sessions = self.inner.sessions.lock();
             let session = sessions
                 .get_mut(session_id)
@@ -3170,19 +3165,27 @@ impl Hub {
             {
                 false
             } else {
-                session.meta.provider_auth_generation = Some(next_generation);
+                session.meta.status = Status::Starting;
+                session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
                 true
             }
         };
-        if !rebound {
+        if !reserved {
             return Ok(false);
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateProviderAuthGeneration {
+            let _ = tx.send(StoreWrite::UpdateStatus {
                 session_id: session_id.to_owned(),
-                provider_auth_generation: next_generation,
+                status: Status::Starting,
             });
         }
+        self.push(
+            session_id,
+            Event::Lifecycle {
+                status: Status::Starting,
+                detail: Some("reloading synchronized Provider credentials".to_owned()),
+            },
+        );
         self.broadcast_sessions();
         Ok(true)
     }
@@ -6722,7 +6725,7 @@ mod core_tests {
     }
 
     #[test]
-    fn idle_failed_sessions_rebind_without_losing_the_native_thread() {
+    fn idle_failed_sessions_recover_without_switching_runtime_generation() {
         let hub = Hub::new();
         hub.create_session(SessionRegistration {
             id: "auth-refresh".to_owned(),
@@ -6754,7 +6757,7 @@ mod core_tests {
             Some("new crash edge".to_owned()),
         );
         assert!(
-            !hub.rebind_provider_auth_generation(
+            !hub.begin_provider_auth_recovery(
                 "auth-refresh",
                 crashed_revision,
                 "login required",
@@ -6766,32 +6769,39 @@ mod core_tests {
         let crashed_revision = hub.status_revision("auth-refresh").unwrap();
 
         assert!(
-            hub.rebind_provider_auth_generation(
+            hub.begin_provider_auth_recovery(
                 "auth-refresh",
                 crashed_revision,
                 "new crash edge",
                 2,
                 3,
             )
-            .expect("safe rebind")
+            .expect("safe recovery")
         );
         assert_eq!(
             hub.session_info("auth-refresh")
                 .unwrap()
                 .meta
                 .provider_auth_generation,
-            Some(3)
+            Some(2),
+            "the original runtime generation owns the native rollout"
         );
+        assert_eq!(hub.status("auth-refresh"), Some(Status::Starting));
 
         hub.set_agent_session_id("auth-refresh", "native-thread".to_owned());
+        hub.set_status(
+            "auth-refresh",
+            Status::Crashed,
+            Some("second login failure".to_owned()),
+        );
         hub.set_status("auth-refresh", Status::Running, None);
         let idle_revision = hub.status_revision("auth-refresh").unwrap();
         assert!(
-            hub.rebind_provider_auth_generation(
+            hub.begin_provider_auth_recovery(
                 "auth-refresh",
                 idle_revision,
-                "new crash edge",
-                3,
+                "second login failure",
+                2,
                 4,
             )
             .expect("idle native thread follows explicit reauthorization")
@@ -6801,7 +6811,7 @@ mod core_tests {
                 .unwrap()
                 .meta
                 .provider_auth_generation,
-            Some(4)
+            Some(2)
         );
         assert_eq!(
             hub.session_info("auth-refresh")
@@ -6815,14 +6825,19 @@ mod core_tests {
         hub.set_status("auth-refresh", Status::Exited, None);
         let exited_revision = hub.status_revision("auth-refresh").unwrap();
         assert!(
-            !hub.rebind_provider_auth_generation(
+            !hub.begin_provider_auth_recovery(
                 "auth-refresh",
                 exited_revision,
-                "new crash edge",
-                4,
+                "second login failure",
+                2,
                 5,
             )
             .expect("an explicitly exited session remains stopped")
+        );
+        hub.set_status(
+            "auth-refresh",
+            Status::Crashed,
+            Some("third login failure".to_owned()),
         );
         hub.set_status("auth-refresh", Status::Running, None);
 
@@ -6834,11 +6849,11 @@ mod core_tests {
         );
         let completed_revision = hub.status_revision("auth-refresh").unwrap();
         assert!(
-            !hub.rebind_provider_auth_generation(
+            !hub.begin_provider_auth_recovery(
                 "auth-refresh",
                 completed_revision,
-                "new crash edge",
-                4,
+                "third login failure",
+                2,
                 5,
             )
             .expect("a completed turn clears the unresolved failure")
