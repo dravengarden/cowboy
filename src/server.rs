@@ -1369,14 +1369,14 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
         let Event::Lifecycle { status, detail } = &envelope.event else {
             continue;
         };
-        if *status == Status::Running {
+        if let Some(recovery_outcome) = lifecycle_incident_recovery_outcome(*status) {
             let recovered = store
-                .recover_runtime_incident(&envelope.session_id, now_ms(), "session_running")
+                .recover_runtime_incident(&envelope.session_id, now_ms(), recovery_outcome)
                 .await?;
             if recovered > 0 {
                 tracing::info!(
                     session_id = %envelope.session_id,
-                    recovery_outcome = "session_running",
+                    recovery_outcome,
                     "runtime incident recovered"
                 );
             }
@@ -1441,6 +1441,17 @@ async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> anyhow:
         );
     }
     Ok(())
+}
+
+const fn lifecycle_incident_recovery_outcome(status: Status) -> Option<&'static str> {
+    match status {
+        // An authoritative worker snapshot projects an in-flight turn as Busy.
+        // It proves that the session is live just as strongly as the idle
+        // Running projection, so a prior crash/interruption is no longer active.
+        Status::Busy => Some("session_busy"),
+        Status::Running => Some("session_running"),
+        _ => None,
+    }
 }
 
 fn classify_crash_detail(detail: Option<&str>) -> &'static str {
@@ -1540,8 +1551,11 @@ fn classify_interruption_detail(detail: Option<&str>) -> &'static str {
 mod incident_classification_tests {
     use super::{
         bounded_incident_summary, classify_crash_detail, classify_interruption_detail,
-        classify_session_error, session_error_severity,
+        classify_session_error, lifecycle_incident_recovery_outcome, record_lifecycle_incidents,
+        session_error_severity,
     };
+    use crate::core::{Envelope, Event, Status};
+    use crate::store::{RuntimeIncidentWrite, Store};
 
     #[test]
     fn crash_details_map_to_stable_incident_classes() {
@@ -1629,6 +1643,78 @@ mod incident_classification_tests {
         assert!(truncated);
         assert!(summary.len() <= 4 * 1024);
         assert_eq!(summary, "你".repeat(summary.chars().count()));
+    }
+
+    #[test]
+    fn busy_and_running_lifecycle_states_recover_incidents() {
+        assert_eq!(
+            lifecycle_incident_recovery_outcome(Status::Busy),
+            Some("session_busy")
+        );
+        assert_eq!(
+            lifecycle_incident_recovery_outcome(Status::Running),
+            Some("session_running")
+        );
+        assert_eq!(lifecycle_incident_recovery_outcome(Status::Crashed), None);
+    }
+
+    #[tokio::test]
+    async fn authoritative_busy_snapshot_closes_a_prior_active_incident() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-incident-recovery-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let url = format!("sqlite://{}", root.join("cowboy.sqlite3").display());
+        let store = Store::connect(&url, root.join("artifacts")).await.unwrap();
+        store.migrate().await.unwrap();
+        store
+            .upsert_runtime_incident(&RuntimeIncidentWrite {
+                id: "incident-busy-recovery".to_owned(),
+                occurred_at_ms: 1_900_000_000_000,
+                source: "controller".to_owned(),
+                classification: "runtime_interruption".to_owned(),
+                severity: "warning".to_owned(),
+                state: "active".to_owned(),
+                summary: "turn appeared interrupted".to_owned(),
+                fingerprint: "busy-recovery".to_owned(),
+                session_id: Some("session-busy-recovery".to_owned()),
+                client_id: None,
+                machine_id: None,
+                trace_id: None,
+                build: Some("test".to_owned()),
+                evidence_start_ms: 1_899_999_999_000,
+                evidence_end_ms: 1_900_000_001_000,
+                detail: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        record_lifecycle_incidents(
+            &store,
+            &[Envelope {
+                session_id: "session-busy-recovery".to_owned(),
+                seq: 2,
+                event: Event::Lifecycle {
+                    status: Status::Busy,
+                    detail: None,
+                },
+                cmid: None,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let incident = store
+            .runtime_incidents(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|incident| incident.id == "incident-busy-recovery")
+            .unwrap();
+        assert_eq!(incident.state, "recovered");
+        assert_eq!(incident.recovery_outcome.as_deref(), Some("session_busy"));
     }
 }
 
