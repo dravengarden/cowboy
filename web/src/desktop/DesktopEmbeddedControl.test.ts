@@ -75,12 +75,14 @@ Deno.test("idle Desktop controls use a neutral boundary", () => {
 Deno.test("focused Topbar paints only the real keyboard cursor", () => {
   assertEquals(
     appSource.includes(
-      '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\']"',
+      '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\']":',
     ),
     false,
   );
   assertEquals(
-    appSource.includes('"& [data-desktop-item]:focus-visible"'),
+    appSource.includes(
+      '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\'] [data-desktop-item]:focus"',
+    ),
     true,
   );
 });

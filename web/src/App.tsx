@@ -2557,7 +2557,17 @@ export function App({
                     // The Topbar status line already identifies the active
                     // keyboard region. Paint only its real cursor: styling the
                     // Toolbar would make every color="inherit" control look
-                    // selected at once.
+                    // selected at once. Programmatic focus() does not reliably
+                    // produce :focus-visible in macOS WKWebView, so combine
+                    // region ownership with real DOM :focus just as Sessions
+                    // does below.
+                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true'] [data-desktop-item]:focus": {
+                        outline: "none",
+                        borderColor: "primary.main",
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
+                        boxShadow: (t) =>
+                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.16)}`,
+                    },
                     "& [data-desktop-item]:focus-visible": {
                         outline: "none",
                         bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
