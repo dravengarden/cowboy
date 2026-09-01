@@ -3527,7 +3527,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/providers/catalog/refresh" {
         return RouteAuth::AdminOperator;
     }
-    if path.starts_with("/api/providers/") && path.contains("/auth") {
+    if provider_auth_path(path) {
         return RouteAuth::ProductOperator;
     }
     if matches!(
@@ -3580,6 +3580,26 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::AdminOperator;
     }
     RouteAuth::Public
+}
+
+fn provider_auth_path(path: &str) -> bool {
+    ["/api/plugins/", "/api/providers/"].iter().any(|prefix| {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            return false;
+        };
+        let mut segments = rest.split('/');
+        if !segments.next().is_some_and(|segment| !segment.is_empty()) {
+            return false;
+        }
+        if segments.next() != Some("auth") {
+            return false;
+        }
+        match (segments.next(), segments.next()) {
+            (None, None) => true,
+            (Some(segment), None) => !segment.is_empty(),
+            _ => false,
+        }
+    })
 }
 
 fn session_id_from_path(path: &str) -> Option<&str> {
@@ -7224,6 +7244,20 @@ async fn serve_axum(
         )
         .route(
             "/api/providers/{id}/auth/{request_id}",
+            get(api_provider_auth_events)
+                .post(api_provider_auth_submit)
+                .delete(api_provider_auth_cancel),
+        )
+        .route(
+            "/api/plugins/{id}/auth",
+            post(api_provider_auth_commit).delete(api_provider_auth_logout),
+        )
+        .route(
+            "/api/plugins/{id}/auth/start",
+            post(api_provider_auth_start),
+        )
+        .route(
+            "/api/plugins/{id}/auth/{request_id}",
             get(api_provider_auth_events)
                 .post(api_provider_auth_submit)
                 .delete(api_provider_auth_cancel),
@@ -17039,6 +17073,24 @@ mod product_auth_api_tests {
         assert_eq!(
             classify_route(&Method::POST, "/api/sessions"),
             RouteAuth::ProductOperator
+        );
+        for path in [
+            "/api/plugins/codex/auth",
+            "/api/plugins/codex/auth/start",
+            "/api/plugins/codex/auth/request-1",
+            "/api/providers/codex/auth",
+            "/api/providers/codex/auth/start",
+            "/api/providers/codex/auth/request-1",
+        ] {
+            assert_eq!(
+                classify_route(&Method::POST, path),
+                RouteAuth::ProductOperator,
+                "Provider authentication route {path} must accept a product operator",
+            );
+        }
+        assert_eq!(
+            classify_route(&Method::POST, "/api/plugins/catalog/refresh"),
+            RouteAuth::AdminOperator,
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/sessions/abc/info"),

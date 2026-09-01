@@ -1297,7 +1297,16 @@ function ProviderManagement(
         onClose={() => void cancelAuthentication()}
         wide
         title={
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1, minWidth: 0 }}>
+          <Box
+            data-provider-auth-dialog-title
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              minWidth: 0,
+              color: "text.primary",
+            }}
+          >
             {flow?.requestId
               ? (
                 <IconButton
@@ -1310,7 +1319,14 @@ function ProviderManagement(
                 </IconButton>
               )
               : null}
-            {flow ? <ProviderMark manifest={flow.provider.manifest} /> : null}
+            {flow
+              ? (
+                <ProviderMark
+                  manifest={flow.provider.manifest}
+                  monochromeColor="inherit"
+                />
+              )
+              : null}
             <Box component="span" sx={{ minWidth: 0 }}>
               {flow
                 ? flow.sharedProviderNames.length > 1

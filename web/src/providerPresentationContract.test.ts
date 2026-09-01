@@ -304,6 +304,21 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
   );
 });
 
+Deno.test("Provider authentication dialog keeps monochrome marks in the title color", () => {
+  const titleStart = managementSource.indexOf(
+    "data-provider-auth-dialog-title",
+  );
+  const titleEnd = managementSource.indexOf(
+    "actions={",
+    titleStart,
+  );
+  const titleSource = managementSource.slice(titleStart, titleEnd);
+  assertEquals(titleStart >= 0, true);
+  assertEquals(titleEnd > titleStart, true);
+  assertEquals(titleSource.includes('color: "text.primary"'), true);
+  assertEquals(titleSource.includes('monochromeColor="inherit"'), true);
+});
+
 Deno.test("Provider actions stay visually distinct from read-only chips", () => {
   assertEquals(
     managementSource.includes("data-provider-management-root"),
