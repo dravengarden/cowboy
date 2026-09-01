@@ -11502,6 +11502,32 @@ const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
 const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RUNTIME_OUTBOUND_CAPACITY: usize = 16;
+const MACHINE_WEBSOCKET_OUTBOUND_CAPACITY: usize = 64;
+
+async fn write_machine_messages<S>(
+    mut sink: S,
+    mut messages: mpsc::Receiver<Message>,
+) -> anyhow::Result<()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    while let Some(message) = messages.recv().await {
+        tokio::time::timeout(WEBSOCKET_FRAME_SEND_TIMEOUT, sink.send(message))
+            .await
+            .map_err(|_| anyhow::anyhow!("Machine WebSocket frame send timed out"))?
+            .map_err(|_| anyhow::anyhow!("Machine WebSocket send failed"))?;
+    }
+    Ok(())
+}
+
+fn queue_machine_message(tx: &mpsc::Sender<Message>, message: Message) -> Result<(), ()> {
+    tx.try_send(message).map_err(|_| ())
+}
+
+fn queue_machine_json<T: Serialize>(tx: &mpsc::Sender<Message>, message: &T) -> Result<(), ()> {
+    let text = serde_json::to_string(message).map_err(|_| ())?;
+    queue_machine_message(tx, Message::Text(text.into()))
+}
 
 async fn forward_machine_runtime_frames<R>(
     mut reader: crate::runtime_wire::FrameReader<R>,
@@ -11799,6 +11825,12 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         return;
     }
     tracing::info!(machine = %hello.machine_id, "Machine connected");
+    // Keep WebSocket writes out of the Machine read loop. A runtime replay or
+    // command response may fill the socket while the Machine is still sending
+    // heartbeats; the read side must continue to make progress independently.
+    let (socket_sink, mut socket_stream) = socket.split();
+    let (machine_write_tx, machine_write_rx) = mpsc::channel(MACHINE_WEBSOCKET_OUTBOUND_CAPACITY);
+    let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     state.machine_control.install(
         hello.machine_id.clone(),
@@ -11929,7 +11961,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     revocation_check.tick().await;
     loop {
         let message = tokio::select! {
-            message = socket.recv() => Some(message),
+            message = socket_stream.next() => Some(message),
             runtime = &mut runtime_rx, if runtime_registration_pending => {
                 runtime_registration_pending = false;
                 if let Ok(runtime) = runtime {
@@ -11939,10 +11971,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             }
             frame = runtime_frame_rx.recv() => {
                 let Some(frame) = frame else { break };
-                if send_json(
-                    &mut socket,
+                if queue_machine_json(
+                    &machine_write_tx,
                     &crate::machine_protocol::MachineFrame::Runtime { frame },
-                ).await.is_err() {
+                ).is_err() {
                     break;
                 }
                 continue;
@@ -11971,12 +12003,26 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 }
                 break;
             }
+            written = &mut socket_writer => {
+                match written {
+                    Ok(Ok(())) => {
+                        tracing::warn!(machine = %hello.machine_id, "Machine WebSocket writer stopped");
+                    }
+                    Ok(Err(error)) => {
+                        tracing::warn!(%error, machine = %hello.machine_id, "Machine WebSocket writer failed");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, machine = %hello.machine_id, "Machine WebSocket writer task failed");
+                    }
+                }
+                break;
+            }
             command = machine_command_rx.recv() => {
                 let Some(command) = command else { break };
-                if send_json(
-                    &mut socket,
+                if queue_machine_json(
+                    &machine_write_tx,
                     &crate::machine_protocol::MachineFrame::Command { command },
-                ).await.is_err() {
+                ).is_err() {
                     break;
                 }
                 continue;
@@ -11986,7 +12032,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     Ok(true) => continue,
                     Ok(false) => {
                         tracing::info!(machine = %hello.machine_id, "Machine connection fenced");
-                        let _ = socket.send(Message::Close(None)).await;
+                        let _ = queue_machine_message(&machine_write_tx, Message::Close(None));
                         break;
                     }
                     Err(error) => {
@@ -12002,8 +12048,20 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let Some(message) = message else {
             break;
         };
-        let Ok(Message::Text(text)) = message else {
+        let Ok(message) = message else {
             break;
+        };
+        let Message::Text(text) = message else {
+            match message {
+                Message::Ping(value) => {
+                    if queue_machine_message(&machine_write_tx, Message::Pong(value)).is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+            continue;
         };
         let Ok(frame) = serde_json::from_str::<crate::machine_protocol::MachineFrame>(&text) else {
             break;
@@ -12141,7 +12199,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                         sequence: acknowledged,
                                     },
                             };
-                            match send_json(&mut socket, &ack).await {
+                            match queue_machine_json(&machine_write_tx, &ack) {
                                 Ok(()) => {
                                     store
                                         .machine_seen(&hello.machine_id, &challenge_id, None)
@@ -12309,6 +12367,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             break;
         }
     }
+    socket_writer.abort();
     runtime_forwarder.abort();
     runtime_writer.abort();
     if let Some(runtime) = connected_runtime.as_ref() {

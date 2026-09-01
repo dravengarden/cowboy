@@ -29,6 +29,7 @@ use crate::runtime_wire::{
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
+const CORE_COMMAND_QUEUE_CAPACITY: usize = 64;
 const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
 const DIRECT_WORKER_TERM_TIMEOUT: Duration = Duration::from_secs(2);
@@ -2485,37 +2486,60 @@ async fn handle_core(
     lease: u64,
     reader: &mut tokio::net::unix::OwnedReadHalf,
 ) -> Result<()> {
-    while let Some(frame) = read_frame(reader).await? {
-        if broker.controller_for(lease).is_none() {
-            tracing::warn!(lease, "ignoring command from fenced controller");
-            continue;
+    // Core commands such as an explicit reset can wait for a previous worker
+    // launch to stop. Keep that lifecycle work serialized, but move it off the
+    // frame reader so a long command cannot starve controller heartbeats.
+    let (command_tx, mut command_rx) = mpsc::channel(CORE_COMMAND_QUEUE_CAPACITY);
+    let command_broker = Arc::clone(&broker);
+    let command_task = tokio::spawn(async move {
+        while let Some(command) = command_rx.recv().await {
+            handle_core_command(&command_broker, command).await;
         }
-        match frame {
-            Frame::CoreCommand { command } => handle_core_command(&broker, command).await,
-            Frame::Ack {
-                session_id,
-                worker_epoch,
-                runtime_seq,
-            } => {
-                if let Some(worker) = broker.workers.lock().get(&session_id)
-                    && worker.epoch == worker_epoch
-                {
-                    let _ = worker.tx.send(Frame::Ack {
-                        session_id,
-                        worker_epoch,
-                        runtime_seq,
-                    });
+    });
+
+    let result =
+        async {
+            while let Some(frame) = read_frame(reader).await? {
+                if broker.controller_for(lease).is_none() {
+                    tracing::warn!(lease, "ignoring command from fenced controller");
+                    continue;
                 }
-            }
-            Frame::Heartbeat => {
-                if let Some(tx) = broker.controller_for(lease) {
-                    let _ = tx.send(Frame::Heartbeat);
+                match frame {
+                Frame::CoreCommand { command } => command_tx.try_send(command).map_err(|error| {
+                    anyhow::anyhow!(
+                        "Machine core command queue saturated; reconnecting controller: {error}"
+                    )
+                })?,
+                Frame::Ack {
+                    session_id,
+                    worker_epoch,
+                    runtime_seq,
+                } => {
+                    if let Some(worker) = broker.workers.lock().get(&session_id)
+                        && worker.epoch == worker_epoch
+                    {
+                        let _ = worker.tx.send(Frame::Ack {
+                            session_id,
+                            worker_epoch,
+                            runtime_seq,
+                        });
+                    }
                 }
+                Frame::Heartbeat => {
+                    if let Some(tx) = broker.controller_for(lease) {
+                        let _ = tx.send(Frame::Heartbeat);
+                    }
+                }
+                other => tracing::debug!(?other, "ignoring non-core runtime frame"),
             }
-            other => tracing::debug!(?other, "ignoring non-core runtime frame"),
+            }
+            Ok(())
         }
-    }
-    Ok(())
+        .await;
+
+    command_task.abort();
+    let _ = command_task.await;
+    result
 }
 
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
@@ -2936,6 +2960,82 @@ mod tests {
             .expect("read welcome")
             .expect("welcome frame");
         (reader, writer, welcome)
+    }
+
+    #[tokio::test]
+    async fn core_heartbeat_is_not_blocked_by_a_long_reset_command() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        broker.sessions.lock().insert(
+            "sess-heartbeat-reset".to_owned(),
+            StartSession {
+                session_id: "sess-heartbeat-reset".to_owned(),
+                provider: "codex".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/tmp".to_owned(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        broker
+            .launching
+            .lock()
+            .insert("sess-heartbeat-reset".to_owned());
+
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        let lease = broker.install_controller(controller_tx);
+        let (mut controller, broker_stream) = UnixStream::pair().expect("core socket pair");
+        let (mut broker_reader, _broker_writer) = broker_stream.into_split();
+        let core_task = tokio::spawn(async move {
+            handle_core(Arc::clone(&broker), lease, &mut broker_reader).await
+        });
+
+        write_frame(
+            &mut controller,
+            &Frame::CoreCommand {
+                command: CoreCommand::StopSession {
+                    session_id: "sess-heartbeat-reset".to_owned(),
+                    command_id: "reset-heartbeat".to_owned(),
+                },
+            },
+        )
+        .await
+        .expect("send long reset command");
+        write_frame(&mut controller, &Frame::Heartbeat)
+            .await
+            .expect("send heartbeat");
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(100), controller_rx.recv())
+                .await
+                .expect("heartbeat response timeout")
+                .expect("controller response"),
+            Frame::Heartbeat
+        ));
+
+        drop(controller);
+        tokio::time::timeout(Duration::from_secs(1), core_task)
+            .await
+            .expect("core reader shutdown timeout")
+            .expect("core reader task")
+            .expect("core reader result");
     }
 
     #[test]

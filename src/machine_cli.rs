@@ -110,11 +110,12 @@ impl WorkspaceConfig {
 }
 
 // The Machine and controller multiplex runtime traffic, adapter responses, and
-// heartbeats over one full-duplex WebSocket. A large frame in each direction
-// can otherwise leave both peers awaiting socket write capacity while neither
-// returns to its read branch. Treat a stalled write as a dead connection so
-// controller_loop reconnects and reattaches the surviving workers.
+// heartbeats over one full-duplex WebSocket. Keep all writes in dedicated
+// tasks: a blocked local runtime socket or WebSocket sink must not stop the
+// read/heartbeat loop from detecting the dead connection and reconnecting.
 const MACHINE_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+const MACHINE_CONTROLLER_OUTBOUND_CAPACITY: usize = 64;
+const MACHINE_RUNTIME_WRITE_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSpawnMode {
@@ -906,7 +907,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                 config.runtime_socket.display()
             )
         })?;
-    let (runtime_reader, mut runtime_writer) = runtime.into_split();
+    let (runtime_reader, runtime_writer) = runtime.into_split();
     let mut runtime_reader = crate::runtime_wire::FrameReader::new(runtime_reader);
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
@@ -914,79 +915,116 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let _provider_auth_watcher = (protocol >= 6)
         .then(|| start_provider_auth_watcher(Arc::clone(&config.providers), event_tx.clone()))
         .transpose()?;
-    let (runtime_command_tx, mut runtime_command_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (runtime_write_tx, runtime_write_rx) =
+        tokio::sync::mpsc::channel(MACHINE_RUNTIME_WRITE_CAPACITY);
     let login_sessions: LoginSessions = Arc::default();
+    let (socket_sink, mut socket_stream) = socket.split();
+    let (controller_write_tx, controller_write_rx) =
+        tokio::sync::mpsc::channel(MACHINE_CONTROLLER_OUTBOUND_CAPACITY);
+    let mut controller_writer =
+        tokio::spawn(write_controller_messages(socket_sink, controller_write_rx));
+    let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
     heartbeat.tick().await;
-    loop {
-        tokio::select! {
-            _ = heartbeat.tick() => {
-                send_frame(&mut socket, &MachineFrame::Heartbeat { sent_at_ms: unix_ms() }).await?;
-                if protocol >= 2
-                    && let Some(event) = config.provider_usage.pending_batch()?
-                {
-                    send_frame(&mut socket, &MachineFrame::Event { event }).await?;
-                }
-            }
-            event = event_rx.recv() => {
-                let Some(event) = event else { continue };
-                send_frame(&mut socket, &MachineFrame::Event { event }).await?;
-            }
-            message = socket.next() => {
-                match message {
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
-                    Some(Ok(Message::Ping(value))) => socket.send(Message::Pong(value)).await?,
-                    Some(Ok(Message::Text(text))) => {
-                        let frame: MachineFrame = serde_json::from_str(&text)
-                            .context("parsing Machine controller frame")?;
-                        match frame {
-                            MachineFrame::Runtime { frame } => {
-                                let workspace_snapshot = config.workspaces.snapshot();
-                                if let Some(rejection) = reject_untrusted_workspace(
-                                    &frame,
-                                    &workspace_snapshot.workspaces,
-                                    &config.worktree_root,
-                                ) {
-                                    send_frame(&mut socket, &MachineFrame::Runtime { frame: rejection }).await?;
-                                    continue;
-                                }
-                                crate::runtime_wire::write_frame(&mut runtime_writer, &frame).await?;
-                            }
-                            MachineFrame::Command { command } => {
-                                if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
-                                    config.provider_usage.acknowledge(producer_id, *sequence)?;
-                                    continue;
-                                }
-                                handle_machine_command(command, MachineCommandContext {
-                                    events: event_tx.clone(),
-                                    components: Arc::clone(&config.components),
-                                    providers: Arc::clone(&config.providers),
-                                    zed_adapter_socket: config.zed_adapter_socket.clone(),
-                                    code_adapter_socket: config.code_adapter_socket.clone(),
-                                    worktree_root: config.worktree_root.clone(),
-                                    workspaces: Arc::clone(&config.workspaces),
-                                    login_sessions: Arc::clone(&login_sessions),
-                                    runtime_commands: runtime_command_tx.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
+    let result: anyhow::Result<()> = async {
+        loop {
+            tokio::select! {
+                _ = heartbeat.tick() => {
+                    queue_controller_frame(
+                        &controller_write_tx,
+                        &MachineFrame::Heartbeat { sent_at_ms: unix_ms() },
+                    )?;
+                    if protocol >= 2
+                        && let Some(event) = config.provider_usage.pending_batch()?
+                    {
+                        queue_controller_frame(
+                            &controller_write_tx,
+                            &MachineFrame::Event { event },
+                        )?;
                     }
-                    Some(Ok(_)) => {}
                 }
-            }
-            frame = runtime_reader.next() => {
-                let Some(frame) = frame? else {
-                    bail!("Machine broker runtime tunnel closed");
-                };
-                send_frame(&mut socket, &MachineFrame::Runtime { frame }).await?;
-            }
-            command = runtime_command_rx.recv() => {
-                if let Some(command) = command {
-                    crate::runtime_wire::write_frame(&mut runtime_writer, &command).await?;
+                event = event_rx.recv() => {
+                    let Some(event) = event else { continue };
+                    queue_controller_frame(&controller_write_tx, &MachineFrame::Event { event })?;
+                }
+                message = socket_stream.next() => {
+                    match message {
+                        Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Ok(()),
+                        Some(Ok(Message::Ping(value))) => {
+                            queue_controller_message(&controller_write_tx, Message::Pong(value))?;
+                        }
+                        Some(Ok(Message::Text(text))) => {
+                            let frame: MachineFrame = serde_json::from_str(&text)
+                                .context("parsing Machine controller frame")?;
+                            match frame {
+                                MachineFrame::Runtime { frame } => {
+                                    let workspace_snapshot = config.workspaces.snapshot();
+                                    if let Some(rejection) = reject_untrusted_workspace(
+                                        &frame,
+                                        &workspace_snapshot.workspaces,
+                                        &config.worktree_root,
+                                    ) {
+                                        queue_controller_frame(
+                                            &controller_write_tx,
+                                            &MachineFrame::Runtime { frame: rejection },
+                                        )?;
+                                        continue;
+                                    }
+                                    runtime_write_tx
+                                        .try_send(frame)
+                                        .map_err(|_| anyhow::anyhow!("Machine runtime writer closed"))?;
+                                }
+                                MachineFrame::Command { command } => {
+                                    if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
+                                        config.provider_usage.acknowledge(producer_id, *sequence)?;
+                                        continue;
+                                    }
+                                    handle_machine_command(command, MachineCommandContext {
+                                        events: event_tx.clone(),
+                                        components: Arc::clone(&config.components),
+                                        providers: Arc::clone(&config.providers),
+                                        zed_adapter_socket: config.zed_adapter_socket.clone(),
+                                        code_adapter_socket: config.code_adapter_socket.clone(),
+                                        worktree_root: config.worktree_root.clone(),
+                                        workspaces: Arc::clone(&config.workspaces),
+                                        login_sessions: Arc::clone(&login_sessions),
+                                        runtime_commands: runtime_write_tx.clone(),
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                    }
+                }
+                frame = runtime_reader.next() => {
+                    let Some(frame) = frame? else {
+                        bail!("Machine broker runtime tunnel closed");
+                    };
+                    queue_controller_frame(
+                        &controller_write_tx,
+                        &MachineFrame::Runtime { frame },
+                    )?;
+                }
+                written = &mut controller_writer => {
+                    match written {
+                        Ok(Ok(())) => bail!("Machine controller writer stopped"),
+                        Ok(Err(error)) => return Err(error).context("Machine controller writer stopped"),
+                        Err(error) => return Err(error).context("Machine controller writer task failed"),
+                    }
+                }
+                written = &mut runtime_writer => {
+                    match written {
+                        Ok(Ok(())) => bail!("Machine runtime writer stopped"),
+                        Ok(Err(error)) => return Err(error).context("Machine runtime writer stopped"),
+                        Err(error) => return Err(error).context("Machine runtime writer task failed"),
+                    }
                 }
             }
         }
-    }
+    }.await;
+    controller_writer.abort();
+    runtime_writer.abort();
+    result
 }
 
 fn start_provider_auth_watcher(
@@ -1827,7 +1865,7 @@ struct MachineCommandContext {
     worktree_root: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
     login_sessions: LoginSessions,
-    runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
+    runtime_commands: tokio::sync::mpsc::Sender<crate::runtime_wire::Frame>,
 }
 
 fn provider_auth_roll_target(
@@ -1957,12 +1995,13 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         // platform-specific filesystem event shape.
                         publish_provider_auth_observations(&providers, &events);
                         if let Some(provider) = roll_provider {
-                            let _ =
-                                runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+                            let _ = runtime_commands.try_send(
+                                crate::runtime_wire::Frame::CoreCommand {
                                     command: crate::runtime_wire::CoreCommand::RollProvider {
                                         provider,
                                     },
-                                });
+                                },
+                            );
                         }
                         let _ = events.send(MachineEvent::CommandResult {
                             request_id,
@@ -2124,7 +2163,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                     );
                 }
                 if accepted && let Some(provider) = provider_for_component(&component) {
-                    let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+                    let _ = runtime_commands.try_send(crate::runtime_wire::Frame::CoreCommand {
                         command: crate::runtime_wire::CoreCommand::RollProvider {
                             provider: provider.to_owned(),
                         },
@@ -2977,6 +3016,70 @@ fn unix_ms() -> i64 {
         .map_or(0, |value| value.as_millis().try_into().unwrap_or(i64::MAX))
 }
 
+fn queue_controller_message(
+    tx: &tokio::sync::mpsc::Sender<Message>,
+    message: Message,
+) -> anyhow::Result<()> {
+    tx.try_send(message).map_err(|error| match error {
+        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+            anyhow::anyhow!("Machine controller writer queue saturated")
+        }
+        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+            anyhow::anyhow!("Machine controller writer queue closed")
+        }
+    })
+}
+
+fn queue_controller_frame(
+    tx: &tokio::sync::mpsc::Sender<Message>,
+    frame: &MachineFrame,
+) -> anyhow::Result<()> {
+    let text = serde_json::to_string(frame).context("serializing Machine frame")?;
+    queue_controller_message(tx, Message::Text(text.into()))
+}
+
+async fn write_controller_messages<S>(
+    mut socket: S,
+    mut messages: tokio::sync::mpsc::Receiver<Message>,
+) -> anyhow::Result<()>
+where
+    S: futures::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    while let Some(message) = messages.recv().await {
+        tokio::time::timeout(MACHINE_FRAME_SEND_TIMEOUT, socket.send(message))
+            .await
+            .context("Machine controller frame send timed out")??;
+    }
+    Ok(())
+}
+
+async fn write_runtime_frames<W>(
+    mut writer: W,
+    mut frames: tokio::sync::mpsc::Receiver<crate::runtime_wire::Frame>,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    write_runtime_frames_with_timeout(&mut writer, &mut frames, MACHINE_FRAME_SEND_TIMEOUT).await
+}
+
+async fn write_runtime_frames_with_timeout<W>(
+    writer: &mut W,
+    frames: &mut tokio::sync::mpsc::Receiver<crate::runtime_wire::Frame>,
+    timeout: Duration,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    while let Some(frame) = frames.recv().await {
+        tokio::time::timeout(timeout, crate::runtime_wire::write_frame(writer, &frame))
+            .await
+            .context("Machine runtime frame write timed out")??;
+    }
+    Ok(())
+}
+
 async fn send_frame<S>(socket: &mut S, frame: &MachineFrame) -> anyhow::Result<()>
 where
     S: futures::Sink<Message> + Unpin,
@@ -3035,6 +3138,7 @@ mod tests {
         provider_auth_roll_target, provider_for_component, reject_untrusted_workspace,
         resolve_runtime_machine_id, select_code_adapter_executable, selected_zed_pair,
         send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_plugins::PluginInventoryReceipt;
@@ -3139,6 +3243,25 @@ mod tests {
         .await
         .expect_err("stalled write must fail closed");
         assert!(error.to_string().contains("Machine frame send timed out"));
+    }
+
+    #[tokio::test]
+    async fn stalled_runtime_write_times_out_without_blocking_controller_heartbeat() {
+        let (mut writer, _reader) = tokio::io::duplex(1);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.try_send(crate::runtime_wire::Frame::Heartbeat)
+            .expect("queue runtime heartbeat");
+        drop(tx);
+
+        let error =
+            write_runtime_frames_with_timeout(&mut writer, &mut rx, Duration::from_millis(10))
+                .await
+                .expect_err("stalled runtime write must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("Machine runtime frame write timed out")
+        );
     }
 
     #[test]
