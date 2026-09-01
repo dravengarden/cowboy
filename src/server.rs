@@ -46,6 +46,7 @@ use crate::core::{
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
+use crate::machine_protocol::CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS;
 use crate::observability::{Observability, SubmitReceipt, TelemetryBatch};
 use crate::persistence::EventReducer;
 use crate::product_auth::{ProductPrincipal, WS_AUTH_REQUIRED_CLOSE_CODE};
@@ -492,8 +493,27 @@ const STORE_QUEUE_CAPACITY: usize = 8_192;
 const FORCE_CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 const QUEUE_EDIT_RECONNECT_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RECONNECT_GRACE_SECONDS: i32 = 15;
-const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+/// A connected Machine still needs time to replay its authoritative worker
+/// snapshots. Cover the Machine's entire outbound reconnect backoff plus a
+/// bounded settlement window before declaring persisted Busy turns dead.
+const RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS: u64 = 15;
+const RUNTIME_RECONCILIATION_GRACE: std::time::Duration = std::time::Duration::from_secs(
+    CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS + RUNTIME_SNAPSHOT_SETTLEMENT_SECONDS,
+);
 const MACHINE_RECONNECT_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+#[cfg(test)]
+#[test]
+fn runtime_reconciliation_covers_machine_retry_and_snapshot_settlement() {
+    assert_eq!(
+        RUNTIME_RECONCILIATION_GRACE,
+        std::time::Duration::from_secs(45)
+    );
+    assert!(
+        RUNTIME_RECONCILIATION_GRACE
+            > std::time::Duration::from_secs(CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS)
+    );
+}
 /// Let restore, listener binding, and Machine reconnection settle before the
 /// optional account collectors start their short-lived provider processes.
 const PROVIDER_UNINSTALL_RETENTION_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
@@ -1004,8 +1024,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Machine WebSockets can only reconnect after Axum starts listening. Keep
     // this timer independent of the request task: real worker snapshots remove
     // their sessions from the reconciliation set, while the remainder become
-    // genuine interruptions after the same bounded grace used for Machine
-    // presence. Interrupted turns stay stopped until the user submits work.
+    // genuine interruptions after the Machine's maximum reconnect delay plus
+    // a bounded snapshot-settlement window. Interrupted turns stay stopped
+    // until the user submits work.
     let runtime_reconciliation_task = {
         let hub = hub.clone();
         let mut shutdown = shutdown_rx.clone();
@@ -1016,6 +1037,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     if !interrupted.is_empty() {
                         tracing::warn!(
                             count = interrupted.len(),
+                            grace_seconds = RUNTIME_RECONCILIATION_GRACE.as_secs(),
                             "runtime reconciliation grace expired without detached owners"
                         );
                     }

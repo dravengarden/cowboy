@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 pub const MACHINE_PROTOCOL_VERSION: u16 = 6;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
+/// Upper bound for the Machine's exponential retry delay when reconnecting to
+/// the Controller. Controller startup reconciliation must cover this delay
+/// before deciding that a detached worker did not survive a deployment.
+pub const CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

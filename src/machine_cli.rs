@@ -19,10 +19,10 @@ use crate::machine_broker::{MachineBrokerArgs, SpawnMode};
 use crate::machine_components::ComponentStore;
 use crate::machine_plugins::MachinePluginStore;
 use crate::machine_protocol::{
-    AuthState, ComponentId, ComponentInventory, ComponentKind, ComponentState, ComponentUpdate,
-    ConnectionMode, MACHINE_PROTOCOL_VERSION, MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity,
-    MachineCommand, MachineEvent, MachineFrame, MachineHello, MachineWorkspace, Platform,
-    ProviderMaterializationState,
+    AuthState, CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS, ComponentId, ComponentInventory,
+    ComponentKind, ComponentState, ComponentUpdate, ConnectionMode, MACHINE_PROTOCOL_VERSION,
+    MIN_MACHINE_PROTOCOL_VERSION, MachineCapacity, MachineCommand, MachineEvent, MachineFrame,
+    MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
 };
 
 struct LoginSession {
@@ -800,7 +800,9 @@ async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
             Err(error) => tracing::warn!(%error, "Machine controller disconnected"),
         }
         tokio::time::sleep(retry).await;
-        retry = (retry * 2).min(Duration::from_secs(30));
+        retry = (retry * 2).min(Duration::from_secs(
+            CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS,
+        ));
     }
 }
 
