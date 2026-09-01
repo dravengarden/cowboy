@@ -291,13 +291,15 @@ revocation, and wipe behavior. Refresh either remains Service-owned with
 short-lived Machine projections or returns a sealed candidate through a
 compare-and-swap generation update that the Service validates and redistributes.
 For Machine-owned refresh, the signed replica remains an immutable local
-materialization while the Provider receives a separate writable runtime
-projection. Machine protocol 6 reports a complete changed runtime bundle as a
-secret-bearing CAS candidate; the Controller commits at most one next Service
-generation, seals it to every Machine, and reconciles all runtime projections
-to that winner. Missing or partial runtime credentials are failures to repair
-from Service authority, never candidates. Replicas may not drift into
-independent accounts.
+materialization while Provider-owned non-credential state remains isolated by
+the session's recorded generation. Declared refreshable credential files for
+compatible generations on one Machine share one writable lineage; copied
+rotating refresh tokens are forbidden. Machine protocol 6 reports a complete
+changed runtime bundle as a secret-bearing CAS candidate; the Controller
+commits at most one next Service generation, seals it to every Machine, and
+reconciles every runtime view to that winner. Missing or partial runtime
+credentials are failures to repair from Service authority, never candidates.
+Replicas may not drift into independent accounts.
 
 If upstream credentials are non-exportable or Machine-bound, the Provider must
 implement a safe Service broker or token-exchange projection. Otherwise it is
@@ -326,7 +328,11 @@ must not classify the rejection as a worker-generation rollout failure. After
 an explicit successful Service login, the failed registration may compare-and-
 swap to the newer auth generation only when the signed auth contract is
 unchanged and the selected Machine acknowledged that exact projection. Once a
-native ACP session ID exists, its auth generation remains immutable.
+native ACP session ID exists, its auth-generation identity remains immutable.
+A successful refresh or explicit reconnect of the same account may rotate the
+credential lineage used by that session; it must drain and resume the exact
+native session rather than discard its history. Switching accounts still
+requires a new session.
 
 ### CR-10: Uninstall is explicit and recoverable for a bounded period
 

@@ -882,6 +882,9 @@ impl MachinePluginStore {
         let provider_auth_root = self.auth_provider_root(&envelope.provider_id);
         let previous = self.latest_auth_envelope(&envelope.provider_id)?;
         validate_auth_replica_transition(previous.as_ref(), envelope)?;
+        let auth_generation_advanced = previous
+            .as_ref()
+            .is_none_or(|previous| previous.auth_generation < envelope.auth_generation);
         fs::create_dir_all(provider_auth_root.join("replicas"))?;
         fs::set_permissions(&provider_auth_root, fs::Permissions::from_mode(0o700))?;
         atomic_write(
@@ -908,6 +911,7 @@ impl MachinePluginStore {
         Ok(PluginInventoryReceipt {
             provider_id: envelope.provider_id.clone(),
             auth_generation: envelope.auth_generation,
+            auth_generation_advanced,
             replica_state: ProviderReplicaState::Current,
             materialization_state: materialization,
         })
@@ -1093,8 +1097,45 @@ impl MachinePluginStore {
         fs::create_dir_all(&generations)?;
         fs::set_permissions(&generations, fs::Permissions::from_mode(0o700))?;
         let generation = generations.join(auth_generation.to_string());
-        if generation.exists() {
+        let created = !generation.exists();
+        if created {
+            let temporary = generations.join(format!(
+                ".{}.{}.{}.partial",
+                auth_generation,
+                std::process::id(),
+                ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let result = (|| -> Result<()> {
+                fs::create_dir_all(&temporary)?;
+                restore_projected_bundle(&package.manifest.authentication, &temporary, bundle)?;
+                let metadata = MaterializationMetadata {
+                    auth_generation,
+                    auth_contract_fingerprint: package
+                        .manifest
+                        .compatibility
+                        .auth_contract_fingerprint
+                        .clone(),
+                };
+                atomic_write(
+                    &temporary.join("metadata.json"),
+                    &serde_json::to_vec(&metadata)?,
+                    0o600,
+                )?;
+                fs::rename(&temporary, &generation)?;
+                Ok(())
+            })();
+            if result.is_err() {
+                let _ = fs::remove_dir_all(&temporary);
+            }
+            result?;
+        } else {
             validate_materialization_metadata(&generation, package, auth_generation)?;
+        }
+
+        let canonical = self
+            .canonical_runtime_projection(package)?
+            .context("Provider runtime projection has no credential source")?;
+        if generation == canonical {
             if projected_credential_bundle(
                 &package.manifest.authentication,
                 &generation,
@@ -1108,37 +1149,16 @@ impl MachinePluginStore {
                     bundle,
                 )?;
             }
-            return Ok(());
-        }
-        let temporary = generations.join(format!(
-            ".{}.{}.{}.partial",
-            auth_generation,
-            std::process::id(),
-            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = (|| -> Result<()> {
-            fs::create_dir_all(&temporary)?;
-            restore_projected_bundle(&package.manifest.authentication, &temporary, bundle)?;
-            let metadata = MaterializationMetadata {
-                auth_generation,
-                auth_contract_fingerprint: package
-                    .manifest
-                    .compatibility
-                    .auth_contract_fingerprint
-                    .clone(),
-            };
-            atomic_write(
-                &temporary.join("metadata.json"),
-                &serde_json::to_vec(&metadata)?,
-                0o600,
+        } else {
+            self.link_runtime_projection_credentials(
+                package,
+                &generation,
+                &canonical,
+                bundle,
+                created,
             )?;
-            fs::rename(&temporary, &generation)?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_dir_all(&temporary);
         }
-        result
+        restore_projected_environment(&package.manifest.authentication, &generation, bundle)
     }
 
     fn reconcile_runtime_projections(
@@ -1146,6 +1166,9 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
+        let Some(canonical) = self.canonical_runtime_projection(package)? else {
+            return Ok(());
+        };
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
@@ -1153,7 +1176,22 @@ impl MachinePluginStore {
                     == package.manifest.compatibility.auth_contract_fingerprint,
                 "Provider runtime projection uses a different auth contract"
             );
-            restore_projected_bundle(&package.manifest.authentication, &generation, bundle)?;
+            if generation == canonical {
+                restore_projected_bundle(&package.manifest.authentication, &generation, bundle)?;
+            } else {
+                restore_projected_environment(
+                    &package.manifest.authentication,
+                    &generation,
+                    bundle,
+                )?;
+                self.link_runtime_projection_credentials(
+                    package,
+                    &generation,
+                    &canonical,
+                    bundle,
+                    true,
+                )?;
+            }
         }
         Ok(())
     }
@@ -1163,6 +1201,9 @@ impl MachinePluginStore {
         package: &ProviderPackage,
         bundle: &PortableCredentialBundle,
     ) -> Result<()> {
+        let Some(canonical) = self.canonical_runtime_projection(package)? else {
+            return Ok(());
+        };
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
@@ -1170,17 +1211,32 @@ impl MachinePluginStore {
                     == package.manifest.compatibility.auth_contract_fingerprint,
                 "Provider runtime projection uses a different auth contract"
             );
-            if projected_credential_bundle(
-                &package.manifest.authentication,
-                &generation,
-                &bundle.method_id,
-            )
-            .is_err()
-            {
-                repair_missing_projected_bundle(
+            if generation == canonical {
+                if projected_credential_bundle(
+                    &package.manifest.authentication,
+                    &generation,
+                    &bundle.method_id,
+                )
+                .is_err()
+                {
+                    repair_missing_projected_bundle(
+                        &package.manifest.authentication,
+                        &generation,
+                        bundle,
+                    )?;
+                }
+            } else {
+                restore_projected_environment(
                     &package.manifest.authentication,
                     &generation,
                     bundle,
+                )?;
+                self.link_runtime_projection_credentials(
+                    package,
+                    &generation,
+                    &canonical,
+                    bundle,
+                    false,
                 )?;
             }
         }
@@ -1197,49 +1253,110 @@ impl MachinePluginStore {
         let mut generations = Vec::new();
         for entry in fs::read_dir(root)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() && !entry.file_name().to_string_lossy().starts_with('.')
-            {
-                generations.push(entry.path());
+            if !entry.file_type()?.is_dir() {
+                continue;
             }
+            let name = entry.file_name();
+            let Some(generation) = name.to_str().and_then(|name| name.parse::<u64>().ok()) else {
+                continue;
+            };
+            generations.push((generation, entry.path()));
         }
-        generations.sort();
-        Ok(generations)
+        generations.sort_by_key(|(generation, _)| *generation);
+        Ok(generations.into_iter().map(|(_, path)| path).collect())
+    }
+
+    fn canonical_runtime_projection(&self, package: &ProviderPackage) -> Result<Option<PathBuf>> {
+        let runtime_root = self
+            .auth_provider_root(&package.manifest.id)
+            .join("runtime");
+        let generations = self.runtime_projection_generations(&package.manifest.id)?;
+        if generations.is_empty() {
+            return Ok(None);
+        }
+        let current_link = runtime_root.join("current");
+        let current = read_link_name(&current_link)
+            .map(|generation| runtime_root.join("generations").join(generation))
+            .filter(|current| generations.iter().any(|generation| generation == current));
+        let current_is_valid = current.is_some();
+        let canonical = current.unwrap_or_else(|| generations[0].clone());
+        let metadata = read_materialization_metadata(&canonical)?;
+        ensure!(
+            metadata.auth_contract_fingerprint
+                == package.manifest.compatibility.auth_contract_fingerprint,
+            "Provider runtime credential source uses a different auth contract"
+        );
+        let name = canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Provider runtime credential source has no generation name")?;
+        if !current_is_valid {
+            activate_link(&runtime_root, name)?;
+        }
+        Ok(Some(canonical))
+    }
+
+    fn link_runtime_projection_credentials(
+        &self,
+        package: &ProviderPackage,
+        generation: &Path,
+        canonical: &Path,
+        bundle: &PortableCredentialBundle,
+        replace_changed: bool,
+    ) -> Result<()> {
+        let auth = &package.manifest.authentication;
+        let home = generation.join("home");
+        let canonical_home = canonical.join("home");
+        ensure!(
+            generation != canonical,
+            "canonical projection cannot link to itself"
+        );
+        let materialized_generation = self
+            .auth_provider_root(&package.manifest.id)
+            .join("materialized/generations")
+            .join(
+                read_materialization_metadata(generation)?
+                    .auth_generation
+                    .to_string(),
+            )
+            .join("home");
+        for credential in &auth.credential_files {
+            let destination = home.join(&credential.relative_path);
+            let source = canonical_home.join(&credential.relative_path);
+            ensure_within(&home, &destination)?;
+            ensure_within(&canonical_home, &source)?;
+            let Some(value) = bundle.values.get(&credential.bundle_key) else {
+                remove_projected_credential(&destination)?;
+                continue;
+            };
+            ensure!(source.is_file(), "canonical Provider credential is missing");
+            if projected_credential_alias_matches(&destination, &source) {
+                continue;
+            }
+            if !replace_changed
+                && projection_contains_uncommitted_refresh(
+                    &destination,
+                    &source,
+                    value,
+                    &materialized_generation.join(&credential.relative_path),
+                )?
+            {
+                continue;
+            }
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)?;
+                set_directory_chain_permissions(&home, parent)?;
+            }
+            replace_link(&destination, &source.to_string_lossy())?;
+        }
+        Ok(())
     }
 
     fn writable_auth_projection_generations(
         &self,
         package: &ProviderPackage,
     ) -> Result<Vec<PathBuf>> {
-        let mut generations = self.runtime_projection_generations(&package.manifest.id)?;
-        let materialized = self
-            .auth_provider_root(&package.manifest.id)
-            .join("materialized/generations");
-        if materialized.is_dir() {
-            for entry in fs::read_dir(&materialized)? {
-                let entry = entry?;
-                if !entry.file_type()?.is_dir()
-                    || entry.file_name().to_string_lossy().starts_with('.')
-                {
-                    continue;
-                }
-                let generation = entry.path();
-                let metadata = read_materialization_metadata(&generation)?;
-                ensure!(
-                    metadata.auth_contract_fingerprint
-                        == package.manifest.compatibility.auth_contract_fingerprint,
-                    "Provider materialization uses a different auth contract"
-                );
-                if home_contains_non_credential_state(
-                    &package.manifest.authentication,
-                    &generation.join("home"),
-                )? {
-                    generations.push(generation);
-                }
-            }
-        }
-        generations.sort();
-        generations.dedup();
-        Ok(generations)
+        self.runtime_projection_generations(&package.manifest.id)
     }
 
     fn inventory_one(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
@@ -1849,33 +1966,6 @@ fn credential_path_relation(credentials: &[PathBuf], relative: &Path) -> (bool, 
     (exact, ancestor)
 }
 
-fn home_contains_non_credential_state(
-    auth: &cowboy_provider_sdk::AuthenticationContract,
-    home: &Path,
-) -> Result<bool> {
-    if !home.is_dir() {
-        return Ok(false);
-    }
-    let credentials = credential_relative_paths(auth);
-    let mut pending = vec![PathBuf::new()];
-    while let Some(relative) = pending.pop() {
-        for entry in fs::read_dir(home.join(&relative))? {
-            let entry = entry?;
-            let child = relative.join(entry.file_name());
-            let (exact, ancestor) = credential_path_relation(&credentials, &child);
-            if exact {
-                continue;
-            }
-            if ancestor && entry.file_type()?.is_dir() {
-                pending.push(child);
-                continue;
-            }
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 fn migrate_legacy_runtime_state(
     auth: &cowboy_provider_sdk::AuthenticationContract,
     legacy_home: &Path,
@@ -2010,9 +2100,7 @@ fn restore_projected_bundle(
         let destination = home.join(&file.relative_path);
         ensure_within(&home, &destination)?;
         let Some(value) = bundle.values.get(&file.bundle_key) else {
-            if destination.is_file() {
-                fs::remove_file(&destination)?;
-            }
+            remove_projected_credential(&destination)?;
             continue;
         };
         let bytes = base64::engine::general_purpose::STANDARD
@@ -2035,6 +2123,15 @@ fn restore_projected_bundle(
             atomic_write(&destination, &bytes, 0o600)?;
         }
     }
+    restore_projected_environment(auth, generation, bundle)
+}
+
+fn restore_projected_environment(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    generation: &Path,
+    bundle: &PortableCredentialBundle,
+) -> Result<()> {
+    validate_portable_bundle(auth, bundle)?;
     let mut environment = BTreeMap::new();
     for (name, bundle_key) in &auth.environment_projection {
         let Some(value) = bundle.values.get(bundle_key) else {
@@ -2055,6 +2152,66 @@ fn restore_projected_bundle(
         atomic_write(&environment_path, &encoded_environment, 0o600)?;
     }
     Ok(())
+}
+
+fn remove_projected_credential(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            ensure!(
+                !metadata.file_type().is_dir(),
+                "Provider credential path is a directory"
+            );
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+    }
+}
+
+fn projected_credential_alias_matches(path: &Path, source: &Path) -> bool {
+    let Ok(target) = fs::read_link(path) else {
+        return false;
+    };
+    let target = if target.is_absolute() {
+        target
+    } else {
+        path.parent().unwrap_or_else(|| Path::new("/")).join(target)
+    };
+    target == source
+}
+
+fn projection_contains_uncommitted_refresh(
+    destination: &Path,
+    canonical: &Path,
+    sealed_value: &str,
+    immutable: &Path,
+) -> Result<bool> {
+    let metadata = match fs::symlink_metadata(destination) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspecting {}", destination.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    ensure!(
+        metadata.file_type().is_file(),
+        "Provider credential path is not a file"
+    );
+    let projected = fs::read(destination)?;
+    if fs::read(canonical).is_ok_and(|value| value == projected) {
+        return Ok(false);
+    }
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(sealed_value)
+        .context("decoding sealed Provider credential")?;
+    if projected == sealed || fs::read(immutable).is_ok_and(|value| value == projected) {
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 fn repair_missing_projected_bundle(
@@ -2307,6 +2464,7 @@ fn validate_portable_bundle(
 pub(crate) struct PluginInventoryReceipt {
     pub provider_id: String,
     pub auth_generation: u64,
+    pub auth_generation_advanced: bool,
     pub replica_state: ProviderReplicaState,
     pub materialization_state: ProviderMaterializationState,
 }
@@ -3202,7 +3360,10 @@ mod tests {
             )]),
         };
         let envelope = seal_auth_for_test(&store, &package, &service_signer, 1, &bundle);
-        store.apply_auth(&envelope).await.unwrap();
+        let first_receipt = store.apply_auth(&envelope).await.unwrap();
+        assert!(first_receipt.auth_generation_advanced);
+        let replayed_receipt = store.apply_auth(&envelope).await.unwrap();
+        assert!(!replayed_receipt.auth_generation_advanced);
         let auth_root = root.join("machine/provider-auth/providers/gemini");
         fs::remove_dir_all(auth_root.join("materialized/generations/1")).unwrap();
         fs::remove_dir_all(auth_root.join("runtime/generations/1")).unwrap();
@@ -3230,7 +3391,8 @@ mod tests {
         };
         let refreshed_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 2, &refreshed_bundle);
-        store.apply_auth(&refreshed_envelope).await.unwrap();
+        let refreshed_receipt = store.apply_auth(&refreshed_envelope).await.unwrap();
+        assert!(refreshed_receipt.auth_generation_advanced);
         assert!(!auth_root.join("replicas/1.sealed.json").exists());
         assert_eq!(
             read_link_name(&auth_root.join("materialized/current")).as_deref(),
@@ -3761,14 +3923,130 @@ mod tests {
         store.materialize_bundle(&package, 2, &next_bundle).unwrap();
         assert_eq!(fs::read(&runtime_auth_path).unwrap(), service_refreshed);
         assert_eq!(fs::read(&runtime_state).unwrap(), b"[]");
+        let second_runtime_auth =
+            root.join("provider-auth/providers/grok/runtime/generations/2/home/.grok/auth.json");
+        assert_eq!(fs::read(&second_runtime_auth).unwrap(), service_refreshed);
+        assert!(
+            fs::symlink_metadata(&second_runtime_auth)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(
-            fs::read(
-                root.join(
-                    "provider-auth/providers/grok/runtime/generations/2/home/.grok/auth.json"
-                )
-            )
-            .unwrap(),
-            service_refreshed
+            fs::read_link(&second_runtime_auth).unwrap(),
+            runtime_auth_path
+        );
+        assert_eq!(
+            read_link_name(&root.join("provider-auth/providers/grok/runtime/current")).as_deref(),
+            Some("1")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn noncanonical_refresh_survives_until_the_service_cas_wins() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-grok-auth-candidate-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+        let bundle_for = |credential: &[u8]| PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(credential),
+            )]),
+        };
+        let sealed = br#"{"account":{"key":"sealed"}}"#;
+        let service_two = br#"{"account":{"key":"service-two"}}"#;
+        store
+            .materialize_bundle(&package, 1, &bundle_for(sealed))
+            .unwrap();
+        store
+            .materialize_bundle(&package, 2, &bundle_for(service_two))
+            .unwrap();
+        let runtime_root = root.join("provider-auth/providers/grok/runtime/generations");
+        let canonical = runtime_root.join("1/home/.grok/auth.json");
+        let noncanonical = runtime_root.join("2/home/.grok/auth.json");
+
+        // A Provider may atomically replace a symlink instead of writing through
+        // it. Preserve that complete refresh candidate until Service CAS resolves.
+        let candidate = br#"{"account":{"key":"runtime-two-refreshed"}}"#;
+        fs::remove_file(&noncanonical).unwrap();
+        fs::write(&noncanonical, candidate).unwrap();
+        store
+            .materialize_bundle(&package, 2, &bundle_for(service_two))
+            .unwrap();
+        assert_eq!(fs::read(&noncanonical).unwrap(), candidate);
+        assert!(
+            !fs::symlink_metadata(&noncanonical)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+
+        let service_winner = br#"{"account":{"key":"service-three"}}"#;
+        store
+            .materialize_bundle(&package, 3, &bundle_for(service_winner))
+            .unwrap();
+        assert_eq!(fs::read(&canonical).unwrap(), service_winner);
+        assert_eq!(fs::read(&noncanonical).unwrap(), service_winner);
+        assert!(
+            fs::symlink_metadata(&noncanonical)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_credential_source_uses_numeric_generation_order_during_migration() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-grok-auth-order-test-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+        let bundle = PortableCredentialBundle {
+            portable_schema: package.manifest.authentication.portable_schema.clone(),
+            method_id: "xai-account".to_owned(),
+            values: BTreeMap::from([(
+                "auth_json".to_owned(),
+                base64::engine::general_purpose::STANDARD.encode(b"auth"),
+            )]),
+        };
+
+        store.materialize_bundle(&package, 2, &bundle).unwrap();
+        store.materialize_bundle(&package, 10, &bundle).unwrap();
+        let runtime_root = root.join("provider-auth/providers/grok/runtime");
+        fs::remove_file(runtime_root.join("current")).unwrap();
+
+        assert_eq!(
+            store
+                .canonical_runtime_projection(&package)
+                .unwrap()
+                .unwrap(),
+            runtime_root.join("generations/2")
+        );
+        assert_eq!(
+            read_link_name(&runtime_root.join("current")).as_deref(),
+            Some("2")
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -957,7 +957,7 @@ pub fn provider_auth_required_detail(provider_id: &str, session_can_rebind: bool
         )
     } else {
         format!(
-            "{prefix}{name} credentials expired or were rejected. Reconnect {name} in Settings > Providers, then start a new session; this established session remains pinned to its original credentials."
+            "{prefix}{name} credentials expired or were rejected. Reconnect the same {name} account in Settings > Providers, then retry this session. Cowboy will reload its credentials without replacing the established session; switching accounts requires a new session."
         )
     }
 }

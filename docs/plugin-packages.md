@@ -421,9 +421,11 @@ also validates the exact auth contract and projection schema, atomically
 materializes the declared credential files and environment, and acknowledges
 materialization. Neither receipt can become an independent account or login
 state. Replica generations are monotonic and immutable: stale generations and
-same-generation envelopes with different meaning are rejected. Sessions open
-a writable runtime copy of the exact immutable auth projection generation
-recorded at creation rather than following a mutable `current` link.
+same-generation envelopes with different meaning are rejected. Sessions keep
+Provider-owned runtime state under the exact auth projection generation
+recorded at creation. Declared refreshable credential files for compatible
+generations on the same Machine resolve to one writable credential lineage;
+Cowboy must never leave independent copies of a rotating refresh token.
 
 An ACP agent that returns `AuthenticationRequired` while establishing a session
 after Cowboy projected a Service credential has rejected that projection.
@@ -431,7 +433,10 @@ Cowboy marks the exact generation `expired` and preserves that cause instead of
 falling back to an older worker binary. A later explicit Service login may
 rebind only a failed session that never received a native ACP session ID, and
 only after the same signed auth contract is synchronized to its selected
-Machine. Established native sessions never change auth identity.
+Machine. Established native sessions never change auth-generation or account
+identity, but a same-account reconnect may rotate their shared credentials.
+After the Machine accepts a newer credential generation it drains matching
+workers, reloads the projection, and resumes each exact native session.
 
 Online Machines reconcile as part of login. Offline Machines retain `pending`
 convergence and reconcile immediately after reconnect. New Machines receive the
@@ -459,13 +464,15 @@ keeps refresh in the Service and issues bounded Machine projections, or uses
 Machine protocol 6 to return a complete runtime credential bundle through a
 generation compare-and-swap. The Machine watches only declared credential
 paths, debounces atomic file replacement, and never puts the secret-bearing
-candidate in diagnostic event history. Cowboy validates the candidate against
-the active signed package and exact Service generation, commits one next
-generation, and redistributes it to every Machine. Stale concurrent candidates
-lose the CAS and are overwritten by the Service winner. Missing, malformed, or
-partially written projections are restored from the current Service generation
-and never promoted. Two Machine replicas may never silently become different
-accounts.
+candidate in diagnostic event history. Within one Machine, compatible runtime
+generations share the declared credential-file lineage while retaining their
+own session databases, rollouts, caches, and other Provider state. Cowboy
+validates a candidate against the active signed package and exact Service
+generation, commits one next generation, and redistributes it to every Machine.
+Stale concurrent candidates lose the CAS and are overwritten by the Service
+winner. Missing, malformed, or partially written projections are restored from
+the current Service generation and never promoted. Two Machine replicas may
+never silently become different accounts.
 
 When an upstream credential is non-exportable or device-bound, the Provider
 must supply a safe Service broker or token-exchange projection. Otherwise the

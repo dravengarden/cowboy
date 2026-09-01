@@ -1830,6 +1830,15 @@ struct MachineCommandContext {
     runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
 }
 
+fn provider_auth_roll_target(
+    receipt: &crate::machine_plugins::PluginInventoryReceipt,
+    action: crate::machine_protocol::ProviderAuthAction,
+) -> Option<String> {
+    (action == crate::machine_protocol::ProviderAuthAction::Apply
+        && receipt.auth_generation_advanced)
+        .then(|| receipt.provider_id.clone())
+}
+
 fn handle_machine_command(command: MachineCommand, context: MachineCommandContext) {
     let MachineCommandContext {
         events,
@@ -1932,6 +1941,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
             tokio::spawn(async move {
                 match providers.apply_auth(&envelope).await {
                     Ok(receipt) => {
+                        let roll_provider = provider_auth_roll_target(&receipt, envelope.action);
                         let _ = events.send(MachineEvent::ProviderAuthReceipt {
                             request_id: request_id.clone(),
                             provider_id: receipt.provider_id,
@@ -1946,6 +1956,14 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         // observations directly instead of relying on a
                         // platform-specific filesystem event shape.
                         publish_provider_auth_observations(&providers, &events);
+                        if let Some(provider) = roll_provider {
+                            let _ =
+                                runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
+                                    command: crate::runtime_wire::CoreCommand::RollProvider {
+                                        provider,
+                                    },
+                                });
+                        }
                         let _ = events.send(MachineEvent::CommandResult {
                             request_id,
                             accepted: true,
@@ -3014,16 +3032,43 @@ mod tests {
         load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
         npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
         parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
-        provider_for_component, reject_untrusted_workspace, resolve_runtime_machine_id,
-        select_code_adapter_executable, selected_zed_pair, send_frame_with_timeout,
-        validate_controller_url, workspace_path_allowed,
+        provider_auth_roll_target, provider_for_component, reject_untrusted_workspace,
+        resolve_runtime_machine_id, select_code_adapter_executable, selected_zed_pair,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
     };
     use crate::machine_components::ComponentStore;
+    use crate::machine_plugins::PluginInventoryReceipt;
     use crate::machine_protocol::{
         ArtifactFormat, ComponentId, ComponentInventory, ComponentKind, ComponentState,
-        ComponentUpdate, DesiredComponent, MachineFrame,
+        ComponentUpdate, DesiredComponent, MachineFrame, ProviderAuthAction,
+        ProviderMaterializationState, ProviderReplicaState,
     };
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
+
+    #[test]
+    fn a_new_applied_auth_generation_rolls_the_same_provider() {
+        let mut receipt = PluginInventoryReceipt {
+            provider_id: "codex".to_owned(),
+            auth_generation: 2,
+            auth_generation_advanced: true,
+            replica_state: ProviderReplicaState::Current,
+            materialization_state: ProviderMaterializationState::Current,
+        };
+        assert_eq!(
+            provider_auth_roll_target(&receipt, ProviderAuthAction::Apply).as_deref(),
+            Some("codex")
+        );
+        receipt.auth_generation_advanced = false;
+        assert_eq!(
+            provider_auth_roll_target(&receipt, ProviderAuthAction::Apply),
+            None
+        );
+        receipt.auth_generation_advanced = true;
+        assert_eq!(
+            provider_auth_roll_target(&receipt, ProviderAuthAction::Wipe),
+            None
+        );
+    }
 
     #[test]
     fn remote_controller_requires_https() {

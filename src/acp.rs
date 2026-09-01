@@ -961,7 +961,7 @@ mod startup_mode_tests {
         assert!(
             projected_auth_error("grok", true, false, Error::auth_required())
                 .message
-                .contains("start a new session")
+                .contains("retry this session")
         );
     }
 
