@@ -571,6 +571,7 @@ fn contains_http_status(detail: &str, status: u16) -> bool {
         format!("status: {status}"),
         format!("\"status\":{status}"),
         format!("\"status\": {status}"),
+        format!("error ({status} "),
     ]
     .iter()
     .any(|needle| detail.contains(needle))
@@ -1134,6 +1135,12 @@ mod tests {
         );
         assert_eq!(
             classify_usage_failure(r#"request failed with {"status":502}"#),
+            UsageFailureKind::Transient
+        );
+        assert_eq!(
+            classify_usage_failure(
+                "DeepSeek balance adapter rejected request: HTTP status server error (502 Bad Gateway)"
+            ),
             UsageFailureKind::Transient
         );
         assert_eq!(
