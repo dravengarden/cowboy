@@ -705,6 +705,24 @@ fn latest_crash_detail_for_session(session: &Session) -> Option<&str> {
     None
 }
 
+/// Return the newest crash detail that has not been followed by a clean turn
+/// completion. A live worker can project `Running` again after a recoverable
+/// Provider failure, so current status alone is not enough to decide whether
+/// refreshed credentials still need to be applied to that session.
+fn unresolved_crash_detail_for_session(session: &Session) -> Option<&str> {
+    for envelope in session.log.iter().rev() {
+        match &envelope.event {
+            Event::TurnEnd { .. } => return None,
+            Event::Lifecycle {
+                status: Status::Crashed,
+                detail,
+            } => return detail.as_deref(),
+            _ => {}
+        }
+    }
+    None
+}
+
 const MOBILE_REVIEW_TAB_CAP: usize = 12;
 const MOBILE_REVIEW_PROGRESS_CAP: usize = 512;
 const MOBILE_REVIEW_POSITION_CAP: usize = 512;
@@ -3121,9 +3139,13 @@ impl Hub {
             .flatten()
     }
 
-    /// Move an unstarted failed session onto a newer compatible Service-auth
-    /// generation. Once an Agent has allocated a native session id, the auth
-    /// identity remains immutable so a different account cannot inherit it.
+    /// Move an idle session with an unresolved failure onto a newer compatible
+    /// Service-auth generation. The caller proves an explicit CAS replacement
+    /// of the same Service credential slot, that the selected Machine has the
+    /// new generation, and that the failure is authentication-related.
+    /// Preserving the native session id is intentional: an explicit
+    /// reauthorization must recover the existing conversation instead of
+    /// orphaning it.
     pub fn rebind_provider_auth_generation(
         &self,
         session_id: &str,
@@ -3141,10 +3163,10 @@ impl Hub {
                 .get_mut(session_id)
                 .ok_or_else(|| format!("unknown session {session_id:?}"))?;
             if (session.meta.status, session.lifecycle_epoch) != expected_status_revision
-                || latest_crash_detail_for_session(session) != Some(expected_crash_detail)
+                || unresolved_crash_detail_for_session(session) != Some(expected_crash_detail)
                 || session.meta.provider_auth_generation != Some(expected_generation)
-                || session.meta.agent_session_id.is_some()
-                || session.meta.status != Status::Crashed
+                || session.in_flight
+                || !matches!(session.meta.status, Status::Crashed | Status::Running)
             {
                 false
             } else {
@@ -3610,6 +3632,16 @@ impl Hub {
         let sessions = self.inner.sessions.lock();
         let session = sessions.get(session_id)?;
         latest_crash_detail_for_session(session).map(str::to_owned)
+    }
+
+    /// Newest crash detail which has not been superseded by a clean turn end.
+    /// Unlike [`Self::latest_crash_detail`], this survives an idle worker
+    /// snapshot projecting the session back to `Running` after the failure.
+    #[must_use]
+    pub fn unresolved_crash_detail(&self, session_id: &str) -> Option<String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(session_id)?;
+        unresolved_crash_detail_for_session(session).map(str::to_owned)
     }
 
     fn next_qid(&self) -> String {
@@ -6690,7 +6722,7 @@ mod core_tests {
     }
 
     #[test]
-    fn only_unstarted_failed_sessions_rebind_to_refreshed_provider_auth() {
+    fn idle_failed_sessions_rebind_without_losing_the_native_thread() {
         let hub = Hub::new();
         hub.create_session(SessionRegistration {
             id: "auth-refresh".to_owned(),
@@ -6752,23 +6784,78 @@ mod core_tests {
         );
 
         hub.set_agent_session_id("auth-refresh", "native-thread".to_owned());
+        hub.set_status("auth-refresh", Status::Running, None);
+        let idle_revision = hub.status_revision("auth-refresh").unwrap();
         assert!(
-            !hub.rebind_provider_auth_generation(
+            hub.rebind_provider_auth_generation(
                 "auth-refresh",
-                crashed_revision,
+                idle_revision,
                 "new crash edge",
                 3,
                 4,
             )
-            .expect("native thread remains immutable")
+            .expect("idle native thread follows explicit reauthorization")
         );
         assert_eq!(
             hub.session_info("auth-refresh")
                 .unwrap()
                 .meta
                 .provider_auth_generation,
-            Some(3)
+            Some(4)
         );
+        assert_eq!(
+            hub.session_info("auth-refresh")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("native-thread")
+        );
+
+        hub.set_status("auth-refresh", Status::Exited, None);
+        let exited_revision = hub.status_revision("auth-refresh").unwrap();
+        assert!(
+            !hub.rebind_provider_auth_generation(
+                "auth-refresh",
+                exited_revision,
+                "new crash edge",
+                4,
+                5,
+            )
+            .expect("an explicitly exited session remains stopped")
+        );
+        hub.set_status("auth-refresh", Status::Running, None);
+
+        hub.push(
+            "auth-refresh",
+            Event::TurnEnd {
+                stop_reason: "end_turn".to_owned(),
+            },
+        );
+        let completed_revision = hub.status_revision("auth-refresh").unwrap();
+        assert!(
+            !hub.rebind_provider_auth_generation(
+                "auth-refresh",
+                completed_revision,
+                "new crash edge",
+                4,
+                5,
+            )
+            .expect("a completed turn clears the unresolved failure")
+        );
+    }
+
+    #[test]
+    fn newer_crash_without_detail_supersedes_an_older_auth_failure() {
+        let hub = hub_with_session("newer-detail-less-crash");
+        hub.set_status(
+            "newer-detail-less-crash",
+            Status::Crashed,
+            Some("login required".to_owned()),
+        );
+        hub.set_status("newer-detail-less-crash", Status::Crashed, None);
+
+        assert_eq!(hub.unresolved_crash_detail("newer-detail-less-crash"), None);
     }
 
     #[tokio::test]

@@ -9718,7 +9718,7 @@ async fn api_provider_auth_commit(
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
     let (statuses, replicas) = distribute_and_mark_provider_auth(&state, statuses).await;
-    rebind_unstarted_provider_sessions(&state, &statuses, &replicas);
+    recover_failed_provider_sessions(&state, &statuses, &replicas);
     let Some(status) = statuses
         .iter()
         .find(|status| status.provider_id == provider_id)
@@ -10155,14 +10155,15 @@ fn rebindable_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
 ) -> Option<((Status, u64), String)> {
-    let revision @ (Status::Crashed, _) = hub.status_revision(session_id)? else {
+    let revision @ (status, _) = hub.status_revision(session_id)?;
+    if !matches!(status, Status::Crashed | Status::Running) {
         return None;
-    };
-    let detail = hub.latest_crash_detail(session_id)?;
+    }
+    let detail = hub.unresolved_crash_detail(session_id)?;
     crate::provider_behavior::is_provider_auth_required_error(&detail).then_some((revision, detail))
 }
 
-fn rebind_unstarted_provider_sessions(
+fn recover_failed_provider_sessions(
     state: &AppState,
     statuses: &[crate::provider_service::ProviderAuthenticationStatus],
     replicas: &BTreeMap<String, ProviderDistributionOutcome>,
@@ -10205,7 +10206,17 @@ fn rebind_unstarted_provider_sessions(
             expected_generation,
             next_generation,
         ) {
-            Ok(true) => rebound.push(session.id),
+            Ok(true) => {
+                if let Err(error) = state.supervisor.reload_session(&session.id) {
+                    tracing::warn!(
+                        session = %session.id,
+                        provider = %session.provider,
+                        %error,
+                        "reloading session after Provider reauthorization"
+                    );
+                }
+                rebound.push(session.id);
+            }
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 session = %session.id,
@@ -10216,7 +10227,7 @@ fn rebind_unstarted_provider_sessions(
         }
     }
     if !rebound.is_empty() {
-        tracing::info!(sessions = ?rebound, "rebound unstarted sessions to refreshed Provider authentication");
+        tracing::info!(sessions = ?rebound, "recovered failed sessions with refreshed Provider authentication");
     }
     rebound
 }
@@ -10406,7 +10417,7 @@ async fn accept_provider_auth_refresh_candidate(
                 "promoted Machine-refreshed Provider credentials"
             );
             let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
-            rebind_unstarted_provider_sessions(state, &statuses, &replicas);
+            recover_failed_provider_sessions(state, &statuses, &replicas);
         }
     }
     Ok(())
@@ -10488,7 +10499,7 @@ async fn accept_service_auth_candidate(
     })
     .map_err(|error| error.to_string())?;
     let (statuses, replicas) = distribute_and_mark_provider_auth(state, statuses).await;
-    rebind_unstarted_provider_sessions(state, &statuses, &replicas);
+    recover_failed_provider_sessions(state, &statuses, &replicas);
     let mut warnings = Vec::new();
     if !statuses
         .iter()
@@ -10496,6 +10507,27 @@ async fn accept_service_auth_candidate(
     {
         warnings.push("shared Provider authentication status is incomplete".to_owned());
     }
+    state.machine_control.record(
+        machine_id,
+        crate::machine_protocol::MachineEvent::LoginState {
+            request_id: request_id.to_owned(),
+            provider: provider_id.to_owned(),
+            state: crate::machine_protocol::AuthState::SignedIn,
+            account_label: account_label.clone(),
+            detail: Some(if warnings.is_empty() {
+                "authentication is owned and synchronized by Cowboy Service".to_owned()
+            } else {
+                format!(
+                    "authentication is owned by Cowboy Service; {}",
+                    warnings.join("; ")
+                )
+            }),
+        },
+    );
+
+    // Promotion and Machine distribution are the security boundary. Report
+    // success before cleaning the disposable executor home so a slow cleanup
+    // cannot leave the UI looking as though credential ownership is unresolved.
     let finalize_request_id = machine_request_id("provider-auth-finalize");
     if let Err(error) = state
         .machine_control
@@ -10512,25 +10544,19 @@ async fn accept_service_auth_candidate(
         .await
     {
         tracing::warn!(%error, %provider_id, %request_id, "cleaning temporary Provider authentication home");
-        warnings.push(format!("temporary executor cleanup is pending: {error}"));
+        state.machine_control.record(
+            machine_id,
+            crate::machine_protocol::MachineEvent::LoginState {
+                request_id: request_id.to_owned(),
+                provider: provider_id.to_owned(),
+                state: crate::machine_protocol::AuthState::SignedIn,
+                account_label,
+                detail: Some(format!(
+                    "authentication is owned by Cowboy Service; temporary executor cleanup is pending: {error}"
+                )),
+            },
+        );
     }
-    state.machine_control.record(
-        machine_id,
-        crate::machine_protocol::MachineEvent::LoginState {
-            request_id: request_id.to_owned(),
-            provider: provider_id.to_owned(),
-            state: crate::machine_protocol::AuthState::SignedIn,
-            account_label,
-            detail: Some(if warnings.is_empty() {
-                "authentication is owned and synchronized by Cowboy Service".to_owned()
-            } else {
-                format!(
-                    "authentication is owned by Cowboy Service; {}",
-                    warnings.join("; ")
-                )
-            }),
-        },
-    );
     Ok(())
 }
 
@@ -10941,7 +10967,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             ) {
                 Ok(marked) => {
                     let replicas = BTreeMap::from([(marked.provider_id.clone(), outcome)]);
-                    rebind_unstarted_provider_sessions(&sync_state, &[marked], &replicas);
+                    recover_failed_provider_sessions(&sync_state, &[marked], &replicas);
                 }
                 Err(error) => {
                     tracing::warn!(%error, %machine_id, provider_id = %authentication.provider_id, "recording reconnected Machine Provider auth convergence");
@@ -12303,6 +12329,27 @@ mod machine_provider_tests {
             )),
         );
         assert!(rebindable_provider_auth_failure(&hub, "s").is_some());
+        hub.set_status("s", Status::Running, None);
+        assert!(
+            rebindable_provider_auth_failure(&hub, "s").is_some(),
+            "an idle worker snapshot must not erase the unresolved auth failure"
+        );
+        hub.set_status("s", Status::Exited, None);
+        assert!(
+            rebindable_provider_auth_failure(&hub, "s").is_none(),
+            "an explicitly exited session must remain stopped"
+        );
+        hub.set_status("s", Status::Running, None);
+        hub.push(
+            "s",
+            crate::core::Event::TurnEnd {
+                stop_reason: "end_turn".to_owned(),
+            },
+        );
+        assert!(
+            rebindable_provider_auth_failure(&hub, "s").is_none(),
+            "a clean turn completion resolves the prior auth failure"
+        );
 
         assert_eq!(
             provider_auth_rebind_generations(

@@ -211,6 +211,12 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
     managementSource.includes('{loginSucceeded ? "Done" : "Cancel"}'),
     true,
   );
+  assertEquals(
+    managementSource.includes(
+      "current?.requestId === flow.requestId ? null : current",
+    ),
+    true,
+  );
 });
 
 Deno.test("session settings embed one focused Service authentication card", () => {

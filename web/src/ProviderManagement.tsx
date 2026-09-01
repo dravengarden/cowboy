@@ -37,6 +37,7 @@ import {
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
+import { providerAuthenticationCompleted } from "./providerAuthenticationFlow.ts";
 import {
   ProviderMark,
   ProviderMarkStack,
@@ -501,7 +502,9 @@ function ProviderManagement(
   useEffect(() => {
     if (!flow?.requestId) return undefined;
     let active = true;
+    let completed = false;
     const poll = async (): Promise<void> => {
+      if (completed) return;
       try {
         const response = await fetch(
           `/api/plugins/${
@@ -537,11 +540,16 @@ function ProviderManagement(
           if (!current || current.requestId !== flow.requestId) return current;
           return { ...current, events: body.events ?? [] };
         });
-        const ready = body.events.some((event) =>
-          event.event === "login_state" &&
-          (event.state === "signed_in" || event.state === "ready")
-        );
-        if (ready) {
+        if (providerAuthenticationCompleted(body.events)) {
+          completed = true;
+          closeAuthenticationBrowser();
+          setLoginInput("");
+          setAuthenticationError("");
+          setAuthenticationClipboardNotice("");
+          setAuthenticationPendingMethod("");
+          setFlow((current) =>
+            current?.requestId === flow.requestId ? null : current
+          );
           await refreshCatalog();
         }
       } catch {
@@ -831,8 +839,7 @@ function ProviderManagement(
   const loginState = flow?.events.findLast((event) =>
     event.event === "login_state"
   );
-  const loginSucceeded = loginState?.event === "login_state" &&
-    (loginState.state === "signed_in" || loginState.state === "ready");
+  const loginSucceeded = providerAuthenticationCompleted(flow?.events ?? []);
   const copyAuthenticationCode = (): void => {
     if (challenge?.event !== "login_challenge" || !challenge.user_code) return;
     const code = challenge.user_code;
