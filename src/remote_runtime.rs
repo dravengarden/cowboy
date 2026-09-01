@@ -23,6 +23,17 @@ use crate::runtime_wire::{
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const BROKER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
 const BROKER_CONNECTION_STABLE_AFTER: Duration = Duration::from_secs(10);
+const BROKER_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
+
+async fn write_broker_frame<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    frame: &Frame,
+) -> Result<()> {
+    tokio::time::timeout(BROKER_FRAME_SEND_TIMEOUT, write_frame(writer, frame))
+        .await
+        .context("Machine broker frame write timed out")??;
+    Ok(())
+}
 
 fn broker_retry_delay(backoff: &mut Duration, stable_connection: bool) -> Duration {
     if stable_connection {
@@ -476,7 +487,7 @@ async fn connect_once(
         .await
         .with_context(|| format!("connecting Machine broker socket {}", socket.display()))?;
     let (mut reader, mut writer) = stream.into_split();
-    write_frame(
+    write_broker_frame(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Core,
@@ -507,7 +518,7 @@ async fn connect_once_stream(
     Vec<WorkerSnapshot>,
 )> {
     let (mut reader, mut writer) = stream.into_split();
-    write_frame(
+    write_broker_frame(
         &mut writer,
         &Frame::Hello {
             role: PeerRole::Core,
@@ -681,7 +692,7 @@ async fn connected(
     buffered: Vec<Frame>,
     notify_rx: &mut mpsc::UnboundedReceiver<()>,
 ) -> Result<()> {
-    write_frame(
+    write_broker_frame(
         &mut writer,
         &Frame::CoreCommand {
             command: CoreCommand::SetDesiredGeneration {
@@ -719,7 +730,7 @@ async fn connected(
                 if last_broker_frame.elapsed() > Duration::from_secs(35) {
                     anyhow::bail!("Machine broker heartbeat timed out");
                 }
-                write_frame(&mut writer, &Frame::Heartbeat).await?;
+                write_broker_frame(&mut writer, &Frame::Heartbeat).await?;
             }
         }
     }
@@ -737,7 +748,7 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .collect();
     commands.sort_by_key(|(_, command)| command_priority(command));
     for (key, command) in commands {
-        write_frame(writer, &Frame::CoreCommand { command }).await?;
+        write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
         shared.sent.lock().insert(key);
     }
     Ok(())
@@ -774,7 +785,7 @@ async fn send_declarations<W: tokio::io::AsyncWrite + Unpin>(
     declarations.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     for mut session in declarations {
         session.adopt_only = true;
-        write_frame(
+        write_broker_frame(
             writer,
             &Frame::CoreCommand {
                 command: CoreCommand::EnsureSession { session },
@@ -897,7 +908,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 }
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
-            write_frame(
+            write_broker_frame(
                 writer,
                 &Frame::Ack {
                     session_id,
