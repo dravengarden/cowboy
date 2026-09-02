@@ -3841,10 +3841,9 @@ const uploadPulse = keyframes`
 `;
 
 // An OPTIMISTIC draft/queue row: shown the instant you stage or move it, before
-// the service confirms. Connected `pending` stays quiet so a fast LAN confirm
-// never flashes a loader. Disconnected `pending` is an upload waiting to reach
-// the service. `sending` is in-flight. `failed` (retry still offline, or ack
-// timeout) is red with retry / return / discard.
+// the service confirms. The local durability barrier and network confirmation
+// are both explicit; there is never a visually silent interval after the
+// gesture. `failed` is red with retry / return / discard.
 function OptimisticDraftRow({
   sessionId,
   kind,
@@ -3857,6 +3856,7 @@ function OptimisticDraftRow({
   const connected = useConnected();
   const appearance = pendingSyncAppearance(message.status, connected);
   const failed = appearance === "failed";
+  const saving = appearance === "saving";
   const sending = appearance === "sending";
   const syncing = appearance === "syncing";
   const cmid = message.cmid ?? "";
@@ -3875,6 +3875,8 @@ function OptimisticDraftRow({
         gap: 0.5,
         bgcolor: failed
           ? alpha(t.palette.error.main, 0.06)
+          : saving
+          ? alpha(t.palette.primary.main, 0.05)
           : sending
           ? alpha(t.palette.primary.main, 0.05)
           : syncing
@@ -3883,7 +3885,7 @@ function OptimisticDraftRow({
         ...(failed && { borderLeft: `3px solid ${t.palette.error.main}` }),
       })}
     >
-      {sending && (
+      {(saving || sending) && (
         <CircularProgress
           size={13}
           thickness={5}
@@ -3920,12 +3922,12 @@ function OptimisticDraftRow({
           : null}
         {syncing && (
           <Typography variant="caption" sx={{ color: "info.main" }}>
-            Waiting to sync
+            {connected ? "Waiting for Cowboy…" : "Waiting for connection…"}
           </Typography>
         )}
-        {sending && (
+        {(saving || sending) && (
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Sending…
+            {kind === "draft" || saving ? "Saving…" : "Sending…"}
           </Typography>
         )}
         {failed && (
@@ -3937,7 +3939,7 @@ function OptimisticDraftRow({
           <QueuedAttachmentChips attachments={previewTray} />
         )}
       </Box>
-      {kind === "draft" && !failed && !sending && (
+      {kind === "draft" && !failed && !saving && !sending && (
         <Tooltip title="Send">
           <IconButton
             size="small"

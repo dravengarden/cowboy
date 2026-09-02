@@ -1,5 +1,5 @@
 export interface DurableDeliveryAttempt {
-  readonly status: "pending";
+  readonly status: "pending" | "sending";
   readonly armConfirmationTimeout: boolean;
 }
 
@@ -9,7 +9,7 @@ export interface DurableDeliveryAttempt {
  *  timeout. */
 export function durableDeliveryAttempt(sent: boolean): DurableDeliveryAttempt {
   return {
-    status: "pending",
+    status: sent ? "sending" : "pending",
     armConfirmationTimeout: sent,
   };
 }

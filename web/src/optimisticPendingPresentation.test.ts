@@ -20,12 +20,14 @@ Deno.test("optimistic draft cards strip image tokens instead of painting raw cow
   assertEquals(body.includes("{message.text || \"📎 attachment\"}"), false);
 });
 
-Deno.test("unsynced rows show an uploading mark and failed rows offer return-to-home", () => {
+Deno.test("pending rows show every delivery phase and failed rows offer return-to-home", () => {
   const start = composer.indexOf("function OptimisticDraftRow(");
   const end = composer.indexOf("interface PendingEditController", start);
   const body = composer.slice(start, end);
   assert(body.includes("CloudUpload"));
-  assert(body.includes("Waiting to sync"));
+  assert(body.includes('const saving = appearance === "saving"'));
+  assert(body.includes("Saving…"));
+  assert(body.includes("Waiting for connection…"));
   assert(body.includes("returnFailedQueued"));
   assert(body.includes("returnLabelForHome"));
   assertEquals(
@@ -64,5 +66,41 @@ Deno.test("failed transcript sends offer return to the list they left", () => {
   const body = transcript.slice(start, end);
   assert(body.includes("returnFailedMessage"));
   assert(body.includes("CloudUpload"));
-  assert(body.includes("Waiting to sync"));
+  assert(body.includes('const saving = appearance === "saving"'));
+  assert(body.includes("Saving…"));
+  assert(body.includes("Waiting for connection…"));
+});
+
+Deno.test("local content paints and reveals before the durable transport barrier resolves", async () => {
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const addStart = store.indexOf("async function qAdd(");
+  const addEnd = store.indexOf("export function retryQueued", addStart);
+  const add = store.slice(addStart, addEnd);
+  assert(add.indexOf('qStatus.set(cmid, "committing")') >= 0);
+  assert(add.indexOf("revealPendingArrival({") < add.indexOf("await store.mutateDurably"));
+  assert(add.indexOf("await store.mutateDurably") >= 0);
+
+  const activateStart = store.indexOf("export async function activateDraft(");
+  const activateEnd = store.indexOf("export function activateAllDrafts", activateStart);
+  const activate = store.slice(activateStart, activateEnd);
+  assert(activate.indexOf("setInteractiveState({") < activate.indexOf("await qClient(sessionId).mutateDurably"));
+  assert(activate.includes('status: "committing"'));
+
+  const commitStart = store.indexOf("function commitQueue(");
+  const commitEnd = store.indexOf("function armQTimers", commitStart);
+  const commit = store.slice(commitStart, commitEnd);
+  assert(commit.includes("setInteractiveState({"));
+  assert(commit.includes("pendingRowStatuses"));
+
+  const editStart = store.indexOf("async function editPendingRow(");
+  const editEnd = store.indexOf("export async function requestSendQueued", editStart);
+  const edit = store.slice(editStart, editEnd);
+  assert(edit.indexOf('qStatus.set(opId, "committing")') < edit.indexOf("await store.mutateDurably"));
+  assert(edit.includes("qStatus.delete(opId)"));
+
+  const sendQueuedStart = store.indexOf("export async function requestSendQueued(");
+  const sendQueuedEnd = store.indexOf("export async function forcePushQueued", sendQueuedStart);
+  const sendQueued = store.slice(sendQueuedStart, sendQueuedEnd);
+  assert(sendQueued.includes("qStatus.delete(opId)"));
+  assert(sendQueued.includes("qStatus.delete(echoCmid)"));
 });

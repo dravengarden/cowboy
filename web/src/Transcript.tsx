@@ -184,6 +184,7 @@ import {
   visibleTranscriptTopGap,
 } from "./transcriptViewport";
 import {
+  hasNewOptimisticDelivery,
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
@@ -1291,10 +1292,9 @@ function CollapsibleUserBody({
 
 // An OPTIMISTIC user bubble — shown the instant you hit send (chat), before the
 // daemon's user-echo confirms it. Mirrors the real user bubble (right-aligned,
-// primary fill). `pending` (<200ms) looks normal so a fast send never flashes;
-// `sending` reads unmistakably as in-flight — the bubble dims, a white sweep
-// runs across it, AND an explicit "Sending…" spinner line sits below it (a faint
-// sweep alone was too easy to miss); `failed` → red edge + Failed + retry /
+// primary fill). Local persistence and transport confirmation are both visible:
+// the bubble dims, a white sweep runs across it, and an explicit status line
+// sits below it. `failed` → red edge + Failed + retry /
 // discard. Reconciled out by cmid the moment the echo Envelope lands (same
 // bubble, seamless — the dim + line vanish as it confirms).
 function OptimisticUserBubble({
@@ -1307,9 +1307,10 @@ function OptimisticUserBubble({
   const connected = useConnected();
   const appearance = pendingSyncAppearance(message.status, connected);
   const failed = appearance === "failed";
+  const saving = appearance === "saving";
   const sending = appearance === "sending";
   const syncing = appearance === "syncing";
-  const inFlight = sending || syncing;
+  const inFlight = saving || sending || syncing;
   const cmid = message.cmid ?? "";
   const content = attachmentDisplayParts(message.text, message.attachments);
   const returnHome = homeForOrigin(message.origin ?? "composer");
@@ -1371,8 +1372,10 @@ function OptimisticUserBubble({
           />
         )}
       </Paper>
-      {sending && (
+      {(saving || sending) && (
         <Stack
+          role="status"
+          aria-live="polite"
           direction="row"
           spacing={0.5}
           alignItems="center"
@@ -1384,12 +1387,14 @@ function OptimisticUserBubble({
             sx={{ color: "text.secondary" }}
           />
           <Typography variant="caption" sx={{ color: "text.secondary" }}>
-            Sending…
+            {saving ? "Saving…" : "Sending…"}
           </Typography>
         </Stack>
       )}
       {syncing && (
         <Stack
+          role="status"
+          aria-live="polite"
           direction="row"
           spacing={0.5}
           alignItems="center"
@@ -1397,7 +1402,7 @@ function OptimisticUserBubble({
         >
           <CloudUpload sx={{ fontSize: 14, color: "info.main" }} />
           <Typography variant="caption" sx={{ color: "info.main" }}>
-            Waiting to sync
+            {connected ? "Waiting for Cowboy…" : "Waiting for connection…"}
           </Typography>
         </Stack>
       )}
@@ -4987,25 +4992,51 @@ export function Transcript({
     };
   }, [desktopNavigation, managesScrollHistory, pageId, sessionId]);
 
-  // A fresh local prompt is more important than restoring an old reading
-  // position. Reveal and pin it immediately; history can continue hydrating in
-  // the background without covering the delivery state.
+  const optimisticDeliveryIds = optimisticMsgs.map((message) =>
+    message.cmid ?? message.id
+  );
+  const optimisticDeliverySignature = optimisticDeliveryIds.join("\u001f");
+  const previousOptimisticDeliveriesRef = useRef({
+    sessionId,
+    ids: optimisticDeliveryIds,
+  });
+
+  // A fresh local prompt is an explicit request to see the new delivery. Pin it
+  // immediately even if the reader had detached from the live edge; do not wait
+  // for the first server planning/timeline event to make it visible. Re-pin for
+  // two frames so an attachment preview can establish its intrinsic geometry.
   useLayoutEffect(() => {
+    const previous = previousOptimisticDeliveriesRef.current;
+    const arrived = previous.sessionId === sessionId &&
+      hasNewOptimisticDelivery(previous.ids, optimisticDeliveryIds);
+    previousOptimisticDeliveriesRef.current = {
+      sessionId,
+      ids: optimisticDeliveryIds,
+    };
+    if (!arrived) return undefined;
     if (
-      !shouldInterruptTranscriptViewportRestore(
+      shouldInterruptTranscriptViewportRestore(
         viewportRestoreActiveRef.current,
         optimisticMsgs.length,
       )
-    ) return;
-    viewportRestoreActiveRef.current = false;
-    setMaskingViewportRestore(false);
+    ) {
+      viewportRestoreActiveRef.current = false;
+      setMaskingViewportRestore(false);
+    }
     stick.current = true;
     setFollowingLive(true);
     resetSticky(sessionId);
     freezeRef.current.key = null;
-    const el = parentRef.current;
-    if (el) pinTranscriptToLatest(el);
-  }, [optimisticMsgs.length, sessionId]);
+    let frame = 0;
+    let attempts = 0;
+    const pin = (): void => {
+      const el = parentRef.current;
+      if (el) pinTranscriptToLatest(el);
+      if (++attempts < 3) frame = requestAnimationFrame(pin);
+    };
+    pin();
+    return () => cancelAnimationFrame(frame);
+  }, [optimisticDeliverySignature, sessionId]);
 
   // A live Page is allowed to follow only for the duration of its active turn.
   // As soon as that turn settles, freeze it as an ordinary reading page at its

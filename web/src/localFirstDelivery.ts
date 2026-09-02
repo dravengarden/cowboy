@@ -7,9 +7,9 @@ export type DeliveryOrigin = "composer" | "draft" | "queue";
 export type DeliveryHome = "draft" | "queue";
 
 /** Visible chrome for a local row that has not been confirmed by the service. */
-export type PendingSyncAppearance = "hidden" | "syncing" | "sending" | "failed";
+export type PendingSyncAppearance = "hidden" | "saving" | "syncing" | "sending" | "failed";
 
-export type DeliveryStatus = "pending" | "sending" | "failed";
+export type DeliveryStatus = "committing" | "pending" | "sending" | "failed";
 
 export type DeliveryDestination = "transcript" | "queue";
 
@@ -23,11 +23,11 @@ export function returnLabelForHome(home: DeliveryHome): string {
 
 /** First attempt: a closed socket is "waiting to resend", not a failure. */
 export function firstDeliveryAttempt(sent: boolean): {
-  readonly status: "pending";
+  readonly status: "pending" | "sending";
   readonly armConfirmationTimeout: boolean;
 } {
   return {
-    status: "pending",
+    status: sent ? "sending" : "pending",
     armConfirmationTimeout: sent,
   };
 }
@@ -38,7 +38,7 @@ export function retryDeliveryAttempt(sent: boolean): {
   readonly armConfirmationTimeout: boolean;
 } {
   if (sent) {
-    return { status: "pending", armConfirmationTimeout: true };
+    return { status: "sending", armConfirmationTimeout: true };
   }
   return { status: "failed", armConfirmationTimeout: false };
 }
@@ -46,19 +46,22 @@ export function retryDeliveryAttempt(sent: boolean): {
 /**
  * Unconfirmed row chrome.
  *
- * A connected `pending` row stays visually quiet so a fast LAN confirm never
- * flashes a loader. A disconnected `pending` row is waiting to reach the
- * service and must look like an upload. `sending` is an in-flight attempt that
- * already left this device. `failed` is a retry that still had no network, or
- * an ack timeout.
+ * `committing` is the local durability barrier, before transport is allowed to
+ * see the mutation. `pending` has been committed but is waiting for a usable
+ * connection. `sending` already left this device. None of these states is
+ * visually quiet: user-authored content must acknowledge the tap immediately.
  */
 export function pendingSyncAppearance(
   status: DeliveryStatus | undefined,
   connected: boolean,
 ): PendingSyncAppearance {
   if (status === "failed") return "failed";
+  if (status === "committing") return "saving";
+  if (!connected && (status === "pending" || status === "sending")) {
+    return "syncing";
+  }
   if (status === "sending") return "sending";
-  if (status === "pending" && !connected) return "syncing";
+  if (status === "pending") return "syncing";
   return "hidden";
 }
 

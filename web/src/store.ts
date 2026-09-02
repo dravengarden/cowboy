@@ -29,6 +29,7 @@ import {
 } from "./durableDelivery.ts";
 import {
   type DeliveryOrigin,
+  type DeliveryStatus,
   destinationForPrompt,
   homeForOrigin,
   retryDeliveryAttempt,
@@ -126,10 +127,10 @@ export interface QueuedMessage {
    *  optimistic row it's the id we minted. */
   cmid?: string;
   /** Set ONLY on a local optimistic row awaiting/failed daemon confirmation:
-   *  `pending` (just sent, no shimmer yet — see SHIMMER_DELAY_MS), `sending`
-   *  (still unconfirmed past the delay → gradient shimmer), `failed` (WS down /
-   *  timed out → red + retry). A confirmed server row carries no status. */
-  status?: "pending" | "sending" | "failed";
+   *  `committing` (durable local save), `pending` (waiting for connection),
+   *  `sending` (awaiting service confirmation), or `failed`. A confirmed server
+   *  row carries no status. */
+  status?: DeliveryStatus;
   /** Where this local row came from, so a failed send can return there. */
   origin?: DeliveryOrigin;
   /** Present only on a DRAFT with a future fire time — the server auto-activates
@@ -468,6 +469,15 @@ function emit(): void {
   scheduleNotify();
 }
 
+/** User gestures must paint from the canonical local state on the current
+ * event turn. Streaming ACP traffic stays frame-paced below, but making a
+ * freshly submitted message wait behind that cadence creates a blank tap and
+ * can leave the row below the visible edge until the first server event. */
+function emitInteractive(): void {
+  notifyScheduled = true;
+  if (presentationHoldCount === 0) flushNotify();
+}
+
 // WebSocket chunks can arrive much faster than the display can paint. State is
 // still reduced synchronously (no event is lost), but visible subscriber
 // rendering keeps the established ~20fps cadence and ~10fps while scrolling.
@@ -556,6 +566,11 @@ function scheduleNotify(): void {
 function setState(next: State): void {
   state = next;
   emit();
+}
+
+function setInteractiveState(next: State): void {
+  state = next;
+  emitInteractive();
 }
 
 const NETWORK_ACTION_TIMEOUT_MS = 10_000;
@@ -1682,12 +1697,6 @@ function isConnected(): boolean {
 // (the transcript isn't a small-value sync state). Both share the timer/status
 // machinery below.
 
-/** How long an optimistic row waits before showing the gradient shimmer. Under
- *  this, it renders as a normal row — a fast LAN/tailnet confirm (<~100ms)
- *  replaces it before the shimmer ever appears, so a quick send never flashes a
- *  loader. ~100ms is the human "instant" threshold (Nielsen/RAIL); 200ms leaves
- *  margin for jitter so the fast path is never a flicker. */
-const SHIMMER_DELAY_MS = 200;
 /** No daemon echo by here → treat the send as failed (WS dropped mid-flight). */
 const SEND_TIMEOUT_MS = 10_000;
 
@@ -2028,7 +2037,7 @@ const qMut = {
     queueMutators.returnQueuedToDraft(v, a),
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
-const qStatus = new Map<string, "pending" | "sending" | "failed">();
+const qStatus = new Map<string, DeliveryStatus>();
 const SILENT_QUEUE_MUTATORS = new Set([
   "editDraft",
   "editQueue",
@@ -2140,7 +2149,17 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // both for the initial send (via mutate) and the reconnect resend.
       send: (m): void => {
         const sent = send(commandForQueueMutation(sessionId, m));
-        if (SILENT_QUEUE_MUTATORS.has(m.name)) return;
+        const mutationRow = (m.args as { row?: QueuedMessage }).row;
+        if (SILENT_QUEUE_MUTATORS.has(m.name)) {
+          // Edits and schedule changes already painted from the local mutation.
+          // Advance their visible phase after the durable barrier; removes have
+          // no remaining row to annotate.
+          if (mutationRow !== undefined) {
+            qStatus.set(m.id, statusAfterExplicitSend(sent));
+            commitQueue(sessionId);
+          }
+          return;
+        }
         const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
           ? {
             status: statusAfterExplicitSend(sent),
@@ -2148,11 +2167,14 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
           }
           : durableDeliveryAttempt(sent);
         qStatus.set(m.id, attempt.status);
-        const echoCmid = (m.args as { row?: QueuedMessage }).row?.cmid;
+        const echoCmid = mutationRow?.cmid;
         if (echoCmid !== undefined && echoCmid !== m.id) {
           qStatus.set(echoCmid, attempt.status);
         }
-        if (attempt.armConfirmationTimeout) armQTimers(sessionId, m.id);
+        commitQueue(sessionId);
+        if (attempt.armConfirmationTimeout) {
+          armQTimers(sessionId, m.id, echoCmid);
+        }
       },
       onChange: (): void => {
         commitQueue(sessionId);
@@ -2197,11 +2219,23 @@ async function hydrateCachedQueues(): Promise<void> {
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
   const view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
-  const pend = new Set((c?.pending() ?? []).map((m) => m.id));
+  const pending = c?.pending() ?? [];
+  const pend = new Set(pending.map((m) => m.id));
+  const pendingRowStatuses = new Map<string, DeliveryStatus>();
+  for (const mutation of pending) {
+    const row = (mutation.args as { row?: QueuedMessage }).row;
+    if (row !== undefined) {
+      pendingRowStatuses.set(
+        row.id,
+        qStatus.get(mutation.id) ?? "pending",
+      );
+    }
+  }
   const withStatus = (rows: readonly QueuedMessage[]): QueuedMessage[] =>
     rows.map((r) => {
-      if (r.cmid === undefined) return r;
-      const status = qStatus.get(r.cmid) ?? (pend.has(r.cmid) ? "pending" : undefined);
+      const status = (r.cmid === undefined ? undefined : qStatus.get(r.cmid)) ??
+        pendingRowStatuses.get(r.id) ??
+        (r.cmid !== undefined && pend.has(r.cmid) ? "pending" : undefined);
       return status !== undefined ? { ...r, status } : r;
     });
   const queues = new Map(state.queues);
@@ -2219,7 +2253,12 @@ function commitQueue(sessionId: string): void {
   const kept = existing.filter((message) =>
     message.cmid === undefined ||
     (!suppressedInFlight.has(message.cmid) && !inFlightCmids.has(message.cmid))
-  );
+  ).map((message) => {
+    const status = message.cmid === undefined ? undefined : qStatus.get(message.cmid);
+    return status !== undefined && status !== message.status
+      ? { ...message, status }
+      : message;
+  });
   const bubbles = [...kept];
   for (const row of view.inFlight ?? []) {
     if (row.cmid !== undefined && suppressedInFlight.has(row.cmid)) continue;
@@ -2234,26 +2273,33 @@ function commitQueue(sessionId: string): void {
   const optimisticMessages = new Map(state.optimisticMessages);
   if (bubbles.length > 0) optimisticMessages.set(sessionId, bubbles);
   else optimisticMessages.delete(sessionId);
-  setState({ ...state, queues, drafts, optimisticMessages });
+  setInteractiveState({ ...state, queues, drafts, optimisticMessages });
 }
 
-/** Arm pending→sending (shimmer) and →failed timers for an optimistic queue row,
- *  keyed by cmid; flips `qStatus` and re-renders. */
-function armQTimers(sessionId: string, cmid: string): void {
-  clearOptTimers(cmid);
-  optTimers.set(cmid, {
-    shimmer: setTimeout(() => {
-      if (qStatus.get(cmid) === "pending") {
-        qStatus.set(cmid, "sending");
-        commitQueue(sessionId);
-      }
-    }, SHIMMER_DELAY_MS),
+/** Arm the acknowledgement timeout for an optimistic queue row. The loader is
+ * already visible before persistence starts, so there is no delayed shimmer. */
+function armQTimers(
+  sessionId: string,
+  mutationId: string,
+  echoCmid?: string,
+): void {
+  clearOptTimers(mutationId);
+  const statusIds = echoCmid === undefined || echoCmid === mutationId
+    ? [mutationId]
+    : [mutationId, echoCmid];
+  optTimers.set(mutationId, {
     fail: setTimeout(() => {
-      if (qStatus.get(cmid) !== "failed") {
-        qStatus.set(cmid, "failed");
+      let changed = false;
+      for (const id of statusIds) {
+        if (qStatus.has(id) && qStatus.get(id) !== "failed") {
+          qStatus.set(id, "failed");
+          changed = true;
+        }
+      }
+      if (changed) {
         commitQueue(sessionId);
       }
-      clearOptTimers(cmid);
+      clearOptTimers(mutationId);
     }, SEND_TIMEOUT_MS),
   });
 }
@@ -2288,7 +2334,7 @@ async function qAdd(
   // which reads this status. `mutateDurably` commits the outbox transaction before
   // its transport callback can send. The source editor may clear only after this
   // barrier resolves.
-  qStatus.set(cmid, "pending");
+  qStatus.set(cmid, "committing");
   const mutator = target === "drafts"
     ? "addDraft"
     : target === "scheduled"
@@ -2300,19 +2346,19 @@ async function qAdd(
     : mode === "front"
     ? "frontQueue"
     : "addQueue";
-  try {
-    await store.mutateDurably(mutator, { row }, cmid);
-  } catch (error) {
-    qStatus.delete(cmid);
-    commitQueue(sessionId);
-    throw error;
-  }
   if (target !== "transcript") {
     revealPendingArrival({
       kind: target === "drafts" || target === "scheduled" ? "draft" : "queued",
       id: row.id,
       cmid,
     });
+  }
+  try {
+    await store.mutateDurably(mutator, { row }, cmid);
+  } catch (error) {
+    qStatus.delete(cmid);
+    commitQueue(sessionId);
+    throw error;
   }
   await waitForState(
     (snapshot) =>
@@ -2342,7 +2388,7 @@ export function retryQueued(sessionId: string, cmid: string): void {
     const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
     if (echoCmid !== undefined && echoCmid !== cmid) qStatus.set(echoCmid, attempt.status);
     commitQueue(sessionId);
-    if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid);
+    if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid, echoCmid);
     return;
   }
   const view = c.get();
@@ -2449,6 +2495,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
         const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid ?? id;
         suppressedInFlight.add(echoCmid);
         settledSuppressed.push(echoCmid);
+        qStatus.delete(echoCmid);
       }
       clearOptTimers(id);
       qStatus.delete(id);
@@ -2501,10 +2548,9 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
 
 // cmid → its pending/timeout timers, so reconcile/retry can clear them. Shared
 // by the chat overlay AND the queue path (`armQTimers`).
-const optTimers = new Map<string, { shimmer?: ReturnType<typeof setTimeout>; fail?: ReturnType<typeof setTimeout> }>();
+const optTimers = new Map<string, { fail?: ReturnType<typeof setTimeout> }>();
 function clearOptTimers(cmid: string): void {
   const t = optTimers.get(cmid);
-  if (t?.shimmer) clearTimeout(t.shimmer);
   if (t?.fail) clearTimeout(t.fail);
   optTimers.delete(cmid);
 }
@@ -2519,17 +2565,13 @@ function patchMessage(sessionId: string, cmid: string, patch: ((m: QueuedMessage
   const map = new Map(state.optimisticMessages);
   if (next.length > 0) map.set(sessionId, next);
   else map.delete(sessionId);
-  setState({ ...state, optimisticMessages: map });
+  setInteractiveState({ ...state, optimisticMessages: map });
 }
 
-/** Arm the pending→sending (shimmer) and →failed timers for an optimistic
- *  chat bubble. */
+/** Arm the acknowledgement timeout for an optimistic chat bubble. */
 function armMsgTimers(sessionId: string, cmid: string): void {
   clearOptTimers(cmid);
   optTimers.set(cmid, {
-    shimmer: setTimeout(() => {
-      patchMessage(sessionId, cmid, (m) => (m.status === "pending" ? { ...m, status: "sending" } : m));
-    }, SHIMMER_DELAY_MS),
     fail: setTimeout(() => {
       patchMessage(sessionId, cmid, (m) => (m.status === "failed" ? m : { ...m, status: "failed" }));
       clearOptTimers(cmid);
@@ -2747,11 +2789,19 @@ async function editPendingRow(
     attachments,
   };
   const store = qClient(sessionId);
-  await store.mutateDurably(
-    target === "draft" ? "editDraft" : "editQueue",
-    { id, row },
-    newCmid(),
-  );
+  const opId = newCmid();
+  qStatus.set(opId, "committing");
+  try {
+    await store.mutateDurably(
+      target === "draft" ? "editDraft" : "editQueue",
+      { id, row },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    commitQueue(sessionId);
+    throw error;
+  }
   await waitForState(
     (snapshot) => {
       const rows = target === "draft"
@@ -2787,20 +2837,26 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
     cmid: echoCmid,
     origin: "queue",
   };
-  qStatus.set(opId, "pending");
-  qStatus.set(echoCmid, "pending");
-  return qClient(sessionId).mutateDurably(
-    "sendQueued",
-    { id, row: presented },
-    opId,
-  ).then(() =>
-    waitForState(
-      (snapshot) =>
-        !(snapshot.queues.get(sessionId) ?? []).some((message) =>
-          message.id === id
-        ),
-      "Send queued message",
-    )
+  qStatus.set(opId, "committing");
+  qStatus.set(echoCmid, "committing");
+  try {
+    await qClient(sessionId).mutateDurably(
+      "sendQueued",
+      { id, row: presented },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    qStatus.delete(echoCmid);
+    commitQueue(sessionId);
+    throw error;
+  }
+  await waitForState(
+    (snapshot) =>
+      !(snapshot.queues.get(sessionId) ?? []).some((message) =>
+        message.id === id
+      ),
+    "Send queued message",
   );
 }
 
@@ -2824,20 +2880,26 @@ export async function forcePushQueued(sessionId: string, id: string): Promise<vo
     cmid: echoCmid,
     origin: "queue",
   };
-  qStatus.set(opId, "pending");
-  qStatus.set(echoCmid, "pending");
-  return qClient(sessionId).mutateDurably(
-    "forceQueued",
-    { id, row: presented },
-    opId,
-  ).then(() =>
-    waitForState(
-      (snapshot) =>
-        !(snapshot.queues.get(sessionId) ?? []).some((message) =>
-          message.id === id
-        ),
-      "Force push queued message",
-    )
+  qStatus.set(opId, "committing");
+  qStatus.set(echoCmid, "committing");
+  try {
+    await qClient(sessionId).mutateDurably(
+      "forceQueued",
+      { id, row: presented },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    qStatus.delete(echoCmid);
+    commitQueue(sessionId);
+    throw error;
+  }
+  await waitForState(
+    (snapshot) =>
+      !(snapshot.queues.get(sessionId) ?? []).some((message) =>
+        message.id === id
+      ),
+    "Force push queued message",
   );
 }
 
@@ -2926,8 +2988,8 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 // --- Draft operations -------------------------------------------------------
 
 // Park the composer's content as a new draft (the "Draft" button). Shows the
-// draft INSTANTLY (optimistic), then sends. WS open → `pending` (no shimmer yet,
-// see SHIMMER_DELAY_MS); WS down → pending in the durable outbox until reconnect.
+// draft INSTANTLY (optimistic), then sends. The card visibly moves from its
+// local durability barrier to service confirmation, or waits for reconnect.
 // Empty is ignored.
 export function addDraft(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
   const trimmed = text.trimEnd();
@@ -2992,48 +3054,43 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
     return;
   }
   const opId = newCmid();
-  const presented = dest === "queue"
-    ? {
-      id: `opt-${opId}`,
-      text: row.text,
-      attachments: row.attachments,
-      cmid: opId,
-      origin: "draft" as const,
-    }
-    : undefined;
-  qStatus.set(opId, "pending");
-  if (presented !== undefined) qStatus.set(presented.cmid, "pending");
-  return qClient(sessionId).mutateDurably(
-    "activateDraft",
-    presented === undefined ? { id } : { id, row: presented },
-    opId,
-  ).then(() => {
-    if (dest === "transcript") {
-      const map = new Map(state.optimisticMessages);
-      map.set(sessionId, [
-        ...(map.get(sessionId) ?? []),
-        {
-          id: `opt-${opId}`,
-          text: row.text,
-          attachments: row.attachments,
-          cmid: opId,
-          status: statusAfterExplicitSend(isConnected()),
-          origin: "draft",
-        },
-      ]);
-      setState({ ...state, optimisticMessages: map });
-      if (isConnected()) armMsgTimers(sessionId, opId);
-    } else {
-      revealPendingArrival({ kind: "queued", id: `opt-${opId}`, cmid: opId });
-    }
-    return waitForState(
-      (snapshot) =>
-        !(snapshot.drafts.get(sessionId) ?? []).some((message) =>
-          message.id === id
-        ),
-      "Send draft",
+  const presented: QueuedMessage = {
+    id: `opt-${opId}`,
+    text: row.text,
+    attachments: row.attachments,
+    cmid: opId,
+    origin: "draft",
+  };
+  qStatus.set(opId, "committing");
+  if (dest === "transcript") {
+    const map = new Map(state.optimisticMessages);
+    map.set(sessionId, [
+      ...(map.get(sessionId) ?? []),
+      { ...presented, status: "committing" },
+    ]);
+    setInteractiveState({ ...state, optimisticMessages: map });
+  } else {
+    revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
+  }
+  try {
+    await qClient(sessionId).mutateDurably(
+      "activateDraft",
+      dest === "transcript" ? { id } : { id, row: presented },
+      opId,
     );
-  });
+  } catch (error) {
+    qStatus.delete(opId);
+    if (dest === "transcript") patchMessage(sessionId, opId, "drop");
+    else commitQueue(sessionId);
+    throw error;
+  }
+  await waitForState(
+    (snapshot) =>
+      !(snapshot.drafts.get(sessionId) ?? []).some((message) =>
+        message.id === id
+      ),
+    "Send draft",
+  );
 }
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
@@ -3051,7 +3108,7 @@ export function activateAllDrafts(sessionId: string): Promise<void> {
 // with every client offline. Both create and reschedule use the durable queue
 // outbox so a PWA release between tapping Save and the server patch cannot lose
 // intent.
-export function scheduleDraft(
+export async function scheduleDraft(
   sessionId: string,
   opts: { id?: string; text?: string; attachments?: Attachment[]; fireAtMs: number; delivery?: Delivery },
 ): Promise<void> {
@@ -3072,25 +3129,32 @@ export function scheduleDraft(
     attachments: attachments ?? source.attachments,
     schedule: { fire_at_ms: fireAtMs, delivery },
   };
-  return qClient(sessionId).mutateDurably(
-    "rescheduleDraft",
-    { id, row },
-    newCmid(),
-  ).then(() =>
-    waitForState(
-      (snapshot) =>
-        snapshot.drafts.get(sessionId)?.some((draft) =>
-          draft.id === id &&
-          draft.schedule?.fire_at_ms === fireAtMs &&
-          draft.schedule.delivery === delivery
-        ) === true,
-      "Schedule draft",
-    )
+  const opId = newCmid();
+  qStatus.set(opId, "committing");
+  try {
+    await qClient(sessionId).mutateDurably(
+      "rescheduleDraft",
+      { id, row },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    commitQueue(sessionId);
+    throw error;
+  }
+  await waitForState(
+    (snapshot) =>
+      snapshot.drafts.get(sessionId)?.some((draft) =>
+        draft.id === id &&
+        draft.schedule?.fire_at_ms === fireAtMs &&
+        draft.schedule.delivery === delivery
+      ) === true,
+    "Schedule draft",
   );
 }
 
 // Strip the schedule off a draft (it stays a plain parked draft).
-export function unscheduleDraft(sessionId: string, id: string): Promise<void> {
+export async function unscheduleDraft(sessionId: string, id: string): Promise<void> {
   const source = findDraft(sessionId, id);
   if (source === undefined || source.schedule === undefined) {
     return Promise.resolve();
@@ -3102,18 +3166,25 @@ export function unscheduleDraft(sessionId: string, id: string): Promise<void> {
     ...(source.cmid !== undefined ? { cmid: source.cmid } : {}),
     ...(source.origin !== undefined ? { origin: source.origin } : {}),
   };
-  return qClient(sessionId).mutateDurably(
-    "unscheduleDraft",
-    { id, row },
-    newCmid(),
-  ).then(() =>
-    waitForState(
-      (snapshot) =>
-        snapshot.drafts.get(sessionId)?.some((draft) =>
-          draft.id === id && draft.schedule === undefined
-        ) === true,
-      "Cancel scheduled draft",
-    )
+  const opId = newCmid();
+  qStatus.set(opId, "committing");
+  try {
+    await qClient(sessionId).mutateDurably(
+      "unscheduleDraft",
+      { id, row },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    commitQueue(sessionId);
+    throw error;
+  }
+  await waitForState(
+    (snapshot) =>
+      snapshot.drafts.get(sessionId)?.some((draft) =>
+        draft.id === id && draft.schedule === undefined
+      ) === true,
+    "Cancel scheduled draft",
   );
 }
 
@@ -3137,18 +3208,25 @@ export async function queuedToDraft(sessionId: string, id: string): Promise<void
     origin: "queue",
     ...(row.schedule !== undefined ? { schedule: row.schedule } : {}),
   };
-  qStatus.set(opId, "pending");
-  return qClient(sessionId).mutateDurably(
-    "returnQueuedToDraft",
-    { id, row: presented },
-    opId,
-  ).then(() => {
-    revealPendingArrival({
-      kind: "draft",
-      id: presented.id,
-      ...(presented.cmid !== undefined ? { cmid: presented.cmid } : {}),
-    });
+  qStatus.set(opId, "committing");
+  if (presented.cmid !== undefined) qStatus.set(presented.cmid, "committing");
+  revealPendingArrival({
+    kind: "draft",
+    id: presented.id,
+    ...(presented.cmid !== undefined ? { cmid: presented.cmid } : {}),
   });
+  try {
+    await qClient(sessionId).mutateDurably(
+      "returnQueuedToDraft",
+      { id, row: presented },
+      opId,
+    );
+  } catch (error) {
+    qStatus.delete(opId);
+    if (presented.cmid !== undefined) qStatus.delete(presented.cmid);
+    commitQueue(sessionId);
+    throw error;
+  }
 }
 
 // Move a draft to another session's drafts (the "parked it in the wrong

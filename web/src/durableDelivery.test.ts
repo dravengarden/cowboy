@@ -13,7 +13,7 @@ Deno.test("disconnected durable delivery waits for reconnect instead of failing"
 
 Deno.test("connected durable delivery starts its confirmation timeout", () => {
   assertEquals(durableDeliveryAttempt(true), {
-    status: "pending",
+    status: "sending",
     armConfirmationTimeout: true,
   });
 });

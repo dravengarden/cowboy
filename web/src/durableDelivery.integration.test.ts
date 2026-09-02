@@ -165,18 +165,23 @@ Deno.test("durable mutation commits its outbox before transport delivery", async
     },
   };
   const sent: string[] = [];
+  let paints = 0;
   const store = replicatedStore<QueueState, typeof queueMutators>({
     clientId: "barrier",
     mutators: queueMutators,
     initial: { rows: [] },
     local: persistence,
     send: (mutation) => sent.push(mutation.id),
+    onChange: () => {
+      paints += 1;
+    },
   });
 
   const commit = store.mutateDurably("submit", { text: "keep me" }, "cmid-barrier");
   await saveStarted;
   assertEquals(sent, [], "transport must not precede the IndexedDB commit");
   assertEquals(store.get().rows, ["keep me"]);
+  assertEquals(paints, 1, "subscribers must paint before the durable write resolves");
   releaseSave?.();
   await commit;
   assertEquals(sent, ["cmid-barrier"]);

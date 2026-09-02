@@ -24,7 +24,7 @@ Deno.test("a first offline attempt waits instead of failing", () => {
     armConfirmationTimeout: false,
   });
   assertEquals(firstDeliveryAttempt(true), {
-    status: "pending",
+    status: "sending",
     armConfirmationTimeout: true,
   });
 });
@@ -35,16 +35,18 @@ Deno.test("an explicit retry that still has no network becomes a failure", () =>
     armConfirmationTimeout: false,
   });
   assertEquals(retryDeliveryAttempt(true), {
-    status: "pending",
+    status: "sending",
     armConfirmationTimeout: true,
   });
 });
 
-Deno.test("offline unconfirmed rows show syncing chrome; connected pending stays quiet", () => {
+Deno.test("every unconfirmed phase has explicit chrome", () => {
   assertEquals(pendingSyncAppearance(undefined, false), "hidden");
-  assertEquals(pendingSyncAppearance("pending", true), "hidden");
+  assertEquals(pendingSyncAppearance("committing", true), "saving");
+  assertEquals(pendingSyncAppearance("committing", false), "saving");
+  assertEquals(pendingSyncAppearance("pending", true), "syncing");
   assertEquals(pendingSyncAppearance("pending", false), "syncing");
-  assertEquals(pendingSyncAppearance("sending", false), "sending");
+  assertEquals(pendingSyncAppearance("sending", false), "syncing");
   assertEquals(pendingSyncAppearance("sending", true), "sending");
   assertEquals(pendingSyncAppearance("failed", true), "failed");
 });

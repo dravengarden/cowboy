@@ -102,7 +102,7 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1412", async
   assert(admin.includes("/cowboy-app-icon-512-v3.png"));
   assert(manifest.includes('"src": "/cowboy-app-icon-180-v3.png"'));
   assert(manifest.includes('"src": "/cowboy-app-icon-512.png"'));
-  assert(serviceWorker.includes('const VERSION = "cowboy-v1618"'));
+  assert(serviceWorker.includes('const VERSION = "cowboy-v1619"'));
   assert(serviceWorker.includes('icon: "/cowboy-app-icon-192.png"'));
   assert(managerInfo.includes("<string>Cowboy.icns</string>"));
   assert(managerBuild.includes("Resources/Cowboy.icns"));
