@@ -232,45 +232,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 }
 
 extension AppModel {
-    var menuBarSymbol: String {
-        if installState.phase.isRunning {
-            return installState.menuBarSymbol
-        }
-        if dependencyUpdateState.phase.isRunning {
-            return "arrow.triangle.2.circlepath.circle.fill"
-        }
-        if serviceActionState.phase == .failed || dependencyUpdateState.phase == .failed {
-            return "exclamationmark.triangle.fill"
-        }
-        if isMachineRunning {
-            return "bolt.horizontal.circle.fill"
-        }
-        if installedStatus.isInstalled {
-            return "bolt.slash.circle"
-        }
-        return "arrow.down.circle"
-    }
-
-    var menuBarMessage: String {
-        if installState.phase.isRunning {
-            return installState.message
-        }
-        if dependencyUpdateState.phase.isRunning {
-            return dependencyUpdateState.message
-        }
-        if serviceActionState.phase.isRunning || serviceActionState.phase == .failed {
-            return serviceActionState.message
-        }
-        if isMachineRunning {
-            return "Cowboy Machine is running"
-        }
-        return installedStatus.isInstalled
-            ? "Cowboy Machine is stopped"
-            : "Cowboy Machine is not installed"
-    }
-
     var menuBarColor: Color {
-        if serviceActionState.phase == .failed || dependencyUpdateState.phase == .failed {
+        if serviceActionState.phase == .failed {
             return .orange
         }
         if isMachineRunning {
@@ -281,21 +244,6 @@ extension AppModel {
 }
 
 extension InstallState {
-    var menuBarSymbol: String {
-        switch phase {
-        case .preparing, .validating, .installing, .activating, .refreshing:
-            "arrow.down.circle"
-        case .succeeded:
-            "checkmark.circle.fill"
-        case .failed, .interrupted:
-            "exclamationmark.triangle.fill"
-        case .cancelled:
-            "xmark.circle.fill"
-        case .idle:
-            "shippingbox"
-        }
-    }
-
     var statusColor: Color {
         switch phase {
         case .succeeded: .green

@@ -117,6 +117,34 @@ struct AppModelTests {
     }
 
     @Test
+    func failedDependencyCheckDoesNotOverrideRunningMachineMenuBarStatus() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: true)
+        let client = MockCowboyServiceClient()
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            detector: detector,
+            serviceClient: client
+        )
+
+        #expect(model.signIn(account: "owner", password: "password"))
+        await model.waitForAccountAction()
+        client.error = TestFailure(errorDescription: "dependency service unavailable")
+
+        #expect(model.checkDependencies())
+        await model.waitForDependencyAction()
+
+        #expect(model.dependencyUpdateState.phase == .failed)
+        #expect(model.menuBarStatus == MenuBarStatus(
+            symbolName: "bolt.horizontal.circle.fill",
+            message: "Cowboy Machine is running"
+        ))
+    }
+
+    @Test
     func signsInThenAppliesDependencyPlan() async {
         let persistence = MemoryPersistence()
         persistence.settings.controllerURL = "https://cowboy.example"
