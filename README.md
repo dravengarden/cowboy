@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/public/cowboy-app-icon-512-v3.png" width="112" height="112" alt="Cowboy">
+  <img src="web/public/cowboy-app-icon-512-v4.png" width="112" height="112" alt="Cowboy">
 </p>
 
 <h1 align="center">Cowboy</h1>

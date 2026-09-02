@@ -28,12 +28,13 @@ async function sha256(path: string): Promise<string> {
     .join("");
 }
 
-Deno.test("Cowboy 1412 brand assets cover every app surface", async () => {
+Deno.test("Cowboy 1703 brand assets cover every app surface", async () => {
   const expectedPngSizes: Record<string, [number, number]> = {
     "assets/brand/cowboy-logo.png": [1024, 1024],
-    "web/public/cowboy-app-icon-180-v3.png": [180, 180],
-    "web/public/cowboy-app-icon-192.png": [192, 192],
-    "web/public/cowboy-app-icon-512-v3.png": [512, 512],
+    "web/public/cowboy-app-icon-180-v4.png": [180, 180],
+    "web/public/cowboy-app-icon-192-v4.png": [192, 192],
+    "web/public/cowboy-app-icon-512-v4.png": [512, 512],
+    "web/public/cowboy-app-icon-maskable-512-v4.png": [512, 512],
     "apps/native-shell/tauri/icons/icon.png": [512, 512],
     "apps/native-shell/tauri/icons/ios/AppIcon-512@2x.png": [1024, 1024],
   };
@@ -44,45 +45,72 @@ Deno.test("Cowboy 1412 brand assets cover every app surface", async () => {
   for (const alias of [
     "web/public/cowboy-app-icon-180.png",
     "web/public/cowboy-app-icon-180-v2.png",
+    "web/public/cowboy-app-icon-180-v3.png",
     "web/public/apple-touch-icon.png",
     "web/public/apple-touch-icon-precomposed.png",
     "web/public/apple-touch-icon-180x180.png",
     "web/public/apple-touch-icon-180x180-precomposed.png",
   ]) {
-    await assertSame("web/public/cowboy-app-icon-180-v3.png", alias);
+    await assertSame("web/public/cowboy-app-icon-180-v4.png", alias);
   }
-  await assertSame("web/public/cowboy-app-icon-192.png", "web/public/icon-192.png");
+  await assertSame(
+    "web/public/apple-touch-icon-152x152.png",
+    "web/public/apple-touch-icon-152x152-precomposed.png",
+  );
+  await assertSame(
+    "web/public/apple-touch-icon-167x167.png",
+    "web/public/apple-touch-icon-167x167-precomposed.png",
+  );
   for (const alias of [
+    "web/public/cowboy-app-icon-192.png",
+    "web/public/icon-192.png",
+  ]) {
+    await assertSame("web/public/cowboy-app-icon-192-v4.png", alias);
+  }
+  for (const alias of [
+    "web/public/cowboy-app-icon-512-v3.png",
     "web/public/cowboy-app-icon-512.png",
+    "web/public/cowboy-app-icon-maskable-512-v4.png",
     "web/public/cowboy-app-icon-maskable-512.png",
     "web/public/icon-512.png",
+    "web/public/maskable-512.png",
   ]) {
-    await assertSame("web/public/cowboy-app-icon-512-v3.png", alias);
+    await assertSame("web/public/cowboy-app-icon-512-v4.png", alias);
   }
 
-  const ico = await bytes("web/public/cowboy-favicon-v3.ico");
+  const ico = await bytes("web/public/cowboy-favicon-v4.ico");
   assertEquals([...ico.subarray(0, 4)], [0, 0, 1, 0]);
+  await assertSame("web/public/cowboy-favicon-v4.ico", "web/public/cowboy-favicon-v3.ico");
+  await assertSame("web/public/cowboy-favicon-v4.ico", "web/public/favicon.ico");
   const icns = await bytes("apps/macos-installer/Resources/Cowboy.icns");
   assertEquals(new TextDecoder().decode(icns.subarray(0, 4)), "icns");
+  await assertSame(
+    "apps/native-shell/tauri/icons/ios/AppIcon-512@2x.png",
+    "apps/native-shell/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
+  );
+  await assertSame(
+    "apps/native-shell/tauri/icons/icon.icns",
+    "apps/macos-installer/Resources/Cowboy.icns",
+  );
 
-  const pinned1412Assets: Record<string, string> = {
+  const pinned1703Assets: Record<string, string> = {
     "assets/brand/cowboy-logo.png":
-      "abb0b21da501300846893286a35b87fcd0c79c9b67f3a289d9d8c8959f7902cc",
-    "web/public/cowboy-app-icon-512-v3.png":
-      "31878cf551d7557e9320c760a1cb6b173fc18b57171bda7dc117326106069a40",
+      "dc61f7d5a82cf3ab76bb8d65f0ee9bd776e8180d5dc31f7fd70337fa4a74a4df",
+    "web/public/cowboy-app-icon-512-v4.png":
+      "a496fdd0fee4ad530c7c83dc41913ad6f72f63be19479df32e70abec54b5cbb0",
     "apps/native-shell/tauri/icons/icon.png":
-      "5947df902bce7a484e01e6e741c607c6cd8812901cd7bcda9871c06eba2c3729",
+      "c62a258a4bb3b2d8dcb4f9fcfe126b279e4f5334f1f0c79cdad99cbf8bee16bf",
     "apps/native-shell/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png":
-      "4dd2f9245e514543e57f105a946e43b2beac3a2127768d6c5caaa83f85b693d9",
+      "de7cce704bc95355ee8e4cee002c046d8f70d752224f248d0a235745ad2aaebd",
     "apps/macos-installer/Resources/Cowboy.icns":
-      "714ead5ff4c2706b4308eadea96ff4c9435397a980696e565280db23cff1408b",
+      "b6b1fb80bd12fb557d8571ce61eec3d2f9e917dab3bfce8b3f43fcd198c2bc6d",
   };
-  for (const [path, expected] of Object.entries(pinned1412Assets)) {
+  for (const [path, expected] of Object.entries(pinned1703Assets)) {
     assertEquals(await sha256(path), expected, path);
   }
 });
 
-Deno.test("README, PWA, notifications, and Manager reference Cowboy 1412", async () => {
+Deno.test("README, PWA, notifications, and Manager reference Cowboy 1703", async () => {
   const read = async (path: string): Promise<string> =>
     await Deno.readTextFile(new URL(path, repoRoot));
   const readme = await read("README.md");
@@ -90,20 +118,25 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1412", async
   const admin = await read("web/admin.html");
   const manifest = await read("web/public/manifest.webmanifest");
   const serviceWorker = await read("web/public/sw.js");
+  const nativeRelease = await read("web/public/native-release.json");
   const managerInfo = await read("apps/macos-installer/Resources/Info.plist");
   const managerBuild = await read("apps/macos-installer/scripts/build-app.sh");
 
-  assert(readme.includes("web/public/cowboy-app-icon-512-v3.png"));
-  assert(index.includes("/manifest.webmanifest?v=cowboy-v1617"));
-  assert(index.includes("/cowboy-favicon-v3.ico"));
-  assert(index.includes("/cowboy-app-icon-512-v3.png"));
-  assert(index.includes("/cowboy-app-icon-180-v3.png"));
-  assert(admin.includes("/cowboy-favicon-v3.ico"));
-  assert(admin.includes("/cowboy-app-icon-512-v3.png"));
-  assert(manifest.includes('"src": "/cowboy-app-icon-180-v3.png"'));
-  assert(manifest.includes('"src": "/cowboy-app-icon-512.png"'));
-  assert(serviceWorker.includes('const VERSION = "cowboy-v1619"'));
-  assert(serviceWorker.includes('icon: "/cowboy-app-icon-192.png"'));
+  assert(readme.includes("web/public/cowboy-app-icon-512-v4.png"));
+  assert(index.includes("/manifest.webmanifest?v=cowboy-v1620"));
+  assert(index.includes("/cowboy-favicon-v4.ico"));
+  assert(index.includes("/cowboy-app-icon-512-v4.png"));
+  assert(index.includes("/cowboy-app-icon-180-v4.png"));
+  assert(admin.includes("/cowboy-favicon-v4.ico"));
+  assert(admin.includes("/cowboy-app-icon-512-v4.png"));
+  assert(manifest.includes('"src": "/cowboy-app-icon-180-v4.png"'));
+  assert(manifest.includes('"src": "/cowboy-app-icon-192-v4.png"'));
+  assert(manifest.includes('"src": "/cowboy-app-icon-512-v4.png"'));
+  assert(manifest.includes('"src": "/cowboy-app-icon-maskable-512-v4.png"'));
+  assert(serviceWorker.includes('const VERSION = "cowboy-v1620"'));
+  assert(serviceWorker.includes('icon: "/cowboy-app-icon-192-v4.png"'));
+  assert(nativeRelease.includes('"latest_version": "0.1.21"'));
+  assert(nativeRelease.includes("Cowboy 1703 icon"));
   assert(managerInfo.includes("<string>Cowboy.icns</string>"));
   assert(managerBuild.includes("Resources/Cowboy.icns"));
 });
