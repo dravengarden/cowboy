@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://dravengarden.github.io/cowboy/sitemap.xml

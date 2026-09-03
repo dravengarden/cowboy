@@ -1,0 +1,68 @@
+name: Cowboy website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/website.yml"
+      - "docs/screenshots/**"
+      - "plugins/*/plugin.json"
+      - "plugins/*/provider.json"
+      - "site/**"
+      - "web/public/cowboy-app-icon-192-v4.png"
+      - "web/public/cowboy-app-icon-512-v4.png"
+      - "web/public/cowboy-favicon-v4.ico"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out Cowboy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned Deno
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: v2.9.5
+
+      - name: Check website source
+        run: |
+          deno fmt --check site/build.ts site/build_test.ts site/site.js
+          deno check site/build.ts site/build_test.ts site/site.js
+          deno test --allow-read --allow-write site/build_test.ts
+
+      - name: Build website artifact
+        run: deno run --allow-read --allow-write=site-dist site/build.ts --out site-dist
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload website artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site-dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

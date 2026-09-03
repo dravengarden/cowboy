@@ -38,6 +38,17 @@ dev-web:
 build-web:
     cd web && deno task build
 
+# Build the public Cowboy product website from the first-party Plugin manifests.
+build-site:
+    deno run --allow-read --allow-write=site-dist site/build.ts --out site-dist
+
+# Keep the published ecosystem synchronized with the real Plugin Catalog inputs.
+site-check:
+    deno fmt --check site/build.ts site/build_test.ts site/site.js
+    deno check site/build.ts site/build_test.ts site/site.js
+    deno test --allow-read --allow-write site/build_test.ts
+    just build-site
+
 # Rebuild the project-owned browser bridge around mvdan/sh's core parser.
 shellfmt-wasm:
     cd web/shellfmt-wasm && go test ./...
@@ -201,7 +212,7 @@ test:
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 
-check: toolchain-check provider-check fmt lint dependencies typecheck feature-check test build
+check: toolchain-check provider-check site-check fmt lint dependencies typecheck feature-check test build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

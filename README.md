@@ -15,6 +15,12 @@
   <img src="https://img.shields.io/badge/ACP-native-4a90d9?style=flat-square" alt="ACP">
 </p>
 
+<p align="center">
+  <a href="https://dravengarden.github.io/cowboy/"><strong>Website</strong></a>
+  · <a href="docs/plugin-packages.md">Plugin platform</a>
+  · <a href="docs/INDEX.md">Documentation</a>
+</p>
+
 ## Product tour
 
 <p align="center">

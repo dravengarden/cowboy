@@ -6,6 +6,7 @@
 web/node_modules/
 tools/do-memory-mock/node_modules/
 web/dist/
+/site-dist/
 dist/plugins/
 dist/provider-runtime-cache/
 *.tsbuildinfo

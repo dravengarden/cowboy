@@ -1,0 +1,199 @@
+import {
+  buildSite,
+  loadSitePlugins,
+  renderPluginCards,
+  type SitePlugin,
+} from "./build.ts";
+
+const ROOT = decodeURIComponent(new URL("..", import.meta.url).pathname)
+  .replace(/\/$/u, "");
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+function assertEquals<T>(actual: T, expected: T, message: string): void {
+  if (actual !== expected) {
+    throw new Error(
+      `${message}: expected ${String(expected)}, got ${String(actual)}`,
+    );
+  }
+}
+
+Deno.test("website catalog follows every first-party Plugin manifest", async () => {
+  const plugins = await loadSitePlugins(ROOT);
+  const manifests: Array<{
+    id: string;
+    version: string;
+    component_release: string;
+    kind: SitePlugin["kind"];
+  }> = [];
+
+  for await (const entry of Deno.readDir(`${ROOT}/plugins`)) {
+    if (!entry.isDirectory) continue;
+    try {
+      manifests.push(JSON.parse(
+        await Deno.readTextFile(`${ROOT}/plugins/${entry.name}/plugin.json`),
+      ));
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
+
+  assertEquals(
+    plugins.length,
+    manifests.length,
+    "every first-party Plugin should appear",
+  );
+  assertEquals(
+    plugins.filter((plugin) => plugin.kind === "agent_provider").length,
+    manifests.filter((manifest) => manifest.kind === "agent_provider").length,
+    "Agent Provider count",
+  );
+  assertEquals(
+    plugins.filter((plugin) => plugin.kind === "code_intelligence").length,
+    manifests.filter((manifest) => manifest.kind === "code_intelligence")
+      .length,
+    "code-intelligence Plugin count",
+  );
+
+  const currentFirstParty = [
+    "codex",
+    "claude-code",
+    "gemini",
+    "grok",
+    "codex-deepseek",
+    "claude-deepseek",
+    "zed",
+  ];
+  for (const id of currentFirstParty) {
+    assert(
+      plugins.some((plugin) => plugin.id === id),
+      `${id} should remain in the first-party catalog`,
+    );
+  }
+
+  assertEquals(
+    [...plugins].map((plugin) => plugin.id).sort().join(","),
+    manifests.map((manifest) => manifest.id).sort().join(","),
+    "website and source Plugin identities",
+  );
+
+  for (const plugin of plugins) {
+    const manifest = manifests.find((candidate) => candidate.id === plugin.id);
+    assert(manifest, `${plugin.id} source manifest should exist`);
+    assertEquals(plugin.version, manifest.version, `${plugin.id} version`);
+    assertEquals(
+      plugin.componentRelease,
+      manifest.component_release,
+      `${plugin.id} component release`,
+    );
+  }
+});
+
+Deno.test("website Plugin cards escape manifest presentation text", () => {
+  const plugin: SitePlugin = {
+    id: "sample",
+    version: "1.0.0",
+    componentRelease: "1.0.0",
+    publisher: "test",
+    kind: "agent_provider",
+    kindLabel: "Agent Provider",
+    name: "Sample <script>",
+    vendor: "Test & Co.",
+    summary: 'Safe "summary"',
+    accentLight: "#112233",
+    accentDark: "#AABBCC",
+    secondaryAccent: "#445566",
+    markViewBox: "0 0 24 24",
+    markPath: "M0 0h24v24H0z",
+    markMode: "fill",
+  };
+
+  const html = renderPluginCards([plugin]);
+  assert(
+    !html.includes("Sample <script>"),
+    "raw HTML must not reach Plugin cards",
+  );
+  assert(
+    html.includes("Sample &lt;script&gt;"),
+    "Plugin name should be escaped",
+  );
+  assert(html.includes("Test &amp; Co."), "Plugin vendor should be escaped");
+  assert(
+    html.includes("Safe &quot;summary&quot;"),
+    "Plugin summary should be escaped",
+  );
+});
+
+Deno.test("website build produces a complete self-contained Pages artifact", async () => {
+  const temporary = await Deno.makeTempDir({
+    dir: ROOT,
+    prefix: ".cowboy-site-test-",
+  });
+  const output = `${temporary}/site-dist`;
+
+  try {
+    await buildSite(ROOT, output);
+    const html = await Deno.readTextFile(`${output}/index.html`);
+    const notFound = await Deno.readTextFile(`${output}/404.html`);
+    const catalog = JSON.parse(
+      await Deno.readTextFile(`${output}/plugins.json`),
+    ) as Array<{ id: string }>;
+
+    assertEquals(
+      notFound,
+      html,
+      "404 fallback should keep the single-page site usable",
+    );
+    assertEquals(catalog.length, 7, "published Plugin catalog count");
+    assert(
+      !/\{\{[A-Z_]+\}\}/u.test(html),
+      "all template placeholders should resolve",
+    );
+    assertEquals(
+      (html.match(/<h1[ >]/gu) ?? []).length,
+      1,
+      "document h1 count",
+    );
+    assert(
+      html.includes('href="#main"'),
+      "document should include a skip link",
+    );
+    assert(
+      html.includes('id="plugin-filter-status"'),
+      "Plugin filter should announce results",
+    );
+
+    for (const plugin of catalog) {
+      assert(
+        html.includes(`data-plugin="${plugin.id}"`),
+        `${plugin.id} card should be rendered`,
+      );
+    }
+
+    const references = html.matchAll(/(?:src|href)="([^"#]+)"/gu);
+    for (const match of references) {
+      const reference = match[1];
+      if (/^(?:https?:|mailto:)/u.test(reference)) continue;
+      const path = reference.replace(/^\.\//u, "");
+      const stat = await Deno.stat(`${output}/${path}`);
+      assert(stat.isFile, `${reference} should resolve to a built file`);
+    }
+  } finally {
+    await Deno.remove(temporary, { recursive: true });
+  }
+});
+
+Deno.test("website build cannot remove a directory outside the repository", async () => {
+  let rejected = false;
+
+  try {
+    await buildSite(ROOT, "../outside-cowboy-site");
+  } catch (error) {
+    rejected = error instanceof Error &&
+      error.message.includes("refusing unsafe website output path");
+  }
+
+  assert(rejected, "an output path outside the repository should be rejected");
+});
