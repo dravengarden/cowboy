@@ -99,9 +99,10 @@ const REQUIRED_ASSETS = [
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   ["site/assets/cowboy-hat-favicon-v2.ico", "assets/favicon.ico"],
   ["site/assets/cowboy-hat-mark-v2-512.png", "assets/cowboy-logo-512.png"],
+  ["web/public/cowboy-app-icon-192-v4.png", "assets/cowboy-app-icon.png"],
   [
-    "site/assets/cowboy-workspace-light-v2.webp",
-    "assets/cowboy-workspace-light.webp",
+    "site/assets/cowboy-hero-devices-light-v4.webp",
+    "assets/cowboy-hero-devices-light.webp",
   ],
   [
     "site/assets/cowboy-desktop-surface-light-v2.webp",
@@ -110,10 +111,6 @@ const REQUIRED_ASSETS = [
   [
     "site/assets/cowboy-mobile-light-v2.webp",
     "assets/cowboy-mobile-light.webp",
-  ],
-  [
-    "site/assets/cowboy-phone-hero-light-v3.webp",
-    "assets/cowboy-phone-hero-light.webp",
   ],
 ] as const;
 

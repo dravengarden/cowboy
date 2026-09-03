@@ -35,7 +35,7 @@
     <link rel="canonical" href="https://dravengarden.github.io/cowboy/">
     <link rel="icon" href="assets/cowboy-hat-mark.svg" type="image/svg+xml">
     <link rel="alternate icon" href="assets/favicon.ico" sizes="any">
-    <link rel="preload" href="assets/cowboy-workspace-light.webp" as="image" type="image/webp">
+    <link rel="preload" href="assets/cowboy-hero-devices-light.webp" as="image" type="image/webp">
     <link rel="stylesheet" href="styles.css">
     <script>
       document.documentElement.classList.add("js");
@@ -57,7 +57,14 @@
     <header class="site-header">
       <div class="nav-shell">
         <a class="wordmark" href="#top" aria-label="Cowboy home">
-          <span class="brand-mark" aria-hidden="true"></span>
+          <img
+            class="brand-icon"
+            src="assets/cowboy-app-icon.png"
+            alt=""
+            width="192"
+            height="192"
+            aria-hidden="true"
+          >
           <span>Cowboy</span>
         </a>
 
@@ -131,27 +138,15 @@
           <div class="hero-hat" aria-hidden="true">
             <span class="brand-mark"></span>
           </div>
-          <div class="hero-device-stage">
-            <div class="product-window">
-              <img
-                class="theme-art workspace-art"
-                src="assets/cowboy-workspace-light.webp"
-                alt="Abstract Cowboy desktop workspace with Sessions, Prompt, and Agent conversation surfaces"
-                width="1536"
-                height="1024"
-                fetchpriority="high"
-              >
-            </div>
-            <div class="hero-phone-preview">
-              <img
-                class="theme-art hero-phone-art"
-                src="assets/cowboy-phone-hero-light.webp"
-                alt="Abstract Cowboy phone workspace with an Agent task timeline and plugin activity"
-                width="464"
-                height="970"
-                fetchpriority="high"
-              >
-            </div>
+          <div class="product-window hero-product-window">
+            <img
+              class="theme-art workspace-art"
+              src="assets/cowboy-hero-devices-light.webp"
+              alt="Abstract Cowboy Desktop and Phone workspaces with plugin sessions, a populated Prompt, and Agent activity"
+              width="1536"
+              height="1024"
+              fetchpriority="high"
+            >
           </div>
           <div class="floating-provider floating-provider-codex" aria-hidden="true">
             <span>&gt;_</span>
@@ -465,7 +460,14 @@
       <div class="section-shell footer-grid">
         <div>
           <a class="wordmark" href="#top" aria-label="Cowboy home">
-            <span class="brand-mark" aria-hidden="true"></span>
+            <img
+              class="brand-icon"
+              src="assets/cowboy-app-icon.png"
+              alt=""
+              width="192"
+              height="192"
+              aria-hidden="true"
+            >
             <span>Cowboy</span>
           </a>
           <p>The remote Agent IDE for work that keeps moving.</p>

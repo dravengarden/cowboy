@@ -166,12 +166,12 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "Plugin filter should announce results",
     );
     assert(
-      html.includes('src="assets/cowboy-workspace-light.webp"'),
-      "hero should use the privacy-safe Cowboy workspace illustration",
+      html.includes('src="assets/cowboy-hero-devices-light.webp"'),
+      "hero should use one privacy-safe Desktop and Phone composition",
     );
     assert(
-      html.includes('src="assets/cowboy-phone-hero-light.webp"'),
-      "hero should pair the desktop workspace with a privacy-safe phone illustration",
+      html.includes('src="assets/cowboy-app-icon.png"'),
+      "wordmarks should use the canonical Cowboy app icon",
     );
     assert(
       html.includes('src="assets/cowboy-mobile-light.webp"'),
@@ -193,8 +193,8 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
 
     for (
       const asset of [
-        "cowboy-workspace-light.webp",
-        "cowboy-phone-hero-light.webp",
+        "cowboy-hero-devices-light.webp",
+        "cowboy-app-icon.png",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]
