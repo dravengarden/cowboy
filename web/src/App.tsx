@@ -2978,10 +2978,10 @@ export function App({
                         }}
                     />
                 )}
-                {/* Top system-chrome material. Bottom-mode Transcript deliberately
-                    follows only the real safe-area inset: its continuous scrolling
-                    content can pass beneath this quiet, theme-aware glass while the
-                    synthetic 24px iPad fallback never becomes a second band. The
+                {/* Top system-chrome material. Bottom-mode Transcript uses the real
+                    safe-area inset plus a narrow phone-standalone floor: its continuous
+                    scrolling content can pass beneath this quiet, theme-aware glass
+                    while the synthetic 24px iPad fallback never becomes a second band. The
                     material is a dedicated drawer follower, so it moves off with the
                     Agent page instead of blurring the revealed Sessions rail. Top
                     mode (desktop): a solid, full navbar-height slab behind the
@@ -3003,7 +3003,9 @@ export function App({
                         top: 0,
                         left: 0,
                         right: 0,
-                        height: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)",
+                        height: navbarAtBottom
+                            ? "var(--cowboy-mobile-status-material-height)"
+                            : "var(--navbar-h, 0px)",
                         // Behind the AppBar content (zIndex 2) but above the transcript (0).
                         // Bottom mode's strip sits alone at the top, so keep it high.
                         zIndex: navbarAtBottom ? ((t) => t.zIndex.appBar) : 1,
@@ -3534,10 +3536,12 @@ export function App({
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
-                                // Transcript is the exception to the standalone
-                                // fallback: use only the real mobile safe area so a
-                                // missing WebKit inset does not create a blank band.
-                                topInset={navbarAtBottom ? "env(safe-area-inset-top, 0px)" : "var(--navbar-h, 0px)"}
+                                // The iPad fallback stays out of Transcript. A phone
+                                // standalone gets only the narrow scroll-edge shelf,
+                                // which content can pass beneath after scrolling.
+                                topInset={navbarAtBottom
+                                    ? "var(--cowboy-mobile-status-material-height)"
+                                    : "var(--navbar-h, 0px)"}
                                 // Mobile footer is in-flow, so the transcript
                                 // already ends above it. Desktop still floats.
                                 bottomInset={mobile

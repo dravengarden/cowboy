@@ -191,12 +191,16 @@ DOM and cannot be covered by a page overlay. Cowboy therefore defines
 `--cowboy-system-top-clearance`: it follows the real inset normally and has a
 24 px minimum only for wide, coarse-pointer standalone displays. Review,
 drawers, fullscreen, failure, and connection surfaces use that contract. The
-bottom-mode Transcript is the deliberate exception: continuous scroll uses only
-the real safe-area inset so a missing WebKit inset does not become an empty band.
-When that inset is zero, the Agent strip is also zero-height and the system-owned
-iPad material remains untouched. Keep fallback surfaces solid and move other
-transient glass below them; do not switch to `black-translucent`, spoof an iPad
-user agent, or add a synthetic blurred band to hide the system material.
+bottom-mode Transcript is the deliberate exception: it never consumes the
+24 px iPad floor. A physical iPhone installed PWA instead receives a 32 px
+in-page scroll-edge shelf through `cowboy-phone-standalone`; this makes the
+theme-aware material visible when iOS reports a zero inset while still letting
+continuous content pass beneath it. The class requires WebKit's standalone
+signal, a coarse pointer, and a physical screen short side below 700 px, so an
+iPad remains on the real inset even in split view. Keep iPad fallback surfaces
+solid and move other transient glass below them; do not switch to
+`black-translucent`, spoof a user agent, or add a synthetic blurred band over
+the iPad system material.
 
 ### Composer frost
 

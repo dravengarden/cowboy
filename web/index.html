@@ -22,7 +22,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Cowboy" />
-    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1622" />
+    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1623" />
     <link rel="icon" href="/cowboy-favicon-v4.ico" sizes="any" />
     <link rel="icon" href="/cowboy-app-icon-512-v4.png" type="image/png" />
     <!-- New filename: Safari caches apple-touch-icon.png by path and ignores
@@ -54,6 +54,13 @@
            but affected standalone WebKit builds report zero while still
            painting that chrome above the page. */
         --cowboy-system-top-clearance: env(safe-area-inset-top, 0px);
+        /* The status-strip material normally follows the real safe area. iOS
+           standalone can report zero on phones, so platform.ts opts only a
+           physical iPhone PWA into a small in-page scroll-edge shelf. */
+        --cowboy-mobile-status-material-height: env(safe-area-inset-top, 0px);
+      }
+      :root.cowboy-phone-standalone {
+        --cowboy-mobile-status-material-height: max(env(safe-area-inset-top, 0px), 32px);
       }
       @media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) {
         :root {

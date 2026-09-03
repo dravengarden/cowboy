@@ -2278,9 +2278,12 @@ Desktop Vim + IME checks:
     not use `black-translucent`, remove desktop window-control manifest behavior,
     or add user-agent detection as a workaround. Chrome emulation can validate
     the layout contract, but only an updated physical iPad PWA can accept the
-    system-drawn pixels. The bottom-mode Transcript is the exception: it uses
-    only the real safe-area inset because a synthetic 24 px floor interrupts the
-    continuous reading canvas with a conspicuous empty band.
+    system-drawn pixels. The bottom-mode Transcript never uses the synthetic
+    iPad floor because that would interrupt the continuous reading canvas with
+    a conspicuous empty band. The narrow `cowboy-phone-standalone` exception is
+    an adjacent in-page scroll-edge shelf, not an attempt to cover system chrome:
+    require WebKit's standalone signal, a coarse pointer, and a physical screen
+    short side below 700 px so iPad split view cannot opt into it.
 
 99. **User-authored delivery and pending edits need a durable hand-off, not an
     optimistic-paint hand-off.** A Queue/Transcript row can render immediately

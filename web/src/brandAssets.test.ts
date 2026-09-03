@@ -123,7 +123,7 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1703", async
   const managerBuild = await read("apps/macos-installer/scripts/build-app.sh");
 
   assert(readme.includes("web/public/cowboy-app-icon-512-v4.png"));
-  assert(index.includes("/manifest.webmanifest?v=cowboy-v1622"));
+  assert(index.includes("/manifest.webmanifest?v=cowboy-v1623"));
   assert(index.includes("/cowboy-favicon-v4.ico"));
   assert(index.includes("/cowboy-app-icon-512-v4.png"));
   assert(index.includes("/cowboy-app-icon-180-v4.png"));
@@ -133,7 +133,7 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1703", async
   assert(manifest.includes('"src": "/cowboy-app-icon-192-v4.png"'));
   assert(manifest.includes('"src": "/cowboy-app-icon-512-v4.png"'));
   assert(manifest.includes('"src": "/cowboy-app-icon-maskable-512-v4.png"'));
-  assert(serviceWorker.includes('const VERSION = "cowboy-v1622"'));
+  assert(serviceWorker.includes('const VERSION = "cowboy-v1623"'));
   assert(serviceWorker.includes('icon: "/cowboy-app-icon-192-v4.png"'));
   assert(nativeRelease.includes('"latest_version": "0.1.26"'));
   assert(nativeRelease.includes("Cowboy 1703 icon"));
