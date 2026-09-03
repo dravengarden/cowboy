@@ -463,7 +463,7 @@ html[data-theme="dark"] .button-primary {
   position: absolute;
   z-index: -2;
   top: 4%;
-  right: -11%;
+  right: 0;
   width: 82%;
   aspect-ratio: 1;
   border-radius: 50%;
@@ -476,7 +476,7 @@ html[data-theme="dark"] .button-primary {
   position: absolute;
   z-index: -1;
   top: -17px;
-  right: -72px;
+  right: -56px;
   width: 180px;
   transform: rotate(8deg);
   opacity: 0.8;
@@ -1962,10 +1962,6 @@ kbd {
     top: 3px;
     right: 0;
     width: 96px;
-  }
-
-  .hero-product::before {
-    right: 0;
   }
 
   .product-window {
