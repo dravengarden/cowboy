@@ -111,6 +111,10 @@ const REQUIRED_ASSETS = [
     "site/assets/cowboy-mobile-light-v2.webp",
     "assets/cowboy-mobile-light.webp",
   ],
+  [
+    "site/assets/cowboy-phone-hero-light-v3.webp",
+    "assets/cowboy-phone-hero-light.webp",
+  ],
 ] as const;
 
 function joinPath(...parts: string[]): string {

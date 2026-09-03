@@ -170,6 +170,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero should use the privacy-safe Cowboy workspace illustration",
     );
     assert(
+      html.includes('src="assets/cowboy-phone-hero-light.webp"'),
+      "hero should pair the desktop workspace with a privacy-safe phone illustration",
+    );
+    assert(
       html.includes('src="assets/cowboy-mobile-light.webp"'),
       "mobile surface should use the privacy-safe Cowboy illustration",
     );
@@ -190,6 +194,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     for (
       const asset of [
         "cowboy-workspace-light.webp",
+        "cowboy-phone-hero-light.webp",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]
