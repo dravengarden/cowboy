@@ -65,6 +65,8 @@ Deno.test("Transcript keeps the real inset while other surfaces use iPad clearan
   assert(
     changesSource.includes("calc(var(--cowboy-system-top-clearance) + 18px)"),
   );
+  assert(appSource.includes("frostedStatusChrome(t)"));
+  assert(appSource.includes("data-mobile-status-strip-material={"));
 });
 
 Deno.test("transient Explore glass clears rather than overlaps iPad system chrome", () => {

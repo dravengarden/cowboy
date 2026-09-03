@@ -177,10 +177,13 @@ that covers only the peek in layout.
 
 ### Status strip
 
-The top safe-area strip uses solid `background.default` — the same token as
-the Sessions rail and the page. Frost on that strip returns after swipe
-flatten and reads as a blurry band over the rail. Do not put
-`backdrop-filter` back on the status strip.
+The Agent top safe-area strip uses the theme-aware `frostedStatusChrome`
+material: it is intentionally more opaque and less blurred than the composer
+glass, so scrolling content is only faintly visible behind the system icons.
+It is a dedicated Sessions-drawer follower and keeps its material during that
+swipe. Moving it with the Agent page is essential: a fixed translucent strip
+would sample the revealed Sessions rail and recreate the old blurry band.
+The rail underneath remains solid `background.default`.
 
 iPadOS 26/27 standalone WebKit can keep painting system status/window chrome
 while reporting `safe-area-inset-top: 0`. The system-owned band is outside the
@@ -190,9 +193,10 @@ DOM and cannot be covered by a page overlay. Cowboy therefore defines
 drawers, fullscreen, failure, and connection surfaces use that contract. The
 bottom-mode Transcript is the deliberate exception: continuous scroll uses only
 the real safe-area inset so a missing WebKit inset does not become an empty band.
-Keep fallback surfaces solid and move transient glass below them; do not switch
-to `black-translucent`, spoof an iPad user agent, or add blur to hide the system
-material.
+When that inset is zero, the Agent strip is also zero-height and the system-owned
+iPad material remains untouched. Keep fallback surfaces solid and move other
+transient glass below them; do not switch to `black-translucent`, spoof an iPad
+user agent, or add a synthetic blurred band to hide the system material.
 
 ### Composer frost
 

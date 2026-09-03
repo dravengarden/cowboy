@@ -11,6 +11,7 @@ import { alpha, type Theme } from "@mui/material/styles";
 import { FROSTED_PILL_DROP_SHADOW_GEOMETRY } from "./floatingOverlayPolicy";
 
 const BLUR = "blur(40px) saturate(180%) brightness(1.06)";
+const STATUS_BLUR = "blur(24px) saturate(150%) brightness(1.02)";
 
 /** Resting Mobile chrome (composer + navbar). One blur tile on its own
  *  follower layer. Drawer swipe keeps the filter — toggling it at
@@ -21,6 +22,18 @@ export function frostedChrome(t: Theme): Record<string, unknown> {
     backgroundColor: alpha(t.palette.background.default, dark ? 0.58 : 0.64),
     backdropFilter: BLUR,
     WebkitBackdropFilter: BLUR,
+  };
+}
+
+/** Theme-aware material below the iOS status icons. It stays more opaque than
+ *  the composer glass so scrolling text is only a quiet silhouette, while the
+ *  shorter blur keeps the narrow safe-area strip from looking cloudy. */
+export function frostedStatusChrome(t: Theme): Record<string, unknown> {
+  const dark = t.palette.mode === "dark";
+  return {
+    backgroundColor: alpha(t.palette.background.default, dark ? 0.72 : 0.78),
+    backdropFilter: STATUS_BLUR,
+    WebkitBackdropFilter: STATUS_BLUR,
   };
 }
 

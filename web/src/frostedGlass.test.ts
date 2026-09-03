@@ -23,6 +23,9 @@ const exploreSurfaceSource = await Deno.readTextFile(
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const frostedGlassSource = await Deno.readTextFile(
+  new URL("./frostedGlass.ts", import.meta.url),
+);
 const geometrySource = await Deno.readTextFile(
   new URL("./floatingComposerGeometry.ts", import.meta.url),
 );
@@ -161,6 +164,28 @@ Deno.test("mobile composer chrome restores resting frost without a swipe filter"
   assertEquals(appSource.includes("mobileFrostFollowRef"), true);
   assertEquals(
     appSource.includes("data-mobile-backdrop-chrome=\"true\""),
+    true,
+  );
+});
+
+Deno.test("mobile status chrome stays subtle and adapts its tint to the theme", () => {
+  assertEquals(frostedGlassSource.includes("frostedStatusChrome"), true);
+  assertEquals(
+    appSource.includes(
+      ": { backgroundColor: t.palette.background.default }",
+    ),
+    true,
+  );
+  assertEquals(
+    frostedGlassSource.includes(
+      "alpha(t.palette.background.default, dark ? 0.72 : 0.78)",
+    ),
+    true,
+  );
+  assertEquals(
+    frostedGlassSource.includes(
+      '"blur(24px) saturate(150%) brightness(1.02)"',
+    ),
     true,
   );
 });

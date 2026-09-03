@@ -132,7 +132,7 @@ import {
     mobilePeekRestLayerSx,
     mobilePresentationMovingRootSx,
 } from "./mobilePresentationMotion";
-import { frostedChrome } from "./frostedGlass";
+import { frostedChrome, frostedStatusChrome } from "./frostedGlass";
 import {
     clampComposerColWidth,
     composerColWidthStore,
@@ -1966,6 +1966,7 @@ export function App({
     const mobileNavFollowRef = useRef<HTMLElement | null>(null);
     const mobileComposerFollowRef = useRef<HTMLDivElement | null>(null);
     const mobileFrostFollowRef = useRef<HTMLDivElement | null>(null);
+    const mobileStatusChromeFollowRef = useRef<HTMLDivElement | null>(null);
     const { appBarRef, composerRef } = useFloatingComposerGeometry({
         surfaceRef: columnRef,
         navbarAtBottom,
@@ -2057,6 +2058,7 @@ export function App({
                 mobileFrostFollowRef.current,
                 mobileComposerFollowRef.current,
                 mobileNavFollowRef.current,
+                mobileStatusChromeFollowRef.current,
             ],
             side: "left",
             phone,
@@ -2976,21 +2978,27 @@ export function App({
                         }}
                     />
                 )}
-                {/* Top system-chrome backing. Bottom-mode Transcript deliberately
+                {/* Top system-chrome material. Bottom-mode Transcript deliberately
                     follows only the real safe-area inset: its continuous scrolling
-                    content looks natural beneath iPad system material, while the
-                    synthetic 24px fallback reads as an empty band. Top
-                    mode (desktop): a full navbar-height slab — the frosted glass BEHIND
-                    the (now transparent) top AppBar, so the transcript diffuses under the
-                    navbar exactly like the mobile bottom bar. Height tracks the measured
+                    content can pass beneath this quiet, theme-aware glass while the
+                    synthetic 24px iPad fallback never becomes a second band. The
+                    material is a dedicated drawer follower, so it moves off with the
+                    Agent page instead of blurring the revealed Sessions rail. Top
+                    mode (desktop): a solid, full navbar-height slab behind the
+                    transparent top AppBar, so Desktop keeps its dense, stable chrome.
+                    Height tracks the measured
                     --navbar-h. pointer-events:none so taps reach the (lifted) navbar.
                     DROPPED in split mode: nothing scrolls under the AppBar (the transcript
                     is an in-flow column below it), so the bar just sits on the app surface. */}
                 {!splitActive && (
                 <Box
+                    ref={mobile && navbarAtBottom ? mobileStatusChromeFollowRef : undefined}
                     aria-hidden
                     data-detent-sheet-chrome="true"
-                    sx={{
+                    data-mobile-backdrop-chrome={mobile && navbarAtBottom ? "true" : undefined}
+                    data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
+                    data-mobile-status-strip-material={mobile && navbarAtBottom ? "true" : undefined}
+                    sx={(t) => ({
                         position: "absolute",
                         top: 0,
                         left: 0,
@@ -3003,23 +3011,9 @@ export function App({
                         // Hide under an open cover sheet — else this frosted strip
                         // bleeds through as a bright band under the status bar.
                         transition: "opacity 200ms ease",
-                        // Frosted / matte glass (磨砂): a milkier tint diffuses the content
-                        // rather than showing it clearly; the heavy blur + `saturate` add
-                        // the iOS-material vibrancy that reads as thick frosted glass.
-                        // Bottom-mode (mobile) status-bar strip is OPAQUE-leaning (0.8, ≥
-                        // the bottom slab's 0.76): `saturate` can only vivify the lavender
-                        // backdrop, never a gray one, so at 0.62 a gray code block scrolling
-                        // under it bled through as a muddy gray band under the status bar.
-                        // A near-solid lavender tint masks that while staying frosted.
-                        // Top mode (desktop, navbar at top) is a SOLID surface:
-                        // an OPAQUE tint means the backdrop-blur has nothing to
-                        // bleed, so the frosted edge can't read as a gray band
-                        // under the bar (the reported "navbar 底部灰色阴影"). Bottom
-                        // mode (mobile status-bar strip) stays frosted — content
-                        // scrolls UNDER it, so it needs the translucent blur.
-                        // Solid page/sidebar colour. Frost here returns after a
-                        // swipe flatten and reads as a blurry status-bar band.
-                        bgcolor: "background.default",
+                        ...(navbarAtBottom
+                            ? frostedStatusChrome(t)
+                            : { backgroundColor: t.palette.background.default }),
                         // Desktop: a hairline delineates the navbar. In LIGHT mode the
                         // old `0 1px 24px` down-shadow smeared a gray cloud across the
                         // lavender (a black shadow on a light tint always reads gray) —
@@ -3028,10 +3022,11 @@ export function App({
                         ...(!navbarAtBottom && {
                             borderBottom: 1,
                             borderColor: "divider",
-                            boxShadow: (t) =>
-                                t.palette.mode === "dark" ? "0 1px 24px rgba(0,0,0,0.5)" : "none",
+                            boxShadow: t.palette.mode === "dark"
+                                ? "0 1px 24px rgba(0,0,0,0.5)"
+                                : "none",
                         }),
-                    }}
+                    })}
                 />
                 )}
                 {/* ONE frosted-glass slab behind BOTH the composer and the navbar,

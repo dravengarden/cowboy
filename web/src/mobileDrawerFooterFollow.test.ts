@@ -61,10 +61,16 @@ Deno.test("mobile drawer translates an in-flow page that owns the footer", () =>
       reviewDrawerSource.indexOf('data-mobile-drawer-close="right"'),
   );
   assert(reviewDrawerSource.includes("mobileDrawerRailHitSx"));
-  assert(appSource.includes("mobileComposerFollowRef.current"));
-  assert(appSource.includes("mobileNavFollowRef.current"));
-  assert(appSource.includes("mobileFrostFollowRef.current"));
+  const followerStart = appSource.indexOf("getFollowers: () => [");
+  const followerEnd = appSource.indexOf("],", followerStart);
+  const followers = appSource.slice(followerStart, followerEnd);
+  assert(followers.includes("mobileComposerFollowRef.current"));
+  assert(followers.includes("mobileNavFollowRef.current"));
+  assert(followers.includes("mobileFrostFollowRef.current"));
+  assert(followers.includes("mobileStatusChromeFollowRef.current"));
   assert(appSource.includes("frostedChrome"));
+  assert(appSource.includes("frostedStatusChrome"));
+  assert(appSource.includes("data-mobile-status-strip-material={"));
   assert(appSource.includes('isolation: "isolate"'));
   // A transformed position:absolute;inset:0 page lets iOS pin the footer.
   assertEquals(appSource.includes("calc(-1 * var(--navbar-h, 0px))"), false);
