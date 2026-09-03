@@ -68,25 +68,31 @@
           <span>Cowboy</span>
         </a>
 
-        <button
-          class="nav-toggle"
-          type="button"
-          aria-expanded="false"
-          aria-controls="site-navigation"
-          aria-label="Open navigation"
-        >
-          <span></span><span></span>
-        </button>
-
         <nav id="site-navigation" class="site-navigation" aria-label="Primary navigation">
           <a href="#product">Product</a>
           <a href="#safety">Safety</a>
           <a href="#ecosystem">Plugins</a>
           <a href="#architecture">Architecture</a>
           <a href="#start">Get started</a>
+          <a
+            class="site-navigation-github"
+            href="https://github.com/dravengarden/cowboy"
+          >GitHub <span aria-hidden="true">↗</span></a>
         </nav>
 
-        <div class="nav-actions">
+        <div class="nav-actions" role="group" aria-label="Site controls">
+          <button
+            class="nav-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="site-navigation"
+            aria-label="Open navigation"
+          >
+            <svg class="menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path class="menu-icon-top" d="M6 8.25h12"></path>
+              <path class="menu-icon-bottom" d="M6 15.75h12"></path>
+            </svg>
+          </button>
           <button class="theme-toggle" type="button" aria-label="Use dark theme">
             <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
               <path d="M20.2 15.5A8.5 8.5 0 0 1 8.5 3.8 8.5 8.5 0 1 0 20.2 15.5Z"></path>

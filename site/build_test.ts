@@ -173,6 +173,21 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       html.includes('src="assets/cowboy-brand-mark.png"'),
       "wordmarks should use the background-free Cowboy brand icon",
     );
+    const controlGroupStart = html.indexOf('<div class="nav-actions"');
+    const navToggleStart = html.indexOf('class="nav-toggle"');
+    const themeToggleStart = html.indexOf('class="theme-toggle"');
+    const controlGroupEnd = html.indexOf("</div>", controlGroupStart);
+    assert(
+      controlGroupStart >= 0 &&
+        navToggleStart > controlGroupStart &&
+        themeToggleStart > navToggleStart &&
+        controlGroupEnd > themeToggleStart,
+      "mobile navigation and theme controls should share one compact control group",
+    );
+    assert(
+      html.includes('class="site-navigation-github"'),
+      "mobile navigation should retain the GitHub destination outside the header controls",
+    );
     assert(
       html.includes('data-agent-provider="claude-code"') &&
         html.includes('data-agent-provider="deepseek"'),

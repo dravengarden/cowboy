@@ -249,38 +249,77 @@ kbd {
 
 .nav-actions {
   display: flex;
-  gap: 8px;
+  gap: 0;
   align-items: center;
   justify-self: end;
+  padding: 3px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--paper) 58%, transparent);
 }
 
 .theme-toggle,
 .github-link,
 .nav-toggle {
+  position: relative;
   display: grid;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: 11px;
-  background: color-mix(in srgb, var(--paper) 76%, transparent);
+  background: transparent;
+  color: var(--ink);
   cursor: pointer;
-  transition: background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
-.theme-toggle:hover,
-.github-link:hover,
-.nav-toggle:hover {
-  transform: translateY(-1px);
-  border-color: var(--line-strong);
-  background: var(--paper);
+.github-link::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 1px;
+  background: var(--line);
+  content: "";
 }
 
+@media (hover: hover) {
+  .theme-toggle:hover,
+  .github-link:hover,
+  .nav-toggle:hover {
+    background: var(--primary-wash);
+    color: var(--primary);
+  }
+}
+
+.theme-toggle:active,
+.github-link:active,
+.nav-toggle:active {
+  transform: scale(0.94);
+  background: var(--primary-wash);
+}
+
+.menu-icon,
 .theme-icon,
 .github-link svg {
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
+}
+
+.menu-icon {
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+}
+
+.menu-icon path {
+  transform-box: view-box;
+  transform-origin: center;
+  transition: transform 150ms ease;
 }
 
 .theme-icon {
@@ -305,6 +344,10 @@ html[data-theme="dark"] .theme-icon-sun {
 }
 
 .nav-toggle {
+  display: none;
+}
+
+.site-navigation-github {
   display: none;
 }
 
@@ -1882,35 +1925,40 @@ kbd {
   }
 
   .nav-shell {
-    grid-template-columns: 1fr auto auto;
-    gap: 8px;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
   }
 
   .nav-toggle {
     display: grid;
-    grid-column: 2;
   }
 
-  .nav-toggle span {
-    display: block;
-    grid-area: 1 / 1;
-    width: 17px;
-    height: 1px;
-    transform: translateY(-3px);
-    background: currentColor;
-    transition: transform 150ms ease;
+  .theme-toggle,
+  .nav-toggle {
+    width: 44px;
+    height: 44px;
   }
 
-  .nav-toggle span + span {
-    transform: translateY(3px);
+  .github-link {
+    display: none;
   }
 
-  .nav-toggle[aria-expanded="true"] span:first-child {
-    transform: rotate(45deg);
+  .theme-toggle::before {
+    position: absolute;
+    top: 11px;
+    bottom: 11px;
+    left: 0;
+    width: 1px;
+    background: var(--line);
+    content: "";
   }
 
-  .nav-toggle[aria-expanded="true"] span + span {
-    transform: rotate(-45deg);
+  .nav-toggle[aria-expanded="true"] .menu-icon-top {
+    transform: translateY(3.75px) rotate(45deg);
+  }
+
+  .nav-toggle[aria-expanded="true"] .menu-icon-bottom {
+    transform: translateY(-3.75px) rotate(-45deg);
   }
 
   .site-navigation {
@@ -1955,6 +2003,15 @@ kbd {
 
   .site-navigation a::after {
     display: none;
+  }
+
+  .site-navigation-github {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 3px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-soft);
   }
 
   .hero {
@@ -2032,14 +2089,8 @@ kbd {
   }
 
   .nav-actions {
-    gap: 6px;
-  }
-
-  .theme-toggle,
-  .github-link,
-  .nav-toggle {
-    width: 38px;
-    height: 38px;
+    padding: 2px;
+    border-radius: 15px;
   }
 
   .hero {
