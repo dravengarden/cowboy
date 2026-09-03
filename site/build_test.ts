@@ -170,8 +170,21 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero should use one privacy-safe Desktop and Phone composition",
     );
     assert(
-      html.includes('src="assets/cowboy-app-icon.png"'),
-      "wordmarks should use the canonical Cowboy app icon",
+      html.includes('src="assets/cowboy-brand-mark.png"'),
+      "wordmarks should use the background-free Cowboy brand icon",
+    );
+    assert(
+      html.includes('data-agent-provider="claude-code"') &&
+        html.includes('data-agent-provider="deepseek"'),
+      "hero control plane should include Claude and DeepSeek",
+    );
+    assert(
+      html.includes('id="safety"') && html.includes("Fail-closed"),
+      "website should present safety as a core product property",
+    );
+    assert(
+      !html.includes("floating-provider"),
+      "hero should use one adaptive control dock instead of floating Provider cards",
     );
     assert(
       html.includes('src="assets/cowboy-mobile-light.webp"'),
@@ -194,7 +207,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     for (
       const asset of [
         "cowboy-hero-devices-light.webp",
-        "cowboy-app-icon.png",
+        "cowboy-brand-mark.png",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]
