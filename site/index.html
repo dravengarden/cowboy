@@ -33,8 +33,9 @@
       content="https://dravengarden.github.io/cowboy/assets/cowboy-logo-512.png"
     >
     <link rel="canonical" href="https://dravengarden.github.io/cowboy/">
-    <link rel="icon" href="assets/favicon.ico" sizes="any">
-    <link rel="preload" href="assets/cowboy-desktop.webp" as="image" type="image/webp">
+    <link rel="icon" href="assets/cowboy-hat-mark.svg" type="image/svg+xml">
+    <link rel="alternate icon" href="assets/favicon.ico" sizes="any">
+    <link rel="preload" href="assets/cowboy-workspace-light.webp" as="image" type="image/webp">
     <link rel="stylesheet" href="styles.css">
     <script>
       document.documentElement.classList.add("js");
@@ -56,7 +57,7 @@
     <header class="site-header">
       <div class="nav-shell">
         <a class="wordmark" href="#top" aria-label="Cowboy home">
-          <img src="assets/cowboy-logo-192.png" alt="" width="38" height="38">
+          <span class="brand-mark" aria-hidden="true"></span>
           <span>Cowboy</span>
         </a>
 
@@ -126,36 +127,19 @@
           </ul>
         </div>
 
-        <div class="hero-product" aria-label="Cowboy desktop product preview">
+        <div class="hero-product">
           <div class="hero-hat" aria-hidden="true">
-            <img
-              src="assets/cowboy-logo-192.png"
-              alt=""
-              width="192"
-              height="192"
-            >
+            <span class="brand-mark"></span>
           </div>
           <div class="product-window">
-            <div class="window-toolbar">
-              <span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-              <span class="window-title">cowboy / live workspace</span>
-              <span class="window-status"><i></i> 2 Machines</span>
-            </div>
-            <div class="product-shot">
-              <img
-                src="assets/cowboy-desktop.webp"
-                alt="Cowboy desktop with sessions, a prompt composer, and a live agent transcript"
-                width="1600"
-                height="782"
-              >
-            </div>
-            <div class="window-statusline" aria-hidden="true">
-              <span>NORMAL</span>
-              <span>SESSIONS</span>
-              <span class="status-grow"></span>
-              <span><i></i> RUNNING</span>
-              <span>CONNECTED</span>
-            </div>
+            <img
+              class="theme-art workspace-art"
+              src="assets/cowboy-workspace-light.webp"
+              alt="Abstract Cowboy desktop workspace with Sessions, Prompt, and Agent conversation surfaces"
+              width="1536"
+              height="1024"
+              fetchpriority="high"
+            >
           </div>
           <div class="floating-provider floating-provider-codex" aria-hidden="true">
             <span>&gt;_</span>
@@ -217,20 +201,15 @@
               <span><kbd>]</kbd><kbd>S</kbd> Next session</span>
               <span><kbd>⌘</kbd><kbd>↵</kbd> Send prompt</span>
             </div>
-            <div class="desktop-map" aria-hidden="true">
-              <div class="map-rail">
-                <span class="map-caption">SESSIONS</span>
-                <i class="active"></i><i></i><i></i><i></i><i></i>
-              </div>
-              <div class="map-composer">
-                <span class="map-caption">PROMPT</span>
-                <span class="map-caret"></span>
-                <div class="map-tools"><i></i><i></i><i></i></div>
-              </div>
-              <div class="map-transcript">
-                <span class="map-caption">CONVERSATION</span>
-                <i></i><i></i><i class="wide"></i><i></i><i class="wide"></i>
-              </div>
+            <div class="desktop-illustration">
+              <img
+                class="theme-art"
+                src="assets/cowboy-desktop-surface-light.webp"
+                alt="Abstract three-column Cowboy Desktop interface"
+                width="1460"
+                height="860"
+                loading="lazy"
+              >
             </div>
           </article>
 
@@ -243,28 +222,15 @@
               A focused Agent view, native selection and paste, large targets,
               safe keyboard behavior, and progressively disclosed code tools.
             </p>
-            <div class="phone-gallery" aria-label="Cowboy mobile product views">
-              <figure class="phone phone-agent">
-                <img
-                  src="assets/cowboy-ios-agent.webp"
-                  alt="Cowboy mobile Agent transcript and composer"
-                  loading="lazy"
-                >
-              </figure>
-              <figure class="phone phone-sessions">
-                <img
-                  src="assets/cowboy-ios-sessions.webp"
-                  alt="Cowboy mobile session switcher"
-                  loading="lazy"
-                >
-              </figure>
-              <figure class="phone phone-code">
-                <img
-                  src="assets/cowboy-ios-code.webp"
-                  alt="Cowboy mobile code intelligence sheet"
-                  loading="lazy"
-                >
-              </figure>
+            <div class="mobile-illustration">
+              <img
+                class="theme-art"
+                src="assets/cowboy-mobile-light.webp"
+                alt="Abstract Cowboy Mobile Sessions, Agent conversation, and Code intelligence views"
+                width="1536"
+                height="1024"
+                loading="lazy"
+              >
             </div>
           </article>
         </div>
@@ -429,7 +395,7 @@
             </div>
             <div class="topology-line"><i></i></div>
             <div class="topology-hub">
-              <img src="assets/cowboy-logo-192.png" alt="" width="72" height="72">
+              <span class="brand-mark topology-brand-mark" aria-hidden="true"></span>
               <span>Cowboy Hub</span>
               <small>sessions · state · routing</small>
             </div>
@@ -487,7 +453,7 @@
       <div class="section-shell footer-grid">
         <div>
           <a class="wordmark" href="#top" aria-label="Cowboy home">
-            <img src="assets/cowboy-logo-192.png" alt="" width="34" height="34">
+            <span class="brand-mark" aria-hidden="true"></span>
             <span>Cowboy</span>
           </a>
           <p>The remote Agent IDE for work that keeps moving.</p>

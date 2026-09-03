@@ -140,6 +140,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     const catalog = JSON.parse(
       await Deno.readTextFile(`${output}/plugins.json`),
     ) as Array<{ id: string }>;
+    const styles = await Deno.readTextFile(`${output}/styles.css`);
 
     assertEquals(
       notFound,
@@ -164,6 +165,38 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       html.includes('id="plugin-filter-status"'),
       "Plugin filter should announce results",
     );
+    assert(
+      html.includes('src="assets/cowboy-workspace-light.webp"'),
+      "hero should use the privacy-safe Cowboy workspace illustration",
+    );
+    assert(
+      html.includes('src="assets/cowboy-mobile-light.webp"'),
+      "mobile surface should use the privacy-safe Cowboy illustration",
+    );
+    assert(
+      html.includes('href="assets/cowboy-hat-mark.svg"'),
+      "document should expose the simplified Cowboy hat favicon",
+    );
+    assert(
+      !html.includes("cowboy-desktop.webp") &&
+        !html.includes("cowboy-ios-agent.webp"),
+      "published HTML should not expose real product captures",
+    );
+    assert(
+      styles.includes('html[data-theme="dark"] .theme-art'),
+      "product illustrations should respond to the selected theme",
+    );
+
+    for (
+      const asset of [
+        "cowboy-workspace-light.webp",
+        "cowboy-desktop-surface-light.webp",
+        "cowboy-mobile-light.webp",
+      ]
+    ) {
+      const stat = await Deno.stat(`${output}/assets/${asset}`);
+      assert(stat.size < 100_000, `${asset} should remain lightweight`);
+    }
 
     for (const plugin of catalog) {
       assert(

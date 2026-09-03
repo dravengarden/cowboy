@@ -96,14 +96,21 @@ const CODE_INTELLIGENCE_PRESENTATION: Record<
 };
 
 const REQUIRED_ASSETS = [
-  ["web/public/cowboy-app-icon-192-v4.png", "assets/cowboy-logo-192.png"],
-  ["web/public/cowboy-app-icon-512-v4.png", "assets/cowboy-logo-512.png"],
-  ["web/public/cowboy-favicon-v4.ico", "assets/favicon.ico"],
-  ["docs/screenshots/desktop.webp", "assets/cowboy-desktop.webp"],
-  ["docs/screenshots/ios-agent.webp", "assets/cowboy-ios-agent.webp"],
-  ["docs/screenshots/ios-code.webp", "assets/cowboy-ios-code.webp"],
-  ["docs/screenshots/ios-code-tree.webp", "assets/cowboy-ios-code-tree.webp"],
-  ["docs/screenshots/ios-sessions.webp", "assets/cowboy-ios-sessions.webp"],
+  ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
+  ["site/assets/cowboy-hat-favicon-v2.ico", "assets/favicon.ico"],
+  ["site/assets/cowboy-hat-mark-v2-512.png", "assets/cowboy-logo-512.png"],
+  [
+    "site/assets/cowboy-workspace-light-v2.webp",
+    "assets/cowboy-workspace-light.webp",
+  ],
+  [
+    "site/assets/cowboy-desktop-surface-light-v2.webp",
+    "assets/cowboy-desktop-surface-light.webp",
+  ],
+  [
+    "site/assets/cowboy-mobile-light-v2.webp",
+    "assets/cowboy-mobile-light.webp",
+  ],
 ] as const;
 
 function joinPath(...parts: string[]): string {

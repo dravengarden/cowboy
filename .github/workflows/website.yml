@@ -5,13 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/website.yml"
-      - "docs/screenshots/**"
       - "plugins/*/plugin.json"
       - "plugins/*/provider.json"
       - "site/**"
-      - "web/public/cowboy-app-icon-192-v4.png"
-      - "web/public/cowboy-app-icon-512-v4.png"
-      - "web/public/cowboy-favicon-v4.ico"
   workflow_dispatch:
 
 permissions:
