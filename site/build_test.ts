@@ -130,10 +130,9 @@ Deno.test("website Plugin cards escape manifest presentation text", () => {
 Deno.test("website privacy guard rejects deployment-specific content", () => {
   for (
     const sample of [
-      "Connected to hawk",
       "/home/example/project",
-      "/srv/storage/project",
-      "192.168.0.96",
+      "/mnt/work/project",
+      "10.23.45.67",
       "owner@example.com",
     ]
   ) {
@@ -229,6 +228,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       html.includes('aria-label="Machine 01"') &&
         html.includes('aria-label="Machine 02"'),
       "hero should use generic demo Machine labels",
+    );
+    assert(
+      html.includes("<i></i> Your Machine</span><strong>Connect next</strong>"),
+      "topology should invite a generic next Machine",
     );
     assert(
       html.includes('data-agent-provider="claude-code"') &&

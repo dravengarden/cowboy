@@ -118,9 +118,10 @@ const REQUIRED_ASSETS = [
 ] as const;
 
 const PUBLIC_SITE_FORBIDDEN_TEXT = [
-  ["private hostname", /\b(?:hawk|falcon|sparrow|macbook-air)\b/iu],
-  ["local home path", /\/(?:home|Users)\/[^\s"'<>]+/u],
-  ["local storage path", /\/srv\/storage\/[^\s"'<>]*/u],
+  [
+    "local filesystem path",
+    /\/(?:home|Users|srv|mnt|Volumes)\/[^\s"'<>]+/u,
+  ],
   [
     "private IPv4 address",
     /\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/u,
@@ -140,6 +141,27 @@ export function assertPublicSiteContent(
     if (pattern.test(text)) {
       throw new Error(`${label} contains ${description}`);
     }
+  }
+}
+
+function assertGenericDemoMachineLabels(html: string): void {
+  const heroLabels = [...html.matchAll(
+    /<span class="control-machine-name"><i><\/i>\s*([^<]+)<\/span>/gu,
+  )].map((match) => match[1].trim());
+  const topology = html.match(
+    /<div class="topology-machines">([\s\S]*?)<\/div>/u,
+  )?.[1] ?? "";
+  const topologyLabels = [...topology.matchAll(
+    /<article><span><i><\/i>\s*([^<]+)<\/span>/gu,
+  )].map((match) => match[1].trim());
+
+  if (heroLabels.join("|") !== "Machine 01|Machine 02") {
+    throw new Error("hero must use generic demo Machine labels");
+  }
+  if (
+    topologyLabels.join("|") !== "Machine 01|Machine 02|Your Machine"
+  ) {
+    throw new Error("topology must use generic demo Machine labels");
   }
 }
 
@@ -400,6 +422,7 @@ export async function buildSite(
   }
 
   assertPublicSiteContent("rendered website", html);
+  assertGenericDemoMachineLabels(html);
   assertPublicSiteContent("Plugin catalog", catalog);
   for (const { file, content } of staticFiles) {
     assertPublicSiteContent(file, content);
