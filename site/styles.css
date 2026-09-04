@@ -952,13 +952,6 @@ html[data-theme="dark"] .theme-art {
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--primary) 25%, transparent));
 }
 
-.hero-client-wiring circle {
-  fill: var(--paper);
-  stroke: var(--primary);
-  stroke-width: 1.15;
-  vector-effect: non-scaling-stroke;
-}
-
 .control-plane-summary,
 .control-plane-map {
   position: relative;
@@ -1123,13 +1116,6 @@ html[data-theme="dark"] .theme-art {
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
   animation: topology-flow 8s linear infinite;
-}
-
-.control-fleet-wiring circle {
-  fill: var(--paper);
-  stroke: var(--primary);
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
 }
 
 .control-machines {

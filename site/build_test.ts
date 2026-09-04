@@ -159,17 +159,45 @@ Deno.test("website privacy guard rejects deployment-specific content", () => {
 Deno.test("repository landing pages use only privacy-safe product artwork", async () => {
   const readme = await Deno.readTextFile(ROOT + "/README.md");
   const contributing = await Deno.readTextFile(ROOT + "/CONTRIBUTING.md");
+  const architecture = await Deno.readTextFile(
+    ROOT + "/docs/architecture/multi-machine.svg",
+  );
 
   assertPublicSiteContent("README.md", readme);
   assertPublicSiteContent("CONTRIBUTING.md", contributing);
   assert(
     readme.includes("site/assets/cowboy-readme-mark-light-v2.png") &&
       readme.includes("site/assets/cowboy-readme-mark-dark-v2.png") &&
-      readme.includes("site/assets/cowboy-remote-topology-light-v2.webp") &&
+      readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
+      readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
+  );
+  for (
+    const section of [
+      "## Why Cowboy",
+      "## Quick start",
+      "## Architecture",
+      "## Plugin ecosystem",
+      "## Safety and ownership",
+      "## Project status",
+      "## Contributing",
+    ]
+  ) {
+    assert(
+      readme.includes(section),
+      `repository landing page should include ${section}`,
+    );
+  }
+  assert(
+    architecture.includes("YOUR SELF-HOSTED CONTROL PLANE") &&
+      architecture.includes("MACHINE-OWNED EXECUTION") &&
+      architecture.includes("outbound WSS · local UDS") &&
+      (architecture.match(/MACHINE 0[1-3]/gu) ?? []).length === 3 &&
+      !architecture.includes("<circle"),
+    "architecture artwork should explain the ownership boundaries without ornamental endpoint circles",
   );
 });
 
@@ -218,14 +246,14 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero should use one privacy-safe Desktop and Phone composition",
     );
     assert(
-      html.includes('class="hero-client-ports"') &&
-        (html.match(/class="control-(?:hub|machine)-ports"/gu) ?? [])
-            .length === 2 &&
+      !html.includes('class="hero-client-ports"') &&
+        !html.includes('class="control-hub-ports"') &&
+        !html.includes('class="control-machine-ports"') &&
         (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&
         html.includes('d="M270 28 C270 74 285 102 300 120"') &&
         styles.includes("top: -108px") &&
         styles.includes("height: 124px"),
-      "hero wiring should attach visible client and Hub ports before branching to three Machines",
+      "hero wiring should connect both clients to one Hub and branch to three Machines without ornamental endpoint circles",
     );
     assert(
       html.includes('src="assets/cowboy-brand-mark.png"') &&
@@ -315,9 +343,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       html.includes('class="hero-client-wiring"') &&
         html.includes("M270 28 C270 74 285 102 300 120") &&
         html.includes("M554 82 C554 107 378 105 300 120") &&
-        html.includes('<circle cx="270" cy="28"') &&
-        html.includes('<circle cx="554" cy="82"') &&
-        html.includes('<circle cx="300" cy="120"') &&
+        !html.includes('<circle cx="270" cy="28"') &&
+        !html.includes('<circle cx="554" cy="82"') &&
+        !html.includes('<circle cx="300" cy="120"') &&
         html.includes('class="control-hub-node"') &&
         html.includes('class="control-fleet-wiring"') &&
         (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&

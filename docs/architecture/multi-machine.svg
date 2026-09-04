@@ -1,97 +1,226 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
-  <title id="title">Cowboy remote Agent IDE architecture</title>
-  <desc id="desc">Phone and desktop clients connect to one Cowboy Hub, which coordinates multiple remote Machines, detached agent workers, and Providers.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Cowboy control and execution boundaries</title>
+  <desc id="desc">Desktop and Mobile clients connect to one self-hosted Cowboy Hub. The Hub persists authoritative state and routes sessions over secure connections to three Machine-owned runtimes, each with its own worktree, detached ACP worker, and exact Plugin generation.</desc>
   <defs>
-    <linearGradient id="canvas" x1="0" x2="1" y1="0" y2="1">
-      <stop offset="0" stop-color="#fbfaff"/>
-      <stop offset="1" stop-color="#f1eff9"/>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path class="grid-line" d="M24 0H0V24" fill="none"/>
+    </pattern>
+    <linearGradient id="hub-gradient" x1="0" x2="1" y1="0" y2="1">
+      <stop class="hub-a" offset="0"/>
+      <stop class="hub-b" offset="1"/>
     </linearGradient>
-    <linearGradient id="hub" x1="0" x2="1">
-      <stop offset="0" stop-color="#6e56cf"/>
-      <stop offset="1" stop-color="#8b79e0"/>
+    <linearGradient id="machine-one" x1="0" x2="1">
+      <stop class="machine-one-a" offset="0"/>
+      <stop class="machine-one-b" offset="1"/>
     </linearGradient>
-    <marker id="arrow" markerHeight="8" markerWidth="8" orient="auto-start-reverse" refX="7" refY="4" viewBox="0 0 8 8">
-      <path d="M0 0 8 4 0 8Z" fill="#8b84a1"/>
-    </marker>
+    <linearGradient id="machine-two" x1="0" x2="1">
+      <stop class="machine-two-a" offset="0"/>
+      <stop class="machine-two-b" offset="1"/>
+    </linearGradient>
+    <linearGradient id="machine-three" x1="0" x2="1">
+      <stop class="machine-three-a" offset="0"/>
+      <stop class="machine-three-b" offset="1"/>
+    </linearGradient>
     <style>
-      .eyebrow { fill: #6e56cf; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 2px; }
-      .label { fill: #252131; font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .sub { fill: #665f74; font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .box { fill: #fff; stroke: #d9d4e7; stroke-width: 2; }
-      .machine { fill: #f8f6fe; stroke: #c9c1ee; stroke-width: 2; }
-      .worker { fill: #fff; stroke: #b9d9c2; stroke-width: 2; }
-      .provider { fill: #fff; stroke: #e8c9a5; stroke-width: 2; }
-      .small-label { font-size: 17px; }
-      .on-hub { fill: #fff; }
-      .on-hub-sub { fill: #eeeaff; }
-      .line { fill: none; stroke: #8b84a1; stroke-width: 3; marker-end: url(#arrow); }
+      .canvas { fill: #f9f8fd; }
+      .grid-line { stroke: #ddd8ed; stroke-width: 1; opacity: .38; }
+      .eyebrow { fill: #6e56cf; font: 700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 2.2px; }
+      .section-label { fill: #777086; font: 650 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 1.6px; }
+      .title { fill: #282331; font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .body { fill: #6e677b; font: 450 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .mono { fill: #827a92; font: 500 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .4px; }
+      .client-card, .store-card { fill: #fff; stroke: #d9d4e6; stroke-width: 1.5; }
+      .control-zone { fill: #f1eefc; stroke: #cfc5f1; stroke-width: 1.5; stroke-dasharray: 6 7; }
+      .machine-card { fill: #fff; stroke-width: 1.5; }
+      .machine-card-one { stroke: url(#machine-one); }
+      .machine-card-two { stroke: url(#machine-two); }
+      .machine-card-three { stroke: url(#machine-three); }
+      .hub-a { stop-color: #6248c6; }
+      .hub-b { stop-color: #8a73e5; }
+      .machine-one-a { stop-color: #343039; }
+      .machine-one-b { stop-color: #c99d86; }
+      .machine-two-a { stop-color: #55a3eb; }
+      .machine-two-b { stop-color: #6675df; }
+      .machine-three-a { stop-color: #3c3941; }
+      .machine-three-b { stop-color: #8b6fd8; }
+      .hub-title { fill: #fff; font: 750 24px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .hub-body { fill: #f1edff; font: 500 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .45px; }
+      .wire { fill: none; stroke: #968caf; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+      .wire-control { stroke: #7962d1; }
+      .wire-remote { stroke-dasharray: 7 8; }
+      .wire-label-bg { fill: #f9f8fd; }
+      .device-icon, .platform-icon { fill: none; stroke: #7159cf; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .platform-shell { fill: #f6f4fc; stroke: #d8d1e9; stroke-width: 1.2; }
+      .platform-detail { fill: none; stroke: #756d83; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+      .status { fill: #38a661; }
+      .chip { fill: #f7f6fa; stroke: #ddd9e5; stroke-width: 1; }
+      .chip-text { font: 650 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .codex { fill: #343039; }
+      .claude { fill: #b87052; }
+      .gemini { fill: #438dcf; }
+      .deepseek { fill: #5870d8; }
+      .grok { fill: #343039; }
+      .custom { fill: #7658cf; }
+      .invariant-bar { fill: #eeebf8; stroke: #d9d3e8; stroke-width: 1; }
+      .invariant { fill: #4e475b; font: 650 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .not-equal { fill: #7658cf; font: 750 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+      @media (prefers-color-scheme: dark) {
+        .canvas { fill: #17131f; }
+        .grid-line { stroke: #3e3652; opacity: .42; }
+        .eyebrow { fill: #a78fff; }
+        .section-label { fill: #9990aa; }
+        .title { fill: #f5f1fb; }
+        .body { fill: #bdb4ca; }
+        .mono { fill: #a99fb8; }
+        .client-card, .store-card { fill: #201b2a; stroke: #443b56; }
+        .control-zone { fill: #211a33; stroke: #5f4b91; }
+        .machine-card { fill: #1e1927; }
+        .machine-one-a { stop-color: #aca3b3; }
+        .machine-one-b { stop-color: #d49779; }
+        .machine-two-a { stop-color: #63b3f4; }
+        .machine-two-b { stop-color: #8390ff; }
+        .machine-three-a { stop-color: #b8b0bf; }
+        .machine-three-b { stop-color: #aa8ef3; }
+        .wire { stroke: #756b89; }
+        .wire-control { stroke: #9a82ef; }
+        .wire-label-bg { fill: #17131f; }
+        .platform-shell, .chip { fill: #282231; stroke: #4a4159; }
+        .platform-detail { stroke: #b4aabd; }
+        .codex, .grok { fill: #eee9f3; }
+        .claude { fill: #e59a78; }
+        .gemini { fill: #72b9f2; }
+        .deepseek { fill: #8799ff; }
+        .custom { fill: #b096ff; }
+        .invariant-bar { fill: #211b2b; stroke: #443b54; }
+        .invariant { fill: #d1c8dc; }
+        .not-equal { fill: #a88fff; }
+      }
     </style>
   </defs>
 
-  <rect width="1200" height="780" rx="28" fill="url(#canvas)"/>
-  <text x="52" y="42" class="eyebrow">ONE REMOTE IDE · MANY MACHINES</text>
+  <rect class="canvas" width="1200" height="760" rx="30"/>
+  <rect width="1200" height="760" rx="30" fill="url(#grid)"/>
+  <text class="eyebrow" x="48" y="42">CONTROL HERE · EXECUTE THERE</text>
+  <text class="section-label" x="1098" y="42" text-anchor="end">ONE HUB / MANY MACHINES</text>
 
-  <path class="line" d="M350 132 470 180"/>
-  <path class="line" d="M850 132 730 180"/>
-  <path class="line" d="M600 268v44"/>
-  <path class="line" d="M488 268 260 440"/>
-  <path class="line" d="M712 268 940 440"/>
-  <path class="line" d="M260 512v44"/>
-  <path class="line" d="M940 512v44"/>
-  <path class="line" d="M260 628v44"/>
-  <path class="line" d="M940 628v44"/>
-
-  <g>
-    <rect class="box" x="170" y="56" width="360" height="76" rx="18"/>
-    <text x="202" y="88" class="label">Phone Agent IDE</text>
-    <text x="202" y="113" class="sub">touch-first remote control</text>
-  </g>
-  <g>
-    <rect class="box" x="670" y="56" width="360" height="76" rx="18"/>
-    <text x="702" y="88" class="label">Desktop Agent IDE</text>
-    <text x="702" y="113" class="sub">keyboard-first workspace</text>
+  <g aria-label="Desktop client">
+    <rect class="client-card" x="120" y="76" width="330" height="96" rx="18"/>
+    <g class="device-icon" transform="translate(148 101)">
+      <rect width="48" height="32" rx="4"/>
+      <path d="M18 39h12M24 32v7M11 43h26"/>
+    </g>
+    <text class="title" x="218" y="113">Desktop</text>
+    <text class="body" x="218" y="137">keyboard / Vim control</text>
+    <text class="mono" x="218" y="157">render · input · reconnect</text>
   </g>
 
-  <g>
-    <rect x="330" y="180" width="540" height="88" rx="22" fill="url(#hub)"/>
-    <text x="600" y="218" text-anchor="middle" class="label on-hub">Cowboy Hub</text>
-    <text x="600" y="245" text-anchor="middle" class="sub on-hub-sub">sequence · persistence · fan-out · permissions</text>
+  <g aria-label="Mobile client">
+    <rect class="client-card" x="750" y="76" width="330" height="96" rx="18"/>
+    <g class="device-icon" transform="translate(782 96)">
+      <rect width="32" height="52" rx="7"/>
+      <path d="M11 7h10M13 45h6"/>
+    </g>
+    <text class="title" x="844" y="113">Mobile</text>
+    <text class="body" x="844" y="137">touch-first control</text>
+    <text class="mono" x="844" y="157">render · input · reconnect</text>
   </g>
 
-  <g>
-    <rect class="box" x="470" y="312" width="260" height="64" rx="16"/>
-    <text x="600" y="340" text-anchor="middle" class="label small-label">SQLite / Postgres</text>
-    <text x="600" y="362" text-anchor="middle" class="sub">durable session history</text>
+  <path class="wire wire-control" d="M285 172V198C285 214 405 210 448 228"/>
+  <path class="wire wire-control" d="M915 172V198C915 214 795 210 752 228"/>
+  <rect class="wire-label-bg" x="495" y="186" width="210" height="26" rx="13"/>
+  <text class="mono" x="600" y="203" text-anchor="middle">HTTP + WebSocket</text>
+
+  <g aria-label="Self-hosted Cowboy control plane">
+    <rect class="control-zone" x="250" y="220" width="700" height="190" rx="24"/>
+    <text class="section-label" x="278" y="248">YOUR SELF-HOSTED CONTROL PLANE</text>
+
+    <rect x="286" y="266" width="436" height="106" rx="20" fill="url(#hub-gradient)"/>
+    <rect class="status" x="314" y="291" width="10" height="10" rx="3"/>
+    <text class="hub-title" x="338" y="306">Cowboy Hub</text>
+    <text class="hub-body" x="314" y="335">sequence · state · route · replay</text>
+    <text class="hub-body" x="314" y="357">permissions · snapshots · fan-out</text>
+
+    <path class="wire" d="M722 319H754"/>
+    <rect class="store-card" x="754" y="266" width="160" height="106" rx="18"/>
+    <g class="device-icon" transform="translate(778 286)">
+      <path d="M0 7c0-4 10-7 22-7s22 3 22 7-10 7-22 7S0 11 0 7Zm0 0v22c0 4 10 7 22 7s22-3 22-7V7M0 18c0 4 10 7 22 7s22-3 22-7"/>
+    </g>
+    <text class="title" x="778" y="340" style="font-size:16px">SQLite / Postgres</text>
+    <text class="mono" x="778" y="359">durable Store</text>
   </g>
 
-  <g>
-    <rect class="machine" x="100" y="440" width="320" height="72" rx="18"/>
-    <text x="132" y="472" class="label">Registered Machine A</text>
-    <text x="132" y="496" class="sub">remote workspace host</text>
-  </g>
-  <g>
-    <rect class="machine" x="780" y="440" width="320" height="72" rx="18"/>
-    <text x="812" y="472" class="label">Registered Machine B</text>
-    <text x="812" y="496" class="sub">remote workspace host</text>
+  <path class="wire wire-remote" d="M600 372V438H200V476"/>
+  <path class="wire wire-remote" d="M600 372V476"/>
+  <path class="wire wire-remote" d="M600 438H1000V476"/>
+  <rect class="wire-label-bg" x="457" y="420" width="286" height="28" rx="14"/>
+  <text class="mono" x="600" y="439" text-anchor="middle">outbound WSS · local UDS</text>
+  <text class="section-label" x="48" y="465">MACHINE-OWNED EXECUTION</text>
+
+  <g aria-label="Machine 01, macOS laptop">
+    <rect class="machine-card machine-card-one" x="48" y="476" width="336" height="178" rx="20"/>
+    <g transform="translate(70 500)">
+      <rect class="platform-shell" width="56" height="46" rx="10"/>
+      <path class="platform-detail" d="M10 10h36v23H10zM5 39h46M19 15h3M26 15h20"/>
+    </g>
+    <rect class="status" x="142" y="501" width="10" height="10" rx="3"/>
+    <text class="section-label" x="160" y="510">MACHINE 01</text>
+    <text class="title" x="142" y="536" style="font-size:17px">macOS · laptop</text>
+    <text class="mono" x="70" y="570">cowboy-machine</text>
+    <text class="body" x="70" y="592">isolated worktree · detached ACP worker</text>
+    <g transform="translate(70 610)">
+      <rect class="chip" width="104" height="28" rx="9"/>
+      <text class="chip-text codex" x="16" y="19">›_  Codex</text>
+      <rect class="chip" x="114" width="106" height="28" rx="9"/>
+      <text class="chip-text claude" x="130" y="19">C  Claude</text>
+    </g>
   </g>
 
-  <g>
-    <rect class="worker" x="100" y="556" width="320" height="72" rx="18"/>
-    <text x="260" y="588" text-anchor="middle" class="label">Detached ACP workers</text>
-    <text x="260" y="612" text-anchor="middle" class="sub">survive browser disconnects</text>
-  </g>
-  <g>
-    <rect class="worker" x="780" y="556" width="320" height="72" rx="18"/>
-    <text x="940" y="588" text-anchor="middle" class="label">Detached ACP workers</text>
-    <text x="940" y="612" text-anchor="middle" class="sub">survive browser disconnects</text>
+  <g aria-label="Machine 02, Linux workstation">
+    <rect class="machine-card machine-card-two" x="432" y="476" width="336" height="178" rx="20"/>
+    <g transform="translate(454 500)">
+      <rect class="platform-shell" width="56" height="46" rx="10"/>
+      <path class="platform-detail" d="M8 9h40v26H8zM22 35v6M34 35v6M16 42h24M14 15h4M22 15h20"/>
+    </g>
+    <rect class="status" x="526" y="501" width="10" height="10" rx="3"/>
+    <text class="section-label" x="544" y="510">MACHINE 02</text>
+    <text class="title" x="526" y="536" style="font-size:17px">Linux · workstation</text>
+    <text class="mono" x="454" y="570">cowboy-machine</text>
+    <text class="body" x="454" y="592">isolated worktree · detached ACP worker</text>
+    <g transform="translate(454 610)">
+      <rect class="chip" width="108" height="28" rx="9"/>
+      <text class="chip-text gemini" x="16" y="19">✦  Gemini</text>
+      <rect class="chip" x="118" width="124" height="28" rx="9"/>
+      <text class="chip-text deepseek" x="134" y="19">D  DeepSeek</text>
+    </g>
   </g>
 
-  <g>
-    <rect class="provider" x="100" y="672" width="320" height="64" rx="16"/>
-    <text x="260" y="710" text-anchor="middle" class="label small-label">Claude · Codex · Gemini · Grok</text>
+  <g aria-label="Machine 03, Linux server">
+    <rect class="machine-card machine-card-three" x="816" y="476" width="336" height="178" rx="20"/>
+    <g transform="translate(838 500)">
+      <rect class="platform-shell" width="56" height="46" rx="10"/>
+      <path class="platform-detail" d="M8 8h40v8H8zM8 20h40v8H8zM8 32h40v8H8M13 12h3M13 24h3M13 36h3M21 12h21M21 24h21M21 36h21"/>
+    </g>
+    <rect class="status" x="910" y="501" width="10" height="10" rx="3"/>
+    <text class="section-label" x="928" y="510">MACHINE 03</text>
+    <text class="title" x="910" y="536" style="font-size:17px">Linux · server</text>
+    <text class="mono" x="838" y="570">cowboy-machine</text>
+    <text class="body" x="838" y="592">isolated worktree · detached ACP worker</text>
+    <g transform="translate(838 610)">
+      <rect class="chip" width="92" height="28" rx="9"/>
+      <text class="chip-text grok" x="16" y="19">G  Grok</text>
+      <rect class="chip" x="102" width="126" height="28" rx="9"/>
+      <text class="chip-text custom" x="118" y="19">+  Your plugin</text>
+    </g>
   </g>
-  <g>
-    <rect class="provider" x="780" y="672" width="320" height="64" rx="16"/>
-    <text x="940" y="710" text-anchor="middle" class="label small-label">Claude · Codex · Gemini · Grok</text>
+
+  <g aria-label="Architecture invariants">
+    <rect class="invariant-bar" x="48" y="682" width="1104" height="48" rx="15"/>
+    <text class="invariant" x="76" y="712">client disconnect</text>
+    <text class="not-equal" x="220" y="712">≠</text>
+    <text class="invariant" x="244" y="712">worker stop</text>
+    <path class="wire" d="M388 697v18"/>
+    <text class="invariant" x="420" y="712">session = Machine + exact Provider generation</text>
+    <text class="eyebrow" x="1122" y="712" text-anchor="end" style="font-size:12px">ACP NATIVE</text>
   </g>
 </svg>
