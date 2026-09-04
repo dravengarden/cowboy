@@ -327,16 +327,12 @@ kbd {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 1.6;
+  stroke-width: 1.7;
 }
 
-.theme-icon-sun,
-html[data-theme="dark"] .theme-icon-moon {
-  display: none;
-}
-
-html[data-theme="dark"] .theme-icon-sun {
-  display: block;
+.theme-icon-fill {
+  fill: currentColor;
+  stroke: none;
 }
 
 .github-link svg {

@@ -117,6 +117,32 @@ const REQUIRED_ASSETS = [
   ],
 ] as const;
 
+const PUBLIC_SITE_FORBIDDEN_TEXT = [
+  ["private hostname", /\b(?:hawk|falcon|sparrow|macbook-air)\b/iu],
+  ["local home path", /\/(?:home|Users)\/[^\s"'<>]+/u],
+  ["local storage path", /\/srv\/storage\/[^\s"'<>]*/u],
+  [
+    "private IPv4 address",
+    /\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/u,
+  ],
+  ["email address", /\b[\w.%+-]+@[\w.-]+\.[a-z]{2,}\b/iu],
+] as const;
+
+export function assertPublicSiteContent(
+  label: string,
+  content: string | Uint8Array,
+): void {
+  const text = typeof content === "string"
+    ? content
+    : new TextDecoder().decode(content);
+
+  for (const [description, pattern] of PUBLIC_SITE_FORBIDDEN_TEXT) {
+    if (pattern.test(text)) {
+      throw new Error(`${label} contains ${description}`);
+    }
+  }
+}
+
 function joinPath(...parts: string[]): string {
   return parts
     .filter(Boolean)
@@ -350,11 +376,36 @@ export async function buildSite(
     .replaceAll("{{AGENT_PLUGIN_COUNT}}", String(agentCount))
     .replaceAll("{{CODE_PLUGIN_COUNT}}", String(codeCount))
     .replace("{{PLUGIN_CARDS}}", renderPluginCards(plugins));
+  const catalog = renderPluginCatalog(plugins);
+  const staticFiles = await Promise.all(
+    ["styles.css", "site.js", "robots.txt", "sitemap.xml"].map(
+      async (file) => ({
+        file,
+        content: await Deno.readTextFile(joinPath(root, `site/${file}`)),
+      }),
+    ),
+  );
+  const assets = await Promise.all(
+    REQUIRED_ASSETS.map(async ([source, destination]) => ({
+      source,
+      destination,
+      content: await Deno.readFile(joinPath(root, source)),
+    })),
+  );
 
   if (/\{\{[A-Z_]+\}\}/u.test(html)) {
     throw new Error(
       "website template still contains an unresolved placeholder",
     );
+  }
+
+  assertPublicSiteContent("rendered website", html);
+  assertPublicSiteContent("Plugin catalog", catalog);
+  for (const { file, content } of staticFiles) {
+    assertPublicSiteContent(file, content);
+  }
+  for (const { source, content } of assets) {
+    assertPublicSiteContent(source, content);
   }
 
   await Deno.remove(output, { recursive: true }).catch((error) => {
@@ -366,14 +417,14 @@ export async function buildSite(
   await Deno.writeTextFile(joinPath(output, ".nojekyll"), "");
   await Deno.writeTextFile(
     joinPath(output, "plugins.json"),
-    renderPluginCatalog(plugins),
+    catalog,
   );
 
-  for (const file of ["styles.css", "site.js", "robots.txt", "sitemap.xml"]) {
-    await Deno.copyFile(joinPath(root, `site/${file}`), joinPath(output, file));
+  for (const { file, content } of staticFiles) {
+    await Deno.writeTextFile(joinPath(output, file), content);
   }
-  for (const [source, destination] of REQUIRED_ASSETS) {
-    await Deno.copyFile(joinPath(root, source), joinPath(output, destination));
+  for (const { destination, content } of assets) {
+    await Deno.writeFile(joinPath(output, destination), content);
   }
 
   return output;

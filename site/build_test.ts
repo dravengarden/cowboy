@@ -1,4 +1,5 @@
 import {
+  assertPublicSiteContent,
   buildSite,
   loadSitePlugins,
   renderPluginCards,
@@ -126,6 +127,31 @@ Deno.test("website Plugin cards escape manifest presentation text", () => {
   );
 });
 
+Deno.test("website privacy guard rejects deployment-specific content", () => {
+  for (
+    const sample of [
+      "Connected to hawk",
+      "/home/example/project",
+      "/srv/storage/project",
+      "192.168.0.96",
+      "owner@example.com",
+    ]
+  ) {
+    let rejected = false;
+    try {
+      assertPublicSiteContent("test fixture", sample);
+    } catch (error) {
+      rejected = error instanceof Error && error.message.includes("contains");
+    }
+    assert(rejected, `${sample} should be rejected from the public site`);
+  }
+
+  assertPublicSiteContent(
+    "generic product demo",
+    "Machine 01 connects through the public Cowboy control plane",
+  );
+});
+
 Deno.test("website build produces a complete self-contained Pages artifact", async () => {
   const temporary = await Deno.makeTempDir({
     dir: ROOT,
@@ -187,6 +213,22 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes('class="site-navigation-github"'),
       "mobile navigation should retain the GitHub destination outside the header controls",
+    );
+    assertEquals(
+      (html.match(/class="theme-icon"/gu) ?? []).length,
+      1,
+      "theme control should use one restrained appearance icon",
+    );
+    assert(
+      html.includes('class="theme-icon-fill"') &&
+        !html.includes("theme-icon-moon") &&
+        !html.includes("theme-icon-sun"),
+      "theme control should use the half-light appearance mark",
+    );
+    assert(
+      html.includes('aria-label="Machine 01"') &&
+        html.includes('aria-label="Machine 02"'),
+      "hero should use generic demo Machine labels",
     );
     assert(
       html.includes('data-agent-provider="claude-code"') &&
