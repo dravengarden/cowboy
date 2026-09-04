@@ -298,12 +298,17 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         !html.includes('<circle cx="554"') &&
         html.includes('class="control-hub-node"') &&
         html.includes('class="control-fleet-wiring"') &&
+        (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&
+        html.includes("M252 0C252 16 100 12 100 30") &&
+        html.includes("M300 0V30") &&
+        html.includes("M348 0C348 16 500 12 500 30") &&
+        !html.includes("M100 24H500") &&
         html.includes("seq · route · replay") &&
         html.includes("<b>3M</b>") &&
         html.includes("<b>6A</b>") &&
         !html.includes("control-machine-add") &&
         !html.includes("control-fleet-wiring-mobile"),
-      "hero should connect Desktop and Mobile through one Hub to a compact three-Machine topology",
+      "hero should connect Desktop and Mobile through one Hub with one explicit route per Machine",
     );
     assert(
       html.includes(
