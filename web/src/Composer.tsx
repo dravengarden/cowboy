@@ -128,7 +128,7 @@ import {
   providerUsage,
   type UsageSnapshot,
 } from "./usageLimits";
-import { reloadSession } from "./sessionReload";
+import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -6833,6 +6833,7 @@ function ComposerSheet({
     false,
   );
   const [cmdConfirm, setCmdConfirm] = useState<SessionAction | null>(null);
+  const [reloadConfirm, setReloadConfirm] = useState(false);
   useEffect(() => {
     if (open) {
       setCustomizeAgent(false);
@@ -6840,6 +6841,7 @@ function ComposerSheet({
       setSessionActionsExpanded(false);
       setWorkspaceOptionsExpanded(false);
       setCmdConfirm(null);
+      setReloadConfirm(false);
     }
   }, [open, session?.id]);
   useEffect(() => {
@@ -6888,6 +6890,7 @@ function ComposerSheet({
     setSessionActionsExpanded(false);
     setWorkspaceOptionsExpanded(false);
     setCmdConfirm(null);
+    setReloadConfirm(false);
     onClose();
   };
   const cancelTitle = (): void => {
@@ -6977,6 +6980,7 @@ function ComposerSheet({
           actionsExpanded={sessionActionsExpanded}
           onActionsExpandedChange={setSessionActionsExpanded}
           onSessionAction={setCmdConfirm}
+          onReload={(): void => setReloadConfirm(true)}
         />
       )}
       {session && <SessionProviderSection session={session} />}
@@ -7141,6 +7145,10 @@ function ComposerSheet({
         onClose={(): void => setCmdConfirm(null)}
         onConfirm={confirmSessionAction}
       />
+      <SessionReloadDialog
+        session={open && reloadConfirm ? session : null}
+        onClose={(): void => setReloadConfirm(false)}
+      />
       </Sheet>
     </>
   );
@@ -7204,6 +7212,7 @@ function SessionInfoSection({
   actionsExpanded,
   onActionsExpandedChange,
   onSessionAction,
+  onReload,
 }: {
   session: SessionMeta;
   title: string;
@@ -7219,6 +7228,7 @@ function SessionInfoSection({
   actionsExpanded: boolean;
   onActionsExpandedChange: (expanded: boolean) => void;
   onSessionAction: (action: SessionAction) => void;
+  onReload: () => void;
 }): React.JSX.Element {
   // Title is editable right here — this sheet already shows the session's identity,
   // so the rename (edit-title) belongs with it rather than off in app Settings.
@@ -7487,6 +7497,19 @@ function SessionInfoSection({
           </ButtonBase>
           <Collapse id={actionsPanelId} in={actionsExpanded} unmountOnExit>
             <Stack spacing={1} sx={{ pt: 0.75 }}>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<Refresh />}
+                aria-label="reload session from session settings"
+                onClick={(event): void => {
+                  event.currentTarget.blur();
+                  onReload();
+                }}
+                sx={{ minHeight: 44, textTransform: "none" }}
+              >
+                Reload runtime
+              </Button>
               {compactAction && (
                 <Button
                   fullWidth
@@ -7631,38 +7654,20 @@ function SessionProviderSection({
         </ButtonBase>
         <Collapse id={panelId} in={expanded}>
           <Box sx={{ pt: 0.5 }}>
-            <Stack
-              direction="row"
-              alignItems="center"
-              spacing={1}
-              sx={{ px: 0.5, pb: 0.25 }}
-            >
-              {entry
-                ? (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{
-                      display: "block",
-                      flex: 1,
-                      minWidth: 0,
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    {entry.manifest.display.summary}
-                  </Typography>
-                )
-                : <Box sx={{ flex: 1 }} />}
-              <NetworkIconButton
-                aria-label="reload session runtime from provider"
-                data-session-provider-reload
-                networkAction={(): Promise<void> => reloadSession(session.id)}
-                size="small"
-                sx={{ width: 32, height: 32, flexShrink: 0 }}
+            {entry && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  display: "block",
+                  px: 0.5,
+                  pb: 0.25,
+                  lineHeight: 1.4,
+                }}
               >
-                <Refresh sx={{ fontSize: 17 }} />
-              </NetworkIconButton>
-            </Stack>
+                {entry.manifest.display.summary}
+              </Typography>
+            )}
             {entry && (
               <List dense disablePadding>
                 {facts.map((row) => (

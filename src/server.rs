@@ -10676,7 +10676,7 @@ async fn compensate_plugin_uninstall(
     let Err(compensation_error) = compensation else {
         let mut reload_errors = Vec::new();
         for session_id in stopped_live_sessions {
-            if let Err(error) = state.supervisor.reload_session(session_id) {
+            if let Err(error) = state.supervisor.reload_session(session_id, true) {
                 reload_errors.push(format!("{session_id}: {error}"));
             }
         }
@@ -11385,7 +11385,7 @@ fn recover_failed_provider_sessions(
             next_generation,
         ) {
             Ok(true) => {
-                if let Err(error) = state.supervisor.reload_session(&session.id) {
+                if let Err(error) = state.supervisor.reload_session(&session.id, false) {
                     tracing::warn!(
                         session = %session.id,
                         provider = %session.provider,
@@ -12717,13 +12717,20 @@ async fn api_session_info(
 /// id, queue, drafts, title, cwd, or persisted config preferences. The
 /// Supervisor owns the atomic worker fence/replacement and broadcasts the
 /// resulting lifecycle edges to every connected client.
+#[derive(Debug, Default, Deserialize)]
+struct SessionReloadQuery {
+    #[serde(default)]
+    confirm_active_turn: bool,
+}
+
 async fn api_session_reload(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
+    Query(query): Query<SessionReloadQuery>,
 ) -> Response {
-    if state.hub.session_info(&session_id).is_none() {
+    let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    }
+    };
     if plugin_fence_state_for_session(&state.hub, &state.plugin_lifecycle_fences, &session_id)
         .is_some_and(|fence| fence != PluginFenceState::Installing)
     {
@@ -12733,7 +12740,16 @@ async fn api_session_reload(
         )
             .into_response();
     }
-    match state.supervisor.reload_session(&session_id) {
+    tracing::info!(
+        session = %session_id,
+        status = ?info.meta.status,
+        confirm_active_turn = query.confirm_active_turn,
+        "session runtime reload requested"
+    );
+    match state
+        .supervisor
+        .reload_session(&session_id, query.confirm_active_turn)
+    {
         Ok(()) => (StatusCode::ACCEPTED, "reloading").into_response(),
         Err(error) => (StatusCode::CONFLICT, error).into_response(),
     }

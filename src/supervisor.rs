@@ -491,7 +491,11 @@ impl Supervisor {
     /// clear transcript history or start a fresh agent context. Persisted config
     /// preferences are replayed by [`RemoteRuntime::reset`] before the replacement
     /// worker can accept another prompt.
-    pub fn reload_session(&self, session_id: &str) -> Result<(), String> {
+    pub fn reload_session(
+        &self,
+        session_id: &str,
+        confirm_active_turn: bool,
+    ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         let meta = self
             .hub
@@ -510,10 +514,16 @@ impl Supervisor {
             );
         }
 
+        let active_turn = matches!(meta.status, Status::Busy | Status::Starting)
+            && self.hub.session_has_in_flight_prompt(session_id);
+        if active_turn && !confirm_active_turn {
+            return Err(
+                "session has an active turn; confirm reload to stop it before retrying".to_owned(),
+            );
+        }
+
         self.resolve_and_persist_cwd(session_id)?;
-        if matches!(meta.status, Status::Busy | Status::Starting)
-            && self.hub.session_has_in_flight_prompt(session_id)
-        {
+        if active_turn {
             self.hub.set_status(
                 session_id,
                 Status::Interrupted,
@@ -1172,7 +1182,9 @@ mod tests {
         let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
         let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
 
-        supervisor.reload_session("s").expect("reload session");
+        supervisor
+            .reload_session("s", true)
+            .expect("reload session");
 
         let info_after = hub.session_info("s").expect("session after reload");
         assert_eq!(info_after.meta.id, info_before.meta.id);
@@ -1218,6 +1230,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reload_rejects_an_active_turn_without_explicit_confirmation() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("s", Status::Running, None);
+        let (dispatch_tx, mut dispatch_rx) = tokio::sync::mpsc::channel(1);
+        hub.set_dispatch_tx(dispatch_tx);
+        hub.submit("s", "active turn".to_owned(), Vec::new(), None);
+        assert_eq!(
+            dispatch_rx.recv().await.expect("active dispatch").text,
+            "active turn"
+        );
+        hub.set_status("s", Status::Busy, None);
+        let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
+        worker.state = WorkerState::Busy;
+        worker.current_turn_id = Some("turn-1".to_owned());
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![worker]);
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        let error = supervisor
+            .reload_session("s", false)
+            .expect_err("unconfirmed active reload must be rejected");
+
+        assert!(error.contains("active turn"));
+        assert_eq!(hub.status("s"), Some(Status::Busy));
+        assert!(hub.session_has_in_flight_prompt("s"));
+        assert!(runtime.pending_for_test().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reload_allows_an_idle_turn_without_confirmation() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("s", Status::Running, None);
+        let runtime = RemoteRuntime::for_test(
+            hub.clone(),
+            vec![worker_snapshot(cwd.to_string_lossy().as_ref())],
+        );
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        supervisor
+            .reload_session("s", false)
+            .expect("idle reload does not need active-turn confirmation");
+
+        assert_eq!(hub.status("s"), Some(Status::Starting));
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
+        }));
+    }
+
+    #[tokio::test]
     async fn reload_waits_for_remote_web_workspace_preparation() {
         let root = TestDir::new();
         let source = root.path().join("columbus");
@@ -1228,7 +1310,7 @@ mod tests {
         let supervisor = remote_supervisor(hub.clone(), runtime.clone(), root.0.clone());
 
         let error = supervisor
-            .reload_session("s")
+            .reload_session("s", false)
             .expect_err("preparing workspace must reject reload");
 
         assert!(error.contains("workspace is still being prepared"));

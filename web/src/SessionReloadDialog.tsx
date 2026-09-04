@@ -21,7 +21,7 @@ export function SessionReloadDialog({
   const confirm = (): void => {
     if (!session) return;
     void action.run(async () => {
-      await reloadSession(session.id);
+      await reloadSession(session.id, { confirmActiveTurn: activeTurn });
       onClose();
     });
   };
@@ -42,6 +42,7 @@ export function SessionReloadDialog({
           </Button>
           <Button
             variant="contained"
+            color={activeTurn ? "warning" : "primary"}
             startIcon={action.progress
               ? <CircularProgress size={16} color="inherit" />
               : <Refresh />}
@@ -49,7 +50,7 @@ export function SessionReloadDialog({
             disabled={action.pending}
             onClick={confirm}
           >
-            Reload
+            {activeTurn ? "Stop & reload" : "Reload"}
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
           </Button>
         </>

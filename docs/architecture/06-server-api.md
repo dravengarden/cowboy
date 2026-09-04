@@ -64,7 +64,7 @@ control plane, while the web files remain an independently replaceable release.
 | `POST /api/sessions` | create a Machine-placed session and return its exact Provider generation |
 | `GET /api/sessions/{id}/files?q&limit` | the composer `@` picker (gitignore-aware fuzzy search) |
 | `GET /api/sessions/{id}/info` | metadata + event / queue / draft counts |
-| `POST /api/sessions/{id}/reload` | atomically rebuild the worker while preserving the Cowboy/native session, transcript, pending state, and saved config |
+| `POST /api/sessions/{id}/reload` | atomically rebuild the worker while preserving the Cowboy/native session, transcript, pending state, and saved config; an in-flight turn is rejected unless the caller sends `confirm_active_turn=true` to explicitly confirm that it may be stopped |
 | `POST /api/sessions` | product operator+; stamps `owner_user_id`; returns authoritative `session_id`, exact `provider_version`, `provider_generation_digest`, and optional `provider_auth_generation` selected transactionally by the Controller |
 | `POST /api/sessions/{id}/prompt` | machine-driven session wake |
 | `GET /api/history/{id}?before_seq=…` | cursor-addressed, event- and byte-bounded history page |

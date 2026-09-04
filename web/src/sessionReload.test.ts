@@ -8,9 +8,25 @@ Deno.test("session reload posts to the encoded session endpoint", async () => {
     return Promise.resolve(new Response("reloading", { status: 202 }));
   };
 
-  await reloadSession("session/with spaces", fetcher);
+  await reloadSession("session/with spaces", {}, fetcher);
 
   assertEquals(request?.input, "/api/sessions/session%2Fwith%20spaces/reload");
+  assertEquals(request?.init.method, "POST");
+});
+
+Deno.test("session reload carries explicit active-turn confirmation", async () => {
+  let request: { input: string; init: RequestInit } | undefined;
+  const fetcher: SessionReloadFetch = (input, init) => {
+    request = { input, init };
+    return Promise.resolve(new Response("reloading", { status: 202 }));
+  };
+
+  await reloadSession("s", { confirmActiveTurn: true }, fetcher);
+
+  assertEquals(
+    request?.input,
+    "/api/sessions/s/reload?confirm_active_turn=true",
+  );
   assertEquals(request?.init.method, "POST");
 });
 
@@ -21,7 +37,7 @@ Deno.test("session reload surfaces the backend rejection detail", async () => {
     );
 
   await assertRejects(
-    () => reloadSession("s", fetcher),
+    () => reloadSession("s", {}, fetcher),
     Error,
     "session workspace is still being prepared",
   );
