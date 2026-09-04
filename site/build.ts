@@ -146,13 +146,13 @@ export function assertPublicSiteContent(
 
 function assertGenericDemoMachineLabels(html: string): void {
   const heroLabels = [...html.matchAll(
-    /<span class="control-machine-name"><i><\/i>\s*([^<]+)<\/span>/gu,
+    /<span class="control-machine-name"><i><\/i>\s*<span>([^<]+)<\/span>/gu,
   )].map((match) => match[1].trim());
   const topology = html.match(
     /<div class="topology-machines">([\s\S]*?)<\/div>/u,
   )?.[1] ?? "";
   const topologyLabels = [...topology.matchAll(
-    /<article><span><i><\/i>\s*([^<]+)<\/span>/gu,
+    /<article><span><i><\/i>\s*<span(?:\s[^>]*)?>([^<]+)<\/span><\/span>/gu,
   )].map((match) => match[1].trim());
 
   if (
@@ -333,7 +333,9 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
   }; --reveal-delay: ${String((index % 3) * 70)}ms"
             >
               <div class="plugin-card-topline">
-                <span>${escapeHtml(plugin.kindLabel)}</span>
+                <span data-i18n="plugins.kind.${
+    plugin.kind === "agent_provider" ? "agent" : "code"
+  }">${escapeHtml(plugin.kindLabel)}</span>
                 <span class="plugin-version">v${
     escapeHtml(plugin.version)
   }</span>
@@ -345,10 +347,14 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
                   <small>${escapeHtml(plugin.vendor)}</small>
                 </span>
               </div>
-              <p>${escapeHtml(plugin.summary)}</p>
+              <p data-i18n="plugins.summary.${escapeHtml(plugin.id)}">${
+    escapeHtml(plugin.summary)
+  }</p>
               <div class="plugin-card-footer">
                 <code>${escapeHtml(plugin.id)}</code>
-                <span>component ${escapeHtml(plugin.componentRelease)}</span>
+                <span><span data-i18n="plugins.component">component</span> ${
+    escapeHtml(plugin.componentRelease)
+  }</span>
               </div>
             </article>`).join("");
 }

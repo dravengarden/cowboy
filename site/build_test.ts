@@ -201,30 +201,44 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     const controlGroupStart = html.indexOf('<div class="nav-actions"');
     const navToggleStart = html.indexOf('class="nav-toggle"');
-    const themeToggleStart = html.indexOf('class="theme-toggle"');
-    const controlGroupEnd = html.indexOf("</div>", controlGroupStart);
+    const preferencesToggleStart = html.indexOf('class="preferences-toggle"');
     assert(
       controlGroupStart >= 0 &&
         navToggleStart > controlGroupStart &&
-        themeToggleStart > navToggleStart &&
-        controlGroupEnd > themeToggleStart,
-      "mobile navigation and theme controls should share one compact control group",
+        preferencesToggleStart > navToggleStart,
+      "mobile navigation and preferences should share one compact control group",
     );
     assert(
       html.includes('class="site-navigation-github"'),
       "mobile navigation should retain the GitHub destination outside the header controls",
     );
-    assertEquals(
-      (html.match(/class="theme-icon"/gu) ?? []).length,
-      1,
-      "theme control should use one restrained appearance icon",
+    assert(
+      (html.match(/data-theme-choice=/gu) ?? []).length === 3 &&
+        html.includes('data-theme-choice="system"') &&
+        html.includes('data-theme-choice="light"') &&
+        html.includes('data-theme-choice="dark"') &&
+        script.includes('colorSchemeQuery.addEventListener?.("change"'),
+      "appearance preferences should offer and live-update System, Light, and Dark modes",
     );
     assert(
-      html.includes('class="theme-icon-fill"') &&
-        !html.includes("theme-icon-moon") &&
-        !html.includes("theme-icon-sun"),
-      "theme control should use the half-light appearance mark",
+      html.includes('data-language="en"') &&
+        html.includes('data-language-choice="en"') &&
+        html.includes('data-language-choice="zh"') &&
+        script.includes('localStorage.setItem("cowboy-site-language"') &&
+        script.includes('"preferences.title": "偏好设置"'),
+      "English should remain the default while the complete site supports Chinese",
     );
+    const translationKeys = new Set(
+      [...html.matchAll(
+        /data-i18n(?:-(?:aria-label|alt|content))?="([^"]+)"/gu,
+      )].map((match) => match[1]),
+    );
+    for (const key of translationKeys) {
+      assert(
+        script.includes(`"${key}":`),
+        `Chinese translation should cover ${key}`,
+      );
+    }
     for (const machine of ["01", "02", "03", "04", "05"]) {
       assert(
         html.includes(`Machine ${machine}</span>`),
@@ -232,12 +246,27 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       );
     }
     assert(
-      html.includes('aria-label="Connect another Machine"') &&
-        html.includes('class="control-route"'),
-      "hero should show an extensible one-to-many Machine fleet",
+      html.includes(
+        'class="control-machine control-machine-codex control-machine-multi"',
+      ) &&
+        html.includes('aria-label="2 Agents"') &&
+        html.includes('data-agent-provider="codex"') &&
+        html.includes('data-agent-provider="claude-code"'),
+      "hero should demonstrate multiple Agents sharing one Machine",
     );
     assert(
-      html.includes("<i></i> Your Machine</span><strong>Connect next</strong>"),
+      html.includes(
+        'class="control-machine control-machine-add" href="#start"',
+      ) &&
+        html.includes('data-i18n="fleet.connect">Connect</strong>') &&
+        html.includes('class="control-route"'),
+      "hero should make the extensible one-to-many Machine action real",
+    );
+    assert(
+      html.includes(
+        '<span data-i18n="topology.yourMachine">Your Machine</span>',
+      ) &&
+        html.includes('data-i18n="topology.connectNext">Connect next</strong>'),
       "topology should invite a generic next Machine",
     );
     assert(
@@ -291,6 +320,8 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes("document.documentElement.style.backgroundColor") &&
+        html.includes('let initialThemeMode = "system"') &&
+        html.includes('matchMedia("(prefers-color-scheme: dark)")') &&
         html.indexOf("document.documentElement.style.backgroundColor") <
           html.indexOf('<link rel="stylesheet"') &&
         script.includes("root.style.backgroundColor = canvas") &&
