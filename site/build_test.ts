@@ -151,6 +151,21 @@ Deno.test("website privacy guard rejects deployment-specific content", () => {
   );
 });
 
+Deno.test("repository landing pages use only privacy-safe product artwork", async () => {
+  const readme = await Deno.readTextFile(ROOT + "/README.md");
+  const contributing = await Deno.readTextFile(ROOT + "/CONTRIBUTING.md");
+
+  assertPublicSiteContent("README.md", readme);
+  assertPublicSiteContent("CONTRIBUTING.md", contributing);
+  assert(
+    readme.includes("site/assets/cowboy-hero-devices-light-v4.webp") &&
+      readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
+      readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
+      !readme.includes("docs/screenshots/"),
+    "repository landing page should use the abstract public artwork instead of private product captures",
+  );
+});
+
 Deno.test("website build produces a complete self-contained Pages artifact", async () => {
   const temporary = await Deno.makeTempDir({
     dir: ROOT,

@@ -1,156 +1,269 @@
 <p align="center">
-  <img src="web/public/cowboy-app-icon-512-v4.png" width="112" height="112" alt="Cowboy">
+  <a href="https://dravengarden.github.io/cowboy/">
+    <img src="web/public/cowboy-app-icon-512-v4.png" width="112" height="112" alt="Cowboy">
+  </a>
 </p>
 
 <h1 align="center">Cowboy</h1>
 
 <p align="center">
-  <strong>A remote Agent IDE for controlling multiple machines.</strong><br>
-  Run Claude Code, Codex, Gemini, and Grok across your machines from one live workspace.
+  <strong>The self-hosted remote Agent IDE.</strong><br>
+  Direct coding agents across every machine you control from one live desktop or mobile workspace.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-7c5cbf?style=flat-square" alt="MIT">
-  <img src="https://img.shields.io/badge/rust-1.97-dea584?style=flat-square" alt="Rust 1.97">
-  <img src="https://img.shields.io/badge/ACP-native-4a90d9?style=flat-square" alt="ACP">
+  <a href="https://dravengarden.github.io/cowboy/">
+    <img src="https://img.shields.io/badge/website-live-6e56cf?style=flat-square" alt="Cowboy website">
+  </a>
+  <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
+    <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-7c5cbf?style=flat-square" alt="MIT license">
+  </a>
+  <img src="https://img.shields.io/badge/Rust-1.97.1-dea584?style=flat-square" alt="Rust 1.97.1">
+  <a href="https://agentclientprotocol.com/">
+    <img src="https://img.shields.io/badge/protocol-ACP_native-4a90d9?style=flat-square" alt="ACP native">
+  </a>
 </p>
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/"><strong>Website</strong></a>
-  · <a href="docs/plugin-packages.md">Plugin platform</a>
+  · <a href="#quick-start">Quick start</a>
+  · <a href="#plugin-ecosystem">Plugins</a>
+  · <a href="#architecture">Architecture</a>
   · <a href="docs/INDEX.md">Documentation</a>
 </p>
 
-## Product tour
-
 <p align="center">
-  <img src="docs/screenshots/desktop.webp" alt="Cowboy desktop: session rail, prompt, and a live conversation with tools, tables, and code" width="920">
+  <a href="https://dravengarden.github.io/cowboy/">
+    <img src="site/assets/cowboy-hero-devices-light-v4.webp" alt="An abstract Cowboy desktop and phone workspace with sessions, prompts, tools, and code" width="1100">
+  </a>
 </p>
 
-<p align="center"><sub>Desktop · the remote IDE for switching machines, directing agents, and watching tools, tables, and code in one view.</sub></p>
+<p align="center"><sub>One self-hosted control plane. Many Machines. Every Agent stays on the infrastructure you choose.</sub></p>
 
-<div style="overflow-x:auto; padding: 4px 0 16px;">
-  <table>
-    <tr>
-      <td align="center" valign="top">
-        <img src="docs/screenshots/ios-agent.webp" alt="Mobile Agent view with a live transcript, tool calls, and composer" width="190"><br>
-        <sub><b>Agent</b><br>tool calls + composer</sub>
-      </td>
-      <td align="center" valign="top">
-        <img src="docs/screenshots/ios-code.webp" alt="Mobile Code review showing Rust syntax highlighting and an LSP symbol panel" width="190"><br>
-        <sub><b>Code</b><br>syntax + LSP symbols</sub>
-      </td>
-      <td align="center" valign="top">
-        <img src="docs/screenshots/ios-code-tree.webp" alt="Mobile Code review worktree file tree" width="190"><br>
-        <sub><b>Worktree</b><br>files + Git context</sub>
-      </td>
-      <td align="center" valign="top">
-        <img src="docs/screenshots/ios-sessions.webp" alt="Mobile session switcher with a live session list" width="190"><br>
-        <sub><b>Sessions</b><br>switch agents anywhere</sub>
-      </td>
-    </tr>
-  </table>
-</div>
+## What Cowboy is
 
-<p align="center"><sub>Light theme shown. On narrow screens, the feature strip stays one row and can be swiped horizontally; each view also reads well on its own.</sub></p>
+Cowboy is a self-hosted control plane for long-running coding agents. A Cowboy
+Hub coordinates durable sessions while each enrolled Machine owns its workspace,
+agent process, and execution lifetime. Close the browser, move from desktop to
+phone, or reconnect later—the worker keeps running on its Machine.
 
-## The remote Agent IDE
+Cowboy is an IDE for agent work, not a generic chat wrapper:
 
-Cowboy gives you one IDE for the agents running across your machines. Connect to a
-machine, open its workspace, and keep directing the work from wherever you are:
+| Principle                      | What it means                                                                                               |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| **One surface, many Machines** | Enroll Linux and macOS hosts, place sessions remotely, and switch without juggling IDEs or SSH tabs.        |
+| **Agent-native visibility**    | Plans, thinking, tools, permissions, code, diffs, queues, and runtime state remain visible in one timeline. |
+| **Durable remote work**        | Machine-owned workers survive browser disconnects and Controller restarts, then replay state on reconnect.  |
+| **Purpose-built clients**      | Desktop is dense and keyboard/Vim-first; Mobile is touch-first and progressively disclosed.                 |
+| **Plugin ecosystem**           | Agent Providers and code intelligence ship as independently versioned, signed, Machine-scoped Plugins.      |
+| **Always yours**               | Run the Hub, storage, Machines, credentials, and release policy on infrastructure you control.              |
 
-- **Control many machines.** Enroll remote hosts and switch between their workspaces without changing IDEs or SSH tabs.
-- **Keep the whole agent visible.** Follow plans, thinking, tool calls, permissions, code, and diffs in one timeline instead of a terminal stream.
-- **Stay connected to the work.** Machine-hosted workers keep running when your browser closes; reconnect later to the same session and state.
-- **Use the protocol, not a replica.** [ACP](https://agentclientprotocol.com) carries the agent surface, so Cowboy remains a conduit for Claude Code, Codex, Gemini, Grok, and future Providers.
-
-Desktop and Mobile are two focused shells for the same remote IDE: keyboard-first on a large screen, touch-first on a phone.
-
-## What you get
-
-| Surface | What it is |
-| --- | --- |
-| **Machines** | Enroll hosts, see their health and capacity, and place work on the right remote machine. |
-| **Agent** | Live transcript, thinking, tools, plans, permissions, queue, and a CodeMirror composer (including Vim). |
-| **Code** | Review each machine's worktree and Git changes with syntax highlighting, LSP diagnostics, and symbol navigation. Long source lines remain horizontally scrollable. |
-| **Sessions** | Create, rename, reorder, pause, resume, and reconnect to agent sessions across machines. |
+> [!NOTE]
+> Cowboy is in active, pre-stable development. There are no published stable
+> binaries yet; build from source and expect interfaces to evolve before 1.0.
 
 ## Quick start
 
-Cowboy is developed and built in the pinned Nix shell. The local daemon can
-start immediately with an in-memory store; use SQLite or PostgreSQL when you
-want sessions to survive restarts.
+### Prerequisites
+
+- [Nix](https://nixos.org/download/) with flakes enabled
+- Linux or macOS
+- Git
+
+Clone Cowboy, enter the pinned development environment, install the
+checkout-local frontend dependencies, and build the release:
 
 ```sh
-nix develop          # pinned Rust 1.97 + Deno + just
-just build           # web bundle + release binaries
+git clone https://github.com/dravengarden/cowboy.git
+cd cowboy
+nix develop
+just install
+just build
+```
+
+Start a local self-hosted Hub with SQLite persistence:
+
+```sh
 ./target/release/cowboy serve \
   --database-url sqlite:///tmp/cowboy.sqlite3
 ```
 
-Open `http://127.0.0.1:3333`, enroll one or more Machines, and start directing agents from the IDE. See [machine operations](docs/machine-operations.md) for remote hosts.
+Open <http://127.0.0.1:3333>. Product login is off by default for local
+development. SQLite is the zero-operations store; PostgreSQL implements the same
+Store API for larger deployments.
+
+To attach another Linux or macOS computer, build the target-platform bootstrap
+with <code>just build-machine-bootstrap</code> and keep the resulting
+<code>cowboy</code>, <code>cowboy-machine</code>, and
+<code>cowboy-machine-install</code> commands together. Create a one-time
+enrollment code in Cowboy, then run the generated command on that Machine:
 
 ```sh
-just check           # fmt, clippy, tsc, tests, release build
+cowboy register https://cowboy.example --background
 ```
 
-SQLite is the zero-ops local store. PostgreSQL speaks the same `Store` API (`--database-url postgresql://…`). Omit the URL and the daemon runs in-memory.
-Use `cowboy store-copy --source postgresql://… --destination sqlite:///…` for a
-fail-closed production migration into a new SQLite file.
+The token is entered through a masked prompt and never needs to appear in shell
+history. See [Machine operations](docs/machine-operations.md) for installation,
+identity verification, background services, and multi-Service isolation.
+
+## Product surfaces
+
+<table>
+  <tr>
+    <td width="64%" align="center">
+      <img src="site/assets/cowboy-desktop-surface-light-v2.webp" alt="Abstract Cowboy Desktop workspace with a session rail, prompt editor, and live Agent timeline">
+    </td>
+    <td width="36%" align="center">
+      <img src="site/assets/cowboy-mobile-light-v2.webp" alt="Abstract Cowboy Mobile surfaces for sessions, Agent work, and code review">
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <strong>Desktop</strong><br>
+      Dense session navigation, split workspaces, visible tool output, and
+      keyboard/Vim control for sustained engineering work.
+    </td>
+    <td valign="top">
+      <strong>Mobile</strong><br>
+      Touch-first session control, Agent follow-up, and code review that
+      reconnect to the same durable worker.
+    </td>
+  </tr>
+</table>
+
+The shared domain model does not force both clients into one compromised
+responsive UI. Each surface is optimized for its input model while observing the
+same authoritative session state.
 
 ## Architecture
 
 <p align="center">
-  <img src="docs/architecture/multi-machine.svg" alt="Phone and desktop clients connect to the Cowboy Hub, which coordinates multiple remote Machines and detached agent workers" width="920">
+  <img src="docs/architecture/multi-machine.svg" alt="Phone and desktop clients connect to one Cowboy Hub, which coordinates storage, remote Machines, detached workers, and Agent Providers" width="920">
 </p>
 
-<p align="center"><sub>One remote IDE surface, one Hub, and as many Machine-hosted agent workspaces as you need.</sub></p>
+1. Desktop and Mobile connect to the Hub over HTTP and WebSocket.
+2. The Hub owns durable ordering, persistence, routing, and client fan-out.
+3. Each outbound-only Machine connection owns isolated worktrees and detached
+   workers for the sessions placed there.
+4. Workers speak [ACP](https://agentclientprotocol.com/) to the exact Provider
+   generation selected for that session.
+5. Reconnect and rolling-update paths use fencing, snapshots, replay, and
+   idempotent commands rather than silently moving an active worker.
 
-The **Hub** (`src/core.rs`) is the only writer of `seq`. Live clients receive compact deltas; durable history is canonicalized and large images become `/api/artifacts/…` before they clone across the persist queue and WebSocket fan-out.
+Read the [architecture overview](docs/architecture/00-overview.md) for the
+component map and end-to-end request flow.
 
-Rolling updates keep workers alive across controller restarts: [architecture/12-rolling-updates.md](docs/architecture/12-rolling-updates.md).
+## Plugin ecosystem
 
-## Provider architecture
+A **Plugin** is Cowboy's only discoverable, installable, upgradable, rollback,
+and uninstall unit. Installation is scoped to a Machine; publishing a release
+does not silently activate it anywhere.
 
-Agent Providers are independently versioned and independently buildable plugins
-(`plugins/*/plugin.json`) whose signed payload is `provider.json`, not
-hardcoded adapters in the UI. Zed is a process-isolated code-intelligence
-plugin. Each manifest carries its component-release identity, so its package
-can be built outside the Cowboy checkout with published Cargo/npm components.
-Plugins pin versioned Cowboy components as described in
-[Plugins and shared components](docs/plugin-components.md). The UI consumes typed Provider capabilities
-through [ACP](https://agentclientprotocol.com), so adding a Provider does not
-require rebuilding the product around another vendor-specific surface.
+| Kind              | First-party Plugins                                                   |
+| ----------------- | --------------------------------------------------------------------- |
+| Agent Provider    | Codex, Claude Code, Gemini, Grok, Codex + DeepSeek, Claude + DeepSeek |
+| Code intelligence | Zed                                                                   |
 
-## Documentation
+The platform keeps the extension boundary explicit:
 
-| Guide | Covers |
-| --- | --- |
-| [Architecture overview](docs/architecture/00-overview.md) | Topology, Hub, workers |
-| [Requirements](docs/requirements.md) | Provider packages, auth, uninstall |
-| [Code review](docs/architecture/13-code-review.md) | Worktree / Git data plane |
-| [Multi-machine](docs/architecture/15-multi-machine.md) | Enrollment and placement |
-| [Operations](docs/architecture/11-operations.md) | Runbooks |
-| [Index](docs/INDEX.md) | Everything else |
+- releases are immutable, signed, and bound to exact platform artifacts;
+- each Machine stages and probes a generation before activation;
+- incompatible packages fail closed before replacing the active generation;
+- Provider UI is typed, data-only IR rendered by Cowboy—Plugins do not inject
+  arbitrary JavaScript, HTML, CSS, or DOM access;
+- old and new generations can drain concurrently, so a running session does not
+  silently adopt new runtime bytes.
 
-## Contributing
+```mermaid
+flowchart LR
+    SOURCE["Plugin source"] --> PACKAGE["Signed .cowboy-plugin"]
+    PACKAGE --> CATALOG["Catalog release"]
+    CATALOG --> A["Machine A generation"]
+    CATALOG --> B["Machine B generation"]
+    A --> S1["Pinned session workers"]
+    B --> S2["Pinned session workers"]
+```
 
-Use the pinned development shell and run the complete web checks before
-opening a change:
+Start with [Installable Plugin packages](docs/plugin-packages.md), then read
+[Plugins and shared components](docs/plugin-components.md) and the normative
+[core requirements](docs/requirements.md).
+
+## Safety and ownership
+
+Cowboy is designed around local ownership and explicit trust boundaries:
+
+- the Hub and SQLite/PostgreSQL data are self-hosted;
+- remote Machines initiate authenticated outbound WebSocket connections;
+- an Ed25519 private key stays on its Machine;
+- enrollment codes are single-use, expire after 15 minutes, and are stored by
+  digest only;
+- Provider credentials are Service-scoped and projected only to compatible,
+  installed Machine generations;
+- package, schema, signature, digest, and platform mismatches fail closed;
+- typed Plugin UI cannot access ambient DOM, filesystem, process, network,
+  credential, clock, or randomness capabilities.
+
+The detailed contracts live in [core requirements](docs/requirements.md) and
+[operations](docs/architecture/11-operations.md).
+
+## Repository map
+
+| Path                               | Responsibility                                                         |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| <code>src/</code>                  | Rust Hub, API, persistence, Machine routing, workers, and CLI          |
+| <code>web/</code>                  | React Desktop, Mobile, Agent, Code, setup, and admin surfaces          |
+| <code>plugins/</code>              | First-party Agent Provider and code-intelligence Plugins               |
+| <code>components/</code>           | Versioned Plugin, Provider, state, UI, and code-intelligence contracts |
+| <code>apps/macos-installer/</code> | Native macOS menu-bar installer and Machine manager                    |
+| <code>site/</code>                 | Public product website and privacy-safe artwork                        |
+| <code>docs/</code>                 | Architecture, product contracts, deployment, and operations            |
+
+## Development
+
+Run project commands inside the pinned Nix shell:
 
 ```sh
 nix develop
+just install
 just check
 ```
 
-Keep each backend's consolidated SQL baseline immutable; add a new migration
-instead of editing one that has already shipped. Frontend-only changes should use the independent
-Web release lane described in [build and deploy](docs/architecture/10-deploy-build.md).
+<code>just check</code> runs formatting, Clippy, dependency policy, Rust tests,
+Web typechecking/lint/tests, Plugin conformance, site tests, and release builds.
+For local HMR, run <code>just dev</code> and <code>just dev-web</code> in
+separate terminals.
 
-## Status
+Keep consolidated SQL baselines immutable after deployment; add a new migration
+instead of editing one that has shipped. Significant Provider or architecture
+changes must preserve the contracts in
+[docs/requirements.md](docs/requirements.md).
 
-Remote Agent IDE in active development. Persistence, resume, history pagination, queue/draft sync, Code review, multi-machine enrollment, and detached workers are in tree. The web UI is a separately switched immutable bundle, so a frontend-only rollout does not recycle agents.
+## Documentation
+
+| Start here                                                | Covers                                                           |
+| --------------------------------------------------------- | ---------------------------------------------------------------- |
+| [Documentation index](docs/INDEX.md)                      | Complete architecture and product documentation                  |
+| [Architecture overview](docs/architecture/00-overview.md) | Hub, Machines, workers, storage, and clients                     |
+| [Machine operations](docs/machine-operations.md)          | Enrollment, identity, services, and Provider installation        |
+| [Plugin packages](docs/plugin-packages.md)                | Package, typed UI, runtime, authentication, and release contract |
+| [Code review](docs/architecture/13-code-review.md)        | Worktree, Git, file, diff, and language-intelligence data plane  |
+| [Build and deploy](docs/architecture/10-deploy-build.md)  | Pinned builds and component-scoped releases                      |
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+for environment setup, project contracts, verification expectations, and the
+information to include with a change.
+
+- Use [GitHub Issues](https://github.com/dravengarden/cowboy/issues) for
+  reproducible bugs and focused feature proposals.
+- Run <code>just check</code> before requesting review.
+- Include screenshots for visual changes and regression coverage for behavior
+  changes.
 
 ## License
 
-[MIT](LICENSE)
+Cowboy is available under the [MIT License](LICENSE).
