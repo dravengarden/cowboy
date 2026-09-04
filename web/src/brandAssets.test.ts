@@ -136,8 +136,8 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1703", async
   assert(manifest.includes('"src": "/cowboy-app-icon-maskable-512-v4.png"'));
   assert(serviceWorker.includes('const VERSION = "cowboy-v1623"'));
   assert(serviceWorker.includes('icon: "/cowboy-app-icon-192-v4.png"'));
-  assert(nativeRelease.includes('"latest_version": "0.1.26"'));
-  assert(nativeRelease.includes("Cowboy 1703 icon"));
+  assert(nativeRelease.includes('"latest_version": "0.1.27"'));
+  assert(nativeRelease.includes("transcript scrollable"));
   assert(managerInfo.includes("<string>Cowboy.icns</string>"));
   assert(managerBuild.includes("Resources/Cowboy.icns"));
 });

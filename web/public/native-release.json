@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "app_id": "top.thundersparrow.cowboy",
-  "latest_version": "0.1.26",
+  "latest_version": "0.1.27",
   "minimum_version": "0.1.0",
-  "release_notes": "Adopts the Cowboy 1703 icon across the native shell. Update through SideStore, then reopen Cowboy.",
+  "release_notes": "Keeps the session transcript scrollable while the keyboard closes after sending. Update through SideStore, then reopen Cowboy.",
   "preferred_channel": "sidestore",
   "channels": [
     {
