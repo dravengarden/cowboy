@@ -4,6 +4,7 @@ const themeToggle = document.querySelector(".theme-toggle");
 const themeColor = document.querySelector('meta[name="theme-color"]');
 const navToggle = document.querySelector(".nav-toggle");
 const navigation = document.querySelector(".site-navigation");
+const backToTop = document.querySelector(".back-to-top");
 
 function setTheme(theme) {
   const canvas = theme === "dark" ? "rgb(21, 17, 29)" : "rgb(246, 244, 251)";
@@ -66,6 +67,18 @@ function updateHeader() {
 
 updateHeader();
 globalThis.addEventListener("scroll", updateHeader, { passive: true });
+
+backToTop?.addEventListener("click", (event) => {
+  event.preventDefault();
+  const reducedMotion = globalThis.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches ?? false;
+  globalThis.scrollTo({
+    top: 0,
+    left: 0,
+    behavior: reducedMotion ? "auto" : "smooth",
+  });
+});
 
 const filterButtons = [...document.querySelectorAll("[data-filter]")];
 const pluginCards = [...document.querySelectorAll(".plugin-card")];

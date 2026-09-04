@@ -271,8 +271,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "topology should use the shared brand icon in an unboxed control map",
     );
     assert(
-      html.includes('class="back-to-top" href="#top"'),
-      "footer should provide a visible return-to-top control",
+      html.includes('class="back-to-top" href="#top"') &&
+        script.includes('backToTop?.addEventListener("click"') &&
+        script.includes("globalThis.scrollTo({"),
+      "footer should provide a reliable return-to-top control with an anchor fallback",
     );
     assert(
       html.includes('href="assets/cowboy-hat-mark.svg"'),
