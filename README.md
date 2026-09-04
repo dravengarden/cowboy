@@ -1,6 +1,9 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-readme-mark-v1.png" width="112" height="112" alt="Cowboy">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-readme-mark-dark-v2.png">
+      <img src="site/assets/cowboy-readme-mark-light-v2.png" width="180" height="101" alt="Cowboy">
+    </picture>
   </a>
 </p>
 
@@ -37,7 +40,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-remote-topology-light-v1.webp" alt="Cowboy Desktop and Mobile connected through one self-hosted Hub to three generic macOS and Linux Machines running multiple Agents" width="1100">
+    <img src="site/assets/cowboy-remote-topology-light-v2.webp" alt="Cowboy Desktop and Mobile connected through one self-hosted Hub to three generic macOS and Linux Machines running multiple Agents" width="1100">
   </a>
 </p>
 

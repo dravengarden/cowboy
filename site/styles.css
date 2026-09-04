@@ -933,10 +933,10 @@ html[data-theme="dark"] .theme-art {
 .hero-client-wiring {
   position: absolute;
   z-index: 0;
-  top: -80px;
+  top: -108px;
   left: 2%;
   width: 96%;
-  height: 96px;
+  height: 124px;
   overflow: visible;
   pointer-events: none;
 }
@@ -3362,8 +3362,8 @@ html[data-theme="dark"] .topology-machines article {
   }
 
   .hero-client-wiring {
-    top: -62px;
-    height: 78px;
+    top: -84px;
+    height: 100px;
   }
 
   .control-plane-summary {

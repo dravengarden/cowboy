@@ -163,8 +163,9 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   assertPublicSiteContent("README.md", readme);
   assertPublicSiteContent("CONTRIBUTING.md", contributing);
   assert(
-    readme.includes("site/assets/cowboy-readme-mark-v1.png") &&
-      readme.includes("site/assets/cowboy-remote-topology-light-v1.webp") &&
+    readme.includes("site/assets/cowboy-readme-mark-light-v2.png") &&
+      readme.includes("site/assets/cowboy-readme-mark-dark-v2.png") &&
+      readme.includes("site/assets/cowboy-remote-topology-light-v2.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
       !readme.includes("docs/screenshots/"),
@@ -215,6 +216,16 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes('src="assets/cowboy-hero-devices-light.webp"'),
       "hero should use one privacy-safe Desktop and Phone composition",
+    );
+    assert(
+      html.includes('class="hero-client-ports"') &&
+        (html.match(/class="control-(?:hub|machine)-ports"/gu) ?? [])
+            .length === 2 &&
+        (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&
+        html.includes('d="M270 28 C270 74 285 102 300 120"') &&
+        styles.includes("top: -108px") &&
+        styles.includes("height: 124px"),
+      "hero wiring should attach visible client and Hub ports before branching to three Machines",
     );
     assert(
       html.includes('src="assets/cowboy-brand-mark.png"') &&
@@ -302,10 +313,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes('class="hero-client-wiring"') &&
-        html.includes("M270 62 C270 91 284 100 300 116") &&
-        html.includes("M554 96 C554 119 366 104 300 116") &&
-        !html.includes('<circle cx="270"') &&
-        !html.includes('<circle cx="554"') &&
+        html.includes("M270 28 C270 74 285 102 300 120") &&
+        html.includes("M554 82 C554 107 378 105 300 120") &&
+        html.includes('<circle cx="270" cy="28"') &&
+        html.includes('<circle cx="554" cy="82"') &&
+        html.includes('<circle cx="300" cy="120"') &&
         html.includes('class="control-hub-node"') &&
         html.includes('class="control-fleet-wiring"') &&
         (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&
