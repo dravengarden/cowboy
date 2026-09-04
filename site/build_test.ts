@@ -259,8 +259,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         'class="control-machine control-machine-add" href="#start"',
       ) &&
         html.includes('data-i18n="fleet.connect">Connect</strong>') &&
-        html.includes('class="control-route"'),
-      "hero should make the extensible one-to-many Machine action real",
+        html.includes('class="control-hub-node"') &&
+        html.includes("control-fleet-wiring control-fleet-wiring-wide") &&
+        html.includes("control-fleet-wiring control-fleet-wiring-mobile") &&
+        html.includes("seq · route · replay"),
+      "hero should render a truthful connected Hub-to-Machine topology with a real extension action",
     );
     assert(
       html.includes(
@@ -295,9 +298,18 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes('class="topology-wiring"') &&
-        html.includes('class="topology-brand-icon"') &&
-        !html.includes("topology-brand-mark"),
-      "topology should use the shared brand icon in an unboxed control map",
+        html.includes('class="topology-hub-core"') &&
+        html.includes("HTTPS · WebSocket") &&
+        html.includes("UDS · outbound WSS") &&
+        !html.includes('class="topology-brand-icon"') &&
+        !html.includes('class="topology-halo"'),
+      "architecture topology should explain real transport and Hub semantics without repeating the logo",
+    );
+    assert(
+      html.includes("Self-hosted remote Agent IDE") &&
+        html.includes("No shared Cowboy cloud") &&
+        script.includes('"hero.ownership":'),
+      "hero should make Cowboy's self-hosted single-instance ownership explicit",
     );
     assert(
       html.includes('class="back-to-top" href="#top"') &&

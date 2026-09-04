@@ -61,11 +61,11 @@ colorSchemeQuery.addEventListener?.("change", () => {
 const zhMessages = {
   "meta.title": "Cowboy — 远程 Agent IDE",
   "meta.description":
-    "Cowboy 是远程 Agent IDE，可从一个控制平面安全调度多台机器上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek runtime。",
+    "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek runtime。",
   "meta.socialDescription":
-    "在一个安全的远程控制平面中管理每个 Agent 与每台 Machine，由独立版本、签名并固定的插件驱动。",
+    "在一个自托管控制平面中管理你的 Agent 与 Machine，由独立版本、签名并固定的插件驱动。",
   "meta.twitterDescription":
-    "从一个安全的远程控制平面调度多台 Machine 上的所有编码 Agent。",
+    "自托管一个安全控制平面，调度你的多台 Machine 上的所有编码 Agent。",
   "skip.content": "跳到正文",
   "brand.home": "Cowboy 首页",
   "brand.github": "在 GitHub 上查看 Cowboy",
@@ -84,20 +84,22 @@ const zhMessages = {
   "preferences.dark": "深色",
   "preferences.language": "语言",
   "fleet.aria":
-    "一个 Cowboy 控制平面调度五台已连接 Machine 上的多个 Agent；Machine 01 同时运行两个 Agent",
-  "fleet.live": "实时集群",
-  "fleet.oneSurface": "一个界面",
-  "fleet.everyMachine": "所有 Machine",
-  "fleet.connected": "已连接",
+    "实时拓扑：一个 Cowboy Hub 连接五台 Machine 和六个 Agent；Machine 01 同时运行两个 Agent",
+  "fleet.live": "实时拓扑",
+  "fleet.clients": "客户端",
+  "fleet.machines": "Machines",
+  "fleet.agents": "Agents",
+  "fleet.controlPlane": "Cowboy Hub",
   "fleet.twoAgents": "2 个 Agent",
   "fleet.yourPlugin": "你的插件",
   "fleet.connect": "连接",
-  "hero.eyebrow": "一个远程控制平面",
+  "hero.eyebrow": "自托管远程 Agent IDE",
   "hero.agents": "你的 Agent。",
   "hero.machines": "你的机器。",
   "hero.workspace": "一个实时工作区。",
   "hero.lede":
-    "在一个控制平面中调度每台已连接 Machine 上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek runtime。远程放置任务，持续查看计划、工具与代码，随后可随时重新连接，而无需停止 Agent。",
+    "在你掌控的基础设施上运行一个 Cowboy 实例，调度每台已加入 Machine 上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek。稍后重新连接时，worker 仍持续运行在原 Machine 上。",
+  "hero.ownership": "一个实例。不共享 Cowboy 云。永远属于你。",
   "hero.run": "运行 Cowboy",
   "hero.explore": "探索插件",
   "hero.signals": "Cowboy 平台特性",
@@ -108,7 +110,7 @@ const zhMessages = {
   "hero.imageAlt":
     "由插件 Session、已填写 Prompt 与 Agent 活动组成的 Cowboy Desktop 和 Phone 抽象界面",
   "facts.aria": "Cowboy 远程控制与安全数据",
-  "facts.controlPlane": "远程控制平面",
+  "facts.controlPlane": "自托管实例",
   "facts.fanout": "Machine 扇出",
   "facts.providers": "Agent 提供方",
   "facts.verification": "发布校验",
