@@ -158,13 +158,24 @@ Deno.test("website privacy guard rejects deployment-specific content", () => {
 
 Deno.test("repository landing pages use only privacy-safe product artwork", async () => {
   const readme = await Deno.readTextFile(ROOT + "/README.md");
+  const readmeZhCn = await Deno.readTextFile(ROOT + "/README.zh-CN.md");
   const contributing = await Deno.readTextFile(ROOT + "/CONTRIBUTING.md");
   const architecture = await Deno.readTextFile(
     ROOT + "/docs/architecture/multi-machine.svg",
   );
 
   assertPublicSiteContent("README.md", readme);
+  assertPublicSiteContent("README.zh-CN.md", readmeZhCn);
   assertPublicSiteContent("CONTRIBUTING.md", contributing);
+  assert(
+    readme.startsWith(
+      '<p align="right">\n  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>\n</p>',
+    ) &&
+      readmeZhCn.startsWith(
+        '<p align="right">\n  <a href="README.md">English</a> · <strong>简体中文</strong>\n</p>',
+      ),
+    "repository landing pages should begin with reciprocal language choices and default to English",
+  );
   assert(
     readme.includes("site/assets/cowboy-readme-mark-light-v2.png") &&
       readme.includes("site/assets/cowboy-readme-mark-dark-v2.png") &&
@@ -177,6 +188,23 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
   );
+  for (
+    const asset of [
+      "site/assets/cowboy-readme-mark-light-v2.png",
+      "site/assets/cowboy-readme-mark-dark-v2.png",
+      "site/assets/cowboy-remote-topology-light-v3.webp",
+      "site/assets/cowboy-remote-topology-dark-v3.webp",
+      "site/assets/cowboy-desktop-surface-light-v2.webp",
+      "site/assets/cowboy-desktop-surface-dark-v2.webp",
+      "site/assets/cowboy-mobile-light-v2.webp",
+      "site/assets/cowboy-mobile-dark-v2.webp",
+    ]
+  ) {
+    assert(
+      readmeZhCn.includes(asset),
+      `Chinese repository landing page should share ${asset}`,
+    );
+  }
   const productSurfaces = readme.slice(
     readme.indexOf("## Product surfaces"),
     readme.indexOf("## Plugin ecosystem"),
@@ -201,6 +229,22 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     assert(
       readme.includes(section),
       `repository landing page should include ${section}`,
+    );
+  }
+  for (
+    const section of [
+      "## 为什么选择 Cowboy",
+      "## 快速开始",
+      "## 架构",
+      "## 插件生态",
+      "## 安全与所有权",
+      "## 项目状态",
+      "## 参与贡献",
+    ]
+  ) {
+    assert(
+      readmeZhCn.includes(section),
+      `Chinese repository landing page should include ${section}`,
     );
   }
   assert(
