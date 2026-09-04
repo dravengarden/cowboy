@@ -171,9 +171,21 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
       readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
+      readme.includes("site/assets/cowboy-desktop-surface-dark-v2.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
+      readme.includes("site/assets/cowboy-mobile-dark-v2.webp") &&
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
+  );
+  const productSurfaces = readme.slice(
+    readme.indexOf("## Product surfaces"),
+    readme.indexOf("## Plugin ecosystem"),
+  );
+  assert(
+    productSurfaces.includes("### Desktop — keyboard first") &&
+      productSurfaces.includes("### Mobile — touch first") &&
+      !productSurfaces.includes("<table>"),
+    "product surfaces should stay readable as a single column on narrow GitHub layouts",
   );
   for (
     const section of [
