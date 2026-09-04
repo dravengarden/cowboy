@@ -1,44 +1,19 @@
 import { currentProviderEntry } from "./providerCatalogRegistry";
+import {
+  BUNDLED_PROVIDER_SURFACE_COLORS,
+  providerSurfaceColor,
+  providerSurfaceColors,
+  type ProviderVisual,
+} from "./visualHostMap.ts";
 
 export type ThemeMode = "light" | "dark";
-
-export interface ProviderVisual {
-  primary: string;
-  secondary: string;
-}
+export type { ProviderVisual } from "./visualHostMap.ts";
+export { applyVisualHostPlugins } from "./visualHostMap.ts";
 
 /** Distinct, theme-readable accents. Catalog metadata can still supply a
- *  package-specific pair; these keep first-party Providers from collapsing
+ *  package-specific pair; host.json keeps first-party Providers from collapsing
  *  into Cowboy purple or vanishing on dark paper (Grok shipped #18181B). */
-export const PROVIDER_SURFACE_COLORS: Record<
-  string,
-  { readonly light: ProviderVisual; readonly dark: ProviderVisual }
-> = {
-  "claude-code": {
-    light: { primary: "#C65D3A", secondary: "#9A4A30" },
-    dark: { primary: "#E08A6A", secondary: "#D97757" },
-  },
-  grok: {
-    light: { primary: "#44403C", secondary: "#78716C" },
-    dark: { primary: "#E8E4DC", secondary: "#C4B5A0" },
-  },
-  gemini: {
-    light: { primary: "#1A73E8", secondary: "#7C4DFF" },
-    dark: { primary: "#8AB4F8", secondary: "#C58AF9" },
-  },
-  codex: {
-    light: { primary: "#3B5BDB", secondary: "#0F766E" },
-    dark: { primary: "#8EA2FF", secondary: "#2DD4BF" },
-  },
-  "claude-deepseek": {
-    light: { primary: "#4F46E5", secondary: "#7C3AED" },
-    dark: { primary: "#A5B4FC", secondary: "#C4B5FD" },
-  },
-  "codex-deepseek": {
-    light: { primary: "#0369A1", secondary: "#0F766E" },
-    dark: { primary: "#7DD3FC", secondary: "#5EEAD4" },
-  },
-};
+export const PROVIDER_SURFACE_COLORS = BUNDLED_PROVIDER_SURFACE_COLORS;
 
 /** Relative luminance of a #RRGGBB accent, or null when the token is not hex. */
 export function providerAccentLuminance(accent: string): number | null {
@@ -70,7 +45,7 @@ export function readableProviderAccent(
   if (mode === "dark") return luminance < 0.25 ? fallback : accent;
   if (luminance <= 0.55) return accent;
   const authored = accent.trim().toLowerCase();
-  for (const pair of Object.values(PROVIDER_SURFACE_COLORS)) {
+  for (const pair of Object.values(providerSurfaceColors())) {
     if (pair.dark.primary.toLowerCase() === authored) return pair.light.primary;
   }
   return fallback;
@@ -82,7 +57,7 @@ export function providerVisual(
   providerVersion?: string,
   providerDigest?: string,
 ): ProviderVisual {
-  const authored = PROVIDER_SURFACE_COLORS[provider];
+  const authored = providerSurfaceColor(provider);
   if (authored) return authored[mode];
   const packaged = currentProviderEntry(
     provider,

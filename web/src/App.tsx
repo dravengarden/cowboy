@@ -226,6 +226,11 @@ import {
 } from "./desktop/controlCenterTabs";
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
+import { PluginSlot } from "@cowboy/plugin-api";
+
+if (globalThis.__COWBOY_PLUGIN_HOST) {
+    globalThis.__COWBOY_PLUGIN_HOST.components.PasskeysPanel = ProductPasskeysPanel;
+}
 import { ProductSessionCapacityPanel } from "./auth/ProductSessionCapacityPanel";
 import { ProductDevicesPanel } from "./auth/ProductDevicesPanel";
 import {
@@ -5881,7 +5886,9 @@ function SettingsShell({
                 >
                     <Stack data-mobile-account-sections spacing={2}>
                         <ProductSessionCapacityPanel />
-                        <ProductPasskeysPanel />
+                        <PluginSlot pluginId="passkey" slot="account.panel">
+                            <ProductPasskeysPanel />
+                        </PluginSlot>
                         <ProductDevicesPanel hideWhenEmpty />
                         <ProductAccountMenu />
                     </Stack>

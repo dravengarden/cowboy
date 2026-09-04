@@ -22,6 +22,11 @@ import {
 import { useEffect, useState } from "react";
 import { ProductAccountMenu } from "../auth/ProductAccountMenu";
 import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
+import { PluginSlot } from "@cowboy/plugin-api";
+
+if (globalThis.__COWBOY_PLUGIN_HOST) {
+  globalThis.__COWBOY_PLUGIN_HOST.components.PasskeysPanel = ProductPasskeysPanel;
+}
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { FONT_PRESETS } from "../fonts";
 import {
@@ -264,7 +269,9 @@ function SetupSettings({
             <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: "0.08em" }}>
               Account
             </Typography>
-            <ProductPasskeysPanel />
+            <PluginSlot pluginId="passkey" slot="account.panel">
+              <ProductPasskeysPanel />
+            </PluginSlot>
             <ProductAccountMenu />
           </Stack>
         </Stack>

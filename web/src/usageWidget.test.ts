@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import { usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
+import {
+  usageWidgetForAccount,
+  usageWidgetHasBalance,
+  usageWidgetProviders,
+} from "./usageWidget";
 
 Deno.test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
   const providers = usageWidgetProviders({
@@ -96,21 +100,21 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
   });
   assertEquals(providers, [
     {
-      kind: "openai",
+      kind: "openai-weekly",
       label: "OpenAI",
       remaining: 94,
       periodLabel: "Weekly",
       resetsAt: 123,
     },
     {
-      kind: "xai",
+      kind: "xai-included",
       label: "xAI",
       remaining: 75,
       periodLabel: "Monthly",
       resetsAt: Date.parse("2026-09-01T00:00:00Z") / 1000,
     },
     {
-      kind: "deepseek",
+      kind: "deepseek-balance",
       label: "DeepSeek",
       balanceCny: 108.8,
       spend24hCny: 2.51,
@@ -156,7 +160,7 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
     }],
   });
   assertEquals(providers, [{
-    kind: "deepseek",
+    kind: "deepseek-balance",
     label: "DeepSeek",
     balanceCny: 12,
     spend24hCny: 0.07,
@@ -201,7 +205,7 @@ Deno.test("usage widget projects one available account", () => {
       },
     }),
     {
-      kind: "xai",
+      kind: "xai-included",
       label: "xAI",
       remaining: 75,
       periodLabel: "Monthly",

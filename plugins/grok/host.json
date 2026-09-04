@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "adapter_slot": "grok",
+  "cli_auth": "grok-json",
+  "visual": {
+    "light": { "primary": "#44403C", "secondary": "#78716C" },
+    "dark": { "primary": "#E8E4DC", "secondary": "#C4B5A0" }
+  },
+  "slots": [
+    "provider.usage",
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  },
+  "usage": {
+    "account": "xai",
+    "collector": "xai-billing",
+    "reset": "xai",
+    "reset_claim": "before-attempt",
+    "product": "xAI",
+    "parser": "xai-credits",
+    "error": "xai-billing",
+    "error_auth": "Sign in to Grok Build in Machines, then refresh xAI usage.",
+    "error_config": "Grok Build usage is not configured on this Machine.",
+    "error_fetch": "Grok Build could not fetch xAI usage.",
+    "order": 1,
+    "widget": "xai-included",
+    "widget_shape": "percent"
+  }
+}

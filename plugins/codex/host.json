@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "adapter_slot": "codex",
+  "cli_auth": "exit",
+  "cli_auth_argv": ["login", "status"],
+  "visual": {
+    "light": { "primary": "#3B5BDB", "secondary": "#0F766E" },
+    "dark": { "primary": "#8EA2FF", "secondary": "#2DD4BF" }
+  },
+  "slots": [
+    "provider.usage",
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  },
+  "usage": {
+    "account": "openai",
+    "collector": "openai-appserver",
+    "reset": "codex",
+    "product": "OpenAI",
+    "error": "openai-auth",
+    "error_auth": "OpenAI usage authorization expired. Sign in to Codex again.",
+    "order": 0,
+    "top_bar_windows": [300, 10080],
+    "widget": "openai-weekly",
+    "widget_shape": "percent",
+    "widget_window": 10080
+  }
+}

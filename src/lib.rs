@@ -48,8 +48,6 @@ mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-mod grok;
-#[cfg(any(feature = "full", feature = "machine-host"))]
 mod legacy_provider_release;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
@@ -81,6 +79,20 @@ mod persistence;
 mod plugin;
 #[cfg(feature = "full")]
 mod plugin_catalog;
+#[cfg(feature = "full")]
+mod plugin_dir;
+#[cfg(feature = "full")]
+mod plugin_host;
+#[cfg(feature = "full")]
+mod plugin_host_bundle;
+#[cfg(feature = "full")]
+mod plugin_passkeys;
+#[cfg(feature = "full")]
+mod plugin_runtime;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod plugin_runtime_args;
+#[cfg(feature = "full")]
+mod plugin_storage;
 #[cfg(feature = "full")]
 mod product_auth;
 #[cfg(feature = "full")]

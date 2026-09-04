@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "adapter_slot": "claude",
+  "cli_executable": "claude",
+  "cli_executable_env": "CLAUDE_CODE_EXECUTABLE",
+  "cli_auth": "exit",
+  "cli_auth_argv": ["auth", "status", "--json"],
+  "visual": {
+    "light": { "primary": "#C65D3A", "secondary": "#9A4A30" },
+    "dark": { "primary": "#E08A6A", "secondary": "#D97757" }
+  },
+  "slots": [
+    "provider.usage",
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  },
+  "usage": {
+    "account": "anthropic",
+    "product": "Anthropic",
+    "parser": "anthropic-utilization",
+    "session_overlay": "anthropic-rate-limit",
+    "order": 2,
+    "empty": "Waiting for session activity. Plan limits appear after the Provider reports them.",
+    "limit_id_prefix": "claude",
+    "limit_labels": [
+      { "id": "five_hour", "label": "5h", "window_minutes": 300 },
+      { "id": "seven_day", "label": "Weekly", "window_minutes": 10080 },
+      { "id": "seven_day_opus", "label": "Opus · Weekly", "window_minutes": 10080 },
+      { "id": "seven_day_sonnet", "label": "Sonnet · Weekly", "window_minutes": 10080 },
+      {
+        "id": "seven_day_overage_included",
+        "label": "Extra usage · Weekly",
+        "window_minutes": 10080
+      },
+      { "id": "overage", "label": "Extra usage" }
+    ]
+  }
+}

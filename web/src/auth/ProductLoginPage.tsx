@@ -1,11 +1,7 @@
-import { Visibility, VisibilityOff } from "@mui/icons-material";
 import {
   Alert,
   Box,
   Button,
-  Divider,
-  IconButton,
-  InputAdornment,
   Stack,
   Tab,
   Tabs,
@@ -13,23 +9,68 @@ import {
   Typography,
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PasswordStrength } from "../admin/PasswordStrength";
 import { assessAdminPassword } from "../admin/passwordStrength";
 import {
-  authApi,
-  AuthApiError,
   PASSWORD_LOGIN_METHOD,
+  passwordLoginFields,
   resolveProductLoginMethodOrder,
+  type AuthHostPlugin,
   type AuthStatus,
   type ProductMe,
   type ProductOidcProvider,
 } from "./authApi";
+import { getCowboyPluginHost, PluginSlot } from "@cowboy/plugin-api";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
+import { loginMethodLabel } from "./productReauthMethods";
+
+type OidcLoginContext = {
+  kind: "oidc";
+  buttonLabel: string;
+  startUrl: string;
+  native: boolean;
+  busy: boolean;
+  onStart: () => void;
+  onCancel: () => void;
+};
+
+type PasswordLoginContext = {
+  kind: "password";
+  mode: "setup" | "register" | "login";
+  fieldLabels: {
+    account: string;
+    secret: string;
+    confirm: string;
+    setup: string;
+  };
+  account: string;
+  password: string;
+  confirm: string;
+  setupToken: string;
+  busy: boolean;
+  passwordVisible: boolean;
+  passwordAcceptable: boolean;
+  confirmMismatch: boolean;
+  canSubmit: boolean;
+  submitLabel: string;
+  onSubmit: () => void;
+  onAuthed: (me: ProductMe) => void;
+  onStatus?: (status: AuthStatus) => void;
+  onError: (error: string | null) => void;
+  onBusy: (busy: boolean) => void;
+  onAccount: (value: string) => void;
+  onPassword: (value: string) => void;
+  onConfirm: (value: string) => void;
+  onSetupToken: (value: string) => void;
+  onTogglePasswordVisible: () => void;
+};
+
+type LoginMethodContext = OidcLoginContext | PasswordLoginContext;
 
 export function ProductLoginPage({
   setupRequired,
   setupPending,
   providers,
+  hostPlugins = [],
   passwordEnabled,
   loginMethodOrder,
   onAuthed,
@@ -38,6 +79,7 @@ export function ProductLoginPage({
   setupRequired: boolean;
   setupPending: boolean;
   providers: ProductOidcProvider[];
+  hostPlugins?: AuthHostPlugin[];
   passwordEnabled: boolean;
   loginMethodOrder: string[];
   onAuthed: (me: ProductMe) => void;
@@ -84,31 +126,41 @@ export function ProductLoginPage({
   const confirmMismatch = confirm.length > 0 && password !== confirm;
   const canLogin = account.trim() !== "" && password !== "";
   const loginMethods = orderedMethodIds.flatMap((id) => {
-    if (id === PASSWORD_LOGIN_METHOD) {
-      return [{ id, label: "Password" }];
+    const label = loginMethodLabel(id, hostPlugins, providers);
+    if (!label) return [];
+    if (id !== PASSWORD_LOGIN_METHOD &&
+      !providers.some((candidate) => candidate.id === id)
+    ) {
+      return [];
     }
-    const provider = providers.find((candidate) => candidate.id === id);
-    return provider ? [{ id, label: provider.display_name }] : [];
+    return [{ id, label }];
   });
   const selectedProvider = providers.find((provider) => provider.id === method);
   const useNativeProviderFlow = selectedProvider !== undefined &&
     nativeOidcFlowSupported();
+  const loginPluginId = selectedProvider?.id ??
+    (method === PASSWORD_LOGIN_METHOD || setupRequired ? "password" : method);
 
   const submit = (): void => {
     if (busy) return;
+    const auth = getCowboyPluginHost().auth;
+    if (!auth) {
+      setError("Could not reach Cowboy");
+      return;
+    }
     setBusy(true);
     setError(null);
     const request = needsCode
-      ? authApi.setup(setupToken.trim()).then((status) => {
-        onStatus?.(status);
+      ? auth.setup(setupToken.trim()).then((status) => {
+        onStatus?.(status as AuthStatus);
       })
       : creating
-      ? authApi.register(account, password).then(onAuthed)
-      : authApi.login(account, password).then(onAuthed);
+      ? auth.register(account, password).then((me) => onAuthed(me as ProductMe))
+      : auth.login(account, password).then((me) => onAuthed(me as ProductMe));
     void request
       .catch((err: unknown) => {
         setError(
-          err instanceof AuthApiError ? err.message : "Could not reach Cowboy",
+          err instanceof Error ? err.message : "Could not reach Cowboy",
         );
       })
       .finally(() => setBusy(false));
@@ -125,7 +177,7 @@ export function ProductLoginPage({
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setError(
-          err instanceof AuthApiError
+          err instanceof Error
             ? err.message
             : "Could not complete external sign-in",
         );
@@ -137,6 +189,63 @@ export function ProductLoginPage({
         }
       });
   };
+
+  useEffect(() => {
+    const auth = getCowboyPluginHost().auth;
+    if (!auth) return;
+    auth.startOidc = () => {
+      submitProvider();
+      return Promise.resolve();
+    };
+    auth.cancelOidc = () => {
+      providerAbort.current?.abort();
+    };
+    return () => {
+      delete auth.startOidc;
+      delete auth.cancelOidc;
+    };
+  });
+
+  const loginContext: LoginMethodContext = selectedProvider
+    ? {
+      kind: "oidc" as const,
+      buttonLabel: selectedProvider.button_label,
+      startUrl: selectedProvider.start_url,
+      native: useNativeProviderFlow,
+      busy,
+      onStart: submitProvider,
+      onCancel: () => providerAbort.current?.abort(),
+    }
+    : {
+      kind: "password" as const,
+      mode: needsCode ? "setup" as const : creating ? "register" as const : "login" as const,
+      account,
+      password,
+      confirm,
+      fieldLabels: passwordLoginFields(hostPlugins),
+      setupToken,
+      busy,
+      passwordVisible,
+      passwordAcceptable: passwordScore.acceptable,
+      confirmMismatch,
+      canSubmit: needsCode
+        ? setupToken.trim() !== ""
+        : creating
+        ? canCreate
+        : canLogin,
+      submitLabel: needsCode ? "Continue" : creating ? "Create account" : "Sign in",
+      onSubmit: submit,
+      onAuthed,
+      onStatus,
+      onError: setError,
+      onBusy: setBusy,
+      onAccount: setAccount,
+      onPassword: setPassword,
+      onConfirm: setConfirm,
+      onSetupToken: setSetupToken,
+      onTogglePasswordVisible: () =>
+        setPasswordVisible((visible) => !visible),
+    };
 
   return (
     <Box
@@ -229,134 +338,109 @@ export function ProductLoginPage({
             ))}
           </Tabs>
         )}
-        {!setupRequired && selectedProvider && (
-          <Button
-            type="button"
-            href={useNativeProviderFlow ? undefined : selectedProvider.start_url}
-            onClick={useNativeProviderFlow ? submitProvider : undefined}
-            variant="contained"
-            size="large"
-            fullWidth
-            disabled={useNativeProviderFlow && busy}
-          >
-            {useNativeProviderFlow && busy
-              ? "Waiting for approval…"
-              : selectedProvider.button_label}
-          </Button>
-        )}
-        {!setupRequired && useNativeProviderFlow && busy && (
-          <Button
-            type="button"
-            variant="text"
-            onClick={() => providerAbort.current?.abort()}
-          >
+        <PluginSlot
+          pluginId={loginPluginId}
+          slot="login.method"
+          context={loginContext}
+          placeholder={null}
+        >
+          <LoginMethodFallback context={loginContext} />
+        </PluginSlot>
+      </Stack>
+    </Box>
+  );
+}
+
+/** Crash-only fallback. Loading uses `placeholder={null}` so core does not
+ *  duplicate the plugin form. This path is last-resort sign-in if the slot
+ *  module throws after mount. */
+function LoginMethodFallback(
+  { context }: { context: LoginMethodContext },
+): React.JSX.Element {
+  if (context.kind === "oidc") {
+    return (
+      <>
+        <Button
+          type="button"
+          href={context.native ? undefined : context.startUrl}
+          onClick={context.native ? context.onStart : undefined}
+          variant="contained"
+          size="large"
+          fullWidth
+          disabled={context.native && context.busy}
+        >
+          {context.native && context.busy
+            ? "Waiting for approval…"
+            : context.buttonLabel}
+        </Button>
+        {context.native && context.busy && (
+          <Button type="button" variant="text" onClick={context.onCancel}>
             Cancel
           </Button>
         )}
-        {!setupRequired && selectedProvider && (
-          <Divider>secure redirect</Divider>
-        )}
-        {needsCode
-          ? (
+      </>
+    );
+  }
+  return (
+    <>
+      {context.mode === "setup"
+        ? (
+          <TextField
+            label={context.fieldLabels.setup}
+            value={context.setupToken}
+            onChange={(event) => context.onSetupToken(event.target.value)}
+            autoComplete="one-time-code"
+            fullWidth
+          />
+        )
+        : (
+          <>
             <TextField
-              label="Setup code"
-              value={setupToken}
-              onChange={(event) => setSetupToken(event.target.value)}
-              autoComplete="one-time-code"
+              label={context.fieldLabels.account}
+              name="username"
+              value={context.account}
+              onChange={(event) => context.onAccount(event.target.value)}
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               fullWidth
             />
-          )
-          : method === PASSWORD_LOGIN_METHOD || setupRequired
-          ? (
-            <>
+            <TextField
+              label={context.fieldLabels.secret}
+              name={context.mode === "register" ? "new-password" : "password"}
+              type="password"
+              value={context.password}
+              onChange={(event) => context.onPassword(event.target.value)}
+              autoComplete={context.mode === "register"
+                ? "new-password"
+                : "current-password"}
+              fullWidth
+            />
+            {context.mode === "register" && (
               <TextField
-                label="Account"
-                name="username"
-                value={account}
-                onChange={(event) => setAccount(event.target.value)}
-                autoComplete="username"
-                autoCapitalize="none"
-                autoCorrect="off"
-                spellCheck={false}
+                label={context.fieldLabels.confirm}
+                type="password"
+                value={context.confirm}
+                onChange={(event) => context.onConfirm(event.target.value)}
+                autoComplete="new-password"
+                error={context.confirmMismatch}
+                helperText={context.confirmMismatch
+                  ? "Passwords do not match"
+                  : undefined}
                 fullWidth
               />
-              <TextField
-                label="Password"
-                name={creating ? "new-password" : "password"}
-                type={passwordVisible ? "text" : "password"}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete={creating ? "new-password" : "current-password"}
-                error={creating && password.length > 0 &&
-                  !passwordScore.acceptable}
-                fullWidth
-                slotProps={{
-                  input: {
-                    endAdornment: creating
-                      ? (
-                        <InputAdornment position="end">
-                          <IconButton
-                            aria-label={passwordVisible
-                              ? "Hide password"
-                              : "Show password"}
-                            edge="end"
-                            onClick={() =>
-                              setPasswordVisible((visible) => !visible)}
-                          >
-                            {passwordVisible
-                              ? <VisibilityOff />
-                              : <Visibility />}
-                          </IconButton>
-                        </InputAdornment>
-                      )
-                      : undefined,
-                  },
-                  ...(creating
-                    ? {
-                      htmlInput: {
-                        passwordrules:
-                          "minlength: 15; maxlength: 128; required: lower, upper, digit; allowed: [-];",
-                      },
-                    }
-                    : {}),
-                }}
-              />
-              {creating && (
-                <PasswordStrength password={password} account={account} />
-              )}
-              {creating && (
-                <TextField
-                  label="Confirm password"
-                  type={passwordVisible ? "text" : "password"}
-                  value={confirm}
-                  onChange={(event) => setConfirm(event.target.value)}
-                  autoComplete="new-password"
-                  error={confirmMismatch}
-                  helperText={confirmMismatch
-                    ? "Passwords do not match"
-                    : undefined}
-                  fullWidth
-                />
-              )}
-            </>
-          )
-          : null}
-        {(setupRequired || method === PASSWORD_LOGIN_METHOD) && (
-          <Button
-            type="submit"
-            variant="contained"
-            size="large"
-            disabled={busy ||
-              (needsCode
-                ? setupToken.trim() === ""
-                : creating
-                ? !canCreate
-                : !canLogin)}
-          >
-            {needsCode ? "Continue" : creating ? "Create account" : "Sign in"}
-          </Button>
+            )}
+          </>
         )}
-      </Stack>
-    </Box>
+      <Button
+        type="submit"
+        variant="contained"
+        size="large"
+        disabled={context.busy || !context.canSubmit}
+      >
+        {context.submitLabel}
+      </Button>
+    </>
   );
 }

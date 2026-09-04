@@ -3,6 +3,12 @@ import { assertEquals } from "jsr:@std/assert";
 const infoSheetSource = await Deno.readTextFile(
   new URL("./InfoSheet.tsx", import.meta.url),
 );
+const detailsSource = await Deno.readTextFile(
+  new URL(
+    "../../plugins/claude-deepseek/ui/DeepSeekDetails.tsx",
+    import.meta.url,
+  ),
+);
 const timeRangeSource = await Deno.readTextFile(
   new URL("./ObservabilityFilters.tsx", import.meta.url),
 );
@@ -14,22 +20,22 @@ const sheetSource = await Deno.readTextFile(
 );
 
 Deno.test("DeepSeek usage exposes diagnostic time and error controls", () => {
-  assertEquals(infoSheetSource.includes("TimeRangeButton"), true);
-  assertEquals(infoSheetSource.includes("MultiSelectChipGroup"), true);
-  assertEquals(infoSheetSource.includes("Blocking errors"), true);
-  assertEquals(infoSheetSource.includes("of requests"), true);
-  assertEquals(infoSheetSource.includes("Retryable provider failures"), true);
-  assertEquals(infoSheetSource.includes("Clear selections"), true);
-  assertEquals(infoSheetSource.includes("resetFilters"), true);
-  assertEquals(infoSheetSource.includes("Cache miss rate"), true);
-  assertEquals(infoSheetSource.includes("Cache protection"), true);
-  assertEquals(infoSheetSource.includes("DEEPSEEK_CACHE_BASE_INTERVAL_LABEL"), true);
-  assertEquals(infoSheetSource.includes("cacheKeepaliveRequests"), true);
-  assertEquals(infoSheetSource.includes("Protection spend"), true);
-  assertEquals(infoSheetSource.includes("Verified hit rate"), true);
-  assertEquals(infoSheetSource.includes("not included in agent spend"), true);
-  assertEquals(infoSheetSource.includes("Schema v3+"), true);
-  assertEquals(infoSheetSource.includes("DEEPSEEK_CACHE_MIN_HIT_LABEL"), true);
+  assertEquals(detailsSource.includes("TimeRangeButton"), true);
+  assertEquals(detailsSource.includes("MultiSelectChipGroup"), true);
+  assertEquals(detailsSource.includes("Blocking errors"), true);
+  assertEquals(detailsSource.includes("of requests"), true);
+  assertEquals(detailsSource.includes("Retryable provider failures"), true);
+  assertEquals(detailsSource.includes("Clear selections"), true);
+  assertEquals(detailsSource.includes("resetFilters"), true);
+  assertEquals(detailsSource.includes("Cache miss rate"), true);
+  assertEquals(detailsSource.includes("usageCacheOptionName"), true);
+  assertEquals(detailsSource.includes("usageCacheIntervalLabel"), true);
+  assertEquals(detailsSource.includes("cacheKeepaliveRequests"), true);
+  assertEquals(detailsSource.includes("Protection spend"), true);
+  assertEquals(detailsSource.includes("Verified hit rate"), true);
+  assertEquals(detailsSource.includes("not included in agent spend"), true);
+  assertEquals(detailsSource.includes("Schema v3+"), true);
+  assertEquals(detailsSource.includes("usageCacheMinHitLabel"), true);
 });
 
 Deno.test("nested observability sheets portal their scrims above the iOS safe area", () => {
@@ -39,7 +45,7 @@ Deno.test("nested observability sheets portal their scrims above the iOS safe ar
     true,
   );
   assertEquals(
-    infoSheetSource.includes('portal\n        title="Filter DeepSeek usage"'),
+    detailsSource.includes('portal\n        title="Filter DeepSeek usage"'),
     true,
   );
   assertEquals(
@@ -56,7 +62,7 @@ Deno.test("desktop Info uses independent columns and compact metric tiles", () =
 
 Deno.test("DeepSeek usage controls stay readable on tablet and desktop widths", () => {
   assertEquals(
-    infoSheetSource.includes('spacing={0.75} sx={{ width: "100%", maxWidth: 560 }}'),
+    detailsSource.includes('spacing={0.75} sx={{ width: "100%", maxWidth: 560 }}'),
     true,
   );
 });

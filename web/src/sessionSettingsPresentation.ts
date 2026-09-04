@@ -5,7 +5,11 @@ import {
   shortResetTime,
   topBarUsageLimits,
 } from "./usageLimits";
-import { usageWidgetForAccount } from "./usageWidget";
+import {
+  usageWidgetBalanceLabel,
+  usageWidgetSpendLabel,
+} from "./usageHostMap";
+import { usageWidgetForAccount, usageWidgetHasBalance } from "./usageWidget";
 
 /** Session-sheet queue and page-view row. These stay off the first
  *  screen; the collapsed label must still name the live state. */
@@ -100,17 +104,17 @@ export function sessionProviderUsageRows(
     ? [{ id: "usage-refresh", label: "Usage", value: freshness }]
     : [];
   const widget = usageWidgetForAccount(usage);
-  if (widget?.kind === "deepseek") {
+  if (widget && usageWidgetHasBalance(widget)) {
     return [
       ...freshnessRows,
       {
-        id: "deepseek-balance",
-        label: "Balance",
+        id: widget.kind,
+        label: usageWidgetBalanceLabel(usage.provider),
         value: compactCny(widget.balanceCny),
       },
       {
-        id: "deepseek-spend",
-        label: "24h spend",
+        id: `${usage.provider}-spend`,
+        label: usageWidgetSpendLabel(usage.provider),
         value: compactCny(widget.spend24hCny),
       },
     ];

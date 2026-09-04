@@ -25,7 +25,7 @@ Deno.test("large DeepSeek sessions expose bounded cache-protection status", () =
     true,
   );
   assertEquals(
-    composerSource.includes("contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS"),
+    composerSource.includes("contextUsed >= usageCacheMinHitTokens(usageAccount)"),
     true,
   );
   assertEquals(composerSource.includes("Base ${cacheBaseInterval}"), true);
@@ -37,4 +37,7 @@ Deno.test("large DeepSeek sessions expose bounded cache-protection status", () =
   );
   assertEquals(composerSource.includes("Cache protected"), true);
   assertEquals(composerSource.includes("Cache status unavailable"), true);
+  assertEquals(composerSource.includes("${cacheOptionName} off"), true);
+  assertEquals(composerSource.includes("${cacheOptionName} learning"), true);
+  assertEquals(composerSource.includes("Cache protection off"), false);
 });

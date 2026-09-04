@@ -634,7 +634,7 @@ impl Supervisor {
         let _lifecycle = self.lifecycle.lock();
         let enabled = value
             .as_bool()
-            .ok_or_else(|| "DeepSeek cache protection must be a boolean".to_owned())?;
+            .ok_or_else(crate::deepseek_cache::boolean_required_message)?;
         let meta = self
             .hub
             .session_list()
@@ -643,7 +643,7 @@ impl Supervisor {
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let configuration = session_configuration(&meta);
         if !crate::deepseek_cache::supported_behavior(&configuration) {
-            return Err("cache protection is available only for DeepSeek sessions".to_owned());
+            return Err(crate::deepseek_cache::unavailable_message());
         }
         if matches!(meta.status, Status::Busy | Status::Starting)
             || self.hub.session_has_in_flight_prompt(session_id)

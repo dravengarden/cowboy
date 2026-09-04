@@ -1,6 +1,16 @@
-//! Resolve the concrete shell path required by Claude Code's Bash tool.
+//! Resolve a bash/zsh path for plugins whose adapter requires one.
+//!
+//! The override env is `COWBOY_ACP_<PLUGIN_ID>_SHELL`, where `<PLUGIN_ID>` is
+//! the plugin id upper-cased with `-`→`_` (e.g. `COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL`).
 
 use std::path::Path;
+
+fn override_key(plugin_id: &str) -> String {
+    format!(
+        "COWBOY_ACP_{}_SHELL",
+        plugin_id.replace('-', "_").to_ascii_uppercase()
+    )
+}
 
 fn supported_name(path: &Path) -> bool {
     matches!(
@@ -27,10 +37,11 @@ fn supported_executable(path: &Path) -> bool {
 }
 
 fn resolve_with(
+    plugin_id: &str,
     get_env: &impl Fn(&str) -> Option<String>,
     usable: impl Fn(&Path) -> bool,
 ) -> Option<String> {
-    let override_shell = get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL")
+    let override_shell = get_env(&override_key(plugin_id))
         .filter(|value| !value.trim().is_empty())
         .map(|value| value.trim().to_owned());
     if let Some(shell) = override_shell.as_deref()
@@ -80,17 +91,20 @@ fn resolve_with(
     None
 }
 
-pub(crate) fn resolve(get_env: &impl Fn(&str) -> Option<String>) -> Option<String> {
-    resolve_with(get_env, supported_executable)
+pub(crate) fn resolve(
+    plugin_id: &str,
+    get_env: &impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    resolve_with(plugin_id, get_env, supported_executable)
 }
 
-pub(crate) fn available() -> bool {
-    resolve(&|key| std::env::var(key).ok()).is_some()
+pub(crate) fn available(plugin_id: &str) -> bool {
+    resolve(plugin_id, &|key| std::env::var(key).ok()).is_some()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_with, supported_executable, supported_name};
+    use super::{override_key, resolve_with, supported_executable, supported_name};
 
     #[test]
     fn rejects_generic_sh_even_when_it_is_executable() {
@@ -108,7 +122,13 @@ mod tests {
     #[test]
     fn override_wins_when_it_is_supported() {
         assert_eq!(
+            override_key("claude-deepseek"),
+            "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL"
+        );
+        assert_eq!(override_key("codex"), "COWBOY_ACP_CODEX_SHELL");
+        assert_eq!(
             resolve_with(
+                "claude-deepseek",
                 &|key| match key {
                     "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL" => {
                         Some(" /custom/bin/bash ".to_owned())
@@ -130,6 +150,7 @@ mod tests {
     fn invalid_override_falls_back_to_path() {
         assert_eq!(
             resolve_with(
+                "claude-deepseek",
                 &|key| match key {
                     "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL" => {
                         Some("/missing/bin/bash".to_owned())
@@ -146,6 +167,6 @@ mod tests {
 
     #[test]
     fn unavailable_shell_fails_closed() {
-        assert_eq!(resolve_with(&|_| None, |_| false), None);
+        assert_eq!(resolve_with("claude-deepseek", &|_| None, |_| false), None);
     }
 }

@@ -410,6 +410,13 @@ pub struct LoadedSession {
 #[derive(Clone)]
 pub struct Store {
     backend: StorageBackend,
+    passkey_plugin: Option<crate::plugin_storage::PluginNamespace>,
+}
+
+pub(crate) struct PasskeySnapshot {
+    pub user: Vec<crate::passkey::UserPasskey>,
+    pub admin: Vec<crate::passkey::UserPasskey>,
+    pub ceremonies: Vec<crate::passkey::ExternalPasskeyCeremonyRecord>,
 }
 
 #[derive(Clone)]
@@ -572,8 +579,8 @@ fn optional_diagnostic_field(
 }
 
 fn diagnostic_title(value: &str) -> String {
-    if value == "xai" {
-        return "xAI".to_owned();
+    if let Some(product) = crate::plugin_runtime_args::usage_product_label(value) {
+        return product.to_owned();
     }
     let mut words = value.split('_').filter(|word| !word.is_empty());
     let Some(first) = words.next() else {
@@ -661,6 +668,22 @@ fn cache_transition_cause(
         "unexpected_exact_prefix_miss"
     } else {
         "unexpected_active_cache_drop"
+    }
+}
+
+fn diagnostic_http_title(status: impl std::fmt::Display) -> String {
+    format!("HTTP {status}")
+}
+
+fn diagnostic_keepalive_title(outcome: &str) -> &'static str {
+    match outcome {
+        "hit" => "Cache protected",
+        "miss" => "Keepalive cache miss",
+        "partial" => "Keepalive partial hit",
+        "retryable_error" => "Keepalive will retry",
+        "terminal_error" => "Keepalive stopped",
+        "preempted" => "Keepalive preempted",
+        _ => "Keepalive observation",
     }
 }
 
@@ -1225,7 +1248,17 @@ impl Store {
         } else {
             anyhow::bail!("unsupported database URL scheme")
         };
-        Ok(Self { backend })
+        Ok(Self {
+            backend,
+            passkey_plugin: None,
+        })
+    }
+
+    pub(crate) fn attach_passkey_plugin(
+        &mut self,
+        namespace: crate::plugin_storage::PluginNamespace,
+    ) {
+        self.passkey_plugin = Some(namespace);
     }
 
     pub(crate) fn artifacts(&self) -> crate::artifacts::ArtifactStore {
@@ -1237,6 +1270,29 @@ impl Store {
 
     pub async fn migrate(&self) -> Result<()> {
         dispatch_storage!(self, migrate())
+    }
+
+    #[must_use]
+    pub(crate) fn plugin_storage(
+        &self,
+        plugin_dir: crate::plugin_dir::PluginDir,
+    ) -> crate::plugin_storage::PluginStorage {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => {
+                crate::plugin_storage::PluginStorage::postgres(storage.pool.clone(), plugin_dir)
+            }
+            StorageBackend::Sqlite(_) => {
+                crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn postgres_pool(&self) -> Option<&PgPool> {
+        match &self.backend {
+            StorageBackend::Postgres(storage) => Some(&storage.pool),
+            StorageBackend::Sqlite(_) => None,
+        }
     }
 
     pub async fn create_machine_enrollment(
@@ -2103,14 +2159,28 @@ impl Store {
         &self,
         user_id: &str,
     ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::list_user(namespace, user_id).await;
+        }
         dispatch_storage!(self, list_user_passkeys(user_id))
     }
 
     pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::insert_user(namespace, passkey).await;
+        }
         dispatch_storage!(self, insert_user_passkey(passkey))
     }
 
     pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
+        if let Some(namespace) = &self.passkey_plugin {
+            let affected =
+                crate::plugin_passkeys::delete_user(namespace, user_id, passkey_id).await?;
+            if affected == 1 && crate::plugin_passkeys::count_user(namespace, user_id).await? == 0 {
+                dispatch_storage!(self, clear_user_passkey_reauth(user_id))?;
+            }
+            return Ok(affected);
+        }
         dispatch_storage!(self, delete_user_passkey(user_id, passkey_id))
     }
 
@@ -2121,6 +2191,16 @@ impl Store {
         passkey_json: &str,
         now_ms: i64,
     ) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::update_user(
+                namespace,
+                user_id,
+                passkey_id,
+                passkey_json,
+                now_ms,
+            )
+            .await;
+        }
         dispatch_storage!(
             self,
             update_user_passkey(user_id, passkey_id, passkey_json, now_ms)
@@ -2131,7 +2211,11 @@ impl Store {
         &self,
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
-        dispatch_storage!(self, user_passkey_policy(user_id))
+        let mut policy = dispatch_storage!(self, user_passkey_policy(user_id))?;
+        if let (Some(namespace), Some(policy)) = (&self.passkey_plugin, policy.as_mut()) {
+            policy.passkey_count = crate::plugin_passkeys::count_user(namespace, user_id).await?;
+        }
+        Ok(policy)
     }
 
     pub async fn set_user_passkey_reauth(
@@ -2140,6 +2224,22 @@ impl Store {
         enabled: bool,
         reauth_after_ms: i64,
     ) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            anyhow::ensure!(
+                crate::passkey::valid_reauth_interval(reauth_after_ms),
+                "Passkey refresh interval is unsupported"
+            );
+            if enabled {
+                anyhow::ensure!(
+                    crate::plugin_passkeys::count_user(namespace, user_id).await? > 0,
+                    "user not found or no Passkey is registered"
+                );
+            }
+            return dispatch_storage!(
+                self,
+                set_user_passkey_reauth_flags(user_id, enabled, reauth_after_ms)
+            );
+        }
         dispatch_storage!(
             self,
             set_user_passkey_reauth(user_id, enabled, reauth_after_ms)
@@ -2150,6 +2250,9 @@ impl Store {
         &self,
         ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
     ) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::upsert_ceremony(namespace, ceremony).await;
+        }
         dispatch_storage!(self, upsert_external_passkey_ceremony(ceremony))
     }
 
@@ -2158,7 +2261,14 @@ impl Store {
         transaction_hash: &str,
         now_ms: i64,
     ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::ceremony(namespace, transaction_hash, now_ms).await;
+        }
         dispatch_storage!(self, external_passkey_ceremony(transaction_hash, now_ms))
+    }
+
+    pub(crate) async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+        dispatch_storage!(self, export_passkey_snapshot())
     }
 
     pub async fn touch_user_last_step_up(&self, user_id: &str, now_ms: i64) -> Result<()> {
@@ -2169,14 +2279,23 @@ impl Store {
         &self,
         account: &str,
     ) -> Result<Vec<crate::passkey::UserPasskey>> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::list_admin(namespace, account).await;
+        }
         dispatch_storage!(self, list_admin_passkeys(account))
     }
 
     pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::insert_admin(namespace, passkey).await;
+        }
         dispatch_storage!(self, insert_admin_passkey(passkey))
     }
 
     pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::delete_admin(namespace, account, passkey_id).await;
+        }
         dispatch_storage!(self, delete_admin_passkey(account, passkey_id))
     }
 
@@ -2187,6 +2306,16 @@ impl Store {
         passkey_json: &str,
         now_ms: i64,
     ) -> Result<()> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::update_admin(
+                namespace,
+                account,
+                passkey_id,
+                passkey_json,
+                now_ms,
+            )
+            .await;
+        }
         dispatch_storage!(
             self,
             update_admin_passkey(account, passkey_id, passkey_json, now_ms)
@@ -2194,6 +2323,9 @@ impl Store {
     }
 
     pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
+        if let Some(namespace) = &self.passkey_plugin {
+            return crate::plugin_passkeys::count_admin(namespace, account).await;
+        }
         dispatch_storage!(self, count_admin_passkeys(account))
     }
 }
@@ -5365,6 +5497,93 @@ impl PostgresStorage {
                 .with_context(|| format!("COUNT admin passkeys {account}"))?;
         Ok(u32::try_from(count.0.max(0)).unwrap_or(0))
     }
+
+    pub async fn clear_user_passkey_reauth(&self, user_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = false, updated_at = now() WHERE id = $1",
+        )
+        .bind(user_id)
+        .execute(&self.pool)
+        .await
+        .context("CLEAR user Passkey reauth")?;
+        Ok(())
+    }
+
+    pub async fn set_user_passkey_reauth_flags(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = $2, \
+             passkey_verification_interval_ms = $3, \
+             passkey_reauth_interval_ms = CASE \
+             WHEN $3 IN (3600000, 7200000, 10800000, 14400000, 21600000) THEN 14400000 \
+             WHEN $3 = 43200000 THEN 43200000 \
+             WHEN $3 IN (86400000, 172800000) THEN 86400000 \
+             ELSE 259200000 END, \
+             passkey_refresh_interval_ms = 86400000, \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(enabled)
+        .bind(reauth_after_ms)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE passkey reauth flags {user_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user not found");
+        Ok(())
+    }
+
+    pub async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+        let user_rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at, last_used_at \
+             FROM user_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT user passkeys")?;
+        let admin_rows = sqlx::query_as::<_, ProductPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, created_at, \
+             last_used_at FROM admin_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT admin passkeys")?;
+        let ceremonies = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json::text, \
+             (extract(epoch FROM expires_at) * 1000)::bigint, \
+             (extract(epoch FROM created_at) * 1000)::bigint \
+             FROM external_passkey_ceremonies",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT external Passkey ceremonies")?;
+        Ok(PasskeySnapshot {
+            user: user_rows
+                .into_iter()
+                .map(ProductPasskeyRow::into_passkey)
+                .collect(),
+            admin: admin_rows
+                .into_iter()
+                .map(ProductPasskeyRow::into_passkey)
+                .collect(),
+            ceremonies: ceremonies
+                .into_iter()
+                .map(
+                    |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                        crate::passkey::ExternalPasskeyCeremonyRecord {
+                            transaction_hash,
+                            ceremony_json,
+                            expires_at_ms,
+                            created_at_ms,
+                        }
+                    },
+                )
+                .collect(),
+        })
+    }
 }
 
 impl PostgresStorage {
@@ -5897,11 +6116,7 @@ impl PostgresStorage {
                 initcap(replace(incident.classification, '_', ' ')) AS title,
                 incident.summary, incident.session_id AS session_ref,
                 session.provider,
-                CASE
-                  WHEN session.provider IN ('codex', 'codex-deepseek') THEN 'codex'
-                  WHEN session.provider IN ('claude-code', 'claude-deepseek') THEN 'claude'
-                  ELSE NULL
-                END AS agent,
+                __RUNTIME_AGENT_SQL__ AS agent,
                 NULL::text AS model, incident.classification
               FROM runtime_incidents incident
               LEFT JOIN sessions session ON session.id = incident.session_id
@@ -5919,7 +6134,7 @@ impl PostgresStorage {
                   ELSE 'warning'
                 END::text AS severity,
                 'failed'::text AS state,
-                'DeepSeek HTTP ' || event.status::text AS title,
+                'HTTP ' || event.status::text AS title,
                 initcap(event.agent) || ' request ' || CASE
                   WHEN event.status BETWEEN 400 AND 499
                     AND event.status NOT IN (408, 425, 429, 499)
@@ -5960,12 +6175,12 @@ impl PostgresStorage {
                   ELSE 'failed'
                 END::text AS state,
                 CASE event.cache_keepalive_outcome
-                  WHEN 'hit' THEN 'DeepSeek cache protected'
-                  WHEN 'miss' THEN 'DeepSeek keepalive cache miss'
-                  WHEN 'partial' THEN 'DeepSeek keepalive partial hit'
-                  WHEN 'retryable_error' THEN 'DeepSeek keepalive will retry'
-                  WHEN 'terminal_error' THEN 'DeepSeek keepalive stopped'
-                  ELSE 'DeepSeek keepalive preempted'
+                  WHEN 'hit' THEN 'Cache protected'
+                  WHEN 'miss' THEN 'Keepalive cache miss'
+                  WHEN 'partial' THEN 'Keepalive partial hit'
+                  WHEN 'retryable_error' THEN 'Keepalive will retry'
+                  WHEN 'terminal_error' THEN 'Keepalive stopped'
+                  ELSE 'Keepalive preempted'
                 END::text AS title,
                 CASE event.cache_keepalive_outcome
                   WHEN 'hit' THEN format('Protected %s cached tokens',
@@ -6130,7 +6345,7 @@ impl PostgresStorage {
                 log.status AS state,
                 initcap(log.provider) || ' ' || replace(log.action, '_', ' ') AS title,
                 log.message AS summary, NULL::text AS session_ref, log.provider,
-                CASE WHEN log.provider = 'codex' THEN 'codex'::text ELSE NULL::text END AS agent,
+                __AUTOMATION_AGENT_SQL__ AS agent,
                 NULL::text AS model,
                 'provider_automation'::text AS classification
               FROM provider_action_logs log
@@ -6155,7 +6370,16 @@ impl PostgresStorage {
             ORDER BY occurred_at_ms DESC, id DESC
             LIMIT $10
         ";
-        sqlx::query_as(query)
+        let query = query
+            .replace(
+                "__RUNTIME_AGENT_SQL__",
+                &crate::plugin_runtime_args::diagnostic_agent_case_sql("session.provider"),
+            )
+            .replace(
+                "__AUTOMATION_AGENT_SQL__",
+                &crate::plugin_runtime_args::diagnostic_agent_case_sql("log.provider"),
+            );
+        sqlx::query_as(&query)
             .bind(filter.since_ms)
             .bind(filter.until_ms)
             .bind(&filter.kinds)
@@ -6406,16 +6630,7 @@ impl PostgresStorage {
             let outcome = json_scalar(&current, "cache_keepalive_outcome")
                 .unwrap_or_else(|| "unknown".to_owned());
             let status = json_scalar(&current, "status").unwrap_or_else(|| "unknown".to_owned());
-            let title = match outcome.as_str() {
-                "hit" => "DeepSeek cache protected",
-                "miss" => "DeepSeek keepalive cache miss",
-                "partial" => "DeepSeek keepalive partial hit",
-                "retryable_error" => "DeepSeek keepalive will retry",
-                "terminal_error" => "DeepSeek keepalive stopped",
-                "preempted" => "DeepSeek keepalive preempted",
-                _ => "DeepSeek keepalive observation",
-            }
-            .to_owned();
+            let title = diagnostic_keepalive_title(&outcome).to_owned();
             let summary = match outcome.as_str() {
                 "hit" => format!(
                     "Protected {} cached tokens",
@@ -6523,7 +6738,7 @@ impl PostgresStorage {
         let cause = (kind == "cache_anomaly")
             .then(|| cache_transition_cause(&current, &previous, intervening_provider_errors > 0));
         let title = cause.map_or_else(
-            || format!("DeepSeek HTTP {status}"),
+            || diagnostic_http_title(&status),
             |cause| cache_transition_title(cause).to_owned(),
         );
         let summary = if kind == "cache_anomaly" {
@@ -7232,6 +7447,20 @@ mod provider_usage_validation_tests {
             &previous,
             Some(31 * 60 * 1_000),
         ));
+    }
+
+    #[test]
+    fn diagnostic_titles_do_not_embed_vendor_product_names() {
+        assert_eq!(diagnostic_http_title(400), "HTTP 400");
+        assert_eq!(diagnostic_keepalive_title("hit"), "Cache protected");
+        assert_eq!(diagnostic_keepalive_title("miss"), "Keepalive cache miss");
+        assert_eq!(
+            diagnostic_keepalive_title("unknown"),
+            "Keepalive observation"
+        );
+        assert_eq!(diagnostic_title("xai"), "xAI");
+        assert_eq!(diagnostic_title("openai"), "OpenAI");
+        assert_eq!(diagnostic_title("cache_keepalive"), "Cache keepalive");
     }
 
     #[test]

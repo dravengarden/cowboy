@@ -1,3 +1,4 @@
+import { occupancyProviderIds } from "./occupancyHostMap";
 import type { MachineSummary, SessionMeta } from "./protocol";
 
 /** Live revisions are monotonic for one Controller process. A connect resync
@@ -52,11 +53,10 @@ export function projectMachineOccupancy(
         component.id.kind === "provider_cli"
       ) {
         const slot = component.id.slot ?? "";
-        activeLeases = load?.providers.get(slot) ?? 0;
-        if (slot === "claude") {
-          activeLeases += load?.providers.get("claude-code") ?? 0;
-          activeLeases += load?.providers.get("claude-deepseek") ?? 0;
-        }
+        activeLeases = occupancyProviderIds(slot).reduce(
+          (sum, provider) => sum + (load?.providers.get(provider) ?? 0),
+          0,
+        );
       }
       if (activeLeases === component.active_leases) return component;
       componentsChanged = true;

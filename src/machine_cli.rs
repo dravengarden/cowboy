@@ -413,121 +413,143 @@ fn managed_provider_environment(
             component.id.kind == kind && slots.contains(&component.id.slot.as_str())
         })
     };
-    let claude_enabled = claude_runtime_enabled(&disabled);
     let mut environment = BTreeMap::new();
-    for key in [
-        "COWBOY_ACP_CODEX_CMD",
-        "COWBOY_ACP_CLAUDE_CODE_CMD",
-        "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE",
-        "COWBOY_ACP_GEMINI_CMD",
-        "COWBOY_ACP_GEMINI_ARGS",
-        "COWBOY_ACP_GROK_CMD",
-        "COWBOY_ACP_GROK_ARGS",
-    ] {
-        let slot = match key {
-            "COWBOY_ACP_CLAUDE_CODE_CMD" | "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE" => "claude",
-            "COWBOY_ACP_GEMINI_CMD" | "COWBOY_ACP_GEMINI_ARGS" => "gemini",
-            "COWBOY_ACP_GROK_CMD" | "COWBOY_ACP_GROK_ARGS" => "grok",
-            _ => "codex",
-        };
-        if if slot == "claude" {
-            !claude_enabled
-        } else {
-            disabled.iter().any(|disabled| disabled == slot)
-        } {
+    for (plugin_id, slot) in crate::plugin_runtime_args::adapter_plugins() {
+        if !crate::plugin_runtime_args::adapter_runtime_enabled(slot, &disabled) {
             continue;
         }
-        if let Ok(value) = std::env::var(key)
-            && !value.trim().is_empty()
-        {
-            environment.insert(key.to_owned(), value);
+        for suffix in ["CMD", "ARGS", "EXECUTABLE"] {
+            let key = crate::plugin_runtime_args::acp_env_key(plugin_id, suffix);
+            if let Ok(value) = std::env::var(&key)
+                && !value.trim().is_empty()
+            {
+                environment.insert(key, value);
+            }
         }
     }
-    pin_grok_runtime_args(&mut environment, &disabled);
-    if !disabled.iter().any(|slot| slot == "claude-deepseek")
-        && let Some(shell) = crate::claude_shell::resolve(&|key| std::env::var(key).ok())
-    {
+    pin_cli_runtime_args(&mut environment, &disabled);
+    for plugin_id in crate::plugin_runtime_args::isolated_shell_plugins() {
+        if disabled.iter().any(|slot| slot == plugin_id) {
+            continue;
+        }
+        let Some(shell) = crate::claude_shell::resolve(plugin_id, &|key| std::env::var(key).ok())
+        else {
+            continue;
+        };
         // Pin the same readiness-checked path into every detached worker. This
         // preserves a nonstandard inherited shell across the systemd boundary;
-        // the Claude DeepSeek launch spec removes this control variable before
-        // starting the adapter.
-        environment.insert("COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL".to_owned(), shell);
-    }
-    if has(ComponentKind::ProviderAdapter, &["codex"]) {
+        // isolated-shell adapters remove this control variable before starting.
         environment.insert(
-            "COWBOY_ACP_CODEX_CMD".to_owned(),
-            components.command_path("codex-acp").display().to_string(),
+            crate::plugin_runtime_args::acp_env_key(plugin_id, "SHELL"),
+            shell,
         );
     }
-    // Keep npm ownership of codex-acp while correcting its App Server resume
-    // request at the worker boundary. A signed standalone ACP runtime may omit
-    // the sibling shim and own its complete provider contract instead.
-    let codex_proxy = worker_command.with_file_name("cowboy-codex-app-server");
-    if !disabled.iter().any(|slot| slot == "codex") && codex_proxy.is_file() {
-        environment.insert("CODEX_PATH".to_owned(), codex_proxy.display().to_string());
-    }
-    if claude_enabled && installed(ComponentKind::ProviderAdapter, &["claude", "claude-code"]) {
+    for detect in crate::plugin_runtime_args::path_detect() {
+        if detect.args.is_some() {
+            continue;
+        }
+        let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(detect.plugin_id)
+        else {
+            continue;
+        };
+        if !crate::plugin_runtime_args::adapter_runtime_enabled(slot, &disabled) {
+            continue;
+        }
+        let occupants = crate::plugin_runtime_args::occupancy_provider_ids(slot);
+        if !installed(ComponentKind::ProviderAdapter, &occupants) {
+            continue;
+        }
         environment.insert(
-            "COWBOY_ACP_CLAUDE_CODE_CMD".to_owned(),
+            crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD"),
             components
-                .command_path("claude-agent-acp")
+                .command_path(detect.command)
                 .display()
                 .to_string(),
         );
     }
-    if claude_enabled {
-        let managed_cli = installed(ComponentKind::ProviderCli, &["claude"])
-            .then(|| components.command_path("claude"));
+    // Keep npm ownership of the Codex adapter while correcting its App Server
+    // resume request at the worker boundary. A signed standalone ACP runtime
+    // may omit the sibling shim and own its complete provider contract instead.
+    let codex_proxy = worker_command.with_file_name("cowboy-codex-app-server");
+    if crate::plugin_runtime_args::adapter_runtime_enabled("codex", &disabled)
+        && codex_proxy.is_file()
+    {
+        environment.insert("CODEX_PATH".to_owned(), codex_proxy.display().to_string());
+    }
+    for (plugin_id, command) in crate::plugin_runtime_args::cli_executable_plugins() {
+        let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(plugin_id) else {
+            continue;
+        };
+        if !crate::plugin_runtime_args::adapter_runtime_enabled(slot, &disabled) {
+            continue;
+        }
+        let occupants = crate::plugin_runtime_args::occupancy_provider_ids(slot);
+        let managed_cli = installed(ComponentKind::ProviderCli, &occupants)
+            .then(|| components.command_path(command));
         let configured = environment
-            .get("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE")
+            .get(&crate::plugin_runtime_args::acp_env_key(
+                plugin_id,
+                "EXECUTABLE",
+            ))
             .map(PathBuf::from);
         let adapter_sibling = environment
-            .get("COWBOY_ACP_CLAUDE_CODE_CMD")
+            .get(&crate::plugin_runtime_args::acp_env_key(plugin_id, "CMD"))
             .map(PathBuf::from)
-            .and_then(|path| path.parent().map(|parent| parent.join("claude")))
+            .and_then(|path| path.parent().map(|parent| parent.join(command)))
             .filter(|path| path.is_file());
-        let path_command = command_on_path("claude");
+        let path_command = command_on_path(command);
         if let Some(executable) = managed_cli
             .or(configured)
             .or(adapter_sibling)
             .or(path_command)
         {
-            // claude-agent-acp otherwise prefers the SDK's pinned optional
-            // binary, which can lag the Machine's updated provider CLI.
             environment.insert(
-                "COWBOY_ACP_CLAUDE_CODE_EXECUTABLE".to_owned(),
+                crate::plugin_runtime_args::acp_env_key(plugin_id, "EXECUTABLE"),
                 executable.display().to_string(),
             );
         }
     }
-    if has(ComponentKind::ProviderCli, &["gemini"]) {
+    for detect in crate::plugin_runtime_args::path_detect() {
+        let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(detect.plugin_id)
+        else {
+            continue;
+        };
+        if detect.args.is_none() {
+            continue;
+        }
+        if !has(ComponentKind::ProviderCli, &[slot]) {
+            continue;
+        }
         environment.insert(
-            "COWBOY_ACP_GEMINI_CMD".to_owned(),
-            components.command_path("gemini").display().to_string(),
-        );
-        environment.insert("COWBOY_ACP_GEMINI_ARGS".to_owned(), "--acp".to_owned());
-    }
-    if has(ComponentKind::ProviderCli, &["grok"]) {
-        environment.insert(
-            "COWBOY_ACP_GROK_CMD".to_owned(),
-            components.command_path("grok").display().to_string(),
+            crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD"),
+            components
+                .command_path(detect.command)
+                .display()
+                .to_string(),
         );
     }
     Ok(environment)
 }
 
-fn pin_grok_runtime_args(environment: &mut BTreeMap<String, String>, disabled: &[String]) {
-    if disabled.iter().any(|slot| slot == "grok") {
-        environment.remove("COWBOY_ACP_GROK_ARGS");
-    } else {
-        // The bootstrap CLI is inherited from the host service, while signed
-        // provider components are resolved above. Keep both paths on the same
-        // app-owned argument contract so a stale unit environment cannot put
-        // this agent-only flag before the `agent` subcommand.
-        environment.insert(
-            "COWBOY_ACP_GROK_ARGS".to_owned(),
-            crate::grok::RUNTIME_ARGS_ENV.to_owned(),
-        );
+fn pin_cli_runtime_args(environment: &mut BTreeMap<String, String>, disabled: &[String]) {
+    for detect in crate::plugin_runtime_args::path_detect() {
+        let Some(args) = &detect.args else {
+            continue;
+        };
+        let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(detect.plugin_id)
+        else {
+            continue;
+        };
+        let key = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "ARGS");
+        if crate::plugin_runtime_args::adapter_runtime_enabled(slot, disabled) {
+            // The bootstrap CLI is inherited from the host service, while signed
+            // provider components are resolved above. Keep both paths on the same
+            // app-owned argument contract so a stale unit environment cannot put
+            // this agent-only flag before the `agent` subcommand.
+            environment.insert(key, args.clone());
+        } else {
+            environment.remove(&key);
+        }
     }
 }
 
@@ -549,17 +571,12 @@ fn disabled_provider_slots_from(value: &str) -> Vec<String> {
         .split(',')
         .map(str::trim)
         .filter(|slot| !slot.is_empty())
-        .map(|slot| match slot {
-            "claude-code" => "claude".to_owned(),
-            other => other.to_owned(),
-        })
+        .map(crate::plugin_runtime_args::normalize_disabled_provider_slot)
         .collect()
 }
 
 fn claude_runtime_enabled(disabled: &[String]) -> bool {
-    ["claude", "claude-deepseek"]
-        .iter()
-        .any(|slot| !disabled.iter().any(|disabled| disabled == slot))
+    crate::plugin_runtime_args::adapter_runtime_enabled("claude", disabled)
 }
 
 async fn supervise_zed_adapter(
@@ -1170,19 +1187,17 @@ async fn collect_inventory(
     if !has_managed_acp {
         inventory.push(bootstrap_acp_inventory(store.bootstrap_acp_generation()));
     }
-    for (slot, command, version_args) in [
-        ("codex", "codex", &["--version"][..]),
-        ("claude", "claude", &["--version"][..]),
-        ("gemini", "gemini", &["--version"][..]),
-        ("grok", "grok", &["--version"][..]),
-    ] {
+    for slot in crate::plugin_runtime_args::occupancy_slots() {
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
         }
+        let Some(command) = crate::plugin_runtime_args::cli_command_for_slot(slot) else {
+            continue;
+        };
         let output = tokio::time::timeout(
             Duration::from_secs(3),
             tokio::process::Command::new(command)
-                .args(version_args)
+                .arg("--version")
                 .kill_on_drop(true)
                 .output(),
         )
@@ -1213,21 +1228,21 @@ async fn collect_inventory(
             ),
         };
         let kind = ComponentKind::ProviderCli;
-        let (auth, auth_detail) = match slot {
-            "codex" => (probe_exit_auth("codex", &["login", "status"]).await, None),
-            "claude" => (
-                probe_exit_auth("claude", &["auth", "status", "--json"]).await,
-                None,
-            ),
-            "gemini" => {
-                let probe = probe_gemini_auth();
-                (probe.state, probe.detail)
-            }
-            "grok" => {
-                let probe = probe_grok_auth();
-                (probe.state, probe.detail)
-            }
-            _ => (AuthState::Unsupported, None),
+        let (auth, auth_detail) = match crate::plugin_runtime_args::cli_auth_for_slot(slot) {
+            Some(auth) => match auth.kind {
+                crate::plugin_runtime_args::CliAuthKind::Exit => {
+                    (probe_exit_auth(command, &auth.argv).await, None)
+                }
+                crate::plugin_runtime_args::CliAuthKind::GeminiEnv => {
+                    let probe = probe_gemini_auth();
+                    (probe.state, probe.detail)
+                }
+                crate::plugin_runtime_args::CliAuthKind::GrokJson => {
+                    let probe = probe_grok_auth();
+                    (probe.state, probe.detail)
+                }
+            },
+            None => (AuthState::Unsupported, None),
         };
         if let Some(existing) = inventory
             .iter_mut()
@@ -1254,7 +1269,16 @@ async fn collect_inventory(
         });
     }
     inventory.push(probe_zed_inventory(zed_adapter_socket).await);
-    for (slot, command) in [("codex", "codex-acp"), ("claude", "claude-agent-acp")] {
+    for detect in crate::plugin_runtime_args::path_detect() {
+        // CLI-only occupants already report through npm/component inventory.
+        // Adapter binaries are the PATH fallback for package-less Machines.
+        if detect.args.is_some() {
+            continue;
+        }
+        let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(detect.plugin_id)
+        else {
+            continue;
+        };
         if disabled.iter().any(|disabled| disabled == slot) {
             continue;
         }
@@ -1265,7 +1289,7 @@ async fn collect_inventory(
         }
         let output = tokio::time::timeout(
             Duration::from_secs(3),
-            tokio::process::Command::new(command)
+            tokio::process::Command::new(detect.command)
                 .arg("--version")
                 .kill_on_drop(true)
                 .output(),
@@ -1312,72 +1336,54 @@ async fn collect_inventory(
             update: None,
         });
     }
-    if !disabled.iter().any(|slot| slot == "codex-deepseek") {
-        let deepseek_ready = crate::provider_catalog::available_codex_deepseek_catalog().is_some()
-            && tokio::time::timeout(
-                Duration::from_millis(500),
-                reqwest::Client::new()
-                    .get("http://127.0.0.1:61137/healthz")
-                    .send(),
-            )
-            .await
-            .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()));
+    for (plugin_id, origin) in crate::plugin_runtime_args::loopback_plugins() {
+        if disabled.iter().any(|slot| slot == plugin_id) {
+            continue;
+        }
+        let gateway_ready = loopback_gateway_ready(origin).await;
+        let catalog_ready = !crate::plugin_runtime_args::loopback_requires_catalog(plugin_id)
+            || crate::plugin_runtime_args::available_loopback_catalog(plugin_id).is_some();
+        let needs_shell = crate::plugin_runtime_args::isolated_shell(plugin_id);
+        let shell_ready = !needs_shell || crate::claude_shell::available(plugin_id);
         inventory.push(ComponentInventory {
             id: ComponentId {
                 kind: ComponentKind::ProviderAdapter,
-                slot: "codex-deepseek".to_owned(),
+                slot: plugin_id.to_owned(),
             },
-            state: if deepseek_ready {
+            state: if gateway_ready && catalog_ready && shell_ready {
                 ComponentState::Active
             } else {
                 ComponentState::Missing
             },
-            version: "0.2.0".to_owned(),
+            version: String::new(),
             generation: String::new(),
             digest: String::new(),
             rollback_generation: None,
             active_leases: 0,
             auth: None,
-            detail: Some("loopback Responses gateway".to_owned()),
-            update: None,
-        });
-    }
-    if !disabled.iter().any(|slot| slot == "claude-deepseek") {
-        let gateway_ready = tokio::time::timeout(
-            Duration::from_millis(500),
-            reqwest::Client::new()
-                .get("http://127.0.0.1:61138/healthz")
-                .send(),
-        )
-        .await
-        .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()));
-        let shell_ready = crate::claude_shell::available();
-        inventory.push(ComponentInventory {
-            id: ComponentId {
-                kind: ComponentKind::ProviderAdapter,
-                slot: "claude-deepseek".to_owned(),
-            },
-            state: if gateway_ready && shell_ready {
-                ComponentState::Active
+            detail: Some(if needs_shell && !shell_ready {
+                "requires an executable absolute bash or zsh path".to_owned()
             } else {
-                ComponentState::Missing
-            },
-            version: "0.1.0".to_owned(),
-            generation: String::new(),
-            digest: String::new(),
-            rollback_generation: None,
-            active_leases: 0,
-            auth: None,
-            detail: Some(if shell_ready {
-                "isolated loopback Anthropic Messages gateway".to_owned()
-            } else {
-                "Claude Code requires an executable absolute bash or zsh path".to_owned()
+                crate::plugin_runtime_args::loopback_detail(plugin_id)
+                    .unwrap_or("isolated loopback gateway")
+                    .to_owned()
             }),
             update: None,
         });
     }
     apply_npm_release_status(&mut inventory).await;
     inventory
+}
+
+async fn loopback_gateway_ready(origin: &str) -> bool {
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        reqwest::Client::new()
+            .get(format!("{origin}/healthz"))
+            .send(),
+    )
+    .await
+    .is_ok_and(|result| result.is_ok_and(|response| response.status().is_success()))
 }
 
 fn bootstrap_acp_inventory(generation: &str) -> ComponentInventory {
@@ -1398,34 +1404,18 @@ fn bootstrap_acp_inventory(generation: &str) -> ComponentInventory {
     }
 }
 
-const NPM_COMPONENTS: &[(ComponentKind, &str, &str)] = &[
-    (ComponentKind::ProviderCli, "codex", "@openai/codex"),
-    (
-        ComponentKind::ProviderCli,
-        "claude",
-        "@anthropic-ai/claude-code",
-    ),
-    (ComponentKind::ProviderCli, "gemini", "@google/gemini-cli"),
-    (ComponentKind::ProviderCli, "grok", "@xai-official/grok"),
-    (
-        ComponentKind::ProviderAdapter,
-        "codex",
-        "@agentclientprotocol/codex-acp",
-    ),
-    (
-        ComponentKind::ProviderAdapter,
-        "claude",
-        "@agentclientprotocol/claude-agent-acp",
-    ),
-];
-
 static NPM_UPDATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn npm_component_kind(kind: &ComponentKind) -> Option<&'static str> {
+    match kind {
+        ComponentKind::ProviderCli => Some("provider_cli"),
+        ComponentKind::ProviderAdapter => Some("provider_adapter"),
+        _ => None,
+    }
+}
+
 fn npm_package_for_component(id: &ComponentId) -> Option<&'static str> {
-    NPM_COMPONENTS
-        .iter()
-        .find(|(kind, slot, _)| &id.kind == kind && id.slot == *slot)
-        .map(|(_, _, package)| *package)
+    crate::plugin_runtime_args::npm_package_for_component(npm_component_kind(&id.kind)?, &id.slot)
 }
 
 fn executable_file(path: &Path) -> bool {
@@ -1494,21 +1484,18 @@ async fn apply_npm_release_status(inventory: &mut [ComponentInventory]) {
     };
     let checked_at_ms = unix_ms();
     for component in inventory {
-        let Some((_, _, package)) = NPM_COMPONENTS
-            .iter()
-            .find(|(kind, slot, _)| &component.id.kind == kind && component.id.slot == *slot)
-        else {
+        let Some(package) = npm_package_for_component(&component.id) else {
             continue;
         };
         let Some(current) = dependencies
-            .get(*package)
+            .get(package)
             .and_then(|value| value.get("version"))
             .and_then(serde_json::Value::as_str)
         else {
             continue;
         };
         let latest = outdated
-            .get(*package)
+            .get(package)
             .and_then(|value| value.get("latest"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or(current);
@@ -2202,13 +2189,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
 }
 
 fn provider_for_component(id: &ComponentId) -> Option<&'static str> {
-    match id.slot.as_str() {
-        "codex" => Some("codex"),
-        "claude" => Some("claude-code"),
-        "gemini" => Some("gemini"),
-        "grok" => Some("grok"),
-        _ => None,
-    }
+    crate::plugin_runtime_args::provider_for_adapter_slot(&id.slot)
 }
 
 fn component_requires_host_restart(kind: &ComponentKind) -> bool {
@@ -3133,7 +3114,7 @@ mod tests {
         gemini_env_value_from, grok_auth_from_json, load_enrolled_machine_id,
         load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
         npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
-        parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
+        parse_workspaces, persist_enrolled_machine_id, pin_cli_runtime_args,
         provider_auth_roll_target, provider_for_component, queue_controller_frame,
         reject_untrusted_workspace, resolve_runtime_machine_id, select_code_adapter_executable,
         selected_zed_pair, send_frame_with_timeout, validate_controller_url,
@@ -3435,14 +3416,22 @@ mod tests {
             "COWBOY_ACP_GROK_ARGS".to_owned(),
             "--no-auto-update --always-approve agent --no-leader stdio".to_owned(),
         )]);
-        pin_grok_runtime_args(&mut environment, &[]);
+        pin_cli_runtime_args(&mut environment, &[]);
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            crate::grok::RUNTIME_ARGS_ENV
+            crate::plugin_runtime_args::grok_env()
+        );
+        assert_eq!(
+            environment["COWBOY_ACP_GEMINI_ARGS"],
+            crate::plugin_runtime_args::gemini_env()
         );
 
-        pin_grok_runtime_args(&mut environment, &["grok".to_owned()]);
+        pin_cli_runtime_args(&mut environment, &["grok".to_owned()]);
         assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
+        assert_eq!(
+            environment["COWBOY_ACP_GEMINI_ARGS"],
+            crate::plugin_runtime_args::gemini_env()
+        );
     }
 
     #[test]
@@ -3679,11 +3668,14 @@ mod tests {
             Some("bash" | "zsh")
         ));
         assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
-        assert_eq!(environment["COWBOY_ACP_GEMINI_ARGS"], "--acp");
+        assert_eq!(
+            environment["COWBOY_ACP_GEMINI_ARGS"],
+            crate::plugin_runtime_args::gemini_env()
+        );
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            crate::grok::RUNTIME_ARGS_ENV
+            crate::plugin_runtime_args::grok_env()
         );
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");

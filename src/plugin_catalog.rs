@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use crate::machine_auth::verify_namespaced;
 use crate::machine_protocol::DesiredPlugin;
+use crate::plugin_host_bundle::PluginHostBundle;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PluginCatalogEntry {
@@ -37,6 +38,8 @@ pub(crate) struct PluginCatalogEntry {
     pub component_release: String,
     pub supported_platforms: Vec<PlatformTarget>,
     pub manifest: PluginManifest,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_host_bundle: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -51,16 +54,18 @@ struct CatalogArtifact {
     entry: PluginCatalogEntry,
     desired: DesiredPlugin,
     package: PluginPackage,
+    host_bundle: Option<PluginHostBundle>,
 }
 
 pub(crate) struct PluginCatalog {
     embedded: BTreeMap<(String, String), PluginCatalogEntry>,
     external: RwLock<BTreeMap<(String, String, String), CatalogArtifact>>,
-    root: PathBuf,
+    roots: Vec<PathBuf>,
 }
 
 impl PluginCatalog {
     pub(crate) fn open(data_dir: &Path, root: Option<PathBuf>) -> Result<Self> {
+        let plugin_dir = crate::plugin_dir::PluginDir::open(data_dir)?;
         let embedded = crate::plugin::first_party_plugins()
             .iter()
             .map(|manifest| {
@@ -80,69 +85,34 @@ impl PluginCatalog {
                     component_release: crate::plugin::active_component_release().to_owned(),
                     supported_platforms: Vec::new(),
                     manifest: manifest.clone(),
+                    has_host_bundle: false,
                 };
                 ((manifest.id.clone(), manifest.version.clone()), entry)
             })
             .collect();
+        let roots = if let Some(root) = root {
+            vec![root]
+        } else {
+            let mut roots = vec![plugin_dir.catalog_dir()];
+            let legacy = crate::plugin_dir::PluginDir::legacy_catalog_dir(data_dir);
+            if legacy.exists() && legacy != plugin_dir.catalog_dir() {
+                roots.push(legacy);
+            }
+            roots
+        };
         let catalog = Self {
             embedded,
             external: RwLock::new(BTreeMap::new()),
-            root: root.unwrap_or_else(|| data_dir.join("plugin-catalog")),
+            roots,
         };
         catalog.refresh_external()?;
         Ok(catalog)
     }
 
     pub(crate) fn refresh_external(&self) -> Result<usize> {
-        fs::create_dir_all(&self.root)
-            .with_context(|| format!("creating Plugin Catalog {}", self.root.display()))?;
-        let trust_root = self.root.join("trusted-publishers");
         let mut next = BTreeMap::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("reading Plugin Catalog {}", self.root.display()))?
-        {
-            let path = entry?.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("cowboy-plugin") {
-                continue;
-            }
-            let bytes = fs::read(&path)
-                .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
-            let package = PluginPackage::from_bytes(&bytes)
-                .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
-            let release_path = path.with_extension("release.json");
-            let release: PluginRelease = serde_json::from_slice(
-                &fs::read(&release_path)
-                    .with_context(|| format!("reading {}", release_path.display()))?,
-            )?;
-            release
-                .validate_bytes(&bytes)
-                .with_context(|| format!("validating Plugin release {}", release_path.display()))?;
-            let key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
-            let public_key = fs::read_to_string(&key_path)
-                .with_context(|| format!("reading trusted publisher {}", key_path.display()))?;
-            ensure!(
-                verify_namespaced(
-                    &public_key,
-                    PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
-                    &release.proof(),
-                    &release.signature,
-                )?,
-                "Plugin release signature is invalid"
-            );
-            let artifact = catalog_artifact(package, bytes, release, &public_key)?;
-            let key = (
-                artifact.entry.plugin_id.clone(),
-                artifact.entry.plugin_version.clone(),
-                artifact
-                    .entry
-                    .artifact_digest
-                    .clone()
-                    .context("released Plugin has no artifact digest")?,
-            );
-            ensure!(
-                next.insert(key, artifact).is_none(),
-                "duplicate Plugin release"
-            );
+        for (index, root) in self.roots.iter().enumerate() {
+            load_catalog_root(root, &mut next, index > 0)?;
         }
         let count = next.len();
         *self.external.write() = next;
@@ -220,7 +190,7 @@ impl PluginCatalog {
             return None;
         }
         Some(
-            self.root
+            self.catalog_root()
                 .join("artifacts")
                 .join(digest.to_ascii_lowercase())
                 .join(name),
@@ -228,7 +198,23 @@ impl PluginCatalog {
     }
 
     pub(crate) fn catalog_root(&self) -> PathBuf {
-        self.root.clone()
+        self.roots
+            .first()
+            .cloned()
+            .expect("plugin catalog has a primary root")
+    }
+
+    pub(crate) fn host_bundles(&self) -> Vec<(PluginCatalogEntry, PluginHostBundle)> {
+        self.external
+            .read()
+            .values()
+            .filter_map(|artifact| {
+                artifact
+                    .host_bundle
+                    .clone()
+                    .map(|bundle| (artifact.entry.clone(), bundle))
+            })
+            .collect()
     }
 
     pub(crate) fn resolve(
@@ -270,11 +256,79 @@ impl PluginCatalog {
     }
 }
 
+fn load_catalog_root(
+    root: &Path,
+    next: &mut BTreeMap<(String, String, String), CatalogArtifact>,
+    skip_duplicates: bool,
+) -> Result<()> {
+    fs::create_dir_all(root)
+        .with_context(|| format!("creating Plugin Catalog {}", root.display()))?;
+    let trust_root = root.join("trusted-publishers");
+    let entries =
+        fs::read_dir(root).with_context(|| format!("reading Plugin Catalog {}", root.display()))?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("cowboy-plugin") {
+            continue;
+        }
+        let bytes = fs::read(&path)
+            .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
+        let package = PluginPackage::from_bytes(&bytes)
+            .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
+        let release_path = path.with_extension("release.json");
+        let release: PluginRelease = serde_json::from_slice(
+            &fs::read(&release_path)
+                .with_context(|| format!("reading {}", release_path.display()))?,
+        )?;
+        release
+            .validate_bytes(&bytes)
+            .with_context(|| format!("validating Plugin release {}", release_path.display()))?;
+        let key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
+        let public_key = fs::read_to_string(&key_path)
+            .with_context(|| format!("reading trusted publisher {}", key_path.display()))?;
+        ensure!(
+            verify_namespaced(
+                &public_key,
+                PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
+                &release.proof(),
+                &release.signature,
+            )?,
+            "Plugin release signature is invalid"
+        );
+        let host_bundle = PluginHostBundle::load_for_package(
+            &path.with_extension("hostbundle.json"),
+            &package.manifest.id,
+            &package.manifest.version,
+            &PluginPackage::artifact_digest(&bytes),
+            &public_key,
+        )?;
+        let artifact = catalog_artifact(package, bytes, release, &public_key, host_bundle)?;
+        let key = (
+            artifact.entry.plugin_id.clone(),
+            artifact.entry.plugin_version.clone(),
+            artifact
+                .entry
+                .artifact_digest
+                .clone()
+                .context("released Plugin has no artifact digest")?,
+        );
+        if next.insert(key, artifact).is_some() {
+            ensure!(
+                skip_duplicates,
+                "duplicate Plugin release in {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn catalog_artifact(
     package: PluginPackage,
     bytes: Vec<u8>,
     release: PluginRelease,
     public_key: &str,
+    host_bundle: Option<PluginHostBundle>,
 ) -> Result<CatalogArtifact> {
     let entry = PluginCatalogEntry {
         plugin_id: release.plugin_id.clone(),
@@ -289,6 +343,7 @@ fn catalog_artifact(
         component_release: release.component_release.clone(),
         supported_platforms: release.supported_platforms.clone(),
         manifest: package.manifest.clone(),
+        has_host_bundle: host_bundle.is_some(),
     };
     Ok(CatalogArtifact {
         entry,
@@ -298,6 +353,7 @@ fn catalog_artifact(
             publisher_public_key: crate::machine_auth::validate_public_key(public_key)?,
         },
         package,
+        host_bundle,
     })
 }
 
@@ -310,6 +366,27 @@ fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_catalog_root_is_the_server_plugin_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-plugin-catalog-layout-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let catalog = PluginCatalog::open(&root, None).unwrap();
+        assert_eq!(
+            catalog.catalog_root(),
+            crate::plugin_dir::PluginDir::open(&root)
+                .unwrap()
+                .catalog_dir()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn embedded_catalog_contains_agent_and_code_plugins() {

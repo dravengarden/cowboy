@@ -1,55 +1,57 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
-  DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
-  DEEPSEEK_CACHE_BASE_INTERVAL_MS,
-  DEEPSEEK_CACHE_MIN_HIT_LABEL,
-  DEEPSEEK_CACHE_MIN_HIT_TOKENS,
-  deepseekAvailableAgents,
-  deepseekCacheProtectionStats,
-  deepseekCacheStats,
-  deepseekCostStats,
-  deepseekVisibleAgents,
+  activityAvailableAgents,
+  activityCacheProtectionStats,
+  activityCacheStats,
+  activityCostStats,
+  activityVisibleAgents,
   percentLabel,
-} from "./deepseekUsage.ts";
+} from "./activityUsage.ts";
+import {
+  usageCacheIntervalLabel,
+  usageCacheIntervalMs,
+  usageCacheMinHitLabel,
+  usageCacheMinHitTokens,
+} from "./usageHostMap.ts";
 
 Deno.test("DeepSeek cache protection uses the shared 64K minimum", () => {
-  assertEquals(DEEPSEEK_CACHE_MIN_HIT_TOKENS, 64_000);
-  assertEquals(DEEPSEEK_CACHE_MIN_HIT_LABEL, "64K");
+  assertEquals(usageCacheMinHitTokens(), 64_000);
+  assertEquals(usageCacheMinHitLabel(), "64K");
 });
 
 Deno.test("DeepSeek cache protection exposes the eight-hour base interval", () => {
-  assertEquals(DEEPSEEK_CACHE_BASE_INTERVAL_MS, 28_800_000);
-  assertEquals(DEEPSEEK_CACHE_BASE_INTERVAL_LABEL, "8h");
+  assertEquals(usageCacheIntervalMs(), 28_800_000);
+  assertEquals(usageCacheIntervalLabel(), "8h");
 });
 
 Deno.test("DeepSeek agent capability follows the full retained telemetry window", () => {
   assertEquals(
-    deepseekAvailableAgents({
+    activityAvailableAgents({
       availableAgents: ["codex", "claude", "claude", "invalid"],
       byAgent: { codex: { requests: 10 } },
     }),
     ["codex", "claude"],
   );
-  assertEquals(deepseekAvailableAgents(undefined), []);
+  assertEquals(activityAvailableAgents(undefined), []);
 });
 
 Deno.test("DeepSeek runtime lanes remain visible when a bounded window is empty", () => {
   assertEquals(
-    deepseekVisibleAgents(["claude", "codex"], [], ["claude"]),
+    activityVisibleAgents(["claude", "codex"], [], ["claude"]),
     ["codex", "claude"],
   );
   assertEquals(
-    deepseekVisibleAgents(["claude", "codex"], ["claude"], []),
+    activityVisibleAgents(["claude", "codex"], ["claude"], []),
     ["claude"],
   );
   assertEquals(
-    deepseekVisibleAgents(["claude", "codex"], ["claude", "codex"], []),
+    activityVisibleAgents(["claude", "codex"], ["claude", "codex"], []),
     ["codex", "claude"],
   );
 });
 
 Deno.test("DeepSeek cache rate uses only verified token observations", () => {
-  const stats = deepseekCacheStats({
+  const stats = activityCacheStats({
     requests: 12,
     cacheHitTokens: 900,
     cacheMissTokens: 100,
@@ -67,7 +69,7 @@ Deno.test("DeepSeek cache rate uses only verified token observations", () => {
 });
 
 Deno.test("DeepSeek cache rate stays unknown without cache fields", () => {
-  const stats = deepseekCacheStats({
+  const stats = activityCacheStats({
     cacheObservations: 0,
     absentCacheObservations: 4,
   });
@@ -77,7 +79,7 @@ Deno.test("DeepSeek cache rate stays unknown without cache fields", () => {
 });
 
 Deno.test("DeepSeek cache protection separates verified outcomes from all attempts", () => {
-  const stats = deepseekCacheProtectionStats({
+  const stats = activityCacheProtectionStats({
     cacheKeepaliveRequests: 6,
     cacheKeepaliveHits: 2,
     cacheKeepaliveMisses: 1,
@@ -91,7 +93,7 @@ Deno.test("DeepSeek cache protection separates verified outcomes from all attemp
   assertEquals(stats.verifiedOutcomes, 4);
   assertEquals(stats.verifiedHitRate, 50);
   assertEquals(stats.protectedHitTokens, 610_944);
-  assertEquals(deepseekCacheProtectionStats({}).verifiedHitRate, undefined);
+  assertEquals(activityCacheProtectionStats({}).verifiedHitRate, undefined);
 });
 
 Deno.test("percentLabel renders two decimals", () => {
@@ -102,8 +104,8 @@ Deno.test("percentLabel renders two decimals", () => {
   assertEquals(percentLabel(undefined), "—");
 });
 
-Deno.test("deepseekCostStats parses backend valuation without double-counting reasoning", () => {
-  const stats = deepseekCostStats({
+Deno.test("activityCostStats parses backend valuation without double-counting reasoning", () => {
+  const stats = activityCostStats({
     requests: 10,
     usageObservedRequests: 10,
     inputTokens: 1_000_000,
@@ -128,10 +130,10 @@ Deno.test("deepseekCostStats parses backend valuation without double-counting re
   assertEquals(stats?.reasoningTokens, 10_000);
 });
 
-Deno.test("deepseekCostStats degrades to zero without tokens and stays unknown without totals", () => {
-  const empty = deepseekCostStats({ requests: 0, estimatedCny: 0 });
+Deno.test("activityCostStats degrades to zero without tokens and stays unknown without totals", () => {
+  const empty = activityCostStats({ requests: 0, estimatedCny: 0 });
   assertEquals(empty?.estimatedCny, 0);
   assertEquals(empty?.costPerRequestCny, 0);
   assertEquals(empty?.priceCoverageRate, undefined);
-  assertEquals(deepseekCostStats(undefined), undefined);
+  assertEquals(activityCostStats(undefined), undefined);
 });

@@ -8,6 +8,9 @@ import {
   type ProviderCompatibilityTarget,
   validateProviderCatalog,
 } from "@cowboy/provider-ui";
+import { applyOccupancyHostPlugins } from "./occupancyHostMap";
+import { applyVisualHostPlugins } from "./visualHostMap";
+import { applyUsageHostPlugins } from "./usageHostMap";
 
 let cached: ProviderCatalogResponse | null = null;
 let pending: Promise<ProviderCatalogResponse> | null = null;
@@ -27,7 +30,11 @@ export async function loadProviderCatalog(
           (await response.text()).trim() || "Could not load Providers",
         );
       }
-      const catalog = validateProviderCatalog(await response.json());
+      const payload = await response.json() as { platform?: { hosts?: unknown } };
+      applyUsageHostPlugins(payload.platform?.hosts);
+      applyOccupancyHostPlugins(payload.platform?.hosts);
+      applyVisualHostPlugins(payload.platform?.hosts);
+      const catalog = validateProviderCatalog(payload);
       cached = catalog;
       for (const listener of listeners) listener();
       return catalog;

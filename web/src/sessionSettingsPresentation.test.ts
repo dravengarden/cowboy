@@ -9,7 +9,7 @@ import {
   sessionProviderUsageRows,
   workspaceOptionsSummary,
 } from "./sessionSettingsPresentation.ts";
-import { XAI_SIGN_IN_MESSAGE } from "./usageLimits.ts";
+import { usageErrorAuth } from "./usageHostMap.ts";
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -228,7 +228,7 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
       error:
         '_x.ai/billing: {"code":-32000,"message":"Authentication required","data":"Authentication required to fetch billing data"}',
     }),
-    XAI_SIGN_IN_MESSAGE,
+    usageErrorAuth("xai"),
   );
   assertEquals(
     sessionProviderUsageEmptyMessage(undefined),

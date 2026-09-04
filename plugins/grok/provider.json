@@ -69,7 +69,16 @@
       },
       "error_rules": []
     },
-    "arguments": ["--no-auto-update", "agent", "stdio"],
+    "arguments": [
+      "--no-auto-update",
+      "--experimental-memory",
+      "--rules",
+      "Read and follow the closest AGENTS.md project instructions before taking any action.",
+      "agent",
+      "--always-approve",
+      "--no-leader",
+      "stdio"
+    ],
     "environment": { "GROK_FOLDER_TRUST": "0" },
     "remove_environment": [],
     "remove_environment_prefixes": ["GROK_", "XAI_"],

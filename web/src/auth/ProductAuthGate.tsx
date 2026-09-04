@@ -23,6 +23,7 @@ import {
   type ProductCapacityServerPolicy,
   type ProductLogoutScope,
   type ProductLogoutServerPolicy,
+  type AuthHostPlugin,
   type ProductMe,
   productMeFromJson,
   type ProductOidcProvider,
@@ -312,6 +313,7 @@ export function ProductAuthGate({
   const [setupRequired, setSetupRequired] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
   const [providers, setProviders] = useState<ProductOidcProvider[]>([]);
+  const [hostPlugins, setHostPlugins] = useState<AuthHostPlugin[]>([]);
   const [passwordEnabled, setPasswordEnabled] = useState(true);
   const [loginMethodOrder, setLoginMethodOrder] = useState<string[]>([]);
   const [passkeyPolicy, setPasskeyPolicy] = useState<
@@ -390,6 +392,7 @@ export function ProductAuthGate({
     const probe = await authApi.status();
     if (probe.kind === "ok") {
       setProviders(probe.body.providers ?? []);
+      setHostPlugins(probe.body.host_plugins ?? []);
       setPasswordEnabled(probe.body.password_enabled !== false);
       setLoginMethodOrder(probe.body.login_method_order ?? []);
       setPasskeyPolicy(probe.body.passkeys);
@@ -536,6 +539,7 @@ export function ProductAuthGate({
           me={me}
           policy={sessionPolicy}
           providers={providers}
+          hostPlugins={hostPlugins}
           passwordEnabled={passwordEnabled}
           loginMethodOrder={loginMethodOrder}
           suspended={recentAuthOpen}
@@ -555,6 +559,7 @@ export function ProductAuthGate({
           open={recentAuthOpen}
           me={me}
           providers={providers}
+          hostPlugins={hostPlugins}
           passwordEnabled={passwordEnabled}
           loginMethodOrder={loginMethodOrder}
           requireResumeGesture={recentAuthOptions.resumeWithUserGesture ===
@@ -572,6 +577,7 @@ export function ProductAuthGate({
         setupRequired={setupRequired}
         setupPending={setupPending}
         providers={providers}
+        hostPlugins={hostPlugins}
         passwordEnabled={passwordEnabled}
         loginMethodOrder={loginMethodOrder}
         onAuthed={handleAuthed}
@@ -579,6 +585,7 @@ export function ProductAuthGate({
           setSetupRequired(status.setup_required === true);
           setSetupPending(status.setup_pending === true);
           setProviders(status.providers ?? []);
+          setHostPlugins(status.host_plugins ?? []);
           setPasswordEnabled(status.password_enabled !== false);
           setLoginMethodOrder(status.login_method_order ?? []);
           setPasskeyPolicy(status.passkeys);

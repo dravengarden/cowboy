@@ -8,8 +8,30 @@ use sha2::{Digest as _, Sha256};
 #[cfg(feature = "full")]
 pub const CONFIG_ID: &str = "deepseek_cache_protection";
 pub const SESSION_POLICY_ENV: &str = "COWBOY_DEEPSEEK_CACHE_PROTECTION";
+
+#[must_use]
 #[cfg(feature = "full")]
-pub const MINIMUM_HIT_TOKENS: u64 = 64_000;
+pub fn minimum_hit_tokens() -> u64 {
+    crate::plugin_runtime_args::deepseek_cache_protection().min_hit_tokens
+}
+
+#[must_use]
+#[cfg(feature = "full")]
+pub fn unavailable_message() -> String {
+    format!(
+        "{} is unavailable for this session",
+        crate::plugin_runtime_args::deepseek_cache_protection().option_name
+    )
+}
+
+#[must_use]
+#[cfg(feature = "full")]
+pub fn boolean_required_message() -> String {
+    format!(
+        "{} must be a boolean",
+        crate::plugin_runtime_args::deepseek_cache_protection().option_name
+    )
+}
 #[cfg(feature = "machine-host")]
 pub const SESSION_HEADER: &str = "X-Cowboy-Session-Id";
 #[cfg(feature = "machine-host")]
@@ -46,11 +68,13 @@ pub fn opaque_session_id(session_id: &str) -> String {
 #[must_use]
 #[cfg(feature = "machine-host")]
 pub fn gateway_origin(behavior: &ConfigurationBehavior) -> Option<&'static str> {
-    match behavior {
-        ConfigurationBehavior::OpenaiGatewayV1 => Some("http://127.0.0.1:61137"),
-        ConfigurationBehavior::AnthropicGatewayV1 => Some("http://127.0.0.1:61138"),
-        _ => None,
-    }
+    crate::plugin_runtime_args::launch_plugin_ids()
+        .into_iter()
+        .find(|plugin_id| {
+            crate::provider_behavior::legacy_behavior(plugin_id).configuration == *behavior
+                && crate::plugin_runtime_args::loopback_origin_for(plugin_id).is_some()
+        })
+        .and_then(crate::plugin_runtime_args::loopback_origin_for)
 }
 
 /// Best-effort removal of a process-local replay snapshot. This request is
@@ -111,16 +135,17 @@ pub async fn local_snapshot_status(
 #[cfg(feature = "full")]
 pub fn config_option(behavior: &ConfigurationBehavior, enabled: bool) -> Option<serde_json::Value> {
     supported_behavior(behavior).then(|| {
+        let protection = crate::plugin_runtime_args::deepseek_cache_protection();
         serde_json::json!({
             "id": CONFIG_ID,
-            "name": "Cache protection",
-            "description": "Automatically protects DeepSeek prompt caches after at least 64K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
+            "name": protection.option_name,
+            "description": protection.option_description,
             "category": "model_config",
             "type": "select",
             "currentValue": enabled,
             "options": [
-                { "value": true, "name": "Auto · recommended" },
-                { "value": false, "name": "Off" }
+                { "value": true, "name": protection.option_on },
+                { "value": false, "name": protection.option_off }
             ]
         })
     })
@@ -146,13 +171,37 @@ mod tests {
             Some(false)
         );
         assert_eq!(selected(&serde_json::json!({}), &PORTABLE), None);
+        let option = config_option(&CODEX, true).expect("DeepSeek cache-protection option");
+        assert_eq!(minimum_hit_tokens(), 64_000);
+        assert_eq!(option["name"], "Cache protection");
+        assert_eq!(option["options"][0]["name"], "Auto · recommended");
+        assert_eq!(option["options"][1]["name"], "Off");
+        assert!(
+            option["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("64K"))
+        );
+        assert_eq!(
+            unavailable_message(),
+            "Cache protection is unavailable for this session"
+        );
+        assert_eq!(
+            boolean_required_message(),
+            "Cache protection must be a boolean"
+        );
     }
 
     #[cfg(feature = "machine-host")]
     #[test]
     fn cache_endpoint_and_opaque_identity_are_provider_scoped_and_content_free() {
-        assert_eq!(gateway_origin(&CODEX), Some("http://127.0.0.1:61137"));
-        assert_eq!(gateway_origin(&CLAUDE), Some("http://127.0.0.1:61138"));
+        assert_eq!(
+            gateway_origin(&CODEX),
+            crate::plugin_runtime_args::loopback_origin_for("codex-deepseek")
+        );
+        assert_eq!(
+            gateway_origin(&CLAUDE),
+            crate::plugin_runtime_args::loopback_origin_for("claude-deepseek")
+        );
         assert_eq!(gateway_origin(&PORTABLE), None);
 
         let opaque = opaque_session_id("sess-private-value");

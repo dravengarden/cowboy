@@ -1,4 +1,10 @@
-import { deepseekCacheStats, deepseekCostStats } from "./deepseekUsage";
+import { activityCacheStats, activityCostStats } from "./activityUsage";
+import {
+  usageProductLabel,
+  usageWidgetKind,
+  usageWidgetShape,
+  usageWidgetWindow,
+} from "./usageHostMap";
 import {
   num,
   type ProviderUsage,
@@ -8,26 +14,34 @@ import {
   type UsageSnapshot,
 } from "./usageLimits";
 
-export type UsageWidgetProvider =
-  | {
-    kind: "openai" | "xai";
-    label: "OpenAI" | "xAI";
-    remaining: number;
-    periodLabel: string;
-    resetsAt?: number;
-  }
-  | {
-    kind: "deepseek";
-    label: "DeepSeek";
-    balanceCny: number;
-    spend24hCny: number;
-    spend24hPriceCoverage: number | undefined;
-    cacheHitRate: number;
-    cacheMissRate: number;
-    blockingErrors: number;
-  };
+export type UsagePercentWidget = {
+  kind: string;
+  label: string;
+  remaining: number;
+  periodLabel: string;
+  resetsAt?: number;
+};
 
-function deepseekBalanceCny(usage: ProviderUsage): number | undefined {
+export type UsageBalanceWidget = {
+  kind: string;
+  label: string;
+  balanceCny: number;
+  spend24hCny: number;
+  spend24hPriceCoverage: number | undefined;
+  cacheHitRate: number;
+  cacheMissRate: number;
+  blockingErrors: number;
+};
+
+export type UsageWidgetProvider = UsagePercentWidget | UsageBalanceWidget;
+
+export function usageWidgetHasBalance(
+  provider: UsageWidgetProvider,
+): provider is UsageBalanceWidget {
+  return "balanceCny" in provider;
+}
+
+function accountBalanceCny(usage: ProviderUsage): number | undefined {
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((account) =>
       account !== undefined
@@ -58,48 +72,38 @@ function deepseekBalanceCny(usage: ProviderUsage): number | undefined {
     : amounts.reduce((sum, amount) => sum + amount, 0);
 }
 
-function deepseekSpend24h(usage: ProviderUsage):
+function activitySpend24h(usage: ProviderUsage):
   | { amount: number; priceCoverage: number | undefined }
   | undefined {
   const rolling = record(usage.activity?.last24Hours);
-  const cost = deepseekCostStats(record(record(rolling?.cost)?.summary));
+  const cost = activityCostStats(record(record(rolling?.cost)?.summary));
   return cost && cost.totalTokens > 0
     ? { amount: cost.estimatedCny, priceCoverage: cost.priceCoverageRate }
     : undefined;
 }
 
-function openAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
-  const weekly = topBarUsageLimits(usage).find((limit) =>
-    limit.windowMinutes === 10080
-  );
-  if (!weekly) return undefined;
+function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+  const limits = topBarUsageLimits(usage);
+  const wanted = usageWidgetWindow(usage.provider);
+  const limit = wanted === undefined
+    ? limits[0]
+    : limits.find((candidate) => candidate.windowMinutes === wanted);
+  if (!limit) return undefined;
   return {
-    kind: "openai",
-    label: "OpenAI",
-    remaining: weekly.remaining,
-    periodLabel: weekly.label,
-    ...(weekly.resetsAt === undefined ? {} : { resetsAt: weekly.resetsAt }),
+    kind: usageWidgetKind(usage.provider),
+    label: usageProductLabel(usage.provider),
+    remaining: limit.remaining,
+    periodLabel: limit.label,
+    ...(limit.resetsAt === undefined ? {} : { resetsAt: limit.resetsAt }),
   };
 }
 
-function xAiWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
-  const included = topBarUsageLimits(usage)[0];
-  if (!included) return undefined;
-  return {
-    kind: "xai",
-    label: "xAI",
-    remaining: included.remaining,
-    periodLabel: included.label,
-    ...(included.resetsAt === undefined ? {} : { resetsAt: included.resetsAt }),
-  };
-}
-
-function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
-  const balanceCny = deepseekBalanceCny(usage);
-  const spend24h = deepseekSpend24h(usage);
+function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
+  const balanceCny = accountBalanceCny(usage);
+  const spend24h = activitySpend24h(usage);
   const rolling = record(usage.activity?.last24Hours);
   const rollingSummary = record(rolling?.summary);
-  const cache = deepseekCacheStats(rollingSummary);
+  const cache = activityCacheStats(rollingSummary);
   const requests = num(rollingSummary?.requests);
   const blockingErrors = num(rollingSummary?.blockingErrors) ?? 0;
   if (
@@ -110,8 +114,8 @@ function deepseekWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
     requests === undefined
   ) return undefined;
   return {
-    kind: "deepseek",
-    label: "DeepSeek",
+    kind: usageWidgetKind(usage.provider),
+    label: usageProductLabel(usage.provider),
     balanceCny,
     spend24hCny: spend24h.amount,
     spend24hPriceCoverage: spend24h.priceCoverage,
@@ -125,9 +129,9 @@ export function usageWidgetForAccount(
   usage: ProviderUsage | undefined,
 ): UsageWidgetProvider | undefined {
   if (!usage || usage.status !== "available") return undefined;
-  if (usage.provider === "openai") return openAiWidget(usage);
-  if (usage.provider === "deepseek") return deepseekWidget(usage);
-  if (usage.provider === "xai") return xAiWidget(usage);
+  const shape = usageWidgetShape(usage.provider);
+  if (shape === "balance") return balanceWidget(usage);
+  if (shape === "percent") return percentWidget(usage);
   return undefined;
 }
 

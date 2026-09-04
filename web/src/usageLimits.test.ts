@@ -7,14 +7,40 @@ import {
   providerUsage,
   providerUsageErrorMessage,
   providerUsageRefreshLabel,
+  providerUsageSlotContext,
   scheduledResetCountdown,
   topBarUsageLimits,
   usageCardProviders,
   usageLimits,
+  applyUsageHostPlugins,
+  usagePluginId,
   usageResetProvider,
   usageResetSchedule,
-  XAI_SIGN_IN_MESSAGE,
 } from "./usageLimits.ts";
+import { usageErrorAuth } from "./usageHostMap.ts";
+
+Deno.test("usage plugin ids map account providers onto agent plugins", () => {
+  assertEquals(usagePluginId("openai"), "codex");
+  assertEquals(usagePluginId("xai"), "grok");
+  assertEquals(usagePluginId("anthropic"), "claude-code");
+  assertEquals(usagePluginId("deepseek"), "claude-deepseek");
+  assertEquals(usagePluginId("gemini"), "gemini");
+  assertEquals(usagePluginId("future-b"), "future-b");
+});
+
+Deno.test("activated host plugins overlay usage account mapping", () => {
+  try {
+    applyUsageHostPlugins([
+      { id: "custom-grok", usage_account: "xai" },
+      { id: "password", slots: ["login.method"] },
+    ]);
+    assertEquals(usagePluginId("xai"), "custom-grok");
+    assertEquals(usagePluginId("openai"), "codex");
+  } finally {
+    applyUsageHostPlugins([]);
+  }
+  assertEquals(usagePluginId("xai"), "grok");
+});
 
 Deno.test("usage cards keep first-party product order and unknown cards stable", () => {
   const snapshot = {
@@ -222,7 +248,7 @@ Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message",
       '_x.ai/billing: {"code":-32000,"message":"Authentication required","data":"Authentication required to fetch billing data"}',
   };
   const message = providerUsageErrorMessage(usage, "Waiting for usage data.");
-  assertEquals(message, XAI_SIGN_IN_MESSAGE);
+  assertEquals(message, usageErrorAuth("xai"));
   assertEquals(message.includes("{"), false);
 });
 
@@ -256,6 +282,47 @@ Deno.test("legacy OpenAI RPC errors never leak through the usage UI", () => {
     "OpenAI usage is temporarily unavailable. Cowboy will retry automatically.",
   );
   assertEquals(message.includes("{"), false);
+});
+
+Deno.test("usage slot context is host-owned presentation for plugin UI", () => {
+  const usage = {
+    provider: "xai",
+    status: "available",
+    source: "Grok Build ACP _x.ai/billing",
+    observed_at_ms: 1,
+    rate_limits: {
+      config: {
+        creditUsagePercent: 37.5,
+        currentPeriod: {
+          type: "USAGE_PERIOD_TYPE_WEEKLY",
+          end: "2026-08-17T00:00:00Z",
+        },
+      },
+    },
+    refresh: {
+      last_attempt_at_ms: 2,
+      manual_refresh_after_ms: 32_000,
+      next_auto_refresh_at_ms: 62_000,
+      stale: true,
+    },
+  };
+  const context = providerUsageSlotContext(usage, {
+    showTitle: false,
+    resetsLabel: (resetsAt) =>
+      resetsAt === undefined ? undefined : `resets:${String(resetsAt)}`,
+    emptyMessage: "none",
+  });
+  assertEquals(context.kind, "provider.usage");
+  assertEquals(context.provider, "xai");
+  assertEquals(context.title, "xAI");
+  assertEquals(context.showTitle, false);
+  assertEquals(context.refreshLabel, "Cached · retrying automatically");
+  assertEquals(context.limits.length, 1);
+  assertEquals(context.limits[0]?.remaining, 63);
+  assertEquals(
+    context.limits[0]?.resetsLabel,
+    `resets:${String(Date.parse("2026-08-17T00:00:00Z") / 1000)}`,
+  );
 });
 
 Deno.test("stale provider metadata has one compact cross-surface label", () => {
@@ -402,8 +469,10 @@ Deno.test("xAI reset actions use their own provider schedule", () => {
     next_refresh_at_ms: 2,
     refresh_interval_ms: 1,
     providers: [usage],
-    codex_reset_schedule: { fire_at_ms: 100 },
-    xai_reset_schedule: { fire_at_ms: 200 },
+    reset_schedules: {
+      codex: { fire_at_ms: 100 },
+      xai: { fire_at_ms: 200 },
+    },
   };
   assertEquals(usageResetProvider(usage), "xai");
   assertEquals(usageResetSchedule(snapshot, usage)?.fire_at_ms, 200);

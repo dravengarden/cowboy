@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import type {
+  AuthHostPlugin,
   ProductMe,
   ProductOidcProvider,
   ProductSessionServerPolicy,
@@ -25,6 +26,7 @@ export function ProductSessionGuard({
   me,
   policy,
   providers,
+  hostPlugins = [],
   passwordEnabled,
   loginMethodOrder,
   suspended,
@@ -34,6 +36,7 @@ export function ProductSessionGuard({
   me: ProductMe;
   policy: ProductSessionServerPolicy | undefined;
   providers: ProductOidcProvider[];
+  hostPlugins?: AuthHostPlugin[];
   passwordEnabled: boolean;
   loginMethodOrder: string[];
   suspended: boolean;
@@ -203,6 +206,7 @@ export function ProductSessionGuard({
         open={sheetOpen}
         me={me}
         providers={providers}
+        hostPlugins={hostPlugins}
         passwordEnabled={passwordEnabled}
         loginMethodOrder={loginMethodOrder}
         purpose={alert.kind}

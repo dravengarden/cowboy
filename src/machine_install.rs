@@ -348,20 +348,25 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         "PATH={}:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH; export PATH",
         shell_quote(&state.join("components/commands").display().to_string())
     );
-    script.push_str(
-        "if command -v codex-acp >/dev/null 2>&1; then COWBOY_ACP_CODEX_CMD=$(command -v codex-acp); export COWBOY_ACP_CODEX_CMD; fi\n",
-    );
-    script.push_str(
-        "if command -v claude-agent-acp >/dev/null 2>&1; then COWBOY_ACP_CLAUDE_CODE_CMD=$(command -v claude-agent-acp); export COWBOY_ACP_CLAUDE_CODE_CMD; fi\n",
-    );
-    script.push_str(
-        "if command -v gemini >/dev/null 2>&1; then COWBOY_ACP_GEMINI_CMD=$(command -v gemini); COWBOY_ACP_GEMINI_ARGS=--acp; export COWBOY_ACP_GEMINI_CMD COWBOY_ACP_GEMINI_ARGS; fi\n",
-    );
-    let _ = writeln!(
-        script,
-        "if command -v grok >/dev/null 2>&1; then COWBOY_ACP_GROK_CMD=$(command -v grok); COWBOY_ACP_GROK_ARGS={}; export COWBOY_ACP_GROK_CMD COWBOY_ACP_GROK_ARGS; fi",
-        shell_quote(crate::grok::RUNTIME_ARGS_ENV)
-    );
+    for detect in crate::plugin_runtime_args::path_detect() {
+        let cmd = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "CMD");
+        if let Some(args) = &detect.args {
+            let args_key = crate::plugin_runtime_args::acp_env_key(detect.plugin_id, "ARGS");
+            let _ = writeln!(
+                script,
+                "if command -v {} >/dev/null 2>&1; then {cmd}=$(command -v {}); {args_key}={}; export {cmd} {args_key}; fi",
+                detect.command,
+                detect.command,
+                shell_quote(args)
+            );
+        } else {
+            let _ = writeln!(
+                script,
+                "if command -v {} >/dev/null 2>&1; then {cmd}=$(command -v {}); export {cmd}; fi",
+                detect.command, detect.command
+            );
+        }
+    }
     let _ = writeln!(
         script,
         "mkdir -p {}",

@@ -82,21 +82,56 @@ macos-installer-verify APP="apps/macos-installer/dist/Cowboy Manager.app":
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
 # payload kinds; neither owns a separate release or installation format.
 component-package-check:
-    for package in plugin-contract app-shell state-store state-sync state-sync-idb provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
+    for package in plugin-contract plugin-api app-shell state-store state-sync state-sync-idb provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
     cargo package --locked --allow-dirty --list -p cowboy-provider-sdk >/dev/null
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
-    deno check tools/check-plugin-components.ts
+    deno check tools/check-plugin-components.ts tools/write-plugin-host-bundle.ts
     deno test --allow-read tools/check-plugin-components_test.ts
+    deno test --allow-read --allow-write --allow-env --allow-run=deno,ssh-keygen tools/write-plugin-host-bundle_test.ts
     deno run --allow-read tools/check-plugin-components.ts
 
 plugin-build PLUGIN:
+    #!/usr/bin/env bash
+    set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     deno run --allow-read tools/check-plugin-components.ts
     test -f "plugins/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "cowboy-plugin://{{PLUGIN}}"
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+      "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+      "cowboy-plugin://{{PLUGIN}}"
+    host_args=("plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
+    release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
+    if [ -f "$release" ]; then
+      host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
+    fi
+    if [ -n "${COWBOY_PLUGIN_PUBLISHER_KEY:-}" ]; then
+      host_args+=(--sign "$COWBOY_PLUGIN_PUBLISHER_KEY")
+    fi
+    deno run --allow-read --allow-write --allow-run=ssh-keygen \
+      tools/write-plugin-host-bundle.ts "${host_args[@]}"
+
+example-auth-bundle PLUGIN PRIVATE_KEY="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    test -f "examples/authentication/{{PLUGIN}}/plugin.json"
+    mkdir -p "dist/plugins/{{PLUGIN}}"
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+      "examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+      "cowboy-plugin://{{PLUGIN}}"
+    host_args=("examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
+    release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
+    if [ -f "$release" ]; then
+      host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
+    fi
+    if [ -n "{{PRIVATE_KEY}}" ]; then
+      host_args+=(--sign "{{PRIVATE_KEY}}")
+    fi
+    deno run --allow-read --allow-write --allow-run=ssh-keygen \
+      tools/write-plugin-host-bundle.ts "${host_args[@]}"
 
 plugin-build-all:
     for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
@@ -144,7 +179,30 @@ plugin-bind-runtime PLUGIN RUNTIME_ARTIFACTS:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- bind-runtime "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{RUNTIME_ARTIFACTS}}"
 
 plugin-sign PLUGIN PRIVATE_KEY:
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- sign "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{PRIVATE_KEY}}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- sign \
+      "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+      "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" \
+      "{{PRIVATE_KEY}}"
+    if [ -f "plugins/{{PLUGIN}}/host.json" ]; then
+      src="plugins/{{PLUGIN}}"
+    elif [ -f "examples/authentication/{{PLUGIN}}/host.json" ]; then
+      src="examples/authentication/{{PLUGIN}}"
+    else
+      src=""
+    fi
+    if [ -n "$src" ]; then
+      host_args=("$src" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
+      release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
+      if [ -f "$release" ]; then
+        host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
+      fi
+      host_args+=(--sign "{{PRIVATE_KEY}}")
+      deno run --allow-read --allow-write --allow-run=ssh-keygen \
+        tools/write-plugin-host-bundle.ts "${host_args[@]}"
+    fi
 
 plugin-verify PLUGIN PUBLIC_KEY:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- verify "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{PUBLIC_KEY}}"

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "loopback_origin": "http://127.0.0.1:61138",
+  "loopback_detail": "isolated loopback Anthropic Messages gateway",
+  "loopback_env": "ANTHROPIC_BASE_URL",
+  "adapter_slot": "claude",
+  "isolated_home_env": "CLAUDE_CONFIG_DIR",
+  "isolated_shell": true,
+  "isolated_shell_env": ["CLAUDE_CODE_SHELL", "SHELL"],
+  "visual": {
+    "light": { "primary": "#4F46E5", "secondary": "#7C3AED" },
+    "dark": { "primary": "#A5B4FC", "secondary": "#C4B5FD" }
+  },
+  "slots": [
+    "provider.usage",
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  },
+  "usage": {
+    "account": "deepseek",
+    "collector": "deepseek-store",
+    "activity": true,
+    "product": "DeepSeek",
+    "order": 3,
+    "widget": "deepseek-balance",
+    "widget_shape": "balance",
+    "widget_balance_label": "Balance",
+    "widget_spend_label": "24h spend",
+    "activity_agents": [
+      { "id": "codex", "label": "Codex" },
+      { "id": "claude", "label": "Claude Code" }
+    ],
+    "activity_models": [
+      { "id": "flash", "label": "Flash" },
+      { "id": "pro", "label": "Pro" }
+    ],
+    "cache_protection": {
+      "min_hit_tokens": 64000,
+      "min_hit_label": "64K",
+      "interval_ms": 28800000,
+      "interval_label": "8h",
+      "option_name": "Cache protection",
+      "option_description": "Automatically protects DeepSeek prompt caches after at least 64K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
+      "option_on": "Auto · recommended",
+      "option_off": "Off"
+    },
+    "available_status": "API",
+    "omit_empty_limits": true
+  }
+}

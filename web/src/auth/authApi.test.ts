@@ -6,6 +6,7 @@ import {
   externalPasskeyApi,
   fetchAuthStatus,
   isHtmlContentType,
+  passwordLoginFields,
 } from "./authApi.ts";
 import { classifyAuthStatus, isLoginDecision } from "./authStatus.ts";
 
@@ -758,6 +759,29 @@ Deno.test("auth status defaults Cardea first and rejects incomplete method order
   );
 });
 
+Deno.test("auth status keeps login host plugin labels", () => {
+  const status = authStatusFromJson({
+    registration: {
+      enabled: false,
+      mode: "disabled",
+      accepts_registration: false,
+    },
+    password_enabled: true,
+    providers: [],
+    host_plugins: [
+      { id: "password", label: " Password " },
+      { id: "google", label: "Google" },
+      { id: "Not Valid" },
+      { id: "passkey" },
+    ],
+  });
+  assertEquals(status?.host_plugins, [
+    { id: "password", label: "Password" },
+    { id: "google", label: "Google" },
+    { id: "passkey" },
+  ]);
+});
+
 Deno.test("200 HTML or shapeless JSON is activating, not login", async () => {
   assertEquals(isHtmlContentType("text/html; charset=utf-8"), true);
   const restoreHtml = withFetch(() =>
@@ -803,4 +827,24 @@ Deno.test("200 HTML or shapeless JSON is activating, not login", async () => {
   } finally {
     restoreText();
   }
+});
+
+Deno.test("password login fields come from the password host plugin", () => {
+  assertEquals(passwordLoginFields(undefined), {
+    account: "Account",
+    secret: "Password",
+    confirm: "Confirm password",
+    setup: "Setup code",
+  });
+  assertEquals(
+    passwordLoginFields([
+      { id: "password", fields: { account: "Email", secret: "Passphrase" } },
+    ]),
+    {
+      account: "Email",
+      secret: "Passphrase",
+      confirm: "Confirm password",
+      setup: "Setup code",
+    },
+  );
 });

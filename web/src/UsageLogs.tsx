@@ -45,6 +45,7 @@ import {
   TimeRangeButton,
 } from "./ObservabilityFilters";
 import { Sheet } from "./Sheet";
+import { usageActivityAgents } from "./usageHostMap";
 
 const SEVERITY_ACCENT: Record<DiagnosticLogSeverity, (theme: import("@mui/material").Theme) => string> = {
   critical: (theme) => theme.palette.mode === "dark" ? "#ff4d6d" : "#c9184a",
@@ -77,10 +78,15 @@ const STATE_OPTIONS: readonly FilterChipOption<DiagnosticLogState>[] = [
   { value: "unknown", label: "Unknown", color: "warning" },
   { value: "cancelled", label: "Cancelled" },
 ];
-const AGENT_OPTIONS: readonly FilterChipOption<DiagnosticLogAgent>[] = [
-  { value: "claude", label: "Claude Code", color: "secondary" },
-  { value: "codex", label: "Codex", color: "info" },
-];
+const AGENT_OPTION_COLORS = ["info", "secondary", "primary"] as const;
+
+function agentOptions(): FilterChipOption<DiagnosticLogAgent>[] {
+  return usageActivityAgents().map((agent, index) => ({
+    value: agent.id,
+    label: agent.label,
+    color: AGENT_OPTION_COLORS[index % AGENT_OPTION_COLORS.length],
+  }));
+}
 
 function optionLabel<T extends string>(options: readonly FilterChipOption<T>[], value: T): string {
   return options.find((option) => option.value === value)?.label ?? value;
@@ -232,6 +238,7 @@ function LogDetail({
 }
 
 export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Element {
+  const runtimeOptions = agentOptions();
   const [filters, setFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
   const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
   const [filterOpen, setFilterOpen] = useState(false);
@@ -384,8 +391,8 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
             })),
             ...filters.agents.map((value) => ({
               key: `agent:${value}`,
-              label: optionLabel(AGENT_OPTIONS, value),
-              color: AGENT_OPTIONS.find((option) => option.value === value)?.color,
+              label: optionLabel(runtimeOptions, value),
+              color: runtimeOptions.find((option) => option.value === value)?.color,
               onDelete: () => setFilters((current) => ({ ...current, agents: current.agents.filter((item) => item !== value) })),
             })),
           ]}
@@ -407,7 +414,7 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
             Critical and Error are blocking or session-ending. Warning includes retryable provider attempts and cache disruption.
           </Typography>
           <MultiSelectChipGroup label="State" options={STATE_OPTIONS} value={draftFilters.states} onChange={(states) => setDraftFilters((current) => ({ ...current, states }))} />
-          <MultiSelectChipGroup label="Runtime" options={AGENT_OPTIONS} value={draftFilters.agents} onChange={(agents) => setDraftFilters((current) => ({ ...current, agents }))} />
+          <MultiSelectChipGroup label="Runtime" options={runtimeOptions} value={draftFilters.agents} onChange={(agents) => setDraftFilters((current) => ({ ...current, agents }))} />
           <Stack direction="row" spacing={1} justifyContent="space-between">
             <Stack direction="row" spacing={0.5}>
               <Button onClick={() => setDraftFilters((current) => ({ ...current, kinds: [], severities: [], states: [], agents: [] }))}>Clear selections</Button>
@@ -431,7 +438,10 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           const detailState = details[entry.id];
           const meta = [
             diagnosticKindLabel(entry.kind),
-            entry.agent === "claude" ? "Claude Code" : entry.agent === "codex" ? "Codex" : undefined,
+            entry.agent
+              ? runtimeOptions.find((option) => option.value === entry.agent)?.label ??
+                entry.agent
+              : undefined,
             entry.model,
             entry.session_ref ? `session ${shortRef(entry.session_ref)}` : undefined,
           ].filter((value): value is string => value !== undefined);

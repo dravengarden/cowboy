@@ -1,4 +1,26 @@
 import { currentProviderEntry } from "./providerCatalogRegistry";
+import {
+  usageCardOrder,
+  usageErrorAuth,
+  usageErrorFetch,
+  usageErrorKind,
+  usageLimitLabel,
+  usageLimitParser,
+  usageLimitRowId,
+  usageProductLabel,
+  usageResetId,
+  usageTopBarWindowMinutes,
+} from "./usageHostMap";
+export {
+  applyUsageHostPlugins,
+  usageAvailableStatus,
+  usageEmptyMessage,
+  usageOmitEmptyLimits,
+  usagePluginId,
+  usageProductLabel,
+  usageResetId,
+  usageWidgetKind,
+} from "./usageHostMap";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -26,29 +48,12 @@ export interface UsageSnapshot {
   next_refresh_at_ms: number;
   refresh_interval_ms: number;
   providers: ProviderUsage[];
-  codex_reset_schedule?: { fire_at_ms: number };
-  xai_reset_schedule?: { fire_at_ms: number };
+  reset_schedules?: Record<string, { fire_at_ms: number }>;
 }
-
-const ACCOUNT_PROVIDER_LABELS: Record<string, string> = {
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  deepseek: "DeepSeek",
-  gemini: "Gemini",
-  xai: "xAI",
-};
-
-const USAGE_CARD_ORDER = new Map([
-  ["openai", 0],
-  ["xai", 1],
-  ["anthropic", 2],
-  ["deepseek", 3],
-  ["gemini", 4],
-]);
 
 /** Display name for an account-usage provider id. Unknown ids pass through. */
 export function accountProviderLabel(provider: string): string {
-  return ACCOUNT_PROVIDER_LABELS[provider] ?? provider;
+  return usageProductLabel(provider);
 }
 
 /** Keep first-party account cards in product order and unknown cards stable. */
@@ -59,22 +64,19 @@ export function usageCardProviders(
   return snapshot.providers
     .map((usage, index) => ({ usage, index }))
     .sort((left, right) =>
-      (USAGE_CARD_ORDER.get(left.usage.provider) ?? Number.MAX_SAFE_INTEGER) -
-        (USAGE_CARD_ORDER.get(right.usage.provider) ??
-          Number.MAX_SAFE_INTEGER) ||
+      usageCardOrder(left.usage.provider) -
+        usageCardOrder(right.usage.provider) ||
       left.index - right.index
     )
     .map(({ usage }) => usage);
 }
 
-export type UsageResetProvider = "codex" | "xai";
+export type UsageResetProvider = string;
 
 export function usageResetProvider(
   usage: ProviderUsage | undefined,
 ): UsageResetProvider | undefined {
-  if (usage?.provider === "openai") return "codex";
-  if (usage?.provider === "xai") return "xai";
-  return undefined;
+  return usage ? usageResetId(usage.provider) : undefined;
 }
 
 export function usageResetSchedule(
@@ -82,11 +84,7 @@ export function usageResetSchedule(
   usage: ProviderUsage | undefined,
 ): { fire_at_ms: number } | undefined {
   const provider = usageResetProvider(usage);
-  return provider === "codex"
-    ? snapshot?.codex_reset_schedule
-    : provider === "xai"
-    ? snapshot?.xai_reset_schedule
-    : undefined;
+  return provider ? snapshot?.reset_schedules?.[provider] : undefined;
 }
 
 export function nearestAvailableResetCredit(
@@ -113,43 +111,60 @@ export interface UsageLimit {
   windowMinutes?: number;
 }
 
-export const XAI_SIGN_IN_MESSAGE =
-  "Sign in to Grok Build in Machines, then refresh xAI usage.";
+type UsageErrorPresenter = (
+  usage: ProviderUsage,
+  error: string,
+  product: string,
+  provider: string,
+) => string;
 
-export function providerUsageErrorMessage(
-  usage: ProviderUsage | undefined,
-  fallback: string,
+function presentRaw(
+  _usage: ProviderUsage,
+  error: string,
 ): string {
-  const error = usage?.error?.trim();
-  if (!error) return fallback;
-  if (usage?.provider === "openai") {
-    if (error.startsWith("OpenAI usage ")) return error;
-    const normalized = error.toLowerCase();
-    if (
-      normalized.includes("authentication required") ||
-      normalized.includes("unauthorized") ||
-      normalized.includes("not signed in") ||
-      normalized.includes("401") || normalized.includes("403")
-    ) {
-      return "OpenAI usage authorization expired. Sign in to Codex again.";
-    }
-    if (
-      normalized.includes("service unavailable") ||
-      normalized.includes("temporarily unavailable") ||
-      normalized.includes("timed out") || normalized.includes("timeout") ||
-      normalized.includes("429") || /\b5\d\d\b/.test(normalized)
-    ) {
-      return usage.refresh?.stale
-        ? "OpenAI usage is temporarily unavailable. Showing the last update."
-        : "OpenAI usage is temporarily unavailable. Cowboy will retry automatically.";
-    }
-    return "OpenAI usage could not be refreshed.";
-  }
-  if (usage?.provider !== "xai" || !error.startsWith("_x.ai/billing:")) {
-    return error;
-  }
+  return error;
+}
 
+function presentOpenaiAuth(
+  usage: ProviderUsage,
+  error: string,
+  product: string,
+  provider: string,
+): string {
+  if (error.startsWith(`${product} usage `)) return error;
+  const normalized = error.toLowerCase();
+  if (
+    normalized.includes("authentication required") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("not signed in") ||
+    normalized.includes("401") || normalized.includes("403")
+  ) {
+    return usageErrorAuth(provider) ??
+      `${product} usage authorization expired. Sign in again.`;
+  }
+  if (
+    normalized.includes("service unavailable") ||
+    normalized.includes("temporarily unavailable") ||
+    normalized.includes("timed out") || normalized.includes("timeout") ||
+    normalized.includes("429") || /\b5\d\d\b/.test(normalized)
+  ) {
+    return usage.refresh?.stale
+      ? `${product} usage is temporarily unavailable. Showing the last update.`
+      : `${product} usage is temporarily unavailable. Cowboy will retry automatically.`;
+  }
+  return `${product} usage could not be refreshed.`;
+}
+
+function presentXaiBilling(
+  _usage: ProviderUsage,
+  error: string,
+  product: string,
+  provider: string,
+): string {
+  if (!error.startsWith("_x.ai/billing:")) return error;
   const encoded = error.slice("_x.ai/billing:".length).trim();
+  const fetchCopy = usageErrorFetch(provider) ??
+    `${product} usage could not be refreshed.`;
   try {
     const rpcError = record(JSON.parse(encoded));
     const detail = typeof rpcError?.data === "string"
@@ -158,14 +173,31 @@ export function providerUsageErrorMessage(
       ? rpcError.message.trim()
       : "";
     if (detail.toLowerCase().includes("authentication required")) {
-      return XAI_SIGN_IN_MESSAGE;
+      return usageErrorAuth(provider) ??
+        `${product} usage authorization expired. Sign in again.`;
     }
-    return detail
-      ? `Grok Build could not fetch xAI usage: ${detail}`
-      : "Grok Build could not fetch xAI usage.";
+    return detail ? `${fetchCopy}: ${detail}` : fetchCopy;
   } catch {
-    return "Grok Build could not fetch xAI usage.";
+    return fetchCopy;
   }
+}
+
+const USAGE_ERROR_PRESENTERS: Record<string, UsageErrorPresenter> = {
+  "openai-auth": presentOpenaiAuth,
+  "xai-billing": presentXaiBilling,
+};
+
+export function providerUsageErrorMessage(
+  usage: ProviderUsage | undefined,
+  fallback: string,
+): string {
+  const error = usage?.error?.trim();
+  if (!error) return fallback;
+  const provider = usage.provider ?? "";
+  const product = provider ? usageProductLabel(provider) : "Provider";
+  const kind = provider ? usageErrorKind(provider) : "raw";
+  const present = USAGE_ERROR_PRESENTERS[kind] ?? presentRaw;
+  return present(usage, error, product, provider);
 }
 
 export function providerUsageRefreshLabel(
@@ -194,89 +226,82 @@ export function windowLabel(minutes: number | undefined): string {
   return `${String(Math.round(minutes / 1440))}d`;
 }
 
-export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
-  if (usage?.provider === "xai") {
-    const config = record(usage.rate_limits?.config);
-    if (config) {
-      const period = record(config.currentPeriod);
-      const periodType = typeof period?.type === "string"
-        ? period.type.toUpperCase()
-        : "";
-      const monthly = record(config.monthlyLimit);
-      const used = record(config.used);
-      const monthlyLimit = num(monthly?.val);
-      const derivedPercent = monthlyLimit !== undefined && monthlyLimit > 0
-        ? ((num(used?.val) ?? 0) / monthlyLimit) * 100
-        : undefined;
-      // The unified credits response is protobuf-derived, so an exact 0%
-      // scalar is omitted. A current unified period makes that omission an
-      // authoritative zero, not an unavailable usage window.
-      const unifiedZeroPercent = config.isUnifiedBillingUser === true &&
-          typeof period?.end === "string" &&
-          Number.isFinite(Date.parse(period.end))
-        ? 0
-        : undefined;
-      const percent = num(config.creditUsagePercent) ?? derivedPercent ??
-        unifiedZeroPercent;
-      if (percent !== undefined) {
-        const reset = typeof period?.end === "string"
-          ? Date.parse(period.end)
-          : typeof config.billingPeriodEnd === "string"
-          ? Date.parse(config.billingPeriodEnd)
-          : Number.NaN;
-        const windowMinutes = periodType.includes("WEEKLY")
-          ? 10080
-          : periodType.includes("MONTHLY")
-          ? 43200
-          : undefined;
-        return [{
-          id: "xai-included-credits",
-          label: windowMinutes === 10080
-            ? "Weekly"
-            : windowMinutes === 43200
-            ? "Monthly"
-            : "Included credits",
-          remaining: Math.round(100 - Math.min(100, Math.max(0, percent))),
-          ...(Number.isFinite(reset) ? { resetsAt: reset / 1000 } : {}),
-          ...(windowMinutes === undefined ? {} : { windowMinutes }),
-        }];
-      }
-    }
-  }
-  const rateRoot = record(usage?.rate_limits?.rateLimits);
-  if (usage?.provider === "anthropic" && rateRoot) {
-    const utilization = num(rateRoot.utilization);
-    const kind = typeof rateRoot.rateLimitType === "string"
-      ? rateRoot.rateLimitType
-      : undefined;
-    if (utilization !== undefined && kind) {
-      const labels: Record<string, { label: string; windowMinutes?: number }> =
-        {
-          five_hour: { label: "5h", windowMinutes: 300 },
-          seven_day: { label: "Weekly", windowMinutes: 10080 },
-          seven_day_opus: { label: "Opus · Weekly", windowMinutes: 10080 },
-          seven_day_sonnet: { label: "Sonnet · Weekly", windowMinutes: 10080 },
-          seven_day_overage_included: {
-            label: "Extra usage · Weekly",
-            windowMinutes: 10080,
-          },
-          overage: { label: "Extra usage" },
-        };
-      const presentation = labels[kind] ?? { label: "Plan usage" };
-      return [{
-        id: `claude-${kind}`,
-        label: presentation.label,
-        remaining: Math.round(100 - Math.min(100, Math.max(0, utilization))),
-        ...(num(rateRoot.resetsAt) === undefined
-          ? {}
-          : { resetsAt: num(rateRoot.resetsAt) as number }),
-        ...(presentation.windowMinutes === undefined
-          ? {}
-          : { windowMinutes: presentation.windowMinutes }),
-      }];
-    }
-  }
-  const buckets = record(usage?.rate_limits?.rateLimitsByLimitId);
+type UsageLimitParser = (usage: ProviderUsage) => UsageLimit[] | undefined;
+
+function parseXaiCredits(usage: ProviderUsage): UsageLimit[] | undefined {
+  const config = record(usage.rate_limits?.config);
+  if (!config) return undefined;
+  const period = record(config.currentPeriod);
+  const periodType = typeof period?.type === "string"
+    ? period.type.toUpperCase()
+    : "";
+  const monthly = record(config.monthlyLimit);
+  const used = record(config.used);
+  const monthlyLimit = num(monthly?.val);
+  const derivedPercent = monthlyLimit !== undefined && monthlyLimit > 0
+    ? ((num(used?.val) ?? 0) / monthlyLimit) * 100
+    : undefined;
+  // The unified credits response is protobuf-derived, so an exact 0%
+  // scalar is omitted. A current unified period makes that omission an
+  // authoritative zero, not an unavailable usage window.
+  const unifiedZeroPercent = config.isUnifiedBillingUser === true &&
+      typeof period?.end === "string" &&
+      Number.isFinite(Date.parse(period.end))
+    ? 0
+    : undefined;
+  const percent = num(config.creditUsagePercent) ?? derivedPercent ??
+    unifiedZeroPercent;
+  if (percent === undefined) return undefined;
+  const reset = typeof period?.end === "string"
+    ? Date.parse(period.end)
+    : typeof config.billingPeriodEnd === "string"
+    ? Date.parse(config.billingPeriodEnd)
+    : Number.NaN;
+  const windowMinutes = periodType.includes("WEEKLY")
+    ? 10080
+    : periodType.includes("MONTHLY")
+    ? 43200
+    : undefined;
+  return [{
+    id: `${usage.provider}-included-credits`,
+    label: windowMinutes === 10080
+      ? "Weekly"
+      : windowMinutes === 43200
+      ? "Monthly"
+      : "Included credits",
+    remaining: Math.round(100 - Math.min(100, Math.max(0, percent))),
+    ...(Number.isFinite(reset) ? { resetsAt: reset / 1000 } : {}),
+    ...(windowMinutes === undefined ? {} : { windowMinutes }),
+  }];
+}
+
+function parseAnthropicUtilization(
+  usage: ProviderUsage,
+): UsageLimit[] | undefined {
+  const rateRoot = record(usage.rate_limits?.rateLimits);
+  if (!rateRoot) return undefined;
+  const utilization = num(rateRoot.utilization);
+  const kind = typeof rateRoot.rateLimitType === "string"
+    ? rateRoot.rateLimitType
+    : undefined;
+  if (utilization === undefined || !kind) return undefined;
+  const presentation = usageLimitLabel(usage.provider, kind);
+  return [{
+    id: usageLimitRowId(usage.provider, kind),
+    label: presentation.label,
+    remaining: Math.round(100 - Math.min(100, Math.max(0, utilization))),
+    ...(num(rateRoot.resetsAt) === undefined
+      ? {}
+      : { resetsAt: num(rateRoot.resetsAt) as number }),
+    ...(presentation.windowMinutes === undefined
+      ? {}
+      : { windowMinutes: presentation.windowMinutes }),
+  }];
+}
+
+function parseGenericBuckets(usage: ProviderUsage): UsageLimit[] {
+  const rateRoot = record(usage.rate_limits?.rateLimits);
+  const buckets = record(usage.rate_limits?.rateLimitsByLimitId);
   const source = buckets
     ? Object.entries(buckets).flatMap(([id, value]) => {
       const bucket = record(value);
@@ -310,6 +335,17 @@ export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
   );
 }
 
+const USAGE_LIMIT_PARSERS: Record<string, UsageLimitParser> = {
+  "xai-credits": parseXaiCredits,
+  "anthropic-utilization": parseAnthropicUtilization,
+};
+
+export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
+  if (!usage) return [];
+  const parser = usageLimitParser(usage.provider);
+  return USAGE_LIMIT_PARSERS[parser]?.(usage) ?? parseGenericBuckets(usage);
+}
+
 /** Compact account summary for the Desktop top bar.
  *
  * Provider/model buckets remain available in the detailed Usage sheet, but the
@@ -323,8 +359,11 @@ export function topBarUsageLimits(
   const account = usageLimits(usage).filter((limit) =>
     !limit.label.includes(" · ")
   );
-  if (usage?.provider === "openai") {
-    return [300, 10080].flatMap((windowMinutes) => {
+  const windows = usage?.provider
+    ? usageTopBarWindowMinutes(usage.provider)
+    : undefined;
+  if (windows) {
+    return windows.flatMap((windowMinutes: number) => {
       const limit = account.find((candidate) =>
         candidate.windowMinutes === windowMinutes
       );
@@ -332,6 +371,50 @@ export function topBarUsageLimits(
     });
   }
   return account.slice(0, 2);
+}
+
+export interface ProviderUsageLimitView extends UsageLimit {
+  resetsLabel?: string;
+}
+
+export interface ProviderUsageSlotContext {
+  kind: "provider.usage";
+  provider: string;
+  title: string;
+  showTitle: boolean;
+  showDetails?: boolean;
+  usage?: ProviderUsage;
+  refreshLabel?: string;
+  emptyMessage: string;
+  limits: ProviderUsageLimitView[];
+}
+
+/** Host-owned presentation payload for a `provider.usage` plugin slot. */
+export function providerUsageSlotContext(
+  usage: ProviderUsage,
+  options: {
+    showTitle: boolean;
+    showDetails?: boolean;
+    limits?: UsageLimit[];
+    resetsLabel: (resetsAt: number | undefined) => string | undefined;
+    emptyMessage: string;
+  },
+): ProviderUsageSlotContext {
+  const limits = options.limits ?? usageLimits(usage);
+  const refreshLabel = providerUsageRefreshLabel(usage);
+  return {
+    kind: "provider.usage",
+    provider: usage.provider,
+    title: accountProviderLabel(usage.provider),
+    showTitle: options.showTitle,
+    ...(options.showDetails ? { showDetails: true, usage } : {}),
+    ...(refreshLabel === undefined ? {} : { refreshLabel }),
+    emptyMessage: options.emptyMessage,
+    limits: limits.map((limit) => {
+      const resetsLabel = options.resetsLabel(limit.resetsAt);
+      return resetsLabel === undefined ? { ...limit } : { ...limit, resetsLabel };
+    }),
+  };
 }
 
 export function fullResetTime(epochSeconds: number | undefined): string {

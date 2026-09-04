@@ -16,6 +16,8 @@ import {
   authApi,
   AuthApiError,
   PASSWORD_LOGIN_METHOD,
+  passwordLoginFields,
+  type AuthHostPlugin,
   type ProductMe,
   type ProductOidcProvider,
   resolveProductLoginMethodOrder,
@@ -69,6 +71,7 @@ export function ProductRecentAuthSheet({
   open,
   me,
   providers,
+  hostPlugins = [],
   passwordEnabled,
   loginMethodOrder,
   requireResumeGesture = false,
@@ -82,6 +85,7 @@ export function ProductRecentAuthSheet({
   open: boolean;
   me: ProductMe;
   providers: ProductOidcProvider[];
+  hostPlugins?: AuthHostPlugin[];
   passwordEnabled: boolean;
   loginMethodOrder: string[];
   requireResumeGesture?: boolean;
@@ -108,8 +112,9 @@ export function ProductRecentAuthSheet({
         orderedLoginMethodIds,
         passwordEnabled,
         providers,
+        hostPlugins,
       ),
-    [orderedLoginMethodIds, passwordEnabled, providers],
+    [orderedLoginMethodIds, passwordEnabled, providers, hostPlugins],
   );
   const primaryMethods = useMemo(
     () => resolvePrimaryReauthMethods(me.primary_auth_method, accountMethods),
@@ -151,6 +156,7 @@ export function ProductRecentAuthSheet({
   const useBrowserProviderFlow = selectedProvider !== undefined &&
     !useNativeProviderFlow && browserOidcFlowSupported();
   const useProviderHandoff = useNativeProviderFlow || useBrowserProviderFlow;
+  const fieldLabels = passwordLoginFields(hostPlugins);
 
   useEffect(() => () => {
     providerAbort.current?.abort();
@@ -381,7 +387,7 @@ export function ProductRecentAuthSheet({
           {!verifiedMe && method === PASSWORD_LOGIN_METHOD && (
             <>
               <TextField
-                label="Account"
+                label={fieldLabels.account}
                 name="username"
                 value={me.account}
                 autoComplete="username"
@@ -389,7 +395,7 @@ export function ProductRecentAuthSheet({
                 slotProps={{ htmlInput: { readOnly: true } }}
               />
               <TextField
-                label="Password"
+                label={fieldLabels.secret}
                 name="password"
                 type="password"
                 value={password}

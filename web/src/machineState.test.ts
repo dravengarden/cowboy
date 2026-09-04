@@ -1,4 +1,5 @@
 import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
+import { applyOccupancyHostPlugins } from "./occupancyHostMap.ts";
 import {
   acceptsMachineSnapshot,
   projectMachineOccupancy,
@@ -110,4 +111,31 @@ Deno.test("Machine occupancy groups sessions once and keeps Provider aliases iso
   assertEquals(projected[0]?.components[1]?.active_leases, 1);
   assertEquals(projected[1]?.active_sessions, 2);
   assertEquals(projected[1]?.components[1]?.active_leases, 2);
+});
+
+Deno.test("Machine occupancy follows plugin adapter slots when overlaid", () => {
+  try {
+    applyOccupancyHostPlugins([
+      { id: "future-claude", adapter_slot: "claude" },
+    ]);
+    const falcon: MachineSummary = {
+      ...machine(),
+      id: "falcon",
+      components: [
+        machine().components[0]!,
+        {
+          ...machine().components[1]!,
+          id: { kind: "provider_cli", slot: "claude" },
+          active_leases: 0,
+        },
+      ],
+    };
+    const projected = projectMachineOccupancy(
+      [falcon],
+      [session("running", "falcon", "future-claude", "sess-9")],
+    );
+    assertEquals(projected[0]?.components[1]?.active_leases, 1);
+  } finally {
+    applyOccupancyHostPlugins([]);
+  }
 });

@@ -57,15 +57,8 @@ enum ComponentPackageKind {
     Npm,
 }
 
-const FIRST_PARTY_PLUGIN_SOURCES: [&str; 7] = [
-    include_str!("../plugins/claude-code/plugin.json"),
-    include_str!("../plugins/claude-deepseek/plugin.json"),
-    include_str!("../plugins/codex/plugin.json"),
-    include_str!("../plugins/codex-deepseek/plugin.json"),
-    include_str!("../plugins/gemini/plugin.json"),
-    include_str!("../plugins/grok/plugin.json"),
-    include_str!("../plugins/zed/plugin.json"),
-];
+const FIRST_PARTY_PLUGIN_SOURCES: &[&str] =
+    include!(concat!(env!("OUT_DIR"), "/first_party_plugins.rs"));
 const COMPONENT_REGISTRY_SOURCE: &str = include_str!("../components/registry.json");
 
 pub(crate) fn first_party_plugins() -> &'static [PluginManifest] {
@@ -174,14 +167,14 @@ mod tests {
     #[test]
     fn every_first_party_integration_is_a_valid_plugin() {
         let plugins = first_party_plugins();
-        assert_eq!(plugins.len(), 7);
+        assert!(plugins.len() >= 7);
         assert!(plugins.iter().any(|plugin| plugin.id == "zed"));
-        assert_eq!(
+        assert!(
             plugins
                 .iter()
                 .filter(|plugin| plugin.kind == PluginKind::AgentProvider)
-                .count(),
-            6
+                .count()
+                >= 6
         );
     }
 

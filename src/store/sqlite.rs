@@ -1192,18 +1192,6 @@ fn provider_error_severity(status: i32) -> &'static str {
     }
 }
 
-fn keepalive_title(outcome: &str) -> &'static str {
-    match outcome {
-        "hit" => "DeepSeek cache protected",
-        "miss" => "DeepSeek keepalive cache miss",
-        "partial" => "DeepSeek keepalive partial hit",
-        "retryable_error" => "DeepSeek keepalive will retry",
-        "terminal_error" => "DeepSeek keepalive stopped",
-        "preempted" => "DeepSeek keepalive preempted",
-        _ => "DeepSeek keepalive observation",
-    }
-}
-
 fn keepalive_summary(record: &ProviderUsageRecord) -> String {
     match record.cache_keepalive_outcome.as_str() {
         "hit" => format!(
@@ -1424,7 +1412,7 @@ fn provider_diagnostic_detail(
             id: id.to_owned(),
             kind: "cache_anomaly".to_owned(),
             occurred_at_ms: record.occurred_at_ms,
-            title: keepalive_title(&record.cache_keepalive_outcome).to_owned(),
+            title: diagnostic_keepalive_title(&record.cache_keepalive_outcome).to_owned(),
             summary: keepalive_summary(record),
             sections: vec![
                 DiagnosticLogSection {
@@ -1442,7 +1430,7 @@ fn provider_diagnostic_detail(
     let cause = (kind == "cache_anomaly")
         .then(|| cache_transition_cause(&current, &previous_json, intervening_provider_errors > 0));
     let title = cause.map_or_else(
-        || format!("DeepSeek HTTP {}", record.status),
+        || diagnostic_http_title(record.status),
         |cause| cache_transition_title(cause).to_owned(),
     );
     let summary = if kind == "cache_anomaly" {
@@ -4696,6 +4684,93 @@ impl SqliteStorage {
                 .with_context(|| format!("COUNT SQLite admin passkeys {account}"))?;
         Ok(u32::try_from(count.0.max(0)).unwrap_or(0))
     }
+
+    pub(super) async fn clear_user_passkey_reauth(&self, user_id: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = 0, updated_at_ms = ?2 WHERE id = ?1",
+        )
+        .bind(user_id)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .context("CLEAR SQLite user Passkey reauth")?;
+        Ok(())
+    }
+
+    pub(super) async fn set_user_passkey_reauth_flags(
+        &self,
+        user_id: &str,
+        enabled: bool,
+        reauth_after_ms: i64,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            "UPDATE users SET passkey_reauth_enabled = ?2, \
+             passkey_verification_interval_ms = ?3, \
+             passkey_reauth_interval_ms = CASE \
+             WHEN ?3 IN (3600000, 7200000, 10800000, 14400000, 21600000) THEN 14400000 \
+             WHEN ?3 = 43200000 THEN 43200000 \
+             WHEN ?3 IN (86400000, 172800000) THEN 86400000 \
+             ELSE 259200000 END, \
+             passkey_refresh_interval_ms = 86400000, \
+             updated_at_ms = ?4 WHERE id = ?1",
+        )
+        .bind(user_id)
+        .bind(i64::from(enabled))
+        .bind(reauth_after_ms)
+        .bind(now_ms())
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("UPDATE SQLite passkey reauth flags {user_id}"))?;
+        anyhow::ensure!(result.rows_affected() == 1, "user not found");
+        Ok(())
+    }
+
+    pub(super) async fn export_passkey_snapshot(&self) -> Result<PasskeySnapshot> {
+        let user_rows = sqlx::query_as::<_, SqliteUserPasskeyRow>(
+            "SELECT id, user_id, credential_id, nickname, passkey_json, created_at_ms, \
+             last_used_at_ms FROM user_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT SQLite user passkeys")?;
+        let admin_rows = sqlx::query_as::<_, SqliteUserPasskeyRow>(
+            "SELECT id, account AS user_id, credential_id, nickname, passkey_json, \
+             created_at_ms, last_used_at_ms FROM admin_passkeys",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT SQLite admin passkeys")?;
+        let ceremonies = sqlx::query_as::<_, (String, String, i64, i64)>(
+            "SELECT transaction_hash, ceremony_json, expires_at_ms, created_at_ms \
+             FROM external_passkey_ceremonies",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("EXPORT SQLite external Passkey ceremonies")?;
+        Ok(PasskeySnapshot {
+            user: user_rows
+                .into_iter()
+                .map(SqliteUserPasskeyRow::into_passkey)
+                .collect(),
+            admin: admin_rows
+                .into_iter()
+                .map(SqliteUserPasskeyRow::into_passkey)
+                .collect(),
+            ceremonies: ceremonies
+                .into_iter()
+                .map(
+                    |(transaction_hash, ceremony_json, expires_at_ms, created_at_ms)| {
+                        crate::passkey::ExternalPasskeyCeremonyRecord {
+                            transaction_hash,
+                            ceremony_json,
+                            expires_at_ms,
+                            created_at_ms,
+                        }
+                    },
+                )
+                .collect(),
+        })
+    }
 }
 
 impl SqliteStorage {
@@ -5250,10 +5325,9 @@ impl SqliteStorage {
             .into_iter()
             .map(RuntimeIncidentWithProvider::into_parts)
             .map(|(incident, provider)| {
-                let agent = provider.as_deref().and_then(|provider| match provider {
-                    "codex" | "codex-deepseek" => Some("codex".to_owned()),
-                    "claude-code" | "claude-deepseek" => Some("claude".to_owned()),
-                    _ => None,
+                let agent = provider.as_deref().and_then(|provider| {
+                    crate::plugin_runtime_args::adapter_slot_for_provider(provider)
+                        .map(str::to_owned)
                 });
                 DiagnosticLogSummary {
                     id: format!("runtime:{}", incident.id),
@@ -5305,7 +5379,7 @@ impl SqliteStorage {
                         kind: "provider_error".to_owned(),
                         severity: provider_error_severity(record.status).to_owned(),
                         state: "failed".to_owned(),
-                        title: format!("DeepSeek HTTP {}", record.status),
+                        title: diagnostic_http_title(record.status),
                         summary: provider_error_summary(record),
                         session_ref: record.session_fingerprint.clone(),
                         provider: Some(record.provider.clone()),
@@ -5327,7 +5401,8 @@ impl SqliteStorage {
                         kind: "cache_anomaly".to_owned(),
                         severity: keepalive_severity(record).to_owned(),
                         state: keepalive_state(&record.cache_keepalive_outcome).to_owned(),
-                        title: keepalive_title(&record.cache_keepalive_outcome).to_owned(),
+                        title: diagnostic_keepalive_title(&record.cache_keepalive_outcome)
+                            .to_owned(),
                         summary: keepalive_summary(record),
                         session_ref: record.session_fingerprint.clone(),
                         provider: Some(record.provider.clone()),
@@ -5406,8 +5481,9 @@ impl SqliteStorage {
                     ),
                     summary: log.message,
                     session_ref: None,
-                    provider: Some(log.provider),
-                    agent: None,
+                    provider: Some(log.provider.clone()),
+                    agent: crate::plugin_runtime_args::adapter_slot_for_provider(&log.provider)
+                        .map(str::to_owned),
                     model: None,
                     classification: Some("provider_automation".to_owned()),
                 }),

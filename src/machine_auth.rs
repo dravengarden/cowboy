@@ -22,6 +22,7 @@ pub(crate) const PROVIDER_AUTH_SIGNATURE_NAMESPACE: &str = "cowboy-provider-auth
 /// Verification-only compatibility domain for Provider generations installed
 /// before generic Plugin releases replaced Provider release envelopes.
 pub(crate) const LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-provider-release-v1";
+pub(crate) const PLUGIN_HOSTBUNDLE_SIGNATURE_NAMESPACE: &str = "cowboy-plugin-hostbundle-v1";
 const SSH_SIGNATURE_HEADER: &[u8] = b"-----BEGIN SSH SIGNATURE-----";
 const MAX_SSH_SIGNATURE_BYTES: usize = 16 * 1_024;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -295,6 +296,7 @@ fn validate_namespace(namespace: &str) -> Result<()> {
         MACHINE_SIGNATURE_NAMESPACE
             | PROVIDER_AUTH_SIGNATURE_NAMESPACE
             | LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE
+            | PLUGIN_HOSTBUNDLE_SIGNATURE_NAMESPACE
             | cowboy_plugin_sdk::PLUGIN_RELEASE_SIGNATURE_NAMESPACE
     ) {
         Ok(())

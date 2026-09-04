@@ -2,11 +2,18 @@ use serde_json::{Value, json};
 
 use crate::usage::ProviderUsage;
 
-pub(crate) fn overlay(provider: &mut ProviderUsage, raw: &Value) {
+pub(crate) fn overlay(
+    provider: &mut ProviderUsage,
+    raw: &Value,
+    empty: Option<&str>,
+    source: Option<&'static str>,
+) {
     let Some(limits) = account_limits(raw) else {
         if provider.status != "available" {
             provider.error = Some(
-                "Anthropic account quota is not exposed; showing Claude session activity".into(),
+                empty
+                    .unwrap_or("Account quota is not exposed; showing session activity")
+                    .to_owned(),
             );
         }
         return;
@@ -15,7 +22,9 @@ pub(crate) fn overlay(provider: &mut ProviderUsage, raw: &Value) {
         provider.rate_limits = Some(limits);
     }
     provider.status = "available";
-    provider.source = "Claude Agent SDK via ACP";
+    if let Some(source) = source {
+        provider.source = source;
+    }
     provider.error = None;
 }
 

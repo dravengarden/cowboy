@@ -43,6 +43,7 @@ import {
   ProviderMarkStack,
   ProviderSurface,
 } from "./ProviderSurface";
+import { PluginSlot } from "@cowboy/plugin-api";
 import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
@@ -363,29 +364,72 @@ function providerCredentialTitle(
 
 type ProviderManagementLifecycleSlot = "setup" | "empty" | "settings";
 
+function pluginSlotForLifecycle(
+  slot: ProviderManagementLifecycleSlot,
+): "provider.setup" | "provider.empty" | "provider.settings" {
+  if (slot === "setup") return "provider.setup";
+  if (slot === "empty") return "provider.empty";
+  return "provider.settings";
+}
+
+function ProviderManagementCard({
+  pluginId,
+  children,
+}: {
+  pluginId: string;
+  children: ReactNode;
+}): React.JSX.Element {
+  return (
+    <PluginSlot
+      pluginId={pluginId}
+      slot="provider.card"
+      context={{ kind: "provider.card", providerId: pluginId }}
+    >
+      {children}
+    </PluginSlot>
+  );
+}
+
 function ProviderManagementLifecycleSurface({
+  providerId,
   manifest,
   slot,
   host,
   blockedCapabilities,
   onEffect,
 }: {
+  providerId: string;
   manifest: ProviderUiManifest;
   slot: ProviderManagementLifecycleSlot;
   host: ProviderHostContext;
   blockedCapabilities: ReadonlySet<EffectCapability> | undefined;
   onEffect: (effect: EffectSchema) => Promise<void>;
 }): React.JSX.Element {
+  const kind = pluginSlotForLifecycle(slot);
   return (
-    <Box sx={{ minWidth: 0 }}>
-      <ProviderSurface
-        manifest={manifest}
-        slot={slot}
-        host={host}
-        blockedCapabilities={blockedCapabilities}
-        onEffect={onEffect}
-      />
-    </Box>
+    <PluginSlot
+      pluginId={providerId}
+      slot={kind}
+      context={{
+        kind,
+        providerId,
+        slot,
+        manifest,
+        host,
+        blockedCapabilities,
+        onEffect,
+      }}
+    >
+      <Box sx={{ minWidth: 0 }}>
+        <ProviderSurface
+          manifest={manifest}
+          slot={slot}
+          host={host}
+          blockedCapabilities={blockedCapabilities}
+          onEffect={onEffect}
+        />
+      </Box>
+    </PluginSlot>
   );
 }
 
@@ -980,8 +1024,11 @@ function ProviderManagement(
               latestCompatibleEntry.artifact_digest !==
                 installed.generation_digest;
             return (
-              <Paper
+              <ProviderManagementCard
                 key={`${providerId}:${installed.provider_version}:${installed.generation_digest}`}
+                pluginId={providerId}
+              >
+              <Paper
                 variant="outlined"
                 sx={{ p: 1.25, minWidth: 0, borderRadius: 1.25 }}
               >
@@ -1052,6 +1099,7 @@ function ProviderManagement(
                   </Stack>
                 </Stack>
               </Paper>
+              </ProviderManagementCard>
             );
           }
           if (!latestEntry) return null;
@@ -1130,6 +1178,7 @@ function ProviderManagement(
             ? entry.manifest.authentication.required
               ? (
                 <ProviderManagementLifecycleSurface
+                  providerId={entry.provider_id}
                   manifest={entry.manifest}
                   slot="setup"
                   host={host}
@@ -1141,6 +1190,7 @@ function ProviderManagement(
             : !installed
             ? (
               <ProviderManagementLifecycleSurface
+                providerId={entry.provider_id}
                 manifest={entry.manifest}
                 slot="empty"
                 host={host}
@@ -1150,6 +1200,7 @@ function ProviderManagement(
             )
             : (
               <ProviderManagementLifecycleSurface
+                providerId={entry.provider_id}
                 manifest={entry.manifest}
                 slot="settings"
                 host={host}
@@ -1180,10 +1231,13 @@ function ProviderManagement(
             )
             : lifecycleSurface;
           return (
-            <Paper
+            <ProviderManagementCard
               key={`${entry.provider_id}:${entry.provider_version}:${
                 entry.artifact_digest ?? entry.package_digest
               }`}
+              pluginId={entry.provider_id}
+            >
+            <Paper
               variant="outlined"
               sx={{
                 p: embedded ? 0 : 1,
@@ -1295,6 +1349,7 @@ function ProviderManagement(
                   : null}
               </Stack>
             </Paper>
+            </ProviderManagementCard>
           );
         })}
       </Box>

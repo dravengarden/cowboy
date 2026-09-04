@@ -201,6 +201,7 @@
       }
     ],
     "remove_environment": [
+      "ENABLE_CLAUDEAI_MCP_SERVERS",
       "API_TIMEOUT_MS",
       "DISABLE_AUTO_COMPACT",
       "DISABLE_COMPACT",

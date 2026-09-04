@@ -33,7 +33,41 @@ export interface ProductOidcProvider {
   start_url: string;
 }
 
+export interface AuthLoginFields {
+  account?: string;
+  secret?: string;
+  confirm?: string;
+  setup?: string;
+}
+
+export interface AuthHostPlugin {
+  id: string;
+  label?: string;
+  fields?: AuthLoginFields;
+}
+
 export const PASSWORD_LOGIN_METHOD = "password";
+
+const DEFAULT_PASSWORD_LOGIN_FIELDS: Required<AuthLoginFields> = {
+  account: "Account",
+  secret: "Password",
+  confirm: "Confirm password",
+  setup: "Setup code",
+};
+
+/** Password login field copy declared by the password host plugin. */
+export function passwordLoginFields(
+  hostPlugins: readonly AuthHostPlugin[] | undefined,
+): Required<AuthLoginFields> {
+  const fields = hostPlugins?.find((plugin) => plugin.id === PASSWORD_LOGIN_METHOD)
+    ?.fields;
+  return {
+    account: fields?.account ?? DEFAULT_PASSWORD_LOGIN_FIELDS.account,
+    secret: fields?.secret ?? DEFAULT_PASSWORD_LOGIN_FIELDS.secret,
+    confirm: fields?.confirm ?? DEFAULT_PASSWORD_LOGIN_FIELDS.confirm,
+    setup: fields?.setup ?? DEFAULT_PASSWORD_LOGIN_FIELDS.setup,
+  };
+}
 
 export function defaultProductLoginMethodOrder(
   passwordEnabled: boolean,
@@ -146,6 +180,7 @@ export interface AuthStatus {
   logout?: ProductLogoutServerPolicy;
   automation?: ProductAutomationServerPolicy;
   providers?: ProductOidcProvider[];
+  host_plugins?: AuthHostPlugin[];
   me?: ProductMe;
 }
 
@@ -220,6 +255,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     logout?: Partial<ProductLogoutServerPolicy>;
     automation?: Partial<ProductAutomationServerPolicy>;
     providers?: unknown;
+    host_plugins?: unknown;
     me?: Partial<ProductMe>;
   };
   const registration = record.registration;
@@ -339,6 +375,38 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     status.password_enabled !== false,
     status.providers ?? [],
   );
+  if (Array.isArray(record.host_plugins)) {
+    status.host_plugins = record.host_plugins.flatMap(
+      (host): AuthHostPlugin[] => {
+        if (host == null || typeof host !== "object") return [];
+        const candidate = host as { id?: unknown; label?: unknown };
+        if (
+          typeof candidate.id !== "string" ||
+          !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.id)
+        ) {
+          return [];
+        }
+        const plugin: AuthHostPlugin = { id: candidate.id };
+        if (typeof candidate.label === "string") {
+          const label = candidate.label.trim();
+          if (label.length > 0) plugin.label = label;
+        }
+        const fields = (host as { login_fields?: unknown }).login_fields;
+        if (fields !== null && typeof fields === "object") {
+          const record = fields as Record<string, unknown>;
+          const parsed: AuthLoginFields = {};
+          for (const key of ["account", "secret", "confirm", "setup"] as const) {
+            const value = record[key];
+            if (typeof value === "string" && value.trim() !== "") {
+              parsed[key] = value.trim();
+            }
+          }
+          if (Object.keys(parsed).length > 0) plugin.fields = parsed;
+        }
+        return [plugin];
+      },
+    );
+  }
   const me = productMeFromJson(record.me);
   if (me) status.me = me;
   return status;

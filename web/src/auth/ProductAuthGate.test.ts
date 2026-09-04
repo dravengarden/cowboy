@@ -12,7 +12,6 @@ async function readAuthSources(): Promise<string> {
     "ProductAccountMenu.tsx",
     "ProductDevicesPanel.tsx",
     "DeviceAuthorizationPage.tsx",
-    "ProductPasskeysPanel.tsx",
     "ProductRecentAuthSheet.tsx",
     "productReauthMethods.ts",
     "ProductSessionGuard.tsx",
@@ -31,9 +30,15 @@ async function readAuthSources(): Promise<string> {
     "idleLock.ts",
     "useIdlePasskeyLock.ts",
   ];
-  const chunks = await Promise.all(
-    names.map((name) => Deno.readTextFile(new URL(name, authDir))),
-  );
+  const chunks = await Promise.all([
+    ...names.map((name) => Deno.readTextFile(new URL(name, authDir))),
+    Deno.readTextFile(
+      new URL(
+        "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
+        authDir,
+      ),
+    ),
+  ]);
   return chunks.join("\n");
 }
 
@@ -156,7 +161,8 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("cowboy"));
   assertEquals(login.includes("Cowboy Admin"), false);
   assertEquals(login.includes("<Paper"), false);
-  assert(login.includes("Setup code"));
+  assert(login.includes("passwordLoginFields"));
+  assert(login.includes("fieldLabels.setup"));
   assert(login.includes("Create the only user"));
   assert(
     login.includes(
@@ -177,10 +183,14 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("selectedProvider.button_label"));
   assert(login.includes("nativeOidcFlowSupported"));
   assert(login.includes("runNativeOidc"));
-  assert(login.includes("href={useNativeProviderFlow ? undefined"));
+  assert(login.includes("placeholder={null}"));
+  assert(login.includes("href={context.native ? undefined"));
   assert(login.includes("resolveProductLoginMethodOrder"));
   assert(login.includes("orderedMethodIds[0]"));
+  assert(login.includes("loginMethodLabel"));
+  assert(login.includes("hostPlugins"));
   assert(gate.includes("status.login_method_order"));
+  assert(gate.includes("status.host_plugins"));
   assert(gate.includes("<ConfirmSheet"));
   assertEquals(gate.includes("<Dialog"), false);
   assert(gate.includes("Periodic Passkey verification stays off"));
@@ -265,7 +275,10 @@ Deno.test("service worker does not cache /api/auth and bumped VERSION", async ()
 Deno.test("Passkey changes recover from an expired recent-auth window", async () => {
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+    new URL(
+      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
+      authDir,
+    ),
   );
   const sheet = await Deno.readTextFile(
     new URL("ProductRecentAuthSheet.tsx", authDir),
@@ -273,10 +286,15 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   const retry = await Deno.readTextFile(new URL("recentAuth.ts", authDir));
   assert(gate.includes("options?: RecentProductAuthOptions"));
   assert(gate.includes("<ProductRecentAuthSheet"));
+  assert(gate.includes("hostPlugins={hostPlugins}"));
   assert(panel.includes("retryWithRecentProductAuth"));
   assert(retry.includes("isRecentProductAuthRequired"));
   assert(sheet.includes("Verify it’s you"));
+  assert(sheet.includes("hostPlugins"));
   assert(sheet.includes("authApi.login(me.account, password)"));
+  assert(sheet.includes("passwordLoginFields"));
+  assertEquals(sheet.includes('label="Account"'), false);
+  assertEquals(sheet.includes('label="Password"'), false);
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("Waiting for Passkey…"));
   assert(sheet.includes("Passkey verification was cancelled. Try again when ready."));
@@ -304,7 +322,10 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
 Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+    new URL(
+      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
+      authDir,
+    ),
   );
   const lock = await Deno.readTextFile(
     new URL("PasskeyReauthLock.tsx", authDir),
@@ -338,7 +359,10 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
 
 Deno.test("Passkey settings use a progressive, visible mobile account hierarchy", async () => {
   const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+    new URL(
+      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
+      authDir,
+    ),
   );
   const account = await Deno.readTextFile(
     new URL("ProductAccountMenu.tsx", authDir),
@@ -374,7 +398,10 @@ Deno.test("session reauthentication is pushed and stays compact until required",
     new URL("ProductRecentAuthSheet.tsx", authDir),
   );
   const panel = await Deno.readTextFile(
-    new URL("ProductPasskeysPanel.tsx", authDir),
+    new URL(
+      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
+      authDir,
+    ),
   );
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   const events = await Deno.readTextFile(

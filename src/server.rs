@@ -207,6 +207,9 @@ struct AppState {
     machine_control: Arc<MachineControl>,
     machine_snapshots: MachineSnapshots,
     plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
+    plugin_dir: crate::plugin_dir::PluginDir,
+    plugin_storage: crate::plugin_storage::PluginStorage,
+    plugin_hosts: Vec<crate::plugin_runtime::ActivatedHostPlugin>,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
@@ -498,24 +501,22 @@ impl MachineSnapshots {
                             crate::machine_protocol::ComponentKind::ProviderAdapter
                             | crate::machine_protocol::ComponentKind::ProviderCli => {
                                 let slot = component.id.slot.as_str();
-                                let exact = provider_sessions
-                                    .and_then(|providers| providers.get(slot))
-                                    .copied()
-                                    .unwrap_or(0);
-                                if slot == "claude" {
-                                    ["claude-code", "claude-deepseek"].iter().fold(
-                                        exact,
-                                        |total, provider| {
-                                            total.saturating_add(
-                                                provider_sessions
-                                                    .and_then(|providers| providers.get(*provider))
-                                                    .copied()
-                                                    .unwrap_or(0),
-                                            )
-                                        },
-                                    )
+                                let occupants =
+                                    crate::plugin_runtime_args::occupancy_provider_ids(slot);
+                                if occupants.is_empty() {
+                                    provider_sessions
+                                        .and_then(|providers| providers.get(slot))
+                                        .copied()
+                                        .unwrap_or(0)
                                 } else {
-                                    exact
+                                    occupants.iter().fold(0, |total, provider| {
+                                        total.saturating_add(
+                                            provider_sessions
+                                                .and_then(|providers| providers.get(*provider))
+                                                .copied()
+                                                .unwrap_or(0),
+                                        )
+                                    })
                                 }
                             }
                             _ => u64::from(active_sessions),
@@ -861,7 +862,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without a database URL the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host without durable storage configured.
-    let (hub, store, persistence_health, writer_task, purge_task, session_id_floor) =
+    let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
         if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
                 .await
@@ -941,10 +942,38 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --database-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
-    let usage = UsageService::new(
+    let plugin_dir =
+        crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
+    let plugin_storage = match store.as_ref() {
+        Some(store) => store.plugin_storage(plugin_dir.clone()),
+        None => crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir.clone()),
+    };
+    let plugin_runtime = match crate::plugin_runtime::PluginRuntime::activate(
+        &plugin_storage,
+        store.as_ref(),
+        Some(plugin_catalog.as_ref()),
+    )
+    .await
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            tracing::error!(%error, "plugin host activation failed");
+            crate::plugin_runtime::PluginRuntime {
+                hosts: Vec::new(),
+                passkey: None,
+            }
+        }
+    };
+    if let Some(store) = store.as_mut()
+        && let Some(namespace) = plugin_runtime.passkey.clone()
+    {
+        store.attach_passkey_plugin(namespace);
+    }
+    let usage = UsageService::with_bindings(
         args.codex_command.clone(),
         store.clone(),
         Some(args.data_dir.join("usage-snapshot.json")),
+        plugin_runtime.usage_bindings(),
     );
     let runtime_router = RuntimeRouter::new();
     let machine_control = Arc::new(MachineControl::default());
@@ -974,12 +1003,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // Reset credits belong to provider accounts, not sessions. Restore one
     // shared timer per provider and keep them independent from session queues.
     if let Some(store) = store.as_ref() {
-        for provider in crate::usage::RESET_PROVIDERS {
+        for provider in &usage.reset_provider_ids() {
             match store.load_provider_reset(provider).await {
                 Ok(Some(action)) => {
                     usage
                         .set_reset_schedule(
-                            provider,
+                            provider.as_str(),
                             Some(crate::usage::ResetSchedule {
                                 fire_at_ms: action.fire_at_ms,
                             }),
@@ -997,7 +1026,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             loop {
-                for provider in crate::usage::RESET_PROVIDERS {
+                for provider in &usage.reset_provider_ids() {
                     let action = match store.as_ref() {
                         Some(store) => store.load_provider_reset(provider).await.ok().flatten(),
                         None => None,
@@ -1005,11 +1034,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     if let Some(action) = action.filter(|item| item.next_attempt_at_ms <= now_ms())
                     {
                         let key = action.idempotency_key;
-                        // xAI does not accept an idempotency key. Claim its
-                        // one-shot timer before any provider call so a crash or
-                        // ambiguous response cannot consume a later reset on
-                        // an automatic retry.
-                        if provider == "xai" {
+                        // Plugins that cannot accept an idempotency key claim
+                        // the one-shot timer before any provider call so a
+                        // crash or ambiguous response cannot consume a later
+                        // reset on an automatic retry.
+                        let claim_before = usage.reset_claims_before_attempt(provider);
+                        if claim_before {
                             let Some(store) = store.as_ref() else {
                                 continue;
                             };
@@ -1054,9 +1084,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                         )
                                         .await;
                                 }
-                                if provider != "xai"
-                                    && let Some(store) = store.as_ref()
-                                {
+                                if !claim_before && let Some(store) = store.as_ref() {
                                     match store.claim_provider_reset(provider, &key).await {
                                         Ok(true) => usage.set_reset_schedule(provider, None).await,
                                         Ok(false) => {}
@@ -1067,7 +1095,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                                 }
                             }
                             Err(error) => {
-                                if provider == "xai" {
+                                if claim_before {
                                     let (status, phase) = if error.call_may_have_reached_provider {
                                         ("unknown", "consume")
                                     } else {
@@ -1297,6 +1325,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     tracing::info!(
         workspace = %args.workspace_root.display(),
         data_dir = %args.data_dir.display(),
+        plugin_dir = %plugin_dir.root().display(),
+        plugin_storage = ?plugin_storage.kind(),
         "cowboy serving",
     );
 
@@ -1315,6 +1345,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             machine_control,
             machine_snapshots,
             plugin_catalog,
+            plugin_dir,
+            plugin_storage,
+            plugin_hosts: plugin_runtime.hosts,
             provider_catalog,
             provider_auth,
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
@@ -2388,6 +2421,7 @@ struct ProductAuthState {
     persistence_health: Option<Arc<PersistenceHealth>>,
     runtime_router: Option<Arc<RuntimeRouter>>,
     plugin_catalog: Option<Arc<crate::plugin_catalog::PluginCatalog>>,
+    plugin_hosts: Arc<Vec<crate::plugin_runtime::ActivatedHostPlugin>>,
     provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
     passkeys: Arc<crate::passkey::PasskeyCeremonies>,
     setup: Arc<crate::admin::AdminSetupState>,
@@ -3975,7 +4009,6 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         path,
         "/api/usage"
             | "/api/usage/logs"
-            | "/api/usage/deepseek/activity"
             | "/api/workspaces"
             | "/api/plugins"
             | "/api/providers"
@@ -4020,6 +4053,12 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path == "/api/plugins/catalog/refresh" {
         return RouteAuth::AdminOperator;
+    }
+    if plugin_ui_path(path) && matches!(*method, Method::GET | Method::HEAD) {
+        return RouteAuth::Public;
+    }
+    if plugin_call_path(path) {
+        return RouteAuth::Product;
     }
     if path == "/api/providers/catalog/refresh" {
         return RouteAuth::AdminOperator;
@@ -4080,6 +4119,32 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
         return RouteAuth::AdminOperator;
     }
     RouteAuth::Public
+}
+
+fn plugin_call_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/plugins/") else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let Some(plugin_id) = segments.next() else {
+        return false;
+    };
+    crate::plugin_host::validate_plugin_id(plugin_id).is_ok()
+        && segments.next() == Some("call")
+        && segments.next().is_none()
+}
+
+fn plugin_ui_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/plugins/") else {
+        return false;
+    };
+    let mut segments = rest.split('/');
+    let Some(plugin_id) = segments.next() else {
+        return false;
+    };
+    crate::plugin_host::validate_plugin_id(plugin_id).is_ok()
+        && segments.next() == Some("ui")
+        && segments.next().is_some_and(|segment| !segment.is_empty())
 }
 
 fn provider_auth_path(path: &str) -> bool {
@@ -4838,6 +4903,12 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
         "logout": state.product_authentication.logout,
         "automation": state.product_authentication.automation,
         "providers": state.product_authentication.public_providers(),
+        "host_plugins": state
+            .plugin_hosts
+            .iter()
+            .filter(|host| host.public_auth_surface())
+            .cloned()
+            .collect::<Vec<_>>(),
     });
     if let Some((session, user)) = product_session_and_user_from_cookie(&state, &headers).await {
         let me = match product_me_for_user(
@@ -8600,6 +8671,7 @@ async fn serve_axum(
         persistence_health: state.persistence_health.clone(),
         runtime_router: Some(state.runtime_router.clone()),
         plugin_catalog: Some(state.plugin_catalog.clone()),
+        plugin_hosts: Arc::new(state.plugin_hosts.clone()),
         provider_catalog: Some(state.provider_catalog.clone()),
         passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
         setup,
@@ -8628,10 +8700,7 @@ async fn serve_axum(
         .route("/api/logs", get(api_diagnostic_logs))
         .route("/api/logs/{id}", get(api_diagnostic_log_detail))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
-        .route(
-            "/api/usage/deepseek/activity",
-            get(api_deepseek_usage_activity),
-        )
+        .route("/api/usage/{provider}/activity", get(api_usage_activity))
         .route("/api/usage/{provider}", post(api_usage_provider_refresh))
         .route("/api/usage/logs", get(api_usage_logs))
         .route("/api/usage/{provider}/reset", post(api_provider_reset))
@@ -8652,6 +8721,8 @@ async fn serve_axum(
             "/api/plugins/catalog/refresh",
             post(api_plugin_catalog_refresh),
         )
+        .route("/api/plugins/{id}/ui/{*path}", get(api_plugin_ui))
+        .route("/api/plugins/{id}/call", post(api_plugin_call))
         .route(
             "/api/providers/catalog/refresh",
             post(api_provider_catalog_refresh),
@@ -9148,6 +9219,7 @@ async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
         state.usage.snapshot().await,
         &state.hub.session_list(),
         &state.provider_catalog,
+        state.usage.plugin_bindings(),
     );
     Json(snapshot).into_response()
 }
@@ -9157,6 +9229,7 @@ async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
         state.usage.refresh().await,
         &state.hub.session_list(),
         &state.provider_catalog,
+        state.usage.plugin_bindings(),
     );
     Json(snapshot).into_response()
 }
@@ -9170,6 +9243,7 @@ async fn api_usage_provider_refresh(
             snapshot,
             &state.hub.session_list(),
             &state.provider_catalog,
+            state.usage.plugin_bindings(),
         ))
         .into_response(),
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
@@ -9259,10 +9333,18 @@ fn parse_deepseek_activity_filter(
     })
 }
 
-async fn api_deepseek_usage_activity(
+async fn api_usage_activity(
     State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
     Query(query): Query<DeepSeekActivityQuery>,
 ) -> Response {
+    if !state.usage.exposes_activity(&provider) {
+        return (
+            StatusCode::NOT_FOUND,
+            "provider does not expose usage activity",
+        )
+            .into_response();
+    }
     let Some(store) = state.store.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -9276,7 +9358,7 @@ async fn api_deepseek_usage_activity(
     };
     match store
         .provider_usage_activity(
-            "deepseek",
+            &provider,
             filter.from_ms,
             filter.to_ms,
             &filter.agents,
@@ -9412,8 +9494,12 @@ fn new_reset_idempotency_key() -> String {
     )
 }
 
-fn reset_provider_supported(provider: &str) -> bool {
-    crate::usage::RESET_PROVIDERS.contains(&provider)
+fn reset_provider_supported(state: &AppState, provider: &str) -> bool {
+    state
+        .usage
+        .reset_provider_ids()
+        .iter()
+        .any(|id| id == provider)
 }
 
 async fn api_provider_reset(
@@ -9421,7 +9507,7 @@ async fn api_provider_reset(
     Path(provider): Path<String>,
     Json(request): Json<ResetRequest>,
 ) -> Response {
-    if !reset_provider_supported(&provider) {
+    if !reset_provider_supported(&state, &provider) {
         return (
             StatusCode::BAD_REQUEST,
             "provider does not support usage resets",
@@ -9503,7 +9589,7 @@ async fn api_provider_reset_schedule(
     Path(provider): Path<String>,
     Json(request): Json<ResetScheduleRequest>,
 ) -> Response {
-    if !reset_provider_supported(&provider) {
+    if !reset_provider_supported(&state, &provider) {
         return (
             StatusCode::BAD_REQUEST,
             "provider does not support usage resets",
@@ -9562,7 +9648,7 @@ async fn api_provider_reset_cancel(
     State(state): State<Arc<AppState>>,
     Path(provider): Path<String>,
 ) -> Response {
-    if !reset_provider_supported(&provider) {
+    if !reset_provider_supported(&state, &provider) {
         return (
             StatusCode::BAD_REQUEST,
             "provider does not support usage resets",
@@ -9863,7 +9949,7 @@ mod diagnostic_log_query_tests {
             kind: "provider_error".to_owned(),
             severity: "error".to_owned(),
             state: "failed".to_owned(),
-            title: "DeepSeek HTTP 400".to_owned(),
+            title: "HTTP 400".to_owned(),
             summary: "request failed".to_owned(),
             session_ref: None,
             provider: Some("deepseek".to_owned()),
@@ -10495,12 +10581,149 @@ async fn api_plugins(State(state): State<Arc<AppState>>) -> Response {
     let authentication_executors = connected_provider_authentication_executors(&state).await;
     Json(serde_json::json!({
         "component_release": crate::plugin::active_component_release(),
+        "platform": {
+            "storage": state.plugin_storage.kind(),
+            "slots": crate::plugin_host::PluginSlotId::all()
+                .iter()
+                .map(|slot| slot.as_str())
+                .collect::<Vec<_>>(),
+            "host_api": crate::plugin_host::PLUGIN_HOST_API_VERSION,
+            "hosts": state.plugin_hosts,
+        },
         "plugins": state.plugin_catalog.entries(),
         "providers": state.provider_catalog.entries(),
         "authentications": state.provider_auth.statuses(),
         "authentication_executors": authentication_executors,
     }))
     .into_response()
+}
+
+async fn api_plugin_ui(
+    State(state): State<Arc<AppState>>,
+    Path((plugin_id, path)): Path<(String, String)>,
+) -> Response {
+    if crate::plugin_host::validate_plugin_id(&plugin_id).is_err() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Ok(relative) = sanitize_plugin_ui_path(&path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let generation = match state.plugin_dir.current_generation(&plugin_id) {
+        Ok(Some(path)) => path,
+        Ok(None) | Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let file = generation.join("ui").join(&relative);
+    match tokio::fs::read(&file).await {
+        Ok(bytes) => {
+            let mut response = bytes.into_response();
+            if let Some(value) = plugin_ui_content_type(&relative) {
+                response.headers_mut().insert(
+                    header::CONTENT_TYPE,
+                    header::HeaderValue::from_static(value),
+                );
+            }
+            response.headers_mut().insert(
+                header::CACHE_CONTROL,
+                header::HeaderValue::from_static("public, max-age=60"),
+            );
+            response
+        }
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn api_plugin_call(
+    State(state): State<Arc<AppState>>,
+    Path(plugin_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    if crate::plugin_host::validate_plugin_id(&plugin_id).is_err() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let Some(host) = state.plugin_hosts.iter().find(|host| host.id == plugin_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some((program, args)) = host.rpc_argv.split_first() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        let mut child = command.spawn().context("spawn plugin rpc")?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(&body)
+                .await
+                .context("write plugin rpc stdin")?;
+            drop(stdin);
+        }
+        let output = child.wait_with_output().await.context("wait plugin rpc")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "plugin rpc exited {}",
+            output.status
+        );
+        Ok::<_, anyhow::Error>(output.stdout)
+    })
+    .await
+    {
+        Ok(Ok(stdout)) => {
+            let json = serde_json::from_slice::<serde_json::Value>(&stdout).is_ok();
+            let mut response = stdout.into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                header::HeaderValue::from_static(if json {
+                    "application/json; charset=utf-8"
+                } else {
+                    "text/plain; charset=utf-8"
+                }),
+            );
+            response
+        }
+        Ok(Err(error)) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
+        Err(_) => (StatusCode::GATEWAY_TIMEOUT, "plugin rpc timed out").into_response(),
+    }
+}
+
+fn sanitize_plugin_ui_path(path: &str) -> Result<PathBuf, ()> {
+    if path.is_empty() || path.starts_with('/') {
+        return Err(());
+    }
+    let mut relative = PathBuf::new();
+    for component in FsPath::new(path).components() {
+        match component {
+            Component::Normal(part) => {
+                let part = part.to_str().ok_or(())?;
+                if part.is_empty() || part == "." || part == ".." {
+                    return Err(());
+                }
+                relative.push(part);
+            }
+            _ => return Err(()),
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(());
+    }
+    Ok(relative)
+}
+
+fn plugin_ui_content_type(path: &FsPath) -> Option<&'static str> {
+    match path.extension().and_then(|value| value.to_str()) {
+        Some("js" | "mjs") => Some("text/javascript; charset=utf-8"),
+        Some("css") => Some("text/css; charset=utf-8"),
+        Some("json") => Some("application/json; charset=utf-8"),
+        Some("wasm") => Some("application/wasm"),
+        Some("svg") => Some("image/svg+xml"),
+        Some("png") => Some("image/png"),
+        Some("woff2") => Some("font/woff2"),
+        _ => None,
+    }
 }
 
 async fn api_plugin_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
@@ -13224,7 +13447,7 @@ async fn api_session_cache_protection(
     if !crate::deepseek_cache::supported_behavior(&configuration) {
         return (
             StatusCode::BAD_REQUEST,
-            "cache protection is available only for DeepSeek sessions",
+            crate::deepseek_cache::unavailable_message(),
         )
             .into_response();
     }
@@ -13237,7 +13460,7 @@ async fn api_session_cache_protection(
         return Json(serde_json::json!({
             "state": "disabled",
             "algorithm": "adaptive-replay-v1",
-            "minimumHitTokens": crate::deepseek_cache::MINIMUM_HIT_TOKENS,
+            "minimumHitTokens": crate::deepseek_cache::minimum_hit_tokens(),
             "contextUsed": session.context_used,
         }))
         .into_response();
@@ -13258,7 +13481,7 @@ async fn api_session_cache_protection(
             if let Some(object) = status.as_object_mut() {
                 object.insert(
                     "minimumHitTokens".to_owned(),
-                    crate::deepseek_cache::MINIMUM_HIT_TOKENS.into(),
+                    crate::deepseek_cache::minimum_hit_tokens().into(),
                 );
                 object.insert("contextUsed".to_owned(), session.context_used.into());
             }
@@ -18853,6 +19076,7 @@ mod product_auth_api_tests {
             persistence_health: None,
             runtime_router: None,
             plugin_catalog: None,
+            plugin_hosts: Arc::new(Vec::new()),
             provider_catalog: None,
             passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
             setup,
@@ -19461,6 +19685,18 @@ mod product_auth_api_tests {
         }
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/catalog/refresh"),
+            RouteAuth::AdminOperator,
+        );
+        assert_eq!(
+            classify_route(&Method::GET, "/api/plugins/password/ui/index.js"),
+            RouteAuth::Public,
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/plugins/password/call"),
+            RouteAuth::Product,
+        );
+        assert_eq!(
+            classify_route(&Method::POST, "/api/plugins/password/ui/index.js"),
             RouteAuth::AdminOperator,
         );
         assert_eq!(

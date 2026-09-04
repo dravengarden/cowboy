@@ -44,26 +44,28 @@
         ./components/plugin-sdk/Cargo.toml
         ./components/plugin-sdk/src
       ];
+      # First-party plugin manifests are discovered by name so adding a
+      # Provider does not edit this closure list.
       provider-manifest-files = [
-        ./plugins/claude-code/provider.json
-        ./plugins/claude-code/plugin.json
-        ./plugins/claude-deepseek/provider.json
-        ./plugins/claude-deepseek/plugin.json
-        ./plugins/codex/provider.json
-        ./plugins/codex/plugin.json
-        ./plugins/codex-deepseek/provider.json
-        ./plugins/codex-deepseek/plugin.json
-        ./plugins/gemini/provider.json
-        ./plugins/gemini/plugin.json
-        ./plugins/grok/provider.json
-        ./plugins/grok/plugin.json
-        ./plugins/zed/plugin.json
-        ./plugins/zed/contract.json
+        (pkgs.lib.fileset.fileFilter (file:
+          file.name == "plugin.json" || file.name == "provider.json" ||
+          file.name == "contract.json"
+        ) ./plugins)
         ./components/registry.json
         ./components/plugin-contract/schema.json
         ./components/code-intelligence/contract.json
       ];
       plugin-contract-files = plugin-sdk-files ++ provider-sdk-files ++ provider-manifest-files;
+      # First-party host UI is discovered by build.rs. Keep the filter tight so
+      # README/worker edits do not restart the controller.
+      plugin-host-files = [
+        (pkgs.lib.fileset.fileFilter (file:
+          file.name == "host.json" || file.hasExt "js" || file.hasExt "css"
+        ) ./examples/authentication)
+        (pkgs.lib.fileset.fileFilter (file:
+          file.name == "host.json" || file.hasExt "js" || file.hasExt "css"
+        ) ./plugins)
+      ];
 
       # Backend and frontend are independent deployment artifacts. Keep this
       # closure explicit: docs, Web, native-shell, and operational edits must
@@ -75,10 +77,11 @@
         fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
+          ./build.rs
           ./src
           ./migrations
           ./web/src/protocol.ts
-        ] ++ plugin-contract-files);
+        ] ++ plugin-contract-files ++ plugin-host-files);
       };
 
       # Machine has a deliberately tiny source closure and is packaged
@@ -93,7 +96,7 @@
           ./src/main.rs
           ./src/cli.rs
           ./src/claude_shell.rs
-          ./src/grok.rs
+          ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
           ./src/machine_cli.rs
@@ -113,7 +116,9 @@
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
-        ] ++ plugin-contract-files);
+        ] ++ plugin-contract-files ++ [
+          (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
+        ]);
       };
 
       code-adapter-src = pkgs.lib.fileset.toSource {
@@ -145,7 +150,7 @@
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         ./src/claude_shell.rs
-        ./src/grok.rs
+        ./src/plugin_runtime_args.rs
         ./src/provider/deepseek_cache.rs
         ./src/provider/deepseek_context.rs
         ./src/provider/mod.rs
@@ -425,6 +430,13 @@
         test -e ${cowboy-src}/components/provider-sdk/Cargo.toml
         test -e ${cowboy-src}/components/plugin-sdk/Cargo.toml
         test -e ${cowboy-src}/plugins/codex/provider.json
+        test -e ${cowboy-src}/plugins/zed/plugin.json
+        test -e ${cowboy-src}/build.rs
+        test -e ${cowboy-src}/plugins/grok/host.json
+        test -e ${cowboy-src}/plugins/grok/ui/index.js
+        test -e ${cowboy-src}/examples/authentication/password/host.json
+        test -e ${cowboy-src}/examples/authentication/google/ui/index.js
+        test ! -e ${cowboy-src}/examples/authentication/README.md
         test ! -e ${cowboy-src}/components/provider-runtime/lock.json
         test -e ${machine-src}/components/provider-sdk/Cargo.toml
         test -e ${machine-src}/components/plugin-sdk/Cargo.toml
@@ -434,7 +446,8 @@
         test -e ${code-adapter-src}/components/plugin-sdk/Cargo.toml
         test ! -e ${code-adapter-src}/providers
         test -e ${machine-src}/src/provider/deepseek_cache.rs
-        test -e ${machine-src}/src/grok.rs
+        test -e ${machine-src}/src/plugin_runtime_args.rs
+        test -e ${machine-src}/plugins/grok/host.json
         test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/src/machine_plugins.rs
         test -e ${machine-src}/src/provider_behavior.rs

@@ -17,8 +17,6 @@ use cowboy_provider_sdk::{
     RuntimeSidecar, RuntimeSidecarTransport, RuntimeValue,
 };
 
-use crate::provider_catalog::{CODEX_DEEPSEEK_CATALOG, available_codex_deepseek_catalog};
-
 pub(crate) use crate::provider_behavior::legacy_behavior;
 
 pub(crate) const DEEPSEEK_SESSION_ID_ENV: &str = "COWBOY_DEEPSEEK_SESSION_ID";
@@ -71,27 +69,14 @@ impl LaunchSpec {
 // A compacted thread can retain a large carried prefix. Counting that immutable
 // prefix again leaves almost no headroom and can make Codex compact after every
 // tool call; only post-compaction growth should trigger the next auto-compact.
-const CODEX_RUNTIME_ARGS: &[&str] = &[
-    "-c",
-    "approval_policy=\"never\"",
-    "-c",
-    "sandbox_mode=\"danger-full-access\"",
-    "-c",
-    "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
-];
 
 // Grok Build is itself an ACP agent. Keep every Cowboy session in its own
 // process instead of joining the CLI's optional shared leader, leave component
 // updates to Cowboy Machine, and match Cowboy's unrestricted agent posture.
-// DeepSeek's Anthropic-compatible 1M lane counts the requested completion
-// against the same context budget as the prompt. Claude Code otherwise waits
-// until roughly the end of the advertised window before compacting, after
-// DeepSeek has already rejected the request. The default user-visible 830K
-// budget therefore compacts at the explicitly safer 819.2K boundary.
-const CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW: &str = "819200";
-const CLAUDE_DEEPSEEK_MAX_OUTPUT_TOKENS: &str = "128000";
-const CODEX_DEEPSEEK_CONTEXT_WINDOW: &str = "680000";
-const CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT: &str = "646000";
+// DeepSeek window and token budgets live in the plugin payloads: Claude Code's
+// Anthropic-compatible 1M lane counts the requested completion against the
+// same context budget as the prompt, so the default user-visible 830K budget
+// compacts at the safer 819.2K boundary owned by claude-deepseek.
 
 // Note: whether an agent can resume via `session/load` (design §7) is read at
 // runtime from its `initialize` response (`agent_capabilities.load_session` —
@@ -130,15 +115,13 @@ pub fn builtin() -> HashMap<&'static str, LaunchSpec> {
 }
 
 fn builtin_with_env(get_env: impl Fn(&str) -> Option<String>) -> HashMap<&'static str, LaunchSpec> {
-    let claude_deepseek_shell = crate::claude_shell::resolve(&get_env);
-    builtin_with_env_and_shell(get_env, claude_deepseek_shell)
+    builtin_with_env_and_shell(get_env, None)
 }
 
 fn builtin_with_env_and_shell(
     get_env: impl Fn(&str) -> Option<String>,
-    claude_deepseek_shell: Option<String>,
+    isolated_shell: Option<String>,
 ) -> HashMap<&'static str, LaunchSpec> {
-    let mut m = HashMap::new();
     let session_context_window = get_env(crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV)
         .and_then(|value| value.parse::<u64>().ok());
     let session_auto_compact_token_limit =
@@ -147,248 +130,163 @@ fn builtin_with_env_and_shell(
     let session_budget_values = session_context_window
         .zip(session_auto_compact_token_limit)
         .filter(|(window, compact)| *window > 0 && *compact > 0 && *compact <= *window);
-    let claude_session_budget = session_budget_values.and_then(|(window, compact)| {
-        crate::deepseek_context::from_launch_values(
-            &cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
-            window,
-            compact,
-        )
-    });
-    let codex_session_budget = session_budget_values.and_then(|(window, compact)| {
-        crate::deepseek_context::from_launch_values(
-            &cowboy_provider_sdk::ConfigurationBehavior::OpenaiGatewayV1,
-            window,
-            compact,
-        )
-    });
-    let claude_executable =
-        get_env("COWBOY_ACP_CLAUDE_CODE_EXECUTABLE").filter(|value| !value.trim().is_empty());
-    let mut claude = spec(
-        "claude-code",
-        "npx",
-        &["-y", "@agentclientprotocol/claude-agent-acp"],
-        &get_env,
-    );
-    if let Some(executable) = &claude_executable {
-        claude
-            .env
-            .insert("CLAUDE_CODE_EXECUTABLE".to_owned(), executable.clone());
-    }
-    m.insert("claude-code", claude);
-    let mut claude_deepseek = spec(
-        "claude-deepseek",
-        "npx",
-        &["-y", "@agentclientprotocol/claude-agent-acp"],
-        &get_env,
-    );
-    // Reuse the adapter executable, and the non-secret setup linked into the
-    // provider config dir. Model routing, credentials, history, and the rest of
-    // the Claude runtime state remain provider-owned.
-    if get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_CMD").is_none()
-        && let Some(command) = get_env("COWBOY_ACP_CLAUDE_CODE_CMD")
-    {
-        claude_deepseek.command = command;
-        if get_env("COWBOY_ACP_CLAUDE_DEEPSEEK_ARGS").is_none() {
-            claude_deepseek.args.clear();
+    let mut m = HashMap::new();
+    for plugin_id in crate::plugin_runtime_args::launch_plugin_ids() {
+        let extra = crate::plugin_runtime_args::cli_arguments(plugin_id);
+        let npx = crate::plugin_runtime_args::npx_prefix(plugin_id);
+        let mut default_args: Vec<&str> = npx.into_iter().collect();
+        default_args.extend_from_slice(extra);
+        let mut spec =
+            spec_with_custom_default_args(plugin_id, "npx", &default_args, extra, &get_env);
+        let configuration = crate::provider_behavior::legacy_behavior(plugin_id).configuration;
+        if crate::plugin_runtime_args::isolated_home_env(plugin_id).is_some()
+            && let Some((window, compact)) = session_budget_values
+            && let Some(budget) =
+                crate::deepseek_context::from_launch_values(&configuration, window, compact)
+        {
+            apply_openai_session_budget_args(&mut spec, &configuration, budget);
         }
-    }
-    claude_deepseek.env.extend([
-        (
-            "ANTHROPIC_BASE_URL".to_owned(),
-            "http://127.0.0.1:61138".to_owned(),
-        ),
-        (
-            "ANTHROPIC_AUTH_TOKEN".to_owned(),
-            "cowboy-local-credential-boundary".to_owned(),
-        ),
-        (
-            "ANTHROPIC_MODEL".to_owned(),
-            "deepseek-v4-flash[1m]".to_owned(),
-        ),
-        (
-            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_owned(),
-            "deepseek-v4-pro[1m]".to_owned(),
-        ),
-        (
-            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_owned(),
-            "deepseek-v4-flash[1m]".to_owned(),
-        ),
-        (
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_owned(),
-            "deepseek-v4-flash".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_SUBAGENT_MODEL".to_owned(),
-            "deepseek-v4-flash".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
-            claude_session_budget.map_or_else(
-                || CLAUDE_DEEPSEEK_AUTO_COMPACT_WINDOW.to_owned(),
-                |budget| budget.auto_compact_token_limit.to_string(),
-            ),
-        ),
-        (
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS".to_owned(),
-            CLAUDE_DEEPSEEK_MAX_OUTPUT_TOKENS.to_owned(),
-        ),
-        // DeepSeek's strongest reasoning posture is the default for this
-        // isolated lane. The ACP effort picker remains available, so users
-        // can still choose `default` or `high` for a particular session.
-        ("CLAUDE_CODE_EFFORT_LEVEL".to_owned(), "max".to_owned()),
-        (
-            "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST".to_owned(),
-            "cowboy-claude-deepseek".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING".to_owned(),
-            "1".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
-            "1".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL".to_owned(),
-            "1".to_owned(),
-        ),
-        (
-            "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL".to_owned(),
-            "1".to_owned(),
-        ),
-        ("DISABLE_LOGIN_COMMAND".to_owned(), "1".to_owned()),
-        ("DISABLE_LOGOUT_COMMAND".to_owned(), "1".to_owned()),
-        ("DISABLE_UPGRADE_COMMAND".to_owned(), "1".to_owned()),
-        ("ENABLE_CLAUDEAI_MCP_SERVERS".to_owned(), "false".to_owned()),
-    ]);
-    // Keep Claude Code's native non-streaming fallback enabled. DeepSeek can
-    // occasionally return HTTP 200 and then close SSE before a content block;
-    // the CLI's fallback repairs that empty attempt within the same native turn.
-    if let Some(shell) = claude_deepseek_shell {
-        // `CLAUDE_CODE_SHELL` is the authoritative override. Also set `SHELL`
-        // for subprocesses and older Claude Code releases that consult it.
-        claude_deepseek
-            .env
-            .insert("CLAUDE_CODE_SHELL".to_owned(), shell.clone());
-        claude_deepseek.env.insert("SHELL".to_owned(), shell);
-    }
-    if let Some(executable) = claude_executable {
-        // Applied after the inherited CLAUDE_* scrub, so the isolated provider
-        // uses the host-selected CLI without inheriting ordinary Claude state.
-        claude_deepseek
-            .env
-            .insert("CLAUDE_CODE_EXECUTABLE".to_owned(), executable);
-    }
-    claude_deepseek.remove_env_prefixes = vec!["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"];
-    claude_deepseek.remove_env = vec![
-        "API_TIMEOUT_MS",
-        "COWBOY_ACP_CLAUDE_DEEPSEEK_SHELL",
-        crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
-        crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
-        "DISABLE_AUTO_COMPACT",
-        "DISABLE_COMPACT",
-        "DISABLE_PROMPT_CACHING",
-        "DISABLE_PROMPT_CACHING_HAIKU",
-        "DISABLE_PROMPT_CACHING_OPUS",
-        "DISABLE_PROMPT_CACHING_SONNET",
-        "ENABLE_TOOL_SEARCH",
-        "ENABLE_CLAUDEAI_MCP_SERVERS",
-        "MAX_THINKING_TOKENS",
-        "MCP_TIMEOUT",
-        "MCP_TOOL_TIMEOUT",
-    ];
-    m.insert("claude-deepseek", claude_deepseek);
-    m.insert(
-        "codex",
-        spec_with_custom_default_args(
-            "codex",
-            "npx",
-            &concat_slices(
-                &["-y", "@agentclientprotocol/codex-acp"],
-                CODEX_RUNTIME_ARGS,
-            ),
-            CODEX_RUNTIME_ARGS,
-            &get_env,
-        ),
-    );
-    let mut deepseek = spec_with_custom_default_args(
-        "codex-deepseek",
-        "npx",
-        &["-y", "@agentclientprotocol/codex-acp"],
-        &[],
-        &get_env,
-    );
-    if let Some(budget) = codex_session_budget {
-        deepseek.args.extend([
-            "-c".to_owned(),
-            format!("model_context_window={}", budget.context_window),
-            "-c".to_owned(),
-            format!(
-                "model_auto_compact_token_limit={}",
-                budget.auto_compact_token_limit
-            ),
-        ]);
-    }
-    // Reuse the installed Codex ACP adapter when the host already supplies it.
-    // The inference endpoint itself remains a separate, independently deployed
-    // process; only this worker-local configuration points Codex at it.
-    if get_env("COWBOY_ACP_CODEX_DEEPSEEK_CMD").is_none()
-        && let Some(command) = get_env("COWBOY_ACP_CODEX_CMD")
-    {
-        deepseek.command = command;
-        if get_env("COWBOY_ACP_CODEX_DEEPSEEK_ARGS").is_none() {
-            deepseek.args.clear();
+        share_occupancy_command(plugin_id, &mut spec, &get_env);
+        if crate::plugin_runtime_args::isolated_home_env(plugin_id).is_some() {
+            apply_isolated_launch(plugin_id, &mut spec, &get_env, isolated_shell.as_deref());
+            if let Some((window, compact)) = session_budget_values
+                && let Some(budget) =
+                    crate::deepseek_context::from_launch_values(&configuration, window, compact)
+            {
+                apply_anthropic_session_budget_env(&mut spec, &configuration, budget);
+            }
         }
+        apply_cli_executable(plugin_id, &mut spec, &get_env);
+        m.insert(plugin_id, spec);
     }
-    deepseek
-        .env
-        .insert("MODEL_PROVIDER".to_owned(), "deepseek-local".to_owned());
-    deepseek.remove_env = vec![
-        "CODEX_ACCESS_TOKEN",
-        "CODEX_API_KEY",
-        "CODEX_AUTH",
-        "CODEX_AUTHAPI_BASE_URL",
-        "CODEX_CLOUD_TASKS_BASE_URL",
-        "CODEX_CONFIG",
-        "CODEX_CONNECTORS_TOKEN",
-        "CODEX_REFRESH_TOKEN_URL_OVERRIDE",
-        "CODEX_REVOKE_TOKEN_URL_OVERRIDE",
-        "CODEX_URL",
-        "OPENAI_API_KEY",
-        "OPENAI_API_BASE",
-        "OPENAI_BASE_URL",
-        "OPENAI_ORG_ID",
-        "OPENAI_ORGANIZATION",
-        "OPENAI_PROJECT_ID",
-        "CHATGPT_BASE_URL",
-        "DEEPSEEK_API_KEY",
-        "DEEPSEEK_API_KEY_FILE",
-        crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
-        crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
-    ];
-    m.insert("codex-deepseek", deepseek);
-    m.insert(
-        "gemini",
-        // The Gemini CLI IS the ACP adapter (`--acp` starts ACP mode); there's no
-        // separate npm package like the others.
-        spec(
-            "gemini",
-            "npx",
-            &["-y", "@google/gemini-cli", "--acp"],
-            &get_env,
-        ),
-    );
-    m.insert(
-        "grok",
-        spec_with_custom_default_args(
-            "grok",
-            "npx",
-            &concat_slices(&["-y", "@xai-official/grok"], crate::grok::RUNTIME_ARGS),
-            crate::grok::RUNTIME_ARGS,
-            &get_env,
-        ),
-    );
     m
+}
+
+fn share_occupancy_command(
+    plugin_id: &str,
+    spec: &mut LaunchSpec,
+    get_env: &impl Fn(&str) -> Option<String>,
+) {
+    let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(plugin_id) else {
+        return;
+    };
+    let Some(primary) = crate::plugin_runtime_args::provider_for_adapter_slot(slot) else {
+        return;
+    };
+    if primary == plugin_id
+        || get_env(&crate::plugin_runtime_args::acp_env_key(plugin_id, "CMD")).is_some()
+    {
+        return;
+    }
+    let Some(command) = get_env(&crate::plugin_runtime_args::acp_env_key(primary, "CMD")) else {
+        return;
+    };
+    spec.command = command;
+    if get_env(&crate::plugin_runtime_args::acp_env_key(plugin_id, "ARGS")).is_none() {
+        spec.args.clear();
+    }
+}
+
+fn apply_cli_executable(
+    plugin_id: &str,
+    spec: &mut LaunchSpec,
+    get_env: &impl Fn(&str) -> Option<String>,
+) {
+    let Some(slot) = crate::plugin_runtime_args::adapter_slot_for_provider(plugin_id) else {
+        return;
+    };
+    let Some(primary) = crate::plugin_runtime_args::provider_for_adapter_slot(slot) else {
+        return;
+    };
+    let Some(env_key) = crate::plugin_runtime_args::cli_executable_env(primary) else {
+        return;
+    };
+    let Some(path) = get_env(&crate::plugin_runtime_args::acp_env_key(
+        primary,
+        "EXECUTABLE",
+    ))
+    .filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    spec.env.insert(env_key.to_owned(), path);
+}
+
+fn apply_isolated_launch(
+    plugin_id: &str,
+    spec: &mut LaunchSpec,
+    get_env: &impl Fn(&str) -> Option<String>,
+    isolated_shell: Option<&str>,
+) {
+    spec.env.extend(
+        crate::plugin_runtime_args::environment(plugin_id)
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+    );
+    if let Some(origin) = crate::plugin_runtime_args::loopback_origin_for(plugin_id)
+        && let Some(env_key) = crate::plugin_runtime_args::loopback_env(plugin_id)
+    {
+        spec.env.insert(env_key.to_owned(), origin.to_owned());
+    }
+    spec.remove_env_prefixes =
+        crate::plugin_runtime_args::remove_environment_prefixes(plugin_id).to_vec();
+    let mut remove_env = crate::plugin_runtime_args::remove_environment(plugin_id).to_vec();
+    if let Some(key) = crate::plugin_runtime_args::isolated_shell_acp_key(plugin_id) {
+        remove_env.push(key);
+    }
+    remove_env.extend([
+        crate::deepseek_context::SESSION_CONTEXT_WINDOW_ENV,
+        crate::deepseek_context::SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV,
+    ]);
+    spec.remove_env = remove_env;
+    if crate::plugin_runtime_args::isolated_shell(plugin_id) {
+        let shell = isolated_shell
+            .map(str::to_owned)
+            .or_else(|| crate::claude_shell::resolve(plugin_id, get_env));
+        if let Some(shell) = shell {
+            for key in crate::plugin_runtime_args::isolated_shell_env(plugin_id) {
+                spec.env.insert((*key).to_owned(), shell.clone());
+            }
+        }
+    }
+}
+
+fn apply_openai_session_budget_args(
+    spec: &mut LaunchSpec,
+    configuration: &cowboy_provider_sdk::ConfigurationBehavior,
+    budget: crate::deepseek_context::ContextBudget,
+) {
+    if !matches!(
+        configuration,
+        cowboy_provider_sdk::ConfigurationBehavior::OpenaiGatewayV1
+    ) {
+        return;
+    }
+    spec.args.extend([
+        "-c".to_owned(),
+        format!("model_context_window={}", budget.context_window),
+        "-c".to_owned(),
+        format!(
+            "model_auto_compact_token_limit={}",
+            budget.auto_compact_token_limit
+        ),
+    ]);
+}
+
+fn apply_anthropic_session_budget_env(
+    spec: &mut LaunchSpec,
+    configuration: &cowboy_provider_sdk::ConfigurationBehavior,
+    budget: crate::deepseek_context::ContextBudget,
+) {
+    if !matches!(
+        configuration,
+        cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1
+    ) {
+        return;
+    }
+    spec.env.insert(
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW".to_owned(),
+        budget.auto_compact_token_limit.to_string(),
+    );
 }
 
 /// Build a provider's launch spec, letting the deployment OVERRIDE how the ACP
@@ -405,19 +303,6 @@ fn builtin_with_env_and_shell(
 /// entirely — no install-at-spawn, no race, no poison, no network dependency.
 /// Unset ⇒ the npx default. A provider may still add adapter-specific default
 /// flags that are independent from the npx wrapper itself.
-fn spec(
-    id: &'static str,
-    default_cmd: &str,
-    default_args: &[&str],
-    get_env: &impl Fn(&str) -> Option<String>,
-) -> LaunchSpec {
-    spec_with_custom_default_args(id, default_cmd, default_args, &[], get_env)
-}
-
-fn concat_slices(left: &[&'static str], right: &[&'static str]) -> Vec<&'static str> {
-    left.iter().chain(right).copied().collect()
-}
-
 fn spec_with_custom_default_args(
     id: &'static str,
     default_cmd: &str,
@@ -425,12 +310,11 @@ fn spec_with_custom_default_args(
     custom_default_args: &[&str],
     get_env: &impl Fn(&str) -> Option<String>,
 ) -> LaunchSpec {
-    let key = id.to_uppercase().replace('-', "_");
-    let arg_override = get_env(&format!("COWBOY_ACP_{key}_ARGS")).map(|args| {
+    let arg_override = get_env(&crate::plugin_runtime_args::acp_env_key(id, "ARGS")).map(|args| {
         shell_words::split(&args)
             .unwrap_or_else(|_| args.split_whitespace().map(str::to_owned).collect())
     });
-    match get_env(&format!("COWBOY_ACP_{key}_CMD")) {
+    match get_env(&crate::plugin_runtime_args::acp_env_key(id, "CMD")) {
         // A custom command replaces npx: the npx-specific prefix (`-y <pkg>`)
         // does NOT carry over. Provider-specific args may still apply, e.g.
         // Codex's default full-access config for a pre-installed adapter.
@@ -475,37 +359,44 @@ pub fn lookup(id: &str) -> Option<LaunchSpec> {
         return None;
     }
     let mut spec = builtin().remove(id)?;
-    if id == "codex-deepseek" {
-        match prepare_codex_deepseek_home() {
-            Ok(home) => {
-                spec.env
-                    .insert("CODEX_HOME".to_owned(), home.display().to_string());
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to prepare isolated Codex DeepSeek home");
-                return None;
-            }
-        }
+    apply_host_isolation(id, &mut spec)?;
+    Some(spec)
+}
+
+fn apply_host_isolation(id: &str, spec: &mut LaunchSpec) -> Option<()> {
+    if crate::plugin_runtime_args::isolated_shell(id) && !crate::claude_shell::available(id) {
+        tracing::warn!(
+            plugin_id = id,
+            "isolated provider requires an executable absolute bash or zsh path"
+        );
+        return None;
     }
-    if id == "claude-deepseek" {
-        if !crate::claude_shell::available() {
-            tracing::warn!("Claude DeepSeek requires an executable absolute bash or zsh path");
+    let Some(env_key) = crate::plugin_runtime_args::isolated_home_env(id) else {
+        return Some(());
+    };
+    let user_home = match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home),
+        None => {
+            tracing::warn!(plugin_id = id, "HOME is not set");
             return None;
         }
-        match prepare_claude_deepseek_config_dir() {
-            Ok(config_dir) => {
-                spec.env.insert(
-                    "CLAUDE_CONFIG_DIR".to_owned(),
-                    config_dir.display().to_string(),
-                );
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to prepare isolated Claude DeepSeek config");
-                return None;
-            }
+    };
+    match prepare_isolated_home(id, env_key, &user_home) {
+        Ok(home) => {
+            spec.env
+                .insert(env_key.to_owned(), home.display().to_string());
+            Some(())
+        }
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                plugin_id = id,
+                env_key,
+                "failed to prepare isolated provider home"
+            );
+            None
         }
     }
-    Some(spec)
 }
 
 /// Resolve and prepare the complete process tree for one detached worker.
@@ -1107,15 +998,66 @@ fn write_claude_deepseek_settings(isolated: &Path, ordinary: &Path) -> std::io::
     std::fs::rename(&temporary, isolated.join("settings.json"))
 }
 
-fn prepare_claude_deepseek_config_dir() -> std::io::Result<PathBuf> {
-    let user_home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
-    prepare_claude_deepseek_config_dir_at(&user_home)
+fn prepare_isolated_home(
+    plugin_id: &str,
+    env_key: &str,
+    user_home: &Path,
+) -> std::io::Result<PathBuf> {
+    match env_key {
+        "CODEX_HOME" => prepare_codex_deepseek_home_at(user_home, plugin_id),
+        "CLAUDE_CONFIG_DIR" => prepare_claude_deepseek_config_dir_at(user_home, plugin_id),
+        _ => prepare_generic_isolated_home_at(user_home, plugin_id),
+    }
 }
 
-fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<PathBuf> {
+fn is_isolated_path_slug(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+}
+
+fn isolated_provider_dir(
+    user_home: &Path,
+    plugin_id: &str,
+    leaf: &str,
+) -> std::io::Result<PathBuf> {
+    if !is_isolated_path_slug(plugin_id) || !is_isolated_path_slug(leaf) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "isolated provider path is invalid",
+        ));
+    }
+    Ok(user_home
+        .join(".local/state/cowboy/providers")
+        .join(plugin_id)
+        .join(leaf))
+}
+
+fn prepare_generic_isolated_home_at(user_home: &Path, plugin_id: &str) -> std::io::Result<PathBuf> {
     use std::os::unix::fs::PermissionsExt as _;
+
+    let target = isolated_provider_dir(user_home, plugin_id, "home")?;
+    std::fs::create_dir_all(&target)?;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
+    Ok(target)
+}
+
+fn prepare_claude_deepseek_config_dir_at(
+    user_home: &Path,
+    plugin_id: &str,
+) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    if !is_isolated_path_slug(plugin_id) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "isolated provider path is invalid",
+        ));
+    }
 
     let mut target = user_home.to_path_buf();
     for component in [
@@ -1123,7 +1065,7 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
         "state",
         "cowboy",
         "providers",
-        "claude-deepseek",
+        plugin_id,
         "claude-config",
     ] {
         target.push(component);
@@ -1131,7 +1073,7 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "Claude DeepSeek config boundary must contain only real directories",
+                    "isolated provider config boundary must contain only real directories",
                 ));
             }
             Ok(_) => {}
@@ -1143,7 +1085,7 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
                         if metadata.file_type().is_symlink() || !metadata.is_dir() {
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
-                                "Claude DeepSeek config boundary must contain only real directories",
+                                "isolated provider config boundary must contain only real directories",
                             ));
                         }
                     }
@@ -1163,18 +1105,11 @@ fn prepare_claude_deepseek_config_dir_at(user_home: &Path) -> std::io::Result<Pa
     Ok(target)
 }
 
-fn prepare_codex_deepseek_home() -> std::io::Result<PathBuf> {
-    let user_home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"))?;
-    prepare_codex_deepseek_home_at(&user_home)
-}
-
-fn prepare_codex_deepseek_home_at(user_home: &Path) -> std::io::Result<PathBuf> {
+fn prepare_codex_deepseek_home_at(user_home: &Path, plugin_id: &str) -> std::io::Result<PathBuf> {
     use std::io::Write as _;
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
-    let target = user_home.join(".local/state/cowboy/providers/codex-deepseek/codex-home");
+    let target = isolated_provider_dir(user_home, plugin_id, "codex-home")?;
     std::fs::create_dir_all(&target)?;
     std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700))?;
 
@@ -1189,14 +1124,14 @@ fn prepare_codex_deepseek_home_at(user_home: &Path) -> std::io::Result<PathBuf> 
     }
 
     let catalog =
-        available_codex_deepseek_catalog().unwrap_or_else(|| PathBuf::from(CODEX_DEEPSEEK_CATALOG));
+        PathBuf::from(crate::plugin_runtime_args::loopback_catalog(plugin_id).unwrap_or(""));
     let shared_tables = shared_codex_config_tables(&ordinary);
     let config = if shared_tables.is_empty() {
-        render_codex_deepseek_config(&catalog)
+        render_codex_deepseek_config(plugin_id, &catalog)
     } else {
         format!(
             "{}\n{shared_tables}",
-            render_codex_deepseek_config(&catalog)
+            render_codex_deepseek_config(plugin_id, &catalog)
         )
     };
     static NEXT_CONFIG_WRITE: AtomicU64 = AtomicU64::new(1);
@@ -1214,35 +1149,13 @@ fn prepare_codex_deepseek_home_at(user_home: &Path) -> std::io::Result<PathBuf> 
     Ok(target)
 }
 
-fn render_codex_deepseek_config(catalog: &Path) -> String {
-    format!(
-        "model = \"deepseek-v4-flash\"\n\
-     model_provider = \"deepseek-local\"\n\
-     model_reasoning_effort = \"max\"\n\
-     model_catalog_json = \"{}\"\n\
-     approval_policy = \"never\"\n\
-     sandbox_mode = \"danger-full-access\"\n\n\
-     model_context_window = {CODEX_DEEPSEEK_CONTEXT_WINDOW}\n\
-     model_auto_compact_token_limit = {CODEX_DEEPSEEK_AUTO_COMPACT_TOKEN_LIMIT}\n\
-     model_auto_compact_token_limit_scope = \"body_after_prefix\"\n\n\
-     [model_providers.deepseek-local]\n\
-     name = \"Isolated DeepSeek Responses gateway\"\n\
-     base_url = \"http://127.0.0.1:61137/v1\"\n\
-     wire_api = \"responses\"\n\
-     requires_openai_auth = false\n\
-     env_http_headers = {{ \"X-Cowboy-Session-Id\" = \"{DEEPSEEK_SESSION_ID_ENV}\", \"X-Cowboy-Cache-Protection\" = \"{cache_policy_env}\" }}\n\
-     request_max_retries = 1\n\
-     stream_max_retries = 0\n\
-     stream_idle_timeout_ms = 600000\n\n\
-     [features]\n\
-     memories = true\n\n\
-     [memories]\n\
-     disable_on_external_context = true\n\
-     extract_model = \"deepseek-v4-flash\"\n\
-     consolidation_model = \"deepseek-v4-flash\"\n\
-     min_rate_limit_remaining_percent = 0\n",
-        catalog.display(),
-        cache_policy_env = crate::deepseek_cache::SESSION_POLICY_ENV,
+fn render_codex_deepseek_config(plugin_id: &str, catalog: &Path) -> String {
+    // Package-less fallback still pins the loopback gateway because the plugin
+    // payload's base_url is a sidecar_url binding, not a literal.
+    crate::plugin_runtime_args::isolated_config_toml(
+        plugin_id,
+        catalog,
+        crate::plugin_runtime_args::loopback_origin_for(plugin_id).unwrap_or(""),
     )
 }
 
@@ -1329,40 +1242,18 @@ mod tests {
         assert!(claude_deepseek.remove_env.contains(&"DISABLE_COMPACT"));
         let codex = lookup_with(&[], "codex").expect("codex registered");
         assert_eq!(codex.command, "npx");
-        assert_eq!(
-            codex.args,
-            [
-                "-y",
-                "@agentclientprotocol/codex-acp",
-                "-c",
-                "approval_policy=\"never\"",
-                "-c",
-                "sandbox_mode=\"danger-full-access\"",
-                "-c",
-                "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
-            ]
-        );
+        let mut codex_npx_args = vec!["-y", "@agentclientprotocol/codex-acp"];
+        codex_npx_args.extend(crate::plugin_runtime_args::codex().iter().copied());
+        assert_eq!(codex.args, codex_npx_args);
         assert_eq!(
             lookup_with(&[], "gemini").map(|s| s.command),
             Some("npx".to_owned())
         );
         let grok = lookup_with(&[], "grok").expect("grok registered");
         assert_eq!(grok.command, "npx");
-        assert_eq!(
-            grok.args,
-            [
-                "-y",
-                "@xai-official/grok",
-                "--no-auto-update",
-                "--experimental-memory",
-                "--rules",
-                crate::grok::PROJECT_RULES_BOOTSTRAP,
-                "agent",
-                "--always-approve",
-                "--no-leader",
-                "stdio",
-            ]
-        );
+        let mut grok_npx_args = vec!["-y", "@xai-official/grok"];
+        grok_npx_args.extend(crate::plugin_runtime_args::grok().iter().copied());
+        assert_eq!(grok.args, grok_npx_args);
         let pinned_grok = lookup_with(
             &[
                 ("COWBOY_ACP_GROK_CMD", "/opt/npm-global/bin/grok"),
@@ -1374,19 +1265,7 @@ mod tests {
             "grok",
         )
         .expect("pinned grok command");
-        assert_eq!(
-            pinned_grok.args,
-            [
-                "--no-auto-update",
-                "--experimental-memory",
-                "--rules",
-                crate::grok::PROJECT_RULES_BOOTSTRAP,
-                "agent",
-                "--always-approve",
-                "--no-leader",
-                "stdio",
-            ]
-        );
+        assert_eq!(pinned_grok.args, crate::plugin_runtime_args::grok());
         assert!(lookup_with(&[], "nope").is_none());
 
         let deepseek = lookup_with(
@@ -1401,12 +1280,12 @@ mod tests {
             Some("deepseek-local")
         );
         assert!(!deepseek.env.contains_key("CODEX_CONFIG"));
-        assert!(deepseek.remove_env.contains(&"CODEX_ACCESS_TOKEN"));
-        assert!(deepseek.remove_env.contains(&"CODEX_AUTH"));
-        assert!(deepseek.remove_env.contains(&"OPENAI_API_KEY"));
-        assert!(deepseek.remove_env.contains(&"OPENAI_ORGANIZATION"));
-        assert!(deepseek.remove_env.contains(&"CODEX_CONFIG"));
-        assert!(deepseek.remove_env.contains(&"DEEPSEEK_API_KEY"));
+        assert!(deepseek.removes_inherited_env("CODEX_ACCESS_TOKEN"));
+        assert!(deepseek.removes_inherited_env("CODEX_AUTH"));
+        assert!(deepseek.removes_inherited_env("OPENAI_API_KEY"));
+        assert!(deepseek.removes_inherited_env("OPENAI_ORGANIZATION"));
+        assert!(deepseek.removes_inherited_env("CODEX_CONFIG"));
+        assert!(deepseek.removes_inherited_env("DEEPSEEK_API_KEY"));
 
         let claude_budget = lookup_with(
             &[
@@ -1478,36 +1357,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(codex.command, "/opt/npm-global/bin/codex-acp");
-        assert_eq!(
-            codex.args,
-            [
-                "-c",
-                "approval_policy=\"never\"",
-                "-c",
-                "sandbox_mode=\"danger-full-access\"",
-                "-c",
-                "model_auto_compact_token_limit_scope=\"body_after_prefix\"",
-            ]
-        );
+        assert_eq!(codex.args, crate::plugin_runtime_args::codex());
         let grok = lookup_with(
             &[("COWBOY_ACP_GROK_CMD", "/opt/npm-global/bin/grok")],
             "grok",
         )
         .expect("custom grok command");
         assert_eq!(grok.command, "/opt/npm-global/bin/grok");
-        assert_eq!(
-            grok.args,
-            [
-                "--no-auto-update",
-                "--experimental-memory",
-                "--rules",
-                crate::grok::PROJECT_RULES_BOOTSTRAP,
-                "agent",
-                "--always-approve",
-                "--no-leader",
-                "stdio",
-            ]
-        );
+        assert_eq!(grok.args, crate::plugin_runtime_args::grok());
         // Other custom commands still drop the npx-specific default args.
         let o = lookup_with(
             &[
@@ -1564,7 +1421,7 @@ mod tests {
                 .env
                 .get("ANTHROPIC_BASE_URL")
                 .map(String::as_str),
-            Some("http://127.0.0.1:61138")
+            Some(crate::plugin_runtime_args::claude_deepseek_loopback_origin())
         );
         assert_eq!(
             claude_deepseek
@@ -1636,6 +1493,7 @@ mod tests {
             "DEEPSEEK_API_KEY",
             "DISABLE_PROMPT_CACHING",
             "MAX_THINKING_TOKENS",
+            "ENABLE_CLAUDEAI_MCP_SERVERS",
         ] {
             assert!(
                 claude_deepseek.removes_inherited_env(inherited),
@@ -1666,9 +1524,12 @@ mod tests {
 
     #[test]
     fn deepseek_config_is_self_contained() {
-        let rendered = super::render_codex_deepseek_config(std::path::Path::new(
-            super::CODEX_DEEPSEEK_CATALOG,
-        ));
+        let rendered = super::render_codex_deepseek_config(
+            "codex-deepseek",
+            std::path::Path::new(
+                crate::plugin_runtime_args::loopback_catalog("codex-deepseek").unwrap(),
+            ),
+        );
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
         assert!(rendered.contains("model_reasoning_effort = \"max\""));
         assert!(rendered.contains("approval_policy = \"never\""));
@@ -1703,6 +1564,30 @@ mod tests {
     }
 
     #[test]
+    fn isolated_home_dispatch_uses_host_env_key() {
+        let root = isolation_test_root("cowboy-isolated-home-dispatch");
+        let codex = super::prepare_isolated_home("codex-deepseek", "CODEX_HOME", &root)
+            .expect("prepare Codex home");
+        assert_eq!(
+            codex,
+            root.join(".local/state/cowboy/providers/codex-deepseek/codex-home")
+        );
+        let claude = super::prepare_isolated_home("claude-deepseek", "CLAUDE_CONFIG_DIR", &root)
+            .expect("prepare Claude config");
+        assert_eq!(
+            claude,
+            root.join(".local/state/cowboy/providers/claude-deepseek/claude-config")
+        );
+        let generic = super::prepare_isolated_home("future-cli", "CUSTOM_HOME", &root)
+            .expect("prepare generic home");
+        assert_eq!(
+            generic,
+            root.join(".local/state/cowboy/providers/future-cli/home")
+        );
+        std::fs::remove_dir_all(&root).expect("remove isolated dispatch home");
+    }
+
+    #[test]
     fn deepseek_home_never_reads_or_links_openai_codex_state() {
         use std::os::unix::fs::PermissionsExt as _;
 
@@ -1715,7 +1600,8 @@ mod tests {
         std::fs::write(openai_home.join("auth.json"), "openai-auth-sentinel")
             .expect("write OpenAI auth");
 
-        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+        let isolated = super::prepare_codex_deepseek_home_at(&root, "codex-deepseek")
+            .expect("prepare DeepSeek home");
         let config =
             std::fs::read_to_string(isolated.join("config.toml")).expect("read DeepSeek config");
         assert!(!config.contains("gpt-secret-sentinel"));
@@ -1771,7 +1657,8 @@ mod tests {
         )
         .expect("write OpenAI config");
 
-        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+        let isolated = super::prepare_codex_deepseek_home_at(&root, "codex-deepseek")
+            .expect("prepare DeepSeek home");
 
         assert_eq!(
             std::fs::read_to_string(isolated.join("AGENTS.md")).unwrap(),
@@ -1806,7 +1693,8 @@ mod tests {
         std::fs::create_dir_all(&isolated_home).expect("create provider-owned skills");
         std::fs::write(isolated_home.join("owned.md"), "provider owned").expect("write owned");
 
-        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+        let isolated = super::prepare_codex_deepseek_home_at(&root, "codex-deepseek")
+            .expect("prepare DeepSeek home");
 
         // A real provider-owned entry is never replaced by a shared link.
         assert!(isolated.join("skills/owned.md").is_file());
@@ -1834,7 +1722,8 @@ mod tests {
         std::fs::create_dir_all(&scaffolding).expect("create provider scaffolding");
         std::fs::write(scaffolding.join("marker"), "provider owned").expect("write marker");
 
-        let isolated = super::prepare_codex_deepseek_home_at(&root).expect("prepare DeepSeek home");
+        let isolated = super::prepare_codex_deepseek_home_at(&root, "codex-deepseek")
+            .expect("prepare DeepSeek home");
 
         // The user's skill arrives even though the directory already existed.
         assert!(isolated.join("skills/omega").is_dir());
@@ -1876,7 +1765,7 @@ mod tests {
         std::fs::write(root.join(".claude.json"), "claude-instance-sentinel")
             .expect("write standard instance metadata");
 
-        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root, "claude-deepseek")
             .expect("prepare isolated Claude config");
         assert_eq!(
             std::fs::metadata(&isolated).unwrap().permissions().mode() & 0o777,
@@ -1932,7 +1821,7 @@ mod tests {
         )
         .expect("write standard settings");
 
-        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root, "claude-deepseek")
             .expect("prepare isolated Claude config");
 
         assert_eq!(
@@ -1971,7 +1860,7 @@ mod tests {
         std::fs::write(standard.join("settings.json"), r#"{"theme":"dark"}"#)
             .expect("write standard settings");
 
-        let isolated = super::prepare_claude_deepseek_config_dir_at(&root)
+        let isolated = super::prepare_claude_deepseek_config_dir_at(&root, "claude-deepseek")
             .expect("prepare isolated Claude config");
 
         let settings: serde_json::Value = serde_json::from_str(
@@ -2007,7 +1896,8 @@ mod tests {
             std::fs::create_dir_all(&outside).unwrap();
             symlink(&outside, &boundary).unwrap();
 
-            let error = super::prepare_claude_deepseek_config_dir_at(&case).unwrap_err();
+            let error =
+                super::prepare_claude_deepseek_config_dir_at(&case, "claude-deepseek").unwrap_err();
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
             assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         }
@@ -2034,7 +1924,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 thread::spawn(move || {
                     barrier.wait();
-                    super::prepare_claude_deepseek_config_dir_at(&root)
+                    super::prepare_claude_deepseek_config_dir_at(&root, "claude-deepseek")
                 })
             })
             .collect::<Vec<_>>();

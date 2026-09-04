@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "adapter_slot": "gemini",
+  "cli_auth": "gemini-env",
+  "visual": {
+    "light": { "primary": "#1A73E8", "secondary": "#7C4DFF" },
+    "dark": { "primary": "#8AB4F8", "secondary": "#C58AF9" }
+  },
+  "slots": [
+    "provider.usage",
+    "provider.setup",
+    "provider.empty",
+    "provider.settings"
+  ],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  },
+  "usage": {
+    "account": "gemini",
+    "product": "Gemini",
+    "session_overlay": "gemini-session-only",
+    "order": 4,
+    "empty": "Account quota is not exposed by this Provider."
+  }
+}

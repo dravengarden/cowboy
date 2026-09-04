@@ -290,9 +290,10 @@ import {
   runConfigPresets,
 } from "./runConfigPresets";
 import {
-  DEEPSEEK_CACHE_BASE_INTERVAL_LABEL,
-  DEEPSEEK_CACHE_MIN_HIT_TOKENS,
-} from "./deepseekUsage";
+  usageCacheIntervalLabel,
+  usageCacheMinHitTokens,
+  usageCacheOptionName,
+} from "./usageHostMap";
 import type {
   AvailableCommand,
   ConfigOption,
@@ -7243,12 +7244,18 @@ function SessionInfoSection({
   const contextPercent = hasContext
     ? Math.min(100, Math.max(0, contextUsed / contextSize * 100))
     : 0;
-  const cacheProtectionVisible = currentProviderEntry(
-        session.provider,
-        session.provider_version,
-        session.provider_generation_digest,
-      )?.manifest.host.features.includes("cache_protection_v1") === true &&
-    contextUsed >= DEEPSEEK_CACHE_MIN_HIT_TOKENS;
+  const providerEntry = currentProviderEntry(
+    session.provider,
+    session.provider_version,
+    session.provider_generation_digest,
+  );
+  const usageAccount = providerEntry?.manifest.host.account_usage?.provider ??
+    session.provider;
+  const cacheOptionName = usageCacheOptionName(usageAccount);
+  const cacheProtectionVisible =
+    providerEntry?.manifest.host.features.includes("cache_protection_v1") ===
+      true &&
+    contextUsed >= usageCacheMinHitTokens(usageAccount);
   const sessionProviderName = providerName(
     session.provider,
     session.provider_version,
@@ -7302,7 +7309,7 @@ function SessionInfoSection({
   ];
   const cacheBaseInterval =
     compactCacheDuration(cacheProtection?.base_interval_ms) ||
-    DEEPSEEK_CACHE_BASE_INTERVAL_LABEL;
+    usageCacheIntervalLabel(usageAccount);
   const cacheAdaptiveInterval = compactCacheDuration(
     cacheProtection?.adaptive_interval_ms,
   );
@@ -7448,10 +7455,10 @@ function SessionInfoSection({
                     compactCacheTokens(cacheProtection.protected_tokens)
                   }`
                   : cacheProtection?.state === "disabled"
-                  ? "Cache protection off"
+                  ? `${cacheOptionName} off`
                   : cacheProtectionUnavailable
                   ? "Cache status unavailable"
-                  : "Cache protection learning"}
+                  : `${cacheOptionName} learning`}
                 sx={{ alignSelf: "flex-start" }}
               />
             </Tooltip>

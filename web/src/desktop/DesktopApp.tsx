@@ -3,6 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
+import { PluginSlot } from "@cowboy/plugin-api";
+
+if (globalThis.__COWBOY_PLUGIN_HOST) {
+  globalThis.__COWBOY_PLUGIN_HOST.components.PasskeysPanel = ProductPasskeysPanel;
+}
 import { ProductDevicesPanel } from "../auth/ProductDevicesPanel";
 import { ProductSessionCapacityPanel } from "../auth/ProductSessionCapacityPanel";
 import type { Mode as ThemeMode } from "../theme";
@@ -94,7 +99,9 @@ function EnabledDesktopAccountCommands({
       width={520}
     >
       <Box sx={{ px: 2.25, py: 2 }}>
-        <ProductPasskeysPanel />
+        <PluginSlot pluginId="passkey" slot="account.panel">
+          <ProductPasskeysPanel />
+        </PluginSlot>
       </Box>
     </DesktopModal>
     </>

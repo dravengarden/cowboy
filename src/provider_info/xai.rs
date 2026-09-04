@@ -11,23 +11,38 @@ use crate::usage::ProviderUsage;
 use super::xai_account::AccountSnapshot;
 
 const BILLING_METHOD: &str = "_x.ai/billing";
-const SIGN_IN_MESSAGE: &str = "Sign in to Grok Build in Machines, then refresh xAI usage.";
-pub(crate) const SOURCE: &str = "Grok Build ACP + xAI account APIs";
 
-pub(crate) async fn collect(spec: &LaunchSpec) -> Result<ProviderUsage> {
-    let mut server = GrokRpcProcess::start(spec).await?;
+pub(crate) async fn collect(
+    spec: &LaunchSpec,
+    account_id: &'static str,
+    source: &'static str,
+    error_auth: Option<&str>,
+    error_fetch: Option<&str>,
+) -> Result<ProviderUsage> {
+    let mut server = GrokRpcProcess::start(
+        spec,
+        source,
+        error_auth.map(str::to_owned),
+        error_fetch.map(str::to_owned),
+    )
+    .await?;
     let billing = server.request(BILLING_METHOD, json!({})).await?;
     let account = match super::xai_account::collect().await {
         Ok(account) => Some(account),
         Err(error) => {
-            tracing::warn!(provider = "xai", %error, "reading xAI account metadata");
+            tracing::warn!(provider = account_id, %error, "reading xAI account metadata");
             None
         }
     };
-    Ok(from_billing(billing, account.as_ref()))
+    Ok(from_billing(billing, account.as_ref(), account_id, source))
 }
 
-fn from_billing(mut billing: Value, account: Option<&AccountSnapshot>) -> ProviderUsage {
+fn from_billing(
+    mut billing: Value,
+    account: Option<&AccountSnapshot>,
+    provider: &'static str,
+    source: &'static str,
+) -> ProviderUsage {
     let tier = billing
         .get("subscription_tier")
         .or_else(|| billing.get("subscriptionTier"))
@@ -55,9 +70,9 @@ fn from_billing(mut billing: Value, account: Option<&AccountSnapshot>) -> Provid
         );
     }
     ProviderUsage {
-        provider: "xai",
+        provider,
         status: "available",
-        source: SOURCE,
+        source,
         observed_at_ms: crate::usage::now_ms(),
         account: plan.map(|plan| json!({ "account": { "planType": plan } })),
         rate_limits: Some(billing),
@@ -72,10 +87,18 @@ struct GrokRpcProcess {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
+    product: String,
+    error_auth: Option<String>,
+    error_fetch: Option<String>,
 }
 
 impl GrokRpcProcess {
-    async fn start(spec: &LaunchSpec) -> Result<Self> {
+    async fn start(
+        spec: &LaunchSpec,
+        product: &str,
+        error_auth: Option<String>,
+        error_fetch: Option<String>,
+    ) -> Result<Self> {
         let mut command = Command::new(&spec.command);
         command.args(&spec.args);
         for (key, _) in std::env::vars_os() {
@@ -101,6 +124,9 @@ impl GrokRpcProcess {
             stdin,
             lines: BufReader::new(stdout).lines(),
             next_id: 1,
+            product: product.to_owned(),
+            error_auth,
+            error_fetch,
         };
         process
             .request(
@@ -146,14 +172,29 @@ impl GrokRpcProcess {
                 continue;
             }
             if let Some(error) = message.get("error") {
-                bail!("{}", rpc_error_message(method, error));
+                bail!(
+                    "{}",
+                    rpc_error_message(
+                        method,
+                        error,
+                        &self.product,
+                        self.error_auth.as_deref(),
+                        self.error_fetch.as_deref(),
+                    )
+                );
             }
             return Ok(message.get("result").cloned().unwrap_or(Value::Null));
         }
     }
 }
 
-fn rpc_error_message(method: &str, error: &Value) -> String {
+fn rpc_error_message(
+    method: &str,
+    error: &Value,
+    product: &str,
+    error_auth: Option<&str>,
+    error_fetch: Option<&str>,
+) -> String {
     let code = error.get("code").and_then(Value::as_i64);
     let detail = error
         .get("data")
@@ -163,7 +204,7 @@ fn rpc_error_message(method: &str, error: &Value) -> String {
         .filter(|detail| !detail.is_empty());
 
     if method == BILLING_METHOD && code == Some(-32601) {
-        return "installed Grok Build does not expose subscription billing over ACP yet".to_owned();
+        return format!("installed {product} does not expose subscription billing over ACP yet");
     }
     if code == Some(-32000)
         && detail.is_some_and(|detail| {
@@ -172,13 +213,17 @@ fn rpc_error_message(method: &str, error: &Value) -> String {
                 .contains("authentication required")
         })
     {
-        return SIGN_IN_MESSAGE.to_owned();
+        return error_auth
+            .unwrap_or("Sign in again to refresh usage.")
+            .to_owned();
     }
 
     let operation = if method == BILLING_METHOD {
-        "Grok Build could not fetch xAI usage"
+        error_fetch
+            .unwrap_or("usage could not be fetched")
+            .to_owned()
     } else {
-        "Grok Build ACP request failed"
+        format!("{product} ACP request failed")
     };
     if let Some(detail) = detail {
         return format!("{operation}: {detail}");
@@ -197,9 +242,21 @@ impl Drop for GrokRpcProcess {
 
 #[cfg(test)]
 mod tests {
-    use super::{BILLING_METHOD, SIGN_IN_MESSAGE, from_billing, rpc_error_message};
+    use super::{BILLING_METHOD, from_billing, rpc_error_message};
     use crate::provider_info::xai_account::{AccountSnapshot, ResetCredit};
-    use serde_json::json;
+    use crate::usage::ProviderUsage;
+    use serde_json::{Value, json};
+
+    const AUTH: &str = "Sign in to Grok Build in Machines, then refresh xAI usage.";
+    const FETCH: &str = "Grok Build could not fetch xAI usage";
+
+    fn billing(value: Value, account: Option<&AccountSnapshot>) -> ProviderUsage {
+        from_billing(value, account, "xai", "xAI")
+    }
+
+    fn rpc(error: &Value) -> String {
+        rpc_error_message(BILLING_METHOD, error, "xAI", Some(AUTH), Some(FETCH))
+    }
 
     #[test]
     fn billing_uses_groks_namespaced_acp_method() {
@@ -208,7 +265,7 @@ mod tests {
 
     #[test]
     fn billing_keeps_the_official_shape_and_surfaces_the_tier() {
-        let usage = from_billing(
+        let usage = billing(
             json!({
                 "config": {
                     "creditUsagePercent": 37.5,
@@ -241,7 +298,7 @@ mod tests {
 
     #[test]
     fn billing_accepts_the_legacy_camel_case_subscription_tier() {
-        let usage = from_billing(json!({ "subscriptionTier": "SuperGrok" }), None);
+        let usage = billing(json!({ "subscriptionTier": "SuperGrok" }), None);
         assert_eq!(
             usage
                 .account
@@ -261,7 +318,7 @@ mod tests {
                 expires_at: Some(200),
             }]),
         };
-        let usage = from_billing(
+        let usage = billing(
             json!({
                 "config": { "isUnifiedBillingUser": true },
                 "subscription_tier": "Free"
@@ -298,21 +355,18 @@ mod tests {
             "message": "Authentication required",
             "data": "Authentication required to fetch billing data"
         });
-        let message = rpc_error_message(BILLING_METHOD, &error);
-        assert_eq!(message, SIGN_IN_MESSAGE);
+        let message = rpc(&error);
+        assert_eq!(message, AUTH);
         assert!(!message.contains('{'));
         assert!(!message.contains(BILLING_METHOD));
     }
 
     #[test]
     fn billing_errors_keep_text_details_without_exposing_rpc_json() {
-        let message = rpc_error_message(
-            BILLING_METHOD,
-            &json!({
-                "code": -32001,
-                "message": "Billing is temporarily unavailable"
-            }),
-        );
+        let message = rpc(&json!({
+            "code": -32001,
+            "message": "Billing is temporarily unavailable"
+        }));
         assert_eq!(
             message,
             "Grok Build could not fetch xAI usage: Billing is temporarily unavailable"
@@ -323,11 +377,8 @@ mod tests {
     #[test]
     fn missing_billing_method_keeps_the_upgrade_guidance() {
         assert_eq!(
-            rpc_error_message(
-                BILLING_METHOD,
-                &json!({ "code": -32601, "message": "Method not found" }),
-            ),
-            "installed Grok Build does not expose subscription billing over ACP yet"
+            rpc(&json!({ "code": -32601, "message": "Method not found" })),
+            "installed xAI does not expose subscription billing over ACP yet"
         );
     }
 }

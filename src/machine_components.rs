@@ -264,13 +264,16 @@ fn component_command(desired: &DesiredComponent) -> Option<String> {
         ComponentKind::ProviderCli => {
             (!desired.id.slot.is_empty()).then(|| desired.id.slot.clone())
         }
-        ComponentKind::ProviderAdapter => match desired.id.slot.as_str() {
-            "codex" => Some("codex-acp".to_owned()),
-            "claude" | "claude-code" => Some("claude-agent-acp".to_owned()),
-            "gemini" => Some("gemini-acp".to_owned()),
-            "" => None,
-            slot => Some(format!("cowboy-acp-{slot}")),
-        },
+        ComponentKind::ProviderAdapter => {
+            let slot = desired.id.slot.as_str();
+            if slot.is_empty() {
+                None
+            } else if let Some(command) = crate::plugin_runtime_args::adapter_entrypoint(slot) {
+                Some(command.to_owned())
+            } else {
+                Some(format!("cowboy-acp-{slot}"))
+            }
+        }
         ComponentKind::ManagedNode => Some("node".to_owned()),
     }
 }
@@ -469,6 +472,22 @@ mod tests {
         assert_eq!(
             component_command(&component(ComponentKind::ProviderAdapter, "claude")).as_deref(),
             Some("claude-agent-acp")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "claude-code")).as_deref(),
+            Some("claude-agent-acp")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "gemini")).as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "grok")).as_deref(),
+            Some("grok")
+        );
+        assert_eq!(
+            component_command(&component(ComponentKind::ProviderAdapter, "future")).as_deref(),
+            Some("cowboy-acp-future")
         );
     }
 

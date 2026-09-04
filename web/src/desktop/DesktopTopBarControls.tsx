@@ -74,18 +74,25 @@ import {
   type ProviderUsage,
   providerUsageErrorMessage,
   providerUsageRefreshLabel,
+  providerUsageSlotContext,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
   shortResetTime,
   usageCardProviders,
   usageLimits,
+  usagePluginId,
   usageResetProvider,
   usageResetSchedule,
   type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
-import { type UsageWidgetProvider, usageWidgetProviders } from "../usageWidget";
+import { PluginSlot } from "@cowboy/plugin-api";
+import {
+  type UsageWidgetProvider,
+  usageWidgetHasBalance,
+  usageWidgetProviders,
+} from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
 import {
   DESKTOP_INSET_RADIUS,
@@ -165,12 +172,12 @@ function compactCny(value: number): string {
 function UsageProviderSummary(
   { provider }: { provider: UsageWidgetProvider },
 ): React.JSX.Element {
-  const deepseek = provider.kind === "deepseek";
-  const width = deepseek ? 286 : 156;
-  const primary = deepseek
+  const balance = usageWidgetHasBalance(provider);
+  const width = balance ? 286 : 156;
+  const primary = balance
     ? compactCny(provider.balanceCny)
     : `${String(provider.remaining)}%`;
-  const secondary = deepseek
+  const secondary = balance
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
       ? `24h ${compactCny(provider.spend24hCny)} · Miss ${
@@ -642,46 +649,59 @@ function DesktopProviderUsage({
   const limits = usageLimits(usage);
   const hasResetCredit = nearestAvailableResetCredit(usage) !== undefined;
   const refreshLabel = providerUsageRefreshLabel(usage);
+  const usageContext = providerUsageSlotContext(usage, {
+    showTitle: true,
+    limits,
+    resetsLabel: (resetsAt) =>
+      resetsAt === undefined ? undefined : `Resets ${fullResetTime(resetsAt)}`,
+    emptyMessage: providerUsageErrorMessage(
+      usage,
+      "This provider has not exposed account limits.",
+    ),
+  });
   return (
     <Stack spacing={1.25} data-usage-provider-section={usage.provider}>
-      <Typography variant="subtitle2" fontWeight={750}>
-        {accountProviderLabel(usage.provider)}
-      </Typography>
-      {refreshLabel && (
-        <Typography variant="caption" color="warning.main">
-          {refreshLabel}
+      <PluginSlot
+        pluginId={usagePluginId(usage.provider)}
+        slot="provider.usage"
+        context={usageContext}
+      >
+        <Typography variant="subtitle2" fontWeight={750}>
+          {accountProviderLabel(usage.provider)}
         </Typography>
-      )}
-      {limits.map((limit) => (
-        <Stack key={limit.id} spacing={0.5}>
-          <Stack direction="row" justifyContent="space-between">
-            <Typography variant="body2">{limit.label}</Typography>
-            <Typography variant="body2" fontWeight={750}>
-              {limit.remaining}% remaining
+        {refreshLabel && (
+          <Typography variant="caption" color="warning.main">
+            {refreshLabel}
+          </Typography>
+        )}
+        {limits.map((limit) => (
+          <Stack key={limit.id} spacing={0.5}>
+            <Stack direction="row" justifyContent="space-between">
+              <Typography variant="body2">{limit.label}</Typography>
+              <Typography variant="body2" fontWeight={750}>
+                {limit.remaining}% remaining
+              </Typography>
+            </Stack>
+            <LinearProgress
+              variant="determinate"
+              value={limit.remaining}
+              sx={{
+                height: 6,
+                borderRadius: 99,
+                "& .MuiLinearProgress-bar": { borderRadius: 99 },
+              }}
+            />
+            <Typography variant="caption" color="text.secondary">
+              Resets {fullResetTime(limit.resetsAt)}
             </Typography>
           </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={limit.remaining}
-            sx={{
-              height: 6,
-              borderRadius: 99,
-              "& .MuiLinearProgress-bar": { borderRadius: 99 },
-            }}
-          />
-          <Typography variant="caption" color="text.secondary">
-            Resets {fullResetTime(limit.resetsAt)}
+        ))}
+        {limits.length === 0 && !hasResetCredit && (
+          <Typography variant="body2" color="text.secondary">
+            {usageContext.emptyMessage}
           </Typography>
-        </Stack>
-      ))}
-      {limits.length === 0 && !hasResetCredit && (
-        <Typography variant="body2" color="text.secondary">
-          {providerUsageErrorMessage(
-            usage,
-            "This provider has not exposed account limits.",
-          )}
-        </Typography>
-      )}
+        )}
+      </PluginSlot>
       <DesktopUsageExtras
         usage={usage}
         schedule={schedule}
@@ -1463,7 +1483,8 @@ export function DesktopTopBarControls({
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
   const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
-    (width, provider) => width + (provider.kind === "deepseek" ? 164 : 156),
+    (width, provider) =>
+      width + (usageWidgetHasBalance(provider) ? 164 : 156),
     0,
   ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +

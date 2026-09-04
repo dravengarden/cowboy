@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "loopback_origin": "http://127.0.0.1:61137",
+  "loopback_detail": "loopback Responses gateway",
+  "loopback_requires_catalog": true,
+  "loopback_catalog": "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json",
+  "adapter_slot": "codex",
+  "isolated_home_env": "CODEX_HOME",
+  "visual": {
+    "light": { "primary": "#0369A1", "secondary": "#0F766E" },
+    "dark": { "primary": "#7DD3FC", "secondary": "#5EEAD4" }
+  }
+}

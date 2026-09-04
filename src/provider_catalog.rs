@@ -1,14 +1,3 @@
-use std::path::PathBuf;
-
-pub(crate) const CODEX_DEEPSEEK_CATALOG: &str = "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json";
-
-/// Return the independently deployed DeepSeek-only model catalog.
-#[must_use]
-pub(crate) fn available_codex_deepseek_catalog() -> Option<PathBuf> {
-    let catalog = PathBuf::from(CODEX_DEEPSEEK_CATALOG);
-    catalog.is_file().then_some(catalog)
-}
-
 #[cfg(feature = "full")]
 mod service_catalog {
     use std::collections::BTreeMap;
@@ -142,8 +131,11 @@ mod service_catalog {
             // the former Provider Catalog only when the default directory was
             // selected, so generations installed before the Plugin cutover
             // remain schedulable until Machines upgrade them.
-            let legacy_root = (plugin_catalog.catalog_root() == data_dir.join("plugin-catalog"))
-                .then(|| data_dir.join("provider-catalog"));
+            let catalog_root = plugin_catalog.catalog_root();
+            let legacy_root = (catalog_root
+                == crate::plugin_dir::PluginDir::open(data_dir)?.catalog_dir()
+                || catalog_root == crate::plugin_dir::PluginDir::legacy_catalog_dir(data_dir))
+            .then(|| data_dir.join("provider-catalog"));
             let catalog = Self {
                 embedded,
                 external: RwLock::new(BTreeMap::new()),
@@ -719,10 +711,12 @@ pub(crate) use service_catalog::ProviderCatalog;
 mod tests {
     #[test]
     fn catalog_is_owned_by_the_component_profile() {
+        let catalog = crate::plugin_runtime_args::loopback_catalog("codex-deepseek")
+            .expect("codex-deepseek host.json must declare loopback_catalog");
         assert_eq!(
-            super::CODEX_DEEPSEEK_CATALOG,
+            catalog,
             "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json"
         );
-        assert!(!super::CODEX_DEEPSEEK_CATALOG.starts_with("/etc/"));
+        assert!(!catalog.starts_with("/etc/"));
     }
 }

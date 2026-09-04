@@ -21,11 +21,11 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use crate::core::SessionMeta;
+use crate::plugin_host::{PluginUsageSpec, UsageCollectorKind};
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 const MANUAL_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
 const TRANSIENT_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_mins(1);
-const REFRESHABLE_PROVIDERS: [&str; 3] = ["deepseek", "openai", "xai"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderRefreshState {
@@ -60,6 +60,8 @@ struct CachedUsageSnapshot {
     refresh_interval_ms: i64,
     providers: Vec<CachedProviderUsage>,
     #[serde(default)]
+    reset_schedules: BTreeMap<String, ResetSchedule>,
+    #[serde(default)]
     codex_reset_schedule: Option<ResetSchedule>,
     #[serde(default)]
     xai_reset_schedule: Option<ResetSchedule>,
@@ -89,10 +91,8 @@ pub struct UsageSnapshot {
     pub next_refresh_at_ms: i64,
     pub refresh_interval_ms: i64,
     pub providers: Vec<ProviderUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub codex_reset_schedule: Option<ResetSchedule>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub xai_reset_schedule: Option<ResetSchedule>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub reset_schedules: BTreeMap<String, ResetSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,10 +122,9 @@ impl std::fmt::Display for ResetError {
 
 impl std::error::Error for ResetError {}
 
-pub const RESET_PROVIDERS: [&str; 2] = ["codex", "xai"];
-
 #[derive(Clone)]
 pub struct UsageService {
+    bindings: Vec<PluginUsageSpec>,
     codex_command: String,
     grok_spec: Option<crate::provider::LaunchSpec>,
     store: Option<crate::store::Store>,
@@ -138,10 +137,21 @@ pub struct UsageService {
 }
 
 impl UsageService {
+    #[cfg(test)]
     pub fn new(
         codex_command: String,
         store: Option<crate::store::Store>,
         cache_path: Option<PathBuf>,
+    ) -> Self {
+        Self::with_bindings(codex_command, store, cache_path, Vec::new())
+    }
+
+    #[must_use]
+    pub fn with_bindings(
+        codex_command: String,
+        store: Option<crate::store::Store>,
+        cache_path: Option<PathBuf>,
+        bindings: Vec<PluginUsageSpec>,
     ) -> Self {
         // Never let an account-card refresh cold-install a provider through
         // npx. Production Machine configuration supplies the managed command;
@@ -158,11 +168,11 @@ impl UsageService {
                 next_refresh_at_ms: 0,
                 refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
                     .unwrap_or(i64::MAX),
-                providers: unavailable_providers(),
-                codex_reset_schedule: None,
-                xai_reset_schedule: None,
+                providers: bindings.iter().map(placeholder_usage).collect(),
+                reset_schedules: BTreeMap::new(),
             });
         Self {
+            bindings,
             codex_command,
             grok_spec,
             store,
@@ -173,6 +183,57 @@ impl UsageService {
             cache_path,
             warming: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    #[must_use]
+    pub fn plugin_bindings(&self) -> &[PluginUsageSpec] {
+        &self.bindings
+    }
+
+    #[must_use]
+    pub fn reset_provider_ids(&self) -> Vec<String> {
+        self.bindings
+            .iter()
+            .filter_map(|binding| binding.reset.clone())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn exposes_activity(&self, account: &str) -> bool {
+        self.bindings
+            .iter()
+            .any(|binding| binding.account == account && binding.activity)
+    }
+
+    #[must_use]
+    pub fn reset_claims_before_attempt(&self, reset_id: &str) -> bool {
+        self.bindings
+            .iter()
+            .find(|binding| binding.reset.as_deref() == Some(reset_id))
+            .is_some_and(PluginUsageSpec::claims_reset_before_attempt)
+    }
+
+    async fn collect_binding(&self, binding: &PluginUsageSpec) -> ProviderUsage {
+        let usage = if !binding.collector_argv.is_empty() {
+            collect_command(binding).await
+        } else {
+            match binding.collector {
+                UsageCollectorKind::OpenaiAppserver => {
+                    collect_openai_usage(&self.codex_command, binding).await
+                }
+                UsageCollectorKind::DeepseekStore => {
+                    collect_deepseek_usage(self.store.as_ref(), binding).await
+                }
+                UsageCollectorKind::XaiBilling => {
+                    collect_configured_xai_usage(self.grok_spec.as_ref(), binding).await
+                }
+                UsageCollectorKind::Command => collect_command(binding).await,
+                UsageCollectorKind::Session | UsageCollectorKind::Unknown => {
+                    placeholder_usage(binding)
+                }
+            }
+        };
+        bind_collected_usage(usage, binding)
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
@@ -207,66 +268,42 @@ impl UsageService {
             RefreshPolicy::Manual
         };
         let attempted_at_ms = now_ms();
-        let refresh_openai =
-            provider_refresh_due(find_provider(&current, "openai"), attempted_at_ms, policy);
-        let refresh_deepseek =
-            provider_refresh_due(find_provider(&current, "deepseek"), attempted_at_ms, policy);
-        let refresh_xai =
-            provider_refresh_due(find_provider(&current, "xai"), attempted_at_ms, policy);
-        if !refresh_openai && !refresh_deepseek && !refresh_xai {
+        let due: Vec<PluginUsageSpec> = self
+            .bindings
+            .iter()
+            .filter(|binding| binding.refreshable())
+            .filter(|binding| {
+                provider_refresh_due(
+                    find_provider(&current, &binding.account),
+                    attempted_at_ms,
+                    policy,
+                )
+            })
+            .cloned()
+            .collect();
+        if due.is_empty() {
             let reset_schedules = self.reset_schedules.lock().await.clone();
             apply_reset_schedules(&mut current, &reset_schedules);
             return current;
         }
-        let (openai, deepseek, xai) = if low_peak {
-            // The in-process database collector is cheap. Finish it first, then
-            // ensure the two provider subprocess lifetimes never overlap.
-            let deepseek = if refresh_deepseek {
-                Some(collect_deepseek_usage(self.store.as_ref()).await)
-            } else {
-                None
-            };
-            let openai = if refresh_openai {
-                Some(collect_openai_usage(&self.codex_command).await)
-            } else {
-                None
-            };
-            let xai = if refresh_xai {
-                Some(collect_configured_xai_usage(self.grok_spec.as_ref()).await)
-            } else {
-                None
-            };
-            (openai, deepseek, xai)
+        // Subprocess collectors are comparatively heavy. Background refreshes
+        // run them one after another so RSS peaks do not stack. Manual refresh
+        // keeps the concurrent path.
+        let attempts = if low_peak {
+            let mut attempts = Vec::new();
+            for binding in &due {
+                attempts.push(self.collect_binding(binding).await);
+            }
+            attempts
         } else {
-            tokio::join!(
-                async {
-                    if refresh_openai {
-                        Some(collect_openai_usage(&self.codex_command).await)
-                    } else {
-                        None
-                    }
-                },
-                async {
-                    if refresh_deepseek {
-                        Some(collect_deepseek_usage(self.store.as_ref()).await)
-                    } else {
-                        None
-                    }
-                },
-                async {
-                    if refresh_xai {
-                        Some(collect_configured_xai_usage(self.grok_spec.as_ref()).await)
-                    } else {
-                        None
-                    }
-                },
-            )
+            let futs = due.iter().map(|binding| self.collect_binding(binding));
+            futures::future::join_all(futs).await
         };
         let completed_at_ms = now_ms();
-        for attempt in [deepseek, openai, xai].into_iter().flatten() {
-            reconcile_provider_attempt(&mut current, attempt, completed_at_ms);
+        for attempt in attempts {
+            reconcile_provider_attempt(&mut current, attempt, completed_at_ms, &self.bindings);
         }
-        update_snapshot_refresh_times(&mut current, completed_at_ms);
+        update_snapshot_refresh_times(&mut current, completed_at_ms, &self.bindings);
         let reset_schedules = self.reset_schedules.lock().await.clone();
         apply_reset_schedules(&mut current, &reset_schedules);
         *self.snapshot.lock().await = current.clone();
@@ -279,12 +316,13 @@ impl UsageService {
             return;
         }
         let current_time_ms = now_ms();
-        if !REFRESHABLE_PROVIDERS.iter().any(|provider| {
-            provider_refresh_due(
-                find_provider(snapshot, provider),
-                current_time_ms,
-                RefreshPolicy::Background,
-            )
+        if !self.bindings.iter().any(|binding| {
+            binding.refreshable()
+                && provider_refresh_due(
+                    find_provider(snapshot, &binding.account),
+                    current_time_ms,
+                    RefreshPolicy::Background,
+                )
         }) {
             return;
         }
@@ -322,11 +360,16 @@ impl UsageService {
         provider: &str,
         policy: RefreshPolicy,
     ) -> Result<UsageSnapshot> {
-        if matches!(provider, "anthropic" | "gemini") {
-            return Ok(self.snapshot().await);
-        }
-        if !REFRESHABLE_PROVIDERS.contains(&provider) {
+        let Some(binding) = self
+            .bindings
+            .iter()
+            .find(|binding| binding.account == provider)
+            .cloned()
+        else {
             bail!("unknown usage provider");
+        };
+        if !binding.refreshable() {
+            return Ok(self.snapshot().await);
         }
         let _guard = self.refresh_lock.lock().await;
         let mut snapshot = self.snapshot.lock().await.clone();
@@ -336,15 +379,10 @@ impl UsageService {
             apply_reset_schedules(&mut snapshot, &reset_schedules);
             return Ok(snapshot);
         }
-        let replacement = match provider {
-            "openai" => collect_openai_usage(&self.codex_command).await,
-            "deepseek" => collect_deepseek_usage(self.store.as_ref()).await,
-            "xai" => collect_configured_xai_usage(self.grok_spec.as_ref()).await,
-            _ => unreachable!("provider was validated above"),
-        };
+        let replacement = self.collect_binding(&binding).await;
         let completed_at_ms = now_ms();
-        reconcile_provider_attempt(&mut snapshot, replacement, completed_at_ms);
-        update_snapshot_refresh_times(&mut snapshot, completed_at_ms);
+        reconcile_provider_attempt(&mut snapshot, replacement, completed_at_ms, &self.bindings);
+        update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &self.bindings);
         let reset_schedules = self.reset_schedules.lock().await.clone();
         apply_reset_schedules(&mut snapshot, &reset_schedules);
         *self.snapshot.lock().await = snapshot.clone();
@@ -371,13 +409,31 @@ impl UsageService {
         expected_credit_id: Option<&str>,
     ) -> std::result::Result<ResetResult, ResetError> {
         let _guard = self.reset_lock.lock().await;
-        match provider {
-            "codex" => {
-                self.consume_nearest_codex_reset(idempotency_key, expected_credit_id)
+        let Some(binding) = self
+            .bindings
+            .iter()
+            .find(|candidate| candidate.reset.as_deref() == Some(provider))
+        else {
+            return Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!("provider does not support usage resets"),
+            });
+        };
+        let account = binding.account.clone();
+        match binding.collector {
+            UsageCollectorKind::OpenaiAppserver => {
+                self.consume_nearest_codex_reset(&account, idempotency_key, expected_credit_id)
                     .await
             }
-            "xai" => self.consume_nearest_xai_reset(expected_credit_id).await,
-            _ => Err(ResetError {
+            UsageCollectorKind::XaiBilling => {
+                self.consume_nearest_xai_reset(&account, expected_credit_id)
+                    .await
+            }
+            UsageCollectorKind::DeepseekStore
+            | UsageCollectorKind::Session
+            | UsageCollectorKind::Command
+            | UsageCollectorKind::Unknown => Err(ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: None,
                 source: anyhow::anyhow!("provider does not support usage resets"),
@@ -387,6 +443,7 @@ impl UsageService {
 
     async fn consume_nearest_codex_reset(
         &self,
+        account: &str,
         idempotency_key: &str,
         expected_credit_id: Option<&str>,
     ) -> std::result::Result<ResetResult, ResetError> {
@@ -445,7 +502,7 @@ impl UsageService {
             .unwrap_or("unknown")
             .to_owned();
         let _ = self
-            .refresh_provider_with_policy("openai", RefreshPolicy::Force)
+            .refresh_provider_with_policy(account, RefreshPolicy::Force)
             .await;
         Ok(ResetResult {
             outcome,
@@ -455,20 +512,43 @@ impl UsageService {
 
     async fn consume_nearest_xai_reset(
         &self,
+        account: &str,
         expected_credit_id: Option<&str>,
     ) -> std::result::Result<ResetResult, ResetError> {
+        let binding = self
+            .bindings
+            .iter()
+            .find(|binding| binding.account == account);
         let Some(spec) = self.grok_spec.as_ref() else {
             return Err(ResetError {
                 call_may_have_reached_provider: false,
                 credit_id: None,
-                source: anyhow::anyhow!("managed Grok Build CLI is not configured"),
+                source: anyhow::anyhow!(
+                    "{}",
+                    binding
+                        .and_then(|binding| binding.error_config.as_deref())
+                        .unwrap_or("usage is not configured")
+                ),
             });
         };
+        let account_id = intern_usage_str(account.to_owned());
+        let product = intern_usage_str(
+            binding
+                .map(PluginUsageSpec::product_label)
+                .unwrap_or("Provider")
+                .to_owned(),
+        );
         // The billing ACP request refreshes Grok's OIDC credential before the
         // account bridge reads reset availability from the same official file.
         let usage = tokio::time::timeout(
             std::time::Duration::from_secs(12),
-            crate::provider_info::collect_xai(spec),
+            crate::provider_info::collect_xai(
+                spec,
+                account_id,
+                product,
+                binding.and_then(|binding| binding.error_auth.as_deref()),
+                binding.and_then(|binding| binding.error_fetch.as_deref()),
+            ),
         )
         .await
         .context("refresh before xAI reset timed out")
@@ -506,7 +586,7 @@ impl UsageService {
             if remaining == 1 { "" } else { "s" }
         );
         let _ = self
-            .refresh_provider_with_policy("xai", RefreshPolicy::Force)
+            .refresh_provider_with_policy(account, RefreshPolicy::Force)
             .await;
         Ok(ResetResult {
             outcome,
@@ -643,16 +723,15 @@ fn classify_usage_failure(detail: &str) -> UsageFailureKind {
 }
 
 fn public_usage_error(
+    bindings: &[PluginUsageSpec],
     provider: &str,
     failure: UsageFailureKind,
     retained_cached_value: bool,
 ) -> String {
-    let product = match provider {
-        "openai" => "OpenAI",
-        "deepseek" => "DeepSeek",
-        "xai" => "xAI",
-        _ => "Provider",
-    };
+    let binding = bindings
+        .iter()
+        .find(|candidate| candidate.account == provider);
+    let product = binding.map_or("Provider", PluginUsageSpec::product_label);
     match failure {
         UsageFailureKind::Transient if retained_cached_value => {
             format!("{product} usage is temporarily unavailable. Showing the last update.")
@@ -660,22 +739,17 @@ fn public_usage_error(
         UsageFailureKind::Transient => {
             format!("{product} usage is temporarily unavailable. Cowboy will retry automatically.")
         }
-        UsageFailureKind::Authentication if provider == "openai" => {
-            "OpenAI usage authorization expired. Sign in to Codex again.".to_owned()
-        }
-        UsageFailureKind::Authentication if provider == "xai" => {
-            "Sign in to Grok Build in Machines, then refresh xAI usage.".to_owned()
-        }
-        UsageFailureKind::Authentication => {
-            format!("{product} usage authorization expired. Sign in again.")
-        }
-        UsageFailureKind::Configuration if provider == "xai" => {
-            "Grok Build usage is not configured on this Machine.".to_owned()
-        }
-        UsageFailureKind::Configuration => {
-            format!("{product} usage is not configured on this Cowboy Service.")
-        }
-        UsageFailureKind::Other => format!("{product} usage could not be refreshed."),
+        UsageFailureKind::Authentication => binding
+            .and_then(|candidate| candidate.error_auth.clone())
+            .unwrap_or_else(|| format!("{product} usage authorization expired. Sign in again.")),
+        UsageFailureKind::Configuration => binding
+            .and_then(|candidate| candidate.error_config.clone())
+            .unwrap_or_else(|| {
+                format!("{product} usage is not configured on this Cowboy Service.")
+            }),
+        UsageFailureKind::Other => binding
+            .and_then(|candidate| candidate.error_fetch.clone())
+            .unwrap_or_else(|| format!("{product} usage could not be refreshed.")),
     }
 }
 
@@ -697,6 +771,7 @@ fn reconcile_provider_attempt(
     snapshot: &mut UsageSnapshot,
     mut attempt: ProviderUsage,
     attempted_at_ms: i64,
+    bindings: &[PluginUsageSpec],
 ) {
     let previous = find_provider(snapshot, attempt.provider).cloned();
     let failed = !matches!(attempt.status, "available" | "exhausted");
@@ -715,7 +790,8 @@ fn reconcile_provider_attempt(
             error = %detail,
             "provider usage refresh failed"
         );
-        let public_error = public_usage_error(attempt.provider, failure, retain_cached_value);
+        let public_error =
+            public_usage_error(bindings, attempt.provider, failure, retain_cached_value);
         if retain_cached_value {
             let mut cached = previous.expect("cached value was checked above");
             cached.error = Some(public_error);
@@ -747,12 +823,20 @@ fn reconcile_provider_attempt(
     }
 }
 
-fn update_snapshot_refresh_times(snapshot: &mut UsageSnapshot, refreshed_at_ms: i64) {
+fn update_snapshot_refresh_times(
+    snapshot: &mut UsageSnapshot,
+    refreshed_at_ms: i64,
+    bindings: &[PluginUsageSpec],
+) {
     snapshot.refreshed_at_ms = refreshed_at_ms;
     snapshot.next_refresh_at_ms = snapshot
         .providers
         .iter()
-        .filter(|usage| REFRESHABLE_PROVIDERS.contains(&usage.provider))
+        .filter(|usage| {
+            bindings
+                .iter()
+                .any(|binding| binding.account == usage.provider && binding.refreshable())
+        })
         .filter_map(|usage| usage.refresh.as_ref())
         .map(|refresh| refresh.next_auto_refresh_at_ms)
         .min()
@@ -764,8 +848,36 @@ fn apply_reset_schedules(
     snapshot: &mut UsageSnapshot,
     schedules: &BTreeMap<String, ResetSchedule>,
 ) {
-    snapshot.codex_reset_schedule = schedules.get("codex").cloned();
-    snapshot.xai_reset_schedule = schedules.get("xai").cloned();
+    snapshot.reset_schedules.clone_from(schedules);
+}
+
+fn cached_reset_schedules(cached: &CachedUsageSnapshot) -> BTreeMap<String, ResetSchedule> {
+    let mut schedules = cached.reset_schedules.clone();
+    insert_legacy_reset_schedule(
+        &mut schedules,
+        "openai-appserver",
+        cached.codex_reset_schedule.as_ref(),
+    );
+    insert_legacy_reset_schedule(
+        &mut schedules,
+        "xai-billing",
+        cached.xai_reset_schedule.as_ref(),
+    );
+    schedules
+}
+
+fn insert_legacy_reset_schedule(
+    schedules: &mut BTreeMap<String, ResetSchedule>,
+    collector: &str,
+    schedule: Option<&ResetSchedule>,
+) {
+    let Some(schedule) = schedule else {
+        return;
+    };
+    let key = crate::plugin_runtime_args::usage_reset_id_for_collector(collector)
+        .unwrap_or(collector)
+        .to_owned();
+    schedules.entry(key).or_insert_with(|| schedule.clone());
 }
 
 fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
@@ -799,8 +911,9 @@ pub fn with_session_usage(
     snapshot: UsageSnapshot,
     sessions: &[SessionMeta],
     catalog: &crate::provider_catalog::ProviderCatalog,
+    bindings: &[PluginUsageSpec],
 ) -> UsageSnapshot {
-    crate::provider_info::overlay_session_usage(snapshot, sessions, catalog)
+    crate::provider_info::overlay_session_usage(snapshot, sessions, catalog, bindings)
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -809,23 +922,36 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-fn intern_usage_str(value: String) -> &'static str {
+pub(crate) fn intern_usage_str(value: String) -> &'static str {
     match value.as_str() {
-        "deepseek" => "deepseek",
-        "openai" => "openai",
-        "anthropic" => "anthropic",
-        "gemini" => "gemini",
-        "xai" => "xai",
         "available" => "available",
         "unavailable" => "unavailable",
+        "exhausted" => "exhausted",
+        "session-only" => "session-only",
         "error" => "error",
-        _ => Box::leak(value.into_boxed_str()),
+        _ => intern_dynamic(value),
     }
+}
+
+fn intern_dynamic(value: String) -> &'static str {
+    static INTERN: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<&'static str>>> =
+        std::sync::OnceLock::new();
+    let mut interned = INTERN
+        .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(existing) = interned.get(value.as_str()).copied() {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(value.into_boxed_str());
+    interned.insert(leaked);
+    leaked
 }
 
 fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
     let bytes = std::fs::read(path).ok()?;
     let cached: CachedUsageSnapshot = serde_json::from_slice(&bytes).ok()?;
+    let reset_schedules = cached_reset_schedules(&cached);
     Some(UsageSnapshot {
         refreshed_at_ms: cached.refreshed_at_ms,
         next_refresh_at_ms: cached.next_refresh_at_ms,
@@ -845,8 +971,7 @@ fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
                 refresh: provider.refresh,
             })
             .collect(),
-        codex_reset_schedule: cached.codex_reset_schedule,
-        xai_reset_schedule: cached.xai_reset_schedule,
+        reset_schedules,
     })
 }
 
@@ -860,15 +985,85 @@ fn save_cached_snapshot(path: &Path, snapshot: &UsageSnapshot) {
     }
 }
 
+fn placeholder_usage(binding: &PluginUsageSpec) -> ProviderUsage {
+    crate::provider_info::unavailable(
+        intern_usage_str(binding.account.clone()),
+        "Provider adapter",
+        "Not refreshed yet",
+    )
+}
+
+fn bind_collected_usage(mut usage: ProviderUsage, binding: &PluginUsageSpec) -> ProviderUsage {
+    usage.provider = intern_usage_str(binding.account.clone());
+    usage.source = intern_usage_str(binding.product_label().to_owned());
+    usage
+}
+
+#[cfg(test)]
 fn unavailable_providers() -> Vec<ProviderUsage> {
-    crate::provider_info::PROVIDERS
+    crate::plugin_runtime_args::usage_accounts()
+        .into_iter()
         .map(|provider| {
             crate::provider_info::unavailable(provider, "Provider adapter", "Not refreshed yet")
         })
-        .to_vec()
+        .collect()
 }
 
-async fn collect_openai_usage(command: &str) -> ProviderUsage {
+async fn collect_command(binding: &PluginUsageSpec) -> ProviderUsage {
+    let product = intern_usage_str(binding.product_label().to_owned());
+    let account = intern_usage_str(binding.account.clone());
+    let Some((program, args)) = binding.collector_argv.split_first() else {
+        return crate::provider_info::unavailable(
+            account,
+            product,
+            "plugin collector argv is empty",
+        );
+    };
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        let output = command.output().await?;
+        anyhow::ensure!(
+            output.status.success(),
+            "plugin collector exited {}",
+            output.status
+        );
+        let collected: CachedProviderUsage = serde_json::from_slice(&output.stdout)
+            .context("parsing plugin collector usage JSON")?;
+        Ok(ProviderUsage {
+            provider: intern_usage_str(collected.provider),
+            status: intern_usage_str(collected.status),
+            source: intern_usage_str(collected.source),
+            observed_at_ms: collected.observed_at_ms,
+            account: collected.account,
+            rate_limits: collected.rate_limits,
+            activity: collected.activity,
+            error: collected.error,
+            refresh: collected.refresh,
+        })
+    })
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
+        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
+    }
+}
+
+fn collector_identity(binding: &PluginUsageSpec) -> (&'static str, &'static str) {
+    (
+        intern_usage_str(binding.account.clone()),
+        intern_usage_str(binding.product_label().to_owned()),
+    )
+}
+
+async fn collect_openai_usage(command: &str, binding: &PluginUsageSpec) -> ProviderUsage {
+    let (account, product) = collector_identity(binding);
     match tokio::time::timeout(
         std::time::Duration::from_secs(12),
         crate::provider_info::collect_openai(command),
@@ -876,67 +1071,67 @@ async fn collect_openai_usage(command: &str) -> ProviderUsage {
     .await
     {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => {
-            crate::provider_info::error("openai", "OpenAI Codex app-server", format!("{error:#}"))
-        }
-        Err(_) => crate::provider_info::error(
-            "openai",
-            "OpenAI Codex app-server",
-            "refresh timed out".to_owned(),
-        ),
+        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
+        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
     }
 }
 
-async fn collect_deepseek_usage(store: Option<&crate::store::Store>) -> ProviderUsage {
+async fn collect_deepseek_usage(
+    store: Option<&crate::store::Store>,
+    binding: &PluginUsageSpec,
+) -> ProviderUsage {
+    let (account, product) = collector_identity(binding);
     match tokio::time::timeout(
         std::time::Duration::from_secs(12),
-        crate::provider_info::collect_deepseek(store),
+        crate::provider_info::collect_deepseek(store, &binding.account, binding.product_label()),
     )
     .await
     {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(
-            "deepseek",
-            "DeepSeek provider adapter",
-            format!("{error:#}"),
-        ),
-        Err(_) => crate::provider_info::error(
-            "deepseek",
-            "DeepSeek provider adapter",
-            "refresh timed out".to_owned(),
-        ),
+        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
+        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
     }
 }
 
-async fn collect_configured_xai_usage(spec: Option<&crate::provider::LaunchSpec>) -> ProviderUsage {
+async fn collect_configured_xai_usage(
+    spec: Option<&crate::provider::LaunchSpec>,
+    binding: &PluginUsageSpec,
+) -> ProviderUsage {
+    let (account, product) = collector_identity(binding);
     let Some(spec) = spec else {
         return crate::provider_info::unavailable(
-            "xai",
-            crate::provider_info::XAI_SOURCE,
-            "Managed Grok Build CLI is not configured",
+            account,
+            product,
+            binding
+                .error_config
+                .as_deref()
+                .unwrap_or("usage is not configured"),
         );
     };
-    collect_xai_usage(spec).await
+    collect_xai_usage(spec, account, product, binding).await
 }
 
-async fn collect_xai_usage(spec: &crate::provider::LaunchSpec) -> ProviderUsage {
+async fn collect_xai_usage(
+    spec: &crate::provider::LaunchSpec,
+    account: &'static str,
+    product: &'static str,
+    binding: &PluginUsageSpec,
+) -> ProviderUsage {
     match tokio::time::timeout(
         std::time::Duration::from_secs(12),
-        crate::provider_info::collect_xai(spec),
+        crate::provider_info::collect_xai(
+            spec,
+            account,
+            product,
+            binding.error_auth.as_deref(),
+            binding.error_fetch.as_deref(),
+        ),
     )
     .await
     {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(
-            "xai",
-            crate::provider_info::XAI_SOURCE,
-            format!("{error:#}"),
-        ),
-        Err(_) => crate::provider_info::error(
-            "xai",
-            crate::provider_info::XAI_SOURCE,
-            "refresh timed out".to_owned(),
-        ),
+        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
+        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
     }
 }
 
@@ -1066,6 +1261,121 @@ impl Drop for JsonRpcProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_host::UsageErrorKind;
+
+    #[test]
+    fn reset_claim_and_ids_follow_plugin_bindings() {
+        let service = UsageService::with_bindings(
+            "codex".to_owned(),
+            None,
+            None,
+            vec![openai_usage_binding(), xai_like_binding("xai")],
+        );
+        assert_eq!(service.reset_provider_ids(), ["codex", "xai"]);
+        assert!(!service.reset_claims_before_attempt("codex"));
+        assert!(service.reset_claims_before_attempt("xai"));
+        assert!(!service.reset_claims_before_attempt("missing"));
+        assert!(!service.exposes_activity("xai"));
+        assert!(!service.exposes_activity("deepseek"));
+    }
+
+    #[test]
+    fn activity_endpoint_follows_deepseek_store_collector() {
+        let service = UsageService::with_bindings(
+            "codex".to_owned(),
+            None,
+            None,
+            vec![
+                openai_usage_binding(),
+                PluginUsageSpec {
+                    account: "custom-ds".to_owned(),
+                    collector: UsageCollectorKind::DeepseekStore,
+                    reset: None,
+                    product: Some("DeepSeek".to_owned()),
+                    parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
+                    error: UsageErrorKind::Raw,
+                    error_auth: None,
+                    error_config: None,
+                    error_fetch: None,
+                    order: None,
+                    top_bar_windows: Vec::new(),
+                    widget: crate::plugin_host::UsageWidgetKind::DeepseekBalance,
+                    widget_shape: crate::plugin_host::UsageWidgetShape::Balance,
+                    widget_window: None,
+                    reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
+                    session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+                    empty: None,
+                    available_status: Some("API".to_owned()),
+                    omit_empty_limits: true,
+                    limit_id_prefix: None,
+                    limit_labels: Vec::new(),
+                    widget_balance_label: None,
+                    widget_spend_label: None,
+                    activity_agents: Vec::new(),
+                    activity_models: Vec::new(),
+                    cache_protection: None,
+                    collector_argv: Vec::new(),
+                    activity: true,
+                },
+            ],
+        );
+        assert!(service.exposes_activity("custom-ds"));
+        assert!(!service.exposes_activity("deepseek"));
+        assert!(!service.exposes_activity("openai"));
+    }
+
+    #[tokio::test]
+    async fn collector_argv_parses_plugin_json_stdout() {
+        let mut binding = openai_usage_binding();
+        binding.account = "future".to_owned();
+        binding.collector = UsageCollectorKind::OpenaiAppserver;
+        binding.collector_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "printf '%s' '{\"provider\":\"future\",\"status\":\"available\",\"source\":\"cmd\",\"observed_at_ms\":1}'"
+                .to_owned(),
+        ];
+        let usage = collect_command(&binding).await;
+        assert_eq!(usage.provider, "future");
+        assert_eq!(usage.status, "available");
+        assert_eq!(usage.source, "cmd");
+        assert_eq!(usage.observed_at_ms, 1);
+    }
+
+    fn openai_usage_binding() -> PluginUsageSpec {
+        PluginUsageSpec {
+            account: "openai".to_owned(),
+            collector: UsageCollectorKind::OpenaiAppserver,
+            reset: Some("codex".to_owned()),
+            product: Some("OpenAI".to_owned()),
+            parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
+            error: crate::plugin_host::UsageErrorKind::OpenaiAuth,
+            error_auth: Some(
+                "OpenAI usage authorization expired. Sign in to Codex again.".to_owned(),
+            ),
+            error_config: None,
+            error_fetch: None,
+            order: Some(0),
+            top_bar_windows: vec![300, 10_080],
+            widget: crate::plugin_host::UsageWidgetKind::OpenaiWeekly,
+            widget_shape: crate::plugin_host::UsageWidgetShape::Percent,
+            widget_window: Some(10_080),
+            reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            empty: None,
+            available_status: None,
+            omit_empty_limits: false,
+            limit_id_prefix: None,
+            limit_labels: Vec::new(),
+            widget_balance_label: None,
+            widget_spend_label: None,
+            activity_agents: Vec::new(),
+            activity_models: Vec::new(),
+            cache_protection: None,
+            collector_argv: Vec::new(),
+            activity: false,
+        }
+    }
 
     fn successful_usage(provider: &'static str, observed_at_ms: i64) -> ProviderUsage {
         ProviderUsage {
@@ -1098,14 +1408,27 @@ mod tests {
     #[test]
     fn unavailable_snapshot_is_explicit() {
         let providers = unavailable_providers();
-        assert_eq!(providers.len(), 5);
-        assert_eq!(providers[0].provider, "deepseek");
-        assert_eq!(providers[1].provider, "openai");
+        let accounts = crate::plugin_runtime_args::usage_accounts();
+        assert_eq!(providers.len(), accounts.len());
+        assert_eq!(
+            providers
+                .iter()
+                .map(|provider| provider.provider)
+                .collect::<Vec<_>>(),
+            accounts
+        );
         assert!(
             providers
                 .iter()
                 .all(|p| p.status == "unavailable" && p.error.is_some())
         );
+    }
+
+    #[tokio::test]
+    async fn empty_bindings_do_not_invent_account_cards() {
+        let service = UsageService::with_bindings("codex".to_owned(), None, None, Vec::new());
+        let snapshot = service.snapshot().await;
+        assert!(snapshot.providers.is_empty());
     }
 
     #[test]
@@ -1156,14 +1479,14 @@ mod tests {
             next_refresh_at_ms: 400,
             refresh_interval_ms: 300,
             providers: vec![successful_usage("openai", 100)],
-            codex_reset_schedule: None,
-            xai_reset_schedule: None,
+            reset_schedules: BTreeMap::new(),
         };
 
         reconcile_provider_attempt(
             &mut snapshot,
             failed_usage("openai", "503 Service Unavailable"),
             200,
+            &[openai_usage_binding()],
         );
 
         let usage = find_provider(&snapshot, "openai").expect("OpenAI usage");
@@ -1193,14 +1516,14 @@ mod tests {
             next_refresh_at_ms: 400,
             refresh_interval_ms: 300,
             providers: vec![successful_usage("openai", 100)],
-            codex_reset_schedule: None,
-            xai_reset_schedule: None,
+            reset_schedules: BTreeMap::new(),
         };
 
         reconcile_provider_attempt(
             &mut snapshot,
             failed_usage("openai", "account/read: 401 Unauthorized"),
             200,
+            &[openai_usage_binding()],
         );
 
         let usage = find_provider(&snapshot, "openai").expect("OpenAI usage");
@@ -1211,6 +1534,169 @@ mod tests {
             Some("OpenAI usage authorization expired. Sign in to Codex again.")
         );
         assert!(!usage.refresh.as_ref().expect("refresh metadata").stale);
+    }
+
+    #[test]
+    fn intern_usage_str_does_not_hardcode_account_ids() {
+        assert!(std::ptr::eq(
+            intern_usage_str("available".to_owned()),
+            intern_usage_str("available".to_owned())
+        ));
+        assert!(std::ptr::eq(
+            intern_usage_str("openai".to_owned()),
+            intern_usage_str("openai".to_owned())
+        ));
+        assert!(std::ptr::eq(
+            intern_usage_str("custom-ds".to_owned()),
+            intern_usage_str("custom-ds".to_owned())
+        ));
+    }
+
+    #[test]
+    fn collected_usage_is_rekeyed_to_the_plugin_account() {
+        let usage =
+            bind_collected_usage(successful_usage("xai", 1), &xai_like_binding("custom-xai"));
+        assert_eq!(usage.provider, "custom-xai");
+        let usage = bind_collected_usage(
+            successful_usage("deepseek", 1),
+            &PluginUsageSpec {
+                account: "custom-ds".to_owned(),
+                collector: UsageCollectorKind::DeepseekStore,
+                reset: None,
+                product: Some("DeepSeek".to_owned()),
+                parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
+                error: UsageErrorKind::Raw,
+                error_auth: None,
+                error_config: None,
+                error_fetch: None,
+                order: None,
+                top_bar_windows: Vec::new(),
+                widget: crate::plugin_host::UsageWidgetKind::DeepseekBalance,
+                widget_shape: crate::plugin_host::UsageWidgetShape::Balance,
+                widget_window: None,
+                reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
+                session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+                empty: None,
+                available_status: Some("API".to_owned()),
+                omit_empty_limits: true,
+                limit_id_prefix: None,
+                limit_labels: Vec::new(),
+                widget_balance_label: None,
+                widget_spend_label: None,
+                activity_agents: Vec::new(),
+                activity_models: Vec::new(),
+                cache_protection: None,
+                collector_argv: Vec::new(),
+                activity: false,
+            },
+        );
+        assert_eq!(usage.provider, "custom-ds");
+    }
+
+    fn xai_like_binding(account: &str) -> PluginUsageSpec {
+        PluginUsageSpec {
+            account: account.to_owned(),
+            collector: UsageCollectorKind::XaiBilling,
+            reset: Some("xai".to_owned()),
+            product: Some("Grok Build".to_owned()),
+            parser: crate::plugin_host::UsageLimitParserKind::XaiCredits,
+            error: UsageErrorKind::XaiBilling,
+            error_auth: Some(
+                "Sign in to Grok Build in Machines, then refresh xAI usage.".to_owned(),
+            ),
+            error_config: Some("Grok Build usage is not configured on this Machine.".to_owned()),
+            error_fetch: Some("Grok Build could not fetch xAI usage.".to_owned()),
+            order: None,
+            top_bar_windows: Vec::new(),
+            widget: crate::plugin_host::UsageWidgetKind::XaiIncluded,
+            widget_shape: crate::plugin_host::UsageWidgetShape::Percent,
+            widget_window: None,
+            reset_claim: crate::plugin_host::UsageResetClaim::BeforeAttempt,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            empty: None,
+            available_status: None,
+            omit_empty_limits: false,
+            limit_id_prefix: None,
+            limit_labels: Vec::new(),
+            widget_balance_label: None,
+            widget_spend_label: None,
+            activity_agents: Vec::new(),
+            activity_models: Vec::new(),
+            cache_protection: None,
+            collector_argv: Vec::new(),
+            activity: false,
+        }
+    }
+
+    #[test]
+    fn public_usage_errors_follow_plugin_error_kind() {
+        let custom = xai_like_binding("custom-xai");
+        assert_eq!(
+            public_usage_error(
+                &[custom.clone()],
+                "custom-xai",
+                UsageFailureKind::Authentication,
+                false,
+            ),
+            "Sign in to Grok Build in Machines, then refresh xAI usage."
+        );
+        assert_eq!(
+            public_usage_error(
+                &[custom],
+                "custom-xai",
+                UsageFailureKind::Configuration,
+                false,
+            ),
+            "Grok Build usage is not configured on this Machine."
+        );
+        assert_eq!(
+            public_usage_error(
+                &[openai_usage_binding()],
+                "openai",
+                UsageFailureKind::Authentication,
+                false,
+            ),
+            "OpenAI usage authorization expired. Sign in to Codex again."
+        );
+        let generic = PluginUsageSpec {
+            account: "future".to_owned(),
+            collector: UsageCollectorKind::Session,
+            reset: None,
+            product: Some("Future".to_owned()),
+            parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
+            error: UsageErrorKind::Raw,
+            error_auth: None,
+            error_config: None,
+            error_fetch: None,
+            order: None,
+            top_bar_windows: Vec::new(),
+            widget: crate::plugin_host::UsageWidgetKind::None,
+            widget_shape: crate::plugin_host::UsageWidgetShape::None,
+            widget_window: None,
+            reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            empty: None,
+            available_status: None,
+            omit_empty_limits: false,
+            limit_id_prefix: None,
+            limit_labels: Vec::new(),
+            widget_balance_label: None,
+            widget_spend_label: None,
+            activity_agents: Vec::new(),
+            activity_models: Vec::new(),
+            cache_protection: None,
+            collector_argv: Vec::new(),
+            activity: false,
+        };
+        assert_eq!(
+            public_usage_error(
+                &[generic],
+                "future",
+                UsageFailureKind::Authentication,
+                false,
+            ),
+            "Future usage authorization expired. Sign in again."
+        );
     }
 
     #[test]
@@ -1265,8 +1751,7 @@ mod tests {
             next_refresh_at_ms: 99,
             refresh_interval_ms: 1_000,
             providers: unavailable_providers(),
-            codex_reset_schedule: None,
-            xai_reset_schedule: None,
+            reset_schedules: BTreeMap::new(),
         };
         let mut snapshot = snapshot;
         snapshot.providers[0].refresh = Some(refresh_state(42, AUTO_REFRESH_INTERVAL, false));
@@ -1306,20 +1791,51 @@ mod tests {
             .await;
         let snapshot = service.snapshot().await;
         assert_eq!(
-            snapshot.codex_reset_schedule.map(|value| value.fire_at_ms),
+            snapshot
+                .reset_schedules
+                .get("codex")
+                .map(|value| value.fire_at_ms),
             Some(100)
         );
         assert_eq!(
-            snapshot.xai_reset_schedule.map(|value| value.fire_at_ms),
+            snapshot
+                .reset_schedules
+                .get("xai")
+                .map(|value| value.fire_at_ms),
             Some(200)
         );
 
         service.set_reset_schedule("xai", None).await;
         let snapshot = service.snapshot().await;
         assert_eq!(
-            snapshot.codex_reset_schedule.map(|value| value.fire_at_ms),
+            snapshot
+                .reset_schedules
+                .get("codex")
+                .map(|value| value.fire_at_ms),
             Some(100)
         );
-        assert!(snapshot.xai_reset_schedule.is_none());
+        assert!(!snapshot.reset_schedules.contains_key("xai"));
+    }
+
+    #[test]
+    fn legacy_named_reset_schedules_import_into_the_plugin_keyed_map() {
+        let cached = CachedUsageSnapshot {
+            refreshed_at_ms: 1,
+            next_refresh_at_ms: 2,
+            refresh_interval_ms: 3,
+            providers: Vec::new(),
+            reset_schedules: BTreeMap::new(),
+            codex_reset_schedule: Some(ResetSchedule { fire_at_ms: 100 }),
+            xai_reset_schedule: Some(ResetSchedule { fire_at_ms: 200 }),
+        };
+        let schedules = cached_reset_schedules(&cached);
+        assert_eq!(
+            schedules.get("codex").map(|value| value.fire_at_ms),
+            Some(100)
+        );
+        assert_eq!(
+            schedules.get("xai").map(|value| value.fire_at_ms),
+            Some(200)
+        );
     }
 }

@@ -1,3 +1,4 @@
+import { usageActivityAgentIds } from "./usageHostMap";
 import {
   timeRangeQuery,
   type ObservabilityTimeRange,
@@ -28,7 +29,7 @@ export type DiagnosticLogState =
   | "unknown"
   | "cancelled";
 
-export type DiagnosticLogAgent = "codex" | "claude";
+export type DiagnosticLogAgent = string;
 
 export interface DiagnosticLogFilters {
   kinds: DiagnosticLogKind[];
@@ -110,7 +111,9 @@ const DIAGNOSTIC_LOG_STATES: readonly DiagnosticLogState[] = [
   "unknown",
   "cancelled",
 ];
-const DIAGNOSTIC_LOG_AGENTS: readonly DiagnosticLogAgent[] = ["codex", "claude"];
+function diagnosticLogAgents(): readonly string[] {
+  return usageActivityAgentIds();
+}
 
 export function cloneDiagnosticLogFilters(
   filters: DiagnosticLogFilters,
@@ -168,7 +171,7 @@ export function parseDiagnosticLogFilters(value: unknown): DiagnosticLogFilters 
       ? selectedValues(value.severities, DIAGNOSTIC_LOG_SEVERITIES)
       : [...DEFAULT_DIAGNOSTIC_LOG_FILTERS.severities],
     states: Array.isArray(value.states) ? selectedValues(value.states, DIAGNOSTIC_LOG_STATES) : [],
-    agents: Array.isArray(value.agents) ? selectedValues(value.agents, DIAGNOSTIC_LOG_AGENTS) : [],
+    agents: Array.isArray(value.agents) ? selectedValues(value.agents, diagnosticLogAgents()) : [],
     timeRange: storedTimeRange(value.timeRange) ?? { ...DEFAULT_DIAGNOSTIC_LOG_FILTERS.timeRange },
   };
 }

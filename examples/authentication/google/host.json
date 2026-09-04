@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "label": "Google",
+  "slots": ["login.method"],
+  "ui": {
+    "entry": "ui/index.js",
+    "host_api": "1.0.0",
+    "ui_kit": "1.0.0"
+  }
+}

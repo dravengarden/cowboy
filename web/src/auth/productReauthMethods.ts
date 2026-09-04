@@ -1,4 +1,8 @@
-import { PASSWORD_LOGIN_METHOD, type ProductOidcProvider } from "./authApi";
+import {
+  type AuthHostPlugin,
+  PASSWORD_LOGIN_METHOD,
+  type ProductOidcProvider,
+} from "./authApi";
 
 const PROVIDER_PREFIX = "provider:";
 
@@ -18,17 +22,30 @@ export function providerVerificationMethodId(providerId: string): string {
   return `${PROVIDER_PREFIX}${providerId}`;
 }
 
+/** Tab/reauth label declared by the login plugin, then OIDC display name, then id. */
+export function loginMethodLabel(
+  id: string,
+  hostPlugins: readonly AuthHostPlugin[] | undefined,
+  providers: readonly ProductOidcProvider[],
+): string {
+  const hostLabel = hostPlugins?.find((plugin) => plugin.id === id)?.label
+    ?.trim();
+  if (hostLabel) return hostLabel;
+  return providers.find((provider) => provider.id === id)?.display_name ?? id;
+}
+
 export function productAccountVerificationMethods(
   orderedMethodIds: string[],
   passwordEnabled: boolean,
   providers: ProductOidcProvider[],
+  hostPlugins: readonly AuthHostPlugin[] = [],
 ): ProductAccountVerificationMethod[] {
   return orderedMethodIds.flatMap((id) => {
     if (id === PASSWORD_LOGIN_METHOD) {
       return passwordEnabled
         ? [{
           id: PASSWORD_LOGIN_METHOD,
-          label: "Password",
+          label: loginMethodLabel(id, hostPlugins, providers),
           authMethod: PASSWORD_LOGIN_METHOD,
         }]
         : [];
@@ -37,7 +54,7 @@ export function productAccountVerificationMethods(
     return provider
       ? [{
         id: providerVerificationMethodId(provider.id),
-        label: provider.display_name,
+        label: loginMethodLabel(id, hostPlugins, providers),
         authMethod: provider.id,
       }]
       : [];
