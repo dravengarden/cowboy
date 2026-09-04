@@ -114,7 +114,6 @@ impl WorkspaceConfig {
 // tasks: a blocked local runtime socket or WebSocket sink must not stop the
 // read/heartbeat loop from detecting the dead connection and reconnecting.
 const MACHINE_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
-const MACHINE_RUNTIME_WRITE_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum CliSpawnMode {
@@ -916,8 +915,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let _provider_auth_watcher = (protocol >= 6)
         .then(|| start_provider_auth_watcher(Arc::clone(&config.providers), event_tx.clone()))
         .transpose()?;
-    let (runtime_write_tx, runtime_write_rx) =
-        tokio::sync::mpsc::channel(MACHINE_RUNTIME_WRITE_CAPACITY);
+    // Controller replay can also exceed a small frame-count bound while the
+    // local broker socket is flushing one large command. Keep the WebSocket
+    // read loop non-blocking; the writer timeout still fences a stalled broker
+    // and dropping this connection discards the short-lived queue.
+    let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
     let login_sessions: LoginSessions = Arc::default();
     let (socket_sink, mut socket_stream) = socket.split();
     // Runtime streams can produce more than a small frame-count bound while the
@@ -973,9 +975,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         )?;
                                         continue;
                                     }
-                                    runtime_write_tx
-                                        .try_send(frame)
-                                        .map_err(|_| anyhow::anyhow!("Machine runtime writer closed"))?;
+                                    runtime_write_tx.send(frame).map_err(|_| {
+                                        anyhow::anyhow!("Machine runtime writer queue closed")
+                                    })?;
                                 }
                                 MachineFrame::Command { command } => {
                                     if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
@@ -1869,7 +1871,7 @@ struct MachineCommandContext {
     worktree_root: PathBuf,
     workspaces: Arc<WorkspaceConfig>,
     login_sessions: LoginSessions,
-    runtime_commands: tokio::sync::mpsc::Sender<crate::runtime_wire::Frame>,
+    runtime_commands: tokio::sync::mpsc::UnboundedSender<crate::runtime_wire::Frame>,
 }
 
 fn provider_auth_roll_target(
@@ -1999,13 +2001,12 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         // platform-specific filesystem event shape.
                         publish_provider_auth_observations(&providers, &events);
                         if let Some(provider) = roll_provider {
-                            let _ = runtime_commands.try_send(
-                                crate::runtime_wire::Frame::CoreCommand {
+                            let _ =
+                                runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
                                     command: crate::runtime_wire::CoreCommand::RollProvider {
                                         provider,
                                     },
-                                },
-                            );
+                                });
                         }
                         let _ = events.send(MachineEvent::CommandResult {
                             request_id,
@@ -2167,7 +2168,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                     );
                 }
                 if accepted && let Some(provider) = provider_for_component(&component) {
-                    let _ = runtime_commands.try_send(crate::runtime_wire::Frame::CoreCommand {
+                    let _ = runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {
                         command: crate::runtime_wire::CoreCommand::RollProvider {
                             provider: provider.to_owned(),
                         },
@@ -3054,7 +3055,7 @@ where
 
 async fn write_runtime_frames<W>(
     mut writer: W,
-    mut frames: tokio::sync::mpsc::Receiver<crate::runtime_wire::Frame>,
+    mut frames: tokio::sync::mpsc::UnboundedReceiver<crate::runtime_wire::Frame>,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -3064,7 +3065,7 @@ where
 
 async fn write_runtime_frames_with_timeout<W>(
     writer: &mut W,
-    frames: &mut tokio::sync::mpsc::Receiver<crate::runtime_wire::Frame>,
+    frames: &mut tokio::sync::mpsc::UnboundedReceiver<crate::runtime_wire::Frame>,
     timeout: Duration,
 ) -> anyhow::Result<()>
 where
@@ -3136,7 +3137,8 @@ mod tests {
         provider_auth_roll_target, provider_for_component, queue_controller_frame,
         reject_untrusted_workspace, resolve_runtime_machine_id, select_code_adapter_executable,
         selected_zed_pair, send_frame_with_timeout, validate_controller_url,
-        workspace_path_allowed, write_controller_messages, write_runtime_frames_with_timeout,
+        workspace_path_allowed, write_controller_messages, write_runtime_frames,
+        write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_plugins::PluginInventoryReceipt;
@@ -3276,8 +3278,8 @@ mod tests {
     #[tokio::test]
     async fn stalled_runtime_write_times_out_without_blocking_controller_heartbeat() {
         let (mut writer, _reader) = tokio::io::duplex(1);
-        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        tx.try_send(crate::runtime_wire::Frame::Heartbeat)
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        tx.send(crate::runtime_wire::Frame::Heartbeat)
             .expect("queue runtime heartbeat");
         drop(tx);
 
@@ -3289,6 +3291,34 @@ mod tests {
             error
                 .to_string()
                 .contains("Machine runtime frame write timed out")
+        );
+    }
+
+    #[tokio::test]
+    async fn controller_runtime_burst_does_not_disconnect_while_writer_is_backpressured() {
+        let (writer, _reader) = tokio::io::duplex(1);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let writer = tokio::spawn(write_runtime_frames(writer, rx));
+
+        tx.send(crate::runtime_wire::Frame::Heartbeat)
+            .expect("queue frame that stalls in the local broker socket");
+        tokio::task::yield_now().await;
+        for _ in 0..128 {
+            tx.send(crate::runtime_wire::Frame::Heartbeat)
+                .expect("buffer burst beyond the retired 64-frame limit");
+        }
+
+        assert!(
+            !writer.is_finished(),
+            "broker backpressure must not close the runtime writer"
+        );
+        writer.abort();
+        assert!(
+            writer
+                .await
+                .expect_err("aborted writer must stop")
+                .is_cancelled(),
+            "writer task should only stop because the test cancelled it"
         );
     }
 
