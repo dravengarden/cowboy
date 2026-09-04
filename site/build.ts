@@ -98,15 +98,15 @@ const CODE_INTELLIGENCE_PRESENTATION: Record<
 const REQUIRED_ASSETS = [
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   [
-    "site/assets/cowboy-tab-icon-v1-16.png",
-    "assets/cowboy-tab-icon-v1-16.png",
+    "site/assets/cowboy-tab-icon-v2-16.png",
+    "assets/cowboy-tab-icon-v2-16.png",
   ],
   [
-    "site/assets/cowboy-tab-icon-v1-32.png",
-    "assets/cowboy-tab-icon-v1-32.png",
+    "site/assets/cowboy-tab-icon-v2-32.png",
+    "assets/cowboy-tab-icon-v2-32.png",
   ],
-  ["site/assets/cowboy-tab-icon-v1.ico", "assets/cowboy-tab-icon-v1.ico"],
-  ["site/assets/cowboy-hat-mark-v2-512.png", "assets/cowboy-logo-512.png"],
+  ["site/assets/cowboy-tab-icon-v2.ico", "assets/cowboy-tab-icon-v2.ico"],
+  ["site/assets/cowboy-readme-mark-v1.png", "assets/cowboy-logo-512.png"],
   [
     "site/assets/cowboy-brand-mark-transparent-v5.png",
     "assets/cowboy-brand-mark.png",
@@ -153,23 +153,21 @@ export function assertPublicSiteContent(
 }
 
 function assertGenericDemoMachineLabels(html: string): void {
-  const heroLabels = [...html.matchAll(
-    /<span class="control-machine-name"><i><\/i>\s*<span>([^<]+)<\/span>/gu,
-  )].map((match) => match[1].trim());
-  const topology = html.match(
-    /<div class="topology-machines">([\s\S]*?)<\/div>/u,
-  )?.[1] ?? "";
-  const topologyLabels = [...topology.matchAll(
-    /<article><span><i><\/i>\s*<span(?:\s[^>]*)?>([^<]+)<\/span><\/span>/gu,
-  )].map((match) => match[1].trim());
+  const labels = [...html.matchAll(/data-demo-machine="([^"]+)"/gu)]
+    .map((match) => match[1].trim());
+  const expected = [
+    "Machine 01",
+    "Machine 02",
+    "Machine 03",
+    "Machine 01",
+    "Machine 02",
+    "Machine 03",
+  ];
 
-  if (
-    heroLabels.join("|") !== "Machine 01|Machine 02|Machine 03"
-  ) {
-    throw new Error("hero must use generic demo Machine labels");
-  }
-  if (topologyLabels.join("|") !== "Machine 01|Machine 02|Machine 03") {
-    throw new Error("topology must use generic demo Machine labels");
+  if (labels.join("|") !== expected.join("|")) {
+    throw new Error(
+      "hero and topology must use exactly three generic demo Machine labels",
+    );
   }
 }
 

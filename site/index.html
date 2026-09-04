@@ -36,9 +36,9 @@
       content="https://dravengarden.github.io/cowboy/assets/cowboy-logo-512.png"
     >
     <link rel="canonical" href="https://dravengarden.github.io/cowboy/">
-    <link rel="icon" href="assets/cowboy-tab-icon-v1-32.png" type="image/png" sizes="32x32">
-    <link rel="icon" href="assets/cowboy-tab-icon-v1-16.png" type="image/png" sizes="16x16">
-    <link rel="alternate icon" href="assets/cowboy-tab-icon-v1.ico" sizes="any">
+    <link rel="icon" href="assets/cowboy-tab-icon-v2-32.png" type="image/png" sizes="32x32">
+    <link rel="icon" href="assets/cowboy-tab-icon-v2-16.png" type="image/png" sizes="16x16">
+    <link rel="alternate icon" href="assets/cowboy-tab-icon-v2.ico" sizes="any">
     <link rel="preload" href="assets/cowboy-hero-devices-light.webp" as="image" type="image/webp">
     <script>
       document.documentElement.classList.add("js");
@@ -226,7 +226,7 @@
             <img
               class="theme-art workspace-art"
               src="assets/cowboy-hero-devices-light.webp"
-              alt="Abstract Cowboy Desktop and Phone workspaces with plugin sessions, a populated Prompt, and Agent activity"
+              alt="Abstract Cowboy Desktop and Phone workspaces connected through one Hub to multiple macOS and Linux Machines"
               data-i18n-alt="hero.imageAlt"
               width="1536"
               height="1024"
@@ -271,8 +271,17 @@
                   <g><circle cx="100" cy="30" r="3"></circle><circle cx="300" cy="30" r="3"></circle><circle cx="500" cy="30" r="3"></circle></g>
                 </svg>
                 <div class="control-machines">
-                  <div class="control-machine control-machine-codex control-machine-multi" aria-label="Machine 01 running Codex and Claude">
-                    <span class="control-machine-name"><i></i> <span>Machine 01</span></span>
+                  <div class="control-machine control-machine-codex control-machine-multi" data-demo-machine="Machine 01" aria-label="Machine 01, a macOS laptop running Codex and Claude">
+                    <div class="control-machine-heading">
+                      <span class="machine-chassis machine-chassis-mac" aria-hidden="true">
+                        <span class="machine-display"><i></i><b>&gt;_</b></span>
+                        <span class="machine-base"></span>
+                      </span>
+                      <span class="control-machine-identity">
+                        <span class="control-machine-name"><i></i> <span>Machine 01</span></span>
+                        <small>macOS · laptop</small>
+                      </span>
+                    </div>
                     <div class="control-agents">
                       <span class="control-agent control-agent-codex" data-agent-provider="codex">
                         <b aria-hidden="true">&gt;_</b><span>Codex</span>
@@ -282,8 +291,17 @@
                       </span>
                     </div>
                   </div>
-                  <div class="control-machine control-machine-gemini control-machine-multi" aria-label="Machine 02 running Gemini and DeepSeek">
-                    <span class="control-machine-name"><i></i> <span>Machine 02</span></span>
+                  <div class="control-machine control-machine-gemini control-machine-multi" data-demo-machine="Machine 02" aria-label="Machine 02, a Linux workstation running Gemini and DeepSeek">
+                    <div class="control-machine-heading">
+                      <span class="machine-chassis machine-chassis-workstation" aria-hidden="true">
+                        <span class="machine-display"><i></i><b>$</b></span>
+                        <span class="machine-stand"></span>
+                      </span>
+                      <span class="control-machine-identity">
+                        <span class="control-machine-name"><i></i> <span>Machine 02</span></span>
+                        <small>Linux · workstation</small>
+                      </span>
+                    </div>
                     <div class="control-agents">
                       <span class="control-agent control-agent-gemini" data-agent-provider="gemini">
                         <b aria-hidden="true">✦</b><span>Gemini</span>
@@ -293,8 +311,18 @@
                       </span>
                     </div>
                   </div>
-                  <div class="control-machine control-machine-grok control-machine-multi" aria-label="Machine 03 running Grok and your Agent plugin">
-                    <span class="control-machine-name"><i></i> <span>Machine 03</span></span>
+                  <div class="control-machine control-machine-grok control-machine-multi" data-demo-machine="Machine 03" aria-label="Machine 03, a Linux server running Grok and your Agent plugin">
+                    <div class="control-machine-heading">
+                      <span class="machine-chassis machine-chassis-server" aria-hidden="true">
+                        <span><i></i><b></b><b></b></span>
+                        <span><i></i><b></b><b></b></span>
+                        <span><i></i><b></b><b></b></span>
+                      </span>
+                      <span class="control-machine-identity">
+                        <span class="control-machine-name"><i></i> <span>Machine 03</span></span>
+                        <small>Linux · server</small>
+                      </span>
+                    </div>
                     <div class="control-agents">
                       <span class="control-agent control-agent-grok" data-agent-provider="grok">
                         <b aria-hidden="true">G</b><span>Grok</span>
@@ -386,12 +414,40 @@
               <img
                 class="theme-art"
                 src="assets/cowboy-desktop-surface-light.webp"
-                alt="Abstract three-column Cowboy Desktop interface"
+                alt="Abstract three-column Cowboy Desktop interface with a Markdown prompt being composed"
                 data-i18n-alt="desktop.imageAlt"
                 width="1460"
                 height="860"
                 loading="lazy"
               >
+              <div class="markdown-composer" aria-hidden="true">
+                <div class="markdown-composer-bar">
+                  <span>prompt.md</span>
+                  <b>MARKDOWN</b>
+                </div>
+                <div class="markdown-line markdown-heading" style="--line-delay: 0ms">
+                  <i>##</i><span>Ship the signed release</span>
+                </div>
+                <div class="markdown-line markdown-copy" style="--line-delay: 180ms">
+                  <span>Deploy Cowboy without stopping active work.</span>
+                </div>
+                <div class="markdown-line markdown-check" style="--line-delay: 360ms">
+                  <i>− [x]</i><span>verify pinned plugins</span>
+                </div>
+                <div class="markdown-line markdown-check" style="--line-delay: 540ms">
+                  <i>− [ ]</i><span>publish the Web release</span>
+                </div>
+                <div class="markdown-line markdown-code" style="--line-delay: 720ms">
+                  <code>`just site-check`</code>
+                </div>
+                <div class="markdown-line markdown-quote" style="--line-delay: 900ms">
+                  <i>&gt;</i><span>Keep every Machine online.</span>
+                </div>
+                <span class="markdown-caret"></span>
+                <div class="markdown-composer-status">
+                  <span>NORMAL</span><span>6 · 31</span>
+                </div>
+              </div>
             </div>
           </article>
 
@@ -572,13 +628,13 @@
             </a>
           </div>
 
-          <div class="topology-diagram reveal" style="--reveal-delay: 100ms" aria-label="Cowboy system topology" data-i18n-aria-label="topology.aria">
-            <svg class="topology-wiring" viewBox="0 0 600 410" preserveAspectRatio="none" aria-hidden="true">
-              <path d="M200 54 C200 116 300 106 300 154"></path>
-              <path d="M400 54 C400 116 300 106 300 154"></path>
-              <path d="M300 282 C300 310 100 294 100 350"></path>
-              <path d="M300 282 V350"></path>
-              <path d="M300 282 C300 310 500 294 500 350"></path>
+          <div class="topology-diagram reveal" style="--reveal-delay: 100ms" aria-label="Desktop and Mobile connect through one self-hosted Cowboy Hub to three macOS and Linux Machines" data-i18n-aria-label="topology.aria">
+            <svg class="topology-wiring" viewBox="0 0 600 470" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M200 54 C200 120 300 108 300 154"></path>
+              <path d="M400 54 C400 120 300 108 300 154"></path>
+              <path d="M300 286 C300 322 100 304 100 338"></path>
+              <path d="M300 286 V338"></path>
+              <path d="M300 286 C300 322 500 304 500 338"></path>
             </svg>
             <div class="topology-clients">
               <span>
@@ -604,9 +660,37 @@
               <span class="topology-protocol topology-protocol-machine">UDS · outbound WSS</span>
             </div>
             <div class="topology-machines">
-              <article><span><i></i> <span>Machine 01</span></span><strong data-i18n="topology.connected">Connected</strong><small>Codex · Claude</small></article>
-              <article><span><i></i> <span>Machine 02</span></span><strong data-i18n="topology.connected">Connected</strong><small>Gemini · DeepSeek</small></article>
-              <article><span><i></i> <span>Machine 03</span></span><strong data-i18n="topology.connected">Connected</strong><small data-i18n="topology.yourPlugins">Grok · your plugins</small></article>
+              <article data-demo-machine="Machine 01">
+                <span class="machine-chassis machine-chassis-mac" aria-hidden="true">
+                  <span class="machine-display"><i></i><b>&gt;_</b></span>
+                  <span class="machine-base"></span>
+                </span>
+                <span class="topology-machine-name"><i></i> <span>Machine 01</span></span>
+                <small class="topology-machine-platform">macOS · laptop</small>
+                <strong data-i18n="topology.connected">Connected</strong>
+                <small class="topology-machine-agents">Codex · Claude</small>
+              </article>
+              <article data-demo-machine="Machine 02">
+                <span class="machine-chassis machine-chassis-workstation" aria-hidden="true">
+                  <span class="machine-display"><i></i><b>$</b></span>
+                  <span class="machine-stand"></span>
+                </span>
+                <span class="topology-machine-name"><i></i> <span>Machine 02</span></span>
+                <small class="topology-machine-platform">Linux · workstation</small>
+                <strong data-i18n="topology.connected">Connected</strong>
+                <small class="topology-machine-agents">Gemini · DeepSeek</small>
+              </article>
+              <article data-demo-machine="Machine 03">
+                <span class="machine-chassis machine-chassis-server" aria-hidden="true">
+                  <span><i></i><b></b><b></b></span>
+                  <span><i></i><b></b><b></b></span>
+                  <span><i></i><b></b><b></b></span>
+                </span>
+                <span class="topology-machine-name"><i></i> <span>Machine 03</span></span>
+                <small class="topology-machine-platform">Linux · server</small>
+                <strong data-i18n="topology.connected">Connected</strong>
+                <small class="topology-machine-agents" data-i18n="topology.yourPlugins">Grok · your plugins</small>
+              </article>
             </div>
           </div>
         </div>

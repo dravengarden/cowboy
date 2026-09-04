@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="web/public/cowboy-app-icon-512-v4.png" width="112" height="112" alt="Cowboy">
+    <img src="site/assets/cowboy-readme-mark-v1.png" width="112" height="112" alt="Cowboy">
   </a>
 </p>
 
@@ -37,7 +37,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-hero-devices-light-v4.webp" alt="An abstract Cowboy desktop and phone workspace with sessions, prompts, tools, and code" width="1100">
+    <img src="site/assets/cowboy-remote-topology-light-v1.webp" alt="Cowboy Desktop and Mobile connected through one self-hosted Hub to three generic macOS and Linux Machines running multiple Agents" width="1100">
   </a>
 </p>
 

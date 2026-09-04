@@ -122,7 +122,7 @@ Deno.test("README, PWA, notifications, and Manager reference Cowboy 1703", async
   const managerInfo = await read("apps/macos-installer/Resources/Info.plist");
   const managerBuild = await read("apps/macos-installer/scripts/build-app.sh");
 
-  assert(readme.includes("web/public/cowboy-app-icon-512-v4.png"));
+  assert(readme.includes("site/assets/cowboy-readme-mark-v1.png"));
   assert(index.includes("/manifest.webmanifest?v=cowboy-v1623"));
   assert(index.includes("/cowboy-favicon-v4.ico"));
   assert(index.includes("/cowboy-app-icon-512-v4.png"));

@@ -107,7 +107,7 @@ const zhMessages = {
   "hero.signal.safety": "故障关闭安全",
   "hero.signal.platforms": "Linux + macOS Machines",
   "hero.imageAlt":
-    "由插件 Session、已填写 Prompt 与 Agent 活动组成的 Cowboy Desktop 和 Phone 抽象界面",
+    "Cowboy Desktop 与 Phone 通过一个 Hub 连接多台 macOS 和 Linux Machine 的抽象界面",
   "facts.aria": "Cowboy 远程控制与安全数据",
   "facts.controlPlane": "自托管实例",
   "facts.fanout": "Machine 扇出",
@@ -137,7 +137,7 @@ const zhMessages = {
   "desktop.keyboardAria": "在 Cowboy Desktop 的每个界面中使用类 Vim 键盘控制",
   "desktop.keyboard": "键盘控制一切",
   "desktop.keyboardDetail": "类 Vim · 所有界面均可寻址",
-  "desktop.imageAlt": "三栏 Cowboy Desktop 抽象界面",
+  "desktop.imageAlt": "正在编写 Markdown Prompt 的三栏 Cowboy Desktop 抽象界面",
   "mobile.label": "02 / Mobile",
   "mobile.title": "触控优先，同一份运行中的工作。",
   "mobile.body":
@@ -211,7 +211,8 @@ const zhMessages = {
   "topology.intro":
     "Desktop 与 Mobile 汇入同一个自托管 Cowboy Hub。Hub 在已加入的 Machines 之间路由持久 Session，让你无需切换 IDE 或 SSH tab 即可切换主机，并重连同一个不会被移动或停止的 worker。",
   "topology.read": "阅读架构",
-  "topology.aria": "Cowboy 系统拓扑",
+  "topology.aria":
+    "Desktop 与 Mobile 通过一个自托管 Cowboy Hub 连接三台 macOS 和 Linux Machine 的系统拓扑",
   "topology.keyboard": "键盘",
   "topology.touch": "触控",
   "topology.controlPlane": "一个控制平面",

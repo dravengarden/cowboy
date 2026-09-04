@@ -158,7 +158,8 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   assertPublicSiteContent("README.md", readme);
   assertPublicSiteContent("CONTRIBUTING.md", contributing);
   assert(
-    readme.includes("site/assets/cowboy-hero-devices-light-v4.webp") &&
+    readme.includes("site/assets/cowboy-readme-mark-v1.png") &&
+      readme.includes("site/assets/cowboy-remote-topology-light-v1.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
       !readme.includes("docs/screenshots/"),
@@ -281,7 +282,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       !html.includes("Machine 04</span>") &&
         !html.includes("Machine 05</span>") &&
+        (html.match(/data-demo-machine=/gu) ?? []).length === 6 &&
         (html.match(/control-machine-multi/gu) ?? []).length === 3 &&
+        (html.match(/machine-chassis-mac/gu) ?? []).length === 2 &&
+        (html.match(/machine-chassis-workstation/gu) ?? []).length === 2 &&
+        (html.match(/machine-chassis-server/gu) ?? []).length === 2 &&
         html.includes('data-agent-provider="codex"') &&
         html.includes('data-agent-provider="claude-code"') &&
         html.includes('data-agent-provider="gemini"') &&
@@ -311,11 +316,13 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero should connect Desktop and Mobile through one Hub with one explicit route per Machine",
     );
     assert(
-      html.includes(
-        '<article><span><i></i> <span>Machine 03</span></span><strong data-i18n="topology.connected">Connected</strong>',
-      ) &&
+      html.includes('<article data-demo-machine="Machine 03">') &&
+        html.includes(
+          '<small class="topology-machine-platform">Linux · server</small>',
+        ) &&
+        html.includes('class="topology-machine-agents"') &&
         !html.includes('data-i18n="topology.connectNext"'),
-      "architecture topology should keep all three generic Machines connected without a fake action",
+      "architecture topology should depict three generic macOS and Linux Machines without a fake action",
     );
     assert(
       html.includes('id="safety"') && html.includes("Fail-closed"),
@@ -334,6 +341,18 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         html.includes("Keyboard controls everything") &&
         !html.includes("Example Cowboy desktop commands"),
       "Desktop should present one Vim-like keyboard promise without shortcut trivia",
+    );
+    assert(
+      html.includes('class="markdown-composer"') &&
+        (html.match(/class="markdown-line /gu) ?? []).length === 6 &&
+        html.includes("##</i><span>Ship the signed release") &&
+        html.includes("− [x]</i><span>verify pinned plugins") &&
+        html.includes("`just site-check`") &&
+        html.includes("&gt;</i><span>Keep every Machine online") &&
+        styles.includes("@keyframes markdown-compose") &&
+        styles.includes("@keyframes markdown-caret-blink") &&
+        styles.includes(".desktop-surface.is-visible .markdown-line"),
+      "Desktop artwork should compose several readable Markdown forms when it enters view",
     );
     assert(
       html.includes('class="topology-wiring"') &&
@@ -367,13 +386,13 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v1-32.png" type="image/png" sizes="32x32"',
+        'href="assets/cowboy-tab-icon-v2-32.png" type="image/png" sizes="32x32"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v1-16.png" type="image/png" sizes="16x16"',
+          'href="assets/cowboy-tab-icon-v2-16.png" type="image/png" sizes="16x16"',
         ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v1.ico" sizes="any"',
+          'href="assets/cowboy-tab-icon-v2.ico" sizes="any"',
         ) &&
         !html.includes('href="assets/cowboy-hat-mark.svg"'),
       "document should expose transparent, tab-sized Cowboy favicons",
@@ -407,9 +426,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v1-16.png",
-        "cowboy-tab-icon-v1-32.png",
-        "cowboy-tab-icon-v1.ico",
+        "cowboy-tab-icon-v2-16.png",
+        "cowboy-tab-icon-v2-32.png",
+        "cowboy-tab-icon-v2.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]
