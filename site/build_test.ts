@@ -218,12 +218,16 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       styles.includes("--brand-filter-rest:") &&
         styles.includes("--brand-filter-peak:") &&
+        styles.includes("--brand-spectrum:") &&
+        styles.includes("--brand-spectrum-opacity:") &&
         styles.includes("@keyframes brand-color-breathe") &&
-        styles.includes("@keyframes brand-aura-breathe") &&
-        styles.includes("@keyframes brand-sheen-pass") &&
+        styles.includes("@keyframes brand-aura-orbit") &&
+        styles.includes("@keyframes brand-spectrum-flow") &&
+        styles.includes("animation: brand-spectrum-flow 6s linear infinite") &&
         styles.includes(".site-header .brand-icon-stage::after") &&
+        !styles.includes("@keyframes brand-sheen-pass") &&
         styles.includes("animation: none !important"),
-      "header brand lighting should adapt to themes, move gently, and honor reduced motion",
+      "header brand lighting should continuously flow through a theme-aware spectrum and honor reduced motion",
     );
     const controlGroupStart = html.indexOf('<div class="nav-actions"');
     const navToggleStart = html.indexOf('class="nav-toggle"');
@@ -265,44 +269,41 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         `Chinese translation should cover ${key}`,
       );
     }
-    for (const machine of ["01", "02", "03", "04", "05"]) {
+    for (const machine of ["01", "02", "03"]) {
       assert(
         html.includes(`Machine ${machine}</span>`),
         `hero should include generic demo Machine ${machine}`,
       );
     }
     assert(
-      html.includes(
-        'class="control-machine control-machine-codex control-machine-multi"',
-      ) &&
-        html.includes('aria-label="2 Agents"') &&
+      !html.includes("Machine 04</span>") &&
+        !html.includes("Machine 05</span>") &&
+        (html.match(/control-machine-multi/gu) ?? []).length === 3 &&
         html.includes('data-agent-provider="codex"') &&
-        html.includes('data-agent-provider="claude-code"'),
-      "hero should demonstrate multiple Agents sharing one Machine",
-    );
-    assert(
-      html.includes(
-        'class="control-machine control-machine-add" href="#start"',
-      ) &&
-        html.includes('data-i18n="fleet.connect">Connect</strong>') &&
-        html.includes('class="control-hub-node"') &&
-        html.includes("control-fleet-wiring control-fleet-wiring-wide") &&
-        html.includes("control-fleet-wiring control-fleet-wiring-mobile") &&
-        html.includes("seq · route · replay"),
-      "hero should render a truthful connected Hub-to-Machine topology with a real extension action",
-    );
-    assert(
-      html.includes(
-        '<span data-i18n="topology.yourMachine">Your Machine</span>',
-      ) &&
-        html.includes('data-i18n="topology.connectNext">Connect next</strong>'),
-      "topology should invite a generic next Machine",
-    );
-    assert(
-      html.includes('data-agent-provider="claude-code"') &&
+        html.includes('data-agent-provider="claude-code"') &&
+        html.includes('data-agent-provider="gemini"') &&
         html.includes('data-agent-provider="deepseek"') &&
-        html.includes('data-agent-provider="grok"'),
-      "hero control plane should include Claude, DeepSeek, and Grok",
+        html.includes('data-agent-provider="grok"') &&
+        html.includes('data-agent-provider="custom"'),
+      "hero should stay at three generic Machines while demonstrating multiple Agents on every Machine",
+    );
+    assert(
+      html.includes('class="hero-client-wiring"') &&
+        html.includes('class="control-hub-node"') &&
+        html.includes('class="control-fleet-wiring"') &&
+        html.includes("seq · route · replay") &&
+        html.includes("<b>3M</b>") &&
+        html.includes("<b>6A</b>") &&
+        !html.includes("control-machine-add") &&
+        !html.includes("control-fleet-wiring-mobile"),
+      "hero should connect Desktop and Mobile through one Hub to a compact three-Machine topology",
+    );
+    assert(
+      html.includes(
+        '<article><span><i></i> <span>Machine 03</span></span><strong data-i18n="topology.connected">Connected</strong>',
+      ) &&
+        !html.includes('data-i18n="topology.connectNext"'),
+      "architecture topology should keep all three generic Machines connected without a fake action",
     );
     assert(
       html.includes('id="safety"') && html.includes("Fail-closed"),
@@ -333,7 +334,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes("Self-hosted remote Agent IDE") &&
-        html.includes("No shared Cowboy cloud") &&
+        html.includes(
+          'One workspace.</span><br><span data-i18n="hero.hosted">Self-hosted.',
+        ) &&
+        html.includes("Self-host Cowboy on your infrastructure") &&
+        script.includes('"hero.hosted":') &&
         script.includes('"hero.ownership":'),
       "hero should make Cowboy's self-hosted single-instance ownership explicit",
     );

@@ -185,15 +185,15 @@
       <section class="hero section-shell" id="top">
         <div class="hero-copy">
           <p class="eyebrow"><span></span> <b data-i18n="hero.eyebrow">Self-hosted remote Agent IDE</b></p>
-          <h1><span data-i18n="hero.agents">Your agents.</span><br><span data-i18n="hero.machines">Your machines.</span><br><em data-i18n="hero.workspace">One live workspace.</em></h1>
+          <h1><span data-i18n="hero.agents">Your agents.</span><br><span data-i18n="hero.machines">Your machines.</span><br><em><span data-i18n="hero.workspace">One workspace.</span><br><span data-i18n="hero.hosted">Self-hosted.</span></em></h1>
           <p class="hero-lede" data-i18n="hero.lede">
-            Run one Cowboy instance on infrastructure you control. Direct Codex,
-            Claude Code, Gemini, Grok, and DeepSeek across every enrolled Machine,
-            then reconnect without stopping the worker that stays there.
+            Self-host Cowboy on your infrastructure. Direct Codex, Claude Code,
+            Gemini, Grok, and DeepSeek across every enrolled Machine, then
+            reconnect to workers that keep running where they started.
           </p>
           <p class="hero-ownership">
             <span aria-hidden="true"></span>
-            <strong data-i18n="hero.ownership">One instance. No shared Cowboy cloud. Always yours.</strong>
+            <strong data-i18n="hero.ownership">Your control plane. Your data. Your credentials. Always yours.</strong>
           </p>
           <div class="hero-actions">
             <a class="button button-primary" href="#start">
@@ -227,9 +227,17 @@
           <div
             class="hero-control-plane"
             role="group"
-            aria-label="Live topology from one Cowboy Hub to five connected Machines and six Agents; Machine 01 runs two Agents"
+            aria-label="Desktop and Mobile connect through one Cowboy Hub to three Machines and six Agents; every Machine runs two Agents"
             data-i18n-aria-label="fleet.aria"
           >
+            <svg class="hero-client-wiring" viewBox="0 0 600 140" preserveAspectRatio="none" aria-hidden="true">
+              <path d="M248 42 C248 83 282 83 300 116"></path>
+              <path d="M530 60 C530 102 348 84 300 116"></path>
+              <path d="M300 116V140"></path>
+              <circle cx="248" cy="42" r="3"></circle>
+              <circle cx="530" cy="60" r="3"></circle>
+              <circle cx="300" cy="116" r="3.5"></circle>
+            </svg>
             <div class="control-plane-summary">
               <span><i></i> <b data-i18n="fleet.live">Live topology</b></span>
               <strong>
@@ -241,7 +249,7 @@
                 <i aria-hidden="true">→</i>
                 <span data-i18n="fleet.agents">Agents</span>
               </strong>
-              <span class="control-fleet-count"><b>5M</b><i aria-hidden="true">·</i><b>6A</b></span>
+              <span class="control-fleet-count"><b>3M</b><i aria-hidden="true">·</i><b>6A</b></span>
             </div>
             <div class="control-plane-map">
               <div class="control-hub-node">
@@ -249,17 +257,13 @@
                 <code>seq · route · replay</code>
               </div>
               <div class="control-machine-field">
-                <svg class="control-fleet-wiring control-fleet-wiring-wide" viewBox="0 0 600 96" preserveAspectRatio="none" aria-hidden="true">
-                  <path d="M300 0V24M50 24H550M50 24V96M150 24V96M250 24V96M350 24V96M450 24V96M550 24V96"></path>
-                  <g><circle cx="50" cy="24" r="3"></circle><circle cx="150" cy="24" r="3"></circle><circle cx="250" cy="24" r="3"></circle><circle cx="350" cy="24" r="3"></circle><circle cx="450" cy="24" r="3"></circle><circle cx="550" cy="24" r="3"></circle></g>
-                </svg>
-                <svg class="control-fleet-wiring control-fleet-wiring-mobile" viewBox="0 0 300 190" preserveAspectRatio="none" aria-hidden="true">
-                  <path d="M150 0V22M50 22H250M50 22V40M150 22V40M250 22V40M150 22V116M50 116H250M50 116V134M150 116V134M250 116V134"></path>
-                  <g><circle cx="50" cy="22" r="2.5"></circle><circle cx="150" cy="22" r="2.5"></circle><circle cx="250" cy="22" r="2.5"></circle><circle cx="50" cy="116" r="2.5"></circle><circle cx="150" cy="116" r="2.5"></circle><circle cx="250" cy="116" r="2.5"></circle></g>
+                <svg class="control-fleet-wiring" viewBox="0 0 600 96" preserveAspectRatio="none" aria-hidden="true">
+                  <path d="M300 0V24M100 24H500M100 24V30M300 24V30M500 24V30"></path>
+                  <g><circle cx="100" cy="24" r="3"></circle><circle cx="300" cy="24" r="3"></circle><circle cx="500" cy="24" r="3"></circle></g>
                 </svg>
                 <div class="control-machines">
                   <div class="control-machine control-machine-codex control-machine-multi" aria-label="Machine 01 running Codex and Claude">
-                    <span class="control-machine-name"><i></i> <span>Machine 01</span><em aria-label="2 Agents" data-i18n-aria-label="fleet.twoAgents">2A</em></span>
+                    <span class="control-machine-name"><i></i> <span>Machine 01</span></span>
                     <div class="control-agents">
                       <span class="control-agent control-agent-codex" data-agent-provider="codex">
                         <b aria-hidden="true">&gt;_</b><span>Codex</span>
@@ -269,43 +273,28 @@
                       </span>
                     </div>
                   </div>
-                  <div class="control-machine control-machine-gemini" aria-label="Machine 02 running Gemini">
+                  <div class="control-machine control-machine-gemini control-machine-multi" aria-label="Machine 02 running Gemini and DeepSeek">
                     <span class="control-machine-name"><i></i> <span>Machine 02</span></span>
                     <div class="control-agents">
                       <span class="control-agent control-agent-gemini" data-agent-provider="gemini">
                         <b aria-hidden="true">✦</b><span>Gemini</span>
                       </span>
-                    </div>
-                  </div>
-                  <div class="control-machine control-machine-deepseek" aria-label="Machine 03 running DeepSeek">
-                    <span class="control-machine-name"><i></i> <span>Machine 03</span></span>
-                    <div class="control-agents">
                       <span class="control-agent control-agent-deepseek" data-agent-provider="deepseek">
                         <b aria-hidden="true">D</b><span>DeepSeek</span>
                       </span>
                     </div>
                   </div>
-                  <div class="control-machine control-machine-grok" aria-label="Machine 04 running Grok">
-                    <span class="control-machine-name"><i></i> <span>Machine 04</span></span>
+                  <div class="control-machine control-machine-grok control-machine-multi" aria-label="Machine 03 running Grok and your Agent plugin">
+                    <span class="control-machine-name"><i></i> <span>Machine 03</span></span>
                     <div class="control-agents">
                       <span class="control-agent control-agent-grok" data-agent-provider="grok">
                         <b aria-hidden="true">G</b><span>Grok</span>
                       </span>
-                    </div>
-                  </div>
-                  <div class="control-machine control-machine-custom" aria-label="Machine 05 running your Agent plugin">
-                    <span class="control-machine-name"><i></i> <span>Machine 05</span></span>
-                    <div class="control-agents">
                       <span class="control-agent control-agent-custom" data-agent-provider="custom">
                         <b aria-hidden="true">+</b><span data-i18n="fleet.yourPlugin">Your plugin</span>
                       </span>
                     </div>
                   </div>
-                  <a class="control-machine control-machine-add" href="#start">
-                    <b class="control-add-mark" aria-hidden="true">+</b>
-                    <span><strong data-i18n="fleet.connect">Connect</strong><small>Machine</small></span>
-                    <svg class="control-add-arrow" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
-                  </a>
                 </div>
               </div>
             </div>
@@ -563,9 +552,10 @@
             <p class="eyebrow"><span></span> <b data-i18n="topology.eyebrow">One remote control plane</b></p>
             <h2><span data-i18n="topology.title.one">One place to direct</span><br><span data-i18n="topology.title.every">every Machine.</span></h2>
             <p data-i18n="topology.intro">
-              Cowboy's Hub routes durable sessions across enrolled Machines.
-              Switch hosts without switching IDEs or SSH tabs; Desktop and Mobile
-              reconnect to the same worker without moving or stopping it.
+              Desktop and Mobile converge on one self-hosted Cowboy Hub. The Hub
+              routes durable sessions across enrolled Machines, so you can switch
+              hosts without switching IDEs or SSH tabs and reconnect to the same
+              worker without moving or stopping it.
             </p>
             <a class="text-link" href="https://github.com/dravengarden/cowboy/blob/main/docs/architecture/00-overview.md">
               <span data-i18n="topology.read">Read the architecture</span>
@@ -607,7 +597,7 @@
             <div class="topology-machines">
               <article><span><i></i> <span>Machine 01</span></span><strong data-i18n="topology.connected">Connected</strong><small>Codex · Claude</small></article>
               <article><span><i></i> <span>Machine 02</span></span><strong data-i18n="topology.connected">Connected</strong><small>Gemini · DeepSeek</small></article>
-              <article><span><i></i> <span data-i18n="topology.yourMachine">Your Machine</span></span><strong data-i18n="topology.connectNext">Connect next</strong><small data-i18n="topology.yourPlugins">Grok · your plugins</small></article>
+              <article><span><i></i> <span>Machine 03</span></span><strong data-i18n="topology.connected">Connected</strong><small data-i18n="topology.yourPlugins">Grok · your plugins</small></article>
             </div>
           </div>
         </div>

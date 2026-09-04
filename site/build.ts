@@ -156,14 +156,11 @@ function assertGenericDemoMachineLabels(html: string): void {
   )].map((match) => match[1].trim());
 
   if (
-    heroLabels.join("|") !==
-      "Machine 01|Machine 02|Machine 03|Machine 04|Machine 05"
+    heroLabels.join("|") !== "Machine 01|Machine 02|Machine 03"
   ) {
     throw new Error("hero must use generic demo Machine labels");
   }
-  if (
-    topologyLabels.join("|") !== "Machine 01|Machine 02|Your Machine"
-  ) {
+  if (topologyLabels.join("|") !== "Machine 01|Machine 02|Machine 03") {
     throw new Error("topology must use generic demo Machine labels");
   }
 }
