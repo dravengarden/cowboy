@@ -48,4 +48,8 @@ Deno.test("desktop reload confirmation names every preserved session state", () 
   assert(dialogSource.includes("The current turn will stop"));
   assert(dialogSource.includes("confirmActiveTurn: activeTurn"));
   assert(dialogSource.includes('activeTurn ? "Stop & reload" : "Reload"'));
+  assertEquals(
+    dialogSource.match(/sx=\{\{ minHeight: 44 \}\}/g)?.length,
+    2,
+  );
 });

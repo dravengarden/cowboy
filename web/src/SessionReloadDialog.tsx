@@ -36,7 +36,12 @@ export function SessionReloadDialog({
       title="Reload this session?"
       actions={
         <>
-          <Button color="inherit" onClick={onClose} disabled={action.pending}>
+          <Button
+            color="inherit"
+            onClick={onClose}
+            disabled={action.pending}
+            sx={{ minHeight: 44 }}
+          >
             Cancel
             <Kbd keys="Esc" />
           </Button>
@@ -49,6 +54,7 @@ export function SessionReloadDialog({
             aria-busy={action.pending || undefined}
             disabled={action.pending}
             onClick={confirm}
+            sx={{ minHeight: 44 }}
           >
             {activeTurn ? "Stop & reload" : "Reload"}
             <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
