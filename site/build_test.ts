@@ -74,6 +74,11 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
     );
   }
 
+  const codex = plugins.find((plugin) => plugin.id === "codex");
+  assert(codex, "Codex should remain in the website catalog");
+  assertEquals(codex.accentLight, "#29252F", "Codex light website accent");
+  assertEquals(codex.accentDark, "#F0ECF8", "Codex dark website accent");
+
   assertEquals(
     [...plugins].map((plugin) => plugin.id).sort().join(","),
     manifests.map((manifest) => manifest.id).sort().join(","),
@@ -341,6 +346,29 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         html.includes("Keyboard controls everything") &&
         !html.includes("Example Cowboy desktop commands"),
       "Desktop should present one Vim-like keyboard promise without shortcut trivia",
+    );
+    assert(
+      (html.match(/class="lifecycle-icon-surface"/gu) ?? []).length === 2 &&
+        html.includes(
+          'class="lifecycle-icon lifecycle-sign" aria-hidden="true"',
+        ) &&
+        html.includes(
+          'class="lifecycle-icon lifecycle-run" aria-hidden="true"',
+        ) &&
+        styles.includes(".lifecycle-icon > svg") &&
+        !styles.includes(".lifecycle-sign::after") &&
+        !styles.includes(".lifecycle-run::after"),
+      "Sign and Run should use stable single-SVG lifecycle marks instead of offset CSS fragments",
+    );
+    assert(
+      styles.includes("--codex-accent: #29252f") &&
+        styles.includes("--codex-accent: #f0ecf8") &&
+        styles.includes("--node-accent: var(--codex-accent)") &&
+        styles.includes(
+          ".control-agent-codex {\n  color: var(--codex-accent);",
+        ) &&
+        !styles.includes("#4f6bed"),
+      "every named Codex surface should use the neutral OpenAI palette instead of blue",
     );
     assert(
       html.includes('class="markdown-composer"') &&

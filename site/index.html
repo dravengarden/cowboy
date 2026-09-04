@@ -536,7 +536,13 @@
           </li>
           <li class="reveal" style="--reveal-delay: 60ms">
             <span>02</span>
-            <div class="lifecycle-icon lifecycle-sign"><i></i></div>
+            <div class="lifecycle-icon lifecycle-sign" aria-hidden="true">
+              <svg viewBox="0 0 48 42">
+                <path class="lifecycle-icon-surface" d="M10 3.5h19l8 8v22a4.5 4.5 0 0 1-4.5 4.5h-22A4.5 4.5 0 0 1 6 33.5V8a4.5 4.5 0 0 1 4-4.5Z"></path>
+                <path d="M29 3.5v8h8"></path>
+                <path d="m14.5 23 5 5 12-12"></path>
+              </svg>
+            </div>
             <strong data-i18n="lifecycle.sign">Sign</strong>
             <p data-i18n="lifecycle.signBody">Publisher identity, contract fingerprint, and every runtime artifact are bound.</p>
           </li>
@@ -554,7 +560,13 @@
           </li>
           <li class="reveal" style="--reveal-delay: 240ms">
             <span>05</span>
-            <div class="lifecycle-icon lifecycle-run"><i></i></div>
+            <div class="lifecycle-icon lifecycle-run" aria-hidden="true">
+              <svg viewBox="0 0 48 42">
+                <rect class="lifecycle-icon-surface" x="3.5" y="5.5" width="41" height="31" rx="7"></rect>
+                <path d="m13 16 6 5-6 5"></path>
+                <path d="M24 27h10"></path>
+              </svg>
+            </div>
             <strong data-i18n="lifecycle.run">Run</strong>
             <p data-i18n="lifecycle.runBody">Sessions stay pinned to the exact installed release until an explicit change.</p>
           </li>

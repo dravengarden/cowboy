@@ -69,6 +69,13 @@ const PLUGIN_ORDER = [
   "zed",
 ];
 
+const WEBSITE_PROVIDER_ACCENTS: Partial<
+  Record<string, { light: string; dark: string }>
+> = {
+  codex: { light: "#29252F", dark: "#F0ECF8" },
+  grok: { light: "#44403C", dark: "#E8E4DC" },
+};
+
 const CODE_INTELLIGENCE_PRESENTATION: Record<
   string,
   Omit<
@@ -254,8 +261,9 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
 
     const display = provider.display;
     const accent = assertHexColor(display.accent, `${manifest.id} accent`);
-    const accentLight = manifest.id === "grok" ? "#44403C" : accent;
-    const accentDark = manifest.id === "grok" ? "#E8E4DC" : accent;
+    const websiteAccent = WEBSITE_PROVIDER_ACCENTS[manifest.id];
+    const accentLight = websiteAccent?.light ?? accent;
+    const accentDark = websiteAccent?.dark ?? accent;
 
     return {
       ...shared,
