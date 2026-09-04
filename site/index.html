@@ -152,32 +152,50 @@
           </div>
           <div
             class="hero-control-plane"
-            aria-label="One Cowboy control plane directing four Agent Providers across two connected Machines"
+            aria-label="One Cowboy control plane directing five Agent Providers across five connected Machines, with room to add more"
           >
             <div class="control-plane-summary">
-              <span><i></i> Remote control</span>
-              <strong>One surface. Every Machine.</strong>
+              <span><i></i> Live fleet</span>
+              <strong>One surface <span aria-hidden="true">→</span> every Machine</strong>
+              <span class="control-fleet-count"><b>5</b> connected</span>
             </div>
-            <div class="control-machine" aria-label="Machine 01">
-              <span class="control-machine-name"><i></i> Machine 01</span>
-              <div class="control-agents">
+            <div class="control-route" aria-hidden="true">
+              <i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <div class="control-machines">
+              <div class="control-machine control-machine-codex" aria-label="Machine 01 running Codex">
+                <span class="control-machine-name"><i></i> Machine 01</span>
                 <span class="control-agent control-agent-codex" data-agent-provider="codex">
-                  <b aria-hidden="true">&gt;_</b> Codex
-                </span>
-                <span class="control-agent control-agent-claude" data-agent-provider="claude-code">
-                  <b aria-hidden="true">C</b> Claude
+                  <b aria-hidden="true">&gt;_</b><span>Codex</span>
                 </span>
               </div>
-            </div>
-            <div class="control-machine" aria-label="Machine 02">
-              <span class="control-machine-name"><i></i> Machine 02</span>
-              <div class="control-agents">
+              <div class="control-machine control-machine-claude" aria-label="Machine 02 running Claude">
+                <span class="control-machine-name"><i></i> Machine 02</span>
+                <span class="control-agent control-agent-claude" data-agent-provider="claude-code">
+                  <b aria-hidden="true">C</b><span>Claude</span>
+                </span>
+              </div>
+              <div class="control-machine control-machine-gemini" aria-label="Machine 03 running Gemini">
+                <span class="control-machine-name"><i></i> Machine 03</span>
                 <span class="control-agent control-agent-gemini" data-agent-provider="gemini">
-                  <b aria-hidden="true">✦</b> Gemini
+                  <b aria-hidden="true">✦</b><span>Gemini</span>
                 </span>
+              </div>
+              <div class="control-machine control-machine-deepseek" aria-label="Machine 04 running DeepSeek">
+                <span class="control-machine-name"><i></i> Machine 04</span>
                 <span class="control-agent control-agent-deepseek" data-agent-provider="deepseek">
-                  <b aria-hidden="true">D</b> DeepSeek
+                  <b aria-hidden="true">D</b><span>DeepSeek</span>
                 </span>
+              </div>
+              <div class="control-machine control-machine-grok" aria-label="Machine 05 running Grok">
+                <span class="control-machine-name"><i></i> Machine 05</span>
+                <span class="control-agent control-agent-grok" data-agent-provider="grok">
+                  <b aria-hidden="true">G</b><span>Grok</span>
+                </span>
+              </div>
+              <div class="control-machine control-machine-add" aria-label="Connect another Machine">
+                <b class="control-add-mark" aria-hidden="true">+</b>
+                <span><strong>Add</strong><small>Machine</small></span>
               </div>
             </div>
           </div>
@@ -189,8 +207,8 @@
             <span>remote control plane</span>
           </div>
           <div>
-            <strong>2+</strong>
-            <span>connected Machines</span>
+            <strong aria-label="one to many">1→N</strong>
+            <span>Machine fan-out</span>
           </div>
           <div>
             <strong>{{AGENT_PLUGIN_COUNT}}</strong>

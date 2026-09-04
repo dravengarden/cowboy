@@ -224,10 +224,16 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         !html.includes("theme-icon-sun"),
       "theme control should use the half-light appearance mark",
     );
+    for (const machine of ["01", "02", "03", "04", "05"]) {
+      assert(
+        html.includes(`Machine ${machine}</span>`),
+        `hero should include generic demo Machine ${machine}`,
+      );
+    }
     assert(
-      html.includes('aria-label="Machine 01"') &&
-        html.includes('aria-label="Machine 02"'),
-      "hero should use generic demo Machine labels",
+      html.includes('aria-label="Connect another Machine"') &&
+        html.includes('class="control-route"'),
+      "hero should show an extensible one-to-many Machine fleet",
     );
     assert(
       html.includes("<i></i> Your Machine</span><strong>Connect next</strong>"),
@@ -235,8 +241,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes('data-agent-provider="claude-code"') &&
-        html.includes('data-agent-provider="deepseek"'),
-      "hero control plane should include Claude and DeepSeek",
+        html.includes('data-agent-provider="deepseek"') &&
+        html.includes('data-agent-provider="grok"'),
+      "hero control plane should include Claude, DeepSeek, and Grok",
     );
     assert(
       html.includes('id="safety"') && html.includes("Fail-closed"),

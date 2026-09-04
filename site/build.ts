@@ -155,7 +155,10 @@ function assertGenericDemoMachineLabels(html: string): void {
     /<article><span><i><\/i>\s*([^<]+)<\/span>/gu,
   )].map((match) => match[1].trim());
 
-  if (heroLabels.join("|") !== "Machine 01|Machine 02") {
+  if (
+    heroLabels.join("|") !==
+      "Machine 01|Machine 02|Machine 03|Machine 04|Machine 05"
+  ) {
     throw new Error("hero must use generic demo Machine labels");
   }
   if (
