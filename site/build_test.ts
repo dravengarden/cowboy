@@ -306,10 +306,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         !html.includes('class="control-hub-ports"') &&
         !html.includes('class="control-machine-ports"') &&
         (html.match(/class="control-machine-route"/gu) ?? []).length === 3 &&
-        html.includes('d="M270 28 C270 74 285 102 300 120"') &&
+        html.includes('d="M270 72 C270 96 285 108 300 120"') &&
+        html.includes('d="M554 108 C554 118 378 108 300 120"') &&
         styles.includes("top: -108px") &&
         styles.includes("height: 124px"),
-      "hero wiring should connect both clients to one Hub and branch to three Machines without ornamental endpoint circles",
+      "hero wiring should start at both client component edges, connect to one Hub, and branch to three Machines without ornamental endpoint circles",
     );
     assert(
       html.includes('src="assets/cowboy-brand-mark.png"') &&
@@ -410,10 +411,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes('class="hero-client-wiring"') &&
-        html.includes("M270 28 C270 74 285 102 300 120") &&
-        html.includes("M554 82 C554 107 378 105 300 120") &&
-        !html.includes('<circle cx="270" cy="28"') &&
-        !html.includes('<circle cx="554" cy="82"') &&
+        html.includes("M270 72 C270 96 285 108 300 120") &&
+        html.includes("M554 108 C554 118 378 108 300 120") &&
+        !html.includes('<circle cx="270" cy="72"') &&
+        !html.includes('<circle cx="554" cy="108"') &&
         !html.includes('<circle cx="300" cy="120"') &&
         html.includes('class="control-hub-node"') &&
         html.includes('class="control-fleet-wiring"') &&
