@@ -1083,10 +1083,16 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
         info != nil
             ? (UIViewAnimationCurve)[info[UIKeyboardAnimationCurveUserInfoKey] integerValue]
             : UIViewAnimationCurveEaseInOut;
+    UIViewAnimationOptions options = (UIViewAnimationOptions)(curve << 16);
+    // Mobile delivery blurs the composer immediately. Keep the web view
+    // interactive while its frame follows the keyboard, and let duplicate
+    // keyboard notifications continue from the current presentation frame.
+    options |= UIViewAnimationOptionAllowUserInteraction;
+    options |= UIViewAnimationOptionBeginFromCurrentState;
 
     [UIView animateWithDuration:duration
                           delay:0
-                        options:(UIViewAnimationOptions)(curve << 16)
+                        options:options
                      animations:^{
                          CGRect f = full;
                          f.size.height = MAX(0, full.size.height - overlap);
