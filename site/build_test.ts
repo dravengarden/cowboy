@@ -366,8 +366,17 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "the floating return-to-top control should reveal after scrolling and avoid mobile browser chrome",
     );
     assert(
-      html.includes('href="assets/cowboy-hat-mark.svg"'),
-      "document should expose the simplified Cowboy hat favicon",
+      html.includes(
+        'href="assets/cowboy-tab-icon-v1-32.png" type="image/png" sizes="32x32"',
+      ) &&
+        html.includes(
+          'href="assets/cowboy-tab-icon-v1-16.png" type="image/png" sizes="16x16"',
+        ) &&
+        html.includes(
+          'href="assets/cowboy-tab-icon-v1.ico" sizes="any"',
+        ) &&
+        !html.includes('href="assets/cowboy-hat-mark.svg"'),
+      "document should expose transparent, tab-sized Cowboy favicons",
     );
     assert(
       !html.includes("cowboy-desktop.webp") &&
@@ -398,6 +407,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
+        "cowboy-tab-icon-v1-16.png",
+        "cowboy-tab-icon-v1-32.png",
+        "cowboy-tab-icon-v1.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

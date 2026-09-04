@@ -97,7 +97,15 @@ const CODE_INTELLIGENCE_PRESENTATION: Record<
 
 const REQUIRED_ASSETS = [
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
-  ["site/assets/cowboy-hat-favicon-v2.ico", "assets/favicon.ico"],
+  [
+    "site/assets/cowboy-tab-icon-v1-16.png",
+    "assets/cowboy-tab-icon-v1-16.png",
+  ],
+  [
+    "site/assets/cowboy-tab-icon-v1-32.png",
+    "assets/cowboy-tab-icon-v1-32.png",
+  ],
+  ["site/assets/cowboy-tab-icon-v1.ico", "assets/cowboy-tab-icon-v1.ico"],
   ["site/assets/cowboy-hat-mark-v2-512.png", "assets/cowboy-logo-512.png"],
   [
     "site/assets/cowboy-brand-mark-transparent-v5.png",
