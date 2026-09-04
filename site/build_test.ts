@@ -196,8 +196,19 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero should use one privacy-safe Desktop and Phone composition",
     );
     assert(
-      html.includes('src="assets/cowboy-brand-mark.png"'),
-      "wordmarks should use the background-free Cowboy brand icon",
+      html.includes('src="assets/cowboy-brand-mark.png"') &&
+        (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
+      "wordmarks should stage the background-free Cowboy brand icon for theme-aware light",
+    );
+    assert(
+      styles.includes("--brand-filter-rest:") &&
+        styles.includes("--brand-filter-peak:") &&
+        styles.includes("@keyframes brand-color-breathe") &&
+        styles.includes("@keyframes brand-aura-breathe") &&
+        styles.includes("@keyframes brand-sheen-pass") &&
+        styles.includes(".site-header .brand-icon-stage::after") &&
+        styles.includes("animation: none !important"),
+      "header brand lighting should adapt to themes, move gently, and honor reduced motion",
     );
     const controlGroupStart = html.indexOf('<div class="nav-actions"');
     const navToggleStart = html.indexOf('class="nav-toggle"');

@@ -17,6 +17,13 @@
   --shadow-sm: 0 8px 28px rgba(63, 48, 93, 0.08);
   --shadow-lg: 0 28px 80px rgba(54, 38, 87, 0.18);
   --header: rgba(246, 244, 251, 0.82);
+  --brand-aura-core: rgba(99, 73, 231, 0.3);
+  --brand-aura-edge: rgba(68, 157, 255, 0.18);
+  --brand-sheen: rgba(255, 255, 255, 0.82);
+  --brand-filter-rest: saturate(1.26) contrast(1.07) brightness(1.04)
+    hue-rotate(-5deg) drop-shadow(0 6px 8px rgba(69, 48, 178, 0.24));
+  --brand-filter-peak: saturate(1.42) contrast(1.08) brightness(1.12)
+    hue-rotate(5deg) drop-shadow(0 9px 14px rgba(60, 95, 235, 0.34));
   --shell: 1280px;
   --radius-sm: 10px;
   --radius-md: 16px;
@@ -46,6 +53,13 @@ html[data-theme="dark"] {
   --shadow-sm: 0 8px 30px rgba(0, 0, 0, 0.2);
   --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.38);
   --header: rgba(21, 17, 29, 0.84);
+  --brand-aura-core: rgba(149, 118, 255, 0.52);
+  --brand-aura-edge: rgba(74, 177, 255, 0.3);
+  --brand-sheen: rgba(238, 246, 255, 0.9);
+  --brand-filter-rest: saturate(1.36) contrast(1.04) brightness(1.17)
+    hue-rotate(-2deg) drop-shadow(0 7px 12px rgba(115, 84, 255, 0.46));
+  --brand-filter-peak: saturate(1.52) contrast(1.04) brightness(1.28)
+    hue-rotate(8deg) drop-shadow(0 10px 18px rgba(67, 159, 255, 0.55));
 }
 
 *,
@@ -216,12 +230,126 @@ kbd {
   mask: url("assets/cowboy-hat-mark.svg") center / contain no-repeat;
 }
 
-.brand-icon {
-  display: block;
-  width: 46px;
+.brand-icon-stage {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  width: 52px;
   aspect-ratio: 1;
-  filter: drop-shadow(0 7px 10px rgba(74, 55, 142, 0.2));
+  isolation: isolate;
+  place-items: center;
+}
+
+.brand-icon-stage::before,
+.brand-icon-stage::after {
+  position: absolute;
+  content: "";
+  pointer-events: none;
+}
+
+.brand-icon-stage::before {
+  z-index: -1;
+  inset: 11%;
+  transform: scale(0.9);
+  border-radius: 48% 52% 55% 45%;
+  background:
+    radial-gradient(ellipse at 42% 58%, var(--brand-aura-core), transparent 62%),
+    radial-gradient(ellipse at 68% 42%, var(--brand-aura-edge), transparent 58%);
+  filter: blur(8px);
+  opacity: 0.58;
+}
+
+.brand-icon-stage::after {
+  z-index: 2;
+  inset: 0;
+  background: linear-gradient(
+    112deg,
+    transparent 32%,
+    var(--brand-sheen) 47%,
+    transparent 62%
+  );
+  background-position: 160% 0;
+  background-size: 260% 100%;
+  mix-blend-mode: screen;
+  opacity: 0;
+  -webkit-mask: url("assets/cowboy-brand-mark.png") center / contain no-repeat;
+  mask: url("assets/cowboy-brand-mark.png") center / contain no-repeat;
+}
+
+.brand-icon {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  filter: var(--brand-filter-rest);
   object-fit: contain;
+}
+
+.site-header .brand-icon {
+  animation: brand-color-breathe 7.5s ease-in-out infinite;
+  will-change: filter;
+}
+
+.site-header .brand-icon-stage::before {
+  animation: brand-aura-breathe 5.5s ease-in-out infinite;
+}
+
+.site-header .brand-icon-stage::after {
+  animation: brand-sheen-pass 8s ease-in-out infinite;
+}
+
+.site-footer .brand-icon-stage {
+  width: 46px;
+}
+
+.site-footer .brand-icon-stage::before {
+  opacity: 0.34;
+}
+
+@keyframes brand-color-breathe {
+  0%,
+  100% {
+    filter: var(--brand-filter-rest);
+  }
+
+  50% {
+    filter: var(--brand-filter-peak);
+  }
+}
+
+@keyframes brand-aura-breathe {
+  0%,
+  100% {
+    transform: scale(0.86) rotate(-2deg);
+    opacity: 0.44;
+  }
+
+  50% {
+    transform: scale(1.08) rotate(3deg);
+    opacity: 0.76;
+  }
+}
+
+@keyframes brand-sheen-pass {
+  0%,
+  56% {
+    background-position: 160% 0;
+    opacity: 0;
+  }
+
+  62% {
+    opacity: 0.68;
+  }
+
+  76% {
+    background-position: -60% 0;
+    opacity: 0.1;
+  }
+
+  77%,
+  100% {
+    background-position: -60% 0;
+    opacity: 0;
+  }
 }
 
 .site-navigation {
@@ -2676,8 +2804,8 @@ html[data-theme="dark"] .control-agent-grok {
     min-height: 62px;
   }
 
-  .wordmark .brand-icon {
-    width: 44px;
+  .site-header .brand-icon-stage {
+    width: 54px;
   }
 
   .nav-actions {
@@ -3107,5 +3235,11 @@ html[data-theme="dark"] .control-agent-grok {
   .js .reveal {
     transform: none;
     opacity: 1;
+  }
+
+  .site-header .brand-icon,
+  .site-header .brand-icon-stage::before,
+  .site-header .brand-icon-stage::after {
+    animation: none !important;
   }
 }
