@@ -247,8 +247,11 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         html.includes('data-theme-choice="system"') &&
         html.includes('data-theme-choice="light"') &&
         html.includes('data-theme-choice="dark"') &&
+        (html.match(/class="theme-choice-icon"/gu) ?? []).length === 3 &&
+        !html.includes("theme-choice-mark") &&
+        styles.includes('.preference-options button[aria-pressed="true"]') &&
         script.includes('colorSchemeQuery.addEventListener?.("change"'),
-      "appearance preferences should offer and live-update System, Light, and Dark modes",
+      "appearance preferences should offer compact icon-led System, Light, and Dark modes",
     );
     assert(
       html.includes('data-language="en"') &&
@@ -289,6 +292,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes('class="hero-client-wiring"') &&
+        html.includes("M270 62 C270 91 284 100 300 116") &&
+        html.includes("M554 96 C554 119 366 104 300 116") &&
+        !html.includes('<circle cx="270"') &&
+        !html.includes('<circle cx="554"') &&
         html.includes('class="control-hub-node"') &&
         html.includes('class="control-fleet-wiring"') &&
         html.includes("seq · route · replay") &&
@@ -345,8 +352,13 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes('class="back-to-top" href="#top"') &&
         script.includes('backToTop?.addEventListener("click"') &&
-        script.includes("globalThis.scrollTo({"),
-      "footer should provide a reliable return-to-top control with an anchor fallback",
+        script.includes("function updateBackToTop()") &&
+        script.includes('classList.toggle("is-visible", visible)') &&
+        script.includes("globalThis.scrollTo({") &&
+        styles.includes(".js .back-to-top.is-visible") &&
+        styles.includes("env(safe-area-inset-bottom") &&
+        styles.includes("@media (display-mode: standalone)"),
+      "the floating return-to-top control should reveal after scrolling and avoid mobile browser chrome",
     );
     assert(
       html.includes('href="assets/cowboy-hat-mark.svg"'),

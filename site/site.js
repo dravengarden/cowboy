@@ -352,12 +352,14 @@ function closeNavigation() {
   navToggle?.setAttribute("aria-expanded", "false");
   navigation?.classList.remove("is-open");
   refreshControlLabels();
+  updateBackToTop();
 }
 
 function closePreferences({ restoreFocus = false } = {}) {
   preferencesToggle?.setAttribute("aria-expanded", "false");
   preferencesPopover?.setAttribute("hidden", "");
   refreshControlLabels();
+  updateBackToTop();
   if (restoreFocus) preferencesToggle?.focus();
 }
 
@@ -367,6 +369,7 @@ navToggle?.addEventListener("click", () => {
   navToggle.setAttribute("aria-expanded", String(opening));
   navigation?.classList.toggle("is-open", opening);
   refreshControlLabels();
+  updateBackToTop();
 });
 
 preferencesToggle?.addEventListener("click", () => {
@@ -375,6 +378,7 @@ preferencesToggle?.addEventListener("click", () => {
   preferencesToggle.setAttribute("aria-expanded", String(opening));
   preferencesPopover?.toggleAttribute("hidden", !opening);
   refreshControlLabels();
+  updateBackToTop();
 });
 
 navigation?.querySelectorAll("a").forEach((link) => {
@@ -402,8 +406,25 @@ function updateHeader() {
   header?.classList.toggle("is-scrolled", globalThis.scrollY > 8);
 }
 
-updateHeader();
-globalThis.addEventListener("scroll", updateHeader, { passive: true });
+function updateBackToTop() {
+  if (!backToTop) return;
+  const controlsOpen = navToggle?.getAttribute("aria-expanded") === "true" ||
+    preferencesToggle?.getAttribute("aria-expanded") === "true";
+  const threshold = Math.max(520, globalThis.innerHeight * 0.65);
+  const visible = globalThis.scrollY > threshold && !controlsOpen;
+  backToTop.classList.toggle("is-visible", visible);
+  backToTop.setAttribute("aria-hidden", String(!visible));
+  backToTop.tabIndex = visible ? 0 : -1;
+}
+
+function updateViewportChrome() {
+  updateHeader();
+  updateBackToTop();
+}
+
+updateViewportChrome();
+globalThis.addEventListener("scroll", updateViewportChrome, { passive: true });
+globalThis.addEventListener("resize", updateBackToTop, { passive: true });
 
 backToTop?.addEventListener("click", (event) => {
   event.preventDefault();
