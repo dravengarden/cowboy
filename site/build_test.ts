@@ -166,6 +166,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       await Deno.readTextFile(`${output}/plugins.json`),
     ) as Array<{ id: string }>;
     const styles = await Deno.readTextFile(`${output}/styles.css`);
+    const script = await Deno.readTextFile(`${output}/site.js`);
 
     assertEquals(
       notFound,
@@ -258,6 +259,22 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "mobile surface should use the privacy-safe Cowboy illustration",
     );
     assert(
+      html.includes('class="keyboard-promise"') &&
+        html.includes("Keyboard controls everything") &&
+        !html.includes("Example Cowboy desktop commands"),
+      "Desktop should present one Vim-like keyboard promise without shortcut trivia",
+    );
+    assert(
+      html.includes('class="topology-wiring"') &&
+        html.includes('class="topology-brand-icon"') &&
+        !html.includes("topology-brand-mark"),
+      "topology should use the shared brand icon in an unboxed control map",
+    );
+    assert(
+      html.includes('class="back-to-top" href="#top"'),
+      "footer should provide a visible return-to-top control",
+    );
+    assert(
       html.includes('href="assets/cowboy-hat-mark.svg"'),
       "document should expose the simplified Cowboy hat favicon",
     );
@@ -269,6 +286,19 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       styles.includes('html[data-theme="dark"] .theme-art'),
       "product illustrations should respond to the selected theme",
+    );
+    assert(
+      html.includes("document.documentElement.style.backgroundColor") &&
+        html.indexOf("document.documentElement.style.backgroundColor") <
+          html.indexOf('<link rel="stylesheet"') &&
+        script.includes("root.style.backgroundColor = canvas") &&
+        script.includes(
+          'document.body?.style.setProperty("background-color", canvas)',
+        ) &&
+        styles.includes(
+          ".site-header {\n    background: var(--canvas);\n    backdrop-filter: none;",
+        ),
+      "selected theme should color the browser edge before and after first paint",
     );
 
     for (

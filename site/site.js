@@ -6,12 +6,15 @@ const navToggle = document.querySelector(".nav-toggle");
 const navigation = document.querySelector(".site-navigation");
 
 function setTheme(theme) {
+  const canvas = theme === "dark" ? "rgb(21, 17, 29)" : "rgb(246, 244, 251)";
   root.dataset.theme = theme;
+  root.style.backgroundColor = canvas;
+  document.body?.style.setProperty("background-color", canvas);
   themeToggle?.setAttribute(
     "aria-label",
     theme === "dark" ? "Use light theme" : "Use dark theme",
   );
-  themeColor?.setAttribute("content", theme === "dark" ? "#15111d" : "#f6f4fb");
+  themeColor?.setAttribute("content", canvas);
   try {
     localStorage.setItem("cowboy-site-theme", theme);
   } catch (_) {

@@ -1001,37 +1001,61 @@ html[data-theme="dark"] .control-agent-grok {
   font-size: 0.91rem;
 }
 
-.keymap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 26px;
-}
-
-.keymap > span {
-  display: inline-flex;
-  gap: 5px;
+.keyboard-promise {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 13px;
   align-items: center;
-  min-height: 30px;
-  padding: 4px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink-soft);
-  font-size: 0.66rem;
+  margin-top: 26px;
+  padding-block: 13px;
+  border-block: 1px solid var(--line);
 }
 
-kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: 20px;
-  height: 20px;
-  padding-inline: 4px;
-  border: 1px solid var(--line-strong);
-  border-bottom-width: 2px;
-  border-radius: 5px;
-  background: var(--canvas);
+.keyboard-mode {
+  grid-row: 1 / 3;
+  color: var(--primary);
+  font-family: var(--mono);
+  font-size: 0.57rem;
+  font-weight: 720;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.keyboard-promise strong {
+  min-width: 0;
   color: var(--ink);
-  font-size: 0.63rem;
+  font-size: 0.76rem;
+  letter-spacing: -0.01em;
+}
+
+.keyboard-promise strong > span {
+  margin-right: 5px;
+  color: var(--primary);
+  font-family: var(--mono);
+}
+
+.keyboard-promise strong i {
+  display: inline-block;
+  width: 0.42em;
+  height: 1em;
+  margin-left: 4px;
+  transform: translateY(0.15em);
+  background: var(--primary);
+  animation: keyboard-cursor 1.1s steps(1, end) infinite;
+}
+
+.keyboard-promise small {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.52rem;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+@keyframes keyboard-cursor {
+  50% {
+    opacity: 0;
+  }
 }
 
 .desktop-illustration {
@@ -1623,140 +1647,177 @@ kbd {
 }
 
 .topology-diagram {
+  position: relative;
   display: grid;
+  grid-template-rows: 64px minmax(210px, 1fr) 78px;
+  min-height: 410px;
   justify-items: center;
   min-width: 0;
+  isolation: isolate;
+  background: radial-gradient(circle at 50% 48%, var(--primary-wash), transparent 47%);
+}
+
+.topology-diagram::before {
+  position: absolute;
+  z-index: -2;
+  inset: 12% 7%;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--primary) 25%, transparent) 0.7px, transparent 0.8px);
+  background-size: 17px 17px;
+  content: "";
+  mask-image: radial-gradient(circle, black, transparent 72%);
+  opacity: 0.5;
+}
+
+.topology-wiring {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.topology-wiring path {
+  fill: none;
+  stroke: color-mix(in srgb, var(--primary) 42%, var(--line));
+  stroke-dasharray: 2 9;
+  stroke-linecap: round;
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+  animation: topology-flow 8s linear infinite;
 }
 
 .topology-clients {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, 1fr);
-  gap: 10px;
-  width: 68%;
+  gap: 18px;
+  width: 66.666%;
+  align-self: start;
 }
 
-.topology-clients span {
+.topology-clients > span {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: center;
   justify-content: center;
-  min-height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--canvas);
+  min-width: 0;
+  padding-top: 4px;
+}
+
+.topology-clients > span > i {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--primary-wash);
+  color: var(--primary);
+}
+
+.topology-clients svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.topology-clients > span > span {
+  display: grid;
+  gap: 1px;
+}
+
+.topology-clients strong {
+  font-size: 0.73rem;
+  font-weight: 680;
+}
+
+.topology-clients small {
+  color: var(--ink-faint);
   font-family: var(--mono);
-  font-size: 0.68rem;
-}
-
-.topology-clients i {
-  width: 9px;
-  height: 9px;
-  border: 1px solid var(--primary);
-  border-radius: 2px;
-}
-
-.topology-line {
-  position: relative;
-  width: 1px;
-  height: 42px;
-  background: var(--line-strong);
-}
-
-.topology-line i {
-  position: absolute;
-  top: 0;
-  left: -2px;
-  width: 5px;
-  height: 10px;
-  border-radius: 5px;
-  background: var(--primary);
-  animation: topology-packet 2.4s ease-in-out infinite;
+  font-size: 0.46rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .topology-hub {
-  display: grid;
-  grid-template-columns: 58px 1fr;
-  column-gap: 12px;
-  align-items: center;
-  min-width: 230px;
-  padding: 14px;
-  border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--line));
-  border-radius: 16px;
-  background: var(--primary-wash);
-  box-shadow: 0 15px 40px rgba(91, 67, 174, 0.12);
-}
-
-.topology-brand-mark {
-  grid-row: 1 / 3;
-  width: 58px;
-  filter: drop-shadow(0 8px 14px rgba(74, 55, 142, 0.2));
-}
-
-.topology-hub span {
-  align-self: end;
-  font-size: 0.88rem;
-  font-weight: 700;
-}
-
-.topology-hub small {
-  align-self: start;
-  color: var(--ink-faint);
-  font-family: var(--mono);
-  font-size: 0.56rem;
-}
-
-.topology-branches {
   position: relative;
-  width: 68%;
-  height: 56px;
-  border-bottom: 1px solid var(--line-strong);
+  z-index: 2;
+  display: grid;
+  align-self: center;
+  justify-items: center;
+  gap: 2px;
 }
 
-.topology-branches::before {
+.topology-halo {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 118px;
+  height: 118px;
+  margin-bottom: 7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--paper) 74%, transparent) 0 38%, color-mix(in srgb, var(--primary) 12%, transparent) 39% 56%, transparent 57%);
+  box-shadow: 0 18px 44px rgba(91, 67, 174, 0.16);
+}
+
+.topology-halo::before,
+.topology-halo::after {
   position: absolute;
-  top: 0;
-  left: 50%;
-  width: 1px;
-  height: 100%;
-  background: var(--line-strong);
+  border: 1px solid color-mix(in srgb, var(--primary) 28%, transparent);
+  border-radius: 50%;
   content: "";
 }
 
-.topology-branches i {
-  position: absolute;
-  bottom: -8px;
-  width: 1px;
-  height: 8px;
-  background: var(--line-strong);
+.topology-halo::before {
+  inset: 8px;
 }
 
-.topology-branches i:nth-child(1) {
-  left: 0;
+.topology-halo::after {
+  inset: 20px;
 }
 
-.topology-branches i:nth-child(2) {
-  left: 50%;
+.topology-brand-icon {
+  position: relative;
+  z-index: 1;
+  width: 80px;
+  filter: drop-shadow(0 10px 16px rgba(74, 55, 142, 0.24));
 }
 
-.topology-branches i:nth-child(3) {
-  right: 0;
+.topology-hub > strong {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.topology-hub > small {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 0.54rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .topology-machines {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 18px;
   width: 100%;
-  margin-top: 8px;
+  align-self: end;
 }
 
 .topology-machines article {
   display: grid;
+  justify-items: center;
   min-width: 0;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--canvas);
+  padding-inline: 6px;
+  text-align: center;
 }
 
 .topology-machines article > span {
@@ -1769,7 +1830,7 @@ kbd {
 }
 
 .topology-machines strong {
-  margin-top: 16px;
+  margin-top: 8px;
   font-size: 0.8rem;
 }
 
@@ -1777,22 +1838,14 @@ kbd {
   overflow: hidden;
   margin-top: 3px;
   color: var(--primary);
-  font-size: 0.62rem;
+  font-size: 0.65rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@keyframes topology-packet {
-  0%, 15% {
-    transform: translateY(0);
-    opacity: 0;
-  }
-  30% {
-    opacity: 1;
-  }
-  80%, 100% {
-    transform: translateY(32px);
-    opacity: 0;
+@keyframes topology-flow {
+  to {
+    stroke-dashoffset: -44;
   }
 }
 
@@ -1946,8 +1999,9 @@ kbd {
 
 .footer-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 80px;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(360px, 1.2fr) auto;
+  gap: 72px;
+  align-items: end;
   padding-bottom: 54px;
 }
 
@@ -1983,6 +2037,40 @@ kbd {
 
 .footer-links a:hover {
   color: var(--primary);
+}
+
+.back-to-top {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  justify-self: end;
+  min-height: 44px;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.back-to-top svg {
+  width: 42px;
+  height: 42px;
+  padding: 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+  transition: transform 160ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.back-to-top:hover {
+  color: var(--primary);
+}
+
+.back-to-top:hover svg {
+  transform: translateY(-3px);
+  border-color: var(--primary);
 }
 
 .footer-bottom {
@@ -2100,6 +2188,11 @@ kbd {
   .nav-toggle {
     width: 44px;
     height: 44px;
+  }
+
+  .site-header {
+    background: var(--canvas);
+    backdrop-filter: none;
   }
 
   .github-link {
@@ -2481,17 +2574,47 @@ kbd {
     gap: 42px;
   }
 
-  .topology-clients,
-  .topology-branches {
-    width: 82%;
+  .topology-diagram {
+    grid-template-rows: 58px minmax(190px, 1fr) 72px;
+    min-height: 370px;
+  }
+
+  .topology-clients {
+    width: 72%;
+  }
+
+  .topology-clients > span > i {
+    width: 34px;
+    height: 34px;
+  }
+
+  .topology-clients strong {
+    font-size: 0.68rem;
+  }
+
+  .topology-halo {
+    width: 104px;
+    height: 104px;
+  }
+
+  .topology-brand-icon {
+    width: 70px;
+  }
+
+  .topology-hub > strong {
+    font-size: 0.88rem;
+  }
+
+  .topology-hub > small {
+    font-size: 0.5rem;
   }
 
   .topology-machines {
-    gap: 6px;
+    gap: 8px;
   }
 
   .topology-machines article {
-    padding: 10px;
+    padding-inline: 3px;
   }
 
   .topology-machines article > span {
@@ -2539,6 +2662,10 @@ kbd {
 
   .footer-links {
     gap: 20px;
+  }
+
+  .back-to-top {
+    justify-self: end;
   }
 
   .footer-bottom {
