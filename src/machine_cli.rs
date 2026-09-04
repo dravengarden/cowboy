@@ -114,7 +114,6 @@ impl WorkspaceConfig {
 // tasks: a blocked local runtime socket or WebSocket sink must not stop the
 // read/heartbeat loop from detecting the dead connection and reconnecting.
 const MACHINE_FRAME_SEND_TIMEOUT: Duration = Duration::from_secs(15);
-const MACHINE_CONTROLLER_OUTBOUND_CAPACITY: usize = 64;
 const MACHINE_RUNTIME_WRITE_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -921,8 +920,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         tokio::sync::mpsc::channel(MACHINE_RUNTIME_WRITE_CAPACITY);
     let login_sessions: LoginSessions = Arc::default();
     let (socket_sink, mut socket_stream) = socket.split();
-    let (controller_write_tx, controller_write_rx) =
-        tokio::sync::mpsc::channel(MACHINE_CONTROLLER_OUTBOUND_CAPACITY);
+    // Runtime streams can produce more than a small frame-count bound while the
+    // WebSocket sink is flushing one large message. Keep the read/heartbeat loop
+    // non-blocking and let the writer's per-frame timeout bound a stalled
+    // connection; dropping the connection also drops this short-lived queue.
+    let (controller_write_tx, controller_write_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut controller_writer =
         tokio::spawn(write_controller_messages(socket_sink, controller_write_rx));
     let mut runtime_writer = tokio::spawn(write_runtime_frames(runtime_writer, runtime_write_rx));
@@ -3019,21 +3021,15 @@ fn unix_ms() -> i64 {
 }
 
 fn queue_controller_message(
-    tx: &tokio::sync::mpsc::Sender<Message>,
+    tx: &tokio::sync::mpsc::UnboundedSender<Message>,
     message: Message,
 ) -> anyhow::Result<()> {
-    tx.try_send(message).map_err(|error| match error {
-        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-            anyhow::anyhow!("Machine controller writer queue saturated")
-        }
-        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-            anyhow::anyhow!("Machine controller writer queue closed")
-        }
-    })
+    tx.send(message)
+        .map_err(|_| anyhow::anyhow!("Machine controller writer queue closed"))
 }
 
 fn queue_controller_frame(
-    tx: &tokio::sync::mpsc::Sender<Message>,
+    tx: &tokio::sync::mpsc::UnboundedSender<Message>,
     frame: &MachineFrame,
 ) -> anyhow::Result<()> {
     let text = serde_json::to_string(frame).context("serializing Machine frame")?;
@@ -3042,7 +3038,7 @@ fn queue_controller_frame(
 
 async fn write_controller_messages<S>(
     mut socket: S,
-    mut messages: tokio::sync::mpsc::Receiver<Message>,
+    mut messages: tokio::sync::mpsc::UnboundedReceiver<Message>,
 ) -> anyhow::Result<()>
 where
     S: futures::Sink<Message> + Unpin,
@@ -3137,10 +3133,10 @@ mod tests {
         load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
         npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
         parse_workspaces, persist_enrolled_machine_id, pin_grok_runtime_args,
-        provider_auth_roll_target, provider_for_component, reject_untrusted_workspace,
-        resolve_runtime_machine_id, select_code_adapter_executable, selected_zed_pair,
-        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
-        write_runtime_frames_with_timeout,
+        provider_auth_roll_target, provider_for_component, queue_controller_frame,
+        reject_untrusted_workspace, resolve_runtime_machine_id, select_code_adapter_executable,
+        selected_zed_pair, send_frame_with_timeout, validate_controller_url,
+        workspace_path_allowed, write_controller_messages, write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_plugins::PluginInventoryReceipt;
@@ -3245,6 +3241,36 @@ mod tests {
         .await
         .expect_err("stalled write must fail closed");
         assert!(error.to_string().contains("Machine frame send timed out"));
+    }
+
+    #[tokio::test]
+    async fn controller_outbound_burst_does_not_disconnect_while_writer_is_backpressured() {
+        let sink = futures::sink::unfold((), |(), _message| async move {
+            std::future::pending::<Result<(), std::io::Error>>().await
+        });
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let writer = tokio::spawn(write_controller_messages(Box::pin(sink), rx));
+
+        queue_controller_frame(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
+            .expect("queue frame that stalls in the WebSocket sink");
+        tokio::task::yield_now().await;
+        for sent_at_ms in 1..=128 {
+            queue_controller_frame(&tx, &MachineFrame::Heartbeat { sent_at_ms })
+                .expect("buffer burst beyond the retired 64-frame limit");
+        }
+
+        assert!(
+            !writer.is_finished(),
+            "backpressure must not close the writer"
+        );
+        writer.abort();
+        assert!(
+            writer
+                .await
+                .expect_err("aborted writer must stop")
+                .is_cancelled(),
+            "writer task should only stop because the test cancelled it"
+        );
     }
 
     #[tokio::test]
