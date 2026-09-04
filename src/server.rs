@@ -11814,11 +11814,10 @@ const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
 const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RUNTIME_OUTBOUND_CAPACITY: usize = 16;
-const MACHINE_WEBSOCKET_OUTBOUND_CAPACITY: usize = 64;
 
 async fn write_machine_messages<S>(
     mut sink: S,
-    mut messages: mpsc::Receiver<Message>,
+    mut messages: mpsc::UnboundedReceiver<Message>,
 ) -> anyhow::Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -11832,11 +11831,14 @@ where
     Ok(())
 }
 
-fn queue_machine_message(tx: &mpsc::Sender<Message>, message: Message) -> Result<(), ()> {
-    tx.try_send(message).map_err(|_| ())
+fn queue_machine_message(tx: &mpsc::UnboundedSender<Message>, message: Message) -> Result<(), ()> {
+    tx.send(message).map_err(|_| ())
 }
 
-fn queue_machine_json<T: Serialize>(tx: &mpsc::Sender<Message>, message: &T) -> Result<(), ()> {
+fn queue_machine_json<T: Serialize>(
+    tx: &mpsc::UnboundedSender<Message>,
+    message: &T,
+) -> Result<(), ()> {
     let text = serde_json::to_string(message).map_err(|_| ())?;
     queue_machine_message(tx, Message::Text(text.into()))
 }
@@ -11881,7 +11883,11 @@ where
 
 #[cfg(test)]
 mod machine_runtime_bridge_tests {
-    use super::{forward_machine_runtime_frames, write_machine_runtime_frames};
+    use super::{
+        forward_machine_runtime_frames, queue_machine_json, write_machine_messages,
+        write_machine_runtime_frames,
+    };
+    use crate::machine_protocol::MachineFrame;
     use crate::runtime_wire::{CoreCommand, Frame, FrameReader, read_frame, write_frame};
     use std::time::Duration;
 
@@ -11936,6 +11942,36 @@ mod machine_runtime_bridge_tests {
         assert_eq!(received, expected_machine_frame);
         forwarder.abort();
         writer.abort();
+    }
+
+    #[tokio::test]
+    async fn machine_outbound_burst_does_not_disconnect_while_writer_is_backpressured() {
+        let sink = futures::sink::unfold((), |(), _message| async move {
+            std::future::pending::<Result<(), std::io::Error>>().await
+        });
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let writer = tokio::spawn(write_machine_messages(Box::pin(sink), rx));
+
+        queue_machine_json(&tx, &MachineFrame::Heartbeat { sent_at_ms: 0 })
+            .expect("queue frame that stalls in the Machine WebSocket sink");
+        tokio::task::yield_now().await;
+        for sent_at_ms in 1..=128 {
+            queue_machine_json(&tx, &MachineFrame::Heartbeat { sent_at_ms })
+                .expect("buffer burst beyond the retired 64-frame limit");
+        }
+
+        assert!(
+            !writer.is_finished(),
+            "backpressure must not close the Machine WebSocket writer"
+        );
+        writer.abort();
+        assert!(
+            writer
+                .await
+                .expect_err("aborted writer must stop")
+                .is_cancelled(),
+            "writer task should only stop because the test cancelled it"
+        );
     }
 }
 
@@ -12140,8 +12176,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     // Keep WebSocket writes out of the Machine read loop. A runtime replay or
     // command response may fill the socket while the Machine is still sending
     // heartbeats; the read side must continue to make progress independently.
+    // Finite runtime replays can exceed a small frame-count bound, so let the
+    // per-frame writer timeout fence a genuinely stalled connection instead of
+    // disconnecting a healthy Machine merely because the queue briefly bursts.
     let (socket_sink, mut socket_stream) = socket.split();
-    let (machine_write_tx, machine_write_rx) = mpsc::channel(MACHINE_WEBSOCKET_OUTBOUND_CAPACITY);
+    let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
     state.machine_control.install(
