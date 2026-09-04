@@ -340,6 +340,19 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "mobile navigation and preferences should share one compact control group",
     );
     assert(
+      html.includes('class="menu-icon-bars"') &&
+        html.includes('class="menu-icon-close"') &&
+        styles.includes(
+          '.nav-toggle[aria-expanded="true"] .menu-icon-close',
+        ) &&
+        styles.includes(
+          '.nav-toggle[aria-expanded="true"] .menu-icon-bars',
+        ) &&
+        !styles.includes("menu-icon-top") &&
+        !styles.includes("menu-icon-bottom"),
+      "mobile navigation should swap complete centered menu and close glyphs instead of rotating clipped line fragments",
+    );
+    assert(
       html.includes('class="site-navigation-github"'),
       "mobile navigation should retain the GitHub destination outside the header controls",
     );

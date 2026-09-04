@@ -480,10 +480,21 @@ kbd {
   stroke-width: 1.8;
 }
 
-.menu-icon path {
+.menu-icon > g {
   transform-box: view-box;
   transform-origin: center;
-  transition: transform 150ms ease;
+  transition: opacity 140ms ease, transform 160ms ease;
+}
+
+.menu-icon-bars {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.menu-icon-close {
+  opacity: 0;
+  stroke-width: 2;
+  transform: rotate(-36deg) scale(0.72);
 }
 
 .preferences-icon {
@@ -3130,16 +3141,31 @@ html[data-theme="dark"] .topology-machines article {
   }
 
   .back-to-top {
-    right: 16px;
+    right: 12px;
     bottom: max(116px, calc(env(safe-area-inset-bottom, 0px) + 88px));
+    width: 44px;
+    height: 44px;
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--primary) 14%, transparent);
   }
 
-  .nav-toggle[aria-expanded="true"] .menu-icon-top {
-    transform: translateY(3.75px) rotate(45deg);
+  .back-to-top svg {
+    width: 18px;
+    height: 18px;
   }
 
-  .nav-toggle[aria-expanded="true"] .menu-icon-bottom {
-    transform: translateY(-3.75px) rotate(-45deg);
+  .nav-toggle[aria-expanded="true"] {
+    background: var(--primary-wash);
+    color: var(--primary);
+  }
+
+  .nav-toggle[aria-expanded="true"] .menu-icon-bars {
+    opacity: 0;
+    transform: rotate(36deg) scale(0.72);
+  }
+
+  .nav-toggle[aria-expanded="true"] .menu-icon-close {
+    opacity: 1;
+    transform: rotate(0deg) scale(1);
   }
 
   .site-navigation {
