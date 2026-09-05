@@ -117,6 +117,15 @@ Deno.test("desktop question navigator presents newest first without mutating chr
   assertEquals(chronological.map((page) => page.id), ["1", "2", "3"]);
 });
 
+Deno.test("a partial answer cannot inflate the known page count", () => {
+  const indexed = [{ id: "10", title: "Question", ordinal: 51 }];
+  const partial = { id: "11", title: "Earlier page", questionCount: 0 };
+  assertEquals(mergeQuestionPageDirectory(indexed, [partial], 51), indexed);
+  assertEquals(mergeQuestionPageDirectory([], [partial], 1), [
+    { id: "11", title: "Earlier page", ordinal: 1 },
+  ]);
+});
+
 function user(key: string, text: string, autoResumed = false): RenderItem {
   return {
     key,

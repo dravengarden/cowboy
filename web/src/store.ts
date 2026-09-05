@@ -54,6 +54,7 @@ import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
 import { beginConversationClear } from "./conversationClearance";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
+import { optimisticQuestionKey } from "./explore/optimisticPages";
 import { notifyHaptic } from "./haptic";
 import { reportClientLog, reportClientMetric } from "./observability";
 import { newUuid } from "./uuid";
@@ -897,6 +898,7 @@ export async function loadQuestionPage(
   sessionId: string,
   pageId: string,
 ): Promise<boolean> {
+  if (isQuestionPageLoaded(sessionId, pageId)) return true;
   const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const rootSeq = Number(pageId);
   if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
@@ -937,7 +939,10 @@ const completeQuestionPages = new Map<string, Set<string>>();
 const transcriptEpoch = new Map<string, number>();
 
 export function isQuestionPageLoaded(sessionId: string, pageId: string): boolean {
-  return completeQuestionPages.get(sessionId)?.has(pageId) === true;
+  return completeQuestionPages.get(sessionId)?.has(pageId) === true ||
+    state.optimisticMessages.get(sessionId)?.some((message) =>
+      optimisticQuestionKey(message) === pageId
+    ) === true;
 }
 
 const INACTIVE_HISTORY_TAIL = 800;
@@ -2632,14 +2637,15 @@ export function retryMessage(sessionId: string, cmid: string): void {
   if (attempt.armConfirmationTimeout) armMsgTimers(sessionId, cmid);
 }
 
-/** Discard a (usually failed) optimistic chat bubble locally — it never reached
- *  the daemon, so there's nothing server-side to remove. */
+/** Discard the local delivery and its durable retry record. A late server echo
+ * remains authoritative history; this is not server-side cancellation. */
 export async function discardMessage(sessionId: string, cmid: string): Promise<void> {
   const pending = pendingNamed(sessionId, cmid);
   if (pending !== undefined) {
     await discardQueued(sessionId, pending.id);
-    return;
   }
+  // Queue reconciliation intentionally retains chat bubbles until their echo.
+  // Explicit discard must also remove that overlay and its local Page root.
   clearOptTimers(cmid);
   patchMessage(sessionId, cmid, "drop");
 }

@@ -27,15 +27,20 @@ export interface QuestionPageDirectoryEntry extends QuestionPageIndexEntry {
  */
 export function mergeQuestionPageDirectory(
   indexed: readonly QuestionPageDirectoryEntry[],
-  loaded: readonly Pick<QuestionPage, "id" | "title">[],
+  loaded: readonly (Pick<QuestionPage, "id" | "title"> & { questionCount?: number })[],
   total: number,
 ): QuestionPageDirectoryEntry[] {
   const byId = new Map(indexed.map((page) => [page.id, page]));
+  // A bounded answer fragment is not an additional question when the durable
+  // directory already knows its missing root. Only real/local prompts add pages.
+  const rooted = indexed.length > 0
+    ? loaded.filter((page) => page.questionCount !== 0)
+    : loaded;
   let nextOrdinal = indexed.reduce(
     (highest, page) => Math.max(highest, page.ordinal),
-    Math.max(0, total - loaded.length),
+    Math.max(0, total - rooted.length),
   );
-  for (const page of loaded) {
+  for (const page of rooted) {
     if (byId.has(page.id)) continue;
     nextOrdinal += 1;
     byId.set(page.id, {

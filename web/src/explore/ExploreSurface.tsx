@@ -51,13 +51,13 @@ import {
   desktopListItemSx,
 } from "../desktop/DesktopEmbeddedControl";
 import { desktopScrollbarSx } from "../desktop/desktopScrollbar";
-import { derive } from "../derive";
 import { Kbd } from "../Kbd";
 import type { Envelope, Status } from "../protocol";
 import {
   isQuestionPageLoaded,
   loadQuestionPage,
   loadPreviousQuestionPage,
+  type QueuedMessage,
   useStoreSelector,
 } from "../store";
 import { requestStickToBottom, setSticky } from "../stickyStore";
@@ -74,13 +74,15 @@ import {
   resolveExploreTail,
   resolveProjectionAnchor,
   resolveExploreFollowUp,
+  reconcileExplorePageIdentities,
+  revealSubmittedExplorePage,
+  type ExploreSessionState,
   type TranscriptProjection,
   useExploreSessionState,
 } from "./exploreStore";
 import {
   authoritativeTailPageId,
   completePageBeforeItem,
-  deriveQuestionPages,
   groupQuestionPages,
   indexedQuestionPagePosition,
   mergeQuestionPageDirectory,
@@ -88,6 +90,12 @@ import {
   presentQuestionPageDirectory,
   type QuestionPage,
 } from "./questionPages";
+import {
+  isOptimisticQuestionPage,
+  newlySubmittedQuestionPage,
+  projectQuestionPages,
+  reconcileOptimisticPageState,
+} from "./optimisticPages";
 import {
   canPresentQuestionPageDuringRestore,
   nextFollowedTailPage,
@@ -97,6 +105,7 @@ import {
 } from "./retainedPage";
 
 const EMPTY_TIMELINE: Envelope[] = [];
+const EMPTY_PENDING_QUESTIONS: QueuedMessage[] = [];
 
 function PageTurnFooter({
   currentOrdinal,
@@ -448,6 +457,29 @@ export interface ExploreTranscriptProps {
   desktop: boolean;
 }
 
+function usePageProjection(sessionId: string, timeline: Envelope[]): {
+  pages: QuestionPage[];
+  state: ExploreSessionState;
+} {
+  const pending = useStoreSelector((snapshot) =>
+    snapshot.optimisticMessages.get(sessionId) ?? EMPTY_PENDING_QUESTIONS
+  );
+  const savedState = useExploreSessionState(sessionId);
+  const { pages, aliases } = useMemo(
+    () => projectQuestionPages(timeline, pending),
+    [timeline, pending],
+  );
+  const pageIds = useMemo(() => new Set(pages.map((page) => page.id)), [pages]);
+  const state = useMemo(
+    () => reconcileOptimisticPageState(savedState, aliases, pageIds),
+    [savedState, aliases, pageIds],
+  );
+  useLayoutEffect(() => {
+    reconcileExplorePageIdentities(sessionId, aliases, pageIds);
+  }, [sessionId, aliases, pageIds]);
+  return { pages, state };
+}
+
 function usePages(
   sessionId: string,
   timeline: Envelope[],
@@ -455,25 +487,19 @@ function usePages(
   pages: QuestionPage[];
   current: QuestionPage | null;
   currentIndex: number;
+  state: ExploreSessionState;
   select: (id: string) => void;
   navigate: (id: string) => void;
 } {
+  const { pages: basePages, state } = usePageProjection(sessionId, timeline);
   const {
     pageId,
     pageParents,
     followTailRequested,
     pendingFollowUp,
     transitionAnchorKey,
-  } = useExploreSessionState(sessionId);
-  const basePages = useMemo(() => {
-    const derived = deriveQuestionPages(derive(timeline));
-    const rooted = derived.filter((page) => page.questionCount > 0);
-    // A bounded history window may begin with lifecycle events whose question
-    // root is older. Once a real root is present, that provisional projection
-    // must not become a separately navigable Page View page.
-    return rooted.length > 0 ? rooted : derived;
-  }, [timeline]);
-  useEffect(() => {
+  } = state;
+  useLayoutEffect(() => {
     if (pendingFollowUp) {
       resolveExploreFollowUp(sessionId, basePages.map((page) => page.id));
     }
@@ -482,6 +508,15 @@ function usePages(
     () => groupQuestionPages(basePages, pageParents),
     [basePages, pageParents],
   );
+  const previousPagesRef = useRef({ sessionId, ids: basePages.map((page) => page.id) });
+  const submittedPageId = previousPagesRef.current.sessionId === sessionId &&
+      state.projection === "explore"
+    ? newlySubmittedQuestionPage(previousPagesRef.current.ids, basePages, pendingFollowUp !== null)
+    : null;
+  useLayoutEffect(() => {
+    previousPagesRef.current = { sessionId, ids: basePages.map((page) => page.id) };
+    if (submittedPageId !== null) revealSubmittedExplorePage(sessionId, submittedPageId);
+  }, [sessionId, basePages, submittedPageId]);
   const tailPageId = pages.at(-1)?.id ?? null;
   const previousTailPageIdRef = useRef<string | null>(tailPageId);
   useEffect(() => {
@@ -496,7 +531,7 @@ function usePages(
     if (nextPageId !== null) setExplorePage(sessionId, nextPageId);
   }, [pageId, pendingFollowUp, sessionId, tailPageId]);
   const transitionPage = pageContainingItemKey(pages, transitionAnchorKey);
-  const selectedPageId = transitionPage?.id ?? pageId;
+  const selectedPageId = submittedPageId ?? transitionPage?.id ?? pageId;
   const selectedIndex = selectedPageId
     ? pages.findIndex((page) => page.id === selectedPageId)
     : -1;
@@ -538,6 +573,7 @@ function usePages(
     pages,
     current,
     currentIndex,
+    state,
     select: (id: string): void => {
       setSticky(sessionId, false);
       navigateExplorePage(sessionId, id);
@@ -1166,13 +1202,15 @@ export function DesktopReadingQuestionDirectory({
   const timeline = useStoreSelector((snapshot) =>
     snapshot.timelines.get(sessionId) ?? EMPTY_TIMELINE
   );
-  const { pageId, pageParents } = useExploreSessionState(sessionId);
-  const loadedPages = useMemo(() => {
-    const derived = deriveQuestionPages(derive(timeline));
-    const rooted = derived.filter((page) => page.questionCount > 0);
-    return groupQuestionPages(rooted.length > 0 ? rooted : derived, pageParents);
-  }, [pageParents, timeline]);
-  const pageIndex = useQuestionPageIndex(sessionId, loadedPages.at(-1)?.id);
+  const { pages: basePages, state: { pageId, pageParents } } = usePageProjection(sessionId, timeline);
+  const loadedPages = useMemo(
+    () => groupQuestionPages(basePages, pageParents),
+    [basePages, pageParents],
+  );
+  const pageIndex = useQuestionPageIndex(
+    sessionId,
+    loadedPages.findLast((page) => !isOptimisticQuestionPage(page.id))?.id,
+  );
   const indexedTotal = pageIndex.data?.total ?? 0;
   const directoryLoadedPages = useMemo(
     () =>
@@ -1368,7 +1406,7 @@ export function ExploreTranscript(
   const pagination = useStoreSelector((snapshot) =>
     snapshot.pagination.get(props.sessionId)
   );
-  const { pages, current, currentIndex, select } = usePages(
+  const { pages, current, currentIndex, select, state: pageState } = usePages(
     props.sessionId,
     props.timeline,
   );
@@ -1380,14 +1418,22 @@ export function ExploreTranscript(
     () => new Set(current?.itemKeys ?? []),
     [current?.itemKeys],
   );
-  const pageIndex = useQuestionPageIndex(props.sessionId, pages.at(-1)?.id);
-  const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const pageIndex = useQuestionPageIndex(
+    props.sessionId,
+    pages.findLast((page) => !isOptimisticQuestionPage(page.id))?.id,
+  );
+  const indexedOrLoadedTotal = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const directoryPages = useMemo(
+    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, indexedOrLoadedTotal),
+    [pageIndex.data?.pages, pages, indexedOrLoadedTotal],
+  );
+  const total = Math.max(indexedOrLoadedTotal, directoryPages.at(-1)?.ordinal ?? 0);
   const provisionalOrdinal = Math.max(
     1,
     total - Math.max(0, pages.length - 1 - currentIndex),
   );
   const indexedPosition = indexedQuestionPagePosition(
-    pageIndex.data?.pages ?? [],
+    directoryPages,
     current?.id,
     provisionalOrdinal,
   );
@@ -1396,10 +1442,6 @@ export function ExploreTranscript(
   const atTail = indexedCurrentOrdinal === undefined
     ? currentIndex === pages.length - 1
     : indexedCurrentOrdinal === total;
-  const directoryPages = useMemo(
-    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, total),
-    [pageIndex.data?.pages, pages, total],
-  );
   const rootRef = useRef<HTMLDivElement>(null);
   const [desktopDirectoryOpen, setDesktopDirectoryOpen] = useState(false);
   const [desktopDirectoryPrefixArmed, setDesktopDirectoryPrefixArmed] = useState(false);
@@ -1489,11 +1531,17 @@ export function ExploreTranscript(
     pageStartId,
     pageLoadingId,
     followTailRequested,
-  } = useExploreSessionState(props.sessionId);
+  } = pageState;
   const resolvingTailRef = useRef<string | null>(null);
   useEffect(() => {
     if (!followTailRequested) {
       resolvingTailRef.current = null;
+      return undefined;
+    }
+    const localTailId = pages.at(-1)?.id;
+    if (localTailId && isOptimisticQuestionPage(localTailId)) {
+      resolveExploreTail(props.sessionId, localTailId);
+      requestAnimationFrame(() => requestStickToBottom(props.sessionId));
       return undefined;
     }
     if (pageIndex.loading || !pageIndex.data) return undefined;
@@ -1558,7 +1606,7 @@ export function ExploreTranscript(
 
   useEffect(() => {
     if (
-      !current || !pageIndex.data || pageIndex.loadingEarlier ||
+      !current || isOptimisticQuestionPage(current.id) || !pageIndex.data || pageIndex.loadingEarlier ||
       pageIndex.data.pages.some((page) => page.id === current.id) ||
       pageIndex.data.nextBeforeSeq === null
     ) return;
@@ -2093,7 +2141,10 @@ export function MobilePageDock({
     snapshot.pagination.get(sessionId)
   );
   const { pages, current, currentIndex, navigate } = usePages(sessionId, timeline);
-  const pageIndex = useQuestionPageIndex(sessionId, pages.at(-1)?.id);
+  const pageIndex = useQuestionPageIndex(
+    sessionId,
+    pages.findLast((page) => !isOptimisticQuestionPage(page.id))?.id,
+  );
   const [open, setOpen] = useState(false);
   const [loadingDirectoryPageId, setLoadingDirectoryPageId] = useState<string | null>(null);
   const [loadingAdjacentPageId, setLoadingAdjacentPageId] = useState<string | null>(null);
@@ -2115,8 +2166,13 @@ export function MobilePageDock({
   );
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
-  const total = Math.max(pages.length, pageIndex.data?.total ?? 0);
-  const indexedPages = pageIndex.data?.pages ?? [];
+  const indexedOrLoadedTotal = Math.max(pages.length, pageIndex.data?.total ?? 0);
+  const directoryPages = useMemo(
+    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, indexedOrLoadedTotal),
+    [pageIndex.data?.pages, pages, indexedOrLoadedTotal],
+  );
+  const total = Math.max(indexedOrLoadedTotal, directoryPages.at(-1)?.ordinal ?? 0);
+  const indexedPages = directoryPages;
   const indexedPosition = indexedQuestionPagePosition(indexedPages, current?.id);
   const indexedPrevious = indexedPosition.previousId
     ? indexedPages.find((page) => page.id === indexedPosition.previousId)
@@ -2127,10 +2183,6 @@ export function MobilePageDock({
   const loadingPrevious = loadingEarlier || pendingPrevious !== null ||
     loadingAdjacentPageId === indexedPrevious?.id;
   const loadingNext = loadingAdjacentPageId === indexedNext?.id;
-  const directoryPages = useMemo(
-    () => mergeQuestionPageDirectory(pageIndex.data?.pages ?? [], pages, total),
-    [pageIndex.data?.pages, pages, total],
-  );
   const currentOrdinal = indexedPosition.ordinal !== undefined
     ? indexedPosition.ordinal
     : Math.max(
@@ -2140,7 +2192,7 @@ export function MobilePageDock({
 
   useEffect(() => {
     if (
-      !current || !pageIndex.data || pageIndex.loadingEarlier ||
+      !current || isOptimisticQuestionPage(current.id) || !pageIndex.data || pageIndex.loadingEarlier ||
       pageIndex.data.pages.some((page) => page.id === current.id) ||
       pageIndex.data.nextBeforeSeq === null
     ) return;

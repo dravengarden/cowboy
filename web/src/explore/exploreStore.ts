@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { clearTranscriptViewport } from "../transcriptViewportStore";
+import { reconcileOptimisticPageState } from "./optimisticPages";
 import {
   type ExploreSessionState,
   exploreStateAfterContextClear,
@@ -123,6 +124,28 @@ export function setTranscriptProjection(
 
 export function setExplorePage(sessionId: string, pageId: string | null): void {
   update(sessionId, { pageId, followTailRequested: false });
+}
+
+export function reconcileExplorePageIdentities(
+  sessionId: string,
+  aliases: ReadonlyMap<string, string>,
+  pageIds: ReadonlySet<string>,
+): void {
+  const current = get(sessionId);
+  const next = reconcileOptimisticPageState(current, aliases, pageIds);
+  if (next !== current) update(sessionId, next);
+}
+
+/** Sending starts a readable local page, not an HTTP page-loading transition. */
+export function revealSubmittedExplorePage(sessionId: string, pageId: string): void {
+  clearTranscriptViewport(sessionId, "page");
+  update(sessionId, {
+    pageId,
+    pageStartId: null,
+    pageLoadingId: null,
+    transitionAnchorKey: null,
+    followTailRequested: false,
+  });
 }
 
 export function resetExploreAfterContextClear(sessionId: string): void {

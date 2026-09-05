@@ -107,6 +107,7 @@ import {
   prettifyCrashDetail,
 } from "./crashDetail";
 import { PromptOriginNote } from "./PromptOriginNote";
+import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
 import { TranscriptReconnectingActivity } from "./TranscriptTurnActivity";
 import {
@@ -4041,9 +4042,15 @@ export function Transcript({
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom), dropped
   // by cmid the moment the echo lands. Empty in the common (confirmed) case.
-  const optimisticMsgs = useStoreSelector(
+  const pendingMessages = useStoreSelector(
     (snapshot) =>
       snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
+  );
+  const optimisticMsgs = useMemo(
+    () => visibleItemKeys
+      ? pendingMessages.filter((message) => visibleItemKeys.has(optimisticQuestionKey(message)))
+      : pendingMessages,
+    [pendingMessages, visibleItemKeys],
   );
   const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
     loading,
@@ -5409,7 +5416,8 @@ export function Transcript({
                 .reverse()
                 .map((om) => (
                   <Box
-                    key={`opt-${om.cmid ?? om.id}`}
+                    key={optimisticQuestionKey(om)}
+                    data-key={optimisticQuestionKey(om)}
                     sx={{ py: 0.625, display: "flex", flexDirection: "column" }}
                   >
                     <OptimisticUserBubble sessionId={sessionId} message={om} />
@@ -5592,7 +5600,9 @@ export function Transcript({
           In-flow (flexShrink:0) so it sits below the scroll area, above the
           composer — never covering the last message. */
       }
-      <SessionStatusBar status={status} crashDetail={crashDetail} />
+      {(status !== "exited" || optimisticMsgs.length === 0) && (
+        <SessionStatusBar status={status} crashDetail={crashDetail} />
+      )}
       {
         /* The scroll-to-latest affordance is the persistent sticky/auto-scroll
           toggle in the composer (stickyStore + Composer), not a pill here. A
