@@ -1189,6 +1189,8 @@ mod tests {
             serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
         contract.id = id.to_owned();
         contract.version = version.to_owned();
+        contract.schema_version = 1;
+        contract.runtime = None;
         let runtime_artifacts = contract
             .supported_platforms
             .iter()

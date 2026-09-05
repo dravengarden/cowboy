@@ -104,6 +104,41 @@ permits old and new Provider and authentication generations to run concurrently
 without fixed-port replacement, and prevents a signed package from falling
 back to a Machine-global CLI, adapter, gateway, or resource path.
 
+## Owned Code Intelligence runtimes
+
+Code Intelligence schema 2 and Plugin SDK 1.6 bind an exact private component
+graph, a launch command and a bounded readiness command. Arguments are literal
+values, declared component commands, a private Unix socket or private state
+directory; there are no shell templates or ambient adapter/server fallbacks.
+Every platform in the contract must have exactly the declared component set,
+versions and commands in its signed release matrix. Authentication Plugins,
+conversely, cannot carry any Machine runtime artifact.
+
+The Machine validates retained runtime bytes before execution or reactivation,
+including every extracted file and the absence of extra files or links. Staging
+probes and code runtimes receive private homes and a closed environment, not
+the Service's credentials. Process-group ownership covers cancellation as well
+as success, failure and explicit teardown.
+
+Code requests select a Plugin by their adapter ID. They never pick the newest
+Catalog entry or the first installed engine. The existing Code client selects
+`zed`; other explicit adapter IDs use the same capability dispatcher. A
+canonical worktree retains its selected generation until all its worktree and
+buffer leases close. Other worktrees may use a newly activated generation at
+the same time. Uninstall prevents new worktrees while retained leases drain;
+reactivation re-verifies bytes and readiness. Once an owned runtime has been
+activated, uninstall cannot silently re-enable its legacy fallback. Legacy
+socket routes remain available only for pre-migration installations and their
+already acquired worktree leases.
+
+Zed owns its build recipes under `plugins/zed/runtime`. Its current complete
+target is Linux x86_64: a static adapter plus the pinned static remote server.
+`just zed-plugin-runtime-build <artifact-base>` builds final bytes from a clean
+commit; `just zed-plugin-conformance <absolute-adapter> <absolute-server>` tests
+their full temporary signed-install lifecycle. These commands neither publish
+nor install a Plugin on a registered Machine. Bind, sign, independently verify,
+and publish through the same generic Plugin lifecycle afterward.
+
 ## Typed UI SDK and component library
 
 Cowboy publishes a versioned Provider UI component library as part of the

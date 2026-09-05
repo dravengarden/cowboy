@@ -7,11 +7,13 @@
 
 mod authentication_host;
 mod cli_auth;
+mod code_intelligence;
 pub mod host;
 
 pub use cli_auth::{
     CliAuthCondition, CliAuthOutcome, CliAuthProbeState, CliAuthRule, CliAuthRuleSet, CliAuthSource,
 };
+pub use code_intelligence::*;
 pub use host::*;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,7 +38,8 @@ pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_VERSION: u16 = 2;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
-pub const CODE_INTELLIGENCE_SCHEMA_VERSION: u16 = 1;
+pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
+pub const CODE_INTELLIGENCE_SCHEMA_VERSION: u16 = 2;
 pub const HOST_BUNDLE_SCHEMA_VERSION: u16 = 1;
 pub const HOST_BUNDLE_SCHEMA: &str = "dravengarden.cowboy.plugin-hostbundle/v1";
 pub const PLUGIN_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-plugin-release-v1";
@@ -199,6 +202,10 @@ pub struct CodeIntelligenceContract {
     pub operations: Vec<String>,
     pub states: Vec<String>,
     pub supported_platforms: Vec<PlatformTarget>,
+    /// Schema 1 is retained only for already published legacy adapters.
+    /// Schema 2 owns the complete executable graph and launch protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<CodeIntelligenceRuntime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +349,7 @@ pub enum PluginComponentKind {
     AgentGateway,
     AcpRuntime,
     CodeIntelligenceAdapter,
+    CodeIntelligenceServer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,7 +466,7 @@ impl PluginContractInventory {
             max_agent_provider_schema: PROVIDER_PACKAGE_SCHEMA_VERSION,
             min_authentication_provider_schema: AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION,
             max_authentication_provider_schema: AUTHENTICATION_PROVIDER_SCHEMA_VERSION,
-            min_code_intelligence_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
+            min_code_intelligence_schema: CODE_INTELLIGENCE_SCHEMA_MIN_VERSION,
             max_code_intelligence_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
             min_host_bundle_schema: HOST_BUNDLE_SCHEMA_VERSION,
             max_host_bundle_schema: HOST_BUNDLE_SCHEMA_VERSION,
@@ -989,8 +997,17 @@ impl PluginRelease {
                     && self.artifact_digest == legacy_artifact_digest),
             "plugin composite artifact digest mismatch"
         );
-        if package.agent_provider().is_some() {
-            self.agent_provider_binding(package)?;
+        match &package.payload {
+            PluginPayload::AgentProvider(_) => {
+                self.agent_provider_binding(package)?;
+            }
+            PluginPayload::CodeIntelligence(contract) => {
+                code_intelligence::validate_release(contract, self)?;
+            }
+            PluginPayload::AuthenticationProvider(_) => ensure!(
+                self.runtime_artifacts.is_empty(),
+                "Authentication Plugin cannot declare Machine runtime artifacts"
+            ),
         }
         Ok(())
     }
@@ -1086,7 +1103,8 @@ impl ReleasedPluginComponent {
             PluginComponentKind::AgentAdapter => PrivateComponentKind::ProviderAdapter,
             PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
             PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
-            PluginComponentKind::CodeIntelligenceAdapter => {
+            PluginComponentKind::CodeIntelligenceAdapter
+            | PluginComponentKind::CodeIntelligenceServer => {
                 bail!("code-intelligence component cannot satisfy an agent Provider payload")
             }
         };
@@ -1132,7 +1150,8 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
         }
         (PluginKind::CodeIntelligence, PluginPayload::CodeIntelligence(contract)) => {
             ensure!(
-                contract.schema_version == CODE_INTELLIGENCE_SCHEMA_VERSION,
+                (CODE_INTELLIGENCE_SCHEMA_MIN_VERSION..=CODE_INTELLIGENCE_SCHEMA_VERSION)
+                    .contains(&contract.schema_version),
                 "unsupported code-intelligence contract"
             );
             ensure!(
@@ -1151,6 +1170,17 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
                 !contract.supported_platforms.is_empty(),
                 "code-intelligence platforms are empty"
             );
+            code_intelligence::validate_contract(contract)?;
+            if contract.schema_version >= 2 {
+                ensure!(
+                    manifest.components.iter().any(|component| {
+                        component.id == "cowboy.plugin-sdk"
+                            && Version::parse(&component.version)
+                                .is_ok_and(|version| version >= Version::new(1, 6, 0))
+                    }),
+                    "owned code runtimes require Plugin SDK 1.6 or newer"
+                );
+            }
         }
         _ => bail!("plugin kind and payload kind mismatch"),
     }

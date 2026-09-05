@@ -1,4 +1,10 @@
 import { resolveImmutableReceipt } from "./plugin-publication-receipt.ts";
+import {
+  copyImmutable,
+  copyImmutableText,
+  exists,
+  sha256,
+} from "./immutable-publication.ts";
 
 interface PluginRelease {
   release_schema: number;
@@ -185,83 +191,4 @@ function digestValue(value: string): string {
   const match = /^sha256:([a-f0-9]{64})$/.exec(value);
   if (!match) throw new Error(`invalid SHA-256 digest ${value}`);
   return match[1];
-}
-
-async function copyImmutable(
-  source: string,
-  destination: string,
-  mode: number,
-): Promise<void> {
-  await Deno.mkdir(destination.slice(0, destination.lastIndexOf("/")), {
-    recursive: true,
-  });
-  if (await exists(destination)) {
-    if (await sha256(source) !== await sha256(destination)) {
-      throw new Error(
-        `immutable publication target already has different bytes: ${destination}`,
-      );
-    }
-    return;
-  }
-  const temporary = `${destination}.${Deno.pid}.partial`;
-  await Deno.copyFile(source, temporary);
-  await Deno.chmod(temporary, mode);
-  await Deno.rename(temporary, destination).catch(async (error) => {
-    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-    await Deno.remove(temporary);
-    if (await sha256(source) !== await sha256(destination)) {
-      throw new Error(
-        `publication race changed immutable target: ${destination}`,
-      );
-    }
-  });
-}
-
-async function copyImmutableText(
-  value: string,
-  destination: string,
-  mode = 0o644,
-): Promise<void> {
-  await Deno.mkdir(destination.slice(0, destination.lastIndexOf("/")), {
-    recursive: true,
-  });
-  if (await exists(destination)) {
-    if (await Deno.readTextFile(destination) !== value) {
-      throw new Error(
-        `immutable publication target already has different text: ${destination}`,
-      );
-    }
-    return;
-  }
-  const temporary = `${destination}.${Deno.pid}.partial`;
-  await Deno.writeTextFile(temporary, value, { mode });
-  await Deno.rename(temporary, destination).catch(async (error) => {
-    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
-    await Deno.remove(temporary);
-    if (await Deno.readTextFile(destination) !== value) {
-      throw new Error(
-        `publication race changed immutable target: ${destination}`,
-      );
-    }
-  });
-}
-
-async function sha256(path: string): Promise<string> {
-  const output = await new Deno.Command("sha256sum", {
-    args: [path],
-    clearEnv: true,
-  }).output();
-  if (!output.success) throw new Error(`sha256sum failed for ${path}`);
-  return new TextDecoder().decode(output.stdout).trim().split(/\s+/)[0]
-    .toLowerCase();
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await Deno.lstat(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
 }

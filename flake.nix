@@ -108,6 +108,7 @@
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
+          ./src/machine_code_plugins.rs
           ./src/machine_cli.rs
           ./src/machine_auth.rs
           ./src/machine_components.rs
@@ -144,7 +145,6 @@
         ] ++ plugin-sdk-files ++ provider-sdk-files);
       };
 
-      zed-adapter-src = pkgs.lib.cleanSource ./plugins/zed/adapter;
 
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
@@ -213,7 +213,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-cAHOFvblavNCfSEDJsI2hyAumFjMCqXF589GyXzfIAM=";
+        hash = "sha256-VhQKM3L77yD62ERiHAJDoJgyekwBlxRAQld1niWX7bE=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
@@ -327,48 +327,27 @@
         };
       };
 
-      cowboy-zed-adapter = rustPlatform.buildRustPackage {
-        pname = "cowboy-zed-adapter";
+      # Independent immutable release tooling for external Plugin publishers
+      # such as Cardea. Its SDK validator and Ed25519 tool are closure-pinned.
+      cowboy-plugin-pack = rustPlatform.buildRustPackage {
+        pname = "cowboy-plugin-pack";
         version = (builtins.fromTOML
-          (builtins.readFile ./plugins/zed/adapter/Cargo.toml)).package.version;
-        src = zed-adapter-src;
-        cargoLock = {
-          lockFile = ./plugins/zed/adapter/Cargo.lock;
-          outputHashes = {
-            "proto-0.1.0" =
-              "sha256-sAjiYGwmQB+Zzb/b7PGm4Nfv36Vb0myqKIBfpuHGTik=";
-          };
-        };
-        nativeBuildInputs = [ pkgs.protobuf ];
-        meta = {
-          description = "GPL-isolated Zed protocol adapter for Cowboy Code";
-          license = pkgs.lib.licenses.gpl3Plus;
-          mainProgram = "cowboy-zed-adapter";
-        };
+          (builtins.readFile ./components/plugin-sdk/Cargo.toml)).package.version;
+        src = cowboy-src;
+        cargoDeps = cowboy-cargo-deps;
+        cargoBuildFlags = [ "-p" "cowboy-plugin-sdk" "--bin" "cowboy-plugin-pack" ];
+        cargoTestFlags = [ "-p" "cowboy-plugin-sdk" ];
+        nativeBuildInputs = [ pkgs.makeWrapper pkgs.openssh ];
+        postFixup = ''
+          wrapProgram "$out/bin/cowboy-plugin-pack" --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+        '';
+        meta.mainProgram = "cowboy-plugin-pack";
       };
 
-      # Zed's official remote-development flow installs a release server on
-      # the target host rather than compiling the editor workspace there.
-      # Pin the exact preview release that corresponds to ZED_REVISION in the
-      # adapter. This keeps Cowboy's instance reproducible and independent of
-      # the user's ~/.zed_server lifecycle.
-      cowboy-zed-server = pkgs.runCommand "cowboy-zed-server-1.13.0" {
-        src = pkgs.fetchurl {
-          url =
-            "https://github.com/zed-industries/zed/releases/download/v1.13.0-pre/zed-remote-server-linux-x86_64.gz";
-          hash = "sha256-+E10MkfNuSORMNvhyRm3Ij5UfM5mrWwKSVkj+FJGQ+Y=";
-        };
-        nativeBuildInputs = [ pkgs.gzip ];
-        meta = {
-          description = "Pinned isolated Zed remote server for Cowboy Code";
-          license = pkgs.lib.licenses.gpl3Plus;
-          mainProgram = "cowboy-zed-server";
-        };
-      } ''
-          mkdir -p "$out/bin"
-          gzip -dc "$src" > "$out/bin/cowboy-zed-server"
-          chmod 0555 "$out/bin/cowboy-zed-server"
-      '';
+      zedRuntime = import ./plugins/zed/runtime/default.nix {
+        inherit pkgs rustToolchain rustPlatform;
+      };
+      inherit (zedRuntime) cowboy-zed-adapter cowboy-zed-adapter-portable cowboy-zed-server;
 
       release-revision = if self ? rev then self.rev else null;
       release-source = lane: bootstrap: {
@@ -547,7 +526,9 @@
         cowboy = cowboy;
         cowboy-machine = cowboy-machine;
         cowboy-code-adapter = cowboy-code-adapter;
+        cowboy-plugin-pack = cowboy-plugin-pack;
         cowboy-zed-adapter = cowboy-zed-adapter;
+        cowboy-zed-adapter-portable = cowboy-zed-adapter-portable;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
         cowboy-controller-release = cowboy-controller-release;

@@ -58,6 +58,8 @@ mod machine_broker;
 #[cfg(feature = "machine-host")]
 pub mod machine_cli;
 #[cfg(feature = "machine-host")]
+mod machine_code_plugins;
+#[cfg(feature = "machine-host")]
 mod machine_components;
 #[cfg(feature = "full")]
 mod machine_control;

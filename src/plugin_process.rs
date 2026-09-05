@@ -19,6 +19,43 @@ const MAX_PLUGIN_COMMAND_STDERR_BYTES: usize = 64 * 1024;
 const PLUGIN_COMMAND_TIMEOUT: Duration = Duration::from_secs(12);
 static PLUGIN_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Own a freshly spawned process group across success, failure and future
+/// cancellation. The leader must be spawned with `process_group(0)`.
+pub(crate) struct PluginProcessGroup {
+    process_id: u32,
+    cgroup: Option<PathBuf>,
+}
+
+impl PluginProcessGroup {
+    pub(crate) fn new(process_id: u32) -> Self {
+        let owner = format!(
+            "plugin-{}-{}",
+            std::process::id(),
+            PLUGIN_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        );
+        let cgroup = crate::cgroup::create(&owner);
+        if let Some(directory) = &cgroup {
+            crate::cgroup::add_pid(directory, process_id);
+        }
+        Self { process_id, cgroup }
+    }
+}
+
+impl Drop for PluginProcessGroup {
+    fn drop(&mut self) {
+        if let Some(directory) = &self.cgroup {
+            crate::cgroup::kill_and_remove(directory);
+        }
+        #[cfg(unix)]
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{}", self.process_id)])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PluginCommandOutput {
     pub(crate) status: ExitStatus,
@@ -106,17 +143,7 @@ async fn run_plugin_command_with_timeout_and_environment(
         timed_out: false,
         error: anyhow::Error::new(error).context("spawn plugin command"),
     })?;
-    let process_id = child.id();
-    let cgroup = process_id.and_then(|process_id| {
-        let owner = format!(
-            "plugin-{}-{}",
-            std::process::id(),
-            PLUGIN_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        );
-        let directory = crate::cgroup::create(&owner)?;
-        crate::cgroup::add_pid(&directory, process_id);
-        Some(directory)
-    });
+    let _process_group = child.id().map(PluginProcessGroup::new);
     let run = async move {
         let mut stdin = child.stdin.take().context("plugin command stdin")?;
         let stdout = child.stdout.take().context("plugin command stdout")?;
@@ -149,7 +176,7 @@ async fn run_plugin_command_with_timeout_and_environment(
             stderr,
         })
     };
-    let result = match tokio::time::timeout(timeout, run).await {
+    match tokio::time::timeout(timeout, run).await {
         Ok(result) => result.map_err(|error| PluginCommandFailure {
             started: true,
             timed_out: false,
@@ -160,30 +187,8 @@ async fn run_plugin_command_with_timeout_and_environment(
             timed_out: true,
             error: anyhow::Error::new(error).context("plugin command timed out"),
         }),
-    };
-    if let Some(directory) = cgroup {
-        crate::cgroup::kill_and_remove(&directory);
     }
-    if let Some(process_id) = process_id {
-        reap_plugin_process_group(process_id).await;
-    }
-    result
 }
-
-#[cfg(unix)]
-async fn reap_plugin_process_group(process_id: u32) {
-    let _ = Command::new("kill")
-        .arg("-KILL")
-        .arg(format!("-{process_id}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
-}
-
-#[cfg(not(unix))]
-async fn reap_plugin_process_group(_process_id: u32) {}
 
 fn plugin_command(program: &str) -> Command {
     if program != "@plugin-js" {

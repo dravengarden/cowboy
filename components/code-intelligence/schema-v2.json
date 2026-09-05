@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/code-intelligence-v2.json",
+  "title": "Cowboy owned Code Intelligence runtime",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "transport",
+    "operations",
+    "states",
+    "supported_platforms",
+    "runtime"
+  ],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "id": { "$ref": "#/$defs/id" },
+    "version": { "$ref": "#/$defs/version" },
+    "transport": { "const": "unix_socket_json_v1" },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "states": { "type": "array", "items": { "type": "string" } },
+    "supported_platforms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["os", "architecture"],
+        "properties": {
+          "os": { "enum": ["linux", "macos"] },
+          "architecture": { "enum": ["x86_64", "aarch64"] }
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["components", "launch", "readiness", "readiness_timeout_ms"],
+      "properties": {
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/component" }
+        },
+        "launch": { "$ref": "#/$defs/command" },
+        "readiness": { "$ref": "#/$defs/command" },
+        "readiness_timeout_ms": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 120000
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "slot", "dependency", "version", "command"],
+      "properties": {
+        "kind": {
+          "enum": ["code_intelligence_adapter", "code_intelligence_server"]
+        },
+        "slot": { "$ref": "#/$defs/id" },
+        "dependency": { "$ref": "#/$defs/id" },
+        "version": { "$ref": "#/$defs/version" },
+        "command": { "$ref": "#/$defs/id" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "arguments"],
+      "properties": {
+        "command": { "$ref": "#/$defs/id" },
+        "arguments": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/argument" }
+        }
+      }
+    },
+    "argument": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "literal" },
+            "value": {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[^\\u0000]*$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "command"],
+          "properties": {
+            "kind": { "const": "component_command" },
+            "command": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "enum": ["socket", "state_directory"] } }
+        }
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "id": "zed",
-  "version": "1.1.10",
+  "version": "1.2.0",
   "transport": "unix_socket_json_v1",
   "operations": [
     "worktree_ensure",
@@ -17,5 +17,46 @@
   "states": ["restricted", "warming", "ready", "failed"],
   "supported_platforms": [
     { "os": "linux", "architecture": "x86_64" }
-  ]
+  ],
+  "runtime": {
+    "components": [
+      {
+        "kind": "code_intelligence_adapter",
+        "slot": "adapter",
+        "dependency": "cowboy-zed-adapter",
+        "version": "1.2.0",
+        "command": "cowboy-zed-adapter"
+      },
+      {
+        "kind": "code_intelligence_server",
+        "slot": "server",
+        "dependency": "zed-remote-server",
+        "version": "1.13.0",
+        "command": "cowboy-zed-server"
+      }
+    ],
+    "launch": {
+      "command": "cowboy-zed-adapter",
+      "arguments": [
+        { "kind": "literal", "value": "serve" },
+        { "kind": "literal", "value": "--socket" },
+        { "kind": "socket" },
+        { "kind": "literal", "value": "--zed-server" },
+        { "kind": "component_command", "command": "cowboy-zed-server" },
+        { "kind": "literal", "value": "--state-dir" },
+        { "kind": "state_directory" }
+      ]
+    },
+    "readiness": {
+      "command": "cowboy-zed-adapter",
+      "arguments": [
+        { "kind": "literal", "value": "probe" },
+        { "kind": "literal", "value": "--socket" },
+        { "kind": "socket" },
+        { "kind": "literal", "value": "--wait-ms" },
+        { "kind": "literal", "value": "30000" }
+      ]
+    },
+    "readiness_timeout_ms": 35000
+  }
 }

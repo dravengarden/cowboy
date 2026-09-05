@@ -88,7 +88,7 @@ component-package-check:
 
 plugin-check: component-package-check
     deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
-    deno check tools/check-plugin-components.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
+    deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
     deno test --no-check --allow-read components/plugin-api/*.test.ts
     deno test --allow-read tools/check-plugin-components_test.ts
     deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
@@ -206,6 +206,13 @@ plugin-publish PLUGIN CATALOG PUBLIC_KEY:
     just plugin-verify "{{PLUGIN}}" "{{PUBLIC_KEY}}"
     deno run --allow-read --allow-write="{{CATALOG}}" --allow-run=sha256sum tools/publish-plugin-release.ts "{{PLUGIN}}" "{{CATALOG}}" "{{PUBLIC_KEY}}"
 
+# Exact Linux adapter/server bytes; never install or update a Machine here.
+zed-plugin-runtime-build ARTIFACT_BASE:
+    deno run --allow-read --allow-write --allow-run plugins/zed/runtime/build.ts "{{ARTIFACT_BASE}}"
+
+zed-plugin-conformance ADAPTER SERVER:
+    COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.
@@ -220,6 +227,7 @@ provider-check: plugin-check
     deno test --allow-read tools/provider-runtime-platforms_test.ts
     deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
     deno test tools/plugin-publication-receipt_test.ts
+    deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
     deno run --allow-read components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets

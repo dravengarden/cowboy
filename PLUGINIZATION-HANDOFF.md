@@ -377,7 +377,7 @@ Corrections implemented in this working tree:
     check. This fixes package metadata drift, not the separate live-runtime
     ownership gap below.
 
-Remaining architecture work:
+Remaining architecture work (historical snapshot; see the September 6 follow-up below):
 
 1. **Finish Zed's exact Plugin runtime ownership (P1).** The generic installer
    stages a code-intelligence Plugin, but `supervise_zed_adapter` still selects
@@ -572,3 +572,85 @@ Machine installed/upgraded, component activated, or legacy data/path deleted.
 The final read-only check still returned `/healthz: ok`, the existing Web
 version `d60d4931b93b674abc4982ec4bda3092`, and `cowboy.service` active with
 `NRestarts=0`.
+
+## Owned-runtime and independent publisher follow-up — 2026-09-06
+
+The preceding candidate receipts are historical, not inputs for the next
+deployment. `3b1dfaf9` integrates fresh `origin/main` (`c293e0e9`), retaining
+its manager health, Provider Reload, transport resilience, updated dependency
+locks, website and native-shell changes together with the extraction.
+
+The next component release is **2.5.0**: Plugin SDK/contract **1.6.0**, Code
+Intelligence contract **1.2.0**, six independent Agent Plugins **3.1.12**, and
+Zed **1.2.0**. Historical component releases remain unchanged. In particular,
+the integrated Codex CLI/ACP pins are **0.153.4 / 1.10.0**; the older Mac probe
+table above is not acceptance evidence for these new bytes.
+
+Completed implementation and deterministic evidence:
+
+- Code Intelligence schema 2 owns the complete adapter/server matrix, exact
+  dependency/version/command bindings, typed socket/state arguments and a
+  bounded readiness command. Authentication cannot smuggle Machine runtimes.
+- Machine dispatch uses the explicit Plugin ID and the exact verified installed
+  generation. The current Code client still selects `zed`; there is no implicit
+  first-installed/latest engine selection. Worktree/buffer leases retain old
+  generations during upgrade/uninstall; new worktrees use the new selection.
+  After owned activation, a durable marker prevents ambient legacy fallback.
+  Pre-migration legacy sessions retain their existing path.
+- Runtime integrity covers every extracted file, not only the entrypoint.
+  Isolated probes recheck bytes before activation. Closed runtime environments,
+  private homes/sockets and process-group guards cover failure, cancellation and
+  teardown, including descendant processes.
+- Zed's private Nix builder now lives under `plugins/zed/runtime/`. Its Linux
+  adapter is static musl, with build-time rejection of an ELF interpreter or
+  shared-library dependency. Its exact private Zed server is also bound into
+  the release. Both actual binaries passed the new temporary signed-package
+  conformance: install, readiness, worktree/buffer open, uninstall while leased,
+  close/drain, failed new selection, and retained-generation reactivation.
+- The full `just check-compact` gate passes: **664 ordinary Rust library
+  tests**, **six isolated PostgreSQL tests**, **1142 Web tests**, **21 Plugin
+  SDK tests**, **17 Provider SDK tests**, **11 Zed adapter tests**, site tests,
+  lint/type/format/audit checks and feature/release builds. Two other ignored
+  tests are a subprocess fixture and the separately executed real Zed
+  conformance. No registered Machine was installed or upgraded.
+- The shared SDK now has an immutable `.#cowboy-plugin-pack` Nix output, which
+  passes its 21 tests and supplies pinned OpenSSH for verification. Its owned
+  `version` command reports `1.6.0`. The Cargo vendor hash was regenerated from
+  the exact updated lock rather than weakening offline/locked builds.
+- Cowboy publication now uses atomic create-only hard links, not POSIX rename
+  replacement. Four focused tests pass for identical retries, concurrent
+  differing/identical writes, and rejecting source/target symlinks.
+- Cardea independently owns its new **1.2.0** host-bound release pipeline in
+  commit **d54b994**, branch `codex/cowboy-plugin-host-20260906`. Its clean task
+  worktree is `/srv/storage/fast0/agent/worktrees/cardea/cowboy-plugin-host-20260906`.
+  Its complete Rust/verifier/tools/wasm/lint/format gate and dependency audits
+  pass. The package owns only OIDC login presentation; issuer, PAR, client
+  authentication, manual approval and account policy are unchanged. The Cardea
+  Worker was not redeployed. Its final package will use the independently built
+  immutable SDK, not Cowboy source or an ambient CLI.
+- The canonical release skill now requires owned Code runtime conformance and
+  portable bytes, and documents the immutable SDK for external publishers.
+  The skill-creator validator passes against the locked Nix Python/PyYAML.
+
+Still required before declaring release/cutover complete:
+
+1. Build the final immutable outputs from the clean committed follow-up source;
+   rebuild/bind every current Agent matrix and Zed's complete matrix. Run actual
+   current macOS probes and required ACP/sidecar generation conformance.
+2. Build the changed Apple shell from committed Git source on the registered
+   Mac and obtain the applicable native/passkey acceptance. No physical-device
+   result has been claimed.
+3. Sign with the existing configured publishers, independently verify and
+   publish each exact Plugin, including Cardea and Password/Passkey. Verify
+   immutable URLs, Catalog observations and complete embedded-Agent coverage.
+4. Apply an exact protected host policy and Cardea selection, run the candidate
+   preflight, then perform the authorized Controller/Web activation through
+   the machine-owned activator. Verify migration, real login, health, versions,
+   Machine presence and old-generation drain before deleting any transitional
+   support. Authorization does not include Machine activation/installation,
+   Service Provider login, or bypassing Cardea's human approvals.
+
+At this checkpoint, no production signatures, Catalog writes, private policy
+changes, credential mutations, component activation or bootstrap deletion have
+occurred. The user's continuation authorizes gated publication and Controller
+restart; implementation/build success alone is not a production receipt.

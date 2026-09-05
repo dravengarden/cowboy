@@ -3,7 +3,8 @@
 Cowboy organizes independently versioned integrations as plugins and reusable
 implementation as components. The machine-readable sources of truth are
 `plugins/*/plugin.json`, `components/plugin-contract/schema.json`,
-`components/plugin-contract/authentication-provider.schema.json`, and
+`components/plugin-contract/authentication-provider.schema.json`,
+`components/code-intelligence/schema-v2.json`, and
 `components/registry.json`.
 
 ## Plugin boundary
@@ -18,7 +19,9 @@ component dependency list. The initial kinds are:
   WebAuthn. The Controller owns credentials, account mappings, protocol
   execution, and Cowboy sessions; the package cannot execute provider code;
 - `code_intelligence`: an isolated code-intelligence integration. The first is
-  the separately built GPL Zed adapter.
+  the separately built GPL Zed adapter and its exact private server. Schema 2
+  owns both the executable graph and launch/readiness bindings; schema 1 is
+  retained for previously published legacy adapters.
 
 The generic Plugin identity is the repository, publication, discovery,
 installation, rollback, and uninstall boundary. A Provider package is only the
@@ -63,6 +66,12 @@ does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` executes that build from
 an unrelated temporary directory. This is the repository acceptance proof for
 moving a Plugin to its own repository and release pipeline.
+
+External publishers can use `nix build .#cowboy-plugin-pack` to obtain a
+closure-pinned SDK CLI, including its signature tool. The `version` command
+reports the exact SDK version; no Cowboy working directory is needed to build
+an external package. Cardea's repository owns its own release recipes using
+this tool, rather than copying the SDK or relying on an ambient compiler.
 
 ## Coordinated release rule
 

@@ -124,6 +124,18 @@ In addition, require all applicable Provider gates below:
   Authentication bundles contain only `host.json`. Build examples with
   `just example-auth-bundle <id>`; do not put credentials or Controller policy
   into the package. `just example-auth-build-all` covers these sources.
+- For Code Intelligence schema 2 (Plugin SDK 1.6+), require its complete exact
+  adapter/server graph, typed command/socket/state bindings and bounded
+  readiness command. Reject extra or missing targets/components and ambient
+  executable lookup. Schema-1 releases are retained legacy inputs, not complete
+  owned-runtime candidates. For Zed, build with
+  `just zed-plugin-runtime-build <artifact-base>` and run
+  `just zed-plugin-conformance <absolute-adapter> <absolute-server>`. The latter
+  exercises real binaries through temporary signing, Machine installation,
+  worktree/buffer leases, uninstall drain and retained-generation reactivation;
+  it does not install on a registered Machine. The private Nix recipe requires
+  a static Linux adapter and the exact server; a copied Nix ELF with a store
+  interpreter is not a portable artifact.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog
@@ -196,6 +208,12 @@ unsigned, deliberately unbound release envelope. `provider-check` checks the
 typed runtime lock and npm lock payloads and builds all six separately so a
 shared SDK change cannot leave one Provider un-linkable. An unbound envelope
 may be reviewed in Web but is never installable.
+
+External publishers can consume the immutable `.#cowboy-plugin-pack` Nix output;
+`cowboy-plugin-pack version` reports the exact SDK tool version. Their own
+repository still owns build, sign, verify and publish recipes and release
+authority. A shared tool artifact does not require importing Cowboy source or
+borrowing its working directory.
 
 ## Publish and verify
 

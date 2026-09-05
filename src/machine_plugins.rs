@@ -10,7 +10,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
+use std::os::unix::fs::DirBuilderExt as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _, symlink};
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,6 +37,9 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::legacy_provider_release::LegacyProviderRelease;
 use crate::machine_auth::LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE;
+use crate::machine_code_plugins::{
+    CodeLaunchPlan, CodeRuntimeHost, CodeRuntimeSelection, probe_code_runtime,
+};
 use crate::machine_protocol::{
     DesiredPlugin, Platform, PluginHostOperation, PluginInstallationState, PluginInventory,
     PortableCredentialBundle, ProviderAuthAction, ProviderMaterializationState,
@@ -191,6 +196,7 @@ pub(crate) struct MachinePluginStore {
     architecture: String,
     encryption: MachineEncryptionIdentity,
     lifecycle: tokio::sync::Mutex<()>,
+    code_runtimes: CodeRuntimeHost,
 }
 
 enum PreparedProviderAuth {
@@ -245,6 +251,7 @@ impl MachinePluginStore {
             architecture,
             encryption,
             lifecycle: tokio::sync::Mutex::new(()),
+            code_runtimes: CodeRuntimeHost::default(),
         })
     }
 
@@ -400,6 +407,11 @@ impl MachinePluginStore {
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
         stage_provider_runtime(&content, &runtime_artifacts).await?;
+        if let Some(plan) =
+            self.code_launch_plan(package, &desired.release.artifact_digest, &content)?
+        {
+            probe_code_runtime(&plan).await?;
+        }
         let inventory = PluginInventory {
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
@@ -419,7 +431,7 @@ impl MachinePluginStore {
             &serde_json::to_vec(&inventory)?,
             0o600,
         )?;
-        Self::activate(&plugin_root, &generation_name)?;
+        self.activate_code_generation(package, &generation_name)?;
         self.inventory_one(&package.manifest.id)?
             .context("activated code-intelligence Plugin is missing from inventory")
     }
@@ -435,10 +447,15 @@ impl MachinePluginStore {
         let _lifecycle = self.lifecycle.lock().await;
         validate_plugin_id(provider_id)?;
         let generation_name = digest_generation_name(generation_digest)?;
-        let (plugin_package, _, _) =
+        let (plugin_package, _, content) =
             self.verified_plugin_generation(provider_id, generation_digest)?;
         if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::CodeIntelligence {
-            Self::activate(&self.plugin_root(provider_id), &generation_name)?;
+            if let Some(plan) =
+                self.code_launch_plan(&plugin_package, generation_digest, &content)?
+            {
+                probe_code_runtime(&plan).await?;
+            }
+            self.activate_code_generation(&plugin_package, &generation_name)?;
             return self
                 .inventory_one(provider_id)?
                 .context("reactivated Plugin is missing from inventory");
@@ -533,6 +550,95 @@ impl MachinePluginStore {
         }
         output.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
         Ok(output)
+    }
+
+    fn activate_code_generation(&self, package: &PluginPackage, generation: &str) -> Result<()> {
+        let root = self.plugin_root(&package.manifest.id);
+        let marker = root.join(".code-runtime-owned-v2");
+        let owned = matches!(&package.payload, PluginPayload::CodeIntelligence(contract) if contract.runtime.is_some());
+        ensure!(
+            owned || !marker.exists(),
+            "cannot replace an owned code runtime with a legacy adapter"
+        );
+        let had_marker = marker.exists();
+        if owned && !had_marker {
+            atomic_write(&marker, b"2\n", 0o600)?;
+        }
+        if let Err(error) = Self::activate(&root, generation) {
+            if owned && !had_marker {
+                fs::remove_file(&marker)?;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn code_launch_plan(
+        &self,
+        package: &PluginPackage,
+        digest: &str,
+        content: &Path,
+    ) -> Result<Option<CodeLaunchPlan>> {
+        let PluginPayload::CodeIntelligence(contract) = &package.payload else {
+            bail!("installed Plugin is not a code-intelligence engine");
+        };
+        let Some(runtime) = &contract.runtime else {
+            return Ok(None);
+        };
+        let commands = runtime
+            .components
+            .iter()
+            .map(|component| {
+                Ok((
+                    component.command.clone(),
+                    runtime_command(&content.join("package.cowboy-plugin"), &component.command)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        Ok(Some(CodeLaunchPlan {
+            plugin_id: package.manifest.id.clone(),
+            generation_digest: digest.to_owned(),
+            runtime: runtime.clone(),
+            commands,
+            home: self
+                .plugin_root(&package.manifest.id)
+                .join("runtime")
+                .join(digest_generation_name(digest)?)
+                .join("home"),
+        }))
+    }
+
+    /// Resolve the selected Plugin by capability id, never a global server
+    /// executable. Existing routes keep their immutable generation on uninstall.
+    pub async fn code_request(
+        &self,
+        plugin_id: &str,
+        payload: &serde_json::Value,
+        legacy_socket: Option<&Path>,
+    ) -> Result<serde_json::Value> {
+        validate_plugin_id(plugin_id)?;
+        self.code_runtimes
+            .request(plugin_id, payload, || {
+                let root = self.plugin_root(plugin_id);
+                if let Some(generation) = read_link_name(&root.join("active")) {
+                    let digest = format!("sha256:{generation}");
+                    let (package, _, content) =
+                        self.verified_plugin_generation(plugin_id, &digest)?;
+                    if let Some(plan) = self.code_launch_plan(&package, &digest, &content)? {
+                        return Ok(CodeRuntimeSelection::Installed(plan));
+                    }
+                }
+                ensure!(
+                    !root.join(".code-runtime-owned-v2").exists(),
+                    "code-intelligence Plugin is not installed; legacy fallback is disabled"
+                );
+                Ok(CodeRuntimeSelection::Legacy(
+                    legacy_socket
+                        .context("code-intelligence Plugin is not installed")?
+                        .to_path_buf(),
+                ))
+            })
+            .await
     }
 
     pub async fn invoke_host(
@@ -2630,7 +2736,16 @@ fn provider_staging_projection(artifacts: &PluginRuntimeArtifacts) -> PlatformRu
             .components
             .iter()
             .map(|component| ReleasedPrivateComponent {
-                kind: cowboy_provider_sdk::PrivateComponentKind::ProviderAdapter,
+                kind: match component.kind {
+                    PluginComponentKind::AgentCli => PrivateComponentKind::ProviderCli,
+                    PluginComponentKind::AgentAdapter => PrivateComponentKind::ProviderAdapter,
+                    PluginComponentKind::AgentGateway => PrivateComponentKind::ProviderGateway,
+                    PluginComponentKind::AcpRuntime => PrivateComponentKind::AcpRuntime,
+                    PluginComponentKind::CodeIntelligenceAdapter
+                    | PluginComponentKind::CodeIntelligenceServer => {
+                        PrivateComponentKind::ProviderAdapter
+                    }
+                },
                 slot: component.slot.clone(),
                 dependency: component.dependency.clone(),
                 version: component.version.clone(),
@@ -2934,7 +3049,7 @@ fn installed_runtime_matches(
     artifacts: &PlatformRuntimeArtifacts,
     metadata: &InstalledRuntimeMetadata,
 ) -> Result<bool> {
-    if metadata.commands.len() != artifacts.components.len() {
+    if metadata.schema_version != 2 || metadata.commands.len() != artifacts.components.len() {
         return Ok(false);
     }
     for expected in &artifacts.components {
@@ -2946,28 +3061,37 @@ fn installed_runtime_matches(
         }
         let executable = content.join(&installed.executable);
         let artifact = content.join(&installed.artifact);
+        let component_root =
+            content
+                .join("runtime")
+                .join(format!("{}-{}", expected.kind.as_str(), expected.slot));
+        let (expected_executable, expected_artifact) = match expected.artifact_format {
+            ProviderArtifactFormat::Raw => (component_root.join("bin"), component_root.join("bin")),
+            ProviderArtifactFormat::TarGz => (
+                component_root.join("content").join(
+                    expected
+                        .entrypoint
+                        .as_deref()
+                        .context("runtime archive requires an entrypoint")?,
+                ),
+                component_root.join("artifact.tar.gz"),
+            ),
+        };
+        if executable != expected_executable || artifact != expected_artifact {
+            return Ok(false);
+        }
         ensure_within(content, &executable)?;
         ensure_within(content, &artifact)?;
-        if !executable.is_file()
-            || !artifact.is_file()
+        if !fs::symlink_metadata(&executable).is_ok_and(|metadata| metadata.is_file())
+            || !fs::symlink_metadata(&artifact).is_ok_and(|metadata| metadata.is_file())
             || digest_file(&artifact)? != expected.artifact_digest.to_ascii_lowercase()
         {
             return Ok(false);
         }
-        if expected.artifact_format == ProviderArtifactFormat::TarGz {
-            let entrypoint = expected
-                .entrypoint
-                .as_deref()
-                .context("released Provider archive has no entrypoint")?;
-            let expected_executable = archive_entry_digest(&artifact, entrypoint)?;
-            if digest_file_with_limit(
-                &executable,
-                MAX_PROVIDER_RUNTIME_EXPANDED_BYTES,
-                "installed Provider runtime entrypoint",
-            )? != expected_executable
-            {
-                return Ok(false);
-            }
+        if expected.artifact_format == ProviderArtifactFormat::TarGz
+            && !archive_runtime_matches(&artifact, &component_root.join("content"))?
+        {
+            return Ok(false);
         }
     }
     Ok(true)
@@ -2997,14 +3121,13 @@ fn digest_file_with_limit(path: &Path, limit: u64, label: &str) -> Result<String
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
-fn archive_entry_digest(archive_path: &Path, entrypoint: &str) -> Result<String> {
+fn archive_runtime_matches(archive_path: &Path, extracted: &Path) -> Result<bool> {
     let decoder = flate2::read::GzDecoder::new(fs::File::open(archive_path)?);
     let mut archive = tar::Archive::new(decoder);
-    let expected = Path::new(entrypoint);
-    let mut found = None;
     let mut expanded_bytes = 0_u64;
     let mut entries = 0_usize;
     let mut paths = BTreeSet::new();
+    let mut extracted_paths = BTreeSet::new();
     for entry in archive.entries()? {
         let mut entry = entry?;
         let path = entry.path()?.into_owned();
@@ -3029,8 +3152,17 @@ fn archive_entry_digest(archive_path: &Path, entrypoint: &str) -> Result<String>
             kind.is_file() || kind.is_dir(),
             "Provider runtime archive contains an unsupported entry type"
         );
-        if path == expected {
-            ensure!(kind.is_file(), "Provider runtime entrypoint is not a file");
+        for ancestor in path.ancestors().filter(|path| !path.as_os_str().is_empty()) {
+            extracted_paths.insert(ancestor.to_path_buf());
+        }
+        let installed = extracted.join(&path);
+        let Ok(metadata) = fs::symlink_metadata(&installed) else {
+            return Ok(false);
+        };
+        if kind.is_file() {
+            if !metadata.is_file() {
+                return Ok(false);
+            }
             let mut digest = Sha256::new();
             let mut buffer = vec![0_u8; 64 * 1024];
             loop {
@@ -3040,10 +3172,40 @@ fn archive_entry_digest(archive_path: &Path, entrypoint: &str) -> Result<String>
                 }
                 digest.update(&buffer[..read]);
             }
-            found = Some(format!("sha256:{:x}", digest.finalize()));
+            if digest_file_with_limit(
+                &installed,
+                MAX_PROVIDER_RUNTIME_EXPANDED_BYTES,
+                "installed runtime file",
+            )? != format!("sha256:{:x}", digest.finalize())
+            {
+                return Ok(false);
+            }
+        } else if !metadata.is_dir() {
+            return Ok(false);
         }
     }
-    found.context("Provider runtime archive entrypoint is missing")
+    // An extra module/library is as capable of changing runtime behavior as a
+    // modified entrypoint. Reject additions and links, not just changed files.
+    if !fs::symlink_metadata(extracted).is_ok_and(|metadata| metadata.is_dir()) {
+        return Ok(false);
+    }
+    let mut pending = vec![extracted.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for child in fs::read_dir(directory)? {
+            let child = child?;
+            let path = child.path();
+            if !extracted_paths.remove(path.strip_prefix(extracted)?) {
+                return Ok(false);
+            }
+            let kind = child.file_type()?;
+            if kind.is_dir() {
+                pending.push(path);
+            } else if !kind.is_file() {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(extracted_paths.is_empty())
 }
 
 async fn stage_runtime_component(
@@ -3119,6 +3281,16 @@ async fn stage_runtime_component(
         }
     };
     probe_released_component(&executable, artifact).await?;
+    ensure!(
+        digest_file(&stored_artifact)? == artifact.artifact_digest.to_ascii_lowercase(),
+        "runtime component probe changed signed artifact bytes"
+    );
+    if artifact.artifact_format == ProviderArtifactFormat::TarGz {
+        ensure!(
+            archive_runtime_matches(&stored_artifact, &component_root.join("content"))?,
+            "runtime component probe changed extracted runtime bytes"
+        );
+    }
     Ok(StagedRuntimeComponent {
         executable,
         artifact: stored_artifact,
@@ -3164,24 +3336,47 @@ fn extract_provider_tar_gz(destination: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+struct StagedProbeHome(PathBuf);
+
+impl Drop for StagedProbeHome {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 async fn probe_released_component(
     executable: &Path,
     artifact: &ReleasedPrivateComponent,
 ) -> Result<()> {
-    let parent = executable
-        .parent()
-        .context("Provider executable has no parent")?;
+    let directory = std::env::temp_dir().join(format!(
+        "cowboy-component-probe-{:032x}",
+        rand::random::<u128>()
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let home = StagedProbeHome(directory);
     let mut child = None;
     for attempt in 0..=4 {
-        match tokio::process::Command::new(executable)
+        let mut command = tokio::process::Command::new(executable);
+        command
             .args(&artifact.probe.args)
-            .current_dir(parent)
+            .current_dir(&home.0)
+            .env_clear()
+            .env("HOME", &home.0)
+            .env("XDG_CONFIG_HOME", home.0.join(".config"))
+            .env("XDG_CACHE_HOME", home.0.join(".cache"))
+            .env("XDG_DATA_HOME", home.0.join(".local/share"))
+            .env("XDG_STATE_HOME", home.0.join(".local/state"))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-        {
+            .kill_on_drop(true);
+        for name in ["PATH", "SSL_CERT_FILE", "SSL_CERT_DIR", "NIX_SSL_CERT_FILE"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command.as_std_mut().process_group(0);
+        match command.spawn() {
             Ok(spawned) => {
                 child = Some(spawned);
                 break;
@@ -3199,6 +3394,9 @@ async fn probe_released_component(
         }
     }
     let mut child = child.context("starting staged Provider component probe")?;
+    let _process_group = child
+        .id()
+        .map(crate::plugin_process::PluginProcessGroup::new);
     let status = if let Ok(status) = tokio::time::timeout(
         Duration::from_millis(artifact.probe.timeout_ms),
         child.wait(),
@@ -4223,8 +4421,11 @@ mod tests {
             serde_json::from_str(include_str!("../plugins/zed/plugin.json")).unwrap();
         let component_release = manifest.component_release.clone();
         let plugin_version = manifest.version.clone();
-        let contract: CodeIntelligenceContract =
+        let mut contract: CodeIntelligenceContract =
             serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
+        // Retained schema-1 releases remain readable during runtime migration.
+        contract.schema_version = 1;
+        contract.runtime = None;
         let package = PluginPackage::new(
             manifest,
             component_release.clone(),
@@ -4302,6 +4503,184 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    #[ignore = "requires the exact portable Zed release binaries; run just zed-plugin-conformance"]
+    #[allow(clippy::too_many_lines)]
+    async fn released_zed_runtime_installs_and_drains() {
+        use cowboy_plugin_sdk::{
+            PluginArtifactProbe, PluginManifest, PluginRelease, ReleasedPluginComponent,
+        };
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let manifest: PluginManifest =
+            serde_json::from_str(include_str!("../plugins/zed/plugin.json")).unwrap();
+        let contract: cowboy_plugin_sdk::CodeIntelligenceContract =
+            serde_json::from_str(include_str!("../plugins/zed/contract.json")).unwrap();
+        let runtime = contract.runtime.clone().expect("owned Zed runtime");
+        let package = PluginPackage::new(
+            manifest.clone(),
+            manifest.component_release.clone(),
+            PluginPayload::CodeIntelligence(contract.clone()),
+        )
+        .unwrap();
+        let bytes = package.canonical_bytes().unwrap();
+        let mut binaries = Vec::new();
+        for name in ["COWBOY_TEST_ZED_ADAPTER", "COWBOY_TEST_ZED_SERVER"] {
+            let path =
+                PathBuf::from(std::env::var_os(name).expect("explicit Zed conformance binary"));
+            assert!(path.is_absolute(), "conformance binaries must be absolute");
+            binaries.push(fs::read(path).unwrap());
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let components = runtime
+            .components
+            .iter()
+            .zip(&binaries)
+            .enumerate()
+            .map(|(index, (component, binary))| ReleasedPluginComponent {
+                kind: component.kind,
+                slot: component.slot.clone(),
+                dependency: component.dependency.clone(),
+                version: component.version.clone(),
+                command: component.command.clone(),
+                artifact_url: format!("http://{address}/{index}"),
+                artifact_digest: PluginPackage::artifact_digest(binary),
+                artifact_format: PluginArtifactFormat::Raw,
+                entrypoint: None,
+                probe: PluginArtifactProbe {
+                    args: vec![if index == 0 { "--help" } else { "version" }.to_owned()],
+                    timeout_ms: 30_000,
+                },
+            })
+            .collect();
+        let server = tokio::spawn(async move {
+            for _ in 0..binaries.len() {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let count = stream.read(&mut request).await.unwrap();
+                let request = std::str::from_utf8(&request[..count]).unwrap();
+                let index = request
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap()
+                    .trim_start_matches('/')
+                    .parse::<usize>()
+                    .unwrap();
+                let binary = &binaries[index];
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            binary.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                stream.write_all(binary).await.unwrap();
+            }
+        });
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-zed-conformance-{:032x}",
+            rand::random::<u128>()
+        ));
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("publisher")).unwrap();
+        let mut release = PluginRelease {
+            release_schema: 1,
+            plugin_id: manifest.id,
+            plugin_version: manifest.version,
+            plugin_kind: manifest.kind,
+            package_digest: PluginPackage::artifact_digest(&bytes),
+            artifact_digest: String::new(),
+            artifact_url: "https://example.invalid/zed.cowboy-plugin".to_owned(),
+            publisher: manifest.publisher,
+            contract_fingerprint: package.contract_fingerprint.clone(),
+            component_release: manifest.component_release,
+            host_bundle_digest: None,
+            signature: String::new(),
+            supported_platforms: contract.supported_platforms,
+            runtime_artifacts: vec![PluginRuntimeArtifacts {
+                os: OperatingSystem::Linux,
+                architecture: Architecture::X86_64,
+                components,
+            }],
+        };
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = publisher
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        let store =
+            MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".to_owned())
+                .unwrap();
+        let installed = store
+            .install(&DesiredPlugin {
+                release: release.clone(),
+                package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                publisher_public_key: publisher.public_key().to_owned(),
+                host_bundle_base64: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(installed.generation_digest, release.artifact_digest);
+        server.await.unwrap();
+        let worktree = root.join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        fs::write(worktree.join("fixture.txt"), "real isolated Zed buffer\n").unwrap();
+        let open = serde_json::json!({"type": "openWorktree", "path": worktree, "trusted": true});
+        assert_eq!(
+            store.code_request("zed", &open, None).await.unwrap()["leases"],
+            1
+        );
+        let open_buffer = serde_json::json!({"type": "openBuffer", "worktree": worktree, "path": "fixture.txt", "leaseId": "conformance"});
+        assert_eq!(
+            store.code_request("zed", &open_buffer, None).await.unwrap()["leases"],
+            1
+        );
+        assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+        store
+            .uninstall("zed", &release.artifact_digest)
+            .await
+            .unwrap();
+        assert!(store.inventory().unwrap().is_empty());
+        let other = serde_json::json!({"type": "openWorktree", "path": root, "trusted": true});
+        assert!(
+            store
+                .code_request("zed", &other, Some(Path::new("/must-not-use-legacy.sock")))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("not installed")
+        );
+        let close_buffer = serde_json::json!({"type": "closeBuffer", "worktree": worktree, "path": "fixture.txt", "leaseId": "conformance"});
+        assert_eq!(
+            store
+                .code_request("zed", &close_buffer, None)
+                .await
+                .unwrap()["leases"],
+            0
+        );
+        assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+        let close = serde_json::json!({"type": "closeWorktree", "path": worktree});
+        assert_eq!(
+            store.code_request("zed", &close, None).await.unwrap()["leases"],
+            0
+        );
+        assert_eq!(store.code_runtimes.live_generation_count().await, 0);
+        let restored = store
+            .reactivate("zed", &release.artifact_digest)
+            .await
+            .unwrap();
+        assert_eq!(restored.generation_digest, release.artifact_digest);
+        store
+            .uninstall("zed", &release.artifact_digest)
+            .await
+            .unwrap();
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn failed_runtime_staging_removes_partial_generation() {
         use cowboy_provider_sdk::{
@@ -4367,6 +4746,12 @@ mod tests {
         builder
             .append_data(&mut header, "bin/fixture", script.as_slice())
             .unwrap();
+        let library = b"export const version = 1;\n";
+        header.set_size(library.len() as u64);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "lib/runtime.js", library.as_slice())
+            .unwrap();
         builder.finish().unwrap();
         let archive_bytes = builder.into_inner().unwrap().finish().unwrap();
         let archive_digest = format!("sha256:{:x}", Sha256::digest(&archive_bytes));
@@ -4417,6 +4802,13 @@ mod tests {
         };
         assert!(installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
         atomic_write(&executable, b"#!/bin/sh\nexit 1\n", 0o700).unwrap();
+        assert!(!installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
+        atomic_write(&executable, script, 0o700).unwrap();
+        assert!(installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
+        atomic_write(&extracted.join("lib/runtime.js"), b"injected helper", 0o600).unwrap();
+        assert!(!installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
+        atomic_write(&extracted.join("lib/runtime.js"), library, 0o600).unwrap();
+        atomic_write(&extracted.join("lib/injected.js"), b"extra module", 0o600).unwrap();
         assert!(!installed_runtime_matches(&root, &artifacts, &metadata).unwrap());
         fs::remove_dir_all(root).unwrap();
     }

@@ -33,6 +33,13 @@ fn main() -> Result<()> {
         return usage();
     };
     match command.as_ref() {
+        "version" if arguments.len() == 1 => {
+            println!(
+                "cowboy-plugin-pack {}",
+                cowboy_plugin_sdk::PLUGIN_SDK_VERSION
+            );
+            Ok(())
+        }
         "build" => build(&arguments[1..]),
         "set-artifact-url" => set_artifact_url(&arguments[1..]),
         "bind-host" => bind_host(&arguments[1..]),

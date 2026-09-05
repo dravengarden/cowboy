@@ -1886,6 +1886,7 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 adapter,
                 payload,
                 AdapterRequestContext {
+                    providers,
                     zed_adapter_socket,
                     code_adapter_socket,
                     worktree_root,
@@ -2053,6 +2054,7 @@ fn component_requires_host_restart(kind: &ComponentKind) -> bool {
 }
 
 struct AdapterRequestContext {
+    providers: Arc<MachinePluginStore>,
     zed_adapter_socket: Option<PathBuf>,
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
@@ -2074,6 +2076,7 @@ async fn run_adapter_request(
     context: AdapterRequestContext,
 ) {
     let AdapterRequestContext {
+        providers,
         zed_adapter_socket,
         code_adapter_socket,
         worktree_root,
@@ -2110,16 +2113,15 @@ async fn run_adapter_request(
             )
             .context("encoding prepared workspace");
         }
-        let socket = match adapter.as_str() {
-            "zed" => zed_adapter_socket.context("Zed adapter is not configured on this Machine")?,
-            "code" => {
-                code_adapter_socket.context("Code adapter is not configured on this Machine")?
-            }
-            _ => bail!("unknown Machine adapter {adapter:?}"),
-        };
-        if matches!(adapter.as_str(), "zed" | "code") {
-            validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
+        validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
+        if adapter != "code" {
+            let legacy = (adapter == "zed")
+                .then_some(zed_adapter_socket.as_deref())
+                .flatten();
+            return providers.code_request(&adapter, &payload, legacy).await;
         }
+        let socket =
+            code_adapter_socket.context("Code adapter is not configured on this Machine")?;
         let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(&socket))
             .await
             .context("Zed adapter connect timed out")??;

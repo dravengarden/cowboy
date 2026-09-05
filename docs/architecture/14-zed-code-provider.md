@@ -19,7 +19,10 @@ The initial compatibility target is:
 An upgrade changes both values together, bumps the Zed plugin version, and must
 pass the adapter protocol fixtures plus `just plugin-check` before deployment.
 Cowboy never discovers or executes the mutable
-server under `~/.zed_server`; Nix supplies the exact adapter/server pair.
+server under `~/.zed_server`. New Plugin releases own the exact adapter/server
+pair and its typed launch/readiness graph. The package's Nix recipes under
+`plugins/zed/runtime` build a static distributable Linux adapter; a regular
+Nix bootstrap binary is not a portable Plugin artifact.
 
 The browser's read-only Code syntax fallback carries a snapshot of the pinned
 Zed `first_line_pattern` matchers, identified by the same revision. It applies
@@ -31,8 +34,20 @@ browser.
 
 ## Process and state isolation
 
-There is one adapter instance for Cowboy, shared by Code sessions. It has its
-own runtime, data, cache, logs, extension store, and trust database:
+There is one adapter instance per active Plugin generation on a Machine,
+shared by that generation's Code worktrees. A worktree with live buffer or
+worktree leases retains its generation across upgrade and uninstall. Other
+worktrees can start against a newer installed generation; no shared socket or
+global server path is replaced underneath a leased worktree. Runtime death
+reports lost protocol state rather than replaying against an ambient binary.
+
+Each generation has a private home below
+`plugins/<id>/runtime/<digest>/home`. Each live process group has a fresh 0700
+Unix-socket/state directory with a short path, separate from that home. The
+Machine removes only that owned temporary directory on teardown. No ordinary
+Zed settings, caches or credentials are inherited.
+
+Pre-migration bootstrap services retain their older separate directories:
 
 ```text
 /run/user/1000/cowboy-zed/

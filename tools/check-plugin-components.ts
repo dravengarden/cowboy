@@ -225,10 +225,6 @@ for (const pluginId of pluginEntries) {
     );
   } else if (manifest.kind === "code_intelligence") {
     assert(
-      pluginId === "zed",
-      `${pluginId}: unsupported code-intelligence plugin`,
-    );
-    assert(
       dependencies.has("cowboy.code-intelligence"),
       `${pluginId}: missing code contract`,
     );
@@ -240,19 +236,21 @@ for (const pluginId of pluginEntries) {
       contract.version === manifest.version,
       `${pluginId}: contract version mismatch`,
     );
-    const cargo = await Deno.readTextFile(
-      `plugins/${pluginId}/adapter/Cargo.toml`,
-    );
-    const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
-    assert(
-      packageBlock.includes(`version = "${manifest.version}"`),
-      `${pluginId}: adapter package version mismatch`,
-    );
+    // A Rust adapter is an optional private implementation, not a named
+    // Plugin identity or the only language an external engine can use.
+    const cargoPath = `plugins/${pluginId}/adapter/Cargo.toml`;
+    const cargo = await Deno.readTextFile(cargoPath).catch((error) => {
+      if (error instanceof Deno.errors.NotFound) return undefined;
+      throw error;
+    });
+    if (cargo !== undefined) {
+      const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
+      assert(
+        packageBlock.includes(`version = "${manifest.version}"`),
+        `${pluginId}: adapter package version mismatch`,
+      );
+    }
   } else {
-    assert(
-      pluginId !== "zed",
-      `${pluginId}: Authentication Provider cannot use the Zed plugin identity`,
-    );
     const contract = await readJson<{ id: string; version: string }>(
       `plugins/${pluginId}/${manifest.entrypoint}`,
     );
