@@ -300,10 +300,10 @@ impl RemoteRuntime {
         let session_id = session.session_id.clone();
         let key = format!("ensure:{session_id}");
         self.queue(key, CoreCommand::EnsureSession { session });
-        // Queue session-owned preferences before any prompt. The worker may not
-        // have advertised its options yet, so this intentionally queues the
-        // scalar values without validation; the ACP response remains the
-        // authority and will refresh the display snapshot.
+        // Queue session-owned preferences before any prompt. Validate them
+        // against a live or persisted options snapshot when one exists; a
+        // truly fresh session has no snapshot yet, so its provider-authored
+        // defaults are queued optimistically until ACP answers authoritatively.
         queue_persisted_config_for_session(&self.shared, &session_id, false);
     }
 
@@ -394,8 +394,9 @@ impl RemoteRuntime {
         // preserving the existing v1 wire contract.
         let ensure_key = format!("ensure:{session_id}");
         self.queue(ensure_key, CoreCommand::EnsureSession { session });
-        // A reset creates a fresh ACP process, so do not use the old worker's
-        // advertised values to decide whether these preferences are needed.
+        // A reset creates a fresh ACP process, so replay every preference that
+        // the prior options snapshot still accepts even when its old current
+        // value already matched. Removed or model-incompatible values stay out.
         queue_persisted_config_for_session(&self.shared, &session_id, true);
         let command_id = self.next_id("reset");
         self.queue(
@@ -1093,20 +1094,23 @@ fn worker_status(state: WorkerState) -> Status {
     }
 }
 
-fn queue_persisted_config_for_session(shared: &Shared, session_id: &str, force: bool) {
-    let options = if force {
-        None
-    } else {
-        shared
-            .workers
-            .lock()
+fn queue_persisted_config_for_session(shared: &Shared, session_id: &str, force_replay: bool) {
+    let worker_options = {
+        let workers = shared.workers.lock();
+        workers
             .get(session_id)
             .and_then(|worker| worker.config_options.clone())
     };
-    queue_persisted_config(shared, session_id, options.as_ref());
+    let options = worker_options.or_else(|| shared.hub.persisted_config_options(session_id));
+    queue_persisted_config(shared, session_id, options.as_ref(), force_replay);
 }
 
-fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&serde_json::Value>) {
+fn queue_persisted_config(
+    shared: &Shared,
+    session_id: &str,
+    options: Option<&serde_json::Value>,
+    force_replay: bool,
+) {
     let Some(preferences) = shared.hub.config_preferences(session_id) else {
         return;
     };
@@ -1139,7 +1143,9 @@ fn queue_persisted_config(shared: &Shared, session_id: &str, options: Option<&se
         else {
             continue;
         };
-        if config_current_value(option) == Some(value) || !config_option_accepts(option, value) {
+        if (!force_replay && config_current_value(option) == Some(value))
+            || !config_option_accepts(option, value)
+        {
             continue;
         }
         queue_config_value(shared, session_id, config_id, value.clone());
@@ -1165,7 +1171,12 @@ fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
     if already_synced {
         return;
     }
-    queue_persisted_config(shared, &worker.session_id, worker.config_options.as_ref());
+    queue_persisted_config(
+        shared,
+        &worker.session_id,
+        worker.config_options.as_ref(),
+        false,
+    );
 }
 
 fn queue_config_value(
@@ -2104,6 +2115,83 @@ mod tests {
             commands[..prompt_index]
                 .iter()
                 .any(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
+        );
+    }
+
+    fn hub_with_stale_spark_preferences() -> Hub {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_config_preference(
+            "s",
+            "model".to_owned(),
+            serde_json::json!("gpt-5.3-codex-spark"),
+        )
+        .expect("model preference");
+        hub.set_config_preference("s", "reasoning_effort".to_owned(), serde_json::json!("max"))
+            .expect("reasoning preference");
+        hub.set_config_options(
+            "s",
+            serde_json::json!([
+                {
+                    "id": "model",
+                    "currentValue": "gpt-5.3-codex-spark",
+                    "options": [{"value": "gpt-5.3-codex-spark"}],
+                },
+                {
+                    "id": "reasoning_effort",
+                    "currentValue": "low",
+                    "options": [
+                        {"value": "low"},
+                        {"value": "medium"},
+                        {"value": "high"},
+                        {"value": "xhigh"},
+                    ],
+                },
+            ]),
+        );
+        hub
+    }
+
+    #[tokio::test]
+    async fn resumed_session_filters_stale_preferences_through_cached_options() {
+        let runtime = RemoteRuntime::for_test(hub_with_stale_spark_preferences(), Vec::new());
+
+        runtime.ensure(snapshot("s").launch.expect("launch metadata"));
+
+        let config_commands = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
+            .collect::<Vec<_>>();
+        assert!(config_commands.is_empty());
+    }
+
+    #[tokio::test]
+    async fn forced_replay_keeps_valid_values_but_filters_stale_preferences() {
+        let runtime = RemoteRuntime::for_test(hub_with_stale_spark_preferences(), Vec::new());
+
+        queue_persisted_config_for_session(&runtime.shared, "s", true);
+
+        let config_values = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter_map(|command| match command {
+                CoreCommand::SetConfigOption {
+                    config_id, value, ..
+                } => Some((config_id, value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            config_values,
+            vec![("model".to_owned(), serde_json::json!("gpt-5.3-codex-spark"))]
         );
     }
 

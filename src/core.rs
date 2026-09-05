@@ -3468,6 +3468,17 @@ impl Hub {
         })
     }
 
+    /// Return only the last agent-backed options snapshot. Unlike
+    /// [`Self::config_options`], this does not synthesize host-owned controls
+    /// when the agent has not advertised any options yet.
+    pub(crate) fn persisted_config_options(&self, session_id: &str) -> Option<serde_json::Value> {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|session| session.config_options.clone())
+    }
+
     /// Return the durable values selected for a session. The returned object is
     /// safe to pass across the Machine boundary because it contains only ACP
     /// option ids and scalar values, never provider credentials.
