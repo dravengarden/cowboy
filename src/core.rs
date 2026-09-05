@@ -1619,6 +1619,81 @@ fn set_config_option_current_value(
     true
 }
 
+fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value> {
+    option
+        .get("currentValue")
+        .or_else(|| option.get("current_value"))
+}
+
+pub(crate) fn config_option_accepts(option: &serde_json::Value, value: &serde_json::Value) -> bool {
+    option
+        .get("options")
+        .is_none_or(|choices| config_value_list_contains(choices, value))
+}
+
+fn config_value_list_contains(options: &serde_json::Value, value: &serde_json::Value) -> bool {
+    match options {
+        serde_json::Value::Array(options) => options
+            .iter()
+            .any(|option| config_value_list_contains(option, value)),
+        serde_json::Value::Object(option) => {
+            option.get("value") == Some(value)
+                || option
+                    .get("options")
+                    .is_some_and(|nested| config_value_list_contains(nested, value))
+        }
+        _ => options == value,
+    }
+}
+
+/// Reconcile durable selections with the provider's authoritative option
+/// snapshot. A selected value may legitimately differ from `currentValue`
+/// while the provider is applying it, but a value that disappeared from the
+/// advertised choices must never be replayed into a recreated worker.
+fn reconcile_config_preferences(
+    options: Option<&serde_json::Value>,
+    preferences: &mut serde_json::Value,
+) -> bool {
+    let Some(options) = options.and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    let Some(preferences) = preferences.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for option in options {
+        let Some(config_id) = option.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(selected) = preferences.get(config_id).cloned() else {
+            continue;
+        };
+        if config_option_accepts(option, &selected) {
+            continue;
+        }
+        let replacement = config_current_value(option)
+            .filter(|value| {
+                matches!(
+                    value,
+                    serde_json::Value::String(_) | serde_json::Value::Bool(_)
+                )
+            })
+            .cloned();
+        match replacement {
+            Some(replacement) if replacement != selected => {
+                preferences.insert(config_id.to_owned(), replacement);
+                changed = true;
+            }
+            Some(_) => {}
+            None => {
+                preferences.remove(config_id);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 impl Hub {
     #[must_use]
     pub fn new() -> Self {
@@ -1824,7 +1899,8 @@ impl Hub {
     /// Populate the in-memory state from a previously-stored snapshot.
     /// Should be called once at startup, BEFORE any client connects, so the
     /// `Sessions` broadcast on first connect already includes everything.
-    /// Skips the write-behind side: these rows are already in the DB.
+    /// Skips ordinary write-behind: these rows are already in the DB. Durable
+    /// compatibility repairs discovered during restore are written back.
     ///
     /// Without runtime reconciliation, restored sessions are forced to a dead
     /// state. Production startup instead uses
@@ -1895,6 +1971,10 @@ impl Hub {
         // persist after restore. This includes duplicate-id healing and removal
         // of retired synthetic continuations left by an older controller.
         let mut pending_dirty: Vec<String> = Vec::new();
+        // Provider option snapshots are authoritative over persisted selections.
+        // Heal values retired by a model/provider upgrade before any worker can
+        // replay them, then write the repaired preference object back to storage.
+        let mut config_preferences_dirty: Vec<(String, serde_json::Value)> = Vec::new();
         // Ids already seen across ALL sessions — ids must be globally unique so a
         // later cross-session move can't collide. The first occurrence keeps its
         // id; a duplicate (corruption from the old counter-reset bug) gets a fresh
@@ -1914,7 +1994,7 @@ impl Hub {
                     mut queue,
                     mut drafts,
                     config_options,
-                    config_preferences,
+                    mut config_preferences,
                     mobile_review_state,
                 } = r;
                 let mut healed = false;
@@ -1942,6 +2022,9 @@ impl Hub {
                     }
                 }
                 let id = meta.id.clone();
+                if reconcile_config_preferences(config_options.as_ref(), &mut config_preferences) {
+                    config_preferences_dirty.push((id.clone(), config_preferences.clone()));
+                }
                 let runtime = live.get(id.as_str()).copied();
                 let was_busy = meta.status == Status::Busy && runtime.is_none();
                 meta.status = match runtime.map(|worker| worker.state) {
@@ -2043,6 +2126,14 @@ impl Hub {
         // after another restart and healed ids remain globally unique.
         for id in pending_dirty {
             self.emit_pending(&id);
+        }
+        for (session_id, preferences) in config_preferences_dirty {
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                    session_id,
+                    preferences,
+                });
+            }
         }
     }
 
@@ -3563,26 +3654,43 @@ impl Hub {
     /// `SetConfigOption` reply path (the agent's authoritative response
     /// refreshes the same array).
     pub fn set_config_options(&self, session_id: &str, options: serde_json::Value) {
-        let options = {
+        let (options, corrected_preferences) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let options = projected_config_options(
+            let raw_options = options;
+            let mut options = projected_config_options(
                 &s.meta.provider,
                 s.meta.provider_behavior.as_ref(),
                 &s.config_preferences,
-                Some(options),
+                Some(raw_options.clone()),
             )
             .expect("agent config options remain present after projection");
+            let corrected = reconcile_config_preferences(Some(&options), &mut s.config_preferences);
+            if corrected {
+                options = projected_config_options(
+                    &s.meta.provider,
+                    s.meta.provider_behavior.as_ref(),
+                    &s.config_preferences,
+                    Some(raw_options),
+                )
+                .expect("agent config options remain present after projection");
+            }
             s.config_options = Some(options.clone());
-            options
+            (options, corrected.then(|| s.config_preferences.clone()))
         };
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::UpdateConfigOptions {
                 session_id: session_id.to_owned(),
                 options: options.clone(),
             });
+            if let Some(preferences) = corrected_preferences {
+                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                    session_id: session_id.to_owned(),
+                    preferences,
+                });
+            }
         }
         self.fanout(Outbound::ConfigOptions {
             session_id: session_id.to_owned(),
@@ -5026,6 +5134,77 @@ mod config_preference_tests {
     }
 
     #[test]
+    fn authoritative_options_replace_a_retired_persisted_value() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        hub.create_local_session(
+            "codex-session".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_config_preference(
+            "codex-session",
+            "model".to_owned(),
+            serde_json::json!("gpt-5.3-codex-spark"),
+        )
+        .expect("model preference");
+        hub.set_config_preference(
+            "codex-session",
+            "reasoning_effort".to_owned(),
+            serde_json::json!("max"),
+        )
+        .expect("reasoning preference");
+        while rx.try_recv().is_ok() {}
+
+        hub.set_config_options(
+            "codex-session",
+            serde_json::json!([
+                {
+                    "id": "model",
+                    "currentValue": "gpt-5.3-codex-spark",
+                    "options": [{"value": "gpt-5.3-codex-spark"}],
+                },
+                {
+                    "id": "reasoning_effort",
+                    "currentValue": "low",
+                    "options": [
+                        {"value": "low"},
+                        {"value": "medium"},
+                        {"value": "high"},
+                        {"value": "xhigh"},
+                    ],
+                },
+            ]),
+        );
+
+        assert_eq!(
+            hub.config_preferences("codex-session"),
+            Some(serde_json::json!({
+                "model": "gpt-5.3-codex-spark",
+                "reasoning_effort": "low",
+            }))
+        );
+        assert_eq!(
+            hub.config_options("codex-session")
+                .and_then(|value| value[1].get("currentValue").cloned()),
+            Some(serde_json::json!("low"))
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StoreWrite::UpdateConfigOptions { .. })
+        ));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StoreWrite::UpdateConfigPreferences { preferences, .. })
+                if preferences["reasoning_effort"] == serde_json::json!("low")
+        ));
+    }
+
+    #[test]
     fn deepseek_context_option_is_projected_after_the_model() {
         let hub = Hub::new();
         hub.create_local_session(
@@ -5152,6 +5331,51 @@ mod runtime_reconciliation_tests {
         assert!(hub.accept_runtime_snapshot(&worker_snapshot("session-2", "worker-epoch-2")));
         assert!(hub.finalize_runtime_reconciliation().is_empty());
         assert_eq!(hub.status("session-2"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn restore_heals_a_preference_retired_by_the_persisted_option_snapshot() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let health = Arc::new(PersistenceHealth::default());
+        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let mut restored = restored_busy("session-stale-config");
+        restored.config_preferences = serde_json::json!({
+            "model": "gpt-5.3-codex-spark",
+            "reasoning_effort": "max",
+        });
+        restored.config_options = Some(serde_json::json!([
+            {
+                "id": "model",
+                "currentValue": "gpt-5.3-codex-spark",
+                "options": [{"value": "gpt-5.3-codex-spark"}],
+            },
+            {
+                "id": "reasoning_effort",
+                "currentValue": "low",
+                "options": [
+                    {"value": "low"},
+                    {"value": "medium"},
+                    {"value": "high"},
+                    {"value": "xhigh"},
+                ],
+            },
+        ]));
+
+        hub.restore_reconciling_runtime(vec![restored]);
+
+        assert_eq!(
+            hub.config_preferences("session-stale-config")
+                .and_then(|value| value.get("reasoning_effort").cloned()),
+            Some(serde_json::json!("low"))
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(StoreWrite::UpdateConfigPreferences {
+                session_id,
+                preferences,
+            }) if session_id == "session-stale-config"
+                && preferences["reasoning_effort"] == serde_json::json!("low")
+        ));
     }
 
     #[test]

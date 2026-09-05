@@ -14,7 +14,7 @@ use tokio::net::UnixStream;
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::sync::mpsc;
 
-use crate::core::{Event, Hub, Status};
+use crate::core::{Event, Hub, Status, config_option_accepts};
 use crate::runtime_wire::{
     CoreCommand, Frame, FrameReader, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole,
     RuntimeEvent, StartSession, WorkerSnapshot, WorkerState, read_frame, write_frame,
@@ -1095,13 +1095,17 @@ fn worker_status(state: WorkerState) -> Status {
 }
 
 fn queue_persisted_config_for_session(shared: &Shared, session_id: &str, force_replay: bool) {
+    let persisted_options = shared.hub.persisted_config_options(session_id);
     let worker_options = {
         let workers = shared.workers.lock();
         workers
             .get(session_id)
             .and_then(|worker| worker.config_options.clone())
     };
-    let options = worker_options.or_else(|| shared.hub.persisted_config_options(session_id));
+    // The Hub snapshot is the last controller-authoritative state and may be
+    // newer than a detached worker's launch-time snapshot. Prefer it when
+    // deciding whether a durable value is still safe to replay.
+    let options = persisted_options.or(worker_options);
     queue_persisted_config(shared, session_id, options.as_ref(), force_replay);
 }
 
@@ -1239,27 +1243,6 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
     option
         .get("currentValue")
         .or_else(|| option.get("current_value"))
-}
-
-fn config_option_accepts(option: &serde_json::Value, value: &serde_json::Value) -> bool {
-    option
-        .get("options")
-        .is_none_or(|choices| config_value_list_contains(choices, value))
-}
-
-fn config_value_list_contains(options: &serde_json::Value, value: &serde_json::Value) -> bool {
-    match options {
-        serde_json::Value::Array(options) => options
-            .iter()
-            .any(|option| config_value_list_contains(option, value)),
-        serde_json::Value::Object(option) => {
-            option.get("value") == Some(value)
-                || option
-                    .get("options")
-                    .is_some_and(|nested| config_value_list_contains(nested, value))
-        }
-        _ => options == value,
-    }
 }
 
 fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
@@ -2134,8 +2117,6 @@ mod tests {
             serde_json::json!("gpt-5.3-codex-spark"),
         )
         .expect("model preference");
-        hub.set_config_preference("s", "reasoning_effort".to_owned(), serde_json::json!("max"))
-            .expect("reasoning preference");
         hub.set_config_options(
             "s",
             serde_json::json!([
@@ -2156,6 +2137,10 @@ mod tests {
                 },
             ]),
         );
+        // Simulate a legacy row whose optimistic selection survived after the
+        // provider removed `max` from the model-dependent choice list.
+        hub.set_config_preference("s", "reasoning_effort".to_owned(), serde_json::json!("max"))
+            .expect("reasoning preference");
         hub
     }
 
@@ -2176,6 +2161,48 @@ mod tests {
     #[tokio::test]
     async fn forced_replay_keeps_valid_values_but_filters_stale_preferences() {
         let runtime = RemoteRuntime::for_test(hub_with_stale_spark_preferences(), Vec::new());
+
+        queue_persisted_config_for_session(&runtime.shared, "s", true);
+
+        let config_values = runtime
+            .pending_for_test()
+            .into_iter()
+            .filter_map(|command| match command {
+                CoreCommand::SetConfigOption {
+                    config_id, value, ..
+                } => Some((config_id, value)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            config_values,
+            vec![("model".to_owned(), serde_json::json!("gpt-5.3-codex-spark"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_options_beat_an_older_worker_snapshot_during_replay() {
+        let mut stale_worker = snapshot("s");
+        stale_worker.config_options = Some(serde_json::json!([
+            {
+                "id": "model",
+                "currentValue": "gpt-5.3-codex-spark",
+                "options": [{"value": "gpt-5.3-codex-spark"}],
+            },
+            {
+                "id": "reasoning_effort",
+                "currentValue": "max",
+                "options": [
+                    {"value": "low"},
+                    {"value": "medium"},
+                    {"value": "high"},
+                    {"value": "xhigh"},
+                    {"value": "max"},
+                ],
+            },
+        ]));
+        let runtime =
+            RemoteRuntime::for_test(hub_with_stale_spark_preferences(), vec![stale_worker]);
 
         queue_persisted_config_for_session(&runtime.shared, "s", true);
 
