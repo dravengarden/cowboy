@@ -659,6 +659,23 @@ native account. This is not a Service login/refresh action.
 
 ### Controller host activation
 
+Publication must remain safe for the live Catalog reader and the automatic
+rollback predecessor. A schema-1-only Controller cannot start against a Catalog
+containing schema-2 releases, even when the candidate Controller accepts both.
+Do not satisfy candidate release coverage by placing unreadable packages into
+the predecessor's live Catalog. First accept a reader-compatible bridge or an
+owned cutover transaction that switches/restores the Catalog and Controller
+configuration together. A component profile rollback alone does not restore
+Catalog bytes, host selections or migrated storage. Keep any one-way storage
+transition behind its separate migration/recovery acceptance.
+
+Inspect the actual service unit and configuration generator, not a stale source
+checkout or only the current private JSON. If `ExecStartPre` regenerates an
+Authentication selection, changing its output file will be undone at restart.
+Update the owning committed machine policy through its normal activation
+boundary; do not add a runtime drop-in or bypass that generator. A Controller
+component restart is not permission for a separate NixOS policy activation.
+
 `--plugin-host-config` / `COWBOY_PLUGIN_HOST_CONFIG` names an absolute, private
 regular JSON file (0600, no symlink, at most 128 KiB). It is Controller policy,
 not a package field or a second release/install lifecycle. For example:

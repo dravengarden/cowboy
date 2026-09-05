@@ -234,6 +234,16 @@ borrowing its working directory.
 Publish only when the user requested a release and the Provider repository's
 release authority permits it.
 
+Before writing a new package/release schema into a live Catalog, check the
+currently running Controller and its automatic rollback predecessor as readers,
+not just the candidate Controller. An older reader may reject the entire
+Catalog on refresh or restart. If either cannot read the new format, keep the
+candidate outside that Catalog until an owned reader-compatible bridge or a
+transactional Catalog/configuration cutover has been accepted. Restoring only
+the Controller executable does not undo Catalog bytes, generated host policy,
+or Plugin migrations. Controller restart authorization does not implicitly
+authorize the separate NixOS service-policy maintenance boundary.
+
 1. Commit the complete Provider change according to its repository policy.
 2. Build the final data-only package and every declared runtime target from
    that exact clean commit:

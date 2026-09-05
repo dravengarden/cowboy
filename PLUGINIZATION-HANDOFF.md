@@ -737,3 +737,114 @@ After correcting those fixture identities, normal Claude, Gemini and Grok
 drain with fake auth and no external network. Their earlier interrupted
 parallel attempts do not establish missing upstream startup fixtures. Repeat
 these against the final clean-build worker and matrices for release receipts.
+
+### Clean candidate acceptance and live-cutover blockers — 2026-09-06
+
+Cowboy implementation **`3b281bea556dc2952a53b6e82b5551672c12c88c`** is
+committed and pushed on `cowboy/sess-1788279284752`. All six Agent matrices,
+Zed **1.2.1**, Password and Passkey were rebuilt/bound from that clean source.
+Agent runtime builders ran with an explicit credential-free build environment;
+actual execution probes use private homes. Immutable Nix outputs all pass:
+
+- SDK: `/nix/store/rvjwyg4vhw0cpxvdjch6jhibzrw4iyh8-cowboy-plugin-pack-1.6.0`
+- Controller: `/nix/store/kxwcnz1357hsv0xssw9hvi86crfzd297-cowboy-controller-release`
+- Web: `/nix/store/s1wc9m7zm8w8xz2x15lzkfi6ap39d77a-cowboy-web-release`
+- Source boundary: `/nix/store/f0ysd93apfbv31dh7izhmvyskzj7lpkb-cowboy-source-boundary`
+- Zed integration: `/nix/store/f60hziklp2jsgdw30p8lj6sppv9x9apl-cowboy-zed-integration`
+
+The real worker is the Controller package's private build output, not a file
+in the public Controller release root:
+`/nix/store/gfsvwz374j1s0qzgjdl0pjbzchi8a1rk-cowboy-0.1.0/bin/cowboy-acp-worker`,
+SHA-256 `b4f87b48f10682fecb6c1d5d1e97bf15d00b332ef82298095f2435ba0c203318`.
+Each of the **six Agent Plugins** passes initialize/session-new and complete
+worker/descendant drain with that immutable worker, fake declared auth and a
+loopback-only namespace. Receipts are
+`dist/plugins/<id>/runtime/worker-conformance.json`.
+
+Claude DeepSeek **3.1.8 / 3.1.13** also passes distinct-generation coexistence,
+separate exact sidecar executables/ports, old-worker stop while the new worker
+stays ready, and final drain. Codex DeepSeek **3.1.13** passes alone, but its
+published **3.1.8** predecessor fails fresh isolated startup with
+`Authentication required`: its unchanged upstream adapter drops the declared
+Codex configuration arguments. Consequently its old/new coexistence gate is
+**unresolved**, not passed. Do not amend the old signed artifact, substitute a
+new launcher into its bytes, or treat the dirty prototype as published-old
+acceptance. Existing-session migration/drain still needs accepted evidence.
+
+The registered arm64 Mac executed all **12 declared component probes across
+six Agent packages** from these exact candidate bytes; all pass. Transfer used
+only built artifacts (archive SHA-256
+`41198460415105e190753ca6926894f9a8f8dc6e1fa831d20432b9733c126cc4`), while
+harness source arrived via Git. Records are
+`dist/native-plugin-conformance/<id>-receipt.json`. The production Apple bridge
+also passes all **8 real WKWebView ABI tests** on a freshly created iOS 26.5
+Simulator. Its receipt is
+`dist/native-plugin-conformance/macbook-air-3b281bea.json`; the test Simulator
+was removed. This is not a full Tauri App or physical-device/passkey login
+receipt. The full shell's version-controlled source location is still needed;
+the unversioned Mac shell was not modified.
+
+Zed's owned static adapter and exact server pass the real temporary-package
+install/open/uninstall-drain/reactivation gate. Adapter
+`/nix/store/i3fqv92qm4badxf3jfn74a7jj2a64w9d-cowboy-zed-adapter-x86_64-unknown-linux-musl-1.2.1`
+has digest `207a5800fe5b29deab93ef621d47740fb1193c3dc7156e495d6d17fad113356b`;
+server bytes remain `5829fe9d9f0b7a5a27129dc217cc9954c3b4334da5da2426bffe55423e723ae5`.
+No registered Machine was installed, upgraded or activated.
+
+Unsigned candidate composite identities (all prefixed `sha256:`):
+
+| Plugin | Version | Composite digest |
+| --- | --- | --- |
+| claude-code | 3.1.13 | `9a560b3954a0596bbc407a6bb1eb6f84cb5c583ae6dbccc3c8b78f199552b315` |
+| claude-deepseek | 3.1.13 | `5463b29bc173c43b6cac91509a3f9e42ad6b78250848784e9101e1b526ea10a7` |
+| codex | 3.1.13 | `94f78b5850da128ff3dc744a73e2242e8a9389e5d39e595d902a21a1d1fe8304` |
+| codex-deepseek | 3.1.13 | `5eadb6e1263d03d17d27f79d0aaac90f5f263c9c8c5569b374a84b303e13505e` |
+| gemini | 3.1.13 | `39d09b98e413cbd9a870d9653eaaf7f36bf50d1dbf74aa96a3ed9ad72f42ff8a` |
+| grok | 3.1.13 | `2d02cf583f0727f14fc47ba6efb322bff9d095686e7eef30d6a70c51ac5fbe32` |
+| zed | 1.2.1 | `ff7735efdbd7da0d78858f82d63e2840a667759734e85260cc938e91a05ebe28` |
+| password | 1.0.0 | `8bc0829d805cf17debdf79a374b8ca5039b0d58d9ee9f6a6e059f6a9c7a45c85` |
+| passkey | 1.0.0 | `3b4cc0e2bf9a6aeaa1b49bca0ac438c2906f51e66a949cca0d0f1b3993fa758f` |
+| cardea | 1.2.0 | `6003c3d6a3b27cd5c077892881cf8c68dc2c722e617581c9b6b530c7b2d309b3` |
+
+Cardea implementation **`d54b994`** is now pushed on
+`codex/cowboy-plugin-host-20260906`. Its complete gate remains passed; only
+its Plugin package/build/publisher tooling changed. Cardea Worker, client,
+accounts, credentials and human approvals were not changed.
+
+**Live-state correction and deployment blockers:**
+
+1. The active Controller release receipt is Cowboy **`c293e0e9`**, with public
+   `/version` `d60d4931b93b674abc4982ec4bda3092`. That public value is not its
+   Git revision. Its SDK accepts only release schema 1 and scans every package;
+   adding schema-2 packages to its live Catalog would break refresh/startup.
+   Automatic restoration of only the old Controller profile would therefore
+   not be a safe rollback. Production publication must wait for an accepted
+   reader bridge or transactional Catalog/configuration cutover.
+2. The actual systemd unit has **Product authentication enabled**, unlike the
+   stale stable Columbus checkout. Its `ExecStartPre` regenerates private
+   `authentication.json` from protected Cardea inputs and pins Cardea **1.1.0**.
+   It has no Plugin-host-config hook. Hand-editing generated JSON would be
+   reverted at restart. Preserve the current enabled authentication policy;
+   change only the owning committed generator/host configuration through the
+   separate authorized NixOS maintenance boundary. No temporary drop-in or
+   stable checkout edit is acceptable. Fresh Columbus `origin/main` was
+   `a8722843904e17462add70af0f9743d2d4815546` when inspected; refetch and
+   integrate both live provenance floors before any future machine task.
+3. Candidate `serve --check-plugin-hosts`, using the actual enabled-auth
+   Service environment/arguments/cwd, passes only **bootstrap** with hostless
+   Cardea 1.1.0 and required WebAuthn storage. This is not catalog-only,
+   migration or real-login acceptance. Production release coverage correctly
+   reports all six **3.1.13** versions unpublished.
+4. Full native-shell provenance/acceptance, Codex DeepSeek predecessor drain,
+   reader-compatible publication/rollback, and the separate host-policy
+   activation authority remain unresolved. Controller restart authority alone
+   does not authorize a NixOS policy activation or real Provider login.
+
+At this checkpoint there have still been **no production signatures, Catalog
+writes, host-policy changes, credential changes, Controller/Web/Machine
+activations, real logins, or bootstrap deletions**. Health remains `ok` with
+the pre-existing Controller and zero service restarts. The canonical release
+skill now calls out live/predecessor Catalog-reader compatibility explicitly.
+The disposable Mac artifact directory and transfer-only tar were removed after
+all receipts were copied back; exact candidate packages and local receipts are
+retained. The isolated Mac Git worktree remains available for continuation.
