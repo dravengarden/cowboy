@@ -46,7 +46,7 @@ primary phone/desktop product path.
 
 ### Core documents
 
-- [`requirements.md`](requirements.md) — Cowboy core requirements and state-ownership contract
+- [`requirements.md`](requirements.md) — Cowboy core requirements, state ownership, and context-preserving Provider reload
 - [`plugin-components.md`](plugin-components.md) — Plugin manifests, shared component ownership, and coordinated versioning
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection

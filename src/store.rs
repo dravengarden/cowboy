@@ -1528,6 +1528,10 @@ impl Store {
         dispatch_storage!(self, update_cwd(session_id, cwd, title))
     }
 
+    pub async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
+        dispatch_storage!(self, reload_provider(meta))
+    }
+
     pub async fn update_mobile_review_state(
         &self,
         session_id: &str,
@@ -5497,6 +5501,20 @@ impl PostgresStorage {
         .execute(&self.pool)
         .await
         .with_context(|| format!("UPDATE session cwd {session_id}"))?;
+        Ok(())
+    }
+
+    pub async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET provider_version = $1, provider_generation_digest = $2, provider_behavior = $3, status = $5, updated_at = now() WHERE id = $4",
+        )
+        .bind(&meta.provider_version)
+        .bind(&meta.provider_generation_digest)
+        .bind(meta.provider_behavior.as_ref().map(serde_json::to_value).transpose()?)
+        .bind(&meta.id)
+        .bind(status_to_str(meta.status))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -9573,6 +9591,44 @@ mod storage_contract_tests {
         );
         assert_eq!(restored.config_preferences["model"], "gpt-test");
         assert_eq!(restored.mobile_review_state["mode"], "code");
+
+        let mut reloaded = restored.meta.clone();
+        reloaded.provider_version = "new-version".to_owned();
+        reloaded.provider_generation_digest = "new-digest".to_owned();
+        reloaded.provider_behavior = Some(crate::provider::legacy_behavior("codex"));
+        reloaded.status = Status::Starting;
+        // The persistence operation must never overwrite the credential home
+        // or native context, even if its input contains unrelated stale fields.
+        reloaded.provider_auth_generation = Some(999);
+        reloaded.agent_session_id = Some("must-not-replace".to_owned());
+        store.reload_provider(&reloaded).await?;
+        let after_reload = store
+            .load_all()
+            .await?
+            .into_iter()
+            .find(|row| row.meta.id == session_id)
+            .unwrap();
+        assert_eq!(after_reload.meta.provider_version, "new-version");
+        assert_eq!(after_reload.meta.provider_generation_digest, "new-digest");
+        assert_eq!(
+            after_reload.meta.provider_behavior,
+            reloaded.provider_behavior
+        );
+        assert_eq!(after_reload.meta.status, Status::Starting);
+        assert_eq!(
+            after_reload.meta.agent_session_id,
+            restored.meta.agent_session_id
+        );
+        assert_eq!(
+            after_reload.meta.provider_auth_generation,
+            restored.meta.provider_auth_generation
+        );
+        assert_eq!(after_reload.meta.cwd, restored.meta.cwd);
+        assert_eq!(after_reload.meta.title, restored.meta.title);
+        assert_eq!(after_reload.config_preferences, restored.config_preferences);
+        assert_eq!(after_reload.queue[0].id, "queue-1");
+        assert_eq!(after_reload.drafts[0].id, "draft-1");
+        assert_eq!(after_reload.events.len(), restored.events.len());
 
         let (history, _, reached_start) = store.history_page(session_id, 2, 200).await?;
         assert_eq!(history.len(), 2);

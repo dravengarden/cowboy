@@ -542,6 +542,38 @@ impl Supervisor {
         self.recycle_session_inner(session_id)
     }
 
+    /// Explicitly adopt a trusted installed Provider release without changing
+    /// native identity, credential home, workspace, or saved user preferences.
+    /// Unlike a same-version reload, this operation never interrupts a turn.
+    pub fn reload_session_provider(
+        &self,
+        expected: &crate::core::SessionMeta,
+        generation: ProviderGeneration<'_>,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let runtime = self.runtime_for_session(&expected.id)?;
+        if !runtime.connected() {
+            return Err("session Machine is not connected".to_owned());
+        }
+        let behavior = generation
+            .behavior
+            .ok_or_else(|| "missing signed Provider behavior".to_owned())?;
+        let mut launch = self.start_session(&expected.id)?;
+        self.hub.begin_provider_reload(
+            expected,
+            generation.version,
+            generation.digest,
+            behavior,
+        )?;
+        generation.version.clone_into(&mut launch.provider_version);
+        generation
+            .digest
+            .clone_into(&mut launch.provider_generation_digest);
+        launch.provider_behavior = Some(behavior.clone());
+        runtime.reset(launch);
+        Ok(())
+    }
+
     /// Apply one Cowboy-owned `DeepSeek` context profile. This setting changes
     /// process startup rather than an ACP option, so recycle only this idle
     /// worker while preserving both the Cowboy and native agent session ids.
@@ -1297,6 +1329,60 @@ mod tests {
         assert!(runtime.pending_for_test().iter().any(|command| {
             matches!(command, CoreCommand::StopSession { command_id, .. } if command_id.starts_with("reset-"))
         }));
+    }
+
+    #[tokio::test]
+    async fn provider_reload_redeclares_only_the_target_and_keeps_native_home() {
+        let root = TestDir::new();
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            root.path().display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.push("s", crate::core::Event::Update {
+            update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "keep"}}),
+        });
+        hub.set_agent_session_id("s", "native-thread".to_owned());
+        hub.set_status("s", Status::Running, None);
+        let before = hub.session_info("s").unwrap().meta;
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+        let behavior = provider::legacy_behavior("codex");
+        let target = ProviderGeneration {
+            version: "new",
+            digest: "new-digest",
+            auth_generation: Some(999),
+            behavior: Some(&behavior),
+        };
+        assert!(
+            supervisor
+                .reload_session_provider(&before, target)
+                .unwrap_err()
+                .contains("not connected")
+        );
+        assert!(runtime.pending_for_test().is_empty());
+        assert_eq!(hub.status("s"), Some(Status::Running));
+        runtime.connect_for_test();
+        supervisor
+            .reload_session_provider(&before, target)
+            .expect("reload");
+        let pending = runtime.pending_for_test();
+        assert!(pending.iter().any(
+            |command| matches!(command, CoreCommand::EnsureSession { session }
+            if session.session_id == "s" && session.provider_version == "new"
+                && session.provider_generation_digest == "new-digest"
+                && session.agent_session_id.as_deref() == Some("native-thread")
+                && session.provider_auth_generation == before.provider_auth_generation
+                && session.cwd == before.cwd && session.adopt_only)
+        ));
+        assert!(pending.iter().any(
+            |command| matches!(command, CoreCommand::StopSession {session_id, command_id}
+            if session_id == "s" && command_id.starts_with("reset-"))
+        ));
     }
 
     #[tokio::test]

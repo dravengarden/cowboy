@@ -342,7 +342,7 @@ fn last_turn_texts(log: &[Envelope]) -> (String, String) {
 pub struct SessionMeta {
     pub id: String,
     pub provider: String,
-    /// Immutable Agent Plugin release selected when the session was created.
+    /// Exact Agent Plugin release, changed only by an explicit idle reload.
     #[serde(default)]
     pub provider_version: String,
     #[serde(default)]
@@ -1258,6 +1258,7 @@ pub enum StoreWrite {
         cwd: String,
         title: Option<String>,
     },
+    ReloadProvider(Box<SessionMeta>),
     SetAgentSessionId {
         session_id: String,
         agent_session_id: Option<String>,
@@ -3285,6 +3286,119 @@ impl Hub {
         Ok(true)
     }
 
+    /// Reserve an idle session for an explicit Provider reload. The lock also
+    /// fences prompt submission: a racing prompt either wins and rejects the
+    /// reload, or stays queued until the replacement runtime is ready.
+    pub fn begin_provider_reload(
+        &self,
+        expected: &SessionMeta,
+        version: &str,
+        digest: &str,
+        behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
+    ) -> Result<(), String> {
+        let meta = {
+            let mut sessions = self.inner.sessions.lock();
+            let session = sessions
+                .get_mut(&expected.id)
+                .ok_or_else(|| "session no longer exists".to_owned())?;
+            if session.in_flight || matches!(session.meta.status, Status::Busy | Status::Starting) {
+                return Err(
+                    "wait for the current turn to finish before loading a new Provider version"
+                        .to_owned(),
+                );
+            }
+            if session.meta.provider != expected.provider
+                || session.meta.provider_version != expected.provider_version
+                || session.meta.provider_generation_digest != expected.provider_generation_digest
+                || session.meta.provider_auth_generation != expected.provider_auth_generation
+                || session.meta.agent_session_id != expected.agent_session_id
+                || session.meta.machine_id != expected.machine_id
+                || session.meta.cwd != expected.cwd
+            {
+                return Err("session changed while preparing reload; try again".to_owned());
+            }
+            if !current_context_has_user_message(session) || session.meta.agent_session_id.is_none()
+            {
+                return Err(
+                    "a saved native session is required to reload a new Provider version"
+                        .to_owned(),
+                );
+            }
+            session.meta.provider_version = version.to_owned();
+            session.meta.provider_generation_digest = digest.to_owned();
+            session.meta.provider_behavior = Some(behavior.clone());
+            // Auth generation owns the native runtime home. Never replace it
+            // with the active installation's credential generation here.
+            session.meta.status = Status::Starting;
+            session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
+            session.meta.clone()
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ReloadProvider(Box::new(meta)));
+        }
+        self.push(
+            &expected.id,
+            Event::Lifecycle {
+                status: Status::Starting,
+                detail: Some(format!(
+                    "reloading Provider {} -> {version}; preserving native session",
+                    expected.provider_version
+                )),
+            },
+        );
+        self.broadcast_sessions();
+        Ok(())
+    }
+
+    /// Settle an interrupted Provider reload against the surviving native
+    /// worker. The reset and write-behind persistence travel independently;
+    /// after reconnect the actual owner, not an unacknowledged intent, defines
+    /// the running release. Never use this to migrate native identity or home.
+    pub fn reconcile_provider_release(&self, worker: &WorkerSnapshot) {
+        let Some(launch) = worker.launch.as_ref().filter(|launch| {
+            worker.has_connected_owner() && !launch.provider_generation_digest.is_empty()
+        }) else {
+            return;
+        };
+        let reconciled = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get_mut(&worker.session_id) else {
+                return;
+            };
+            if session.meta.provider != launch.provider
+                || session.meta.cwd != launch.cwd
+                || session.meta.provider_auth_generation != launch.provider_auth_generation
+                || session.meta.agent_session_id.is_none()
+                || session.meta.agent_session_id != worker.agent_session_id
+                || session.meta.provider_generation_digest.is_empty()
+                || (session.meta.provider_generation_digest == launch.provider_generation_digest
+                    && session.meta.provider_version == launch.provider_version)
+            {
+                return;
+            }
+            session
+                .meta
+                .provider_version
+                .clone_from(&launch.provider_version);
+            session
+                .meta
+                .provider_generation_digest
+                .clone_from(&launch.provider_generation_digest);
+            session
+                .meta
+                .provider_behavior
+                .clone_from(&launch.provider_behavior);
+            session.meta.clone()
+        };
+        tracing::warn!(session = %worker.session_id, version = %reconciled.provider_version,
+            digest = %reconciled.provider_generation_digest,
+            "reconciled interrupted Provider reload with surviving native worker");
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::ReloadProvider(Box::new(reconciled)));
+        }
+        self.broadcast_sessions();
+    }
+
     /// Retarget a Cowboy session to a replacement checkout while preserving its
     /// transcript, queue, Cowboy id, and native agent session id. A creation-time
     /// default title follows the cwd; user-authored and auto-derived titles do not.
@@ -5276,7 +5390,7 @@ mod runtime_reconciliation_tests {
         }
     }
 
-    fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSnapshot {
+    pub(super) fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSnapshot {
         WorkerSnapshot {
             session_id: session_id.to_owned(),
             worker_epoch: worker_epoch.to_owned(),
@@ -6754,6 +6868,170 @@ mod core_tests {
                 .event_count,
             1
         );
+    }
+
+    fn provider_reload_fixture() -> (Hub, SessionMeta) {
+        let hub = hub_with_session("provider-reload");
+        hub.push("provider-reload", Event::Update {
+            update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "keep history"}}),
+        });
+        hub.set_agent_session_id("provider-reload", "native-thread".to_owned());
+        hub.set_status("provider-reload", Status::Running, None);
+        hub.set_config_preference(
+            "provider-reload",
+            "model".to_owned(),
+            serde_json::json!("saved-model"),
+        )
+        .expect("preference");
+        let meta = hub.session_info("provider-reload").expect("session").meta;
+        (hub, meta)
+    }
+
+    #[tokio::test]
+    async fn provider_reload_preserves_identity_and_fences_new_prompts() {
+        let (hub, before) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.add_draft(&before.id, "saved draft".to_owned(), vec![], None);
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        let (history, _) = hub.snapshot(&before.id).expect("history");
+        hub.begin_provider_reload(&before, "new-version", "new-digest", &behavior)
+            .expect("reload");
+        hub.submit(&before.id, "racing prompt".to_owned(), vec![], None);
+        assert!(rx.try_recv().is_err(), "prompt must wait for replacement");
+        let after = hub.session_info(&before.id).expect("session");
+        assert_eq!(after.meta.provider_version, "new-version");
+        assert_eq!(after.meta.provider_generation_digest, "new-digest");
+        assert_eq!(after.meta.provider_behavior, Some(behavior));
+        assert_eq!(after.meta.agent_session_id, before.agent_session_id);
+        assert_eq!(
+            after.meta.provider_auth_generation,
+            before.provider_auth_generation
+        );
+        assert_eq!(after.meta.cwd, before.cwd);
+        assert_eq!(after.meta.title, before.title);
+        assert_eq!(after.meta.machine_id, before.machine_id);
+        assert_eq!(after.meta.status, Status::Starting);
+        assert_eq!(after.drafts_count, 1);
+        assert_eq!(after.queue_count, 1);
+        assert_eq!(
+            hub.config_preferences(&before.id).unwrap()["model"],
+            "saved-model"
+        );
+        assert_eq!(
+            serde_json::to_value(&hub.snapshot(&before.id).unwrap().0[..history.len()]).unwrap(),
+            serde_json::to_value(history).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_reload_rejects_a_prompt_that_won_the_race() {
+        let (hub, before) = provider_reload_fixture();
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.submit(&before.id, "active prompt".to_owned(), vec![], None);
+        assert!(rx.recv().await.is_some());
+        let behavior = crate::provider::legacy_behavior("codex");
+        assert!(
+            hub.begin_provider_reload(&before, "new", "new", &behavior)
+                .unwrap_err()
+                .contains("current turn")
+        );
+        assert_eq!(
+            hub.session_info(&before.id)
+                .unwrap()
+                .meta
+                .provider_generation_digest,
+            before.provider_generation_digest
+        );
+        assert!(hub.session_has_in_flight_prompt(&before.id));
+    }
+
+    #[test]
+    fn provider_reload_reconciles_interrupted_reset_without_migrating_native_identity() {
+        let (hub, before) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        hub.begin_provider_reload(&before, "intended", "intended-digest", &behavior)
+            .unwrap();
+        let mut worker =
+            super::runtime_reconciliation_tests::worker_snapshot(&before.id, "surviving-worker");
+        worker.agent_session_id.clone_from(&before.agent_session_id);
+        worker.launch = Some(crate::runtime_wire::StartSession {
+            session_id: before.id.clone(),
+            provider: before.provider.clone(),
+            provider_version: "actual".to_owned(),
+            provider_generation_digest: "actual-digest".to_owned(),
+            provider_auth_generation: before.provider_auth_generation,
+            provider_behavior: Some(behavior),
+            cwd: before.cwd.clone(),
+            agent_session_id: before.agent_session_id.clone(),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "worker-generation".to_owned(),
+            fallback_for: None,
+            adopt_only: false,
+        });
+        let history = serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap();
+        for mismatch in ["native", "home", "cwd", "placeholder"] {
+            let mut invalid = worker.clone();
+            match mismatch {
+                "native" => invalid.agent_session_id = Some("other-thread".to_owned()),
+                "home" => invalid.launch.as_mut().unwrap().provider_auth_generation = Some(999),
+                "cwd" => invalid.launch.as_mut().unwrap().cwd = "/other".to_owned(),
+                _ => invalid.worker_epoch = format!("broker-{}", before.id),
+            }
+            hub.reconcile_provider_release(&invalid);
+            assert_eq!(
+                hub.session_info(&before.id).unwrap().meta.provider_version,
+                "intended"
+            );
+        }
+        hub.reconcile_provider_release(&worker);
+        let actual = hub.session_info(&before.id).unwrap().meta;
+        assert_eq!(actual.provider_version, "actual");
+        assert_eq!(actual.provider_generation_digest, "actual-digest");
+        assert_eq!(actual.agent_session_id, before.agent_session_id);
+        assert_eq!(
+            actual.provider_auth_generation,
+            before.provider_auth_generation
+        );
+        assert_eq!(
+            serde_json::to_value(hub.snapshot(&before.id).unwrap().0).unwrap(),
+            history
+        );
+        // The opposite crash ordering (new worker, old persisted binding) uses
+        // the same actual-owner reconciliation without an automatic restart.
+        worker.launch.as_mut().unwrap().provider_version = "replacement".to_owned();
+        worker.launch.as_mut().unwrap().provider_generation_digest =
+            "replacement-digest".to_owned();
+        hub.reconcile_provider_release(&worker);
+        assert_eq!(
+            hub.session_info(&before.id).unwrap().meta.provider_version,
+            "replacement"
+        );
+    }
+
+    #[test]
+    fn provider_reload_rejects_stale_identity_and_unsaved_context() {
+        let (hub, before) = provider_reload_fixture();
+        let behavior = crate::provider::legacy_behavior("codex");
+        let mut stale = before.clone();
+        stale.provider_generation_digest = "other".to_owned();
+        assert!(
+            hub.begin_provider_reload(&stale, "new", "new", &behavior)
+                .unwrap_err()
+                .contains("changed")
+        );
+        hub.prepare_context_reset(&before.id);
+        let cleared = hub.session_info(&before.id).unwrap().meta;
+        assert!(
+            hub.begin_provider_reload(&cleared, "new", "new", &behavior)
+                .unwrap_err()
+                .contains("saved native")
+        );
+        assert_eq!(hub.status(&before.id), Some(Status::Running));
     }
 
     #[tokio::test]

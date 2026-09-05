@@ -219,6 +219,11 @@ impl RemoteRuntime {
         self.shared.pending.lock().values().cloned().collect()
     }
 
+    #[cfg(test)]
+    pub(crate) fn connect_for_test(&self) {
+        self.shared.connected.store(true, Ordering::Release);
+    }
+
     /// Start the reconnecting I/O pump after Hub restore and all side-effect
     /// consumers (dispatcher/scheduler) are wired.
     pub fn start(self: &Arc<Self>, bootstrap: RemoteBootstrap) {
@@ -382,6 +387,17 @@ impl RemoteRuntime {
                 .clone_from(&self.shared.desired_generation);
         }
         let session_id = session.session_id.clone();
+        let same_provider_release =
+            self.shared
+                .workers
+                .lock()
+                .get(&session_id)
+                .is_some_and(|worker| {
+                    worker.launch.as_ref().is_some_and(|previous| {
+                        previous.provider_generation_digest == session.provider_generation_digest
+                            && previous.provider_version == session.provider_version
+                    })
+                });
         self.shared.resetting.lock().insert(session_id.clone());
         self.shared.config_sync_epochs.lock().remove(&session_id);
         self.shared
@@ -394,10 +410,11 @@ impl RemoteRuntime {
         // preserving the existing v1 wire contract.
         let ensure_key = format!("ensure:{session_id}");
         self.queue(ensure_key, CoreCommand::EnsureSession { session });
-        // A reset creates a fresh ACP process, so replay every preference that
-        // the prior options snapshot still accepts even when its old current
-        // value already matched. Removed or model-incompatible values stay out.
-        queue_persisted_config_for_session(&self.shared, &session_id, true);
+        // Cross-version reloads must wait for the replacement's own option
+        // snapshot. Values accepted by the old release may have been removed.
+        if same_provider_release {
+            queue_persisted_config_for_session(&self.shared, &session_id, true);
+        }
         let command_id = self.next_id("reset");
         self.queue(
             command_id.clone(),
@@ -1249,6 +1266,7 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !shared.hub.accept_runtime_snapshot(worker) {
         return false;
     }
+    shared.hub.reconcile_provider_release(worker);
     let idle_guard = idle_snapshot_guard(shared, worker);
     if let Some(agent_session_id) = &worker.agent_session_id {
         shared
@@ -2156,6 +2174,39 @@ mod tests {
             .filter(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
             .collect::<Vec<_>>();
         assert!(config_commands.is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_reload_waits_for_new_options_before_replaying_preferences() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+        let mut replacement = snapshot("s").launch.unwrap();
+        replacement.provider_generation_digest = "sha256:new-release".to_owned();
+        runtime.reset(replacement);
+        assert!(
+            !runtime
+                .pending_for_test()
+                .iter()
+                .any(|command| { matches!(command, CoreCommand::SetConfigOption { .. }) })
+        );
+        let mut worker = snapshot("s");
+        worker.worker_epoch = "replacement".to_owned();
+        worker.config_options = Some(serde_json::json!([{
+            "id": "model", "currentValue": "supported-model",
+            "options": [{"value": "supported-model"}]
+        }]));
+        sync_config_for_worker(&runtime.shared, &worker);
+        assert!(
+            !runtime
+                .pending_for_test()
+                .iter()
+                .any(|command| { matches!(command, CoreCommand::SetConfigOption { .. }) }),
+            "the old model and removed reasoning option must not reach the new runtime"
+        );
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["model"],
+            "gpt-5.3-codex-spark"
+        );
     }
 
     #[tokio::test]

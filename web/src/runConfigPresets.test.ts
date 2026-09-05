@@ -52,7 +52,13 @@ Deno.test("signed Provider presets project without Provider identity branches", 
 
 Deno.test("presets fail closed when the live Provider surface lacks a value", () => {
   assertEquals(supportedRunConfigPresets(declared, options.slice(0, 1)), []);
-  assertEquals(supportedRunConfigPresets([{ ...declared[0], values: { model: "unknown" } }], options), []);
+  assertEquals(
+    supportedRunConfigPresets([{
+      ...declared[0],
+      values: { model: "unknown" },
+    }], options),
+    [],
+  );
 });
 
 Deno.test("preset changes omit values the session already owns", () => {
@@ -62,6 +68,41 @@ Deno.test("preset changes omit values the session already owns", () => {
     { configId: "model", value: "model-b" },
     { configId: "effort", value: "medium" },
   ]);
+});
+
+Deno.test("another model's reasoning limits do not hide signed recommendations", () => {
+  const live: ConfigOption[] = [
+    {
+      ...selectOption("model", "spark", ["spark", "astra"]),
+      category: "model",
+    },
+    {
+      ...selectOption("effort", "low", ["low", "medium"]),
+      category: "thought_level",
+    },
+  ];
+  const astra = { ...declared[0], values: { effort: "max", model: "astra" } };
+  const presets = supportedRunConfigPresets([astra], live);
+  assertEquals(presets.length, 1);
+  assertEquals(runConfigPresetChanges(presets[0], live), [
+    { configId: "model", value: "astra" },
+    { configId: "effort", value: "max" },
+  ]);
+  assertEquals(
+    supportedRunConfigPresets([{
+      ...astra,
+      values: { model: "spark", effort: "max" },
+    }], live),
+    [],
+  );
+  assertEquals(
+    supportedRunConfigPresets([{
+      ...astra,
+      values: { model: "missing", effort: "max" },
+    }], live),
+    [],
+  );
+  assertEquals(supportedRunConfigPresets([astra], live.slice(0, 1)), []);
 });
 
 const desktopSource = await Deno.readTextFile(

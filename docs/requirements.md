@@ -318,6 +318,22 @@ generation digest. Existing sessions may drain on their leased generation while
 new sessions use the active generation. Provider names or mutable active links
 are never sufficient session identity.
 
+Ordinary session Reload retains that exact release. An explicit idle-only
+"Load installed Provider" confirmation may rebind one existing session to its
+Machine's trusted active release, bound to the confirmed artifact digest. It
+must validate compatible authentication, native-session, and configuration
+contracts, retain the original auth-generation runtime home, and fence racing
+prompts until the replacement is ready. Cowboy/native IDs, workspace, history,
+queue, drafts, and user preferences survive; unsupported preferences follow
+the runtime's advertised compatible values. Resume failure is visible and must
+never fall back to a blank native session. This shared ACP contract applies to
+Codex and followers; a Provider without native resume/load support fails closed.
+It does not install software, migrate accounts, or restart other sessions.
+If a reload is interrupted before the reset and persistence both complete,
+reconnection reconciles the release binding with the surviving worker only
+when its native ID, workspace, and auth-generation home still match. The UI
+then reports the actual release; an upgrade not applied can be retried.
+
 A new session is schedulable only when its Machine has the Provider installed,
 the required Service authentication is ready, and the Machine has acknowledged
 materializing and probing the current authentication generation.

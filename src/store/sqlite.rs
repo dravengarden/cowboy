@@ -4732,6 +4732,21 @@ impl SqliteStorage {
         Ok(())
     }
 
+    pub(super) async fn reload_provider(&self, meta: &SessionMeta) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET provider_version = ?1, provider_generation_digest = ?2, provider_behavior = ?3, status = ?6, updated_at_ms = ?4 WHERE id = ?5",
+        )
+        .bind(&meta.provider_version)
+        .bind(&meta.provider_generation_digest)
+        .bind(meta.provider_behavior.as_ref().map(serde_json::to_value).transpose()?)
+        .bind(now_ms())
+        .bind(&meta.id)
+        .bind(status_to_str(meta.status))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub(super) async fn update_status(&self, session_id: &str, status: Status) -> Result<()> {
         sqlx::query("UPDATE sessions SET status = ?1, updated_at_ms = ?2 WHERE id = ?3")
             .bind(status_to_str(status))

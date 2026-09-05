@@ -82,6 +82,33 @@ enum PluginFenceState {
 
 type PluginLifecycleFences = Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
 
+/// Reserve the lifecycle before reading the active release, including across
+/// awaits. Reuse the non-destructive installing fence; cancellation releases it.
+struct ProviderReloadFence {
+    fences: PluginLifecycleFences,
+    key: (String, String),
+}
+
+impl ProviderReloadFence {
+    fn acquire(fences: &PluginLifecycleFences, key: (String, String)) -> Result<Self, String> {
+        let mut active = fences.write();
+        if active.contains_key(&key) {
+            return Err("Provider is changing on the selected Machine".to_owned());
+        }
+        active.insert(key.clone(), PluginFenceState::Installing);
+        Ok(Self {
+            fences: Arc::clone(fences),
+            key,
+        })
+    }
+}
+
+impl Drop for ProviderReloadFence {
+    fn drop(&mut self) {
+        self.fences.write().remove(&self.key);
+    }
+}
+
 const fn provider_session_has_active_turn(status: crate::agent_model::Status) -> bool {
     matches!(status, crate::agent_model::Status::Busy)
 }
@@ -1782,6 +1809,7 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             cwd,
             title,
         } => store.update_cwd(session_id, cwd, title.as_deref()).await,
+        StoreWrite::ReloadProvider(meta) => store.reload_provider(meta).await,
         StoreWrite::SetAgentSessionId {
             session_id,
             agent_session_id,
@@ -8538,7 +8566,10 @@ async fn serve_axum(
             put(api_code_buffer_open).delete(api_code_buffer_close),
         )
         .route("/api/sessions/{id}/info", get(api_session_info))
-        .route("/api/sessions/{id}/reload", post(api_session_reload))
+        .route(
+            "/api/sessions/{id}/reload",
+            get(api_session_reload_plan).post(api_session_reload),
+        )
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
@@ -12760,6 +12791,84 @@ async fn api_session_info(
 struct SessionReloadQuery {
     #[serde(default)]
     confirm_active_turn: bool,
+    #[serde(default)]
+    upgrade_provider: bool,
+    expected_generation_digest: Option<String>,
+}
+
+async fn session_reload_target(
+    state: &Arc<AppState>,
+    meta: &crate::core::SessionMeta,
+) -> Result<ResolvedProviderGeneration, String> {
+    if !state.runtime_router.connected(&meta.machine_id) {
+        return Err("session Machine is not connected".to_owned());
+    }
+    if matches!(meta.status, Status::Busy | Status::Starting)
+        || state.hub.session_has_in_flight_prompt(&meta.id)
+    {
+        return Err(
+            "wait for the current turn to finish before loading a new Provider version".to_owned(),
+        );
+    }
+    if state.hub.agent_session_id_for_resume(&meta.id).is_none() {
+        return Err("a saved native session is required to load a new Provider version".to_owned());
+    }
+    let installed = current_machine_plugin(state, &meta.machine_id, &meta.provider).await?;
+    let auth = state.provider_auth.status(&meta.provider);
+    let generation = resolve_provider_generation(
+        &state.provider_catalog,
+        &[installed],
+        &meta.provider,
+        auth.as_ref(),
+    )?;
+    let previous = state.provider_catalog.package(
+        &meta.provider, &meta.provider_version, &meta.provider_generation_digest,
+    ).ok_or_else(|| "the previous Provider package is unavailable; cannot verify native session compatibility".to_owned())?;
+    let next = state
+        .provider_catalog
+        .package(&meta.provider, &generation.version, &generation.digest)
+        .ok_or_else(|| "the target Provider package is unavailable".to_owned())?;
+    if !provider_reload_contract_compatible(&previous.manifest, &next.manifest) {
+        return Err("Provider authentication or native session contract changed; keeping the existing runtime".to_owned());
+    }
+    Ok(generation)
+}
+
+fn provider_reload_contract_compatible(
+    previous: &cowboy_provider_sdk::ProviderManifest,
+    next: &cowboy_provider_sdk::ProviderManifest,
+) -> bool {
+    previous.id == next.id
+        && previous.compatibility.auth_contract_fingerprint
+            == next.compatibility.auth_contract_fingerprint
+        && previous.authentication.projection_schema == next.authentication.projection_schema
+        && previous.authentication.portable_schema == next.authentication.portable_schema
+        && previous.runtime.behavior.session == next.runtime.behavior.session
+        && previous.runtime.behavior.configuration == next.runtime.behavior.configuration
+}
+
+async fn api_session_reload_plan(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(info) = state.hub.session_info(&session_id) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    match session_reload_target(&state, &info.meta).await {
+        Ok(target) => Json(serde_json::json!({
+            "current_version": info.meta.provider_version,
+            "target_version": target.version,
+            "target_digest": target.digest,
+            "upgrade_available": target.digest != info.meta.provider_generation_digest,
+        }))
+        .into_response(),
+        Err(error) => Json(serde_json::json!({
+            "current_version": info.meta.provider_version,
+            "upgrade_available": false,
+            "blocked_reason": error,
+        }))
+        .into_response(),
+    }
 }
 
 async fn api_session_reload(
@@ -12770,6 +12879,49 @@ async fn api_session_reload(
     let Some(info) = state.hub.session_info(&session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    if query.upgrade_provider {
+        let _fence = match ProviderReloadFence::acquire(
+            &state.plugin_lifecycle_fences,
+            (info.meta.machine_id.clone(), info.meta.provider.clone()),
+        ) {
+            Ok(fence) => fence,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        };
+        let target = match session_reload_target(&state, &info.meta).await {
+            Ok(target) => target,
+            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+        };
+        if query.expected_generation_digest.as_deref() != Some(target.digest.as_str()) {
+            return (
+                StatusCode::CONFLICT,
+                "installed Provider changed; reopen Reload and confirm the new version",
+            )
+                .into_response();
+        }
+        let result = state.provider_auth.with_scheduling_generation(
+            &info.meta.provider,
+            target.auth_generation.is_some(),
+            target.auth_generation,
+            || {
+                state.supervisor.reload_session_provider(
+                    &info.meta,
+                    crate::supervisor::ProviderGeneration {
+                        version: &target.version,
+                        digest: &target.digest,
+                        auth_generation: info.meta.provider_auth_generation,
+                        behavior: Some(&target.behavior),
+                    },
+                )
+            },
+        );
+        return match result {
+            Ok(Ok(())) => {
+                (StatusCode::ACCEPTED, "reloading installed Provider version").into_response()
+            }
+            Ok(Err(error)) => (StatusCode::CONFLICT, error).into_response(),
+            Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        };
+    }
     if plugin_fence_state_for_session(&state.hub, &state.plugin_lifecycle_fences, &session_id)
         .is_some_and(|fence| fence != PluginFenceState::Installing)
     {
@@ -13437,6 +13589,57 @@ mod machine_provider_tests {
     };
     use crate::core::{Hub, SessionOrigin, Status};
     use std::collections::BTreeMap;
+
+    #[test]
+    fn provider_reload_reserves_lifecycle_until_resolution_finishes_or_is_cancelled() {
+        let fences = super::PluginLifecycleFences::default();
+        let key = ("machine".to_owned(), "codex".to_owned());
+        let guard = super::ProviderReloadFence::acquire(&fences, key.clone()).unwrap();
+        assert_eq!(
+            fences.read().get(&key),
+            Some(&super::PluginFenceState::Installing)
+        );
+        assert!(super::ProviderReloadFence::acquire(&fences, key.clone()).is_err());
+        drop(guard);
+        assert!(!fences.read().contains_key(&key));
+        fences
+            .write()
+            .insert(key.clone(), super::PluginFenceState::Uninstalled);
+        assert!(super::ProviderReloadFence::acquire(&fences, key.clone()).is_err());
+        assert_eq!(
+            fences.read().get(&key),
+            Some(&super::PluginFenceState::Uninstalled)
+        );
+    }
+
+    #[test]
+    fn provider_reload_accepts_versions_but_rejects_native_or_auth_contract_changes() {
+        let source: cowboy_provider_sdk::StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
+        let previous = source.compile().unwrap();
+        let mut next = previous.clone();
+        next.version = "new-version".to_owned();
+        assert!(super::provider_reload_contract_compatible(&previous, &next));
+        next.authentication.projection_schema = "different-home".to_owned();
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        next = previous.clone();
+        next.compatibility.auth_contract_fingerprint = "different-auth".to_owned();
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        next = previous.clone();
+        next.runtime.behavior.session = cowboy_provider_sdk::SessionBehavior::XaiSessionV1;
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+        next = previous.clone();
+        next.id = "different-provider".to_owned();
+        assert!(!super::provider_reload_contract_compatible(
+            &previous, &next
+        ));
+    }
 
     fn installed_auth(generation: u64) -> crate::machine_protocol::PluginInventory {
         crate::machine_protocol::PluginInventory {

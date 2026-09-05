@@ -16,10 +16,20 @@ function supportsPreset(
   preset: Pick<RunConfigPreset, "values">,
   optionById: ReadonlyMap<string, ConfigOption>,
 ): boolean {
+  const changingModel = Object.entries(preset.values).some(([id, value]) => {
+    const option = optionById.get(id);
+    return option?.category === "model" &&
+      String(option.currentValue) !== value &&
+      option.options.some((candidate) => String(candidate.value) === value);
+  });
   return Object.entries(preset.values).every(([id, value]) =>
     optionById.get(id)?.options.some((candidate) =>
-      String(candidate.value) === value
-    ) === true
+        String(candidate.value) === value
+      ) === true ||
+    // Reasoning choices describe the CURRENT model. A signed preset for a
+    // different advertised model must not inherit that model's restrictions.
+    // The serial config path applies the model first, then validates its effort.
+    (changingModel && optionById.get(id)?.category === "thought_level")
   );
 }
 
@@ -45,8 +55,9 @@ export function runConfigPresets(
   providerDigest?: string | undefined,
 ): readonly RunConfigPreset[] {
   if (!provider) return [];
-  const declared = currentProviderEntry(provider, providerVersion, providerDigest)
-    ?.manifest.configuration.presets ?? [];
+  const declared =
+    currentProviderEntry(provider, providerVersion, providerDigest)
+      ?.manifest.configuration.presets ?? [];
   return supportedRunConfigPresets(declared, options);
 }
 
@@ -71,5 +82,8 @@ export function runConfigPresetChanges(
     String(optionById.get(configId)?.currentValue) === value
       ? []
       : [{ configId, value }]
+  ).sort((left, right) =>
+    Number(optionById.get(right.configId)?.category === "model") -
+    Number(optionById.get(left.configId)?.category === "model")
   );
 }
