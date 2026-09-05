@@ -217,6 +217,44 @@ pub struct MachineWorkspace {
     pub canonical_path: String,
 }
 
+/// Controller-derived Machine health. Clients render this projection instead
+/// of inferring runtime responsiveness from their local process table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineHealthState {
+    Ready,
+    Starting,
+    Reconnecting,
+    Updating,
+    Degraded,
+    Offline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MachineHealthReason {
+    RuntimeConnected,
+    RuntimeStarting,
+    RuntimeUnavailable,
+    TransportReconnecting,
+    TransportUnavailable,
+    MachineUpdating,
+    MachineReportedDegraded,
+    MachineOffline,
+    UnknownMachineStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MachineHealth {
+    pub state: MachineHealthState,
+    pub reason: MachineHealthReason,
+    /// Controller time at which this projection was calculated.
+    pub observed_at_ms: i64,
+    /// Most recent authenticated Machine frame persisted by the Controller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at_ms: Option<i64>,
+}
+
 /// Browser-facing projection of one enrolled Machine. The HTTP registry route
 /// and the product WebSocket share this exact type so periodic browser polling
 /// cannot drift from the pushed control-plane state.
@@ -230,6 +268,7 @@ pub struct MachineSummary {
     pub local: bool,
     pub connected: bool,
     pub schedulable: bool,
+    pub health: MachineHealth,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
     #[serde(default)]

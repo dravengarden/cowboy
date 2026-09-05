@@ -67,6 +67,17 @@ from `service-origin` or the installed launcher, matches only
 arguments. Quitting the menu app does not stop the independently owned Machine
 LaunchAgent.
 
+Runtime responsiveness is Controller-authoritative. The Machine registry
+projects `ready`, `starting`, `reconnecting`, `updating`, `degraded`, or
+`offline` health from the authenticated control transport and the detached ACP
+runtime heartbeat, including a bounded startup grace and an observation time.
+Welcome-time automatic component reconciliation has its own bounded update
+grace because legacy Machine hosts start heartbeats only after that work. The
+Manager renders the resulting projection. It reports the local LaunchAgent
+only as a separate background-service fact; a loaded process cannot make
+health green, and an unreachable Controller leaves Machine health unknown
+rather than guessing that the Machine is healthy or offline.
+
 The process-owned task model keeps an active install or dependency update
 independent from any window. Installation persists a bounded non-secret
 activity history and marks a task left running across process termination as

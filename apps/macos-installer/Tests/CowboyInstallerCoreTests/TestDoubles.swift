@@ -105,6 +105,12 @@ final class MockCowboyServiceClient: CowboyServiceClient, @unchecked Sendable {
         displayName: "MacBook Air",
         status: "online",
         connected: true,
+        health: ManagedMachineHealth(
+            state: "ready",
+            reason: "runtime_connected",
+            observedAtMilliseconds: 200,
+            lastSeenAtMilliseconds: 150
+        ),
         activeSessions: 0,
         pendingUpdates: [],
         components: []

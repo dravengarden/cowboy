@@ -233,13 +233,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
 extension AppModel {
     var menuBarColor: Color {
-        if serviceActionState.phase == .failed {
-            return .orange
+        switch menuBarStatus.tone {
+        case .healthy:
+            .green
+        case .working:
+            .accentColor
+        case .attention:
+            .orange
+        case .inactive:
+            .secondary
         }
-        if isMachineRunning {
-            return .green
-        }
-        return installedStatus.isInstalled ? .secondary : .orange
     }
 }
 

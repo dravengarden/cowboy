@@ -140,7 +140,96 @@ struct AppModelTests {
         #expect(model.dependencyUpdateState.phase == .failed)
         #expect(model.menuBarStatus == MenuBarStatus(
             symbolName: "bolt.horizontal.circle.fill",
-            message: "Cowboy Machine is running"
+            message: "Cowboy Machine is running",
+            tone: .healthy
+        ))
+    }
+
+    @Test
+    func serverRuntimeHealthOverridesLocalLaunchAgentPresence() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: true)
+        let client = MockCowboyServiceClient()
+        client.machineSummary = ManagedMachineSummary(
+            id: "macbook-air",
+            displayName: "MacBook Air",
+            status: "online",
+            connected: false,
+            health: ManagedMachineHealth(
+                state: "degraded",
+                reason: "runtime_unavailable",
+                observedAtMilliseconds: 200,
+                lastSeenAtMilliseconds: 150
+            ),
+            activeSessions: 0,
+            pendingUpdates: [],
+            components: []
+        )
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            detector: detector,
+            serviceClient: client
+        )
+
+        await model.refreshAllAndWait()
+
+        #expect(model.isMachineRunning)
+        #expect(model.menuBarStatus == MenuBarStatus(
+            symbolName: "exclamationmark.triangle.fill",
+            message: "Cowboy Machine is not responding",
+            tone: .attention
+        ))
+    }
+
+    @Test
+    func serverReadyHealthOverridesMissingLocalLaunchAgentProcess() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: false)
+        let client = MockCowboyServiceClient()
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            detector: detector,
+            serviceClient: client
+        )
+
+        await model.refreshAllAndWait()
+
+        #expect(!model.isMachineRunning)
+        #expect(model.menuBarStatus == MenuBarStatus(
+            symbolName: "bolt.horizontal.circle.fill",
+            message: "Cowboy Machine is running",
+            tone: .healthy
+        ))
+    }
+
+    @Test
+    func controllerOutageDoesNotGuessMachineHealthFromLocalProcess() async {
+        let persistence = MemoryPersistence()
+        persistence.settings.controllerURL = "https://cowboy.example"
+        let detector = StubStatusDetector()
+        detector.status = installedStatus(running: true)
+        let client = MockCowboyServiceClient()
+        client.error = TestFailure(errorDescription: "service unavailable")
+        let model = makeModel(
+            backend: MockInstallerBackend(),
+            persistence: persistence,
+            detector: detector,
+            serviceClient: client
+        )
+
+        await model.refreshAllAndWait()
+
+        #expect(model.remoteMachine == nil)
+        #expect(model.menuBarStatus == MenuBarStatus(
+            symbolName: "questionmark.circle",
+            message: "Cowboy Machine status is unavailable",
+            tone: .attention
         ))
     }
 

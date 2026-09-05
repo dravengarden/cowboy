@@ -45,6 +45,7 @@ struct Connection {
     colocated: bool,
     protocol: u16,
     tx: mpsc::UnboundedSender<MachineCommand>,
+    connected_at: std::time::Instant,
 }
 
 #[derive(Default)]
@@ -70,8 +71,19 @@ impl MachineControl {
                 colocated,
                 protocol,
                 tx,
+                connected_at: std::time::Instant::now(),
             },
         );
+    }
+
+    /// Age of the current authenticated Machine transport. `None` means the
+    /// Controller has no live command channel for this Machine.
+    #[must_use]
+    pub fn connection_age(&self, machine_id: &str) -> Option<std::time::Duration> {
+        self.connections
+            .read()
+            .get(machine_id)
+            .map(|connection| connection.connected_at.elapsed())
     }
 
     /// Return whether the current authenticated connection shares the

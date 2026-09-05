@@ -209,6 +209,41 @@ struct CowboyServiceClientTests {
     }
 
     @Test
+    func decodesServerAuthoredMachineHealth() async throws {
+        let transport = SequenceHTTPTransport(responses: [jsonResponse(#"""
+        [
+          {
+            "id":"macbook-air",
+            "display_name":"MacBook Air",
+            "status":"online",
+            "connected":false,
+            "health":{
+              "state":"degraded",
+              "reason":"runtime_unavailable",
+              "observed_at_ms":200,
+              "last_seen_at_ms":150
+            },
+            "active_sessions":0,
+            "pending_updates":[],
+            "components":[]
+          }
+        ]
+        """#)])
+        let client = URLSessionCowboyServiceClient(transport: transport)
+
+        let machine = try await client.machine(
+            controllerURL: "https://cowboy.example",
+            machineID: "macbook-air"
+        )
+
+        #expect(machine.effectiveHealthState == .degraded)
+        #expect(machine.healthDisplayName == "Not responding")
+        #expect(machine.health?.reason == "runtime_unavailable")
+        #expect(machine.health?.observedAtMilliseconds == 200)
+        #expect(machine.health?.lastSeenAtMilliseconds == 150)
+    }
+
+    @Test
     func buildsOnePlanForSignedAndNpmUpdates() async throws {
         let transport = SequenceHTTPTransport(responses: [jsonResponse(#"""
         [

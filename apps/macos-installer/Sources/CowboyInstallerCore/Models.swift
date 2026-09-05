@@ -323,11 +323,49 @@ public struct MachineComponentSummary: Codable, Equatable, Sendable {
     }
 }
 
+public enum ManagedMachineHealthState: String, Equatable, Sendable {
+    case ready
+    case starting
+    case reconnecting
+    case updating
+    case degraded
+    case offline
+}
+
+/// Server-authoritative Machine health. String wire values remain open so a
+/// newer Controller cannot make an older Manager reject the whole registry.
+public struct ManagedMachineHealth: Codable, Equatable, Sendable {
+    public let state: String
+    public let reason: String
+    public let observedAtMilliseconds: Int64
+    public let lastSeenAtMilliseconds: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case reason
+        case observedAtMilliseconds = "observed_at_ms"
+        case lastSeenAtMilliseconds = "last_seen_at_ms"
+    }
+
+    public init(
+        state: String,
+        reason: String,
+        observedAtMilliseconds: Int64,
+        lastSeenAtMilliseconds: Int64? = nil
+    ) {
+        self.state = state
+        self.reason = reason
+        self.observedAtMilliseconds = observedAtMilliseconds
+        self.lastSeenAtMilliseconds = lastSeenAtMilliseconds
+    }
+}
+
 public struct ManagedMachineSummary: Codable, Equatable, Sendable {
     public let id: String
     public let displayName: String
     public let status: String
     public let connected: Bool
+    public let health: ManagedMachineHealth?
     public let activeSessions: UInt32
     public let pendingUpdates: [MachineComponentIdentifier]
     public let components: [MachineComponentSummary]
@@ -337,6 +375,7 @@ public struct ManagedMachineSummary: Codable, Equatable, Sendable {
         case displayName = "display_name"
         case status
         case connected
+        case health
         case activeSessions = "active_sessions"
         case pendingUpdates = "pending_updates"
         case components
@@ -347,6 +386,7 @@ public struct ManagedMachineSummary: Codable, Equatable, Sendable {
         displayName: String,
         status: String,
         connected: Bool,
+        health: ManagedMachineHealth? = nil,
         activeSessions: UInt32,
         pendingUpdates: [MachineComponentIdentifier],
         components: [MachineComponentSummary]
@@ -355,9 +395,38 @@ public struct ManagedMachineSummary: Codable, Equatable, Sendable {
         self.displayName = displayName
         self.status = status
         self.connected = connected
+        self.health = health
         self.activeSessions = activeSessions
         self.pendingUpdates = pendingUpdates
         self.components = components
+    }
+
+    /// Prefer the Controller's projection. The fallback keeps Manager usable
+    /// during a rolling Controller upgrade and still relies only on server
+    /// fields, never local LaunchAgent process presence.
+    public var effectiveHealthState: ManagedMachineHealthState {
+        if let health {
+            return ManagedMachineHealthState(rawValue: health.state) ?? .degraded
+        }
+        switch status {
+        case "online": connected ? .ready : .degraded
+        case "reconnecting": .reconnecting
+        case "updating": .updating
+        case "degraded": .degraded
+        case "offline": .offline
+        default: .degraded
+        }
+    }
+
+    public var healthDisplayName: String {
+        switch effectiveHealthState {
+        case .ready: "Ready"
+        case .starting: "Starting"
+        case .reconnecting: "Reconnecting"
+        case .updating: "Updating"
+        case .degraded: "Not responding"
+        case .offline: "Offline"
+        }
     }
 }
 

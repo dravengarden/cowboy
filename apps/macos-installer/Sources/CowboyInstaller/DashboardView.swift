@@ -68,7 +68,7 @@ struct DashboardView: View {
                         Text(model.menuBarMessage)
                             .font(.headline)
                         if let remote = model.remoteMachine {
-                            Text("\(remote.displayName) · \(remote.status) · \(remote.activeSessions) active session\(remote.activeSessions == 1 ? "" : "s")")
+                            Text("\(remote.displayName) · \(remote.healthDisplayName) · \(remote.activeSessions) active session\(remote.activeSessions == 1 ? "" : "s")")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -79,7 +79,10 @@ struct DashboardView: View {
                 if model.installedStatus.isInstalled {
                     LabeledContent("Machine ID", value: model.installedStatus.machineID ?? "Unknown")
                     LabeledContent("Version", value: model.installedStatus.version ?? "Unknown")
-                    LabeledContent("State", value: model.isMachineRunning ? "Running in background" : "Stopped")
+                    LabeledContent(
+                        "Background service",
+                        value: model.isMachineRunning ? "Running" : "Stopped"
+                    )
                     if let origin = model.installedStatus.serviceOrigin ?? model.controllerURL?.absoluteString {
                         LabeledContent("Cowboy Service", value: origin)
                     }

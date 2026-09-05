@@ -321,9 +321,87 @@ struct MachineSnapshots {
     store: Option<Store>,
     hub: Hub,
     runtime_router: Arc<RuntimeRouter>,
+    machine_control: Arc<MachineControl>,
     desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     product_auth_enabled: bool,
     revision: Arc<AtomicU64>,
+}
+
+const MACHINE_RUNTIME_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_secs(45);
+// Legacy Machine hosts begin their heartbeat only after welcome-time component
+// reconciliation. Keep that explicitly identified work out of the
+// "unresponsive" state while still bounding a genuinely stuck update.
+const MACHINE_COMPONENT_RECONCILIATION_GRACE: std::time::Duration =
+    std::time::Duration::from_secs(330);
+
+fn project_machine_health(
+    status: &str,
+    runtime_connected: bool,
+    control_connection_age: Option<std::time::Duration>,
+    automatic_update_pending: bool,
+    observed_at_ms: i64,
+    last_seen_at_ms: Option<i64>,
+) -> crate::machine_protocol::MachineHealth {
+    use crate::machine_protocol::{MachineHealth, MachineHealthReason, MachineHealthState};
+
+    let (state, reason) = match status {
+        "online" if runtime_connected => (
+            MachineHealthState::Ready,
+            MachineHealthReason::RuntimeConnected,
+        ),
+        "online"
+            if automatic_update_pending
+                && control_connection_age
+                    .is_some_and(|age| age < MACHINE_COMPONENT_RECONCILIATION_GRACE) =>
+        {
+            (
+                MachineHealthState::Updating,
+                MachineHealthReason::MachineUpdating,
+            )
+        }
+        "online"
+            if control_connection_age.is_some_and(|age| age < MACHINE_RUNTIME_STARTUP_GRACE) =>
+        {
+            (
+                MachineHealthState::Starting,
+                MachineHealthReason::RuntimeStarting,
+            )
+        }
+        "online" if control_connection_age.is_some() => (
+            MachineHealthState::Degraded,
+            MachineHealthReason::RuntimeUnavailable,
+        ),
+        "online" => (
+            MachineHealthState::Degraded,
+            MachineHealthReason::TransportUnavailable,
+        ),
+        "reconnecting" => (
+            MachineHealthState::Reconnecting,
+            MachineHealthReason::TransportReconnecting,
+        ),
+        "updating" => (
+            MachineHealthState::Updating,
+            MachineHealthReason::MachineUpdating,
+        ),
+        "degraded" => (
+            MachineHealthState::Degraded,
+            MachineHealthReason::MachineReportedDegraded,
+        ),
+        "offline" => (
+            MachineHealthState::Offline,
+            MachineHealthReason::MachineOffline,
+        ),
+        _ => (
+            MachineHealthState::Degraded,
+            MachineHealthReason::UnknownMachineStatus,
+        ),
+    };
+    MachineHealth {
+        state,
+        reason,
+        observed_at_ms,
+        last_seen_at_ms,
+    }
 }
 
 impl MachineSnapshots {
@@ -331,6 +409,7 @@ impl MachineSnapshots {
         store: Option<Store>,
         hub: Hub,
         runtime_router: Arc<RuntimeRouter>,
+        machine_control: Arc<MachineControl>,
         desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
         product_auth_enabled: bool,
     ) -> Self {
@@ -338,6 +417,7 @@ impl MachineSnapshots {
             store,
             hub,
             runtime_router,
+            machine_control,
             desired_components,
             product_auth_enabled,
             revision: Arc::new(AtomicU64::new(0)),
@@ -458,7 +538,7 @@ impl MachineSnapshots {
                         });
                     }
                 }
-                let pending_updates = self
+                let pending_updates: Vec<crate::machine_protocol::ComponentId> = self
                     .desired_components
                     .iter()
                     .filter(|desired| {
@@ -470,15 +550,28 @@ impl MachineSnapshots {
                     })
                     .map(|desired| desired.id.clone())
                     .collect();
+                let automatic_update_pending = self
+                    .desired_components
+                    .iter()
+                    .any(|desired| desired.automatic && pending_updates.contains(&desired.id));
                 let connected = self.runtime_router.connected(&machine.id);
                 let schedulable = connected
                     && !workspaces.is_empty()
                     && !capacity.draining
                     && active_sessions < capacity.max_sessions;
+                let health = project_machine_health(
+                    &machine.status,
+                    connected,
+                    self.machine_control.connection_age(&machine.id),
+                    automatic_update_pending,
+                    checked_at_ms,
+                    machine.last_seen_at_ms,
+                );
                 crate::machine_protocol::MachineSummary {
                     local,
                     connected,
                     schedulable,
+                    health,
                     id: machine.id,
                     display_name: machine.display_name,
                     platform: machine.platform,
@@ -513,6 +606,127 @@ impl MachineSnapshots {
             Ok(machines) => self.hub.broadcast_machines(revision, machines),
             Err(error) => tracing::warn!(%error, revision, "publishing Machine snapshot"),
         }
+    }
+}
+
+#[cfg(test)]
+mod machine_health_tests {
+    use super::{
+        MACHINE_COMPONENT_RECONCILIATION_GRACE, MACHINE_RUNTIME_STARTUP_GRACE,
+        project_machine_health,
+    };
+    use crate::machine_protocol::{MachineHealthReason, MachineHealthState};
+
+    #[test]
+    fn controller_projects_runtime_health_instead_of_process_presence() {
+        let ready = project_machine_health(
+            "online",
+            true,
+            Some(std::time::Duration::from_secs(90)),
+            false,
+            200,
+            Some(150),
+        );
+        assert_eq!(ready.state, MachineHealthState::Ready);
+        assert_eq!(ready.reason, MachineHealthReason::RuntimeConnected);
+        assert_eq!(ready.observed_at_ms, 200);
+        assert_eq!(ready.last_seen_at_ms, Some(150));
+
+        let starting = project_machine_health(
+            "online",
+            false,
+            Some(MACHINE_RUNTIME_STARTUP_GRACE - std::time::Duration::from_millis(1)),
+            false,
+            200,
+            None,
+        );
+        assert_eq!(starting.state, MachineHealthState::Starting);
+        assert_eq!(starting.reason, MachineHealthReason::RuntimeStarting);
+
+        let unresponsive = project_machine_health(
+            "online",
+            false,
+            Some(MACHINE_RUNTIME_STARTUP_GRACE),
+            false,
+            200,
+            Some(150),
+        );
+        assert_eq!(unresponsive.state, MachineHealthState::Degraded);
+        assert_eq!(unresponsive.reason, MachineHealthReason::RuntimeUnavailable);
+
+        let stale_database_presence =
+            project_machine_health("online", false, None, false, 200, Some(150));
+        assert_eq!(stale_database_presence.state, MachineHealthState::Degraded);
+        assert_eq!(
+            stale_database_presence.reason,
+            MachineHealthReason::TransportUnavailable
+        );
+
+        let updating = project_machine_health(
+            "online",
+            false,
+            Some(MACHINE_COMPONENT_RECONCILIATION_GRACE - std::time::Duration::from_millis(1)),
+            true,
+            200,
+            Some(150),
+        );
+        assert_eq!(updating.state, MachineHealthState::Updating);
+        assert_eq!(updating.reason, MachineHealthReason::MachineUpdating);
+
+        let stuck_update = project_machine_health(
+            "online",
+            false,
+            Some(MACHINE_COMPONENT_RECONCILIATION_GRACE),
+            true,
+            200,
+            Some(150),
+        );
+        assert_eq!(stuck_update.state, MachineHealthState::Degraded);
+        assert_eq!(stuck_update.reason, MachineHealthReason::RuntimeUnavailable);
+    }
+
+    #[test]
+    fn controller_preserves_explicit_machine_lifecycle_states() {
+        for (status, expected_state, expected_reason) in [
+            (
+                "reconnecting",
+                MachineHealthState::Reconnecting,
+                MachineHealthReason::TransportReconnecting,
+            ),
+            (
+                "updating",
+                MachineHealthState::Updating,
+                MachineHealthReason::MachineUpdating,
+            ),
+            (
+                "degraded",
+                MachineHealthState::Degraded,
+                MachineHealthReason::MachineReportedDegraded,
+            ),
+            (
+                "offline",
+                MachineHealthState::Offline,
+                MachineHealthReason::MachineOffline,
+            ),
+        ] {
+            let health = project_machine_health(status, false, None, false, 200, None);
+            assert_eq!(health.state, expected_state);
+            assert_eq!(health.reason, expected_reason);
+        }
+    }
+
+    #[test]
+    fn machine_health_serializes_as_a_stable_client_contract() {
+        let health = project_machine_health("online", true, None, false, 200, Some(150));
+        assert_eq!(
+            serde_json::to_value(health).expect("serialize Machine health"),
+            serde_json::json!({
+                "state": "ready",
+                "reason": "runtime_connected",
+                "observed_at_ms": 200,
+                "last_seen_at_ms": 150,
+            })
+        );
     }
 }
 
@@ -733,10 +947,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Some(args.data_dir.join("usage-snapshot.json")),
     );
     let runtime_router = RuntimeRouter::new();
+    let machine_control = Arc::new(MachineControl::default());
     let machine_snapshots = MachineSnapshots::new(
         store.clone(),
         hub.clone(),
         Arc::clone(&runtime_router),
+        Arc::clone(&machine_control),
         Arc::clone(&desired_machine_components),
         args.product_auth_enabled,
     );
@@ -1096,7 +1312,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             shutdown: shutdown_rx,
             runtime_health,
             runtime_router,
-            machine_control: Arc::new(MachineControl::default()),
+            machine_control,
             machine_snapshots,
             plugin_catalog,
             provider_catalog,
@@ -11843,8 +12059,26 @@ async fn api_machine_enroll(
 // a loaded macOS host, so keep the nonce window above their worst-case budget.
 const MACHINE_HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 const MACHINE_HEARTBEAT_MS: u64 = 15_000;
+const MACHINE_HEARTBEAT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_millis(MACHINE_HEARTBEAT_MS * 3);
 const WEBSOCKET_FRAME_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const MACHINE_RUNTIME_OUTBOUND_CAPACITY: usize = 16;
+
+#[derive(Default)]
+struct MachineHeartbeatWatchdog {
+    deadline: Option<std::time::Instant>,
+}
+
+impl MachineHeartbeatWatchdog {
+    fn observe_at(&mut self, observed_at: std::time::Instant) {
+        self.deadline = Some(observed_at + MACHINE_HEARTBEAT_TIMEOUT);
+    }
+
+    fn expired_at(&self, observed_at: std::time::Instant) -> bool {
+        self.deadline
+            .is_some_and(|deadline| observed_at >= deadline)
+    }
+}
 
 async fn write_machine_messages<S>(
     mut sink: S,
@@ -11915,12 +12149,27 @@ where
 #[cfg(test)]
 mod machine_runtime_bridge_tests {
     use super::{
-        forward_machine_runtime_frames, queue_machine_json, write_machine_messages,
-        write_machine_runtime_frames,
+        MACHINE_HEARTBEAT_TIMEOUT, MachineHeartbeatWatchdog, forward_machine_runtime_frames,
+        queue_machine_json, write_machine_messages, write_machine_runtime_frames,
     };
     use crate::machine_protocol::MachineFrame;
     use crate::runtime_wire::{CoreCommand, Frame, FrameReader, read_frame, write_frame};
     use std::time::Duration;
+
+    #[test]
+    fn machine_heartbeat_watchdog_starts_on_first_heartbeat_and_resets() {
+        let start = std::time::Instant::now();
+        let mut watchdog = MachineHeartbeatWatchdog::default();
+        assert!(!watchdog.expired_at(start + MACHINE_HEARTBEAT_TIMEOUT));
+
+        watchdog.observe_at(start);
+        assert!(!watchdog.expired_at(start + MACHINE_HEARTBEAT_TIMEOUT - Duration::from_millis(1)));
+        assert!(watchdog.expired_at(start + MACHINE_HEARTBEAT_TIMEOUT));
+
+        watchdog.observe_at(start + Duration::from_secs(30));
+        assert!(!watchdog.expired_at(start + MACHINE_HEARTBEAT_TIMEOUT));
+        assert!(watchdog.expired_at(start + Duration::from_secs(30) + MACHINE_HEARTBEAT_TIMEOUT));
+    }
 
     #[tokio::test]
     async fn runtime_bridge_makes_full_duplex_progress_under_backpressure() {
@@ -12341,6 +12590,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
     revocation_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     revocation_check.tick().await;
+    let mut heartbeat_watchdog = MachineHeartbeatWatchdog::default();
     loop {
         let message = tokio::select! {
             message = socket_stream.next() => Some(message),
@@ -12410,6 +12660,14 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 continue;
             }
             _ = revocation_check.tick() => {
+                if heartbeat_watchdog.expired_at(std::time::Instant::now()) {
+                    tracing::warn!(
+                        machine = %hello.machine_id,
+                        timeout_ms = MACHINE_HEARTBEAT_TIMEOUT.as_millis(),
+                        "Machine heartbeat timed out"
+                    );
+                    break;
+                }
                 match store.machine_connection_is_current(&hello.machine_id, &challenge_id).await {
                     Ok(true) => continue,
                     Ok(false) => {
@@ -12450,6 +12708,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         };
         let result = match frame {
             crate::machine_protocol::MachineFrame::Heartbeat { .. } => {
+                heartbeat_watchdog.observe_at(std::time::Instant::now());
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
