@@ -567,6 +567,41 @@ mod service_catalog {
         }
 
         #[test]
+        fn embedded_codex_catalog_recommends_astra_and_defaults_to_sol_medium() {
+            let source: cowboy_provider_sdk::StandardProviderSource =
+                serde_json::from_str(include_str!("../plugins/codex/provider.json")).unwrap();
+            let package = cowboy_provider_sdk::build_package(source.compile().unwrap()).unwrap();
+            let presets = &package.manifest.configuration.presets;
+            let default = presets
+                .iter()
+                .find(|preset| preset.is_default)
+                .expect("Codex must declare a default configuration preset");
+
+            assert_eq!(default.id, "sol-medium");
+            assert_eq!(
+                default.values.get("model").map(String::as_str),
+                Some("gpt-5.6-sol")
+            );
+            assert_eq!(
+                default.values.get("reasoning_effort").map(String::as_str),
+                Some("medium")
+            );
+
+            let astra = presets
+                .iter()
+                .find(|preset| preset.id == "astra-max")
+                .expect("Codex must recommend Astra Max");
+            assert_eq!(
+                astra.values.get("model").map(String::as_str),
+                Some("gpt-6-astra")
+            );
+            assert_eq!(
+                astra.values.get("reasoning_effort").map(String::as_str),
+                Some("max")
+            );
+        }
+
+        #[test]
         fn default_catalog_retains_signed_legacy_generations_for_execution() {
             let root = std::env::temp_dir().join(format!(
                 "cowboy-legacy-provider-catalog-test-{}",

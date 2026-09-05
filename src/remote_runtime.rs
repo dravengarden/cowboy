@@ -2092,12 +2092,13 @@ mod tests {
         assert!(
             config_commands
                 .iter()
-                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-5.6-luna"))
+                .any(|(id, value)| *id == "model" && **value == serde_json::json!("gpt-5.6-sol"))
         );
         assert!(
             config_commands
                 .iter()
-                .any(|(id, value)| *id == "reasoning_effort" && **value == serde_json::json!("max"))
+                .any(|(id, value)| *id == "reasoning_effort"
+                    && **value == serde_json::json!("medium"))
         );
         assert!(
             commands[..prompt_index]

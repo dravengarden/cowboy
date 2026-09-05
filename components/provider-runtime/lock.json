@@ -45,22 +45,22 @@
     },
     "openai-codex": {
       "kind": "npm_archive",
-      "version": "0.147.0",
+      "version": "0.153.4",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-linux-x64.tgz",
-          "integrity": "sha512-0W9MBxPpWW0cSkNqrTDN2jR7rzzT7oNMhQY5446lT2Lw5cz5yhDTck4Va9rjkQEm+HlFzP/dmEMSZbXfJsINmw==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-x64.tgz",
+          "integrity": "sha512-x1EcwBlY3AObM1VTUHNM2AzAJQsyreGdagpF+qFiYi/Oa30VBktvvG0C6tLtCzqW6hjZNWkGZQWmeVk7MuJKWg==",
           "entrypoint": "package/vendor/x86_64-unknown-linux-musl/bin/codex"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-linux-arm64.tgz",
-          "integrity": "sha512-SLC1JXw2TYfr/c3HhrJubyyLelq7vTOLWVmiThFA+z0+WgzCPmaseJ/kzDD3Gge/TO7fCnnj7UcPmC0d2c8XAg==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-arm64.tgz",
+          "integrity": "sha512-QKdjYLYV4hXIuUQDP3P6F4NXuWFoKo9WUoV4nAREIx55kiUyi8UsYdsVobkeXir5n/maEQgYMCKLHVma4rNPiw==",
           "entrypoint": "package/vendor/aarch64-unknown-linux-musl/bin/codex"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.147.0-darwin-arm64.tgz",
-          "integrity": "sha512-BEUVkiOW7kLcRyrMLfAr/h9wF8sRVJyZDy6OHtVn6QGDXiv3BvAZVTY1Pu9xF7KdIdkYXbp4uayN0aDQQaAUJw==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-darwin-arm64.tgz",
+          "integrity": "sha512-B1qhN3fa1ay0R0wGziXqgwSkB5icpYChNKHhtBHff/0UtSTC7z+l8aTtvMlGjH3E8HEvY3+njIJelM9CAAoVWg==",
           "entrypoint": "package/vendor/aarch64-apple-darwin/bin/codex"
         }
       }
@@ -96,7 +96,7 @@
     },
     "codex-acp": {
       "kind": "node_npm",
-      "version": "1.1.7",
+      "version": "1.10.0",
       "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       "probe": ["--version"]
