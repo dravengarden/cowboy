@@ -1661,8 +1661,27 @@ fn reconcile_config_preferences(
     let Some(preferences) = preferences.as_object_mut() else {
         return false;
     };
+    let changing_model = options.iter().any(|option| {
+        option.get("category").and_then(serde_json::Value::as_str) == Some("model")
+            && option
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| {
+                    preferences.get(id).is_some_and(|selected| {
+                        config_current_value(option) != Some(selected)
+                            && config_option_accepts(option, selected)
+                    })
+                })
+    });
     let mut changed = false;
     for option in options {
+        // A queued model change can still receive snapshots for the prior
+        // model. Its reasoning limits cannot retire the next model's preset.
+        if changing_model
+            && option.get("category").and_then(serde_json::Value::as_str) == Some("thought_level")
+        {
+            continue;
+        }
         let Some(config_id) = option.get("id").and_then(serde_json::Value::as_str) else {
             continue;
         };
@@ -5316,6 +5335,40 @@ mod config_preference_tests {
             Ok(StoreWrite::UpdateConfigPreferences { preferences, .. })
                 if preferences["reasoning_effort"] == serde_json::json!("low")
         ));
+    }
+
+    #[test]
+    fn previous_model_snapshot_does_not_retire_a_pending_presets_reasoning() {
+        let mut preferences = serde_json::json!({"model": "astra", "reasoning_effort": "max"});
+        let mut options = serde_json::json!([
+            {"id": "model", "category": "model", "currentValue": "spark",
+             "options": [{"value": "spark"}, {"value": "astra"}]},
+            {"id": "reasoning_effort", "category": "thought_level", "currentValue": "low",
+             "options": [{"value": "low"}, {"value": "medium"}]}
+        ]);
+        assert!(!reconcile_config_preferences(
+            Some(&options),
+            &mut preferences
+        ));
+        assert_eq!(preferences["reasoning_effort"], "max");
+        options[0]["currentValue"] = serde_json::json!("astra");
+        options[1]["options"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"value": "max"}));
+        assert!(!reconcile_config_preferences(
+            Some(&options),
+            &mut preferences
+        ));
+        assert_eq!(preferences["reasoning_effort"], "max");
+        // Once the selected model itself retires the effort, normal repair
+        // still applies; a genuinely removed value never survives indefinitely.
+        options[1]["options"].as_array_mut().unwrap().pop();
+        assert!(reconcile_config_preferences(
+            Some(&options),
+            &mut preferences
+        ));
+        assert_eq!(preferences["reasoning_effort"], "low");
     }
 
     #[test]
