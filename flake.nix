@@ -329,7 +329,8 @@
 
       cowboy-zed-adapter = rustPlatform.buildRustPackage {
         pname = "cowboy-zed-adapter";
-        version = "1.1.2";
+        version = (builtins.fromTOML
+          (builtins.readFile ./plugins/zed/adapter/Cargo.toml)).package.version;
         src = zed-adapter-src;
         cargoLock = {
           lockFile = ./plugins/zed/adapter/Cargo.lock;
