@@ -100,10 +100,12 @@ A new first-party Provider can be added by dropping a plugin tree + host.json + 
 
 ## Completion record — 2026-09-05
 
-Status: the original nine-item core-extraction target is implemented in this
-working tree. The broader generation/lifecycle work identified by the design
-review below is not complete. No commit, production signature, publication,
-activation, or deployment was performed.
+Status: the original nine-item core-extraction target and the code corrections
+below are implemented. The initial extraction record preceded the commits and
+clean builds in **Candidate verification**. Production signature, publication,
+activation and platform/real-login acceptance remain separate prerequisites.
+This is not a completed end-to-end migration of every Plugin kind: the final
+runtime review also identified Zed's legacy execution path, recorded below.
 
 1. `build.rs` now discovers every first-party Provider and host source. The
    runtime-argument, Catalog, and legacy-behavior readers consume that generated
@@ -363,23 +365,46 @@ Corrections implemented in this working tree:
     runtime executables. Worker generation hashing also includes the extracted
     managed-config/discovery code, SDKs and package-authored runtime inputs, so
     their later changes cannot reuse a worker generation with different behavior.
-    These packaging corrections still require the clean Nix candidate build
-    below; they do not constitute activation evidence.
+    The clean Nix builds and source-boundary check below pass. Refreshing the
+    staged Cargo vendor hash was also necessary after the local SDK versions
+    changed; a normal checkout build did not exercise that fixed-output lock
+    check. None of these build results constitute activation evidence.
+
+20. Zed's Nix adapter package still advertised `1.1.2` while its owned Cargo
+    manifest was already `1.1.10`. `84ce854d` derives the Nix version from that
+    manifest instead of maintaining another version literal. The clean Nix
+    adapter build passes all 11 tests and the real adapter/server integration
+    check. This fixes package metadata drift, not the separate live-runtime
+    ownership gap below.
 
 Remaining architecture work:
 
-1. **Prepare a clean release candidate.** The complete task remains uncommitted
-   in this worktree. Review and commit the extraction plus corrections, then
-   build final packages and all declared runtime artifacts from that exact
-   clean revision. Existing local unbound envelopes and hermetic signatures
-   are not production release receipts.
-2. **Complete target-platform and real integration acceptance.** The local
-   Linux quality gate does not build/test every advertised Machine target or
-   the Apple native shell. Obtain the required target execution evidence and
-   native Passkey/bridge acceptance, plus authorized real authentication and
-   old/new generation coexistence checks; do not treat schema validation as
-   those runtime results.
-3. **Verify an authorized Catalog-only cutover (P1).** The local signed
+1. **Finish Zed's exact Plugin runtime ownership (P1).** The generic installer
+   stages a code-intelligence Plugin, but `supervise_zed_adapter` still selects
+   its adapter/server from the legacy `ComponentStore` through
+   `selected_zed_pair`, not from that installed Plugin generation. Its current
+   published matrix binds only the adapter. Bind and validate the complete
+   adapter/server dependency set, route execution and leases through the exact
+   installed generation, and prove upgrade/uninstall/rollback and legacy drain.
+   Resolve selection semantics for more than one code-intelligence Plugin
+   explicitly; do not silently replace the existing shared Code service.
+   The Nix-built ELF also requires its Nix loader/closure: a passing probe on
+   Hawk is not evidence for an arbitrary Linux Machine. Zed's `1.1.10` candidate
+   is deliberately still unbound, rather than claiming these gaps are solved.
+2. **Finish immutable runtime release acceptance.** All six Agent matrices
+   have now been built and bound for Linux x86_64 and macOS aarch64. Their
+   declared CLI/help probes pass on both platforms. Keep the required broader
+   conformance evidence, then sign and publish each Plugin independently under
+   the requested release authority. Unbound or unsigned local envelopes are
+   not production release receipts.
+3. **Complete native and real integration acceptance.** An actual arm64 Mac
+   with Xcode is reachable and its eight Agent component probes pass. That does
+   not build the changed Apple shell or exercise native Passkey/bridge behavior.
+   Use the registered host and committed Git exchange for that build, then
+   obtain native acceptance, authorized real authentication and real ACP/sidecar
+   old/new generation coexistence checks. Schema validation and version/help
+   output are not substitutes for those results.
+4. **Verify an authorized Catalog-only cutover (P1).** The local signed
    sources, exact host configuration and startup readiness path are implemented
    and exercised with hermetic Catalogs. Production still needs independently
    verified Password/Passkey and configured OIDC releases, an exact private
@@ -391,7 +416,7 @@ Remaining architecture work:
    AGENTS.md and the canonical release skill; publication never authorizes
    Machine installation or credential mutation. None of these production
    signing/publication/activation/deployment actions was performed here.
-4. **Remove transitional bootstrap code after cutover evidence.** Default
+5. **Remove transitional bootstrap code after cutover evidence.** Default
    bootstrap behavior and the pre-Catalog Controller executor deliberately
    remain for existing deployments. `catalog_only` retires them at runtime,
    not from the binary. Physical deletion should follow verified migration
@@ -433,3 +458,117 @@ Post-review verification:
 - `git diff --check` passes. No plugin/example `ui/**` file, old host-bundle
   writer reference in production, `${USAGE_CLI_COMMAND}`, core
   `codex_command`, or bare Plugin JavaScript read/run/net grant remains.
+
+## Candidate verification — 2026-09-05–06
+
+The complete extraction and corrections were committed in `4347a22a`.
+The Cargo vendor fix is finalized in `78d06754`; `d4ca9a15` updates only the
+canonical release skill's paths, schema-2 host requirements and cutover routing.
+The skill was validated with its owned validator using PyYAML from Cowboy's
+locked Nixpkgs, without changing the shared Python environment.
+`84ce854d` then fixes the Zed package version drift without changing SDK,
+Plugin, dependency or host-contract sources.
+
+The final clean source `84ce854df9230f72c82c5e3d5892825e58d759c7` successfully built:
+
+| Output | Local GC-root link | Immutable Nix result |
+|---|---|---|
+| Controller | `result-pluginization-verified` | `/nix/store/7krwlfdrprdczj314jr460xnd5fiir88-cowboy-controller-release` |
+| Web | `result-pluginization-verified-1` | `/nix/store/xhxb3ackmm2s2nfrh7bmnwzy8px0f4mq-cowboy-web-release` |
+| Machine | `result-pluginization-verified-2` | `/nix/store/qn41ynv45k7mhssnx60g62asi8hprdfz-cowboy-machine-release` |
+| Source boundary | `result-pluginization-verified-3` | `/nix/store/b3a60n9az6kaly9fj67n1kb5s1j3q4xl-cowboy-source-boundary` |
+| Zed integration | `result-pluginization-verified-4` | `/nix/store/b1rgpzsmwm5fxqxkj0m4yhmhz782p454-cowboy-zed-integration` |
+
+All three component `source.json` receipts contain that exact revision and
+`dirty: false`. Machine's desired worker generation is
+`worker-d6e3554fa38944e72167`. These are candidate artifacts, **not deployment
+receipts**. The Controller's hermetic Nix check phase passed 538 default-feature
+library tests (six PostgreSQL tests remain in the separate gate) and three
+binary tests. The checkout's complete all-features gate passed again from the
+clean extraction commit: 636 ordinary library tests, all six isolated
+PostgreSQL tests, 1105 Web tests and the other package/lint/build gates above.
+Both real Rust package directories expose pinned Deno 2.9.5 through
+`cowboy-plugin-js`, verified with an empty process environment.
+The earlier `78d06754` build remains under `result-pluginization*`; use the
+explicit `result-pluginization-verified*` links above for the final candidate.
+The final Controller executable is byte-identical to the one used for the
+Service-input preflight below:
+`sha256:602535ba7fe21f22adf5c65a705cdaeb027d61309d00949e65ceeb21a2b16f1a`.
+
+All seven Machine Plugin packages and five Authentication examples were also
+rebuilt from the clean `d4ca9a15` source. They are local artifacts under
+`dist/plugins/`, with no production signatures or Catalog writes.
+
+The repository-owned Agent runtime builder completed for each of the six
+Agents using the unchanged exact dependency pins and npm/Git locks. Each matrix
+contains Linux x86_64 and macOS aarch64. The SDK assigned digest-bound HTTPS
+package URLs and bound each runtime matrix to its own unsigned schema-2 release.
+Password/Passkey also have their own digest-bound candidate package URLs;
+assigning a URL does not publish its bytes. A final local audit re-hashed every
+package, host bundle and bound runtime artifact: all matched, with 16 distinct
+runtime artifacts across the two platforms. Zed remains data-only/unbound.
+
+Linux executable probes passed in the owned runtime builder. All eight unique
+macOS components were additionally tested on the registered `macbook-air`
+(macOS 26.4.1 build 25E253, arm64), not merely downloaded or cross-built:
+
+| Component | Exact dependency version | Declared probe result |
+|---|---|---|
+| Claude CLI | `2.1.231` | `--version`, exit 0 |
+| Claude Agent ACP | `0.63.0` | `--version`, exit 0 |
+| Codex CLI | `0.147.0` | `--version`, exit 0 |
+| Codex ACP | `1.1.7` | `--version`, exit 0 |
+| Gemini CLI | `0.55.1` | `--version`, exit 0 |
+| Grok CLI | `0.2.117` | `--version`, exit 0 |
+| Claude DeepSeek gateway | `0.1.0` | `--help`, exit 0 |
+| Codex DeepSeek gateway | `0.2.0` | `--help`, exit 0 |
+
+The Mac verified the exact artifact digests before extraction. Archive path,
+entry-type and size bounds passed; probes used private temporary homes, closed
+environments and a 30-second timeout. No Provider credential or ordinary
+Codex/Claude state was used. The remote fixture was removed after all probes
+exited; the local build artifacts remain. These probes do not establish native
+shell, authenticated ACP, sidecar drain or actual Passkey acceptance.
+
+Zed's final Nix adapter is
+`/nix/store/0digkp9a7x8pq0mqgchbq20ws9mbpyy1-cowboy-zed-adapter-1.1.10/bin/cowboy-zed-adapter`,
+with executable digest
+`sha256:4e49cb6941c4972e3dcd49208472f562afd51b3d4a0be38bb63ce84e3c89dfe3`.
+Its owned `--help` exits successfully with an empty environment. The Nix
+integration starts the actual pinned Zed server, verifies adapter health, and
+opens/closes a trusted worktree and a file-buffer lease. It does not install a
+Plugin or prove the remaining Plugin-generation selection path.
+
+`dist/plugins/pluginization-candidate-verification.json` records the exact
+local candidate digests, source revisions, Nix outputs, Mac probe observations
+and explicit limitations. It is an ignored local verification record, not a
+production publication, installation or deployment receipt. The durable
+completion/remaining-work summary is this committed document.
+
+Read-only inspection of Hawk's actual Service established the concrete cutover
+prerequisites, rather than assuming a fresh deployment:
+
+- The running unit uses `/var/lib/cowboy`, the legacy-compatible Catalog at
+  `/var/lib/cowboy/plugin-catalog`, and protected
+  `/var/lib/cowboy/authentication.json`. Password and Passkeys are enabled;
+  OIDC exact-selects `cardea@1.1.0`.
+- The candidate Controller ran `serve --check-plugin-hosts` with the running
+  process's original environment, arguments and working directory, without
+  printing private inputs. It returned `configuration_valid` for `bootstrap`,
+  with no Catalog-only marker and WebAuthn storage required. This did not
+  connect to the database, stage hosts, migrate, authenticate or restart.
+- The installed Cardea selection is a trusted schema-1 release with **no host
+  bundle**. Catalog-only needs an independently released Cardea successor from
+  its owning repository; do not attach host bytes to the immutable 1.1.0
+  envelope or disable the configured login method to make preflight pass.
+- Password and Passkey are not yet published. Current Agent Catalog releases
+  are 3.1.8 without host bundles. The actual
+  `just provider-release-coverage /var/lib/cowboy/plugin-catalog` check rejects
+  all six required 3.1.10 releases as unpublished, correctly blocking Controller
+  deployment until that separate release work succeeds.
+
+No production signing key was opened, credential changed, Catalog refreshed,
+Machine installed/upgraded, component activated, or legacy data/path deleted.
+The final read-only check still returned `/healthz: ok`, the existing Web
+version `d60d4931b93b674abc4982ec4bda3092`, and `cowboy.service` active with
+`NRestarts=0`.
