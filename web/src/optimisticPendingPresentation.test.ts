@@ -83,8 +83,11 @@ Deno.test("local content paints and reveals before the durable transport barrier
   const activateStart = store.indexOf("export async function activateDraft(");
   const activateEnd = store.indexOf("export function activateAllDrafts", activateStart);
   const activate = store.slice(activateStart, activateEnd);
-  assert(activate.indexOf("setInteractiveState({") < activate.indexOf("await qClient(sessionId).mutateDurably"));
-  assert(activate.includes('status: "committing"'));
+  assert(activate.indexOf('qStatus.set(opId, "committing")') < activate.indexOf("await qClient(sessionId).mutateDurably"));
+  assert(activate.includes("row: presented"));
+  assert(activate.includes("destination: dest"));
+  assertEquals(activate.includes("await optimisticMessage("), false);
+  assertEquals(activate.includes("await discardQueued("), false);
 
   const commitStart = store.indexOf("function commitQueue(");
   const commitEnd = store.indexOf("function armQTimers", commitStart);
@@ -103,4 +106,18 @@ Deno.test("local content paints and reveals before the durable transport barrier
   const sendQueued = store.slice(sendQueuedStart, sendQueuedEnd);
   assert(sendQueued.includes("qStatus.delete(opId)"));
   assert(sendQueued.includes("qStatus.delete(echoCmid)"));
+});
+
+Deno.test("unfocused pending draft activation actively recovers a missing server id", async () => {
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const transport = store.slice(store.indexOf("function transmitQueueMutation("), store.indexOf("function qClient("));
+  assert(transport.includes("if (command === null && isConnected())"));
+  assert(transport.includes("void hydrateSession(sessionId)"));
+  const hydration = store.slice(store.indexOf("async function hydrateSession("), store.indexOf("export function retrySessionHydration("));
+  assert(hydration.includes("needsDraftSource(sessionId) ||"));
+  assert(hydration.includes("retryableFailure = needsDraftSource(sessionId)"));
+  assert(hydration.includes('qStatus.set(mutation.id, "failed")'));
+  const discard = store.slice(store.indexOf("async function discardQueueMutationDurably("), store.indexOf("function pendingNamed("));
+  assert(discard.includes("discardDurableDelivery(store, cmid"));
+  assert(discard.includes('qStatus.set(cmid, "failed")'));
 });

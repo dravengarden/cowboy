@@ -36,6 +36,9 @@ function deepFreeze<V>(value: V): V {
 export interface Client<T, M extends Mutators<T>> {
   /** The value to render: confirmed base + replayed pending. */
   view(): T;
+  /** Immutable authoritative value, without optimistic mutations. Restored by
+   * hydrate and advanced only by accepted arbiter snapshots. */
+  baseValue(): T;
   /** The confirmed (arbiter) version this client has applied up to. */
   version(): Version;
   /** Outstanding optimistic mutations not yet confirmed by the arbiter. */
@@ -200,6 +203,7 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
 
   return {
     view: (): T => viewValue,
+    baseValue: (): T => base.value,
     version: (): Version => base.version,
     pending: (): readonly Mutation[] => queue,
 

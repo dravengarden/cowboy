@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   appendUnique,
+  draftActivationSourceId,
   emptyQueueValue,
   queueMutators,
   removeById,
@@ -35,6 +36,77 @@ Deno.test("activating a draft onto the transcript only hides the draft", () => {
   assertEquals(next.drafts, []);
   assertEquals(next.queue, []);
   assertEquals(next.inFlight, []);
+});
+
+Deno.test("sending an unconfirmed draft keeps its source hidden after the server assigns an id", () => {
+  const args = { id: "opt-c-draft", sourceCmid: draft.cmid, row: presented };
+  const local = { ...draft, id: args.id };
+  const initial = queueMutators.activateDraft(
+    { ...emptyQueueValue(), drafts: [local] }, args,
+  );
+  const acknowledged = queueMutators.activateDraft(
+    { ...emptyQueueValue(), drafts: [draft] }, args,
+  );
+  assertEquals(initial.drafts, []);
+  assertEquals(acknowledged.drafts, []);
+  assertEquals(acknowledged.queue, [presented]);
+});
+
+Deno.test("a draft send cannot settle before its pending source is created", () => {
+  const activation = {
+    id: "activate-op",
+    name: "activateDraft",
+    args: { id: "opt-c-draft", sourceCmid: draft.cmid, row: presented },
+  };
+  const creation = { id: draft.cmid, name: "addDraft", args: { row: draft } };
+  assertEquals(settledTransitionIds([creation, activation], emptyQueueValue()), []);
+  assertEquals(
+    settledTransitionIds([activation], { ...emptyQueueValue(), drafts: [draft] }),
+    [],
+  );
+  assertEquals(settledTransitionIds([activation], emptyQueueValue()), [activation.id]);
+});
+
+Deno.test("a draft send retains its transcript bubble in the durable outbox view", () => {
+  const next = queueMutators.activateDraft(
+    { ...emptyQueueValue(), drafts: [draft] },
+    { id: draft.id, row: presented, destination: "transcript" as const },
+  );
+  assertEquals(next.drafts, []);
+  assertEquals(next.queue, []);
+  assertEquals(next.inFlight, [presented]);
+});
+
+Deno.test("a pending edit does not turn a server-backed draft into a new local source", () => {
+  const editing = { ...draft, status: "sending" as const };
+  const args = { id: editing.id, row: presented, destination: "transcript" as const };
+  assertEquals(draftActivationSourceId(args, []), editing.id);
+  assertEquals(
+    queueMutators.activateDraft({ ...emptyQueueValue(), drafts: [editing] }, args).drafts,
+    [],
+  );
+});
+
+Deno.test("send waits for a pending return-to-drafts move before settling", () => {
+  const returning = { id: "return-op", name: "returnQueuedToDraft", args: { id: queued.id, row: queued } };
+  const activation = { id: "activate-op", name: "activateDraft", args: { id: queued.id, row: presented } };
+  assertEquals(
+    settledTransitionIds([returning, activation], { ...emptyQueueValue(), queue: [queued] }),
+    [],
+  );
+  assertEquals(
+    settledTransitionIds([returning, activation], { ...emptyQueueValue(), drafts: [queued] }),
+    [returning.id],
+  );
+  assertEquals(settledTransitionIds([activation], emptyQueueValue()), [activation.id]);
+  assertEquals(
+    settledTransitionIds([returning, activation], emptyQueueValue()),
+    [returning.id, activation.id],
+  );
+  assertEquals(
+    settledTransitionIds([activation, returning], emptyQueueValue()),
+    [activation.id, returning.id],
+  );
 });
 
 Deno.test("sending or force-pushing a queued row parks it in-flight", () => {

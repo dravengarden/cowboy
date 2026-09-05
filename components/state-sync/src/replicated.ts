@@ -18,6 +18,8 @@ import type { ArgsOf, Mutators } from "./mutators.ts";
 import type { ClientSnapshot, LocalPersistence, Mutation, MutationId, Patch, Version } from "./types.ts";
 
 export interface ReplicatedStore<T, M extends Mutators<T>> extends ReadableStore<T> {
+  /** Immutable authoritative value before pending mutations are replayed. */
+  baseValue(): T;
   /** Apply a mutator locally (instant) and send it upstream. Pass an explicit
    *  `id` to make the mutation id an externally-meaningful key (e.g. an optimistic
    *  row's cmid, for no-duplicate confirmation). */
@@ -108,6 +110,7 @@ export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T
 
   return {
     get: (): T => client.view(),
+    baseValue: (): T => client.baseValue(),
     subscribe: (listener): () => void => {
       listeners.add(listener);
       return (): void => {

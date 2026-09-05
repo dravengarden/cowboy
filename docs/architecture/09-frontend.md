@@ -84,6 +84,25 @@ release gate; no source symlink or external `shared-utils` checkout is needed.
 `web/src/protocol.ts` mirrors the Rust `Inbound`/`Outbound`/`Envelope`/`SessionMeta`
 types so the wire contract is checked at both ends.
 
+Sending a not-yet-confirmed draft is a durable move, not a fresh `submit` plus
+local discard. The activation keeps the source creation cmid while the view
+hides both its optimistic id and its eventual server id. Only the transport
+waits for that id before sending the existing `activate_draft` command. The
+queue/transcript destination is visible immediately and survives reload with
+its attachments; a failed local write keeps the original draft. Stale queue
+patches may still acknowledge mutations, but cannot replace the source lookup
+or settle a move from an obsolete list. Source lookup uses the replicated
+store's hydrated authoritative base, including for unfocused sessions. Missing
+ids actively request the existing HTTP bootstrap: replaying an idempotent
+creation does not guarantee another server echo. Before
+transport consumes a source, flush its acknowledgement so a crash cannot
+replay the consumed creation. A reconnect snapshot can settle a move and its
+already-completed source transition together. A failed concurrent discard
+restores an explicitly retryable row instead of a stuck committing phase or
+silently sending against the cancellation intent. This shared Web state path does
+not change Codex or the Claude follower's Provider protocol or native editor
+input.
+
 ## Transcript
 
 `Transcript.tsx` renders the session timeline (user messages, agent chunks, tool

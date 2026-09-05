@@ -24,7 +24,9 @@ import {
   shouldStartImmediateReconnect,
 } from "./connectionRecovery.ts";
 import {
+  discardDurableDelivery,
   durableDeliveryAttempt,
+  sendAfterDurableSnapshot,
   shouldUseTranscriptDelivery,
 } from "./durableDelivery.ts";
 import {
@@ -36,6 +38,8 @@ import {
   statusAfterExplicitSend,
 } from "./localFirstDelivery.ts";
 import {
+  type DraftActivation,
+  draftActivationSourceId,
   emptyQueueValue,
   QUEUE_TRANSITION_MUTATORS,
   queueMutators,
@@ -1306,6 +1310,9 @@ async function hydrateSession(
       if (!state.hydrated.has(sessionId)) {
         throw new Error("session bootstrap contained no transcript snapshot");
       }
+      // HTTP 200 is not a source acknowledgement: creation can still be racing,
+      // or another terminal may have removed it. Bound retries in both cases.
+      retryableFailure = needsDraftSource(sessionId);
     } catch (error) {
       retryableFailure = timedOut || !controller.signal.aborted;
       if (retryableFailure) console.warn("session bootstrap failed", error);
@@ -1316,9 +1323,10 @@ async function hydrateSession(
       }
       if (
         retryableFailure &&
-        !state.hydrated.has(sessionId) &&
-        transcriptIsCached(sessionId) &&
-        openedSessionId === sessionId &&
+        (needsDraftSource(sessionId) ||
+          (!state.hydrated.has(sessionId) &&
+            transcriptIsCached(sessionId) &&
+            openedSessionId === sessionId)) &&
         retryAttempt < SESSION_HYDRATION_RETRY_DELAYS_MS.length
       ) {
         const delay = SESSION_HYDRATION_RETRY_DELAYS_MS[retryAttempt]!;
@@ -1326,14 +1334,23 @@ async function hydrateSession(
           if (sessionHydrationRetryTimers.get(sessionId) !== retry) return;
           sessionHydrationRetryTimers.delete(sessionId);
           if (
-            !state.hydrated.has(sessionId) &&
-            transcriptIsCached(sessionId) &&
-            openedSessionId === sessionId
+            needsDraftSource(sessionId) ||
+            (!state.hydrated.has(sessionId) &&
+              transcriptIsCached(sessionId) &&
+              openedSessionId === sessionId)
           ) {
             void hydrateSession(sessionId, true, retryAttempt + 1);
           }
         }, delay);
         sessionHydrationRetryTimers.set(sessionId, retry);
+      } else if (retryableFailure && needsDraftSource(sessionId)) {
+        for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
+          if (mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null) {
+            qStatus.set(mutation.id, "failed");
+          }
+        }
+        commitQueue(sessionId);
+        notify("Draft source could not be synchronized. Retry sending when connected.");
       }
     }
   })();
@@ -2037,7 +2054,7 @@ const qMut = {
     queueMutators.submitPrompt(v, a),
   forceQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.forceQueue(v, a),
   frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.frontQueue(v, a),
-  activateDraft: (v: QValue, a: { id: string; row?: QueuedMessage }): QValue =>
+  activateDraft: (v: QValue, a: DraftActivation<QueuedMessage>): QValue =>
     queueMutators.activateDraft(v, a),
   sendQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.sendQueued(v, a),
@@ -2048,6 +2065,7 @@ const qMut = {
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, DeliveryStatus>();
+const draftDispatches = new Set<string>();
 const SILENT_QUEUE_MUTATORS = new Set([
   "editDraft",
   "editQueue",
@@ -2061,7 +2079,7 @@ const SILENT_QUEUE_MUTATORS = new Set([
 // confirms the hide mutation.
 const suppressedInFlight = new Set<string>();
 
-function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound {
+function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
   const args = m.args as { id?: string; row?: QueuedMessage };
   if (m.name === "addDraft" && args.row !== undefined) {
     return {
@@ -2121,7 +2139,13 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     return { type: "unschedule_draft", session_id: sessionId, id: args.id };
   }
   if (m.name === "activateDraft" && args.id !== undefined) {
-    return { type: "activate_draft", session_id: sessionId, id: args.id };
+    const id = draftActivationSourceId(
+      m.args as DraftActivation,
+      // The view already hides this source. Read the durable authoritative base
+      // so reconnect also works for cached sessions that are not currently open.
+      qClients.get(sessionId)?.baseValue().drafts ?? [],
+    );
+    return id === null ? null : { type: "activate_draft", session_id: sessionId, id };
   }
   if (m.name === "sendQueued" && args.id !== undefined) {
     return { type: "request_send_queued", session_id: sessionId, id: args.id };
@@ -2147,6 +2171,68 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
   };
 }
 
+function needsDraftSource(sessionId: string): boolean {
+  return qClients.get(sessionId)?.pending().some((mutation) =>
+    mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null
+  ) === true;
+}
+
+function dispatchQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): void {
+  if (m.name !== "activateDraft" || commandForQueueMutation(sessionId, m) === null) {
+    transmitQueueMutation(sessionId, m);
+    return;
+  }
+  const store = qClients.get(sessionId);
+  if (store === undefined || draftDispatches.has(m.id)) return;
+  draftDispatches.add(m.id);
+  qStatus.set(m.id, "committing");
+  commitQueue(sessionId);
+  void sendAfterDurableSnapshot(store, m.id, () => transmitQueueMutation(sessionId, m))
+    .catch((error: unknown) => {
+      if (!store.pending().some((mutation) => mutation.id === m.id)) return;
+      qStatus.set(m.id, "failed");
+      commitQueue(sessionId);
+      notify(error instanceof Error ? error.message : "Draft send could not be saved locally");
+    }).finally(() => draftDispatches.delete(m.id));
+}
+
+function transmitQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): void {
+  const command = commandForQueueMutation(sessionId, m);
+  const sent = command !== null && send(command);
+  const mutationRow = (m.args as { row?: QueuedMessage }).row;
+  if (SILENT_QUEUE_MUTATORS.has(m.name)) {
+    // Edits and schedule changes already painted from the local mutation.
+    // Advance their visible phase after the durable barrier; removes have
+    // no remaining row to annotate.
+    if (mutationRow !== undefined) {
+      qStatus.set(m.id, statusAfterExplicitSend(sent));
+      commitQueue(sessionId);
+    }
+    return;
+  }
+  const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
+    ? {
+      status: statusAfterExplicitSend(sent),
+      armConfirmationTimeout: sent,
+    }
+    : durableDeliveryAttempt(sent);
+  qStatus.set(m.id, attempt.status);
+  const echoCmid = mutationRow?.cmid;
+  if (echoCmid !== undefined && echoCmid !== m.id) {
+    qStatus.set(echoCmid, attempt.status);
+  }
+  commitQueue(sessionId);
+  if (attempt.armConfirmationTimeout) {
+    armQTimers(sessionId, m.id, echoCmid);
+  }
+  if (command === null && isConnected()) {
+    // Lazy socket bootstrap omits unfocused queues. A duplicate add_draft is
+    // idempotent but has no echo, so actively recover a lost creation patch
+    // through the existing deduplicated/retried HTTP bootstrap path.
+    void hydrateSession(sessionId);
+  }
+}
+
 function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
   let c = qClients.get(sessionId);
   if (c === undefined) {
@@ -2157,35 +2243,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // Adds send add_draft/submit (cmid = mutation id). Local-first moves send
       // the matching activate/request_send/force/queued_to_draft command. Used
       // both for the initial send (via mutate) and the reconnect resend.
-      send: (m): void => {
-        const sent = send(commandForQueueMutation(sessionId, m));
-        const mutationRow = (m.args as { row?: QueuedMessage }).row;
-        if (SILENT_QUEUE_MUTATORS.has(m.name)) {
-          // Edits and schedule changes already painted from the local mutation.
-          // Advance their visible phase after the durable barrier; removes have
-          // no remaining row to annotate.
-          if (mutationRow !== undefined) {
-            qStatus.set(m.id, statusAfterExplicitSend(sent));
-            commitQueue(sessionId);
-          }
-          return;
-        }
-        const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
-          ? {
-            status: statusAfterExplicitSend(sent),
-            armConfirmationTimeout: sent,
-          }
-          : durableDeliveryAttempt(sent);
-        qStatus.set(m.id, attempt.status);
-        const echoCmid = mutationRow?.cmid;
-        if (echoCmid !== undefined && echoCmid !== m.id) {
-          qStatus.set(echoCmid, attempt.status);
-        }
-        commitQueue(sessionId);
-        if (attempt.armConfirmationTimeout) {
-          armQTimers(sessionId, m.id, echoCmid);
-        }
-      },
+      send: (m): void => dispatchQueueMutation(sessionId, m),
       onChange: (): void => {
         commitQueue(sessionId);
       },
@@ -2393,7 +2451,14 @@ export function retryQueued(sessionId: string, cmid: string): void {
   const pending = c.pending().find((mutation) => mutation.id === cmid);
   if (pending !== undefined) {
     c.bump(cmid);
-    const attempt = retryDeliveryAttempt(send(commandForQueueMutation(sessionId, pending)));
+    if (pending.name === "activateDraft") {
+      dispatchQueueMutation(sessionId, pending);
+      return;
+    }
+    const command = commandForQueueMutation(sessionId, pending);
+    const attempt = command === null
+      ? durableDeliveryAttempt(false)
+      : retryDeliveryAttempt(send(command));
     qStatus.set(cmid, attempt.status);
     const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
     if (echoCmid !== undefined && echoCmid !== cmid) qStatus.set(echoCmid, attempt.status);
@@ -2418,8 +2483,21 @@ export function retryQueued(sessionId: string, cmid: string): void {
 /** Discard a (failed) optimistic queue/draft row locally — it never reached the
  *  daemon, so nothing server-side to remove. Persist the outbox removal before
  *  reporting success so a reload cannot resurrect and resend a discarded row. */
+async function discardQueueMutationDurably(sessionId: string, cmid: string): Promise<void> {
+  const store = qClients.get(sessionId);
+  if (store === undefined) return;
+  await discardDurableDelivery(store, cmid, () => {
+    clearOptTimers(cmid);
+    qStatus.set(cmid, "failed");
+    const echoCmid = (store.pending().find((mutation) => mutation.id === cmid)?.args as
+      { row?: QueuedMessage } | undefined)?.row?.cmid;
+    if (echoCmid !== undefined) qStatus.set(echoCmid, "failed");
+    commitQueue(sessionId);
+  });
+}
+
 export async function discardQueued(sessionId: string, cmid: string): Promise<void> {
-  await qClients.get(sessionId)?.confirmDurably([cmid]);
+  await discardQueueMutationDurably(sessionId, cmid);
   clearOptTimers(cmid);
   qStatus.delete(cmid);
   commitQueue(sessionId);
@@ -2439,7 +2517,7 @@ function pendingNamed(
 export async function returnFailedQueued(sessionId: string, cmid: string): Promise<void> {
   const pending = pendingNamed(sessionId, cmid);
   if (pending !== undefined && QUEUE_TRANSITION_MUTATORS.has(pending.name)) {
-    await qClients.get(sessionId)?.confirmDurably([pending.id]);
+    await discardQueueMutationDurably(sessionId, pending.id);
     clearOptTimers(pending.id);
     qStatus.delete(pending.id);
     const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
@@ -2492,11 +2570,12 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     inFlight: [],
   };
   const store = qClient(sessionId);
-  const settled = settledTransitionIds(
-    store.pending(),
-    next,
-    sameQueuedContent,
-  );
+  // Stale patches may still acknowledge a cmid, but their old list cannot
+  // retire a transition, recover an orphan, or replace the source-id lookup.
+  const acceptsValue = resync || version > store.version();
+  const settled = acceptsValue
+    ? settledTransitionIds(store.pending(), next, sameQueuedContent)
+    : [];
   const settledSuppressed: string[] = [];
   if (settled.length > 0) {
     for (const id of settled) {
@@ -2513,11 +2592,13 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     store.confirm(settled);
   }
   store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
-  const orphaned = claimOrphanedPendingEdits(
-    sessionId,
-    new Set(next.queue.map((row) => row.id)),
-    new Set(next.drafts.map((row) => row.id)),
-  );
+  const orphaned = acceptsValue
+    ? claimOrphanedPendingEdits(
+      sessionId,
+      new Set(next.queue.map((row) => row.id)),
+      new Set(next.drafts.map((row) => row.id)),
+    )
+    : [];
   for (const record of orphaned) {
     const alreadyRecovered = next.drafts.some((row) =>
       row.cmid === record.recoveryCmid
@@ -2545,6 +2626,16 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     suppressedInFlight.delete(cmid);
   }
   for (const cmid of settledSuppressed) suppressedInFlight.delete(cmid);
+  // A local draft can be sent before its add_draft acknowledgement. Its durable
+  // activation already owns the visible row; now deliver the original server
+  // move using the assigned id. Never mint a second submit/cmid for its content.
+  for (const mutation of store.pending()) {
+    if (
+      mutation.name === "activateDraft" &&
+      qStatus.get(mutation.id) === "pending" &&
+      commandForQueueMutation(sessionId, mutation) !== null
+    ) dispatchQueueMutation(sessionId, mutation);
+  }
   if (confirmed.length > 0) {
     const set = new Set<string | undefined>(confirmed);
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
@@ -3055,15 +3146,6 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
     sessionDispatchable(sessionId),
     (state.queues.get(sessionId)?.length ?? 0) === 0,
   );
-  if (row.status !== undefined && row.cmid !== undefined) {
-    if (dest === "transcript") {
-      await optimisticMessage(sessionId, row.text, row.attachments, "draft");
-    } else {
-      await qAdd("queue", sessionId, row.text, row.attachments, { origin: "draft" });
-    }
-    await discardQueued(sessionId, row.cmid);
-    return;
-  }
   const opId = newCmid();
   const presented: QueuedMessage = {
     id: `opt-${opId}`,
@@ -3073,20 +3155,20 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
     origin: "draft",
   };
   qStatus.set(opId, "committing");
-  if (dest === "transcript") {
-    const map = new Map(state.optimisticMessages);
-    map.set(sessionId, [
-      ...(map.get(sessionId) ?? []),
-      { ...presented, status: "committing" },
-    ]);
-    setInteractiveState({ ...state, optimisticMessages: map });
-  } else {
+  if (dest !== "transcript") {
     revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
   }
   try {
     await qClient(sessionId).mutateDurably(
       "activateDraft",
-      dest === "transcript" ? { id } : { id, row: presented },
+      {
+        id,
+        row: presented,
+        destination: dest,
+        ...(row.cmid !== undefined && id === `opt-${row.cmid}`
+          ? { sourceCmid: row.cmid }
+          : {}),
+      },
       opId,
     );
   } catch (error) {

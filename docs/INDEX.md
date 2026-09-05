@@ -30,7 +30,7 @@ primary phone/desktop product path.
 - [`architecture/05-storage.md`](architecture/05-storage.md) — PostgreSQL/SQLite store, write-behind, pagination, and retention
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — REST, WebSocket, runtime SPA files, and session reload
 - [`architecture/08-memory.md`](architecture/08-memory.md) — Agent-owned memory and provider-state boundaries
-- [`architecture/09-frontend.md`](architecture/09-frontend.md) — React state, transcript, composer, PWA, and native-shell contracts
+- [`architecture/09-frontend.md`](architecture/09-frontend.md) — React state, durable draft delivery, transcript, composer, PWA, and native-shell contracts
 - [`architecture/10-deploy-build.md`](architecture/10-deploy-build.md) — Pinned builds and component-scoped releases
 - [`architecture/11-operations.md`](architecture/11-operations.md) — Capacity, store backup and cutover, observability, and incident policy
 - [`architecture/12-rolling-updates.md`](architecture/12-rolling-updates.md) — Fencing, replay, draining, readiness, and rollback

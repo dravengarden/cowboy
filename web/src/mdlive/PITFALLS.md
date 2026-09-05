@@ -2319,3 +2319,28 @@ Desktop Vim + IME checks:
     (`detail === 0`) pass through without consuming it. Do not use a timeout,
     defer the submit, remove the pointerup fallback, or intercept touches on the
     editor canvas.
+
+101. **Sending an unconfirmed draft must move its identity, not copy its content.**
+    A local `pending`/`sending` row may already exist on the server while its
+    create acknowledgement is still travelling. Submitting a fresh copy and
+    dropping only the local create mutation leaves the original server draft
+    behind; its late echo then shows the sent text and image a second time.
+    Persist an `activateDraft` intent that retains the source creation cmid,
+    hide that source across both local and server-assigned ids, and resolve the
+    existing `activate_draft` command when the create echo supplies its id. The
+    UI moves immediately after its local durability barrier; only transport
+    depends on the source acknowledgement. Keep that intent and its image bytes
+    through reload, do not interpret a pre-creation empty snapshot as success,
+    and preserve the source when persistence fails. Resolve ids from the hydrated
+    authoritative base, not the optimistic view or a transient map. Flush the
+    source acknowledgement before sending activation; the normal debounced save
+    otherwise leaves a crash window that replays the consumed creation. Recheck
+    that the move is still pending after that write. A single reconnect snapshot
+    must also settle an activation whose return-to-drafts dependency has already
+    completed. Lazy bootstrap omits unfocused queues, and an idempotent duplicate
+    create has no echo: actively request HTTP bootstrap when the source id is
+    still missing. If a concurrent discard rolls back after a failed write,
+    restore a retryable delivery phase rather than leaving `committing` forever
+    or automatically sending against the cancellation intent.
+    This is a delivery-state repair shared by Desktop and Mobile;
+    native editor, touch, focus, selection, and IME ownership remain unchanged.

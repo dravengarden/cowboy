@@ -7,11 +7,14 @@ import {
   replicatedStore,
   snapshotPatch,
 } from "@cowboy/state-sync";
-import { durableDeliveryAttempt } from "./durableDelivery.ts";
+import { discardDurableDelivery, durableDeliveryAttempt, sendAfterDurableSnapshot } from "./durableDelivery.ts";
 import {
+  type DraftActivation,
+  draftActivationSourceId,
   emptyQueueValue,
   type QueueValue,
   queueMutators as deliveryMutators,
+  settledTransitionIds,
 } from "./queueMutators.ts";
 
 interface QueueState {
@@ -320,4 +323,199 @@ Deno.test("failed durable discard restores the pending delivery", async () => {
   assertEquals(store.pending(), []);
   assertEquals(store.get().rows, []);
   assertEquals(snapshot?.pending, []);
+});
+
+for (const destination of ["queue", "transcript"] as const) {
+  Deno.test(`unconfirmed draft moves to ${destination} once across reload and late creation ack`, async () => {
+    const row = {
+      id: "opt-create-draft",
+      cmid: "create-draft",
+      text: "draft with an image",
+      attachments: [{ block: { type: "image", data: "cGl4ZWw=", mimeType: "image/png" } }],
+    };
+    type Row = typeof row;
+    const activation: DraftActivation<Row> = {
+      id: row.id,
+      sourceCmid: row.cmid,
+      row: { ...row, id: "opt-send-draft", cmid: "send-draft" },
+      destination,
+    };
+    const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
+    const sent: string[] = [];
+    const makeStore = () => {
+      const store = replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
+        clientId: "draft-send-reload",
+        mutators: deliveryMutators,
+        initial: emptyQueueValue<Row>(),
+        local: persistence,
+        send: (mutation) => {
+          if (mutation.name !== "activateDraft") return;
+          const id = draftActivationSourceId(mutation.args as DraftActivation, store.baseValue().drafts);
+          if (id !== null) sent.push(id);
+        },
+      });
+      return store;
+    };
+    const beforeReload = makeStore();
+    await beforeReload.mutateDurably("addDraft", { row }, row.cmid);
+    await beforeReload.mutateDurably("activateDraft", activation, "send-draft");
+    assertEquals(beforeReload.get().drafts, []);
+    assertEquals(sent, [], "no submit copy and no activation using a local id");
+    assertEquals(persistence.snapshot()?.pending.map((mutation) => mutation.name), [
+      "addDraft", "activateDraft",
+    ]);
+
+    const reloaded = makeStore();
+    await reloaded.hydrate();
+    const target = destination === "queue" ? reloaded.get().queue : reloaded.get().inFlight;
+    assertEquals(target, [activation.row]);
+    assertEquals(reloaded.get().drafts, []);
+    // An unrelated empty snapshot before creation is not a send acknowledgement.
+    assertEquals(settledTransitionIds(reloaded.pending(), emptyQueueValue<Row>()), []);
+    reloaded.resend();
+    assertEquals(sent, []);
+
+    const canonical = { ...row, id: "server-draft-id" };
+    const created = { ...emptyQueueValue<Row>(), drafts: [canonical] };
+    reloaded.applyPatch(snapshotPatch(1, created, [row.cmid]));
+    assertEquals(reloaded.get().drafts, [], "the late echo cannot resurrect the sent draft");
+    assertEquals(settledTransitionIds(reloaded.pending(), created), []);
+    // Reload after the creation ack, with only activation still pending. The
+    // source id must come from the hydrated base even when this session is not
+    // opened, so no fresh focused-session bootstrap is available to supply it.
+    await reloaded.flush();
+    const unfocused = makeStore();
+    await unfocused.hydrate();
+    assertEquals(unfocused.get().drafts, []);
+    assertEquals(unfocused.baseValue().drafts, [canonical]);
+    unfocused.applyPatch(snapshotPatch(0, emptyQueueValue<Row>(), []));
+    assertEquals(unfocused.baseValue().drafts, [canonical], "stale snapshots cannot erase the source id");
+    unfocused.resend();
+    assertEquals(sent, [canonical.id], "send moves the same authoritative draft");
+
+    const consumed = emptyQueueValue<Row>();
+    unfocused.confirm(settledTransitionIds(unfocused.pending(), consumed));
+    unfocused.applyPatch(snapshotPatch(2, consumed, []));
+    await unfocused.flush();
+    assertEquals(unfocused.pending(), []);
+    const afterSend = makeStore();
+    await afterSend.hydrate();
+    afterSend.resend();
+    assertEquals(afterSend.get(), consumed);
+    assertEquals(sent, [canonical.id]);
+  });
+}
+
+Deno.test("failed durable draft activation retains its original text and attachments", async () => {
+  const row = { id: "draft-source", cmid: "draft-create", text: "keep original", attachments: ["image-bytes"] };
+  let rejectWrites = false;
+  const sent: string[] = [];
+  const store = replicatedStore<QueueValue<typeof row>, typeof deliveryMutators>({
+    clientId: "draft-send-quota",
+    mutators: deliveryMutators,
+    initial: { ...emptyQueueValue<typeof row>(), drafts: [row] },
+    local: {
+      load: () => Promise.resolve(null),
+      save: () => rejectWrites ? Promise.reject(new Error("quota exceeded")) : Promise.resolve(),
+    },
+    send: (mutation) => sent.push(mutation.name),
+  });
+  rejectWrites = true;
+  const error = await store.mutateDurably("activateDraft", {
+    id: row.id, row: { ...row, id: "opt-send", cmid: "send-op" }, destination: "transcript",
+  }, "send-op").then(() => null, (reason: Error) => reason.message);
+  assertEquals(error, "quota exceeded");
+  assertEquals(store.get().drafts, [row]);
+  assertEquals(store.get().inFlight, []);
+  assertEquals(sent, []);
+  rejectWrites = false;
+  await store.flush();
+});
+
+Deno.test("a crash immediately after activation cannot replay its consumed draft creation", async () => {
+  const row = { id: "opt-created", cmid: "created", text: "send exactly once" };
+  type Row = typeof row;
+  const persistence = memoryPersistence<ClientSnapshot<QueueValue<Row>>>();
+  const sent: string[] = [];
+  const makeStore = () => replicatedStore<QueueValue<Row>, typeof deliveryMutators>({
+    clientId: "crash-at-activation",
+    mutators: deliveryMutators,
+    initial: emptyQueueValue<Row>(),
+    local: persistence,
+    send: (mutation) => sent.push(mutation.name),
+  });
+  const store = makeStore();
+  await store.mutateDurably("addDraft", { row }, row.cmid);
+  await store.mutateDurably("activateDraft", {
+    id: row.id, sourceCmid: row.cmid, row: { ...row, id: "opt-activate", cmid: "activate" },
+  }, "activate");
+  store.applyPatch(snapshotPatch(1, {
+    ...emptyQueueValue<Row>(), drafts: [{ ...row, id: "server-draft" }],
+  }, [row.cmid]));
+  assertEquals(persistence.snapshot()?.pending.map((mutation) => mutation.name), ["addDraft", "activateDraft"]);
+  await sendAfterDurableSnapshot(store, "activate", () => {
+    assertEquals(persistence.snapshot()?.pending.map((mutation) => mutation.name), ["activateDraft"]);
+  });
+
+  // No debounce timer, pagehide, or final activation acknowledgement gets a
+  // chance to run before this reload. The server has already consumed the draft.
+  const reloaded = makeStore();
+  await reloaded.hydrate();
+  const consumed = emptyQueueValue<Row>();
+  const settled = settledTransitionIds(reloaded.pending(), consumed);
+  assertEquals(settled, ["activate"]);
+  reloaded.confirm(settled);
+  reloaded.applyPatch(snapshotPatch(2, consumed, []), { force: true });
+  sent.length = 0;
+  reloaded.resend();
+  assertEquals(sent, []);
+  assertEquals(reloaded.get(), consumed);
+  await reloaded.flush();
+});
+
+Deno.test("discard rollback after a skipped activation restores an explicitly retryable row", async () => {
+  const firstWrite = Promise.withResolvers<void>();
+  const writeStarted = Promise.withResolvers<void>();
+  let racing = false;
+  let writes = 0;
+  let sent = 0;
+  let status = "committing";
+  const row = { id: "canonical-draft", text: "keep after failed discard" };
+  const store = replicatedStore<QueueValue<typeof row>, typeof deliveryMutators>({
+    clientId: "discard-rollback",
+    mutators: deliveryMutators,
+    initial: { ...emptyQueueValue<typeof row>(), drafts: [row] },
+    local: {
+      load: () => Promise.resolve(null),
+      save: () => {
+        if (!racing) return Promise.resolve();
+        writes++;
+        if (writes === 1) {
+          writeStarted.resolve();
+          return firstWrite.promise;
+        }
+        return writes === 2 ? Promise.reject(new Error("discard write failed")) : Promise.resolve();
+      },
+    },
+    send: () => {},
+  });
+  await store.mutateDurably("activateDraft", {
+    id: row.id, row: { ...row, id: "opt-activate" }, destination: "transcript",
+  }, "activate");
+  racing = true;
+  const sending = sendAfterDurableSnapshot(store, "activate", () => sent++);
+  await writeStarted.promise;
+  const discarding = discardDurableDelivery(store, "activate", () => { status = "failed"; })
+    .then(() => "ok", (error: Error) => error.message);
+  assertEquals(store.pending(), []);
+  firstWrite.resolve();
+  await sending;
+  assertEquals(await discarding, "discard write failed");
+  assertEquals(sent, 0, "do not silently send after the user tried to cancel");
+  assertEquals(status, "failed", "rollback must not leave an undispatchable committing row");
+  assertEquals(store.pending().map((mutation) => mutation.id), ["activate"]);
+  assertEquals(store.get().inFlight[0]?.text, row.text);
+  // The restored row offers Retry. A fresh durable barrier can now send it.
+  await sendAfterDurableSnapshot(store, "activate", () => sent++);
+  assertEquals(sent, 1);
 });

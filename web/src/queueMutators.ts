@@ -16,6 +16,24 @@ export interface QueueValue<R extends QueueItem = QueueItem> {
   readonly inFlight: readonly R[];
 }
 
+export interface DraftActivation<R extends QueueItem = QueueItem> {
+  id: string;
+  /** A local draft has no server id yet. Retain its creation identity until
+   * the authoritative echo supplies one; sending must move, never copy it. */
+  sourceCmid?: string;
+  row?: R;
+  destination?: "queue" | "transcript";
+}
+
+export function draftActivationSourceId(
+  activation: DraftActivation,
+  drafts: readonly QueueItem[],
+): string | null {
+  return activation.sourceCmid === undefined
+    ? activation.id
+    : drafts.find((row) => row.cmid === activation.sourceCmid)?.id ?? null;
+}
+
 export function emptyQueueValue<R extends QueueItem>(): QueueValue<R> {
   return { queue: [], drafts: [], inFlight: [] };
 }
@@ -135,11 +153,19 @@ export const queueMutators = {
   ): QueueValue<R> => ({ ...value, queue: prependUnique(value.queue, args.row) }),
   activateDraft: <R extends QueueItem>(
     value: QueueValue<R>,
-    args: { id: string; row?: R },
+    args: DraftActivation<R>,
   ): QueueValue<R> => ({
     ...value,
-    drafts: removeById(value.drafts, args.id),
-    queue: args.row === undefined ? value.queue : appendUnique(value.queue, args.row),
+    drafts: value.drafts.filter((row) =>
+      row.id !== args.id &&
+      !(args.sourceCmid !== undefined && row.cmid === args.sourceCmid)
+    ),
+    queue: args.row === undefined || args.destination === "transcript"
+      ? value.queue
+      : appendUnique(value.queue, args.row),
+    inFlight: args.row !== undefined && args.destination === "transcript"
+      ? appendUnique(value.inFlight ?? [], args.row)
+      : value.inFlight,
   }),
   sendQueued: <R extends QueueItem>(
     value: QueueValue<R>,
@@ -183,8 +209,20 @@ export function settledTransitionIds<R extends QueueItem>(
   const settled: string[] = [];
   for (const mutation of pending) {
     if (mutation.name === "activateDraft") {
-      const id = (mutation.args as { id: string }).id;
-      if (!next.drafts.some((row) => row.id === id)) settled.push(mutation.id);
+      const args = mutation.args as DraftActivation;
+      const sourcePending = pending.some((candidate) =>
+        (args.sourceCmid !== undefined && candidate.id === args.sourceCmid) ||
+        (candidate.name === "returnQueuedToDraft" &&
+          (candidate.args as { id: string }).id === args.id &&
+          next.queue.some((row) => row.id === args.id))
+      );
+      if (
+        !sourcePending &&
+        !next.drafts.some((row) =>
+          row.id === args.id ||
+          (args.sourceCmid !== undefined && row.cmid === args.sourceCmid)
+        )
+      ) settled.push(mutation.id);
     } else if (
       mutation.name === "sendQueued" ||
       mutation.name === "forceQueued" ||
