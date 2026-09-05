@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "jsr:@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert";
 import {
   compareProviderVersions,
   evaluateExpression,
@@ -18,13 +18,16 @@ import {
   validateProviderUiManifest,
 } from "@cowboy/provider-ui";
 import {
+  currentProviderEntry,
   exactProviderEntry,
   joinProviderInstallations,
   latestCompatibleProviderEntries,
+  loadProviderCatalog,
   providerAuthenticationExecutorEntry,
   providerEntryForIdentity,
   providerPresentationEntry,
   serviceAuthenticationProviderEntries,
+  subscribeProviderCatalog,
 } from "./providerCatalogRegistry.ts";
 
 function manifest(): ProviderManifest {
@@ -1105,4 +1108,77 @@ Deno.test("Machine Provider inventory uses the exact Rust protocol state union",
     Error,
     "Invalid Machine Provider inventory entry",
   );
+});
+
+Deno.test("Catalog refresh publishes new recommendations without racing foreground requests", async () => {
+  const previousFetch = globalThis.fetch;
+  const olderManifest = uiManifest();
+  const latestManifest = structuredClone(olderManifest);
+  latestManifest.version = "1.1.0";
+  latestManifest.configuration.presets = [{
+    id: "balanced",
+    name: "Balanced",
+    detail: "Updated default",
+    is_default: true,
+    values: { model: "balanced-model" },
+  }, {
+    id: "frontier",
+    name: "Frontier",
+    detail: "Newly available model",
+    is_default: false,
+    values: { model: "frontier-model" },
+  }];
+  const entry = (manifest: ProviderUiManifest): ProviderCatalogEntry => ({
+    provider_id: manifest.id,
+    provider_version: manifest.version,
+    package_digest: `sha256:${"4".repeat(64)}`,
+    artifact_digest: `sha256:${"5".repeat(64)}`,
+    authentication_scope: "none-v1",
+    release_state: "ready",
+    publisher: manifest.publisher,
+    contract_fingerprint: `sha256:${"6".repeat(64)}`,
+    supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+    manifest,
+  });
+  let published = olderManifest;
+  let requests = 0;
+  let notifications = 0;
+  let unavailable = false;
+  const unsubscribe = subscribeProviderCatalog(() => notifications++);
+  globalThis.fetch = () => {
+    requests++;
+    return Promise.resolve(unavailable
+      ? new Response("Service recovering", { status: 503 })
+      : Response.json({
+        providers: [entry(published)],
+        authentications: [],
+        authentication_executors: [],
+      }));
+  };
+  try {
+    await loadProviderCatalog(true);
+    published = latestManifest;
+    await loadProviderCatalog();
+    assertEquals(requests, 1);
+    assertEquals(currentProviderEntry("example")?.provider_version, "1.0.0");
+
+    await Promise.all([loadProviderCatalog(true), loadProviderCatalog(true)]);
+    assertEquals(requests, 2);
+    assertEquals(notifications, 2);
+    assertEquals(currentProviderEntry("example")?.provider_version, "1.1.0");
+    assertEquals(
+      currentProviderEntry("example")?.manifest.configuration.presets.map(
+        (preset) => [preset.id, preset.is_default],
+      ),
+      [["balanced", true], ["frontier", false]],
+    );
+
+    unavailable = true;
+    await assertRejects(() => loadProviderCatalog(true), Error, "Service recovering");
+    assertEquals(currentProviderEntry("example")?.provider_version, "1.1.0");
+    assertEquals(notifications, 2);
+  } finally {
+    unsubscribe();
+    globalThis.fetch = previousFetch;
+  }
 });

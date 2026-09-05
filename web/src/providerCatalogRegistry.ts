@@ -16,8 +16,10 @@ const listeners = new Set<() => void>();
 export async function loadProviderCatalog(
   force = false,
 ): Promise<ProviderCatalogResponse> {
+  // Foreground recovery, reconnect, and account surfaces share one fetch.
+  // A forced refresh must not race another response back into the cache.
+  if (pending) return await pending;
   if (!force && cached) return cached;
-  if (!force && pending) return await pending;
   pending = fetch("/api/plugins", { headers: { accept: "application/json" } })
     .then(async (response) => {
       if (!response.ok) {
@@ -34,6 +36,14 @@ export async function loadProviderCatalog(
       pending = null;
     });
   return await pending;
+}
+
+/** Revalidate Provider metadata after a live connection or foreground return.
+ * Keep the last validated catalog available if the Service is still recovering. */
+export function refreshProviderCatalog(): void {
+  void loadProviderCatalog(true).catch((cause: unknown) => {
+    console.warn("Could not refresh Providers", cause);
+  });
 }
 
 export function subscribeProviderCatalog(listener: () => void): () => void {

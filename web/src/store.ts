@@ -43,6 +43,7 @@ import {
   settledTransitionIds,
 } from "./queueMutators.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
+import { refreshProviderCatalog } from "./providerCatalogRegistry";
 import { pruneDrafts } from "./draftStore";
 import {
   claimOrphanedPendingEdits,
@@ -443,6 +444,7 @@ if (typeof document !== "undefined") {
     // transition. Coalesce them so the forced Apple reconnect never replaces
     // its own in-flight successor.
     if (now - lastForegroundRecoveryAt < FOREGROUND_RECOVERY_COALESCE_MS) return;
+    if (state.connected) refreshProviderCatalog();
     if (
       shouldReconnectOnForeground(
         socket?.readyState,
@@ -1557,6 +1559,9 @@ function openSocket(): void {
     reconnectAttempts = 0;
     setState({ ...state, connected: true });
     conn.connectionReady();
+    // Agent options arrive over WS, while recommended presets come from the
+    // Catalog. Refresh both after an upgrade even when the app stayed open.
+    refreshProviderCatalog();
     if (openedSessionId) {
       send({ type: "open_session", session_id: openedSessionId });
       void hydrateSession(openedSessionId, true);
