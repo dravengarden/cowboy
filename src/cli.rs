@@ -268,6 +268,18 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_PLUGIN_CATALOG_DIR")]
     pub plugin_catalog_dir: Option<PathBuf>,
 
+    /// Private Controller host activation policy: `bootstrap` or `catalog_only`,
+    /// with exact signed host release selections. Publication is independent.
+    #[arg(long, env = "COWBOY_PLUGIN_HOST_CONFIG")]
+    pub plugin_host_config: Option<PathBuf>,
+
+    /// Verify host selections against the signed Catalog, print a JSON report,
+    /// and exit without starting services or writing state. Uses the same
+    /// authentication and database flags as an actual start; never connects to
+    /// the database or executes migrations, Plugins, or login requests.
+    #[arg(long)]
+    pub check_plugin_hosts: bool,
+
     /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
     /// daemon runs in pure in-memory mode without restart recovery.
     #[arg(long, env = "COWBOY_DATABASE_URL")]
@@ -292,10 +304,6 @@ pub struct ServeArgs {
         default_value = "http://127.0.0.1:6301"
     )]
     pub victoria_metrics_url: String,
-
-    /// Codex CLI used to query `OpenAI` account usage.
-    #[arg(long, env = "COWBOY_CODEX_COMMAND", default_value = "codex")]
-    pub codex_command: String,
 }
 
 impl Cli {
@@ -522,6 +530,24 @@ impl ServeArgs {
             .as_deref()
             .or(self.postgres_url.as_deref())
     }
+
+    /// Hermetic argument fixture without inherited deployment configuration.
+    #[cfg(test)]
+    pub(crate) fn test_plugin_check(data_dir: &Path) -> Self {
+        let cli = Cli::try_parse_from(["cowboy", "serve", "--check-plugin-hosts"]).unwrap();
+        let Command::Serve(mut args) = cli.command else {
+            panic!("serve command expected");
+        };
+        args.data_dir = data_dir.to_owned();
+        args.plugin_catalog_dir = None;
+        args.plugin_host_config = None;
+        args.auth_config = None;
+        args.cardea_oidc_config = None;
+        args.database_url = None;
+        args.postgres_url = None;
+        args.product_auth_enabled = false;
+        *args
+    }
 }
 
 #[cfg(test)]
@@ -529,6 +555,32 @@ mod tests {
     use clap::Parser as _;
 
     use super::{Cli, Command, mask_secret};
+
+    #[tokio::test]
+    #[cfg(feature = "full")]
+    async fn plugin_preflight_exits_before_service_identity_or_other_startup_effects() {
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-cli-preflight-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut args = super::ServeArgs::test_plugin_check(&root);
+        args.plugin_catalog_dir = Some(root.join("external"));
+        // Normal startup must read this file, so success also proves the
+        // diagnostic returns before unrelated component setup.
+        args.machine_components_manifest = Some(root.join("missing-components.json"));
+        let cli = Cli {
+            command: Command::Serve(Box::new(args)),
+        };
+        cli.run().await.unwrap();
+        assert!(
+            !root.exists(),
+            "read-only preflight created Service/Catalog state"
+        );
+    }
 
     #[test]
     #[cfg(feature = "full")]

@@ -1,4 +1,4 @@
-import { assertThrows } from "jsr:@std/assert@1.0.19";
+import { assert, assertThrows } from "jsr:@std/assert@1.0.19";
 import {
   validateIndependentPluginVersion,
   validateReleaseHistory,
@@ -49,4 +49,38 @@ Deno.test("a plugin can release independently above its component baseline", () 
     Error,
     "predates the active component release",
   );
+});
+
+Deno.test("published authentication schemas are independently resolvable", async () => {
+  for (
+    const name of ["authentication-provider", "authentication-provider-v2"]
+  ) {
+    const schema = JSON.parse(
+      await Deno.readTextFile(
+        `components/plugin-contract/${name}.schema.json`,
+      ),
+    );
+    const inspect = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      if ("$ref" in value) {
+        assert(
+          typeof value.$ref === "string" && value.$ref.startsWith("#/"),
+          `${name}: a published schema must not depend on external resolution`,
+        );
+        let target: unknown = schema;
+        for (const token of value.$ref.slice(2).split("/")) {
+          assert(target !== null && typeof target === "object");
+          target = (target as Record<string, unknown>)[
+            token.replaceAll("~1", "/").replaceAll("~0", "~")
+          ];
+        }
+        assert(
+          target !== undefined,
+          `${name}: dangling reference ${value.$ref}`,
+        );
+      }
+      for (const child of Object.values(value)) inspect(child);
+    };
+    inspect(schema);
+  }
 });

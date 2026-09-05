@@ -575,10 +575,6 @@ fn disabled_provider_slots_from(value: &str) -> Vec<String> {
         .collect()
 }
 
-fn claude_runtime_enabled(disabled: &[String]) -> bool {
-    crate::plugin_runtime_args::adapter_runtime_enabled("claude", disabled)
-}
-
 async fn supervise_zed_adapter(
     components: Arc<ComponentStore>,
     socket: Option<PathBuf>,
@@ -872,11 +868,16 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             .await,
         plugins: config.providers.inventory()?,
         provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
+        plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
+            crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
+        )),
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),
     };
-    let proof = if proof_version >= 2 {
+    let proof = if proof_version >= 3 {
+        crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
+    } else if proof_version >= 2 {
         crate::machine_protocol::challenge_proof_v2(&challenge_id, &nonce, expires_at_ms, &hello)
     } else {
         crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello)
@@ -1229,19 +1230,17 @@ async fn collect_inventory(
         };
         let kind = ComponentKind::ProviderCli;
         let (auth, auth_detail) = match crate::plugin_runtime_args::cli_auth_for_slot(slot) {
-            Some(auth) => match auth.kind {
-                crate::plugin_runtime_args::CliAuthKind::Exit => {
-                    (probe_exit_auth(command, &auth.argv).await, None)
-                }
-                crate::plugin_runtime_args::CliAuthKind::GeminiEnv => {
-                    let probe = probe_gemini_auth();
-                    (probe.state, probe.detail)
-                }
-                crate::plugin_runtime_args::CliAuthKind::GrokJson => {
-                    let probe = probe_grok_auth();
-                    (probe.state, probe.detail)
-                }
-            },
+            Some(auth) if auth.kind.is_exit() => (probe_exit_auth(command, &auth.argv).await, None),
+            Some(auth) if auth.rules.is_some() => {
+                probe_declared_auth(auth.rules.as_ref().expect("guarded cli auth rules"))
+            }
+            Some(auth) => (
+                AuthState::Unsupported,
+                Some(format!(
+                    "unsupported CLI auth probe: {}",
+                    auth.kind.as_str()
+                )),
+            ),
             None => (AuthState::Unsupported, None),
         };
         if let Some(existing) = inventory
@@ -1647,206 +1646,17 @@ async fn probe_exit_auth(command: &str, args: &[&str]) -> AuthState {
     }
 }
 
-const GEMINI_CONSUMER_LOGIN_RETIRED: &str = "Personal Google Login is no longer supported by Gemini CLI. Use Antigravity for personal, Google AI Pro, or Google AI Ultra accounts. Cowboy Gemini sessions require GEMINI_API_KEY or a Code Assist Standard/Enterprise Google Cloud project.";
-
-#[derive(Debug, PartialEq, Eq)]
-struct GeminiAuthProbe {
-    state: AuthState,
-    detail: Option<String>,
-}
-
-fn probe_gemini_auth() -> GeminiAuthProbe {
-    let Some(home) = std::env::var_os("HOME") else {
-        return GeminiAuthProbe {
-            state: AuthState::SignedOut,
-            detail: Some(
-                "HOME is not configured, so Gemini credentials cannot be discovered.".to_owned(),
-            ),
-        };
+fn probe_declared_auth(
+    rules: &crate::plugin_auth_probe::CliAuthRuleSet,
+) -> (AuthState, Option<String>) {
+    let outcome = crate::plugin_auth_probe::evaluate(rules);
+    let state = match outcome.state {
+        crate::plugin_auth_probe::CliAuthProbeState::SignedIn => AuthState::SignedIn,
+        crate::plugin_auth_probe::CliAuthProbeState::SignedOut => AuthState::SignedOut,
+        crate::plugin_auth_probe::CliAuthProbeState::Error => AuthState::Error,
+        crate::plugin_auth_probe::CliAuthProbeState::Unsupported => AuthState::Unsupported,
     };
-    let root = PathBuf::from(home).join(".gemini");
-    let api_key = gemini_env_configured(&root, "GEMINI_API_KEY");
-    let vertex_enabled = gemini_env_value(&root, "GOOGLE_GENAI_USE_VERTEXAI")
-        .is_some_and(|value| value.eq_ignore_ascii_case("true"));
-    let vertex = vertex_enabled
-        && (gemini_env_configured(&root, "GOOGLE_CLOUD_PROJECT")
-            || gemini_env_configured(&root, "GOOGLE_API_KEY"));
-    let selected = std::fs::read(root.join("settings.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .pointer("/security/auth/selectedType")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        });
-    let gateway = std::env::var("GOOGLE_GEMINI_BASE_URL")
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty());
-    let code_assist_project = gemini_env_configured(&root, "GOOGLE_CLOUD_PROJECT");
-    gemini_auth_from_metadata(
-        selected.as_deref(),
-        root.join("oauth_creds.json").is_file(),
-        api_key,
-        vertex,
-        gateway,
-        code_assist_project,
-    )
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct GrokAuthProbe {
-    state: AuthState,
-    detail: Option<String>,
-}
-
-fn probe_grok_auth() -> GrokAuthProbe {
-    if [
-        "XAI_API_KEY",
-        "GROK_CODE_XAI_API_KEY",
-        "GROK_DEPLOYMENT_KEY",
-    ]
-    .iter()
-    .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
-    {
-        return GrokAuthProbe {
-            state: AuthState::SignedIn,
-            detail: Some("xAI credential".to_owned()),
-        };
-    }
-    if std::env::var("GROK_AUTH_PROVIDER_COMMAND").is_ok_and(|value| !value.trim().is_empty()) {
-        return GrokAuthProbe {
-            state: AuthState::SignedIn,
-            detail: Some("Grok external auth provider".to_owned()),
-        };
-    }
-    if let Ok(serialized) = std::env::var("GROK_AUTH")
-        && !serialized.trim().is_empty()
-    {
-        return grok_auth_from_json(serialized.as_bytes(), "Grok account");
-    }
-    let path = std::env::var_os("GROK_AUTH_PATH")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("GROK_HOME").map(|home| PathBuf::from(home).join("auth.json")))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".grok/auth.json"))
-        });
-    let Some(path) = path else {
-        return GrokAuthProbe {
-            state: AuthState::SignedOut,
-            detail: Some(
-                "HOME is not configured, so Grok credentials cannot be discovered.".to_owned(),
-            ),
-        };
-    };
-    match std::fs::read(path) {
-        Ok(bytes) => grok_auth_from_json(&bytes, "Grok account"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => GrokAuthProbe {
-            state: AuthState::SignedOut,
-            detail: None,
-        },
-        Err(error) => GrokAuthProbe {
-            state: AuthState::SignedOut,
-            detail: Some(format!("Grok credentials could not be read: {error}")),
-        },
-    }
-}
-
-fn grok_auth_from_json(bytes: &[u8], label: &str) -> GrokAuthProbe {
-    let credential = serde_json::from_slice::<serde_json::Value>(bytes)
-        .ok()
-        .is_some_and(|value| grok_json_has_credential(&value));
-    GrokAuthProbe {
-        state: if credential {
-            AuthState::SignedIn
-        } else {
-            AuthState::SignedOut
-        },
-        detail: credential.then(|| label.to_owned()),
-    }
-}
-
-fn grok_json_has_credential(value: &serde_json::Value) -> bool {
-    fn is_official_credential(value: &serde_json::Value) -> bool {
-        let Some(object) = value.as_object() else {
-            return false;
-        };
-        object
-            .get("key")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|key| !key.trim().is_empty())
-            && object
-                .get("auth_mode")
-                .is_some_and(serde_json::Value::is_string)
-            && object
-                .get("create_time")
-                .is_some_and(serde_json::Value::is_string)
-            && object
-                .get("user_id")
-                .is_some_and(serde_json::Value::is_string)
-    }
-
-    is_official_credential(value)
-        || value
-            .as_object()
-            .is_some_and(|store| store.values().any(is_official_credential))
-}
-
-fn gemini_env_configured(root: &Path, key: &str) -> bool {
-    gemini_env_value(root, key).is_some_and(|value| !value.trim().is_empty())
-}
-
-fn gemini_env_value(root: &Path, key: &str) -> Option<String> {
-    if let Ok(value) = std::env::var(key)
-        && !value.trim().is_empty()
-    {
-        return Some(value);
-    }
-    let contents = std::fs::read_to_string(root.join(".env")).ok()?;
-    gemini_env_value_from(&contents, key)
-}
-
-fn gemini_env_value_from(contents: &str, key: &str) -> Option<String> {
-    contents.lines().find_map(|line| {
-        let line = line.trim();
-        let line = line.strip_prefix("export ").unwrap_or(line);
-        let (candidate, value) = line.split_once('=')?;
-        (candidate.trim() == key).then(|| {
-            value
-                .trim()
-                .trim_matches(|character| character == '\'' || character == '"')
-                .to_owned()
-        })
-    })
-}
-
-fn gemini_auth_from_metadata(
-    selected: Option<&str>,
-    oauth_credentials: bool,
-    api_key: bool,
-    vertex: bool,
-    gateway: bool,
-    code_assist_project: bool,
-) -> GeminiAuthProbe {
-    match selected {
-        Some("oauth-personal") if oauth_credentials && code_assist_project => GeminiAuthProbe {
-            state: AuthState::SignedIn,
-            detail: Some("Code Assist Standard/Enterprise Google Login".to_owned()),
-        },
-        Some("oauth-personal") if oauth_credentials => GeminiAuthProbe {
-            state: AuthState::SignedOut,
-            detail: Some(GEMINI_CONSUMER_LOGIN_RETIRED.to_owned()),
-        },
-        Some("gemini-api-key") if api_key => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API key".to_owned()) },
-        Some("vertex-ai" | "compute-default-credentials") if vertex => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Vertex AI".to_owned()) },
-        Some("gateway") if gateway => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API gateway".to_owned()) },
-        None if api_key => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Gemini API key".to_owned()) },
-        None if vertex => GeminiAuthProbe { state: AuthState::SignedIn, detail: Some("Vertex AI".to_owned()) },
-        Some(_) | None => GeminiAuthProbe {
-            state: AuthState::SignedOut,
-            detail: Some("Configure GEMINI_API_KEY, Vertex AI, or a Code Assist Standard/Enterprise Google Cloud project.".to_owned()),
-        },
-    }
+    (state, outcome.detail)
 }
 
 struct MachineCommandContext {
@@ -2084,6 +1894,45 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                 },
             ));
         }
+        MachineCommand::InvokePluginHost {
+            request_id,
+            plugin_id,
+            plugin_version,
+            generation_digest,
+            auth_generation,
+            operation,
+            payload,
+        } => {
+            tokio::spawn(async move {
+                let result = providers
+                    .invoke_host(
+                        &plugin_id,
+                        &plugin_version,
+                        &generation_digest,
+                        auth_generation,
+                        operation,
+                        payload,
+                    )
+                    .await;
+                let event = match result {
+                    Ok(payload) => MachineEvent::PluginHostResponse {
+                        request_id,
+                        accepted: true,
+                        started: true,
+                        payload: Some(payload),
+                        detail: None,
+                    },
+                    Err(failure) => MachineEvent::PluginHostResponse {
+                        request_id,
+                        accepted: false,
+                        started: failure.started,
+                        payload: None,
+                        detail: Some(format!("{:#}", failure.error)),
+                    },
+                };
+                let _ = events.send(event);
+            });
+        }
         MachineCommand::Reconcile {
             request_id,
             components: desired,
@@ -2213,7 +2062,7 @@ struct AdapterRequestContext {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DeepseekCacheStatusRequest {
+struct ProviderCacheStatusRequest {
     configuration: cowboy_provider_sdk::ConfigurationBehavior,
     session_id: String,
 }
@@ -2232,9 +2081,9 @@ async fn run_adapter_request(
         events,
     } = context;
     let result = async {
-        if adapter == "deepseek-cache-status" {
-            let request: DeepseekCacheStatusRequest = serde_json::from_value(payload)
-                .context("decoding DeepSeek cache status request")?;
+        if adapter == "provider-cache-status" {
+            let request: ProviderCacheStatusRequest = serde_json::from_value(payload)
+                .context("decoding Provider cache status request")?;
             if !crate::deepseek_cache::supported_behavior(&request.configuration)
                 || request.session_id.is_empty()
                 || request.session_id.len() > 256
@@ -2243,7 +2092,7 @@ async fn run_adapter_request(
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             {
-                bail!("invalid DeepSeek cache status request");
+                bail!("invalid Provider cache status request");
             }
             return crate::deepseek_cache::local_snapshot_status(
                 &request.configuration,
@@ -2483,7 +2332,7 @@ fn apply_auth_preflight(
                     .is_some_and(|value| !value.trim().is_empty())
                     || std::fs::read_to_string(&path)
                         .ok()
-                        .and_then(|contents| gemini_env_value_from(&contents, key))
+                        .and_then(|contents| crate::plugin_auth_probe::dotenv_value(&contents, key))
                         .is_some_and(|value| !value.trim().is_empty());
                 anyhow::ensure!(
                     configured,
@@ -3109,16 +2958,14 @@ mod tests {
     use clap::Parser as _;
 
     use super::{
-        Args, WorkspaceConfig, bootstrap_acp_inventory, claude_runtime_enabled,
-        code_adapter_trusted_roots, disabled_provider_slots_from, gemini_auth_from_metadata,
-        gemini_env_value_from, grok_auth_from_json, load_enrolled_machine_id,
-        load_workspace_snapshot, login_challenge_tokens, managed_provider_environment,
-        npm_package_for_component, npm_script_shell_with, npm_update_is_confirmed_by_inventory,
-        parse_workspaces, persist_enrolled_machine_id, pin_cli_runtime_args,
-        provider_auth_roll_target, provider_for_component, queue_controller_frame,
-        reject_untrusted_workspace, resolve_runtime_machine_id, select_code_adapter_executable,
-        selected_zed_pair, send_frame_with_timeout, validate_controller_url,
-        workspace_path_allowed, write_controller_messages, write_runtime_frames,
+        Args, WorkspaceConfig, bootstrap_acp_inventory, code_adapter_trusted_roots,
+        disabled_provider_slots_from, load_enrolled_machine_id, load_workspace_snapshot,
+        login_challenge_tokens, managed_provider_environment, npm_package_for_component,
+        npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
+        persist_enrolled_machine_id, pin_cli_runtime_args, provider_auth_roll_target,
+        provider_for_component, queue_controller_frame, reject_untrusted_workspace, resolve_runtime_machine_id,
+        select_code_adapter_executable, selected_zed_pair, send_frame_with_timeout,
+        validate_controller_url, workspace_path_allowed, write_controller_messages, write_runtime_frames,
         write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
@@ -3128,7 +2975,16 @@ mod tests {
         ComponentUpdate, DesiredComponent, MachineFrame, ProviderAuthAction,
         ProviderMaterializationState, ProviderReplicaState,
     };
+
     use crate::runtime_wire::{CoreCommand, Frame, StartSession};
+
+    fn detected_cli_args(plugin_id: &str) -> String {
+        crate::plugin_runtime_args::path_detect()
+            .into_iter()
+            .find(|detect| detect.plugin_id == plugin_id)
+            .and_then(|detect| detect.args)
+            .unwrap_or_else(|| panic!("missing PATH arguments for {plugin_id}"))
+    }
 
     #[test]
     fn a_new_applied_auth_generation_rolls_the_same_provider() {
@@ -3304,74 +3160,6 @@ mod tests {
     }
 
     #[test]
-    fn gemini_auth_rejects_retired_consumer_oauth() {
-        assert_eq!(
-            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false, false)
-                .state,
-            crate::machine_protocol::AuthState::SignedOut
-        );
-        assert_eq!(
-            gemini_auth_from_metadata(Some("oauth-personal"), true, false, false, false, true)
-                .state,
-            crate::machine_protocol::AuthState::SignedIn
-        );
-        assert_eq!(
-            gemini_auth_from_metadata(Some("gemini-api-key"), false, true, false, false, false)
-                .state,
-            crate::machine_protocol::AuthState::SignedIn
-        );
-        assert_eq!(
-            gemini_auth_from_metadata(None, false, false, false, false, false).state,
-            crate::machine_protocol::AuthState::SignedOut
-        );
-    }
-
-    #[test]
-    fn gemini_env_reader_accepts_exported_values_without_exposing_other_keys() {
-        let contents = "IGNORED=value\nexport GOOGLE_CLOUD_PROJECT='enterprise-project'\n";
-        assert_eq!(
-            gemini_env_value_from(contents, "GOOGLE_CLOUD_PROJECT").as_deref(),
-            Some("enterprise-project")
-        );
-        assert_eq!(gemini_env_value_from(contents, "GEMINI_API_KEY"), None);
-    }
-
-    #[test]
-    fn grok_auth_probe_recognizes_nested_oauth_without_exposing_tokens() {
-        let signed_in = grok_auth_from_json(
-            br#"{"https://auth.x.ai::client":{"key":"secret","auth_mode":"oidc","create_time":"2026-08-14T00:00:00Z","user_id":"user","refresh_token":"refresh"}}"#,
-            "Grok account",
-        );
-        assert_eq!(
-            signed_in.state,
-            crate::machine_protocol::AuthState::SignedIn
-        );
-        assert_eq!(signed_in.detail.as_deref(), Some("Grok account"));
-
-        let inline = grok_auth_from_json(
-            br#"{"key":"secret","auth_mode":"api_key","create_time":"2026-08-14T00:00:00Z","user_id":""}"#,
-            "Grok account",
-        );
-        assert_eq!(inline.state, crate::machine_protocol::AuthState::SignedIn);
-
-        let signed_out = grok_auth_from_json(
-            br#"{"profile":{"email":"user@example.com"}}"#,
-            "Grok account",
-        );
-        assert_eq!(
-            signed_out.state,
-            crate::machine_protocol::AuthState::SignedOut
-        );
-        assert_eq!(signed_out.detail, None);
-
-        let unrelated_key = grok_auth_from_json(br#"{"profile":{"key":"vim"}}"#, "Grok account");
-        assert_eq!(
-            unrelated_key.state,
-            crate::machine_protocol::AuthState::SignedOut
-        );
-    }
-
-    #[test]
     fn grok_device_login_url_exposes_the_official_browser_code() {
         let (url, code) =
             login_challenge_tokens("https://accounts.x.ai/oauth2/device?user_code=XDR4-AT53");
@@ -3419,29 +3207,35 @@ mod tests {
         pin_cli_runtime_args(&mut environment, &[]);
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            crate::plugin_runtime_args::grok_env()
+            detected_cli_args("grok")
         );
         assert_eq!(
             environment["COWBOY_ACP_GEMINI_ARGS"],
-            crate::plugin_runtime_args::gemini_env()
+            detected_cli_args("gemini")
         );
 
         pin_cli_runtime_args(&mut environment, &["grok".to_owned()]);
         assert!(!environment.contains_key("COWBOY_ACP_GROK_ARGS"));
         assert_eq!(
             environment["COWBOY_ACP_GEMINI_ARGS"],
-            crate::plugin_runtime_args::gemini_env()
+            detected_cli_args("gemini")
         );
     }
 
     #[test]
     fn either_claude_lane_keeps_the_shared_runtime_enabled() {
-        assert!(claude_runtime_enabled(&["claude".to_owned()]));
-        assert!(claude_runtime_enabled(&["claude-deepseek".to_owned()]));
-        assert!(!claude_runtime_enabled(&[
-            "claude".to_owned(),
-            "claude-deepseek".to_owned(),
-        ]));
+        assert!(crate::plugin_runtime_args::adapter_runtime_enabled(
+            "claude",
+            &["claude".to_owned()]
+        ));
+        assert!(crate::plugin_runtime_args::adapter_runtime_enabled(
+            "claude",
+            &["claude-deepseek".to_owned()]
+        ));
+        assert!(!crate::plugin_runtime_args::adapter_runtime_enabled(
+            "claude",
+            &["claude".to_owned(), "claude-deepseek".to_owned(),]
+        ));
     }
 
     #[test]
@@ -3670,12 +3464,12 @@ mod tests {
         assert!(environment["COWBOY_ACP_GEMINI_CMD"].ends_with("commands/gemini"));
         assert_eq!(
             environment["COWBOY_ACP_GEMINI_ARGS"],
-            crate::plugin_runtime_args::gemini_env()
+            detected_cli_args("gemini")
         );
         assert!(environment["COWBOY_ACP_GROK_CMD"].ends_with("commands/grok"));
         assert_eq!(
             environment["COWBOY_ACP_GROK_ARGS"],
-            crate::plugin_runtime_args::grok_env()
+            detected_cli_args("grok")
         );
         assert_eq!(environment["CODEX_PATH"], proxy.display().to_string());
         std::fs::remove_dir_all(root).expect("cleanup");

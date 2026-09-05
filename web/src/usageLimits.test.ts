@@ -3,6 +3,7 @@ import {
   acceptedScheduleTime,
   accountProviderLabel,
   accountProviderUsage,
+  applyUsageHostPlugins,
   nearestAvailableResetCredit,
   providerUsage,
   providerUsageErrorMessage,
@@ -12,12 +13,32 @@ import {
   topBarUsageLimits,
   usageCardProviders,
   usageLimits,
-  applyUsageHostPlugins,
   usagePluginId,
   usageResetProvider,
   usageResetSchedule,
 } from "./usageLimits.ts";
 import { usageErrorAuth } from "./usageHostMap.ts";
+
+function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
+  const root = new URL("../../plugins/", import.meta.url);
+  return [...Deno.readDirSync(root)]
+    .filter((entry) => entry.isDirectory)
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      try {
+        const host = JSON.parse(
+          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+        ) as Record<string, unknown>;
+        return [{ id: entry.name, ...host }];
+      } catch (reason) {
+        if (reason instanceof Deno.errors.NotFound) return [];
+        throw reason;
+      }
+    });
+}
+
+const FIRST_PARTY_HOSTS = firstPartyHosts();
+applyUsageHostPlugins(FIRST_PARTY_HOSTS);
 
 Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("openai"), "codex");
@@ -28,16 +49,16 @@ Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("future-b"), "future-b");
 });
 
-Deno.test("activated host plugins overlay usage account mapping", () => {
+Deno.test("activated host inventory replaces usage account mapping", () => {
   try {
     applyUsageHostPlugins([
-      { id: "custom-grok", usage_account: "xai" },
+      { id: "custom-grok", usage: { account: "xai" } },
       { id: "password", slots: ["login.method"] },
     ]);
     assertEquals(usagePluginId("xai"), "custom-grok");
-    assertEquals(usagePluginId("openai"), "codex");
+    assertEquals(usagePluginId("openai"), "openai");
   } finally {
-    applyUsageHostPlugins([]);
+    applyUsageHostPlugins(FIRST_PARTY_HOSTS);
   }
   assertEquals(usagePluginId("xai"), "grok");
 });
@@ -252,7 +273,7 @@ Deno.test("legacy Grok billing auth JSON becomes an actionable sign-in message",
   assertEquals(message.includes("{"), false);
 });
 
-Deno.test("legacy Grok billing errors preserve useful text without RPC JSON", () => {
+Deno.test("legacy Grok transient RPC errors use generic safe copy", () => {
   const message = providerUsageErrorMessage({
     provider: "xai",
     status: "unavailable",
@@ -263,8 +284,9 @@ Deno.test("legacy Grok billing errors preserve useful text without RPC JSON", ()
   }, "Waiting for usage data.");
   assertEquals(
     message,
-    "Grok Build could not fetch xAI usage: Billing is temporarily unavailable",
+    "xAI usage is temporarily unavailable. Cowboy will retry automatically.",
   );
+  assertEquals(message.includes("{"), false);
 });
 
 Deno.test("legacy OpenAI RPC errors never leak through the usage UI", () => {

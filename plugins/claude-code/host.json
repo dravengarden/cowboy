@@ -16,15 +16,23 @@
     "provider.settings"
   ],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "provider.usage": "provider-usage-v1",
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
   },
   "usage": {
     "account": "anthropic",
     "product": "Anthropic",
-    "parser": "anthropic-utilization",
-    "session_overlay": "anthropic-rate-limit",
+    "session_rate_limits": {
+      "pointer": "/_meta/_claude~1rateLimit",
+      "target": "rateLimits",
+      "required_number_fields": ["utilization"],
+      "required_string_fields": ["rateLimitType"]
+    },
     "order": 2,
     "empty": "Waiting for session activity. Plan limits appear after the Provider reports them.",
     "limit_id_prefix": "claude",

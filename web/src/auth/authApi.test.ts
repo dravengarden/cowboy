@@ -2,6 +2,7 @@ import { assertEquals, assertRejects } from "jsr:@std/assert";
 import {
   authApi,
   AuthApiError,
+  authProtocolRequest,
   authStatusFromJson,
   externalPasskeyApi,
   fetchAuthStatus,
@@ -133,6 +134,38 @@ Deno.test("auth login and register POST JSON with credentials", async () => {
         account: "draven",
         password: "supersecret1",
       }),
+    );
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("signed auth UI transport is confined to JSON auth protocol paths", async () => {
+  let seen: FetchArgs | undefined;
+  const restore = withFetch((args) => {
+    seen = args;
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  try {
+    assertEquals(
+      await authProtocolRequest("/api/auth/future-method/action", {
+        method: "POST",
+        body: { proof: "opaque" },
+      }),
+      { ok: true },
+    );
+    assertEquals(seen?.input, "/api/auth/future-method/action");
+    assertEquals(seen?.init?.credentials, "same-origin");
+    assertEquals(seen?.init?.body, JSON.stringify({ proof: "opaque" }));
+    await assertRejects(
+      async () => await authProtocolRequest("/api/plugins/password/call"),
+      TypeError,
+      "/api/auth/*",
+    );
+    await assertRejects(
+      async () => await authProtocolRequest("/api/auth/../admin"),
+      TypeError,
+      "/api/auth/*",
     );
   } finally {
     restore();
@@ -769,16 +802,31 @@ Deno.test("auth status keeps login host plugin labels", () => {
     password_enabled: true,
     providers: [],
     host_plugins: [
-      { id: "password", label: " Password " },
-      { id: "google", label: "Google" },
+      {
+        id: "password",
+        generation: "a".repeat(64),
+        label: " Password ",
+        slots: ["login.method"],
+      },
+      {
+        id: "google",
+        generation: "b".repeat(64),
+        label: "Google",
+        slots: ["login.method"],
+      },
       { id: "Not Valid" },
-      { id: "passkey" },
+      {
+        id: "passkey",
+        generation: "c".repeat(64),
+        slots: ["account.panel"],
+      },
+      { id: "unsigned-login", slots: ["login.method"] },
     ],
   });
   assertEquals(status?.host_plugins, [
-    { id: "password", label: "Password" },
-    { id: "google", label: "Google" },
-    { id: "passkey" },
+    { id: "password", label: "Password", slots: ["login.method"] },
+    { id: "google", label: "Google", slots: ["login.method"] },
+    { id: "passkey", slots: ["account.panel"] },
   ]);
 });
 
@@ -838,7 +886,11 @@ Deno.test("password login fields come from the password host plugin", () => {
   });
   assertEquals(
     passwordLoginFields([
-      { id: "password", fields: { account: "Email", secret: "Passphrase" } },
+      {
+        id: "password",
+        slots: ["login.method"],
+        fields: { account: "Email", secret: "Passphrase" },
+      },
     ]),
     {
       account: "Email",

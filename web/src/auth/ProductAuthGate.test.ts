@@ -9,6 +9,8 @@ async function readAuthSources(): Promise<string> {
     "authStatus.ts",
     "ProductAuthGate.tsx",
     "ProductLoginPage.tsx",
+    "ProductPasskeysPanel.tsx",
+    "ProductAccountPluginPanels.tsx",
     "ProductAccountMenu.tsx",
     "ProductDevicesPanel.tsx",
     "DeviceAuthorizationPage.tsx",
@@ -30,15 +32,9 @@ async function readAuthSources(): Promise<string> {
     "idleLock.ts",
     "useIdlePasskeyLock.ts",
   ];
-  const chunks = await Promise.all([
-    ...names.map((name) => Deno.readTextFile(new URL(name, authDir))),
-    Deno.readTextFile(
-      new URL(
-        "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
-        authDir,
-      ),
-    ),
-  ]);
+  const chunks = await Promise.all(
+    names.map((name) => Deno.readTextFile(new URL(name, authDir))),
+  );
   return chunks.join("\n");
 }
 
@@ -230,7 +226,11 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
   assert(capacity.includes('["Authorized clients", inventory'));
   assert(capacity.includes("capacity.authorized_clients_per_user"));
   assert(capacity.includes("Effective server policy"));
-  assert(capacity.includes("Automation credentials and their separate client pool are disabled"));
+  assert(
+    capacity.includes(
+      "Automation credentials and their separate client pool are disabled",
+    ),
+  );
   assert(desktop.includes("CLI & ACP access"));
   assert(clients.includes("Browser cookie sessions and Passkeys"));
   assert(clients.includes("hideWhenEmpty"));
@@ -275,10 +275,7 @@ Deno.test("service worker does not cache /api/auth and bumped VERSION", async ()
 Deno.test("Passkey changes recover from an expired recent-auth window", async () => {
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const panel = await Deno.readTextFile(
-    new URL(
-      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
-      authDir,
-    ),
+    new URL("ProductPasskeysPanel.tsx", authDir),
   );
   const sheet = await Deno.readTextFile(
     new URL("ProductRecentAuthSheet.tsx", authDir),
@@ -288,6 +285,7 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assert(gate.includes("<ProductRecentAuthSheet"));
   assert(gate.includes("hostPlugins={hostPlugins}"));
   assert(panel.includes("retryWithRecentProductAuth"));
+  assert(panel.includes("reauthenticate"));
   assert(retry.includes("isRecentProductAuthRequired"));
   assert(sheet.includes("Verify it’s you"));
   assert(sheet.includes("hostPlugins"));
@@ -297,7 +295,9 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assertEquals(sheet.includes('label="Password"'), false);
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("Waiting for Passkey…"));
-  assert(sheet.includes("Passkey verification was cancelled. Try again when ready."));
+  assert(
+    sheet.includes("Passkey verification was cancelled. Try again when ready."),
+  );
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("runBrowserOidc"));
   assert(sheet.includes("useProviderHandoff"));
@@ -314,18 +314,15 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
     panel.indexOf("const revoke ="),
     panel.indexOf("const toggle ="),
   );
-  assert(addHandler.includes("Passkey setup was cancelled. Nothing changed."));
-  assert(addHandler.includes('resumeLabel: "Continue to Passkey"'));
-  assert(revokeHandler.includes("Revocation was cancelled."));
+  assert(addHandler.includes("registerPasskey"));
+  assert(panel.includes('resumeLabel: "Continue to Passkey"'));
+  assert(revokeHandler.includes("authApi.deletePasskey"));
 });
 
 Deno.test("Passkey names are explicit and the product lock is event-driven", async () => {
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const panel = await Deno.readTextFile(
-    new URL(
-      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
-      authDir,
-    ),
+    new URL("ProductPasskeysPanel.tsx", authDir),
   );
   const lock = await Deno.readTextFile(
     new URL("PasskeyReauthLock.tsx", authDir),
@@ -338,7 +335,7 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
   );
   assertEquals(`${gate}\n${panel}\n${admin}`.includes('"This device"'), false);
   assert(gate.includes('const [nickname, setNickname] = useState("")'));
-  assert(panel.includes('const [nickname, setNickname] = useState("")'));
+  assert(panel.includes('useState("")'));
   assert(panel.includes("PASSKEY_REAUTH_INTERVALS"));
   const intervals = await Deno.readTextFile(
     new URL("passkeyIntervals.ts", authDir),
@@ -359,10 +356,7 @@ Deno.test("Passkey names are explicit and the product lock is event-driven", asy
 
 Deno.test("Passkey settings use a progressive, visible mobile account hierarchy", async () => {
   const panel = await Deno.readTextFile(
-    new URL(
-      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
-      authDir,
-    ),
+    new URL("ProductPasskeysPanel.tsx", authDir),
   );
   const account = await Deno.readTextFile(
     new URL("ProductAccountMenu.tsx", authDir),
@@ -398,10 +392,7 @@ Deno.test("session reauthentication is pushed and stays compact until required",
     new URL("ProductRecentAuthSheet.tsx", authDir),
   );
   const panel = await Deno.readTextFile(
-    new URL(
-      "../../../examples/authentication/passkey/ui/PasskeysPanel.tsx",
-      authDir,
-    ),
+    new URL("ProductPasskeysPanel.tsx", authDir),
   );
   const store = await Deno.readTextFile(new URL("store.ts", webSrc));
   const events = await Deno.readTextFile(
@@ -448,9 +439,9 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
   assert(panel.includes("Session protection"));
   assert(panel.includes("Service settings"));
-  assert(panel.includes("currentSessionProtectionItems"));
-  assert(panel.includes("configuredSessionProtectionItems"));
-  assert(panel.includes("activity never extends the"));
+  assert(panel.includes("data-product-passkeys-panel"));
+  assert(panel.includes("authApi.listPasskeys"));
+  assert(panel.includes("updateMe(next)"));
   assert(panel.includes("Off for this account"));
   assert(panel.includes("Verify this browser"));
   assert(store.includes('{ type: "auth_activity" }'));

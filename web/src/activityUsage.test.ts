@@ -8,11 +8,15 @@ import {
   percentLabel,
 } from "./activityUsage.ts";
 import {
+  applyUsageHostPlugins,
   usageCacheIntervalLabel,
   usageCacheIntervalMs,
   usageCacheMinHitLabel,
   usageCacheMinHitTokens,
 } from "./usageHostMap.ts";
+import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
+
+applyUsageHostPlugins(testFirstPartyHostPlugins());
 
 Deno.test("DeepSeek cache protection uses the shared 64K minimum", () => {
   assertEquals(usageCacheMinHitTokens(), 64_000);
@@ -116,14 +120,14 @@ Deno.test("activityCostStats parses backend valuation without double-counting re
     unpricedOutputTokens: 0,
     unknownModelRequests: 0,
     modelFamilies: ["flash"],
-    estimatedCny: 0.218,
-    noCacheCny: 1.1,
-    allHitFloorCny: 0.12,
-    cacheSavingsCny: 0.882,
-    cacheMissPremiumCny: 0.098,
+    estimatedCost: 0.218,
+    noCacheCost: 1.1,
+    allHitFloorCost: 0.12,
+    cacheSavings: 0.882,
+    cacheMissPremium: 0.098,
   });
-  assertEquals(stats?.estimatedCny, 0.218);
-  assertEquals(stats?.costPerRequestCny, 0.218 / 10);
+  assertEquals(stats?.estimatedCost, 0.218);
+  assertEquals(stats?.costPerRequest, 0.218 / 10);
   assertEquals(stats?.totalTokens, 1_050_000);
   assertEquals(stats?.avgTokensPerRequest, 1_050_000 / 10);
   assertEquals(stats?.priceCoverageRate, 950_000 * 100 / 1_050_000);
@@ -131,9 +135,9 @@ Deno.test("activityCostStats parses backend valuation without double-counting re
 });
 
 Deno.test("activityCostStats degrades to zero without tokens and stays unknown without totals", () => {
-  const empty = activityCostStats({ requests: 0, estimatedCny: 0 });
-  assertEquals(empty?.estimatedCny, 0);
-  assertEquals(empty?.costPerRequestCny, 0);
+  const empty = activityCostStats({ requests: 0, estimatedCost: 0 });
+  assertEquals(empty?.estimatedCost, 0);
+  assertEquals(empty?.costPerRequest, 0);
   assertEquals(empty?.priceCoverageRate, undefined);
   assertEquals(activityCostStats(undefined), undefined);
 });

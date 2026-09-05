@@ -19,7 +19,7 @@ mod agent_sink;
 mod artifacts;
 #[cfg(feature = "full")]
 mod auth_plugins;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod cgroup;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod claude_shell;
@@ -48,6 +48,8 @@ mod diff_snapshot;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 mod files;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod first_party_sources;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod legacy_provider_release;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
@@ -66,6 +68,9 @@ mod machine_plugins;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_protocol;
 #[cfg(feature = "full")]
+#[path = "provider/managed_config.rs"]
+mod managed_config;
+#[cfg(feature = "full")]
 mod memory_observability;
 #[cfg(feature = "full")]
 mod observability;
@@ -78,15 +83,21 @@ mod persistence;
 #[cfg(feature = "full")]
 mod plugin;
 #[cfg(feature = "full")]
+mod plugin_activation;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod plugin_auth_probe;
+#[cfg(feature = "full")]
 mod plugin_catalog;
 #[cfg(feature = "full")]
 mod plugin_dir;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod plugin_host;
-#[cfg(feature = "full")]
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod plugin_host_bundle;
 #[cfg(feature = "full")]
 mod plugin_passkeys;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod plugin_process;
 #[cfg(feature = "full")]
 mod plugin_runtime;
 #[cfg(any(feature = "full", feature = "machine-host"))]

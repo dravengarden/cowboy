@@ -9,7 +9,13 @@ import {
   sessionProviderUsageRows,
   workspaceOptionsSummary,
 } from "./sessionSettingsPresentation.ts";
-import { usageErrorAuth } from "./usageHostMap.ts";
+import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
+import {
+  applyUsageHostPlugins,
+  usageErrorAuth,
+} from "./usageHostMap.ts";
+
+applyUsageHostPlugins(testFirstPartyHostPlugins());
 
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
@@ -193,6 +199,7 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
         }],
       },
       activity: {
+        pricing: { currency: "CNY" },
         last24Hours: {
           summary: {
             requests: 2,
@@ -207,15 +214,15 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
               inputTokens: 1_000_000,
               pricedInputTokens: 1_000_000,
               outputTokens: 1_000_000,
-              estimatedCny: 2.51,
+              estimatedCost: 2.51,
             },
           },
         },
       },
     }),
     [
-      { id: "deepseek-balance", label: "Balance", value: "¥108.80" },
-      { id: "deepseek-spend", label: "24h spend", value: "¥2.51" },
+      { id: "deepseek-balance", label: "Balance", value: "CNY 108.80" },
+      { id: "deepseek-spend", label: "24h spend", value: "CNY 2.51" },
     ],
   );
 

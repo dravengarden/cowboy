@@ -9,6 +9,7 @@ use crate::plugin_storage::{NamespaceBackend, PluginNamespace, set_postgres_sear
 use crate::store::Store;
 
 const CORE_IMPORT: &str = "core_passkeys";
+pub(crate) const STORAGE_CAPABILITY: &str = "webauthn";
 
 pub async fn list_user(ns: &PluginNamespace, user_id: &str) -> Result<Vec<UserPasskey>> {
     list_passkeys(ns, "user_passkeys", "user_id", user_id).await
@@ -484,10 +485,33 @@ mod tests {
     use crate::plugin_dir::PluginDir;
     use crate::plugin_host::PluginHostSpec;
     use crate::plugin_runtime::PluginRuntime;
-    use crate::plugin_storage::PluginStorage;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::Path;
+
+    fn unlock_fixture_directories(path: &Path) {
+        if !std::fs::symlink_metadata(path).unwrap().is_dir() {
+            return;
+        }
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for entry in std::fs::read_dir(path).unwrap() {
+            unlock_fixture_directories(&entry.unwrap().path());
+        }
+    }
 
     #[tokio::test]
     async fn sqlite_passkey_plugin_round_trip_and_import() {
+        assert_passkey_plugin_round_trip_and_import(None).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+    async fn postgres_passkey_plugin_round_trip_and_import() {
+        let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+            .expect("run nix develop -c just test-postgres");
+        assert_passkey_plugin_round_trip_and_import(Some(&url)).await;
+    }
+
+    async fn assert_passkey_plugin_round_trip_and_import(postgres_url: Option<&str>) {
         let root = std::env::temp_dir().join(format!(
             "cowboy-plugin-passkeys-{}-{}",
             std::process::id(),
@@ -495,12 +519,10 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let store = Store::connect(
-            &format!("sqlite://{}", root.join("core.sqlite3").display()),
-            root.join("artifacts"),
-        )
-        .await
-        .unwrap();
+        let sqlite_url = format!("sqlite://{}", root.join("core.sqlite3").display());
+        let store = Store::connect(postgres_url.unwrap_or(&sqlite_url), root.join("artifacts"))
+            .await
+            .unwrap();
         store.migrate().await.unwrap();
         let user = crate::store::ProductUser {
             id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
@@ -522,9 +544,19 @@ mod tests {
             last_used_at_ms: None,
         };
         store.insert_user_passkey(&core_passkey).await.unwrap();
+        let admin_passkey = UserPasskey {
+            id: "admin-pk1".to_owned(),
+            user_id: "root".to_owned(),
+            credential_id: "admin-cred-1".to_owned(),
+            nickname: "admin laptop".to_owned(),
+            passkey_json: "{\"admin\":true}".to_owned(),
+            created_at_ms: 20,
+            last_used_at_ms: Some(30),
+        };
+        store.insert_admin_passkey(&admin_passkey).await.unwrap();
 
         let dir = PluginDir::open(&root).unwrap();
-        let storage = PluginStorage::sqlite_files(dir);
+        let storage = store.plugin_storage(dir);
         let spec = PluginHostSpec::from_json(
             include_str!("../examples/authentication/passkey/host.json").as_bytes(),
         )
@@ -538,16 +570,60 @@ mod tests {
         let listed = list_user(&ns, &user.id).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].nickname, "laptop");
+        assert_eq!(listed[0].passkey_json, core_passkey.passkey_json);
+        assert_eq!(listed[0].created_at_ms, core_passkey.created_at_ms);
+        assert_eq!(listed[0].last_used_at_ms, None);
         assert_eq!(count_user(&ns, &user.id).await.unwrap(), 1);
+        let admins = list_admin(&ns, "root").await.unwrap();
+        assert_eq!(admins.len(), 1);
+        assert_eq!(admins[0].credential_id, admin_passkey.credential_id);
+        assert_eq!(admins[0].passkey_json, admin_passkey.passkey_json);
+        assert_eq!(admins[0].last_used_at_ms, Some(30));
 
-        let runtime_dir = PluginDir::open(&root.join("runtime")).unwrap();
-        let runtime_storage = store.plugin_storage(runtime_dir);
-        let runtime = PluginRuntime::activate(&runtime_storage, Some(&store), None)
+        update_user(&ns, &user.id, "pk1", "{\"used\":true}", 40)
             .await
             .unwrap();
-        assert!(runtime.hosts.iter().any(|host| host.id == "password"));
-        assert!(runtime.passkey.is_some());
+        update_admin(&ns, "root", "admin-pk1", "{\"admin_used\":true}", 50)
+            .await
+            .unwrap();
+        assert_eq!(
+            list_user(&ns, &user.id).await.unwrap()[0].last_used_at_ms,
+            Some(40)
+        );
+        assert_eq!(
+            list_admin(&ns, "root").await.unwrap()[0].last_used_at_ms,
+            Some(50)
+        );
+        assert_eq!(delete_user(&ns, &user.id, "pk1").await.unwrap(), 1);
+        assert_eq!(delete_admin(&ns, "root", "admin-pk1").await.unwrap(), 1);
+        import_from_core(&ns, &store).await.unwrap();
+        assert_eq!(count_user(&ns, &user.id).await.unwrap(), 0);
+        assert_eq!(count_admin(&ns, "root").await.unwrap(), 0);
+        assert_eq!(store.list_user_passkeys(&user.id).await.unwrap().len(), 1);
+        assert_eq!(store.list_admin_passkeys("root").await.unwrap().len(), 1);
+
+        assert_bootstrap_runtime_hosts(&store, &root).await;
         drop(store);
-        let _ = std::fs::remove_dir_all(root);
+        unlock_fixture_directories(&root);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    async fn assert_bootstrap_runtime_hosts(store: &Store, root: &Path) {
+        let runtime_dir = PluginDir::open(&root.join("runtime")).unwrap();
+        let runtime_storage = store.plugin_storage(runtime_dir);
+        let runtime = PluginRuntime::activate(&runtime_storage, None)
+            .await
+            .unwrap();
+        assert!(
+            runtime
+                .default_hosts()
+                .iter()
+                .any(|host| host.id == "password")
+        );
+        assert!(
+            runtime
+                .namespace_for_capability(STORAGE_CAPABILITY)
+                .is_some()
+        );
     }
 }

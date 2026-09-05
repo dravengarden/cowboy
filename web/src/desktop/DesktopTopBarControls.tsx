@@ -89,8 +89,9 @@ import {
 import { UsageLogs } from "../UsageLogs";
 import { PluginSlot } from "@cowboy/plugin-api";
 import {
-  type UsageWidgetProvider,
+  formatCompactCurrency,
   usageWidgetHasBalance,
+  type UsageWidgetProvider,
   usageWidgetProviders,
 } from "../usageWidget";
 import { DesktopModal } from "./DesktopModal";
@@ -165,27 +166,25 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function compactCny(value: number): string {
-  return `¥${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
-}
-
 function UsageProviderSummary(
   { provider }: { provider: UsageWidgetProvider },
 ): React.JSX.Element {
   const balance = usageWidgetHasBalance(provider);
   const width = balance ? 286 : 156;
   const primary = balance
-    ? compactCny(provider.balanceCny)
+    ? formatCompactCurrency(provider.balance, provider.currency)
     : `${String(provider.remaining)}%`;
   const secondary = balance
     ? provider.spend24hPriceCoverage !== undefined &&
         provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${compactCny(provider.spend24hCny)} · Miss ${
+      ? `24h ${
+        formatCompactCurrency(provider.spend24h, provider.currency)
+      } · Miss ${
         provider.cacheMissRate.toFixed(1)
       }% · ${provider.blockingErrors.toLocaleString()} blocked`
-      : `24h ≥${compactCny(provider.spend24hCny)} · ${
-        provider.spend24hPriceCoverage?.toFixed(0) ?? "0"
-      }% priced · Miss ${
+      : `24h ≥${
+        formatCompactCurrency(provider.spend24h, provider.currency)
+      } · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${
         provider.cacheMissRate.toFixed(1)
       }% · ${provider.blockingErrors.toLocaleString()} blocked`
     : `${provider.periodLabel} · resets ${shortResetTime(provider.resetsAt)}`;
@@ -1483,8 +1482,7 @@ export function DesktopTopBarControls({
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
   const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
-    (width, provider) =>
-      width + (usageWidgetHasBalance(provider) ? 164 : 156),
+    (width, provider) => width + (usageWidgetHasBalance(provider) ? 164 : 156),
     0,
   ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
   const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
@@ -1762,7 +1760,8 @@ export function DesktopTopBarControls({
                   <DesktopProviderUsage
                     usage={provider}
                     schedule={usageResetSchedule(snapshot, provider)}
-                    onUsageChanged={() => loadUsage(false)}
+                    onUsageChanged={() =>
+                      loadUsage(false)}
                   />
                 </Stack>
               ))}

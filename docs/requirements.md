@@ -1,9 +1,10 @@
 # Cowboy core requirements
 
 Status: normative plugin and Provider platform contract. Plugin manifest schema
-1, component registry schema 1, Plugin package/release schema 1, Provider
+1, component registry schema 2, Plugin package schema 1, Plugin release schemas
+1-2, Provider
 payload schema 2, Agent runtime-binding schema 2, UI schemas 1-2, host
-integration schemas 1-2, Provider SDK 3.0, Machine protocol 6,
+integration schemas 1-2, Provider SDK 3.0, Machine protocol 7,
 Machine-scoped installation, exact session generations, Service-scoped
 authentication, and bounded uninstall retention implement this boundary. The
 in-tree `LaunchSpec` registry remains only as a drain-compatible fallback for
@@ -44,6 +45,16 @@ contract is a typed payload, not a second release or installation unit.
 Product-login integrations use the data-only `authentication_provider` kind
 and execute only through Controller-owned protocol drivers. Zed uses the
 `code_intelligence` kind and retains its isolated process and license boundary.
+
+Authentication payload schema 1 selects OIDC. Schema 2 also selects the closed
+`local_password` and `webauthn` drivers, with an empty public configuration;
+password algorithms, credentials, relying-party policy, users, and sessions
+remain Controller-owned. Local authentication releases require a release-bound
+host bundle. SDK build/sign/verify, Catalog ingestion, and Machine validation
+check protocol/renderer/capability ownership together: Authentication hosts
+cannot carry collector files, RPC, Agent runtime bindings, or unrelated native
+capabilities. WebAuthn additionally requires its own migrated storage namespace.
+An old OIDC release without a host remains valid but grants no host behavior.
 
 Reusable implementation belongs to an owned component, not a plugin copy or an
 external source-tree link. Component releases bind exact versions, source
@@ -211,14 +222,23 @@ package and composite digests, publisher signature, URL/archive bounds, and
 probes. The target Machine independently inspects downloaded bytes. An
 incompatible artifact never replaces the active generation.
 
-Each Machine advertises a strict `ProviderContractInventory` in its signed
-hello: Provider SDK version, supported package/release/UI/host schema intervals,
-Machine contract, platform, and architecture. The Controller repeats the same
-compatibility predicate immediately before an install or upgrade, and Web may
-offer only the newest ready release accepted by that inventory. An absent,
-malformed, or insufficient inventory fails closed with a typed compatibility
-code and an update-Machine explanation; Cowboy must not send a newer package to
-an older decoder and expose its raw deserialization error.
+The generic Plugin SDK owns the versioned `PluginHostSpec`. SDK packaging,
+Catalog ingestion, and Machine staging independently parse and validate that
+same semantic contract, including renderer/slot relationships, storage SQL,
+process grants, and references to exact signed runtime files. Core may project
+validated fields but must not maintain a second host schema or weaker builder
+validator.
+
+Each Machine advertises two strict capability envelopes in its signed hello.
+`PluginContractInventory` covers the generic Plugin SDK, manifest, outer
+package/release, payload-kind, host-bundle, and host-contract schema intervals.
+`ProviderContractInventory` independently covers the narrower Agent Provider
+SDK, package/runtime-binding/UI/host schemas, and Machine Provider contract.
+The Controller repeats both applicable predicates immediately before an install
+or upgrade, and Web may offer only the newest ready release accepted by both.
+An absent, malformed, or insufficient inventory fails closed with a typed
+compatibility code and an update-Machine explanation; Cowboy must not send a
+newer package to an older decoder and expose its raw deserialization error.
 
 ### CR-7: Installation is dynamic and Machine-scoped
 
@@ -421,16 +441,80 @@ The Provider platform is not complete until automated acceptance proves:
 
 ## Implemented migration boundary
 
-Plugin package/release schema 1, Provider payload schema 2, Agent runtime-binding
+Plugin package schema 1, Plugin release schemas 1-2, Provider payload schema 2, Agent runtime-binding
 schema 2, UI schemas 1-2, host integration schemas 1-2, Controller contract 2,
-Provider Machine contract 4, Machine protocol 6, and Cowboy Provider SDK 3.0 in
+Provider Machine contract 4, Machine protocol 7, and Cowboy Provider SDK 3.0 in
 both Rust and TypeScript are the active contract. The Plugin Catalog embeds all
 seven independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
 `.cowboy-plugin` package is paired with a complete, signed runtime envelope.
+Controller host runtimes are immutable snapshots keyed by the exact Plugin
+release identity. Refresh validates and stages every candidate generation,
+applies required Plugin migrations, and atomically publishes Catalog entries
+and runtime hosts together. Old exact generations remain resolvable while
+captured requests and session leases drain; an exact lookup never falls through
+to another version. After an ID first receives trusted Catalog authority, a
+persistent private marker prevents an absent or interrupted later scan from
+silently restoring source-bundled behavior.
+Controller host enablement is separate from Catalog publication. The private
+`COWBOY_PLUGIN_HOST_CONFIG` policy exact-pins host release identities and merges
+the OIDC driver's existing exact authentication selection; conflicts fail
+startup. Its opt-in `catalog_only` mode disables every source-bundled host and
+requires the enabled login methods and durable admin/Product WebAuthn storage
+to have matching selected, release-bound Authentication hosts before core DB
+migration or host staging. Legacy non-Plugin OIDC must migrate before cutover.
+Unselected Authentication releases do not become defaults or run migrations
+just because they are published, and public auth status contains only enabled
+methods/panels. Every released host that declares Controller storage also
+requires an exact selection, regardless of Plugin kind and in both `bootstrap`
+and `catalog_only` modes. An unselected storage release remains discoverable
+by exact identity but is not an ID default and cannot create or migrate a
+namespace. Stateless Agent/Code defaults may still follow the unambiguous
+latest release; adding storage to a newer release cannot inherit that authority
+or fall back to an older ID default. Only pre-Catalog source bootstrap storage
+retains its explicit compatibility path. Bootstrap readiness must reject a
+missing required WebAuthn storage selection before connecting or migrating the
+core database, including when persistent Catalog authority excludes a source
+fallback. Missing pinned releases reject refresh without changing the
+visible snapshot; selected-host activation errors abort startup. Successful
+Catalog-only activation durably records a one-way marker, so a later omitted
+policy cannot silently restore bootstrap mode. Default bootstrap remains a
+migration path, not authority over a previously signed Plugin.
+`cowboy serve --check-plugin-hosts` uses the same configuration and signature
+preflight without creating Service/Catalog state, connecting to a database,
+staging hosts, running migrations or contacting authentication services. Its
+data-only, secret-free report identifies the selected releases and explicitly
+distinguishes configuration validation from unperformed activation and storage
+checks. Run it with the same protected environment and arguments as the
+candidate Controller. Ordinary startup must perform that same check before
+creating Service identities or caches; private host/login configuration parse
+failures must not echo secret-bearing input values or field names.
 Target Machines repeat package, composite digest, publisher, contract,
-platform, private dependency, archive, and staged-probe checks before
+platform, private dependency, archive, host-bundle, and staged-probe checks before
 atomically changing their active generation.
+
+Released usage collection, reset, and activity transforms execute only on a
+connected protocol-seven Machine whose active `(plugin_id, plugin_version,
+artifact_digest, auth_generation)` exactly matches a retained signed host
+generation. The Controller sends a closed operation and bounded JSON payload,
+never argv or a path. The Machine revalidates the package, release, host-bundle
+bytes and staged host files under its lifecycle lock, resolves component
+commands and authentication home from that generation, and runs the signed
+collector with no ambient Machine or Controller secrets. Signed
+`collector_sidecars` declarations resolve other active exact Provider
+generations by adapter slot and sidecar id; dynamic loopback endpoints exist
+only for the invocation. Sensitive responses are correlated directly and do
+not enter Machine event history or durable inventory. Source-bundled hosts may
+use the bounded Controller executor only during the explicit pre-Catalog
+bootstrap transition.
+
+Protocol-seven Machines also advertise a proof-v3-bound generic Plugin
+contract inventory. Install and upgrade require that inventory and pass the
+outer manifest/package/release/payload/host compatibility predicate before
+bytes cross the control channel; Agent Plugins then pass the independent
+Provider predicate. Web applies the same composition when choosing an upgrade.
+Older Machines may still uninstall or reactivate retained exact generations on
+protocol 5, but cannot receive a new generic Plugin envelope.
 
 Exact package workers receive a Machine-verified command map for every private
 component. Cowboy prepends only those generation-local directories to the
@@ -459,14 +543,16 @@ status, and automatically seals durable state to enrolled Machines; offline
 replicas remain pending and converge on reconnect. Uninstall uses an expiring
 exact-impact plan, active
 turn confirmation, an absolute three-day purge deadline, and reference-aware
-attachment cleanup. Machine protocol 6 carries the generic Plugin lifecycle,
-exact retained-generation reactivation, and secret-bearing Provider refresh
-CAS candidates; Agent auth commands remain capability-specific. Plugin
+attachment cleanup. Machine protocol 7 adds exact-generation Plugin host
+execution, proof-v3 generic compatibility inventory, and new install/upgrade.
+Uninstall and retained-generation reactivation remain compatible from protocol
+5, while secret-bearing Provider refresh CAS candidates require protocol 6.
+Agent auth commands remain capability-specific. Plugin
 lifecycle fences serialize install/uninstall, auth generations reject stale or
 conflicting replicas, and session launch resolves the writable runtime copy of
 the exact recorded auth projection.
 
 The legacy in-tree launch registry is retained only to drain old sessions that
 lack an exact package generation. New Machine-backed sessions must resolve an
-an active signed Agent Plugin generation. Remove that fallback after the last legacy
+active signed Agent Plugin generation. Remove that fallback after the last legacy
 session generation is no longer restorable.

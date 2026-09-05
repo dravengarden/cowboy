@@ -5,6 +5,9 @@ import {
   projectMachineOccupancy,
 } from "./machineState.ts";
 import type { MachineSummary, SessionMeta } from "./protocol.ts";
+import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
+
+applyOccupancyHostPlugins(testFirstPartyHostPlugins());
 
 function machine(): MachineSummary {
   return {
@@ -137,5 +140,65 @@ Deno.test("Machine occupancy follows plugin adapter slots when overlaid", () => 
     assertEquals(projected[0]?.components[1]?.active_leases, 1);
   } finally {
     applyOccupancyHostPlugins([]);
+  }
+});
+
+Deno.test("Machine occupancy stays pinned to each session's exact host generation", () => {
+  const oldDigest = `sha256:${"a".repeat(64)}`;
+  const currentDigest = `sha256:${"b".repeat(64)}`;
+  try {
+    applyOccupancyHostPlugins([
+      {
+        id: "future-agent",
+        plugin_version: "1.0.0",
+        artifact_digest: oldDigest,
+        default_for_id: false,
+        adapter_slot: "claude",
+      },
+      {
+        id: "future-agent",
+        plugin_version: "2.0.0",
+        artifact_digest: currentDigest,
+        default_for_id: true,
+        adapter_slot: "codex",
+      },
+    ]);
+    const target: MachineSummary = {
+      ...machine(),
+      capacity: { max_sessions: 4, draining: false },
+      components: [
+        machine().components[0]!,
+        {
+          ...machine().components[1]!,
+          id: { kind: "provider_cli", slot: "claude" },
+          active_leases: 0,
+        },
+        {
+          ...machine().components[1]!,
+          id: { kind: "provider_cli", slot: "codex" },
+          active_leases: 0,
+        },
+      ],
+    };
+    const oldSession = {
+      ...session("running", "hawk", "future-agent", "old"),
+      provider_version: "1.0.0",
+      provider_generation_digest: oldDigest,
+    };
+    const currentSession = {
+      ...session("running", "hawk", "future-agent", "current"),
+      provider_version: "2.0.0",
+      provider_generation_digest: currentDigest,
+    };
+    const projected = projectMachineOccupancy(
+      [target],
+      [oldSession, currentSession],
+    );
+    assertEquals(
+      projected[0]?.components.map((component) => component.active_leases),
+      [2, 1, 1],
+    );
+  } finally {
+    applyOccupancyHostPlugins(testFirstPartyHostPlugins());
   }
 });

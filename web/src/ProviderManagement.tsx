@@ -20,6 +20,8 @@ import {
   type EffectCapability,
   type EffectSchema,
   type MachineProviderInventory,
+  type PluginContractInventory,
+  projectAgentPluginInventory,
   type ProviderAuthenticationPresentation,
   type ProviderAuthenticationStatus,
   type ProviderCatalogEntry,
@@ -27,7 +29,6 @@ import {
   type ProviderHostContext,
   type ProviderUiManifest,
   resolveProviderAuthenticationPresentation,
-  projectAgentPluginInventory,
 } from "@cowboy/provider-ui";
 import {
   joinProviderInstallations,
@@ -63,6 +64,7 @@ interface ProviderMachine {
   schedulable: boolean;
   plugins: readonly unknown[];
   provider_contracts?: ProviderContractInventory;
+  plugin_contracts?: PluginContractInventory;
 }
 
 interface AffectedSession {
@@ -374,14 +376,20 @@ function pluginSlotForLifecycle(
 
 function ProviderManagementCard({
   pluginId,
+  pluginVersion,
+  artifactDigest,
   children,
 }: {
   pluginId: string;
+  pluginVersion?: string;
+  artifactDigest?: string;
   children: ReactNode;
 }): React.JSX.Element {
   return (
     <PluginSlot
       pluginId={pluginId}
+      {...(pluginVersion === undefined ? {} : { pluginVersion })}
+      {...(artifactDigest === undefined ? {} : { artifactDigest })}
       slot="provider.card"
       context={{ kind: "provider.card", providerId: pluginId }}
     >
@@ -392,6 +400,8 @@ function ProviderManagementCard({
 
 function ProviderManagementLifecycleSurface({
   providerId,
+  providerVersion,
+  artifactDigest,
   manifest,
   slot,
   host,
@@ -399,6 +409,8 @@ function ProviderManagementLifecycleSurface({
   onEffect,
 }: {
   providerId: string;
+  providerVersion?: string;
+  artifactDigest?: string;
   manifest: ProviderUiManifest;
   slot: ProviderManagementLifecycleSlot;
   host: ProviderHostContext;
@@ -409,6 +421,10 @@ function ProviderManagementLifecycleSurface({
   return (
     <PluginSlot
       pluginId={providerId}
+      {...(providerVersion === undefined
+        ? {}
+        : { pluginVersion: providerVersion })}
+      {...(artifactDigest === undefined ? {} : { artifactDigest })}
       slot={kind}
       context={{
         kind,
@@ -434,15 +450,14 @@ function ProviderManagementLifecycleSurface({
 }
 
 function ProviderManagement(
-  { scope, machine, focusProviderId, embedded = false }: ProviderManagementProps,
+  { scope, machine, focusProviderId, embedded = false }:
+    ProviderManagementProps,
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
     useProviderCatalog();
   const inventory = useMemo<MachineProviderInventory[]>(
     () =>
-      scope === "machine"
-        ? projectAgentPluginInventory(machine.plugins)
-        : [],
+      scope === "machine" ? projectAgentPluginInventory(machine.plugins) : [],
     [machine?.plugins, scope],
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -487,6 +502,9 @@ function ProviderManagement(
           architecture: machine.architecture,
           ...(machine.provider_contracts
             ? { provider_contracts: machine.provider_contracts }
+            : {}),
+          ...(machine.plugin_contracts
+            ? { plugin_contracts: machine.plugin_contracts }
             : {}),
         })
         : serviceCredentialGroups.map((group) => {
@@ -540,7 +558,7 @@ function ProviderManagement(
   const authenticationForEntry = useCallback(
     (entry: ProviderCatalogEntry): ProviderAuthenticationStatus | undefined =>
       authentications.get(entry.provider_id) ??
-      authenticationsByScope.get(entry.authentication_scope),
+        authenticationsByScope.get(entry.authentication_scope),
     [authentications, authenticationsByScope],
   );
   useEffect(() => {
@@ -551,9 +569,9 @@ function ProviderManagement(
       if (completed) return;
       try {
         const response = await fetch(
-          `/api/plugins/${
-            encodeURIComponent(flow.provider.provider_id)
-          }/auth/${encodeURIComponent(flow.requestId ?? "")}`,
+          `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
+            encodeURIComponent(flow.requestId ?? "")
+          }`,
         );
         if (!response.ok) {
           if (!active) return;
@@ -766,14 +784,16 @@ function ProviderManagement(
         request_id: string;
         expires_at_ms: number;
       };
-      setFlow((current) => current
-        ? {
-          ...current,
-          requestId: body.request_id,
-          expiresAtMs: body.expires_at_ms,
-          events: [],
-        }
-        : current);
+      setFlow((current) =>
+        current
+          ? {
+            ...current,
+            requestId: body.request_id,
+            expiresAtMs: body.expires_at_ms,
+            events: [],
+          }
+          : current
+      );
       await refreshCatalog();
     } catch (cause) {
       setAuthenticationError(
@@ -819,9 +839,9 @@ function ProviderManagement(
     try {
       if (flow?.requestId) {
         await fetch(
-          `/api/plugins/${
-            encodeURIComponent(flow.provider.provider_id)
-          }/auth/${encodeURIComponent(flow.requestId)}`,
+          `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
+            encodeURIComponent(flow.requestId)
+          }`,
           { method: "DELETE" },
         );
       }
@@ -860,9 +880,9 @@ function ProviderManagement(
   const confirmUninstall = async (): Promise<void> => {
     if (!uninstallPlan) return;
     const response = await fetch(
-      `/api/machines/${
-        encodeURIComponent(uninstallPlan.machine_id)
-      }/plugins/${encodeURIComponent(uninstallPlan.plugin_id)}/uninstall`,
+      `/api/machines/${encodeURIComponent(uninstallPlan.machine_id)}/plugins/${
+        encodeURIComponent(uninstallPlan.plugin_id)
+      }/uninstall`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -941,32 +961,32 @@ function ProviderManagement(
       })}
     >
       {!embedded && (
-      <Stack
-        direction="row"
-        spacing={1}
-        alignItems="center"
-        justifyContent="space-between"
-      >
-        <Box>
-          <Typography variant="overline" color="text.secondary">
-            {scope === "service"
-              ? "Cowboy Service authentication"
-              : "Providers"}
-          </Typography>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block" }}
-          >
-            {scope === "service"
-              ? "Configure once; encrypted credentials synchronize to every enrolled Machine"
-              : "Installed, upgraded, and uninstalled independently on this Machine"}
-          </Typography>
-        </Box>
-        {catalogError
-          ? <Chip size="small" color="error" label="Catalog unavailable" />
-          : null}
-      </Stack>
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          justifyContent="space-between"
+        >
+          <Box>
+            <Typography variant="overline" color="text.secondary">
+              {scope === "service"
+                ? "Cowboy Service authentication"
+                : "Providers"}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block" }}
+            >
+              {scope === "service"
+                ? "Configure once; encrypted credentials synchronize to every enrolled Machine"
+                : "Installed, upgraded, and uninstalled independently on this Machine"}
+            </Typography>
+          </Box>
+          {catalogError
+            ? <Chip size="small" color="error" label="Catalog unavailable" />
+            : null}
+        </Stack>
       )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
       {scope === "service" && unpublishedLatestEntries.length > 0
@@ -980,10 +1000,12 @@ function ProviderManagement(
               ).join(", ")
             }`}
           >
-            {unpublishedLatestEntries.length} Provider runtime update{
-              unpublishedLatestEntries.length === 1 ? " is" : "s are"
-            } still publishing. Existing credentials stay active; Cowboy uses
-            the newest signed release for sign-in changes.
+            {unpublishedLatestEntries.length}{" "}
+            Provider runtime update{unpublishedLatestEntries.length === 1
+              ? " is"
+              : "s are"}{" "}
+            still publishing. Existing credentials stay active; Cowboy uses the
+            newest signed release for sign-in changes.
           </Alert>
         )
         : null}
@@ -1027,78 +1049,86 @@ function ProviderManagement(
               <ProviderManagementCard
                 key={`${providerId}:${installed.provider_version}:${installed.generation_digest}`}
                 pluginId={providerId}
+                pluginVersion={installed.provider_version}
+                artifactDigest={installed.generation_digest}
               >
-              <Paper
-                variant="outlined"
-                sx={{ p: 1.25, minWidth: 0, borderRadius: 1.25 }}
-              >
-                <Stack spacing={1.1}>
-                  <Typography variant="subtitle1" fontWeight={700}>
-                    {providerId}
-                  </Typography>
-                  <Stack
-                    direction="row"
-                    spacing={0.75}
-                    flexWrap="wrap"
-                    useFlexGap
-                  >
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      color="warning"
-                      label={`Machine ${installed.provider_version}`}
-                    />
-                    <Chip
-                      size="small"
-                      variant="outlined"
-                      label={installed.state}
-                    />
-                  </Stack>
-                  <Alert severity="warning">
-                    {operationError || latestCompatibility?.detail ||
-                      "The exact installed Provider package is missing from the Service Catalog. Cowboy will not render a different release's UI."}
-                  </Alert>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ overflowWrap: "anywhere" }}
-                  >
-                    Installed generation: {installed.generation_digest}
-                  </Typography>
-                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                    {canUpgrade && latestCompatibleEntry
-                      ? (
-                        <Button
-                          variant="contained"
-                          onClick={() =>
-                            void run(latestCompatibleEntry, installed, {
-                              capability: "upgrade_on_machine",
-                            }).catch(() => undefined)}
-                        >
-                          Upgrade to trusted {latestCompatibleEntry.provider_version}
-                        </Button>
-                      )
-                      : null}
-                    <Button
-                      color="error"
-                      variant="outlined"
-                      onClick={() =>
-                        void requestUninstallPlan(providerId).catch(
-                          (cause: unknown) => {
-                            setErrors((current) => ({
-                              ...current,
-                              [providerId]: cause instanceof Error
-                                ? cause.message
-                                : "Could not prepare Provider uninstall",
-                            }));
-                          },
-                        )}
+                <Paper
+                  variant="outlined"
+                  sx={{ p: 1.25, minWidth: 0, borderRadius: 1.25 }}
+                >
+                  <Stack spacing={1.1}>
+                    <Typography variant="subtitle1" fontWeight={700}>
+                      {providerId}
+                    </Typography>
+                    <Stack
+                      direction="row"
+                      spacing={0.75}
+                      flexWrap="wrap"
+                      useFlexGap
                     >
-                      Uninstall…
-                    </Button>
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        color="warning"
+                        label={`Machine ${installed.provider_version}`}
+                      />
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={installed.state}
+                      />
+                    </Stack>
+                    <Alert severity="warning">
+                      {operationError || latestCompatibility?.detail ||
+                        "The exact installed Provider package is missing from the Service Catalog. Cowboy will not render a different release's UI."}
+                    </Alert>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ overflowWrap: "anywhere" }}
+                    >
+                      Installed generation: {installed.generation_digest}
+                    </Typography>
+                    <Stack
+                      direction="row"
+                      spacing={1}
+                      flexWrap="wrap"
+                      useFlexGap
+                    >
+                      {canUpgrade && latestCompatibleEntry
+                        ? (
+                          <Button
+                            variant="contained"
+                            onClick={() =>
+                              void run(latestCompatibleEntry, installed, {
+                                capability: "upgrade_on_machine",
+                              }).catch(() => undefined)}
+                          >
+                            Upgrade to trusted{" "}
+                            {latestCompatibleEntry.provider_version}
+                          </Button>
+                        )
+                        : null}
+                      <Button
+                        color="error"
+                        variant="outlined"
+                        onClick={() =>
+                          void requestUninstallPlan(providerId).catch(
+                            (cause: unknown) => {
+                              setErrors((current) => ({
+                                ...current,
+                                [providerId]: cause instanceof Error
+                                  ? cause.message
+                                  : "Could not prepare Provider uninstall",
+                              }));
+                            },
+                          )}
+                      >
+                        Uninstall…
+                      </Button>
+                    </Stack>
                   </Stack>
-                </Stack>
-              </Paper>
+                </Paper>
               </ProviderManagementCard>
             );
           }
@@ -1170,15 +1200,19 @@ function ProviderManagement(
             expandedCredentialScopes.has(entry.authentication_scope);
           const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
             releaseReady
-            ? undefined
-            : scope === "service"
-            ? UNPUBLISHED_AUTH_EFFECTS
-            : UNPUBLISHED_RELEASE_EFFECTS;
+              ? undefined
+              : scope === "service"
+              ? UNPUBLISHED_AUTH_EFFECTS
+              : UNPUBLISHED_RELEASE_EFFECTS;
           const lifecycleSurface = scope === "service"
             ? entry.manifest.authentication.required
               ? (
                 <ProviderManagementLifecycleSurface
                   providerId={entry.provider_id}
+                  {...(entry.artifact_digest === null ? {} : {
+                    providerVersion: entry.provider_version,
+                    artifactDigest: entry.artifact_digest,
+                  })}
                   manifest={entry.manifest}
                   slot="setup"
                   host={host}
@@ -1191,6 +1225,10 @@ function ProviderManagement(
             ? (
               <ProviderManagementLifecycleSurface
                 providerId={entry.provider_id}
+                {...(entry.artifact_digest === null ? {} : {
+                  providerVersion: entry.provider_version,
+                  artifactDigest: entry.artifact_digest,
+                })}
                 manifest={entry.manifest}
                 slot="empty"
                 host={host}
@@ -1201,6 +1239,10 @@ function ProviderManagement(
             : (
               <ProviderManagementLifecycleSurface
                 providerId={entry.provider_id}
+                {...(entry.artifact_digest === null ? {} : {
+                  providerVersion: entry.provider_version,
+                  artifactDigest: entry.artifact_digest,
+                })}
                 manifest={entry.manifest}
                 slot="settings"
                 host={host}
@@ -1236,119 +1278,123 @@ function ProviderManagement(
                 entry.artifact_digest ?? entry.package_digest
               }`}
               pluginId={entry.provider_id}
+              {...(entry.artifact_digest === null ? {} : {
+                pluginVersion: entry.provider_version,
+                artifactDigest: entry.artifact_digest,
+              })}
             >
-            <Paper
-              variant="outlined"
-              sx={{
-                p: embedded ? 0 : 1,
-                minWidth: 0,
-                borderRadius: 1.25,
-                border: embedded ? 0 : 1,
-                bgcolor: "transparent",
-                boxShadow: "none",
-              }}
-              data-provider-management-card
-              data-provider-credential-card={scope === "service"
-                ? "true"
-                : undefined}
-            >
-              <Stack spacing={1}>
-                {embedded
-                  ? (
-                    <Box
-                      data-provider-session-actions
-                      sx={{
-                        "& .MuiButton-root": {
-                          width: "100%",
-                          minHeight: 44,
-                          justifyContent: "center",
-                          px: 1.5,
-                          borderRadius: 1,
-                          textTransform: "none",
-                          fontWeight: 650,
-                          letterSpacing: 0,
-                          boxShadow: "none",
-                        },
-                        "& .MuiButton-contained": {
-                          bgcolor: "transparent",
-                          color: "primary.main",
-                          border: "1px solid",
-                          borderColor: "divider",
-                          "&:hover": { bgcolor: "action.hover" },
-                        },
-                        "& .MuiStack-root, & .MuiBox-root": { width: "100%" },
-                      }}
-                    >
-                      {lifecycleSurface}
-                    </Box>
-                  )
-                  : (
-                    <>
-                      <ProviderManagementIdentity
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: embedded ? 0 : 1,
+                  minWidth: 0,
+                  borderRadius: 1.25,
+                  border: embedded ? 0 : 1,
+                  bgcolor: "transparent",
+                  boxShadow: "none",
+                }}
+                data-provider-management-card
+                data-provider-credential-card={scope === "service"
+                  ? "true"
+                  : undefined}
+              >
+                <Stack spacing={1}>
+                  {embedded
+                    ? (
+                      <Box
+                        data-provider-session-actions
+                        sx={{
+                          "& .MuiButton-root": {
+                            width: "100%",
+                            minHeight: 44,
+                            justifyContent: "center",
+                            px: 1.5,
+                            borderRadius: 1,
+                            textTransform: "none",
+                            fontWeight: 650,
+                            letterSpacing: 0,
+                            boxShadow: "none",
+                          },
+                          "& .MuiButton-contained": {
+                            bgcolor: "transparent",
+                            color: "primary.main",
+                            border: "1px solid",
+                            borderColor: "divider",
+                            "&:hover": { bgcolor: "action.hover" },
+                          },
+                          "& .MuiStack-root, & .MuiBox-root": { width: "100%" },
+                        }}
+                      >
+                        {lifecycleSurface}
+                      </Box>
+                    )
+                    : (
+                      <>
+                        <ProviderManagementIdentity
+                          manifest={entry.manifest}
+                          providerId={entry.provider_id}
+                          version={host.provider_version}
+                          statusLabel={managementStatus}
+                          statusTone={managementStatusTone}
+                          actions={identityActions}
+                          title={credentialGroup
+                            ? providerCredentialTitle(credentialGroup.entries)
+                            : entry.manifest.display.name}
+                          summary={entry.manifest.display.summary}
+                          consumers={sharedCredential ? credentialEntries : []}
+                        />
+                        {readyCredential && credentialManagementOpen
+                          ? (
+                            <Box
+                              id={`provider-credential-management-${entry.authentication_scope}`}
+                              data-provider-credential-management
+                              sx={{ pl: { xs: 0, sm: 5.25 } }}
+                            >
+                              {lifecycleSurface}
+                            </Box>
+                          )
+                          : null}
+                      </>
+                    )}
+                  {scope === "machine" && installed &&
+                      entry.manifest.authentication.required
+                    ? (
+                      <Box sx={{ pl: 6 }}>
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label={machineCredentialLabel(
+                            installed.materialization_state,
+                            authPresentation,
+                          )}
+                          color={installed.materialization_state === "current"
+                            ? "success"
+                            : "warning"}
+                        />
+                      </Box>
+                    )
+                    : null}
+                  {scope === "machine" && latestCompatibility &&
+                      (!latestCompatibleEntry ||
+                        latestCompatibleEntry.artifact_digest ===
+                          installed?.generation_digest)
+                    ? (
+                      <Alert severity="warning">
+                        {latestCompatibility.detail}
+                      </Alert>
+                    )
+                    : null}
+                  {surfaceError
+                    ? (
+                      <ProviderSurface
                         manifest={entry.manifest}
-                        providerId={entry.provider_id}
-                        version={host.provider_version}
-                        statusLabel={managementStatus}
-                        statusTone={managementStatusTone}
-                        actions={identityActions}
-                        title={credentialGroup
-                          ? providerCredentialTitle(credentialGroup.entries)
-                          : entry.manifest.display.name}
-                        summary={entry.manifest.display.summary}
-                        consumers={sharedCredential ? credentialEntries : []}
+                        slot="error"
+                        host={host}
                       />
-                      {readyCredential && credentialManagementOpen
-                        ? (
-                          <Box
-                            id={`provider-credential-management-${entry.authentication_scope}`}
-                            data-provider-credential-management
-                            sx={{ pl: { xs: 0, sm: 5.25 } }}
-                          >
-                            {lifecycleSurface}
-                          </Box>
-                        )
-                        : null}
-                    </>
-                  )}
-                {scope === "machine" && installed &&
-                    entry.manifest.authentication.required
-                  ? (
-                    <Box sx={{ pl: 6 }}>
-                      <Chip
-                        size="small"
-                        variant="outlined"
-                        label={machineCredentialLabel(
-                          installed.materialization_state,
-                          authPresentation,
-                        )}
-                        color={installed.materialization_state === "current"
-                          ? "success"
-                          : "warning"}
-                      />
-                    </Box>
-                  )
-                  : null}
-                {scope === "machine" && latestCompatibility &&
-                    (!latestCompatibleEntry ||
-                      latestCompatibleEntry.artifact_digest ===
-                        installed?.generation_digest)
-                  ? (
-                    <Alert severity="warning">
-                      {latestCompatibility.detail}
-                    </Alert>
-                  )
-                  : null}
-                {surfaceError
-                  ? (
-                    <ProviderSurface
-                      manifest={entry.manifest}
-                      slot="error"
-                      host={host}
-                    />
-                  )
-                  : null}
-              </Stack>
-            </Paper>
+                    )
+                    : null}
+                </Stack>
+              </Paper>
             </ProviderManagementCard>
           );
         })}
@@ -1422,154 +1468,152 @@ function ProviderManagement(
           </>
         }
       >
-          {flow
-            ? (
-              <Stack spacing={1.5} sx={{ pt: 0.5 }}>
-                <Alert severity="info">
-                  {authenticationCopy(
-                    resolveProviderAuthenticationPresentation(
-                      flow.provider.manifest.authentication,
-                    ),
-                    flow.sharedProviderNames.length > 1,
-                  ).serviceDetail}
-                </Alert>
-                {!flow.requestId
-                  ? (
-                    <Stack spacing={1}>
-                      <Typography variant="body2">
-                        {authenticationCopy(
-                          resolveProviderAuthenticationPresentation(
-                            flow.provider.manifest.authentication,
-                          ),
-                          flow.sharedProviderNames.length > 1,
-                        ).chooseMethod}
-                      </Typography>
-                      {flow.provider.manifest.authentication.methods.map((
-                        method,
-                      ) => (
-                        <Button
-                          key={method.id}
-                          variant="contained"
-                          disabled={Boolean(authenticationPendingMethod)}
-                          startIcon={authenticationPendingMethod === method.id
-                            ? <CircularProgress size={16} color="inherit" />
-                            : undefined}
-                          onClick={() => void startAuthentication(method.id)}
-                        >
-                          {method.label}
-                        </Button>
-                      ))}
-                      {authenticationError
-                        ? <Alert severity="error">{authenticationError}</Alert>
-                        : null}
-                    </Stack>
-                  )
-                  : null}
-                {!loginSucceeded && challenge?.event === "login_challenge"
-                  ? (
-                    <Stack spacing={1}>
-                      <Button
-                        variant="contained"
-                        {...authenticationPageTap}
-                      >
-                        {challenge.user_code
-                          ? "Copy code & open sign-in"
-                          : authenticationCopy(
-                            resolveProviderAuthenticationPresentation(
-                              flow.provider.manifest.authentication,
-                            ),
-                          ).externalAction}
-                      </Button>
-                      <Typography variant="caption" color="text.secondary">
-                        {challenge.user_code
-                          ? "Cowboy copies the device code before opening the Provider page. Paste it only if the page does not fill it automatically. Close the browser to return here; Cowboy will keep waiting securely."
-                          : "After completing the Provider page, return to Cowboy. This dialog will keep waiting securely."}
-                      </Typography>
-                      {authenticationClipboardNotice
-                        ? (
-                          <Alert
-                            severity={authenticationClipboardNotice.startsWith(
-                                "Could not",
-                              )
-                              ? "warning"
-                              : "info"}
-                          >
-                            {authenticationClipboardNotice}
-                          </Alert>
-                        )
-                        : null}
-                      {authenticationError
-                        ? <Alert severity="warning">{authenticationError}</Alert>
-                        : null}
-                      {challenge.user_code
-                        ? (
-                          <Button
-                            variant="outlined"
-                            onClick={copyAuthenticationCode}
-                          >
-                            Copy {challenge.user_code}
-                          </Button>
-                        )
-                        : null}
-                      {challenge.input_required
-                        ? (
-                          <Stack spacing={1}>
-                            <TextField
-                              label={challenge.input_label ??
-                                "Authorization value"}
-                              type={challenge.secret_input
-                                ? "password"
-                                : "text"}
-                              value={loginInput}
-                              autoComplete="off"
-                              onChange={(event) =>
-                                setLoginInput(event.target.value)}
-                            />
-                            <Button
-                              variant="contained"
-                              disabled={!loginInput.trim()}
-                              onClick={() => void submitAuthentication()}
-                            >
-                              {authenticationCopy(
-                                resolveProviderAuthenticationPresentation(
-                                  flow.provider.manifest.authentication,
-                                ),
-                              ).submit}
-                            </Button>
-                          </Stack>
-                        )
-                        : null}
-                    </Stack>
-                  )
-                  : flow.requestId && !loginSucceeded
-                  ? (
+        {flow
+          ? (
+            <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+              <Alert severity="info">
+                {authenticationCopy(
+                  resolveProviderAuthenticationPresentation(
+                    flow.provider.manifest.authentication,
+                  ),
+                  flow.sharedProviderNames.length > 1,
+                ).serviceDetail}
+              </Alert>
+              {!flow.requestId
+                ? (
+                  <Stack spacing={1}>
                     <Typography variant="body2">
                       {authenticationCopy(
                         resolveProviderAuthenticationPresentation(
                           flow.provider.manifest.authentication,
                         ),
-                      ).waiting}
+                        flow.sharedProviderNames.length > 1,
+                      ).chooseMethod}
                     </Typography>
-                  )
-                  : null}
-                {loginState?.event === "login_state"
-                  ? (
-                    <Alert
-                      severity={loginSucceeded
-                        ? "success"
-                        : loginState.state === "error" ||
-                            loginState.state === "unsupported"
-                        ? "error"
-                        : "info"}
+                    {flow.provider.manifest.authentication.methods.map((
+                      method,
+                    ) => (
+                      <Button
+                        key={method.id}
+                        variant="contained"
+                        disabled={Boolean(authenticationPendingMethod)}
+                        startIcon={authenticationPendingMethod === method.id
+                          ? <CircularProgress size={16} color="inherit" />
+                          : undefined}
+                        onClick={() => void startAuthentication(method.id)}
+                      >
+                        {method.label}
+                      </Button>
+                    ))}
+                    {authenticationError
+                      ? <Alert severity="error">{authenticationError}</Alert>
+                      : null}
+                  </Stack>
+                )
+                : null}
+              {!loginSucceeded && challenge?.event === "login_challenge"
+                ? (
+                  <Stack spacing={1}>
+                    <Button
+                      variant="contained"
+                      {...authenticationPageTap}
                     >
-                      {loginState.detail ??
-                        loginState.state.replaceAll("_", " ")}
-                    </Alert>
-                  )
-                  : null}
-              </Stack>
-            )
-            : null}
+                      {challenge.user_code
+                        ? "Copy code & open sign-in"
+                        : authenticationCopy(
+                          resolveProviderAuthenticationPresentation(
+                            flow.provider.manifest.authentication,
+                          ),
+                        ).externalAction}
+                    </Button>
+                    <Typography variant="caption" color="text.secondary">
+                      {challenge.user_code
+                        ? "Cowboy copies the device code before opening the Provider page. Paste it only if the page does not fill it automatically. Close the browser to return here; Cowboy will keep waiting securely."
+                        : "After completing the Provider page, return to Cowboy. This dialog will keep waiting securely."}
+                    </Typography>
+                    {authenticationClipboardNotice
+                      ? (
+                        <Alert
+                          severity={authenticationClipboardNotice.startsWith(
+                              "Could not",
+                            )
+                            ? "warning"
+                            : "info"}
+                        >
+                          {authenticationClipboardNotice}
+                        </Alert>
+                      )
+                      : null}
+                    {authenticationError
+                      ? <Alert severity="warning">{authenticationError}</Alert>
+                      : null}
+                    {challenge.user_code
+                      ? (
+                        <Button
+                          variant="outlined"
+                          onClick={copyAuthenticationCode}
+                        >
+                          Copy {challenge.user_code}
+                        </Button>
+                      )
+                      : null}
+                    {challenge.input_required
+                      ? (
+                        <Stack spacing={1}>
+                          <TextField
+                            label={challenge.input_label ??
+                              "Authorization value"}
+                            type={challenge.secret_input ? "password" : "text"}
+                            value={loginInput}
+                            autoComplete="off"
+                            onChange={(event) =>
+                              setLoginInput(event.target.value)}
+                          />
+                          <Button
+                            variant="contained"
+                            disabled={!loginInput.trim()}
+                            onClick={() => void submitAuthentication()}
+                          >
+                            {authenticationCopy(
+                              resolveProviderAuthenticationPresentation(
+                                flow.provider.manifest.authentication,
+                              ),
+                            ).submit}
+                          </Button>
+                        </Stack>
+                      )
+                      : null}
+                  </Stack>
+                )
+                : flow.requestId && !loginSucceeded
+                ? (
+                  <Typography variant="body2">
+                    {authenticationCopy(
+                      resolveProviderAuthenticationPresentation(
+                        flow.provider.manifest.authentication,
+                      ),
+                    ).waiting}
+                  </Typography>
+                )
+                : null}
+              {loginState?.event === "login_state"
+                ? (
+                  <Alert
+                    severity={loginSucceeded
+                      ? "success"
+                      : loginState.state === "error" ||
+                          loginState.state === "unsupported"
+                      ? "error"
+                      : "info"}
+                  >
+                    {loginState.detail ??
+                      loginState.state.replaceAll("_", " ")}
+                  </Alert>
+                )
+                : null}
+            </Stack>
+          )
+          : null}
       </ConfirmSheet>
 
       <ConfirmSheet
@@ -1609,72 +1653,72 @@ function ProviderManagement(
           </>
         }
       >
-          {uninstallPlan
-            ? (
-              <Stack spacing={1.5} sx={{ pt: 0.5 }}>
-                <Alert severity="warning">{uninstallPlan.warning}</Alert>
-                <Typography variant="body2">
-                  {uninstallPlan.affected_sessions.length -
-                    uninstallPlan.active_session_ids.length} idle and{" "}
-                  {uninstallPlan.active_session_ids.length}{" "}
-                  active session{uninstallPlan.affected_sessions.length === 1
-                    ? ""
-                    : "s"}{" "}
-                  will leave ordinary Cowboy views immediately. Active turns are
-                  explicitly cancelled; they are not silently drained.
-                </Typography>
-                {uninstallPlan.affected_sessions.length > 0
-                  ? (
-                    <Paper
-                      variant="outlined"
-                      sx={{ p: 1, maxHeight: 180, overflow: "auto" }}
-                    >
-                      <Stack spacing={0.5}>
-                        {uninstallPlan.affected_sessions.map((session) => (
-                          <Typography key={session.id} variant="caption">
-                            {session.title} · {session.status} · {session.id}
-                          </Typography>
-                        ))}
-                      </Stack>
-                    </Paper>
-                  )
-                  : null}
-                <Typography variant="body2" fontWeight={700}>
-                  Permanent purge deadline:{" "}
-                  {absolutePurgeTime(uninstallPlan.purge_after_ms)}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Until then Cowboy retains the affected transcripts, queued
-                  messages and drafts, attachments, session metadata, and exact
-                  runtime identifiers as soft-deleted data. Reinstalling does
-                  not automatically restore them; the deadline is absolute and
-                  is not extended by retries.
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  Source projects, repositories, session worktrees, and files
-                  outside Cowboy's session database are not deleted. Cowboy
-                  Service authentication remains signed in, while this Machine's
-                  private credential projection is wiped.
-                </Typography>
-                {uninstallPlan.active_session_ids.length > 0
-                  ? (
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          checked={confirmActive}
-                          onChange={(event) =>
-                            setConfirmActive(event.target.checked)}
-                        />
-                      }
-                      label={`Stop and remove ${uninstallPlan.active_session_ids.length} active session${
-                        uninstallPlan.active_session_ids.length === 1 ? "" : "s"
-                      }`}
-                    />
-                  )
-                  : null}
-              </Stack>
-            )
-            : null}
+        {uninstallPlan
+          ? (
+            <Stack spacing={1.5} sx={{ pt: 0.5 }}>
+              <Alert severity="warning">{uninstallPlan.warning}</Alert>
+              <Typography variant="body2">
+                {uninstallPlan.affected_sessions.length -
+                  uninstallPlan.active_session_ids.length} idle and{" "}
+                {uninstallPlan.active_session_ids.length}{" "}
+                active session{uninstallPlan.affected_sessions.length === 1
+                  ? ""
+                  : "s"}{" "}
+                will leave ordinary Cowboy views immediately. Active turns are
+                explicitly cancelled; they are not silently drained.
+              </Typography>
+              {uninstallPlan.affected_sessions.length > 0
+                ? (
+                  <Paper
+                    variant="outlined"
+                    sx={{ p: 1, maxHeight: 180, overflow: "auto" }}
+                  >
+                    <Stack spacing={0.5}>
+                      {uninstallPlan.affected_sessions.map((session) => (
+                        <Typography key={session.id} variant="caption">
+                          {session.title} · {session.status} · {session.id}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Paper>
+                )
+                : null}
+              <Typography variant="body2" fontWeight={700}>
+                Permanent purge deadline:{" "}
+                {absolutePurgeTime(uninstallPlan.purge_after_ms)}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Until then Cowboy retains the affected transcripts, queued
+                messages and drafts, attachments, session metadata, and exact
+                runtime identifiers as soft-deleted data. Reinstalling does not
+                automatically restore them; the deadline is absolute and is not
+                extended by retries.
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Source projects, repositories, session worktrees, and files
+                outside Cowboy's session database are not deleted. Cowboy
+                Service authentication remains signed in, while this Machine's
+                private credential projection is wiped.
+              </Typography>
+              {uninstallPlan.active_session_ids.length > 0
+                ? (
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={confirmActive}
+                        onChange={(event) =>
+                          setConfirmActive(event.target.checked)}
+                      />
+                    }
+                    label={`Stop and remove ${uninstallPlan.active_session_ids.length} active session${
+                      uninstallPlan.active_session_ids.length === 1 ? "" : "s"
+                    }`}
+                  />
+                )
+                : null}
+            </Stack>
+          )
+          : null}
       </ConfirmSheet>
     </Stack>
   );
@@ -1721,7 +1765,9 @@ function serviceAuthenticationLabel(
     }
     return state;
   }
-  return `${shared ? "shared API key configured" : copy.ready}${auth.account_label ? ` · ${auth.account_label}` : ""}`;
+  return `${shared ? "shared API key configured" : copy.ready}${
+    auth.account_label ? ` · ${auth.account_label}` : ""
+  }`;
 }
 
 function authenticationCopy(
@@ -1754,32 +1800,31 @@ function authenticationCopy(
         clearFailed: "Provider sign-out failed",
         waiting: "Waiting for the Provider…",
       };
-    case "api_key":
-      {
-        const apiKeyCopy = {
-          title: "Configure API key for",
-          empty: "API key missing",
-          ready: "API key configured",
-          serviceDetail:
-            "This API key belongs to Cowboy Service. Cowboy stores one encrypted credential generation and synchronizes it to every enrolled Machine.",
-          chooseMethod: "Choose the Provider-declared API key credential.",
-          externalAction: "Get API key",
-          submit: "Save API key",
-          submitFailed: "Could not save the API key",
-          clearFailed: "Could not clear the API key",
-          waiting: "Preparing secure API key entry…",
-        };
-        if (!shared) return apiKeyCopy;
-        return {
-          ...apiKeyCopy,
-          title: "Configure shared API key for",
-          empty: "Shared API key missing",
-          serviceDetail:
-            "One DeepSeek API key belongs to Cowboy Service and is shared by every compatible DeepSeek Provider. Cowboy stores one encrypted credential generation and synchronizes each Provider projection to every enrolled Machine.",
-          chooseMethod:
-            "Enter the shared DeepSeek API key once. It will configure every compatible Provider.",
-        };
-      }
+    case "api_key": {
+      const apiKeyCopy = {
+        title: "Configure API key for",
+        empty: "API key missing",
+        ready: "API key configured",
+        serviceDetail:
+          "This API key belongs to Cowboy Service. Cowboy stores one encrypted credential generation and synchronizes it to every enrolled Machine.",
+        chooseMethod: "Choose the Provider-declared API key credential.",
+        externalAction: "Get API key",
+        submit: "Save API key",
+        submitFailed: "Could not save the API key",
+        clearFailed: "Could not clear the API key",
+        waiting: "Preparing secure API key entry…",
+      };
+      if (!shared) return apiKeyCopy;
+      return {
+        ...apiKeyCopy,
+        title: "Configure shared API key for",
+        empty: "Shared API key missing",
+        serviceDetail:
+          "One DeepSeek API key belongs to Cowboy Service and is shared by every compatible DeepSeek Provider. Cowboy stores one encrypted credential generation and synchronizes each Provider projection to every enrolled Machine.",
+        chooseMethod:
+          "Enter the shared DeepSeek API key once. It will configure every compatible Provider.",
+      };
+    }
     default:
       return assertUnhandled(presentation);
   }

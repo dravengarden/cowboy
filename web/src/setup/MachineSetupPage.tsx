@@ -21,12 +21,7 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { ProductAccountMenu } from "../auth/ProductAccountMenu";
-import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
-import { PluginSlot } from "@cowboy/plugin-api";
-
-if (globalThis.__COWBOY_PLUGIN_HOST) {
-  globalThis.__COWBOY_PLUGIN_HOST.components.PasskeysPanel = ProductPasskeysPanel;
-}
+import { ProductAccountPluginPanels } from "../auth/ProductAccountPluginPanels";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { FONT_PRESETS } from "../fonts";
 import {
@@ -44,7 +39,9 @@ import { needsMachineSetup } from "./machineReady";
 const MACHINE_SETUP_DOCS_URL = "";
 const MACHINE_SETUP_SKILL_URL = "";
 
-function SetupReference({ href, label }: { href: string; label: string }): React.JSX.Element {
+function SetupReference(
+  { href, label }: { href: string; label: string },
+): React.JSX.Element {
   if (!href) {
     return <Button disabled variant="text">{label} · Coming soon</Button>;
   }
@@ -72,12 +69,16 @@ function CopyBlock({
   return (
     <Stack spacing={0.75}>
       <Stack direction="row" alignItems="center" justifyContent="space-between">
-        <Typography variant="subtitle2" sx={{ fontWeight: 650 }}>{label}</Typography>
+        <Typography variant="subtitle2" sx={{ fontWeight: 650 }}>
+          {label}
+        </Typography>
         <Stack direction="row" spacing={0.25}>
           {secret
             ? (
               <IconButton
-                aria-label={revealed ? "Hide enrollment token" : "Show enrollment token"}
+                aria-label={revealed
+                  ? "Hide enrollment token"
+                  : "Show enrollment token"}
                 size="small"
                 onClick={(): void => setRevealed((value) => !value)}
               >
@@ -97,7 +98,9 @@ function CopyBlock({
               });
             }}
           >
-            {copied ? <Check fontSize="small" /> : <ContentCopy fontSize="small" />}
+            {copied
+              ? <Check fontSize="small" />
+              : <ContentCopy fontSize="small" />}
           </IconButton>
         </Stack>
       </Stack>
@@ -125,7 +128,9 @@ function CopyBlock({
           {displayedValue}
         </Typography>
       </Box>
-      <Typography color="text.secondary" sx={{ fontSize: 13 }}>{hint}</Typography>
+      <Typography color="text.secondary" sx={{ fontSize: 13 }}>
+        {hint}
+      </Typography>
     </Stack>
   );
 }
@@ -205,8 +210,15 @@ function SetupSettings({
       }}
     >
       <Box sx={{ px: 3, pt: 2.5, pb: 4 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-          <Typography sx={{ fontWeight: 700, fontSize: "1.25rem", letterSpacing: -0.4 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ mb: 1 }}
+        >
+          <Typography
+            sx={{ fontWeight: 700, fontSize: "1.25rem", letterSpacing: -0.4 }}
+          >
             Settings
           </Typography>
           <IconButton aria-label="Close settings" onClick={onClose}>
@@ -219,11 +231,21 @@ function SetupSettings({
         </Typography>
         <Stack spacing={3.5}>
           <Stack spacing={1.25}>
-            <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: "0.08em" }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: "0.08em" }}
+            >
               Appearance
             </Typography>
             <Typography variant="subtitle2">Theme</Typography>
-            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 0.75 }}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                gap: 0.75,
+              }}
+            >
               {themes.map((choice) => (
                 <Choice
                   key={choice}
@@ -236,27 +258,47 @@ function SetupSettings({
               ))}
             </Box>
             <Typography variant="subtitle2" sx={{ pt: 1 }}>Typeface</Typography>
-            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 0.75 }}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                gap: 0.75,
+              }}
+            >
               {FONT_PRESETS.map((preset, index) => (
                 <Choice
                   key={preset.id}
                   active={reading.fontVariant === preset.id}
                   onClick={(): void => setFontVariant(preset.id)}
                   ariaLabel={`${preset.label} typeface`}
-                  wide={index === FONT_PRESETS.length - 1 && FONT_PRESETS.length % 2 === 1}
+                  wide={index === FONT_PRESETS.length - 1 &&
+                    FONT_PRESETS.length % 2 === 1}
                 >
-                  <Typography component="span" sx={{ fontFamily: preset.stack, fontSize: "0.9rem" }} noWrap>
+                  <Typography
+                    component="span"
+                    sx={{ fontFamily: preset.stack, fontSize: "0.9rem" }}
+                    noWrap
+                  >
                     {preset.label}
                   </Typography>
                 </Choice>
               ))}
             </Box>
             <Typography variant="subtitle2" sx={{ pt: 1 }}>Size</Typography>
-            <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                gap: 0.75,
+              }}
+            >
               {FONT_SCALE_PRESETS.map((value) => (
                 <Choice
                   key={value}
-                  active={nearestPreset(reading.fontScale, FONT_SCALE_PRESETS) === value}
+                  active={nearestPreset(
+                    reading.fontScale,
+                    FONT_SCALE_PRESETS,
+                  ) === value}
                   onClick={(): void => setFontScale(value)}
                   ariaLabel={`${Math.round(value * 100)} percent font size`}
                 >
@@ -266,12 +308,14 @@ function SetupSettings({
             </Box>
           </Stack>
           <Stack spacing={1.25}>
-            <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: "0.08em" }}>
+            <Typography
+              variant="overline"
+              color="text.secondary"
+              sx={{ letterSpacing: "0.08em" }}
+            >
               Account
             </Typography>
-            <PluginSlot pluginId="passkey" slot="account.panel">
-              <ProductPasskeysPanel />
-            </PluginSlot>
+            <ProductAccountPluginPanels />
             <ProductAccountMenu />
           </Stack>
         </Stack>
@@ -289,14 +333,16 @@ export function MachineSetupPage(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [issued, setIssued] = useState<{
-    token: string;
-    machine_id: string;
-    display_name: string;
-    expires_in_seconds: number;
-    expires_at_ms: number;
-    origin: string;
-  } | null>(null);
+  const [issued, setIssued] = useState<
+    {
+      token: string;
+      machine_id: string;
+      display_name: string;
+      expires_in_seconds: number;
+      expires_at_ms: number;
+      origin: string;
+    } | null
+  >(null);
 
   useEffect(() => {
     if (!issued) return;
@@ -319,7 +365,10 @@ export function MachineSetupPage(): React.JSX.Element {
       method: "POST",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       body: JSON.stringify(name ? { display_name: name } : {}),
     })
       .then(async (response) => {
@@ -347,7 +396,9 @@ export function MachineSetupPage(): React.JSX.Element {
         setWaiting(true);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not create machine");
+        setError(
+          err instanceof Error ? err.message : "Could not create machine",
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -361,7 +412,10 @@ export function MachineSetupPage(): React.JSX.Element {
       method: "DELETE",
       cache: "no-store",
       credentials: "same-origin",
-      headers: { accept: "application/json", "content-type": "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
       body: JSON.stringify({ token }),
     })
       .then(async (response) => {
@@ -374,7 +428,11 @@ export function MachineSetupPage(): React.JSX.Element {
         setWaiting(false);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not discard enrollment code");
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Could not discard enrollment code",
+        );
       })
       .finally(() => setBusy(false));
   };
@@ -385,7 +443,9 @@ export function MachineSetupPage(): React.JSX.Element {
     ? Math.max(0, Math.ceil((issued.expires_at_ms - nowMs) / 1000))
     : 0;
   const expired = issued !== null && remainingSeconds === 0;
-  const expiryLabel = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, "0")}`;
+  const expiryLabel = `${Math.floor(remainingSeconds / 60)}:${
+    String(remainingSeconds % 60).padStart(2, "0")
+  }`;
 
   return (
     <Box
@@ -410,7 +470,10 @@ export function MachineSetupPage(): React.JSX.Element {
       >
         <SettingsIcon />
       </IconButton>
-      <SetupSettings open={settingsOpen} onClose={(): void => setSettingsOpen(false)} />
+      <SetupSettings
+        open={settingsOpen}
+        onClose={(): void => setSettingsOpen(false)}
+      />
       <Stack spacing={3} sx={{ width: "100%", maxWidth: 420 }}>
         <Box>
           <Typography
@@ -448,7 +511,9 @@ export function MachineSetupPage(): React.JSX.Element {
               <CopyBlock
                 label="Then paste this token"
                 value={issued.token}
-                hint={expired ? "This one-time token has expired." : `Shown once. Expires in ${expiryLabel}.`}
+                hint={expired
+                  ? "This one-time token has expired."
+                  : `Shown once. Expires in ${expiryLabel}.`}
                 secret
               />
               {expired
@@ -461,7 +526,8 @@ export function MachineSetupPage(): React.JSX.Element {
                       </Button>
                     }
                   >
-                    Enrollment code expired. Generate a fresh code before registering this computer.
+                    Enrollment code expired. Generate a fresh code before
+                    registering this computer.
                   </Alert>
                 )
                 : waiting
@@ -474,11 +540,18 @@ export function MachineSetupPage(): React.JSX.Element {
                   </Stack>
                 )
                 : (
-                  <Alert severity="success">Computer connected. Opening Cowboy…</Alert>
+                  <Alert severity="success">
+                    Computer connected. Opening Cowboy…
+                  </Alert>
                 )}
               {waiting || expired
                 ? (
-                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    alignItems="center"
+                    flexWrap="wrap"
+                  >
                     <Button
                       variant="text"
                       color="inherit"
@@ -516,33 +589,36 @@ export function MachineSetupPage(): React.JSX.Element {
                 {busy ? "Creating…" : "Create code"}
               </Button>
               <Typography color="text.secondary" sx={{ fontSize: 13 }}>
-                You will get
-                {" "}
+                You will get{" "}
                 <Box
                   component="span"
                   sx={{
-                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, monospace",
                     fontSize: 13,
                   }}
                 >
                   cowboy register {globalThis.location.origin}
-                </Box>
-                {" "}
+                </Box>{" "}
                 and a one-time token to paste.
               </Typography>
               <Typography color="text.secondary" sx={{ fontSize: 13 }}>
-                The default command runs in the current terminal. Add
-                {" "}
+                The default command runs in the current terminal. Add{" "}
                 <Box
                   component="span"
-                  sx={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
+                  sx={{
+                    fontFamily:
+                      "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  }}
                 >
                   --background
-                </Box>
-                {" "}
+                </Box>{" "}
                 to install and start a background service instead.
               </Typography>
-              <Typography color="text.secondary" sx={{ fontSize: 13, opacity: 0.8 }}>
+              <Typography
+                color="text.secondary"
+                sx={{ fontSize: 13, opacity: 0.8 }}
+              >
                 Signed in as {me.account}
               </Typography>
             </>

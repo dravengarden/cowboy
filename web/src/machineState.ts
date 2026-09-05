@@ -1,4 +1,4 @@
-import { occupancyProviderIds } from "./occupancyHostMap";
+import { providerOccupancySlot } from "./occupancyHostMap";
 import type { MachineSummary, SessionMeta } from "./protocol";
 
 /** Live revisions are monotonic for one Controller process. A connect resync
@@ -21,19 +21,24 @@ export function projectMachineOccupancy(
 ): readonly MachineSummary[] {
   const sessionLoads = new Map<
     string,
-    { active: number; providers: Map<string, number> }
+    { active: number; adapterSlots: Map<string, number> }
   >();
   for (const session of sessions) {
     if (session.status === "exited" || !session.machine_id) continue;
     let load = sessionLoads.get(session.machine_id);
     if (!load) {
-      load = { active: 0, providers: new Map() };
+      load = { active: 0, adapterSlots: new Map() };
       sessionLoads.set(session.machine_id, load);
     }
     load.active += 1;
-    load.providers.set(
+    const adapterSlot = providerOccupancySlot(
       session.provider,
-      (load.providers.get(session.provider) ?? 0) + 1,
+      session.provider_version,
+      session.provider_generation_digest,
+    ) ?? session.provider;
+    load.adapterSlots.set(
+      adapterSlot,
+      (load.adapterSlots.get(adapterSlot) ?? 0) + 1,
     );
   }
   let changed = false;
@@ -53,10 +58,7 @@ export function projectMachineOccupancy(
         component.id.kind === "provider_cli"
       ) {
         const slot = component.id.slot ?? "";
-        activeLeases = occupancyProviderIds(slot).reduce(
-          (sum, provider) => sum + (load?.providers.get(provider) ?? 0),
-          0,
-        );
+        activeLeases = load?.adapterSlots.get(slot) ?? 0;
       }
       if (activeLeases === component.active_leases) return component;
       componentsChanged = true;

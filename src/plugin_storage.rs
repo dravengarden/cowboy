@@ -1,9 +1,9 @@
 //! Plugin-owned storage on the controller database backend.
 //!
-//! PostgreSQL: one schema `plugin_<id>` per plugin, search_path locked, no
-//! access to `public`. SQLite: one file under `plugins/live/<id>/state/`.
-//! Core SQLx migrations are never used. A plugin migration failure marks that
-//! plugin unhealthy and does not abort the controller.
+//! `PostgreSQL`: one schema `plugin_<id>` per plugin, `search_path` locked, no
+//! access to `public`. `SQLite`: one file under `plugins/live/<id>/state/`.
+//! Core `SQLx` migrations are never used. A plugin migration failure rejects
+//! the candidate runtime; an explicitly selected host must activate at startup.
 
 #![warn(clippy::pedantic)]
 
@@ -225,36 +225,29 @@ async fn migrate_postgres(
         let checksum: String = row.try_get("checksum")?;
         applied_map.insert(version, checksum);
     }
+    validate_applied_migrations(plugin_id, "PostgreSQL", migrations, &applied_map)?;
     for migration in &migrations.migrations {
         let checksum = sql_checksum(&migration.sql);
-        match applied_map.get(&migration.version) {
-            Some(existing) => ensure!(
-                existing == &checksum,
-                "plugin {} PostgreSQL migration {} checksum mismatch",
-                plugin_id,
-                migration.version
-            ),
-            None => {
-                for statement in split_sql_statements(&migration.sql)? {
-                    sqlx::query(&statement)
-                        .execute(&mut *transaction)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "applying plugin {plugin_id} PostgreSQL migration {}",
-                                migration.version
-                            )
-                        })?;
-                }
-                sqlx::query(&format!(
-                    "INSERT INTO {MIGRATION_TABLE} (version, checksum) VALUES ($1, $2)"
-                ))
-                .bind(&migration.version)
-                .bind(&checksum)
-                .execute(&mut *transaction)
-                .await
-                .context("recording plugin PostgreSQL migration")?;
+        if !applied_map.contains_key(&migration.version) {
+            for statement in split_sql_statements(&migration.sql)? {
+                sqlx::query(&statement)
+                    .execute(&mut *transaction)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "applying plugin {plugin_id} PostgreSQL migration {}",
+                            migration.version
+                        )
+                    })?;
             }
+            sqlx::query(&format!(
+                "INSERT INTO {MIGRATION_TABLE} (version, checksum) VALUES ($1, $2)"
+            ))
+            .bind(&migration.version)
+            .bind(&checksum)
+            .execute(&mut *transaction)
+            .await
+            .context("recording plugin PostgreSQL migration")?;
         }
     }
     transaction
@@ -313,45 +306,38 @@ async fn migrate_sqlite(
         let checksum: String = row.try_get("checksum")?;
         applied_map.insert(version, checksum);
     }
+    validate_applied_migrations(plugin_id, "SQLite", migrations, &applied_map)?;
     for migration in &migrations.migrations {
         let checksum = sql_checksum(&migration.sql);
-        match applied_map.get(&migration.version) {
-            Some(existing) => ensure!(
-                existing == &checksum,
-                "plugin {} SQLite migration {} checksum mismatch",
-                plugin_id,
-                migration.version
-            ),
-            None => {
-                let mut transaction = pool
-                    .begin()
-                    .await
-                    .context("begin plugin SQLite migration")?;
-                for statement in split_sql_statements(&migration.sql)? {
-                    sqlx::query(&statement)
-                        .execute(&mut *transaction)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "applying plugin {plugin_id} SQLite migration {}",
-                                migration.version
-                            )
-                        })?;
-                }
-                sqlx::query(&format!(
-                    "INSERT INTO {MIGRATION_TABLE} (version, checksum, applied_at_ms) VALUES (?1, ?2, ?3)"
-                ))
-                .bind(&migration.version)
-                .bind(&checksum)
-                .bind(chrono::Utc::now().timestamp_millis())
-                .execute(&mut *transaction)
+        if !applied_map.contains_key(&migration.version) {
+            let mut transaction = pool
+                .begin()
                 .await
-                .context("recording plugin SQLite migration")?;
-                transaction
-                    .commit()
+                .context("begin plugin SQLite migration")?;
+            for statement in split_sql_statements(&migration.sql)? {
+                sqlx::query(&statement)
+                    .execute(&mut *transaction)
                     .await
-                    .context("commit plugin SQLite migration")?;
+                    .with_context(|| {
+                        format!(
+                            "applying plugin {plugin_id} SQLite migration {}",
+                            migration.version
+                        )
+                    })?;
             }
+            sqlx::query(&format!(
+                "INSERT INTO {MIGRATION_TABLE} (version, checksum, applied_at_ms) VALUES (?1, ?2, ?3)"
+            ))
+            .bind(&migration.version)
+            .bind(&checksum)
+            .bind(chrono::Utc::now().timestamp_millis())
+            .execute(&mut *transaction)
+            .await
+            .context("recording plugin SQLite migration")?;
+            transaction
+                .commit()
+                .await
+                .context("commit plugin SQLite migration")?;
         }
     }
     Ok(PluginNamespace {
@@ -362,6 +348,30 @@ async fn migrate_sqlite(
 
 fn sql_checksum(sql: &str) -> String {
     format!("sha256:{:x}", Sha256::digest(sql.as_bytes()))
+}
+
+fn validate_applied_migrations(
+    plugin_id: &str,
+    dialect: &str,
+    migrations: &PluginSqlMigrations,
+    applied: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    for (version, existing_checksum) in applied {
+        let migration = migrations
+            .migrations
+            .iter()
+            .find(|migration| migration.version == *version)
+            .with_context(|| {
+                format!(
+                    "plugin {plugin_id} {dialect} migration {version} is absent from the signed manifest"
+                )
+            })?;
+        ensure!(
+            existing_checksum == &sql_checksum(&migration.sql),
+            "plugin {plugin_id} {dialect} migration {version} checksum mismatch"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) async fn set_postgres_search_path(
@@ -404,6 +414,17 @@ mod tests {
                 }],
             },
         }
+    }
+
+    fn notes_storage_v2() -> PluginStorageSpec {
+        let mut storage = notes_storage();
+        let migration = PluginMigration {
+            version: "0002".to_owned(),
+            sql: "ALTER TABLE notes ADD COLUMN category TEXT;".to_owned(),
+        };
+        storage.postgres.migrations.push(migration.clone());
+        storage.sqlite.migrations.push(migration);
+        storage
     }
 
     #[tokio::test]
@@ -461,12 +482,24 @@ mod tests {
             )
             .is_err()
         );
+        storage
+            .migrate_plugin("usage-demo", &notes_storage_v2())
+            .await
+            .expect("upgrade plugin storage");
+        let downgrade = storage.migrate_plugin("usage-demo", &notes_storage()).await;
+        assert!(downgrade.is_err());
+        let downgrade = downgrade.err().expect("downgrade error");
+        assert!(
+            downgrade
+                .to_string()
+                .contains("absent from the signed manifest")
+        );
         drop(core);
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
-    #[ignore = "set COWBOY_TEST_POSTGRES_URL to an isolated empty database"]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
     async fn postgres_plugin_schema_cannot_read_public() {
         let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
             .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
@@ -520,6 +553,50 @@ mod tests {
                 "SELECT COUNT(*) FROM public.cowboy_plugin_secret"
             )
             .is_err()
+        );
+        storage
+            .migrate_plugin("usage-demo", &notes_storage_v2())
+            .await
+            .expect("upgrade plugin storage");
+        let downgrade = storage.migrate_plugin("usage-demo", &notes_storage()).await;
+        assert!(
+            downgrade
+                .err()
+                .expect("downgrade must fail")
+                .to_string()
+                .contains("absent from the signed manifest")
+        );
+        let mut broken = notes_storage_v2();
+        broken.postgres.migrations.push(PluginMigration {
+            version: "0003".to_owned(),
+            sql: "CREATE TABLE rollback_probe (id TEXT PRIMARY KEY); \
+                  INSERT INTO no_such_table (id) VALUES ('fail');"
+                .to_owned(),
+        });
+        assert!(storage.migrate_plugin("usage-demo", &broken).await.is_err());
+        let rolled_back: bool =
+            sqlx::query_scalar("SELECT to_regclass('plugin_usage_demo.rollback_probe') IS NULL")
+                .fetch_one(core.postgres_pool().unwrap())
+                .await
+                .unwrap();
+        assert!(
+            rolled_back,
+            "failed migration left a partially applied schema"
+        );
+        assert_eq!(
+            namespace
+                .fetch_i64("SELECT COUNT(*) FROM _cowboy_plugin_migrations")
+                .await
+                .unwrap(),
+            2
+        );
+        let core_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cowboy_plugin_secret")
+            .fetch_one(core.postgres_pool().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            core_count, 1,
+            "plugin search_path leaked into the core pool"
         );
         drop(core);
         let _ = std::fs::remove_dir_all(root);

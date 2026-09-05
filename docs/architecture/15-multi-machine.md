@@ -246,7 +246,7 @@ interval, source age, and an opaque source-request fingerprint. Existing
 request/error/cache/spend aggregates filter to interactive rows; protection
 attempts, hits, misses, retries, preemptions, tokens, duration, age, interval,
 and price have a separate read model. The Machine also exposes a bounded
-`deepseek-cache-status` adapter operation that queries only its local gateway;
+`provider-cache-status` adapter operation that queries only its local gateway;
 the controller never receives a retained request body.
 
 Schema-v4 rollout and rollback follow the same controller-first and drain-first

@@ -1,9 +1,9 @@
 import { assertEquals } from "jsr:@std/assert";
-import {
-  usageWidgetForAccount,
-  usageWidgetHasBalance,
-  usageWidgetProviders,
-} from "./usageWidget";
+import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
+import { applyUsageHostPlugins } from "./usageHostMap.ts";
+import { usageWidgetForAccount, usageWidgetProviders } from "./usageWidget";
+
+applyUsageHostPlugins(testFirstPartyHostPlugins());
 
 Deno.test("usage widget aggregates supported providers and drops unsupported placeholders", () => {
   const providers = usageWidgetProviders({
@@ -43,6 +43,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
           }],
         },
         activity: {
+          pricing: { currency: "CNY" },
           summary: {
             requests: 2,
             cacheObservations: 2,
@@ -63,7 +64,7 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
                 inputTokens: 1_000_000,
                 pricedInputTokens: 1_000_000,
                 outputTokens: 1_000_000,
-                estimatedCny: 2.51,
+                estimatedCost: 2.51,
               },
             },
           },
@@ -116,8 +117,9 @@ Deno.test("usage widget aggregates supported providers and drops unsupported pla
     {
       kind: "deepseek-balance",
       label: "DeepSeek",
-      balanceCny: 108.8,
-      spend24hCny: 2.51,
+      currency: "CNY",
+      balance: 108.8,
+      spend24h: 2.51,
       spend24hPriceCoverage: 100,
       cacheHitRate: 90,
       cacheMissRate: 10,
@@ -136,9 +138,14 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
       status: "available",
       source: "test",
       observed_at_ms: 1,
-      account: { balanceInfos: [{ currency: "CNY", total_balance: "12" }] },
+      account: { balanceInfos: [{ currency: "EUR", total_balance: "12" }] },
       activity: {
-        summary: { cacheObservations: 1, cacheHitTokens: 1, cacheMissTokens: 9 },
+        pricing: { currency: "EUR" },
+        summary: {
+          cacheObservations: 1,
+          cacheHitTokens: 1,
+          cacheMissTokens: 9,
+        },
         last24Hours: {
           summary: {
             requests: 4,
@@ -147,14 +154,16 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
             cacheHitTokens: 8,
             cacheMissTokens: 2,
           },
-          cost: { summary: {
-            requests: 1,
-            inputTokens: 100,
-            pricedInputTokens: 50,
-            unpricedInputTokens: 50,
-            outputTokens: 20,
-            estimatedCny: 0.07,
-          } },
+          cost: {
+            summary: {
+              requests: 1,
+              inputTokens: 100,
+              pricedInputTokens: 50,
+              unpricedInputTokens: 50,
+              outputTokens: 20,
+              estimatedCost: 0.07,
+            },
+          },
         },
       },
     }],
@@ -162,8 +171,9 @@ Deno.test("usage widget marks partial 24h valuation and keeps the same cache win
   assertEquals(providers, [{
     kind: "deepseek-balance",
     label: "DeepSeek",
-    balanceCny: 12,
-    spend24hCny: 0.07,
+    currency: "EUR",
+    balance: 12,
+    spend24h: 0.07,
     spend24hPriceCoverage: 70 / 120 * 100,
     cacheHitRate: 80,
     cacheMissRate: 20,

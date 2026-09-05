@@ -87,9 +87,11 @@ component-package-check:
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
-    deno check tools/check-plugin-components.ts tools/write-plugin-host-bundle.ts
+    deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
+    deno check tools/check-plugin-components.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
+    deno test --no-check --allow-read components/plugin-api/*.test.ts
     deno test --allow-read tools/check-plugin-components_test.ts
-    deno test --allow-read --allow-write --allow-env --allow-run=deno,ssh-keygen tools/write-plugin-host-bundle_test.ts
+    deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
     deno run --allow-read tools/check-plugin-components.ts
 
 plugin-build PLUGIN:
@@ -102,18 +104,8 @@ plugin-build PLUGIN:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
       "plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
       "cowboy-plugin://{{PLUGIN}}"
-    host_args=("plugins/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
-    release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
-    if [ -f "$release" ]; then
-      host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
-    fi
-    if [ -n "${COWBOY_PLUGIN_PUBLISHER_KEY:-}" ]; then
-      host_args+=(--sign "$COWBOY_PLUGIN_PUBLISHER_KEY")
-    fi
-    deno run --allow-read --allow-write --allow-run=ssh-keygen \
-      tools/write-plugin-host-bundle.ts "${host_args[@]}"
 
-example-auth-bundle PLUGIN PRIVATE_KEY="":
+example-auth-bundle PLUGIN:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
@@ -122,16 +114,17 @@ example-auth-bundle PLUGIN PRIVATE_KEY="":
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
       "examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
       "cowboy-plugin://{{PLUGIN}}"
-    host_args=("examples/authentication/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
-    release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
-    if [ -f "$release" ]; then
-      host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
-    fi
-    if [ -n "{{PRIVATE_KEY}}" ]; then
-      host_args+=(--sign "{{PRIVATE_KEY}}")
-    fi
-    deno run --allow-read --allow-write --allow-run=ssh-keygen \
-      tools/write-plugin-host-bundle.ts "${host_args[@]}"
+
+# Every bootstrap login host must have an independently buildable signed
+# Plugin source. Discovery deliberately has no list of authentication IDs.
+example-auth-build-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for host in examples/authentication/*/host.json; do
+      source_dir="${host%/host.json}"
+      test -f "$source_dir/plugin.json"
+      just example-auth-bundle "${source_dir##*/}"
+    done
 
 plugin-build-all:
     for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
@@ -150,7 +143,11 @@ plugin-isolation-check PLUGIN="codex":
     cd "$isolation_root"
     "$repo_root/target/debug/cowboy-plugin-pack" build "$repo_root/plugins/{{PLUGIN}}" "{{PLUGIN}}.cowboy-plugin"
     test -s "{{PLUGIN}}.cowboy-plugin"
+    test -s "{{PLUGIN}}.hostbundle.json"
     test -s "{{PLUGIN}}.release.json"
+    host_digest="$(sha256sum "{{PLUGIN}}.hostbundle.json" | cut -d' ' -f1)"
+    test "$(jq -r .release_schema "{{PLUGIN}}.release.json")" = 2
+    test "$(jq -r .host_bundle_digest "{{PLUGIN}}.release.json")" = "sha256:$host_digest"
 
 # Agent Plugin payload helper. Its output is the generic runtime manifest
 # consumed by plugin-bind-runtime; it is not an independent release lifecycle.
@@ -182,30 +179,28 @@ plugin-sign PLUGIN PRIVATE_KEY:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    host_args=()
+    host_bundle="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"
+    if [ -f "$host_bundle" ]; then
+      host_args+=("$host_bundle")
+    fi
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- sign \
       "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
       "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" \
-      "{{PRIVATE_KEY}}"
-    if [ -f "plugins/{{PLUGIN}}/host.json" ]; then
-      src="plugins/{{PLUGIN}}"
-    elif [ -f "examples/authentication/{{PLUGIN}}/host.json" ]; then
-      src="examples/authentication/{{PLUGIN}}"
-    else
-      src=""
-    fi
-    if [ -n "$src" ]; then
-      host_args=("$src" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json")
-      release="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json"
-      if [ -f "$release" ]; then
-        host_args+=("$(jq -er '.package_digest | select(test("^sha256:[a-f0-9]{64}$"))' "$release")")
-      fi
-      host_args+=(--sign "{{PRIVATE_KEY}}")
-      deno run --allow-read --allow-write --allow-run=ssh-keygen \
-        tools/write-plugin-host-bundle.ts "${host_args[@]}"
-    fi
+      "{{PRIVATE_KEY}}" "${host_args[@]}"
 
 plugin-verify PLUGIN PUBLIC_KEY:
-    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- verify "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{PUBLIC_KEY}}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host_args=()
+    host_bundle="dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"
+    if [ -f "$host_bundle" ]; then
+      host_args+=("$host_bundle")
+    fi
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- verify \
+      "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+      "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" \
+      "{{PUBLIC_KEY}}" "${host_args[@]}"
 
 plugin-publish PLUGIN CATALOG PUBLIC_KEY:
     just plugin-verify "{{PLUGIN}}" "{{PUBLIC_KEY}}"
@@ -229,6 +224,7 @@ provider-check: plugin-check
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
+    just example-auth-build-all
     just plugin-isolation-check codex
     cd web && deno task typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
@@ -270,7 +266,12 @@ test:
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 
-check: toolchain-check provider-check site-check fmt lint dependencies typecheck feature-check test build
+# Ignored PostgreSQL tests each get a fresh database in a private, temporary
+# cluster. Never consumes a caller-provided database URL or starts a TCP listener.
+test-postgres:
+    bash tools/test-postgres.sh
+
+check: toolchain-check provider-check site-check fmt lint dependencies typecheck feature-check test test-postgres build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

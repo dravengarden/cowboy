@@ -23,9 +23,9 @@ import {
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
 import { isBundleRecoveryUrl } from "./moduleRecovery";
-import { installCowboyPluginHost } from "./pluginHost";
+import { installCowboyPluginRenderers } from "./pluginHost";
 
-installCowboyPluginHost();
+installCowboyPluginRenderers();
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");

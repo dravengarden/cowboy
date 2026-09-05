@@ -8,6 +8,7 @@ interface PluginRelease {
   artifact_digest: string;
   artifact_url: string;
   publisher: string;
+  host_bundle_digest?: string;
   signature: string;
   runtime_artifacts: Array<{
     os: string;
@@ -37,13 +38,36 @@ const releasePath = `${sourceRoot}/${pluginId}.release.json`;
 const release = JSON.parse(
   await Deno.readTextFile(releasePath),
 ) as PluginRelease;
-if (release.plugin_id !== pluginId || release.release_schema !== 1) {
+if (
+  release.plugin_id !== pluginId ||
+  ![1, 2].includes(release.release_schema)
+) {
   throw new Error("release identity or schema mismatch");
 }
 if (!release.signature.trim()) throw new Error("Plugin release is unsigned");
 const packageDigest = await sha256(packagePath);
 if (release.package_digest !== `sha256:${packageDigest}`) {
   throw new Error("Plugin package digest mismatch");
+}
+if (
+  (release.release_schema === 1) !==
+    (release.host_bundle_digest === undefined)
+) {
+  throw new Error("Plugin release/host bundle schema mismatch");
+}
+const hostBundleSource = `${sourceRoot}/${pluginId}.hostbundle.json`;
+if (release.host_bundle_digest !== undefined) {
+  digestValue(release.host_bundle_digest);
+  if (!await exists(hostBundleSource)) {
+    throw new Error("bound Plugin host bundle is missing");
+  }
+  if (
+    release.host_bundle_digest !== `sha256:${await sha256(hostBundleSource)}`
+  ) {
+    throw new Error("Plugin host bundle digest mismatch");
+  }
+} else if (await exists(hostBundleSource)) {
+  throw new Error("Plugin host bundle is not bound by the signed release");
 }
 
 const publicKey = (await Deno.readTextFile(publicKeyPath)).trim();
@@ -95,11 +119,17 @@ for (const target of release.runtime_artifacts) {
 }
 
 const releaseDigest = digestValue(release.artifact_digest);
-const catalogStem =
-  `${pluginId}-${release.plugin_version}-${releaseDigest}`;
+const catalogStem = `${pluginId}-${release.plugin_version}-${releaseDigest}`;
 const catalogPackage = `${catalogRoot}/${catalogStem}.cowboy-plugin`;
 const catalogRelease = `${catalogRoot}/${catalogStem}.release.json`;
+const catalogHostBundle = `${catalogRoot}/${catalogStem}.hostbundle.json`;
 await copyImmutable(packagePath, catalogPackage, 0o644);
+if (release.host_bundle_digest !== undefined) {
+  await copyImmutable(hostBundleSource, catalogHostBundle, 0o644);
+}
+// The release envelope is the Catalog commit marker. Publish every byte it
+// binds first so a concurrent refresh sees either the old Catalog or one
+// complete immutable release, never a package/host half-transaction.
 await copyImmutable(releasePath, catalogRelease, 0o644);
 
 const receiptIdentity = {

@@ -1,7 +1,155 @@
 {
   "schema_version": 1,
   "adapter_slot": "gemini",
-  "cli_auth": "gemini-env",
+  "cli_auth": "rules-v1",
+  "cli_auth_rules": {
+    "rules": [
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "json-string",
+              "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+              "pointer": "/security/auth/selectedType",
+              "value": "oauth-personal"
+            },
+            { "op": "exists", "source": { "kind": "file", "path": "${HOME}/.gemini/oauth_creds.json" } },
+            {
+              "op": "any",
+              "values": [
+                { "op": "nonempty", "source": { "kind": "env", "name": "GOOGLE_CLOUD_PROJECT" } },
+                { "op": "nonempty", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GOOGLE_CLOUD_PROJECT" } }
+              ]
+            }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Code Assist Standard/Enterprise Google Login" }
+      },
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "json-string",
+              "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+              "pointer": "/security/auth/selectedType",
+              "value": "oauth-personal"
+            },
+            { "op": "exists", "source": { "kind": "file", "path": "${HOME}/.gemini/oauth_creds.json" } }
+          ]
+        },
+        "outcome": {
+          "state": "signed-out",
+          "detail": "Personal Google Login is no longer supported by Gemini CLI. Use Antigravity for personal, Google AI Pro, or Google AI Ultra accounts. Cowboy Gemini sessions require GEMINI_API_KEY or a Code Assist Standard/Enterprise Google Cloud project."
+        }
+      },
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "json-string",
+              "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+              "pointer": "/security/auth/selectedType",
+              "value": "gemini-api-key"
+            },
+            {
+              "op": "any",
+              "values": [
+                { "op": "nonempty", "source": { "kind": "env", "name": "GEMINI_API_KEY" } },
+                { "op": "nonempty", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GEMINI_API_KEY" } }
+              ]
+            }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Gemini API key" }
+      },
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "any",
+              "values": [
+                {
+                  "op": "json-string",
+                  "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+                  "pointer": "/security/auth/selectedType",
+                  "value": "vertex-ai"
+                },
+                {
+                  "op": "json-string",
+                  "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+                  "pointer": "/security/auth/selectedType",
+                  "value": "compute-default-credentials"
+                }
+              ]
+            },
+            {
+              "op": "any",
+              "values": [
+                { "op": "equals", "source": { "kind": "env", "name": "GOOGLE_GENAI_USE_VERTEXAI" }, "value": "true", "ignore_case": true },
+                { "op": "equals", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GOOGLE_GENAI_USE_VERTEXAI" }, "value": "true", "ignore_case": true }
+              ]
+            },
+            {
+              "op": "any",
+              "values": [
+                { "op": "nonempty", "source": { "kind": "env", "name": "GOOGLE_CLOUD_PROJECT" } },
+                { "op": "nonempty", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GOOGLE_CLOUD_PROJECT" } },
+                { "op": "nonempty", "source": { "kind": "env", "name": "GOOGLE_API_KEY" } },
+                { "op": "nonempty", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GOOGLE_API_KEY" } }
+              ]
+            }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Vertex AI" }
+      },
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "json-string",
+              "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+              "pointer": "/security/auth/selectedType",
+              "value": "gateway"
+            },
+            { "op": "nonempty", "source": { "kind": "env", "name": "GOOGLE_GEMINI_BASE_URL" } }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Gemini API gateway" }
+      },
+      {
+        "when": {
+          "op": "all",
+          "values": [
+            {
+              "op": "not",
+              "value": {
+                "op": "json-string",
+                "source": { "kind": "file", "path": "${HOME}/.gemini/settings.json" },
+                "pointer": "/security/auth/selectedType"
+              }
+            },
+            {
+              "op": "any",
+              "values": [
+                { "op": "nonempty", "source": { "kind": "env", "name": "GEMINI_API_KEY" } },
+                { "op": "nonempty", "source": { "kind": "dotenv", "path": "${HOME}/.gemini/.env", "key": "GEMINI_API_KEY" } }
+              ]
+            }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Gemini API key" }
+      }
+    ],
+    "fallback": {
+      "state": "signed-out",
+      "detail": "Configure GEMINI_API_KEY, Vertex AI, or a Code Assist Standard/Enterprise Google Cloud project."
+    }
+  },
   "visual": {
     "light": { "primary": "#1A73E8", "secondary": "#7C4DFF" },
     "dark": { "primary": "#8AB4F8", "secondary": "#C58AF9" }
@@ -13,14 +161,17 @@
     "provider.settings"
   ],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "provider.usage": "provider-usage-v1",
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
   },
   "usage": {
     "account": "gemini",
     "product": "Gemini",
-    "session_overlay": "gemini-session-only",
     "order": 4,
     "empty": "Account quota is not exposed by this Provider."
   }

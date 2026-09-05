@@ -88,9 +88,13 @@ export function activityAvailableAgents(
 ): string[] {
   if (!Array.isArray(activity?.availableAgents)) return [];
   const known = new Set(knownIds);
-  return [...new Set(activity.availableAgents.filter((agent): agent is string =>
-    typeof agent === "string" && known.has(agent)
-  ))];
+  return [
+    ...new Set(
+      activity.availableAgents.filter((agent): agent is string =>
+        typeof agent === "string" && known.has(agent)
+      ),
+    ),
+  ];
 }
 
 /** Runtime lanes to keep visible even when the active filter has no events. */
@@ -117,11 +121,11 @@ export function percentLabel(value: number | undefined): string {
 
 /** Backend-valued spend and cache economics for one exact model mix. */
 export interface ActivityCostStats {
-  estimatedCny: number;
-  noCacheCny: number;
-  allHitFloorCny: number;
-  cacheSavingsCny: number;
-  cacheMissPremiumCny: number;
+  estimatedCost: number;
+  noCacheCost: number;
+  allHitFloorCost: number;
+  cacheSavings: number;
+  cacheMissPremium: number;
   totalTokens: number;
   requests: number;
   usageObservedRequests: number;
@@ -133,8 +137,8 @@ export interface ActivityCostStats {
   unpricedOutputTokens: number;
   reasoningTokens: number;
   modelFamilies: string[];
-  costPerRequestCny: number;
-  costPerMTokensCny: number;
+  costPerRequest: number;
+  costPerMTokens: number;
   avgTokensPerRequest: number;
   priceCoverageRate: number | undefined;
 }
@@ -149,7 +153,7 @@ export function activityCostStats(
   value: Record<string, unknown> | undefined,
 ): ActivityCostStats | undefined {
   if (!value) return undefined;
-  const estimatedCny = finite(value.estimatedCny);
+  const estimatedCost = finite(value.estimatedCost);
   const requests = finite(value.requests);
   const inputTokens = finite(value.inputTokens);
   const pricedInputTokens = finite(value.pricedInputTokens);
@@ -160,11 +164,11 @@ export function activityCostStats(
   const pricedTokens = pricedInputTokens +
     Math.max(0, outputTokens - unpricedOutputTokens);
   return {
-    estimatedCny,
-    noCacheCny: finite(value.noCacheCny),
-    allHitFloorCny: finite(value.allHitFloorCny),
-    cacheSavingsCny: finite(value.cacheSavingsCny),
-    cacheMissPremiumCny: finite(value.cacheMissPremiumCny),
+    estimatedCost,
+    noCacheCost: finite(value.noCacheCost),
+    allHitFloorCost: finite(value.allHitFloorCost),
+    cacheSavings: finite(value.cacheSavings),
+    cacheMissPremium: finite(value.cacheMissPremium),
     totalTokens,
     requests,
     usageObservedRequests: finite(value.usageObservedRequests),
@@ -180,12 +184,11 @@ export function activityCostStats(
         typeof family === "string"
       )
       : [],
-    costPerRequestCny: requests > 0 ? estimatedCny / requests : 0,
-    costPerMTokensCny: totalTokens > 0
-      ? estimatedCny / totalTokens * 1e6
-      : 0,
+    costPerRequest: requests > 0 ? estimatedCost / requests : 0,
+    costPerMTokens: totalTokens > 0 ? estimatedCost / totalTokens * 1e6 : 0,
     avgTokensPerRequest: requests > 0 ? totalTokens / requests : 0,
-    priceCoverageRate: totalTokens > 0 ? pricedTokens * 100 / totalTokens
+    priceCoverageRate: totalTokens > 0
+      ? pricedTokens * 100 / totalTokens
       : undefined,
   };
 }

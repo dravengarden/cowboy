@@ -5,14 +5,12 @@
 use cowboy_provider_sdk::ConfigurationBehavior;
 use sha2::{Digest as _, Sha256};
 
-#[cfg(feature = "full")]
-pub const CONFIG_ID: &str = "deepseek_cache_protection";
 pub const SESSION_POLICY_ENV: &str = "COWBOY_DEEPSEEK_CACHE_PROTECTION";
 
 #[must_use]
 #[cfg(feature = "full")]
 pub fn minimum_hit_tokens() -> u64 {
-    crate::plugin_runtime_args::deepseek_cache_protection().min_hit_tokens
+    crate::plugin_runtime_args::cache_protection_policy().min_hit_tokens
 }
 
 #[must_use]
@@ -20,7 +18,7 @@ pub fn minimum_hit_tokens() -> u64 {
 pub fn unavailable_message() -> String {
     format!(
         "{} is unavailable for this session",
-        crate::plugin_runtime_args::deepseek_cache_protection().option_name
+        crate::plugin_runtime_args::cache_protection_policy().option_name
     )
 }
 
@@ -29,7 +27,7 @@ pub fn unavailable_message() -> String {
 pub fn boolean_required_message() -> String {
     format!(
         "{} must be a boolean",
-        crate::plugin_runtime_args::deepseek_cache_protection().option_name
+        crate::plugin_runtime_args::cache_protection_policy().option_name
     )
 }
 #[cfg(feature = "machine-host")]
@@ -51,10 +49,14 @@ pub fn supported_behavior(behavior: &ConfigurationBehavior) -> bool {
 
 #[must_use]
 #[cfg(feature = "full")]
-pub fn selected(preferences: &serde_json::Value, behavior: &ConfigurationBehavior) -> Option<bool> {
+pub fn selected(
+    preferences: &serde_json::Value,
+    behavior: &ConfigurationBehavior,
+    option_id: &str,
+) -> Option<bool> {
     supported_behavior(behavior).then(|| {
         preferences
-            .get(CONFIG_ID)
+            .get(option_id)
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true)
     })
@@ -133,11 +135,15 @@ pub async fn local_snapshot_status(
 
 #[must_use]
 #[cfg(feature = "full")]
-pub fn config_option(behavior: &ConfigurationBehavior, enabled: bool) -> Option<serde_json::Value> {
+pub fn config_option(
+    behavior: &ConfigurationBehavior,
+    enabled: bool,
+    option_id: &str,
+) -> Option<serde_json::Value> {
     supported_behavior(behavior).then(|| {
-        let protection = crate::plugin_runtime_args::deepseek_cache_protection();
+        let protection = crate::plugin_runtime_args::cache_protection_policy();
         serde_json::json!({
-            "id": CONFIG_ID,
+            "id": option_id,
             "name": protection.option_name,
             "description": protection.option_description,
             "category": "model_config",
@@ -162,16 +168,21 @@ mod tests {
     #[cfg(feature = "full")]
     #[test]
     fn deepseek_defaults_to_auto_and_preserves_explicit_off() {
-        assert_eq!(selected(&serde_json::json!({}), &CODEX), Some(true));
+        assert_eq!(
+            selected(&serde_json::json!({}), &CODEX, "cache"),
+            Some(true)
+        );
         assert_eq!(
             selected(
                 &serde_json::json!({"deepseek_cache_protection": false}),
-                &CLAUDE
+                &CLAUDE,
+                "deepseek_cache_protection"
             ),
             Some(false)
         );
-        assert_eq!(selected(&serde_json::json!({}), &PORTABLE), None);
-        let option = config_option(&CODEX, true).expect("DeepSeek cache-protection option");
+        assert_eq!(selected(&serde_json::json!({}), &PORTABLE, "cache"), None);
+        let option =
+            config_option(&CODEX, true, "cache").expect("DeepSeek cache-protection option");
         assert_eq!(minimum_hit_tokens(), 64_000);
         assert_eq!(option["name"], "Cache protection");
         assert_eq!(option["options"][0]["name"], "Auto · recommended");

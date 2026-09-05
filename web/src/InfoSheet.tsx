@@ -13,7 +13,6 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import { ExpandMore, Refresh } from "@mui/icons-material";
@@ -23,20 +22,20 @@ import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "@cowboy/plugin-api";
 import {
   acceptedScheduleTime,
+  accountProviderLabel,
   type JsonRecord,
   nearestAvailableResetCredit,
   num,
-  accountProviderLabel,
   type ProviderUsage,
   providerUsageErrorMessage,
   providerUsageSlotContext,
   record,
   relativeUpdateTime,
   scheduledResetCountdown,
-  type UsageLimit,
-  usageCardProviders,
   usageAvailableStatus,
+  usageCardProviders,
   usageEmptyMessage,
+  type UsageLimit,
   usageLimits,
   usageOmitEmptyLimits,
   usagePluginId,
@@ -84,7 +83,6 @@ function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
     </Stack>
   );
 }
-
 
 interface MetricsData {
   db_bytes: number;
@@ -382,13 +380,17 @@ function ProviderUsageCardBody({
                 size="small"
                 sx={{ width: 32, height: 32 }}
               >
-                <Refresh sx={{
-                  fontSize: 17,
-                  ...(refreshBusy && {
-                    animation: "cowboy-card-refresh 700ms linear infinite",
-                    "@keyframes cowboy-card-refresh": { to: { transform: "rotate(360deg)" } },
-                  }),
-                }} />
+                <Refresh
+                  sx={{
+                    fontSize: 17,
+                    ...(refreshBusy && {
+                      animation: "cowboy-card-refresh 700ms linear infinite",
+                      "@keyframes cowboy-card-refresh": {
+                        to: { transform: "rotate(360deg)" },
+                      },
+                    }),
+                  }}
+                />
               </NetworkIconButton>
             )}
           </Stack>
@@ -417,9 +419,17 @@ function ProviderUsageCardBody({
           >
             <AccordionSummary
               expandIcon={<ExpandMore />}
-              sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
+              sx={{
+                minHeight: 40,
+                px: 0,
+                "& .MuiAccordionSummary-content": { my: 0.5 },
+              }}
             >
-              <Stack direction="row" justifyContent="space-between" sx={{ width: "100%", pr: 1 }}>
+              <Stack
+                direction="row"
+                justifyContent="space-between"
+                sx={{ width: "100%", pr: 1 }}
+              >
                 <Typography variant="body2" sx={{ fontWeight: 600 }}>
                   Usage limit resets
                 </Typography>
@@ -433,93 +443,93 @@ function ProviderUsageCardBody({
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
               <Divider />
               {credits.map((credit, index) => {
-              const expiresAt = num(credit.expiresAt);
-              const actionable = str(credit.id) === nearestCreditId;
-              const row = (
-                <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
-                  <Stack
-                    direction="row"
-                    justifyContent="space-between"
-                    spacing={1}
-                    alignItems="baseline"
-                  >
-                    <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                      {str(credit.title) ?? "Rate-limit reset"}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      color={actionable ? "primary.main" : "text.secondary"}
-                      fontWeight={actionable ? 700 : 400}
-                    >
-                      {actionable
-                        ? schedule ? "Scheduled" : "Use next"
-                        : "Available"}
-                    </Typography>
-                  </Stack>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mt: 0.25 }}
-                  >
-                    {expiresAt === undefined
-                      ? "No expiry reported"
-                      : `Expires ${fullDateTime(expiresAt)}`}
-                  </Typography>
-                </Box>
-              );
-              return (
-                <Box
-                  key={str(credit.id) ?? index}
-                  sx={{
-                    borderBottom: index < credits.length - 1 ? 1 : 0,
-                    borderColor: "divider",
-                  }}
-                >
-                  {actionable && !schedule
-                    ? (
-                      <ButtonBase
-                        onClick={openResetDialog}
-                        sx={{ width: "100%", borderRadius: 1 }}
-                      >
-                        {row}
-                      </ButtonBase>
-                    )
-                    : row}
-                  {actionable && schedule && (
+                const expiresAt = num(credit.expiresAt);
+                const actionable = str(credit.id) === nearestCreditId;
+                const row = (
+                  <Box sx={{ py: 1.1, width: "100%", textAlign: "left" }}>
                     <Stack
                       direction="row"
-                      alignItems="center"
                       justifyContent="space-between"
                       spacing={1}
-                      sx={{ pb: 1.1 }}
+                      alignItems="baseline"
                     >
-                      <Box>
-                        <Typography
-                          variant="caption"
-                          color="primary.main"
-                          fontWeight={700}
-                        >
-                          {scheduledResetCountdown(schedule.fire_at_ms, now)}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block" }}
-                        >
-                          {fullDateTime(schedule.fire_at_ms / 1000)}
-                        </Typography>
-                      </Box>
-                      <NetworkButton
-                        size="small"
-                        disabled={resetBusy}
-                        networkAction={cancelSchedule}
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {str(credit.title) ?? "Rate-limit reset"}
+                      </Typography>
+                      <Typography
+                        variant="caption"
+                        color={actionable ? "primary.main" : "text.secondary"}
+                        fontWeight={actionable ? 700 : 400}
                       >
-                        Cancel
-                      </NetworkButton>
+                        {actionable
+                          ? schedule ? "Scheduled" : "Use next"
+                          : "Available"}
+                      </Typography>
                     </Stack>
-                  )}
-                </Box>
-              );
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: "block", mt: 0.25 }}
+                    >
+                      {expiresAt === undefined
+                        ? "No expiry reported"
+                        : `Expires ${fullDateTime(expiresAt)}`}
+                    </Typography>
+                  </Box>
+                );
+                return (
+                  <Box
+                    key={str(credit.id) ?? index}
+                    sx={{
+                      borderBottom: index < credits.length - 1 ? 1 : 0,
+                      borderColor: "divider",
+                    }}
+                  >
+                    {actionable && !schedule
+                      ? (
+                        <ButtonBase
+                          onClick={openResetDialog}
+                          sx={{ width: "100%", borderRadius: 1 }}
+                        >
+                          {row}
+                        </ButtonBase>
+                      )
+                      : row}
+                    {actionable && schedule && (
+                      <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                        spacing={1}
+                        sx={{ pb: 1.1 }}
+                      >
+                        <Box>
+                          <Typography
+                            variant="caption"
+                            color="primary.main"
+                            fontWeight={700}
+                          >
+                            {scheduledResetCountdown(schedule.fire_at_ms, now)}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: "block" }}
+                          >
+                            {fullDateTime(schedule.fire_at_ms / 1000)}
+                          </Typography>
+                        </Box>
+                        <NetworkButton
+                          size="small"
+                          disabled={resetBusy}
+                          networkAction={cancelSchedule}
+                        >
+                          Cancel
+                        </NetworkButton>
+                      </Stack>
+                    )}
+                  </Box>
+                );
               })}
               {resetError && !resetOpen && (
                 <Typography color="error.main" variant="caption">
@@ -537,9 +547,15 @@ function ProviderUsageCardBody({
           >
             <AccordionSummary
               expandIcon={<ExpandMore />}
-              sx={{ minHeight: 40, px: 0, "& .MuiAccordionSummary-content": { my: 0.5 } }}
+              sx={{
+                minHeight: 40,
+                px: 0,
+                "& .MuiAccordionSummary-content": { my: 0.5 },
+              }}
             >
-              <Typography variant="body2" fontWeight={600}>Activity details</Typography>
+              <Typography variant="body2" fontWeight={600}>
+                Activity details
+              </Typography>
             </AccordionSummary>
             <AccordionDetails sx={{ px: 0, pt: 0 }}>
               <InfoRow
@@ -664,9 +680,12 @@ function UsageInfoSection(): React.JSX.Element {
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {
-      const response = await fetch(`/api/usage/${encodeURIComponent(provider)}`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `/api/usage/${encodeURIComponent(provider)}`,
+        {
+          method: "POST",
+        },
+      );
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
       setSnapshot(await response.json() as UsageSnapshot);
     } catch (cause) {

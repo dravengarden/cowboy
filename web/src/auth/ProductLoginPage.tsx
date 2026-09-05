@@ -11,15 +11,16 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { assessAdminPassword } from "../admin/passwordStrength";
 import {
-  PASSWORD_LOGIN_METHOD,
-  passwordLoginFields,
-  resolveProductLoginMethodOrder,
+  authApi,
   type AuthHostPlugin,
   type AuthStatus,
+  PASSWORD_LOGIN_METHOD,
+  passwordLoginFields,
   type ProductMe,
   type ProductOidcProvider,
+  resolveProductLoginMethodOrder,
 } from "./authApi";
-import { getCowboyPluginHost, PluginSlot } from "@cowboy/plugin-api";
+import { PluginSlot } from "@cowboy/plugin-api";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { loginMethodLabel } from "./productReauthMethods";
 
@@ -64,7 +65,7 @@ type PasswordLoginContext = {
   onTogglePasswordVisible: () => void;
 };
 
-type LoginMethodContext = OidcLoginContext | PasswordLoginContext;
+export type LoginMethodContext = OidcLoginContext | PasswordLoginContext;
 
 export function ProductLoginPage({
   setupRequired,
@@ -128,7 +129,8 @@ export function ProductLoginPage({
   const loginMethods = orderedMethodIds.flatMap((id) => {
     const label = loginMethodLabel(id, hostPlugins, providers);
     if (!label) return [];
-    if (id !== PASSWORD_LOGIN_METHOD &&
+    if (
+      id !== PASSWORD_LOGIN_METHOD &&
       !providers.some((candidate) => candidate.id === id)
     ) {
       return [];
@@ -143,20 +145,24 @@ export function ProductLoginPage({
 
   const submit = (): void => {
     if (busy) return;
-    const auth = getCowboyPluginHost().auth;
-    if (!auth) {
-      setError("Could not reach Cowboy");
-      return;
-    }
     setBusy(true);
     setError(null);
     const request = needsCode
-      ? auth.setup(setupToken.trim()).then((status) => {
+      ? authApi.request("/api/auth/setup", {
+        method: "POST",
+        body: { token: setupToken.trim() },
+      }).then((status) => {
         onStatus?.(status as AuthStatus);
       })
       : creating
-      ? auth.register(account, password).then((me) => onAuthed(me as ProductMe))
-      : auth.login(account, password).then((me) => onAuthed(me as ProductMe));
+      ? authApi.request("/api/auth/register", {
+        method: "POST",
+        body: { account, password },
+      }).then((me) => onAuthed(me as ProductMe))
+      : authApi.request("/api/auth/login", {
+        method: "POST",
+        body: { account, password },
+      }).then((me) => onAuthed(me as ProductMe));
     void request
       .catch((err: unknown) => {
         setError(
@@ -190,22 +196,6 @@ export function ProductLoginPage({
       });
   };
 
-  useEffect(() => {
-    const auth = getCowboyPluginHost().auth;
-    if (!auth) return;
-    auth.startOidc = () => {
-      submitProvider();
-      return Promise.resolve();
-    };
-    auth.cancelOidc = () => {
-      providerAbort.current?.abort();
-    };
-    return () => {
-      delete auth.startOidc;
-      delete auth.cancelOidc;
-    };
-  });
-
   const loginContext: LoginMethodContext = selectedProvider
     ? {
       kind: "oidc" as const,
@@ -218,7 +208,11 @@ export function ProductLoginPage({
     }
     : {
       kind: "password" as const,
-      mode: needsCode ? "setup" as const : creating ? "register" as const : "login" as const,
+      mode: needsCode
+        ? "setup" as const
+        : creating
+        ? "register" as const
+        : "login" as const,
       account,
       password,
       confirm,
@@ -233,18 +227,21 @@ export function ProductLoginPage({
         : creating
         ? canCreate
         : canLogin,
-      submitLabel: needsCode ? "Continue" : creating ? "Create account" : "Sign in",
+      submitLabel: needsCode
+        ? "Continue"
+        : creating
+        ? "Create account"
+        : "Sign in",
       onSubmit: submit,
       onAuthed,
-      onStatus,
+      ...(onStatus ? { onStatus } : {}),
       onError: setError,
       onBusy: setBusy,
       onAccount: setAccount,
       onPassword: setPassword,
       onConfirm: setConfirm,
       onSetupToken: setSetupToken,
-      onTogglePasswordVisible: () =>
-        setPasswordVisible((visible) => !visible),
+      onTogglePasswordVisible: () => setPasswordVisible((visible) => !visible),
     };
 
   return (
@@ -351,10 +348,8 @@ export function ProductLoginPage({
   );
 }
 
-/** Crash-only fallback. Loading uses `placeholder={null}` so core does not
- *  duplicate the plugin form. This path is last-resort sign-in if the slot
- *  module throws after mount. */
-function LoginMethodFallback(
+/** Cowboy-owned renderer for the closed login-method context union. */
+export function LoginMethodFallback(
   { context }: { context: LoginMethodContext },
 ): React.JSX.Element {
   if (context.kind === "oidc") {

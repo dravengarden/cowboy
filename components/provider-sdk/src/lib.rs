@@ -337,30 +337,10 @@ pub struct CommandDiscoveryContract {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountUsageContract {
-    pub provider: AccountUsageProvider,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountUsageProvider {
-    Openai,
-    Anthropic,
-    Deepseek,
-    Gemini,
-    Xai,
-}
-
-impl AccountUsageProvider {
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Openai => "openai",
-            Self::Anthropic => "anthropic",
-            Self::Deepseek => "deepseek",
-            Self::Gemini => "gemini",
-            Self::Xai => "xai",
-        }
-    }
+    /// Stable account/usage namespace. It is deliberately not a closed enum:
+    /// a signed Provider may introduce a new account source without an SDK or
+    /// Cowboy host release.
+    pub provider: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -1649,6 +1629,9 @@ impl HostIntegrationContract {
                 compaction.aliases.contains(&compaction.fallback_command),
                 "conversation compaction fallback must be one of its aliases"
             );
+        }
+        if let Some(account_usage) = &self.account_usage {
+            validate_id(&account_usage.provider, "account usage provider")?;
         }
         ensure!(
             self.tool_presentations.len() <= 64,
@@ -3784,7 +3767,9 @@ mod tests {
         assert!(validate_provider_sdk_version("1.99.0").is_err());
         assert!(validate_provider_sdk_version("2.3.1").is_err());
         assert!(validate_provider_sdk_version("2.4.1").is_err());
-        assert!(validate_provider_sdk_version("3.1.10").is_err());
+        let mut newer = semver::Version::parse(PROVIDER_SDK_VERSION).unwrap();
+        newer.patch += 1;
+        assert!(validate_provider_sdk_version(&newer.to_string()).is_err());
     }
 
     #[test]
@@ -3926,11 +3911,21 @@ mod tests {
         let source: StandardProviderSource =
             serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
         let expected_mark_path = source.display.mark_path.clone();
+        let expected_version = source.version.clone();
         let package = build_package(source.compile().unwrap()).unwrap();
-        assert_eq!(package.manifest.version, "3.1.9");
+        assert_eq!(package.manifest.version, expected_version);
         assert_eq!(
             package.manifest.runtime.arguments,
-            ["--no-auto-update", "agent", "stdio"]
+            [
+                "--no-auto-update",
+                "--experimental-memory",
+                "--rules",
+                "Read and follow the closest AGENTS.md project instructions before taking any action.",
+                "agent",
+                "--always-approve",
+                "--no-leader",
+                "stdio",
+            ]
                 .into_iter()
                 .map(|value| RuntimeValue::Literal(value.to_owned()))
                 .collect::<Vec<_>>()
@@ -4173,6 +4168,19 @@ mod tests {
         unknown_profile["runtime"]["behavior"]["permission"] =
             serde_json::Value::String("provider_specific_magic".to_owned());
         assert!(serde_json::from_value::<StandardProviderSource>(unknown_profile).is_err());
+    }
+
+    #[test]
+    fn account_usage_namespace_accepts_future_slugs_and_rejects_unsafe_values() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/codex/provider.json")).unwrap();
+        let mut future = source.clone();
+        future.host.account_usage.as_mut().unwrap().provider = "future-cloud".to_owned();
+        assert!(build_package(future.compile().unwrap()).is_ok());
+
+        let mut unsafe_source = source;
+        unsafe_source.host.account_usage.as_mut().unwrap().provider = "Future Cloud".to_owned();
+        assert!(build_package(unsafe_source.compile().unwrap()).is_err());
     }
 
     #[test]

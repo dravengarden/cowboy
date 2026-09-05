@@ -11,12 +11,14 @@ Deno.test("Provider release coverage requires the exact signed published version
     await Deno.mkdir(`${catalog}/trusted-publishers`, { recursive: true });
     await Deno.mkdir(`${catalog}/receipts`, { recursive: true });
     const packageDigest = `sha256:${await sha256("package")}`;
+    const hostBundleDigest = `sha256:${await sha256("host")}`;
     const artifactDigest = `sha256:${"2".repeat(64)}`;
     const artifactValue = artifactDigest.slice("sha256:".length);
     const packageValue = packageDigest.slice("sha256:".length);
     const stem = `${catalog}/example-1.2.3-${artifactValue}`;
     const packagePath = `${stem}.cowboy-plugin`;
     const releasePath = `${stem}.release.json`;
+    const hostBundlePath = `${stem}.hostbundle.json`;
     await Deno.writeTextFile(
       `${plugins}/example/plugin.json`,
       JSON.stringify({
@@ -47,8 +49,9 @@ Deno.test("Provider release coverage requires the exact signed published version
       "package",
     );
     await Deno.writeTextFile(packagePath, "package");
+    await Deno.writeTextFile(hostBundlePath, "host");
     const release = {
-      release_schema: 1,
+      release_schema: 2,
       plugin_id: "example",
       plugin_version: "1.2.3",
       package_digest: packageDigest,
@@ -56,6 +59,7 @@ Deno.test("Provider release coverage requires the exact signed published version
       artifact_url:
         `https://cowboy.example/plugin-artifacts/${packageValue}/example.cowboy-plugin`,
       publisher: "cowboy-first-party",
+      host_bundle_digest: hostBundleDigest,
       signature: "signed",
       runtime_artifacts: [],
     };
@@ -91,6 +95,15 @@ Deno.test("Provider release coverage requires the exact signed published version
       `published artifact digest mismatch: ${publishedPackage}`,
     );
     await Deno.writeTextFile(publishedPackage, "package");
+
+    await Deno.writeTextFile(hostBundlePath, "tampered");
+    const [tamperedHost] = await checkProviderReleaseCoverage(plugins, catalog);
+    assertEquals(tamperedHost?.covered, false);
+    assertEquals(
+      tamperedHost?.detail,
+      `published artifact digest mismatch: ${hostBundlePath}`,
+    );
+    await Deno.writeTextFile(hostBundlePath, "host");
 
     await Deno.remove(releasePath);
     assertEquals(await checkProviderReleaseCoverage(plugins, catalog), [{

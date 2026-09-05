@@ -9,8 +9,6 @@
 
 use cowboy_provider_sdk::ConfigurationBehavior;
 
-#[cfg(feature = "full")]
-pub const CONFIG_ID: &str = "deepseek_context";
 pub const SESSION_CONTEXT_WINDOW_ENV: &str = "COWBOY_SESSION_CONTEXT_WINDOW";
 pub const SESSION_AUTO_COMPACT_TOKEN_LIMIT_ENV: &str = "COWBOY_SESSION_AUTO_COMPACT_TOKEN_LIMIT";
 
@@ -167,6 +165,7 @@ pub fn config_option(
     behavior: &ConfigurationBehavior,
     model: Option<&str>,
     requested_profile: Option<&str>,
+    option_id: &str,
 ) -> Option<serde_json::Value> {
     let selected = launch_budget(behavior, model, requested_profile)?;
     let description = match behavior {
@@ -195,7 +194,7 @@ pub fn config_option(
         })
         .collect::<Vec<_>>();
     Some(serde_json::json!({
-        "id": CONFIG_ID,
+        "id": option_id,
         "name": "Context budget",
         "description": description,
         "category": "model_config",
@@ -242,16 +241,24 @@ mod tests {
     #[test]
     #[cfg(feature = "full")]
     fn config_option_marks_the_correct_recommendation() {
-        let claude = config_option(&CLAUDE, None, None).unwrap();
+        let claude = config_option(&CLAUDE, None, None, "context_budget").unwrap();
         assert_eq!(claude["currentValue"], "830k");
         assert_eq!(claude["options"][4]["name"], "830K · recommended");
 
-        let codex = config_option(&CODEX, None, None).unwrap();
+        let codex = config_option(&CODEX, None, None, "context_budget").unwrap();
         assert_eq!(codex["currentValue"], "680k");
         assert_eq!(codex["options"][3]["name"], "680K · recommended");
         assert_eq!(codex["options"][4]["name"], "830K · large");
-        assert!(config_option(&ConfigurationBehavior::AcpConfigOptionsV1, None, None).is_none());
-        assert!(config_option(&PORTABLE, None, None).is_none());
+        assert!(
+            config_option(
+                &ConfigurationBehavior::AcpConfigOptionsV1,
+                None,
+                None,
+                "context_budget"
+            )
+            .is_none()
+        );
+        assert!(config_option(&PORTABLE, None, None, "context_budget").is_none());
     }
 
     #[test]

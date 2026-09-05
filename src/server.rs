@@ -207,9 +207,7 @@ struct AppState {
     machine_control: Arc<MachineControl>,
     machine_snapshots: MachineSnapshots,
     plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
-    plugin_dir: crate::plugin_dir::PluginDir,
     plugin_storage: crate::plugin_storage::PluginStorage,
-    plugin_hosts: Vec<crate::plugin_runtime::ActivatedHostPlugin>,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
@@ -486,6 +484,11 @@ impl MachineSnapshots {
                     .get("provider_contracts")
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok());
+                let plugin_contracts = machine
+                    .inventory
+                    .get("plugin_contracts")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok());
                 let (active_sessions, provider_sessions) = session_loads
                     .get(&machine.id)
                     .map_or((0, None), |(active, providers)| (*active, Some(providers)));
@@ -584,6 +587,7 @@ impl MachineSnapshots {
                     components,
                     plugins,
                     provider_contracts,
+                    plugin_contracts,
                     capacity,
                     active_sessions,
                     pending_updates,
@@ -783,6 +787,18 @@ fn scheduled_reset_failure_policy(
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    let (plugin_catalog, product_authentication) =
+        crate::plugin_activation::prepare_controller_hosts(&args)?;
+    if args.check_plugin_hosts {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plugin_catalog.host_preflight_report()?)?
+        );
+        return Ok(());
+    }
+    plugin_catalog.initialize()?;
+    let plugin_catalog = Arc::new(plugin_catalog);
+    let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
     let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
@@ -797,12 +813,13 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     let desired_machine_components = Arc::new(desired_machine_components);
     init_tracing();
-    let legacy_oidc_provider = load_oidc_provider(
-        args.product_auth_enabled,
-        args.cardea_oidc_config.as_deref(),
-    )?;
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
+    }
+    if args.auth_config.is_some() && !args.product_auth_enabled {
+        tracing::warn!(
+            "authentication Plugins are configured but product authentication is disabled"
+        );
     }
     tracing::info!(
         compiled =
@@ -824,25 +841,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)
             .context("opening code content cache")?;
     let web_push = WebPushService::open(&args.data_dir).context("opening Web Push service")?;
-    let plugin_catalog = Arc::new(crate::plugin_catalog::PluginCatalog::open(
-        &args.data_dir,
-        args.plugin_catalog_dir.clone(),
-    )?);
-    let product_authentication = Arc::new(if args.product_auth_enabled {
-        crate::auth_plugins::ProductAuthentication::load(
-            args.auth_config.as_deref(),
-            &plugin_catalog,
-            legacy_oidc_provider,
-        )
-        .context("loading product authentication methods")?
-    } else {
-        if args.auth_config.is_some() {
-            tracing::warn!(
-                "authentication Plugins are configured but product authentication is disabled"
-            );
-        }
-        crate::auth_plugins::ProductAuthentication::disabled()
-    });
     let provider_catalog = Arc::new(crate::provider_catalog::ProviderCatalog::open(
         &args.data_dir,
         Arc::clone(&plugin_catalog),
@@ -948,32 +946,32 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Some(store) => store.plugin_storage(plugin_dir.clone()),
         None => crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir.clone()),
     };
-    let plugin_runtime = match crate::plugin_runtime::PluginRuntime::activate(
-        &plugin_storage,
-        store.as_ref(),
-        Some(plugin_catalog.as_ref()),
-    )
-    .await
-    {
+    let plugin_runtime = match plugin_catalog.activate_runtime(&plugin_storage).await {
         Ok(runtime) => runtime,
+        Err(error) if plugin_catalog.strict_host_activation() => {
+            return Err(error).context("activating selected Plugin hosts");
+        }
         Err(error) => {
             tracing::error!(%error, "plugin host activation failed");
-            crate::plugin_runtime::PluginRuntime {
-                hosts: Vec::new(),
-                passkey: None,
-            }
+            plugin_catalog.install_empty_runtime()
         }
     };
-    if let Some(store) = store.as_mut()
-        && let Some(namespace) = plugin_runtime.passkey.clone()
-    {
+    if let Some(store) = store.as_mut() {
+        let namespace = plugin_runtime
+            .namespace_for_capability(crate::plugin_passkeys::STORAGE_CAPABILITY)
+            .cloned()
+            .context("WebAuthn plugin storage is unavailable")?;
+        crate::plugin_passkeys::import_from_core(&namespace, store)
+            .await
+            .context("migrating legacy Passkey rows into plugin storage")?;
         store.attach_passkey_plugin(namespace);
     }
-    let usage = UsageService::with_bindings(
-        args.codex_command.clone(),
+    let machine_control = Arc::new(MachineControl::default());
+    let usage = UsageService::with_plugin_catalog(
         store.clone(),
         Some(args.data_dir.join("usage-snapshot.json")),
-        plugin_runtime.usage_bindings(),
+        Arc::clone(&plugin_catalog),
+        Arc::clone(&machine_control),
     );
     let runtime_router = RuntimeRouter::new();
     let machine_control = Arc::new(MachineControl::default());
@@ -1345,9 +1343,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             machine_control,
             machine_snapshots,
             plugin_catalog,
-            plugin_dir,
             plugin_storage,
-            plugin_hosts: plugin_runtime.hosts,
             provider_catalog,
             provider_auth,
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
@@ -1400,20 +1396,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         }
     }
     result
-}
-
-fn load_oidc_provider(
-    product_auth_enabled: bool,
-    config_path: Option<&std::path::Path>,
-) -> anyhow::Result<Option<Arc<crate::oidc::OidcProvider>>> {
-    if !product_auth_enabled {
-        return Ok(None);
-    }
-    config_path
-        .map(crate::oidc::OidcProvider::load)
-        .transpose()
-        .context("loading Cardea OIDC consumer profile")
-        .map(|provider| provider.map(Arc::new))
 }
 
 async fn run_machine_presence_sweeper(
@@ -2421,7 +2403,7 @@ struct ProductAuthState {
     persistence_health: Option<Arc<PersistenceHealth>>,
     runtime_router: Option<Arc<RuntimeRouter>>,
     plugin_catalog: Option<Arc<crate::plugin_catalog::PluginCatalog>>,
-    plugin_hosts: Arc<Vec<crate::plugin_runtime::ActivatedHostPlugin>>,
+    plugin_storage: Option<crate::plugin_storage::PluginStorage>,
     provider_catalog: Option<Arc<crate::provider_catalog::ProviderCatalog>>,
     passkeys: Arc<crate::passkey::PasskeyCeremonies>,
     setup: Arc<crate::admin::AdminSetupState>,
@@ -3344,8 +3326,22 @@ async fn api_admin_plugins_refresh(
         )
             .into_response();
     };
-    match catalog.refresh_external() {
-        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+    let Some(storage) = state.plugin_storage.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "plugin runtime storage unavailable",
+        )
+            .into_response();
+    };
+    match catalog.refresh_with_runtime(storage).await {
+        Ok(count) => {
+            if let Some(providers) = state.provider_catalog.as_ref()
+                && let Err(error) = providers.refresh_external()
+            {
+                return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+            }
+            Json(serde_json::json!({ "external_releases": count })).into_response()
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -3369,8 +3365,20 @@ async fn api_admin_providers_refresh(
         )
             .into_response();
     };
-    match catalog.refresh_external() {
-        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+    let (Some(plugins), Some(storage)) =
+        (state.plugin_catalog.as_ref(), state.plugin_storage.as_ref())
+    else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "plugin runtime storage unavailable",
+        )
+            .into_response();
+    };
+    match plugins.refresh_with_runtime(storage).await {
+        Ok(_) => match catalog.refresh_external() {
+            Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+            Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        },
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -4054,9 +4062,6 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/plugins/catalog/refresh" {
         return RouteAuth::AdminOperator;
     }
-    if plugin_ui_path(path) && matches!(*method, Method::GET | Method::HEAD) {
-        return RouteAuth::Public;
-    }
     if plugin_call_path(path) {
         return RouteAuth::Product;
     }
@@ -4132,19 +4137,6 @@ fn plugin_call_path(path: &str) -> bool {
     crate::plugin_host::validate_plugin_id(plugin_id).is_ok()
         && segments.next() == Some("call")
         && segments.next().is_none()
-}
-
-fn plugin_ui_path(path: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/api/plugins/") else {
-        return false;
-    };
-    let mut segments = rest.split('/');
-    let Some(plugin_id) = segments.next() else {
-        return false;
-    };
-    crate::plugin_host::validate_plugin_id(plugin_id).is_ok()
-        && segments.next() == Some("ui")
-        && segments.next().is_some_and(|segment| !segment.is_empty())
 }
 
 fn provider_auth_path(path: &str) -> bool {
@@ -4883,6 +4875,13 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
     let setup_pending = setup_required
         && crate::admin::setup_cookie_token(&headers)
             .is_some_and(|token| state.setup.tickets.is_valid(&token));
+    let host_plugins = state
+        .plugin_catalog
+        .as_ref()
+        .and_then(|catalog| catalog.runtime())
+        .map_or_else(Vec::new, |runtime| {
+            state.product_authentication.public_host_plugins(&runtime)
+        });
     let mut body = serde_json::json!({
         "registration": crate::admin::RegistrationPublicStatus {
             enabled: false,
@@ -4903,12 +4902,7 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
         "logout": state.product_authentication.logout,
         "automation": state.product_authentication.automation,
         "providers": state.product_authentication.public_providers(),
-        "host_plugins": state
-            .plugin_hosts
-            .iter()
-            .filter(|host| host.public_auth_surface())
-            .cloned()
-            .collect::<Vec<_>>(),
+        "host_plugins": host_plugins,
     });
     if let Some((session, user)) = product_session_and_user_from_cookie(&state, &headers).await {
         let me = match product_me_for_user(
@@ -4965,7 +4959,7 @@ async fn api_auth_create_automation_credential(
             "invalid automation credential request",
         )
             .into_response();
-    }
+    };
     let maximum_age_ms = state
         .product_authentication
         .automation
@@ -8671,7 +8665,7 @@ async fn serve_axum(
         persistence_health: state.persistence_health.clone(),
         runtime_router: Some(state.runtime_router.clone()),
         plugin_catalog: Some(state.plugin_catalog.clone()),
-        plugin_hosts: Arc::new(state.plugin_hosts.clone()),
+        plugin_storage: Some(state.plugin_storage.clone()),
         provider_catalog: Some(state.provider_catalog.clone()),
         passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
         setup,
@@ -8721,8 +8715,12 @@ async fn serve_axum(
             "/api/plugins/catalog/refresh",
             post(api_plugin_catalog_refresh),
         )
-        .route("/api/plugins/{id}/ui/{*path}", get(api_plugin_ui))
-        .route("/api/plugins/{id}/call", post(api_plugin_call))
+        .route(
+            "/api/plugins/{id}/call",
+            post(api_plugin_call).layer(DefaultBodyLimit::max(
+                crate::plugin_process::MAX_PLUGIN_COMMAND_INPUT_BYTES,
+            )),
+        )
         .route(
             "/api/providers/catalog/refresh",
             post(api_provider_catalog_refresh),
@@ -9215,21 +9213,23 @@ async fn api_observability_incidents(State(state): State<Arc<AppState>>) -> Resp
 }
 
 async fn api_usage(State(state): State<Arc<AppState>>) -> Response {
+    let bindings = state.usage.plugin_bindings();
     let snapshot = crate::usage::with_session_usage(
         state.usage.snapshot().await,
         &state.hub.session_list(),
         &state.provider_catalog,
-        state.usage.plugin_bindings(),
+        &bindings,
     );
     Json(snapshot).into_response()
 }
 
 async fn api_usage_refresh(State(state): State<Arc<AppState>>) -> Response {
+    let bindings = state.usage.plugin_bindings();
     let snapshot = crate::usage::with_session_usage(
         state.usage.refresh().await,
         &state.hub.session_list(),
         &state.provider_catalog,
-        state.usage.plugin_bindings(),
+        &bindings,
     );
     Json(snapshot).into_response()
 }
@@ -9239,19 +9239,22 @@ async fn api_usage_provider_refresh(
     axum::extract::Path(provider): axum::extract::Path<String>,
 ) -> Response {
     match state.usage.refresh_provider(&provider).await {
-        Ok(snapshot) => Json(crate::usage::with_session_usage(
-            snapshot,
-            &state.hub.session_list(),
-            &state.provider_catalog,
-            state.usage.plugin_bindings(),
-        ))
-        .into_response(),
+        Ok(snapshot) => {
+            let bindings = state.usage.plugin_bindings();
+            Json(crate::usage::with_session_usage(
+                snapshot,
+                &state.hub.session_list(),
+                &state.provider_catalog,
+                &bindings,
+            ))
+            .into_response()
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
 
 #[derive(Default, Deserialize)]
-struct DeepSeekActivityQuery {
+struct UsageActivityQuery {
     window: Option<String>,
     model: Option<String>,
     agent: Option<String>,
@@ -9260,7 +9263,7 @@ struct DeepSeekActivityQuery {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct DeepSeekActivityFilter {
+struct UsageActivityFilter {
     window: String,
     from_ms: i64,
     to_ms: i64,
@@ -9287,9 +9290,11 @@ fn selected_activity_filters(
     Ok(selected)
 }
 
-fn parse_deepseek_activity_filter(
-    query: &DeepSeekActivityQuery,
-) -> Result<DeepSeekActivityFilter, &'static str> {
+fn parse_usage_activity_filter(
+    query: &UsageActivityQuery,
+    allowed_models: &[&str],
+    allowed_agents: &[&str],
+) -> Result<UsageActivityFilter, &'static str> {
     let now = now_ms();
     let (window, from_ms, to_ms) = match (query.from_ms, query.to_ms) {
         (Some(from_ms), Some(to_ms))
@@ -9324,27 +9329,31 @@ fn parse_deepseek_activity_filter(
         }
         _ => return Err("activity time range requires both boundaries"),
     };
-    Ok(DeepSeekActivityFilter {
+    Ok(UsageActivityFilter {
         window,
         from_ms,
         to_ms,
-        models: selected_activity_filters(query.model.as_deref(), &["flash", "pro"])?,
-        agents: selected_activity_filters(query.agent.as_deref(), &["codex", "claude"])?,
+        models: selected_activity_filters(query.model.as_deref(), allowed_models)?,
+        agents: selected_activity_filters(query.agent.as_deref(), allowed_agents)?,
     })
 }
 
 async fn api_usage_activity(
     State(state): State<Arc<AppState>>,
     Path(provider): Path<String>,
-    Query(query): Query<DeepSeekActivityQuery>,
+    Query(query): Query<UsageActivityQuery>,
 ) -> Response {
-    if !state.usage.exposes_activity(&provider) {
+    let bindings = state.usage.plugin_bindings();
+    let Some(binding) = bindings
+        .iter()
+        .find(|binding| binding.account == provider && binding.activity)
+    else {
         return (
             StatusCode::NOT_FOUND,
             "provider does not expose usage activity",
         )
             .into_response();
-    }
+    };
     let Some(store) = state.store.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -9352,7 +9361,17 @@ async fn api_usage_activity(
         )
             .into_response();
     };
-    let filter = match parse_deepseek_activity_filter(&query) {
+    let allowed_models = binding
+        .activity_models
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    let allowed_agents = binding
+        .activity_agents
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    let filter = match parse_usage_activity_filter(&query, &allowed_models, &allowed_agents) {
         Ok(filter) => filter,
         Err(error) => return (StatusCode::BAD_REQUEST, error).into_response(),
     };
@@ -9371,20 +9390,22 @@ async fn api_usage_activity(
                 object.insert("window".to_owned(), filter.window.into());
                 object.insert("observedAtMs".to_owned(), crate::usage::now_ms().into());
             }
-            crate::provider_info::decorate_deepseek_activity(&mut activity);
-            Json(activity).into_response()
+            Json(state.usage.decorate_activity(&provider, activity).await).into_response()
         }
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
 #[cfg(test)]
-mod deepseek_activity_filter_tests {
-    use super::{DeepSeekActivityQuery, parse_deepseek_activity_filter};
+mod usage_activity_filter_tests {
+    use super::{UsageActivityQuery, parse_usage_activity_filter};
+
+    const MODELS: &[&str] = &["flash", "pro"];
+    const AGENTS: &[&str] = &["codex", "claude"];
 
     #[test]
     fn defaults_to_bounded_unfiltered_activity() {
-        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery::default())
+        let filter = parse_usage_activity_filter(&UsageActivityQuery::default(), MODELS, AGENTS)
             .expect("default filter");
         assert_eq!(filter.window, "24h");
         assert_eq!(filter.to_ms - filter.from_ms, 86_400_000);
@@ -9394,12 +9415,16 @@ mod deepseek_activity_filter_tests {
 
     #[test]
     fn accepts_agent_and_model_family_filters() {
-        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
-            window: Some("30d".to_owned()),
-            model: Some("pro,flash".to_owned()),
-            agent: Some("codex,claude".to_owned()),
-            ..DeepSeekActivityQuery::default()
-        })
+        let filter = parse_usage_activity_filter(
+            &UsageActivityQuery {
+                window: Some("30d".to_owned()),
+                model: Some("pro,flash".to_owned()),
+                agent: Some("codex,claude".to_owned()),
+                ..UsageActivityQuery::default()
+            },
+            MODELS,
+            AGENTS,
+        )
         .expect("multi filter");
         assert_eq!(filter.to_ms - filter.from_ms, 30 * 86_400_000);
         assert_eq!(filter.models, ["pro", "flash"]);
@@ -9414,10 +9439,14 @@ mod deepseek_activity_filter_tests {
             ("8h", 8 * 3_600),
             ("12h", 12 * 3_600),
         ] {
-            let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
-                window: Some(window.to_owned()),
-                ..DeepSeekActivityQuery::default()
-            })
+            let filter = parse_usage_activity_filter(
+                &UsageActivityQuery {
+                    window: Some(window.to_owned()),
+                    ..UsageActivityQuery::default()
+                },
+                MODELS,
+                AGENTS,
+            )
             .expect("rolling window");
             assert_eq!(filter.window, window);
             assert_eq!(
@@ -9430,11 +9459,15 @@ mod deepseek_activity_filter_tests {
     #[test]
     fn accepts_an_exact_bounded_time_range() {
         let to_ms = super::now_ms();
-        let filter = parse_deepseek_activity_filter(&DeepSeekActivityQuery {
-            from_ms: Some(to_ms - 2 * 3_600_000),
-            to_ms: Some(to_ms),
-            ..DeepSeekActivityQuery::default()
-        })
+        let filter = parse_usage_activity_filter(
+            &UsageActivityQuery {
+                from_ms: Some(to_ms - 2 * 3_600_000),
+                to_ms: Some(to_ms),
+                ..UsageActivityQuery::default()
+            },
+            MODELS,
+            AGENTS,
+        )
         .expect("custom range");
         assert_eq!(filter.window, "custom");
         assert_eq!(filter.from_ms, to_ms - 2 * 3_600_000);
@@ -9444,20 +9477,20 @@ mod deepseek_activity_filter_tests {
     #[test]
     fn rejects_open_ended_dimensions() {
         for query in [
-            DeepSeekActivityQuery {
+            UsageActivityQuery {
                 window: Some("forever".to_owned()),
-                ..DeepSeekActivityQuery::default()
+                ..UsageActivityQuery::default()
             },
-            DeepSeekActivityQuery {
+            UsageActivityQuery {
                 model: Some("deepseek-v4-pro[1m]".to_owned()),
-                ..DeepSeekActivityQuery::default()
+                ..UsageActivityQuery::default()
             },
-            DeepSeekActivityQuery {
+            UsageActivityQuery {
                 agent: Some("unknown-runtime".to_owned()),
-                ..DeepSeekActivityQuery::default()
+                ..UsageActivityQuery::default()
             },
         ] {
-            assert!(parse_deepseek_activity_filter(&query).is_err());
+            assert!(parse_usage_activity_filter(&query, MODELS, AGENTS).is_err());
         }
     }
 }
@@ -10579,18 +10612,26 @@ async fn api_providers(State(state): State<Arc<AppState>>) -> Response {
 
 async fn api_plugins(State(state): State<Arc<AppState>>) -> Response {
     let authentication_executors = connected_provider_authentication_executors(&state).await;
+    let inventory = state.plugin_catalog.inventory();
+    let hosts = inventory
+        .runtime
+        .map_or_else(Vec::new, |runtime| runtime.public_descriptors());
     Json(serde_json::json!({
         "component_release": crate::plugin::active_component_release(),
         "platform": {
+            "schema_version": 1,
             "storage": state.plugin_storage.kind(),
             "slots": crate::plugin_host::PluginSlotId::all()
                 .iter()
                 .map(|slot| slot.as_str())
                 .collect::<Vec<_>>(),
             "host_api": crate::plugin_host::PLUGIN_HOST_API_VERSION,
-            "hosts": state.plugin_hosts,
+            "renderer_schema": crate::plugin_host::PLUGIN_RENDERER_SCHEMA_VERSION,
+            "native_host_api": crate::plugin_host::PLUGIN_NATIVE_HOST_API_VERSION,
+            "surface_transport": "typed-renderer-v1",
+            "hosts": hosts,
         },
-        "plugins": state.plugin_catalog.entries(),
+        "plugins": inventory.entries,
         "providers": state.provider_catalog.entries(),
         "authentications": state.provider_auth.statuses(),
         "authentication_executors": authentication_executors,
@@ -10598,83 +10639,49 @@ async fn api_plugins(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
-async fn api_plugin_ui(
-    State(state): State<Arc<AppState>>,
-    Path((plugin_id, path)): Path<(String, String)>,
-) -> Response {
-    if crate::plugin_host::validate_plugin_id(&plugin_id).is_err() {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let Ok(relative) = sanitize_plugin_ui_path(&path) else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let generation = match state.plugin_dir.current_generation(&plugin_id) {
-        Ok(Some(path)) => path,
-        Ok(None) | Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
-    let file = generation.join("ui").join(&relative);
-    match tokio::fs::read(&file).await {
-        Ok(bytes) => {
-            let mut response = bytes.into_response();
-            if let Some(value) = plugin_ui_content_type(&relative) {
-                response.headers_mut().insert(
-                    header::CONTENT_TYPE,
-                    header::HeaderValue::from_static(value),
-                );
-            }
-            response.headers_mut().insert(
-                header::CACHE_CONTROL,
-                header::HeaderValue::from_static("public, max-age=60"),
-            );
-            response
-        }
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 async fn api_plugin_call(
     State(state): State<Arc<AppState>>,
     Path(plugin_id): Path<String>,
+    Query(identity): Query<PluginCallIdentity>,
     body: axum::body::Bytes,
 ) -> Response {
     if crate::plugin_host::validate_plugin_id(&plugin_id).is_err() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(host) = state.plugin_hosts.iter().find(|host| host.id == plugin_id) else {
+    let Some(runtime) = state.plugin_catalog.runtime() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let host = match (identity.version.as_deref(), identity.digest.as_deref()) {
+        (None, None) => runtime.default_host(&plugin_id),
+        (Some(version), Some(digest)) => runtime.exact_host(&plugin_id, version, digest),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "plugin version and digest must be supplied together",
+            )
+                .into_response();
+        }
+    };
+    let Some(host) = host.cloned() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let Some((program, args)) = host.rpc_argv.split_first() else {
-        return StatusCode::NOT_FOUND.into_response();
+        let Ok(request) = serde_json::from_slice::<serde_json::Value>(&body) else {
+            return (StatusCode::BAD_REQUEST, "plugin call body must be JSON").into_response();
+        };
+        return api_builtin_plugin_call(state, &host, request).await;
     };
-    let mut command = tokio::process::Command::new(program);
-    command
-        .args(args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(std::time::Duration::from_secs(12), async {
-        let mut child = command.spawn().context("spawn plugin rpc")?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(&body)
-                .await
-                .context("write plugin rpc stdin")?;
-            drop(stdin);
-        }
-        let output = child.wait_with_output().await.context("wait plugin rpc")?;
-        anyhow::ensure!(
-            output.status.success(),
-            "plugin rpc exited {}",
-            output.status
-        );
-        Ok::<_, anyhow::Error>(output.stdout)
-    })
-    .await
-    {
-        Ok(Ok(stdout)) => {
-            let json = serde_json::from_slice::<serde_json::Value>(&stdout).is_ok();
-            let mut response = stdout.into_response();
+    match crate::plugin_process::run_plugin_command(program, args, &body).await {
+        Ok(output) => {
+            if !output.status.success() {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    format!("plugin rpc exited {}", output.status),
+                )
+                    .into_response();
+            }
+            let json = serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok();
+            let mut response = output.stdout.into_response();
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 header::HeaderValue::from_static(if json {
@@ -10685,57 +10692,83 @@ async fn api_plugin_call(
             );
             response
         }
-        Ok(Err(error)) => (StatusCode::BAD_GATEWAY, error.to_string()).into_response(),
-        Err(_) => (StatusCode::GATEWAY_TIMEOUT, "plugin rpc timed out").into_response(),
-    }
-}
-
-fn sanitize_plugin_ui_path(path: &str) -> Result<PathBuf, ()> {
-    if path.is_empty() || path.starts_with('/') {
-        return Err(());
-    }
-    let mut relative = PathBuf::new();
-    for component in FsPath::new(path).components() {
-        match component {
-            Component::Normal(part) => {
-                let part = part.to_str().ok_or(())?;
-                if part.is_empty() || part == "." || part == ".." {
-                    return Err(());
-                }
-                relative.push(part);
-            }
-            _ => return Err(()),
+        Err(failure) if failure.timed_out => {
+            (StatusCode::GATEWAY_TIMEOUT, "plugin rpc timed out").into_response()
         }
+        Err(failure) => (StatusCode::BAD_GATEWAY, failure.error.to_string()).into_response(),
     }
-    if relative.as_os_str().is_empty() {
-        return Err(());
-    }
-    Ok(relative)
 }
 
-fn plugin_ui_content_type(path: &FsPath) -> Option<&'static str> {
-    match path.extension().and_then(|value| value.to_str()) {
-        Some("js" | "mjs") => Some("text/javascript; charset=utf-8"),
-        Some("css") => Some("text/css; charset=utf-8"),
-        Some("json") => Some("application/json; charset=utf-8"),
-        Some("wasm") => Some("application/wasm"),
-        Some("svg") => Some("image/svg+xml"),
-        Some("png") => Some("image/png"),
-        Some("woff2") => Some("font/woff2"),
-        _ => None,
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginCallIdentity {
+    version: Option<String>,
+    digest: Option<String>,
+}
+
+/// Host primitives available to a UI-only plugin generation. They are keyed by
+/// declared capability and account identity, never by Plugin or Provider id.
+async fn api_builtin_plugin_call(
+    state: Arc<AppState>,
+    host: &crate::plugin_runtime::ActivatedHostPlugin,
+    request: serde_json::Value,
+) -> Response {
+    let operation = request.get("operation").and_then(serde_json::Value::as_str);
+    if operation != Some("usage_activity") {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    let Some(provider) = host.usage.as_ref().map(|usage| usage.account.as_str()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if request
+        .get("provider")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|candidate| candidate != provider)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let string_field = |name: &str| {
+        request
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    };
+    let query = UsageActivityQuery {
+        window: string_field("window"),
+        model: string_field("model"),
+        agent: string_field("agent"),
+        from_ms: request.get("from_ms").and_then(serde_json::Value::as_i64),
+        to_ms: request.get("to_ms").and_then(serde_json::Value::as_i64),
+    };
+    api_usage_activity(State(state), Path(provider.to_owned()), Query(query)).await
 }
 
 async fn api_plugin_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
-    match state.plugin_catalog.refresh_external() {
-        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+    match state
+        .plugin_catalog
+        .refresh_with_runtime(&state.plugin_storage)
+        .await
+    {
+        Ok(count) => {
+            if let Err(error) = state.provider_catalog.refresh_external() {
+                return (StatusCode::BAD_REQUEST, error.to_string()).into_response();
+            }
+            Json(serde_json::json!({ "external_releases": count })).into_response()
+        }
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
 
 async fn api_provider_catalog_refresh(State(state): State<Arc<AppState>>) -> Response {
-    match state.provider_catalog.refresh_external() {
-        Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+    match state
+        .plugin_catalog
+        .refresh_with_runtime(&state.plugin_storage)
+        .await
+    {
+        Ok(_) => match state.provider_catalog.refresh_external() {
+            Ok(count) => Json(serde_json::json!({ "external_releases": count })).into_response(),
+            Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        },
         Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     }
 }
@@ -10834,6 +10867,54 @@ struct PluginInstallRequest {
     digest: Option<String>,
 }
 
+async fn plugin_install_compatibility(
+    state: &AppState,
+    machine_id: &str,
+    desired: &crate::machine_protocol::DesiredPlugin,
+) -> Result<Option<cowboy_plugin_sdk::PluginCompatibilityProblem>, String> {
+    let store = state
+        .store
+        .as_ref()
+        .ok_or_else(|| "Plugin lifecycle requires persistence".to_owned())?;
+    let machine = store
+        .list_machines()
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|machine| machine.id == machine_id && !machine.revoked)
+        .ok_or_else(|| format!("unknown or revoked Machine {machine_id:?}"))?;
+    let Some(raw_contracts) = machine.inventory.get("plugin_contracts").cloned() else {
+        return Ok(Some(
+            cowboy_plugin_sdk::PluginCompatibilityProblem::capability_inventory_unavailable(),
+        ));
+    };
+    let contracts = match serde_json::from_value::<cowboy_plugin_sdk::PluginContractInventory>(
+        raw_contracts,
+    ) {
+        Ok(contracts) => contracts,
+        Err(_) => {
+            return Ok(Some(cowboy_plugin_sdk::PluginCompatibilityProblem::new(
+                cowboy_plugin_sdk::PluginCompatibilityCode::CapabilityInventoryInvalid,
+                "Cowboy Machine reported an invalid Plugin capability inventory. Update Cowboy Machine before installing or upgrading Plugins.",
+            )));
+        }
+    };
+    let target = serde_json::from_value::<cowboy_provider_sdk::PlatformTarget>(serde_json::json!({
+        "os": machine.platform,
+        "architecture": machine.architecture,
+    }))
+    .map_err(|error| format!("Machine Plugin platform is invalid: {error}"))?;
+    let (_, requirements) = crate::plugin_catalog::desired_plugin_compatibility(desired)
+        .map_err(|error| format!("Catalog Plugin release is invalid: {error}"))?;
+    Ok(contracts.compatibility_problem(
+        &requirements,
+        &desired.release.plugin_id,
+        &desired.release.plugin_version,
+        &desired.release.supported_platforms,
+        &target,
+    ))
+}
+
 async fn agent_plugin_install_compatibility(
     state: &AppState,
     machine_id: &str,
@@ -10904,6 +10985,20 @@ fn provider_compatibility_response(
         .into_response()
 }
 
+fn plugin_compatibility_response(
+    problem: cowboy_plugin_sdk::PluginCompatibilityProblem,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "plugin_incompatible",
+            "code": problem.code,
+            "detail": problem.detail,
+        })),
+    )
+        .into_response()
+}
+
 async fn api_machine_plugin_install(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
@@ -10917,6 +11012,11 @@ async fn api_machine_plugin_install(
         Ok(desired) => desired,
         Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
     };
+    match plugin_install_compatibility(&state, &machine_id, &desired).await {
+        Ok(None) => {}
+        Ok(Some(problem)) => return plugin_compatibility_response(problem),
+        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
+    }
     let is_agent_plugin =
         desired.release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider;
     if is_agent_plugin {
@@ -12494,6 +12594,149 @@ fn random_machine_token() -> anyhow::Result<String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
+fn provider_usage_source_is_authorized(
+    current_plugins: &[crate::machine_protocol::PluginInventory],
+    runtime: &crate::plugin_runtime::PluginRuntime,
+    producer_id: &str,
+    provider: &str,
+    agent: &str,
+) -> bool {
+    let Some(producer) = current_plugins.iter().find(|plugin| {
+        plugin.plugin_id == producer_id
+            && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+    }) else {
+        return false;
+    };
+    let producer_agent = runtime
+        .exact_host(
+            producer_id,
+            &producer.plugin_version,
+            &producer.generation_digest,
+        )
+        .and_then(|host| host.adapter_slot.as_deref());
+    producer_agent == Some(agent)
+        && runtime.default_hosts().into_iter().any(|host| {
+            host.usage.as_ref().is_some_and(|usage| {
+                usage.activity
+                    && usage.account == provider
+                    && (usage.activity_agents.is_empty()
+                        || usage.activity_agents.iter().any(|entry| entry.id == agent))
+            })
+        })
+}
+
+#[cfg(test)]
+mod provider_usage_source_tests {
+    use super::provider_usage_source_is_authorized;
+    use crate::machine_protocol::{
+        PluginInstallationState, PluginInventory, ProviderMaterializationState,
+        ProviderReplicaState,
+    };
+    use crate::plugin_host::{PluginHostSpec, PluginSlotId};
+    use crate::plugin_runtime::ActivatedHostPlugin;
+
+    fn activated(id: &str, source: &str) -> ActivatedHostPlugin {
+        let spec = PluginHostSpec::from_json(source.as_bytes()).expect("host spec");
+        ActivatedHostPlugin {
+            id: id.to_owned(),
+            plugin_version: Some("1.0.0".to_owned()),
+            artifact_digest: Some("sha256:generation".to_owned()),
+            generation: "test-generation".to_owned(),
+            slots: spec
+                .slots
+                .iter()
+                .map(|slot| PluginSlotId::as_str(*slot))
+                .collect(),
+            ui: spec.ui.clone(),
+            usage: spec.usage,
+            label: spec.label,
+            adapter_slot: spec.adapter_slot,
+            login_fields: spec.login_fields,
+            rpc_argv: spec.rpc_argv,
+            visual: spec.visual,
+            native_capabilities: spec.native_capabilities,
+        }
+    }
+
+    fn installed(id: &str, state: PluginInstallationState) -> PluginInventory {
+        PluginInventory {
+            plugin_id: id.to_owned(),
+            plugin_version: "1.0.0".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
+            generation_digest: "sha256:generation".to_owned(),
+            contract_fingerprint: "sha256:contract".to_owned(),
+            state,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: None,
+            replica_state: ProviderReplicaState::Absent,
+            materialization_state: ProviderMaterializationState::NotInstalled,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn signed_host_data_authorizes_a_future_usage_producer() {
+        let plugins = [installed("future-runtime", PluginInstallationState::Active)];
+        let runtime = crate::plugin_runtime::PluginRuntime::from_default_hosts(vec![
+            activated(
+                "future-runtime",
+                r#"{"schema_version":1,"adapter_slot":"future-agent"}"#,
+            ),
+            activated(
+                "future-usage",
+                r#"{"schema_version":1,"usage":{"account":"future-account","activity":true,"activity_agents":[{"id":"future-agent","label":"Future Agent"}]}}"#,
+            ),
+        ]);
+        assert!(provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            "future-runtime",
+            "future-account",
+            "future-agent",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            "future-runtime",
+            "other-account",
+            "future-agent",
+        ));
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            "future-runtime",
+            "future-account",
+            "other-agent",
+        ));
+    }
+
+    #[test]
+    fn inactive_plugin_cannot_publish_usage_events() {
+        let plugins = [installed(
+            "future-runtime",
+            PluginInstallationState::Missing,
+        )];
+        let runtime = crate::plugin_runtime::PluginRuntime::from_default_hosts(vec![
+            activated(
+                "future-runtime",
+                r#"{"schema_version":1,"adapter_slot":"future-agent"}"#,
+            ),
+            activated(
+                "future-usage",
+                r#"{"schema_version":1,"usage":{"account":"future-account","activity":true}}"#,
+            ),
+        ]);
+        assert!(!provider_usage_source_is_authorized(
+            &plugins,
+            &runtime,
+            "future-runtime",
+            "future-account",
+            "future-agent",
+        ));
+    }
+}
+
 async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let Some(store) = state.store.as_ref().cloned() else {
         let _ = send_json(
@@ -12524,7 +12767,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         challenge_id: challenge_id.clone(),
         nonce: nonce.clone(),
         expires_at_ms,
-        proof_version: 2,
+        proof_version: 3,
     };
     if send_json(&mut socket, &challenge).await.is_err() {
         return;
@@ -12576,7 +12819,11 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     if now_ms() > expires_at_ms {
         return;
     }
-    let proof = if hello.max_protocol >= 3 {
+    let proof = if hello.max_protocol
+        >= crate::machine_protocol::PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION
+    {
+        crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
+    } else if hello.max_protocol >= 3 {
         crate::machine_protocol::challenge_proof_v2(&challenge_id, &nonce, expires_at_ms, &hello)
     } else {
         crate::machine_protocol::challenge_proof_v1(&challenge_id, &nonce, expires_at_ms, &hello)
@@ -12630,6 +12877,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         "components": &hello.components,
         "plugins": &hello.plugins,
         "provider_contracts": &hello.provider_contracts,
+        "plugin_contracts": &hello.plugin_contracts,
         "workspaces": &hello.workspaces,
         "workspace_revision": &hello.workspace_revision,
         "capacity": &hello.capacity,
@@ -12965,6 +13213,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "components": &current_components,
                     "providers": &current_providers,
                     "provider_contracts": &hello.provider_contracts,
+                    "plugin_contracts": &hello.plugin_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
@@ -12997,6 +13246,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     "components": &current_components,
                     "plugins": &current_providers,
                     "provider_contracts": &hello.provider_contracts,
+                    "plugin_contracts": &hello.plugin_contracts,
                     "workspaces": &current_workspaces,
                     "workspace_revision": &current_workspace_revision,
                     "capacity": &hello.capacity,
@@ -13038,16 +13288,28 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         events,
                     },
             } => {
-                let bounded = events.len() <= 200
-                    && events
-                        .first()
-                        .is_some_and(|event| event.sequence == first_sequence)
-                    && events
-                        .last()
-                        .is_some_and(|event| event.sequence == last_sequence)
-                    && events
-                        .windows(2)
-                        .all(|pair| pair[0].sequence < pair[1].sequence);
+                let plugin_runtime = state.plugin_catalog.runtime();
+                let bounded = plugin_runtime.as_ref().is_some_and(|runtime| {
+                    events.len() <= 200
+                        && events
+                            .first()
+                            .is_some_and(|event| event.sequence == first_sequence)
+                        && events
+                            .last()
+                            .is_some_and(|event| event.sequence == last_sequence)
+                        && events
+                            .windows(2)
+                            .all(|pair| pair[0].sequence < pair[1].sequence)
+                        && events.iter().all(|event| {
+                            provider_usage_source_is_authorized(
+                                &current_providers,
+                                runtime,
+                                &producer_id,
+                                &event.provider,
+                                &event.agent,
+                            )
+                        })
+                });
                 if !bounded {
                     Err(anyhow::anyhow!("invalid provider usage sequence envelope"))
                 } else {
@@ -13444,18 +13706,18 @@ async fn api_session_cache_protection(
         || crate::provider::legacy_behavior(&session.provider).configuration,
         |behavior| behavior.configuration.clone(),
     );
-    if !crate::deepseek_cache::supported_behavior(&configuration) {
+    let preferences = state
+        .hub
+        .config_preferences(&session.id)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let Some(enabled) = crate::managed_config::cache_protection(&configuration, &preferences)
+    else {
         return (
             StatusCode::BAD_REQUEST,
             crate::deepseek_cache::unavailable_message(),
         )
             .into_response();
-    }
-    let enabled = state
-        .hub
-        .config_preferences(&session.id)
-        .and_then(|preferences| crate::deepseek_cache::selected(&preferences, &configuration))
-        .unwrap_or(true);
+    };
     if !enabled {
         return Json(serde_json::json!({
             "state": "disabled",
@@ -13469,7 +13731,7 @@ async fn api_session_cache_protection(
         .machine_control
         .adapter_request(
             &session.machine_id,
-            "deepseek-cache-status",
+            "provider-cache-status",
             serde_json::json!({
                 "configuration": configuration,
                 "sessionId": session.id,
@@ -13488,7 +13750,7 @@ async fn api_session_cache_protection(
             Json(status).into_response()
         }
         Err(error) => {
-            tracing::warn!(session = %session.id, machine = %session.machine_id, %error, "DeepSeek cache-protection status unavailable");
+            tracing::warn!(session = %session.id, machine = %session.machine_id, %error, "Provider cache-protection status unavailable");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "cache-protection status is temporarily unavailable",
@@ -17896,16 +18158,13 @@ fn handle_command(
             session_id,
             config_id,
             value,
-        } => {
-            if config_id == crate::deepseek_context::CONFIG_ID {
-                state
-                    .supervisor
-                    .set_deepseek_context_profile(&session_id, value)
-            } else if config_id == crate::deepseek_cache::CONFIG_ID {
-                state
-                    .supervisor
-                    .set_deepseek_cache_protection(&session_id, value)
-            } else {
+        } => match state.supervisor.set_managed_config_option(
+            &session_id,
+            &config_id,
+            value.clone(),
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) => {
                 state
                     .hub
                     .set_config_preference(&session_id, config_id.clone(), value.clone())
@@ -17916,7 +18175,8 @@ fn handle_command(
                         )
                     })
             }
-        }
+            Err(error) => Err(error),
+        },
         // Revive on open (design §7): warm the agent when the client selects
         // the session, not only on the first prompt. No-op if already alive.
         Inbound::OpenSession { session_id } => {
@@ -19076,7 +19336,7 @@ mod product_auth_api_tests {
             persistence_health: None,
             runtime_router: None,
             plugin_catalog: None,
-            plugin_hosts: Arc::new(Vec::new()),
+            plugin_storage: None,
             provider_catalog: None,
             passkeys: Arc::new(crate::passkey::PasskeyCeremonies::default()),
             setup,
@@ -19099,8 +19359,12 @@ mod product_auth_api_tests {
             "cowboy-missing-oidc-config-{}",
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
-        assert!(load_oidc_provider(false, Some(&missing)).unwrap().is_none());
-        assert!(load_oidc_provider(true, Some(&missing)).is_err());
+        assert!(
+            crate::plugin_activation::load_legacy_oidc_provider(false, Some(&missing))
+                .unwrap()
+                .is_none()
+        );
+        assert!(crate::plugin_activation::load_legacy_oidc_provider(true, Some(&missing)).is_err());
     }
 
     async fn test_store() -> (Store, std::path::PathBuf) {
@@ -19689,7 +19953,7 @@ mod product_auth_api_tests {
         );
         assert_eq!(
             classify_route(&Method::GET, "/api/plugins/password/ui/index.js"),
-            RouteAuth::Public,
+            RouteAuth::AdminOperator,
         );
         assert_eq!(
             classify_route(&Method::POST, "/api/plugins/password/call"),

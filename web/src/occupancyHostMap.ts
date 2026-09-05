@@ -1,37 +1,89 @@
-import { bundledHostPlugins } from "./bundledHostPlugins.ts";
+import {
+  isPluginArtifactDigest,
+  isPluginIdentifier,
+} from "@cowboy/plugin-api/runtime";
 
 function readAdapterSlot(host: object): string | undefined {
   const record = host as { adapter_slot?: unknown };
-  return typeof record.adapter_slot === "string" && record.adapter_slot !== ""
-    ? record.adapter_slot
-    : undefined;
+  const slot = record.adapter_slot;
+  return isPluginIdentifier(slot) ? slot : undefined;
 }
 
-function collectAdapterAliases(hosts: unknown): Record<string, string[]> {
+type AdapterMaps = {
+  aliases: Record<string, string[]>;
+  defaults: Record<string, string>;
+  exact: Record<string, string>;
+};
+
+function exactAdapterKey(
+  pluginId: string,
+  pluginVersion: string,
+  artifactDigest: string,
+): string {
+  return `${pluginId}\u0000${pluginVersion}\u0000${artifactDigest}`;
+}
+
+function collectAdapterAliases(hosts: unknown): AdapterMaps {
   const aliases: Record<string, string[]> = {};
-  if (!Array.isArray(hosts)) return aliases;
+  const defaults: Record<string, string> = {};
+  const exact: Record<string, string> = {};
+  if (!Array.isArray(hosts)) return { aliases, defaults, exact };
   for (const host of hosts) {
     if (host === null || typeof host !== "object") continue;
-    const id = (host as { id?: unknown }).id;
+    const row = host as {
+      id?: unknown;
+      plugin_version?: unknown;
+      artifact_digest?: unknown;
+      default_for_id?: unknown;
+    };
+    const candidateId = row.id;
     const slot = readAdapterSlot(host);
-    if (typeof id !== "string" || id === "" || !slot) continue;
-    const existing = aliases[slot] ?? [];
-    if (!existing.includes(id)) existing.push(id);
-    aliases[slot] = existing;
+    if (!isPluginIdentifier(candidateId) || !slot) continue;
+    const id = candidateId;
+    if (row.default_for_id === undefined || row.default_for_id === true) {
+      defaults[id] = slot;
+      const existing = aliases[slot] ?? [];
+      if (!existing.includes(id)) existing.push(id);
+      aliases[slot] = existing;
+    }
+    if (
+      typeof row.plugin_version === "string" &&
+      isPluginArtifactDigest(row.artifact_digest)
+    ) {
+      exact[exactAdapterKey(id, row.plugin_version, row.artifact_digest)] =
+        slot;
+    }
   }
-  return aliases;
+  return { aliases, defaults, exact };
 }
 
-const bundledAliases = collectAdapterAliases(bundledHostPlugins);
-let adapterAliases: Record<string, string[]> = {};
+let adapterMaps: AdapterMaps = { aliases: {}, defaults: {}, exact: {} };
 
-/** Overlay Machine adapter-slot aliases declared by activated host plugins. */
+/** Replace Machine adapter-slot aliases from the activated host inventory. */
 export function applyOccupancyHostPlugins(hosts: unknown): void {
-  adapterAliases = collectAdapterAliases(hosts);
+  adapterMaps = collectAdapterAliases(hosts);
 }
 
 /** Session provider ids that occupy a Machine adapter/CLI slot. */
 export function occupancyProviderIds(slot: string): string[] {
-  const extra = adapterAliases[slot] ?? bundledAliases[slot] ?? [];
+  const extra = adapterMaps.aliases[slot] ?? [];
   return [...new Set([slot, ...extra])];
+}
+
+/** Resolve the adapter slot from the exact session generation. An exact miss
+ * never adopts another release's host declaration. */
+export function providerOccupancySlot(
+  pluginId: string,
+  pluginVersion?: string,
+  artifactDigest?: string,
+): string | undefined {
+  if ((pluginVersion === undefined) !== (artifactDigest === undefined)) {
+    return undefined;
+  }
+  if (pluginVersion !== undefined && artifactDigest !== undefined) {
+    return adapterMaps.exact[
+      exactAdapterKey(pluginId, pluginVersion, artifactDigest)
+    ];
+  }
+  return adapterMaps.defaults[pluginId];
 }

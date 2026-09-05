@@ -454,46 +454,7 @@ fn projected_config_options(
     options: Option<serde_json::Value>,
 ) -> Option<serde_json::Value> {
     let configuration = configuration_behavior(provider, behavior);
-    let had_options = options.is_some();
-    let mut options = options.unwrap_or_else(|| serde_json::json!([]));
-    let Some(array) = options.as_array_mut() else {
-        return Some(options);
-    };
-    array.retain(|option| {
-        let id = option.get("id").and_then(serde_json::Value::as_str);
-        id != Some(crate::deepseek_context::CONFIG_ID)
-            && id != Some(crate::deepseek_cache::CONFIG_ID)
-    });
-    let model = preferences.get("model").and_then(serde_json::Value::as_str);
-    let requested = preferences
-        .get(crate::deepseek_context::CONFIG_ID)
-        .and_then(serde_json::Value::as_str);
-    if let Some(option) = crate::deepseek_context::config_option(&configuration, model, requested) {
-        let insert_at = array
-            .iter()
-            .position(|candidate| {
-                candidate.get("id").and_then(serde_json::Value::as_str) == Some("model")
-            })
-            .map_or(array.len(), |index| index.saturating_add(1));
-        array.insert(insert_at, option);
-    }
-    if let Some(enabled) = crate::deepseek_cache::selected(preferences, &configuration)
-        && let Some(option) = crate::deepseek_cache::config_option(&configuration, enabled)
-    {
-        let insert_at = array
-            .iter()
-            .position(|candidate| {
-                candidate.get("id").and_then(serde_json::Value::as_str)
-                    == Some(crate::deepseek_context::CONFIG_ID)
-            })
-            .map_or(array.len(), |index| index.saturating_add(1));
-        array.insert(insert_at, option);
-    }
-    if had_options || crate::deepseek_cache::supported_behavior(&configuration) {
-        Some(options)
-    } else {
-        None
-    }
+    crate::managed_config::projected_options(&configuration, preferences, options)
 }
 
 /// Immutable attributes assigned when a Cowboy session is registered.

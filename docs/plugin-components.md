@@ -13,8 +13,9 @@ component dependency list. The initial kinds are:
 
 - `agent_provider`: an installable agent integration whose entry point is the
   existing signed, data-only Provider package contract;
-- `authentication_provider`: a signed, data-only OpenID Connect product-login
-  integration. The Controller owns credentials, account mappings, protocol
+- `authentication_provider`: a signed, data-only product-login integration.
+  Payload schema 1 selects OIDC; schema 2 also selects local password and
+  WebAuthn. The Controller owns credentials, account mappings, protocol
   execution, and Cowboy sessions; the package cannot execute provider code;
 - `code_intelligence`: an isolated code-intelligence integration. The first is
   the separately built GPL Zed adapter.
@@ -33,10 +34,10 @@ installed product. Every active component is also a distributable package:
 Cargo crates for Rust SDKs and npm source packages with explicit exports for
 TypeScript, schemas, and runtime tooling. Cowboy consumes TypeScript components
 by package name rather than reaching into their source directories. The
-registry includes the plugin contract, Web app shell, reactive store,
-optimistic sync and IndexedDB adapter, Provider SDK/UI/runtime tooling, and the
-Zed code-intelligence contract. Cowboy no longer stages or imports
-`shared-utils`.
+registry includes the plugin contract, versioned plugin host API, Web app
+shell, reactive store, optimistic sync and IndexedDB adapter, Provider
+SDK/UI/runtime tooling, and the Zed code-intelligence contract. Cowboy no
+longer stages or imports `shared-utils`.
 
 Each component release records:
 
@@ -87,6 +88,13 @@ adjacent component releases. `provider-check` additionally proves a Plugin can
 build from an unrelated working directory. The repository-wide `just check`
 includes both gates.
 
+`just example-auth-build-all` discovers every login host under
+`examples/authentication/` and requires its own manifest and SDK-only package
+build. The examples include release-ready Password and Passkey source packages;
+they are not additional Machine installations or an alternative release format.
+They join `provider-check` so a shared SDK change exercises the local-login
+migration prerequisites as well as the seven Machine Plugins.
+
 ## Layout
 
 ```text
@@ -94,6 +102,7 @@ components/
   registry.json
   plugin-contract/
   plugin-sdk/
+  plugin-api/
   app-shell/
   state-store/
   state-sync/

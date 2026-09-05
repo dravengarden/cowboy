@@ -1,15 +1,15 @@
 import {
   Component,
   type ErrorInfo,
-  type JSX,
   type ReactNode,
   useEffect,
   useState,
 } from "react";
 import {
+  loadPluginSlot,
   type PluginSlotComponent,
   type PluginSlotId,
-  loadPluginSlot,
+  type PluginSlotProps,
 } from "./types.ts";
 
 interface BoundaryProps {
@@ -21,7 +21,8 @@ interface BoundaryState {
   failed: boolean;
 }
 
-export class PluginSlotBoundary extends Component<BoundaryProps, BoundaryState> {
+export class PluginSlotBoundary
+  extends Component<BoundaryProps, BoundaryState> {
   override state: BoundaryState = { failed: false };
 
   static getDerivedStateFromError(): BoundaryState {
@@ -46,42 +47,63 @@ export class PluginSlotBoundary extends Component<BoundaryProps, BoundaryState> 
 
 export function PluginSlot({
   pluginId,
+  pluginVersion,
+  artifactDigest,
   slot,
   context,
   children,
   placeholder,
 }: {
   pluginId: string;
+  /** Exact trusted release identity. Both fields are required together. */
+  pluginVersion?: string;
+  artifactDigest?: string;
   slot: PluginSlotId;
   context?: unknown;
   children?: ReactNode;
-  /** Shown while the slot module loads. Defaults to `children`. */
+  /** Shown while the signed renderer declaration resolves. Defaults to `children`. */
   placeholder?: ReactNode;
-}): JSX.Element {
-  const [module, setModule] = useState<PluginSlotComponent | null>(null);
+}) {
+  const [renderer, setRenderer] = useState<
+    PluginSlotComponent | null | undefined
+  >(undefined);
   useEffect(() => {
     let cancelled = false;
-    setModule(null);
-    void loadPluginSlot(pluginId, slot).then((loaded) => {
-      if (!cancelled) setModule(() => loaded);
+    setRenderer(undefined);
+    void loadPluginSlot(
+      pluginId,
+      slot,
+      pluginVersion,
+      artifactDigest,
+    ).then((loaded) => {
+      if (!cancelled) setRenderer(() => loaded);
     });
     return () => {
       cancelled = true;
     };
-  }, [pluginId, slot]);
+  }, [pluginId, pluginVersion, artifactDigest, slot]);
   const core = children ?? null;
-  if (!module) {
+  if (renderer === undefined) {
     return (
       <div style={{ display: "contents" }}>
         {placeholder === undefined ? core : placeholder}
       </div>
     );
   }
-  const Module = module;
+  if (renderer === null) {
+    return <div style={{ display: "contents" }}>{core}</div>;
+  }
+  const Renderer = renderer as (props: PluginSlotProps) => ReactNode;
   return (
     <div style={{ display: "contents" }}>
       <PluginSlotBoundary fallback={core}>
-        <Module pluginId={pluginId} slot={slot} context={context} />
+        <Renderer
+          pluginId={pluginId}
+          {...(pluginVersion === undefined ? {} : { pluginVersion })}
+          {...(artifactDigest === undefined ? {} : { artifactDigest })}
+          slot={slot}
+          context={context}
+        />
       </PluginSlotBoundary>
     </div>
   );

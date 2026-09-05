@@ -8,8 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 6;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 7;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
+pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -146,6 +147,10 @@ pub struct MachineHello {
         deserialize_with = "deserialize_provider_contracts"
     )]
     pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
+    /// Generic outer Plugin/package/release/host decoder capabilities. This
+    /// is distinct from the narrower Agent Provider payload contract above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_contracts: Option<cowboy_plugin_sdk::PluginContractInventory>,
     /// Explicit launch roots exported by the Machine. Cowboy never sends an
     /// arbitrary controller-side path to a remote host.
     #[serde(default)]
@@ -281,6 +286,8 @@ pub struct MachineSummary {
     pub plugins: Vec<PluginInventory>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_contracts: Option<cowboy_provider_sdk::ProviderContractInventory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_contracts: Option<cowboy_plugin_sdk::PluginContractInventory>,
     #[serde(default)]
     pub capacity: MachineCapacity,
     #[serde(default)]
@@ -378,6 +385,58 @@ pub fn challenge_proof_v2(
     proof
 }
 
+/// Version-three handshake proof additionally binds the generic Plugin
+/// decoder inventory introduced with Machine protocol seven. A new Machine
+/// still signs proof v2 when an older Controller requests it, preserving
+/// rolling upgrade compatibility in both directions.
+#[must_use]
+pub fn challenge_proof_v3(
+    challenge_id: &str,
+    nonce: &str,
+    expires_at_ms: i64,
+    hello: &MachineHello,
+) -> Vec<u8> {
+    let mut proof = challenge_proof_v2(challenge_id, nonce, expires_at_ms, hello);
+    proof.extend_from_slice(b"cowboy-machine-proof-v3\n");
+    if let Some(plugin_contracts) = &hello.plugin_contracts {
+        proof.extend_from_slice(b"plugin-contracts:");
+        proof.extend_from_slice(
+            plugin_contracts
+                .plugin_sdk_version
+                .len()
+                .to_string()
+                .as_bytes(),
+        );
+        proof.push(b':');
+        proof.extend_from_slice(plugin_contracts.plugin_sdk_version.as_bytes());
+        for value in [
+            plugin_contracts.min_manifest_schema,
+            plugin_contracts.max_manifest_schema,
+            plugin_contracts.min_package_schema,
+            plugin_contracts.max_package_schema,
+            plugin_contracts.min_release_schema,
+            plugin_contracts.max_release_schema,
+            plugin_contracts.min_agent_provider_schema,
+            plugin_contracts.max_agent_provider_schema,
+            plugin_contracts.min_authentication_provider_schema,
+            plugin_contracts.max_authentication_provider_schema,
+            plugin_contracts.min_code_intelligence_schema,
+            plugin_contracts.max_code_intelligence_schema,
+            plugin_contracts.min_host_bundle_schema,
+            plugin_contracts.max_host_bundle_schema,
+            plugin_contracts.min_host_schema,
+            plugin_contracts.max_host_schema,
+        ] {
+            proof.push(b':');
+            proof.extend_from_slice(value.to_string().as_bytes());
+        }
+        proof.push(b'\n');
+    } else {
+        proof.extend_from_slice(b"plugin-contracts:absent\n");
+    }
+    proof
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginInstallationState {
@@ -453,6 +512,21 @@ pub struct DesiredPlugin {
     pub release: cowboy_plugin_sdk::PluginRelease,
     pub package_base64: String,
     pub publisher_public_key: String,
+    /// Exact serialized host bundle whose digest is bound by `release`.
+    /// Schema-one releases omit both the release digest and these bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_bundle_base64: Option<String>,
+}
+
+/// Closed operations exposed by an installed Plugin host generation. The
+/// Machine selects the signed argv for the operation; the Controller never
+/// supplies an executable or filesystem path over the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginHostOperation {
+    CollectUsage,
+    ResetUsage,
+    DecorateActivity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -622,6 +696,18 @@ pub enum MachineCommand {
         adapter: String,
         payload: serde_json::Value,
     },
+    /// Execute one signed host operation against the active exact Plugin and
+    /// authentication generation on this Machine.
+    InvokePluginHost {
+        request_id: String,
+        plugin_id: String,
+        plugin_version: String,
+        generation_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_generation: Option<u64>,
+        operation: PluginHostOperation,
+        payload: serde_json::Value,
+    },
     ProviderUsageAck {
         producer_id: String,
         sequence: u64,
@@ -639,9 +725,10 @@ impl MachineCommand {
             // Uninstall is destructive and its Controller saga relies on
             // exact-generation reactivation for compensation. Never let a
             // protocol-three Machine begin removal that it cannot undo.
-            Self::InstallPlugin { .. }
-            | Self::UninstallPlugin { .. }
-            | Self::ReactivatePlugin { .. } => 5,
+            Self::InstallPlugin { .. } | Self::InvokePluginHost { .. } => {
+                PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION
+            }
+            Self::UninstallPlugin { .. } | Self::ReactivatePlugin { .. } => 5,
             Self::BeginLogin { .. }
             | Self::CancelLogin { .. }
             | Self::SubmitLoginCode { .. }
@@ -844,6 +931,19 @@ pub enum MachineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// Sensitive Plugin output is correlated directly to the requester and
+    /// must not enter the ordinary Machine event history.
+    PluginHostResponse {
+        request_id: String,
+        accepted: bool,
+        /// False only when the Machine can prove no Plugin process started.
+        #[serde(default)]
+        started: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payload: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
     LoginChallenge {
         request_id: String,
         provider: String,
@@ -943,8 +1043,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_refresh_candidate_round_trips_only_on_protocol_six() {
-        assert_eq!(MACHINE_PROTOCOL_VERSION, 6);
+    fn provider_refresh_candidate_survives_the_protocol_seven_addition() {
+        assert_eq!(MACHINE_PROTOCOL_VERSION, 7);
         let event = MachineEvent::ProviderAuthRefreshCandidate {
             request_id: "refresh-1".to_owned(),
             provider_id: "grok".to_owned(),
@@ -964,6 +1064,59 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<MachineEvent>(encoded).unwrap(),
             event
+        );
+    }
+
+    #[test]
+    fn plugin_install_and_exact_host_invocation_require_protocol_seven() {
+        let command = MachineCommand::InvokePluginHost {
+            request_id: "usage-1".to_owned(),
+            plugin_id: "codex".to_owned(),
+            plugin_version: "1.2.3".to_owned(),
+            generation_digest: format!("sha256:{}", "ab".repeat(32)),
+            auth_generation: Some(4),
+            operation: PluginHostOperation::CollectUsage,
+            payload: serde_json::json!({ "provider": "openai" }),
+        };
+        assert_eq!(
+            command.minimum_protocol(),
+            PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION
+        );
+        let encoded = serde_json::to_value(&command).unwrap();
+        assert_eq!(encoded["command"], "invoke_plugin_host");
+        assert_eq!(encoded["operation"], "collect_usage");
+        assert_eq!(
+            serde_json::from_value::<MachineCommand>(encoded).unwrap(),
+            command
+        );
+
+        let install = MachineCommand::InstallPlugin {
+            request_id: "install-1".to_owned(),
+            plugin: Box::new(DesiredPlugin {
+                release: cowboy_plugin_sdk::PluginRelease {
+                    release_schema: 2,
+                    plugin_id: "codex".to_owned(),
+                    plugin_version: "1.2.3".to_owned(),
+                    plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
+                    package_digest: format!("sha256:{}", "01".repeat(32)),
+                    artifact_digest: format!("sha256:{}", "02".repeat(32)),
+                    artifact_url: "https://example.invalid/codex".to_owned(),
+                    publisher: "cowboy-project".to_owned(),
+                    contract_fingerprint: format!("sha256:{}", "03".repeat(32)),
+                    component_release: "1.0.0".to_owned(),
+                    host_bundle_digest: Some(format!("sha256:{}", "04".repeat(32))),
+                    signature: "signature".to_owned(),
+                    supported_platforms: Vec::new(),
+                    runtime_artifacts: Vec::new(),
+                },
+                package_base64: "e30=".to_owned(),
+                publisher_public_key: "key".to_owned(),
+                host_bundle_base64: Some("e30=".to_owned()),
+            }),
+        };
+        assert_eq!(
+            install.minimum_protocol(),
+            PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION
         );
     }
 
@@ -1079,6 +1232,7 @@ mod tests {
         assert_eq!(hello.capacity.max_sessions, 1);
         assert!(!hello.capacity.draining);
         assert!(hello.provider_contracts.is_none());
+        assert!(hello.plugin_contracts.is_none());
     }
 
     #[test]
@@ -1100,6 +1254,7 @@ mod tests {
             components: Vec::new(),
             plugins: Vec::new(),
             provider_contracts: None,
+            plugin_contracts: None,
             workspaces: Vec::new(),
             workspace_revision: None,
             capacity: MachineCapacity::default(),
@@ -1150,6 +1305,45 @@ mod tests {
         let mut omitted = hello;
         omitted.provider_contracts = None;
         assert_ne!(proof, challenge_proof_v2("id", "nonce", 42, &omitted));
+    }
+
+    #[test]
+    fn challenge_proof_v3_binds_plugin_contracts_without_changing_v2() {
+        let mut hello: MachineHello = serde_json::from_value(serde_json::json!({
+            "machine_id": "falcon",
+            "display_name": "Falcon",
+            "platform": "linux",
+            "arch": "x86_64",
+            "connection_mode": "outbound_tls",
+            "min_protocol": 1,
+            "max_protocol": 7,
+            "min_runtime_protocol": 1,
+            "max_runtime_protocol": 3,
+            "host_build": "test",
+            "encryption_public_key": "machine-key"
+        }))
+        .unwrap();
+        hello.plugin_contracts = Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
+            crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
+        ));
+        let proof = challenge_proof_v3("id", "nonce", 42, &hello);
+        let legacy_proof = challenge_proof_v2("id", "nonce", 42, &hello);
+
+        let mut downgraded = hello.clone();
+        downgraded
+            .plugin_contracts
+            .as_mut()
+            .unwrap()
+            .max_release_schema = 1;
+        assert_ne!(proof, challenge_proof_v3("id", "nonce", 42, &downgraded));
+        assert_eq!(
+            legacy_proof,
+            challenge_proof_v2("id", "nonce", 42, &downgraded)
+        );
+
+        let mut omitted = hello;
+        omitted.plugin_contracts = None;
+        assert_ne!(proof, challenge_proof_v3("id", "nonce", 42, &omitted));
     }
 
     #[test]
@@ -1212,6 +1406,7 @@ mod tests {
                 components: Vec::new(),
                 plugins: Vec::new(),
                 provider_contracts: None,
+                plugin_contracts: None,
                 workspaces: Vec::new(),
                 workspace_revision: None,
                 capacity: MachineCapacity::default(),

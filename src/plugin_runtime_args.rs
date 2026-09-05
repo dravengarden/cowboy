@@ -6,42 +6,41 @@
 //! package-less Codex DeepSeek `config.toml`.
 
 use std::collections::BTreeMap;
+#[cfg(feature = "full")]
 use std::path::Path;
 use std::sync::OnceLock;
 
-const CLAUDE_CODE: &str = include_str!("../plugins/claude-code/provider.json");
-const CLAUDE_CODE_HOST: &str = include_str!("../plugins/claude-code/host.json");
-const CLAUDE_DEEPSEEK: &str = include_str!("../plugins/claude-deepseek/provider.json");
-const CLAUDE_DEEPSEEK_HOST: &str = include_str!("../plugins/claude-deepseek/host.json");
-const CODEX: &str = include_str!("../plugins/codex/provider.json");
-const CODEX_HOST: &str = include_str!("../plugins/codex/host.json");
-const CODEX_DEEPSEEK: &str = include_str!("../plugins/codex-deepseek/provider.json");
-const CODEX_DEEPSEEK_HOST: &str = include_str!("../plugins/codex-deepseek/host.json");
-const GEMINI: &str = include_str!("../plugins/gemini/provider.json");
-const GEMINI_HOST: &str = include_str!("../plugins/gemini/host.json");
-const GROK: &str = include_str!("../plugins/grok/provider.json");
-const GROK_HOST: &str = include_str!("../plugins/grok/host.json");
+/// Local mirror of the host-contract identifier rule. `machine-host` builds do
+/// not link the Controller's `plugin_host` module, so keep this small predicate
+/// in sync at the source-reading boundary.
+fn valid_host_identifier(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+}
 
-/// First plugin for a slot is the canonical occupant used for disable aliases
-/// and component→provider mapping.
-const ADAPTER_HOSTS: &[(&str, &str)] = &[
-    ("codex", CODEX_HOST),
-    ("codex-deepseek", CODEX_DEEPSEEK_HOST),
-    ("grok", GROK_HOST),
-    ("gemini", GEMINI_HOST),
-    ("claude-code", CLAUDE_CODE_HOST),
-    ("claude-deepseek", CLAUDE_DEEPSEEK_HOST),
-];
+fn adapter_hosts() -> impl Iterator<Item = (&'static str, &'static str)> {
+    crate::first_party_sources::HOST_SOURCES
+        .iter()
+        .copied()
+        .filter(|(id, source)| optional_adapter_slot(id, source).is_some())
+}
 
-/// First plugin to occupy a Machine component slot owns that slot's npm channel.
-const NPM_PAYLOADS: &[(&str, &str)] = &[
-    ("codex", CODEX),
-    ("grok", GROK),
-    ("gemini", GEMINI),
-    ("claude-code", CLAUDE_CODE),
-    ("claude-deepseek", CLAUDE_DEEPSEEK),
-    ("codex-deepseek", CODEX_DEEPSEEK),
-];
+fn npm_payloads() -> impl Iterator<Item = (&'static str, &'static str)> {
+    crate::first_party_sources::PROVIDER_SOURCES.iter().copied()
+}
+
+#[cfg(feature = "full")]
+fn provider_source(plugin_id: &str) -> &'static str {
+    npm_payloads()
+        .find(|(id, _)| *id == plugin_id)
+        .map(|(_, source)| source)
+        .unwrap_or_else(|| panic!("{plugin_id} provider.json is missing"))
+}
 
 struct AdapterIndex {
     plugin_to_slot: BTreeMap<&'static str, &'static str>,
@@ -55,13 +54,13 @@ fn adapter_index() -> &'static AdapterIndex {
         let mut plugin_to_slot = BTreeMap::new();
         let mut slot_to_primary = BTreeMap::new();
         let mut slot_to_plugins: BTreeMap<&'static str, Vec<&'static str>> = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             let Some(slot) = optional_adapter_slot(plugin_id, source) else {
                 continue;
             };
-            plugin_to_slot.insert(*plugin_id, slot);
-            slot_to_plugins.entry(slot).or_default().push(*plugin_id);
-            slot_to_primary.entry(slot).or_insert(*plugin_id);
+            plugin_to_slot.insert(plugin_id, slot);
+            slot_to_plugins.entry(slot).or_default().push(plugin_id);
+            slot_to_primary.entry(slot).or_insert(plugin_id);
         }
         AdapterIndex {
             plugin_to_slot,
@@ -72,11 +71,14 @@ fn adapter_index() -> &'static AdapterIndex {
 }
 
 struct NpmCatalog {
+    #[cfg(feature = "machine-host")]
     by_component: BTreeMap<String, BTreeMap<String, &'static str>>,
+    #[cfg(feature = "full")]
     by_plugin: BTreeMap<String, &'static str>,
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn npm_package_for_component(kind: &str, slot: &str) -> Option<&'static str> {
     npm_catalog()
         .by_component
@@ -86,6 +88,7 @@ pub(crate) fn npm_package_for_component(kind: &str, slot: &str) -> Option<&'stat
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
     npm_catalog()
         .by_plugin
@@ -95,6 +98,7 @@ pub(crate) fn npx_package_for_plugin(plugin_id: &str) -> &'static str {
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn npx_prefix(plugin_id: &str) -> [&'static str; 2] {
     ["-y", npx_package_for_plugin(plugin_id)]
 }
@@ -102,13 +106,27 @@ pub(crate) fn npx_prefix(plugin_id: &str) -> [&'static str; 2] {
 fn npm_catalog() -> &'static NpmCatalog {
     static VALUE: OnceLock<NpmCatalog> = OnceLock::new();
     VALUE.get_or_init(|| {
+        #[cfg(feature = "machine-host")]
         let mut by_component = BTreeMap::new();
+        #[cfg(feature = "full")]
         let mut by_plugin = BTreeMap::new();
-        for (plugin_id, source) in NPM_PAYLOADS {
-            collect_npm_packages(plugin_id, source, &mut by_component, &mut by_plugin);
+        for (plugin_id, source) in npm_payloads() {
+            #[cfg(feature = "machine-host")]
+            let components = Some(&mut by_component);
+            #[cfg(not(feature = "machine-host"))]
+            let components = None;
+            let package = collect_npm_packages(plugin_id, source, components);
+            #[cfg(feature = "full")]
+            if let Some(package) = package {
+                by_plugin.entry(plugin_id.to_owned()).or_insert(package);
+            }
+            #[cfg(not(feature = "full"))]
+            let _ = package;
         }
         NpmCatalog {
+            #[cfg(feature = "machine-host")]
             by_component,
+            #[cfg(feature = "full")]
             by_plugin,
         }
     })
@@ -117,14 +135,11 @@ fn npm_catalog() -> &'static NpmCatalog {
 fn collect_npm_packages(
     plugin_id: &str,
     source: &str,
-    packages: &mut BTreeMap<String, BTreeMap<String, &'static str>>,
-    npx: &mut BTreeMap<String, &'static str>,
-) {
+    mut packages: Option<&mut BTreeMap<String, BTreeMap<String, &'static str>>>,
+) -> Option<&'static str> {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} provider.json must parse: {error}"));
-    let Some(runtime) = value.get("runtime") else {
-        return;
-    };
+    let runtime = value.get("runtime")?;
     let mut dependencies = BTreeMap::new();
     if let Some(entries) = runtime
         .get("dependencies")
@@ -145,12 +160,9 @@ fn collect_npm_packages(
             dependencies.insert(id.to_owned(), leaked);
         }
     }
-    let Some(platforms) = runtime
+    let platforms = runtime
         .get("platforms")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return;
-    };
+        .and_then(serde_json::Value::as_array)?;
     let mut plugin_cli = None;
     let mut plugin_adapter = None;
     for platform in platforms {
@@ -176,11 +188,13 @@ fn collect_npm_packages(
             let Some(package) = dependencies.get(dependency).copied() else {
                 continue;
             };
-            packages
-                .entry(kind.to_owned())
-                .or_default()
-                .entry(slot.to_owned())
-                .or_insert(package);
+            if let Some(packages) = packages.as_deref_mut() {
+                packages
+                    .entry(kind.to_owned())
+                    .or_default()
+                    .entry(slot.to_owned())
+                    .or_insert(package);
+            }
             match kind {
                 "provider_adapter" => {
                     plugin_adapter.get_or_insert(package);
@@ -192,9 +206,7 @@ fn collect_npm_packages(
             }
         }
     }
-    if let Some(package) = plugin_adapter.or(plugin_cli) {
-        npx.entry(plugin_id.to_owned()).or_insert(package);
-    }
+    plugin_adapter.or(plugin_cli)
 }
 
 fn npm_package_from_registry_url(source: &str) -> Option<&str> {
@@ -218,6 +230,7 @@ pub(crate) fn acp_env_key(plugin_id: &str, suffix: &str) -> String {
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn adapter_plugins() -> Vec<(&'static str, &'static str)> {
     adapter_index()
         .plugin_to_slot
@@ -238,11 +251,11 @@ pub(crate) struct PathDetect {
 pub(crate) fn path_detect() -> Vec<PathDetect> {
     let index = adapter_index();
     let mut detects = Vec::new();
-    for (plugin_id, source) in NPM_PAYLOADS {
+    for (plugin_id, source) in npm_payloads() {
         let Some(&slot) = index.plugin_to_slot.get(plugin_id) else {
             continue;
         };
-        if index.slot_to_primary.get(slot) != Some(plugin_id) {
+        if index.slot_to_primary.get(slot) != Some(&plugin_id) {
             continue;
         }
         let Some(command) = runtime_entrypoint(plugin_id, source) else {
@@ -261,13 +274,13 @@ pub(crate) fn path_detect() -> Vec<PathDetect> {
     detects
 }
 
+#[cfg(feature = "machine-host")]
 fn entrypoints() -> &'static BTreeMap<&'static str, &'static str> {
     static VALUE: OnceLock<BTreeMap<&'static str, &'static str>> = OnceLock::new();
     VALUE.get_or_init(|| {
-        NPM_PAYLOADS
-            .iter()
+        npm_payloads()
             .filter_map(|(plugin_id, source)| {
-                runtime_entrypoint(plugin_id, source).map(|command| (*plugin_id, command))
+                runtime_entrypoint(plugin_id, source).map(|command| (plugin_id, command))
             })
             .collect()
     })
@@ -275,9 +288,10 @@ fn entrypoints() -> &'static BTreeMap<&'static str, &'static str> {
 
 /// Occupancy slots in first-party host order.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn occupancy_slots() -> Vec<&'static str> {
     let mut slots = Vec::new();
-    for (plugin_id, _) in ADAPTER_HOSTS {
+    for (plugin_id, _) in adapter_hosts() {
         let Some(slot) = adapter_slot_for_provider(plugin_id) else {
             continue;
         };
@@ -288,47 +302,62 @@ pub(crate) fn occupancy_slots() -> Vec<&'static str> {
     slots
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CliAuthKind {
-    Exit,
-    GeminiEnv,
-    GrokJson,
+#[cfg(feature = "machine-host")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CliAuthKind(String);
+
+#[cfg(feature = "machine-host")]
+impl CliAuthKind {
+    fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub(crate) fn is_exit(&self) -> bool {
+        self.0 == "exit"
+    }
 }
 
+#[cfg(feature = "machine-host")]
 pub(crate) struct CliAuth {
     pub kind: CliAuthKind,
     pub argv: Vec<&'static str>,
+    pub rules: Option<crate::plugin_auth_probe::CliAuthRuleSet>,
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn cli_auth_for_slot(slot: &str) -> Option<&'static CliAuth> {
     let primary = provider_for_adapter_slot(slot)?;
     cli_auths().get(primary)
 }
 
+#[cfg(feature = "machine-host")]
 fn cli_auths() -> &'static BTreeMap<&'static str, CliAuth> {
     static VALUE: OnceLock<BTreeMap<&'static str, CliAuth>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut auths = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             if let Some(auth) = parse_cli_auth(plugin_id, source) {
-                auths.insert(*plugin_id, auth);
+                auths.insert(plugin_id, auth);
             }
         }
         auths
     })
 }
 
+#[cfg(feature = "machine-host")]
 fn parse_cli_auth(plugin_id: &str, source: &str) -> Option<CliAuth> {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
     let kind = value.get("cli_auth").and_then(serde_json::Value::as_str)?;
-    let kind = match kind {
-        "exit" => CliAuthKind::Exit,
-        "gemini-env" => CliAuthKind::GeminiEnv,
-        "grok-json" => CliAuthKind::GrokJson,
-        other => panic!("{plugin_id} cli_auth {other} is unsupported"),
-    };
+    if !valid_host_identifier(kind) {
+        panic!("{plugin_id} cli_auth identifier is invalid");
+    }
+    let kind = CliAuthKind::new(kind);
     let argv = value
         .get("cli_auth_argv")
         .and_then(serde_json::Value::as_array)
@@ -344,20 +373,30 @@ fn parse_cli_auth(plugin_id: &str, source: &str) -> Option<CliAuth> {
             Box::leak(text.to_owned().into_boxed_str()) as &'static str
         })
         .collect::<Vec<_>>();
-    match kind {
-        CliAuthKind::Exit if argv.is_empty() => {
-            panic!("{plugin_id} cli_auth exit needs cli_auth_argv")
-        }
-        CliAuthKind::GeminiEnv | CliAuthKind::GrokJson if !argv.is_empty() => {
-            panic!("{plugin_id} cli_auth_argv is only valid for exit probes")
-        }
-        _ => {}
+    let rules = value.get("cli_auth_rules").map(|rules| {
+        let parsed: crate::plugin_auth_probe::CliAuthRuleSet =
+            serde_json::from_value(rules.clone())
+                .unwrap_or_else(|error| panic!("{plugin_id} cli_auth_rules must parse: {error}"));
+        parsed
+            .validate()
+            .unwrap_or_else(|error| panic!("{plugin_id} cli_auth_rules is invalid: {error:#}"));
+        parsed
+    });
+    if kind.is_exit() && argv.is_empty() {
+        panic!("{plugin_id} cli_auth exit needs cli_auth_argv");
     }
-    Some(CliAuth { kind, argv })
+    if kind.is_exit() && rules.is_some() {
+        panic!("{plugin_id} cli_auth exit cannot use cli_auth_rules");
+    }
+    if !kind.is_exit() && !argv.is_empty() {
+        panic!("{plugin_id} cli_auth_argv is only valid for exit probes");
+    }
+    Some(CliAuth { kind, argv, rules })
 }
 
 /// CLI binary name for an occupancy slot.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn cli_command_for_slot(slot: &str) -> Option<&'static str> {
     let occupancy = adapter_slot_for_provider(slot)?;
     let primary = provider_for_adapter_slot(occupancy)?;
@@ -366,6 +405,7 @@ pub(crate) fn cli_command_for_slot(slot: &str) -> Option<&'static str> {
 
 /// Staged adapter command for an occupancy slot or plugin id.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn adapter_entrypoint(slot: &str) -> Option<&'static str> {
     let occupancy = adapter_slot_for_provider(slot)?;
     let primary = provider_for_adapter_slot(occupancy)?;
@@ -394,26 +434,30 @@ pub(crate) fn occupancy_provider_ids(slot: &str) -> Vec<&'static str> {
 }
 
 struct CliExecutable {
+    #[cfg(feature = "machine-host")]
     command: &'static str,
+    #[cfg(feature = "full")]
     env: Option<&'static str>,
 }
 
 /// Command name of a sibling CLI that adapters should prefer over a bundled binary.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn cli_executable(plugin_id: &str) -> Option<&'static str> {
     cli_executables().get(plugin_id).map(|row| row.command)
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn cli_executable_env(plugin_id: &str) -> Option<&'static str> {
     cli_executables().get(plugin_id).and_then(|row| row.env)
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn cli_executable_plugins() -> Vec<(&'static str, &'static str)> {
-    ADAPTER_HOSTS
-        .iter()
-        .filter_map(|(plugin_id, _)| cli_executable(plugin_id).map(|command| (*plugin_id, command)))
+    adapter_hosts()
+        .filter_map(|(plugin_id, _)| cli_executable(plugin_id).map(|command| (plugin_id, command)))
         .collect()
 }
 
@@ -421,9 +465,9 @@ fn cli_executables() -> &'static BTreeMap<&'static str, CliExecutable> {
     static VALUE: OnceLock<BTreeMap<&'static str, CliExecutable>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut commands = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             if source.contains("\"cli_executable\"") {
-                commands.insert(*plugin_id, parse_cli_executable(plugin_id, source));
+                commands.insert(plugin_id, parse_cli_executable(plugin_id, source));
             }
         }
         commands
@@ -447,6 +491,7 @@ fn parse_cli_executable(plugin_id: &str, source: &str) -> CliExecutable {
     {
         panic!("{plugin_id} cli_executable is invalid");
     }
+    #[cfg(feature = "full")]
     let env = value
         .get("cli_executable_env")
         .and_then(serde_json::Value::as_str)
@@ -457,7 +502,9 @@ fn parse_cli_executable(plugin_id: &str, source: &str) -> CliExecutable {
             Box::leak(text.to_owned().into_boxed_str()) as &'static str
         });
     CliExecutable {
+        #[cfg(feature = "machine-host")]
         command: Box::leak(text.to_owned().into_boxed_str()),
+        #[cfg(feature = "full")]
         env,
     }
 }
@@ -476,9 +523,14 @@ pub(crate) fn adapter_slot_for_provider(provider: &str) -> Option<&'static str> 
 }
 
 struct IsolatedHome {
+    #[cfg(feature = "full")]
     env: Option<&'static str>,
+    #[cfg(feature = "full")]
+    settings: BTreeMap<String, serde_json::Value>,
     shell: bool,
+    #[cfg(feature = "full")]
     shell_env: Vec<&'static str>,
+    #[cfg(feature = "full")]
     shell_acp_key: Option<&'static str>,
 }
 
@@ -486,12 +538,12 @@ fn isolated_homes() -> &'static BTreeMap<&'static str, IsolatedHome> {
     static VALUE: OnceLock<BTreeMap<&'static str, IsolatedHome>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut homes = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             if !(source.contains("\"isolated_home_env\"") || source.contains("\"isolated_shell\""))
             {
                 continue;
             }
-            homes.insert(*plugin_id, parse_isolated_home(plugin_id, source));
+            homes.insert(plugin_id, parse_isolated_home(plugin_id, source));
         }
         homes
     })
@@ -499,8 +551,21 @@ fn isolated_homes() -> &'static BTreeMap<&'static str, IsolatedHome> {
 
 /// Package-less adapter home variable declared by `host.json`.
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn isolated_home_env(plugin_id: &str) -> Option<&'static str> {
     isolated_homes().get(plugin_id).and_then(|home| home.env)
+}
+
+/// Plugin-owned seed values written by an isolated-home convention.
+#[must_use]
+#[cfg(feature = "full")]
+pub(crate) fn isolated_home_settings(
+    plugin_id: &str,
+) -> Option<&'static BTreeMap<String, serde_json::Value>> {
+    isolated_homes()
+        .get(plugin_id)
+        .map(|home| &home.settings)
+        .filter(|settings| !settings.is_empty())
 }
 
 /// Whether the adapter requires a readiness-checked bash/zsh path.
@@ -513,6 +578,7 @@ pub(crate) fn isolated_shell(plugin_id: &str) -> bool {
 
 /// Plugins that pin `COWBOY_ACP_<ID>_SHELL` across the Machine worker boundary.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn isolated_shell_plugins() -> Vec<&'static str> {
     isolated_homes()
         .iter()
@@ -522,6 +588,7 @@ pub(crate) fn isolated_shell_plugins() -> Vec<&'static str> {
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn isolated_shell_env(plugin_id: &str) -> &'static [&'static str] {
     isolated_homes()
         .get(plugin_id)
@@ -530,6 +597,7 @@ pub(crate) fn isolated_shell_env(plugin_id: &str) -> &'static [&'static str] {
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn isolated_shell_acp_key(plugin_id: &str) -> Option<&'static str> {
     isolated_homes()
         .get(plugin_id)
@@ -539,6 +607,7 @@ pub(crate) fn isolated_shell_acp_key(plugin_id: &str) -> Option<&'static str> {
 fn parse_isolated_home(plugin_id: &str, source: &str) -> IsolatedHome {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
+    #[cfg(feature = "full")]
     let env = value
         .get("isolated_home_env")
         .and_then(serde_json::Value::as_str)
@@ -548,10 +617,41 @@ fn parse_isolated_home(plugin_id: &str, source: &str) -> IsolatedHome {
             }
             Box::leak(text.to_owned().into_boxed_str()) as &'static str
         });
+    #[cfg(feature = "full")]
+    let settings = match value.get("isolated_home_settings") {
+        None => BTreeMap::new(),
+        Some(serde_json::Value::Object(settings)) => {
+            let rendered = serde_json::to_vec(settings).unwrap_or_else(|error| {
+                panic!("{plugin_id} isolated_home_settings must serialize: {error}")
+            });
+            if rendered.len() > 16 * 1024 {
+                panic!("{plugin_id} isolated_home_settings is too large");
+            }
+            settings
+                .iter()
+                .map(|(key, value)| {
+                    if key.is_empty()
+                        || key.len() > 128
+                        || key.contains('\0')
+                        || key.chars().any(char::is_control)
+                    {
+                        panic!("{plugin_id} isolated_home_settings key is invalid");
+                    }
+                    (key.clone(), value.clone())
+                })
+                .collect()
+        }
+        Some(_) => panic!("{plugin_id} isolated_home_settings must be an object"),
+    };
+    #[cfg(feature = "full")]
+    if !settings.is_empty() && env.is_none() {
+        panic!("{plugin_id} isolated_home_settings needs isolated_home_env");
+    }
     let shell = value
         .get("isolated_shell")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    #[cfg(feature = "full")]
     let shell_env = value
         .get("isolated_shell_env")
         .and_then(serde_json::Value::as_array)
@@ -567,16 +667,23 @@ fn parse_isolated_home(plugin_id: &str, source: &str) -> IsolatedHome {
             Box::leak(text.to_owned().into_boxed_str()) as &'static str
         })
         .collect();
+    #[cfg(feature = "full")]
     let shell_acp_key =
         shell.then(|| Box::leak(acp_env_key(plugin_id, "SHELL").into_boxed_str()) as &'static str);
     IsolatedHome {
+        #[cfg(feature = "full")]
         env,
+        #[cfg(feature = "full")]
+        settings,
         shell,
+        #[cfg(feature = "full")]
         shell_env,
+        #[cfg(feature = "full")]
         shell_acp_key,
     }
 }
 
+#[cfg(feature = "full")]
 fn valid_isolated_home_env(value: &str) -> bool {
     (1..=64).contains(&value.len())
         && value
@@ -590,11 +697,13 @@ fn valid_isolated_home_env(value: &str) -> bool {
 
 /// Display name declared by the account's host plugin.
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn usage_product_label(account: &str) -> Option<&'static str> {
     usage_products().get(account).copied()
 }
 
 #[must_use]
+#[cfg(all(test, feature = "full"))]
 pub(crate) fn usage_accounts() -> Vec<&'static str> {
     usage_account_rows()
         .iter()
@@ -603,6 +712,7 @@ pub(crate) fn usage_accounts() -> Vec<&'static str> {
 }
 
 #[must_use]
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 pub(crate) fn provider_info_urls_env(account: &str) -> String {
     format!(
         "COWBOY_PROVIDER_INFO_{}_URLS",
@@ -610,43 +720,12 @@ pub(crate) fn provider_info_urls_env(account: &str) -> String {
     )
 }
 
-#[must_use]
-pub(crate) fn usage_reset_id_for_collector(collector: &str) -> Option<&'static str> {
-    usage_collector_resets().get(collector).copied()
-}
-
-fn usage_collector_resets() -> &'static BTreeMap<String, &'static str> {
-    static VALUE: OnceLock<BTreeMap<String, &'static str>> = OnceLock::new();
-    VALUE.get_or_init(|| {
-        let mut resets = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
-            let value: serde_json::Value = serde_json::from_str(source)
-                .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
-            let Some(usage) = value.get("usage") else {
-                continue;
-            };
-            let Some(collector) = usage.get("collector").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
-            let Some(reset) = usage
-                .get("reset")
-                .and_then(serde_json::Value::as_str)
-                .filter(|reset| !reset.is_empty())
-            else {
-                continue;
-            };
-            let leaked: &'static str = Box::leak(reset.to_owned().into_boxed_str());
-            resets.entry(collector.to_owned()).or_insert(leaked);
-        }
-        resets
-    })
-}
-
+#[cfg(all(test, feature = "full"))]
 fn usage_account_rows() -> &'static Vec<(u16, &'static str)> {
     static VALUE: OnceLock<Vec<(u16, &'static str)>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut rows = Vec::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             let value: serde_json::Value = serde_json::from_str(source)
                 .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
             let Some(usage) = value.get("usage") else {
@@ -671,6 +750,7 @@ fn usage_account_rows() -> &'static Vec<(u16, &'static str)> {
 }
 
 #[must_use]
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 pub(crate) fn usage_activity_agent_ids(account: &str) -> &'static [&'static str] {
     usage_activity_agents()
         .get(account)
@@ -678,11 +758,12 @@ pub(crate) fn usage_activity_agent_ids(account: &str) -> &'static [&'static str]
         .unwrap_or(&[])
 }
 
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 fn usage_activity_agents() -> &'static BTreeMap<String, Vec<&'static str>> {
     static VALUE: OnceLock<BTreeMap<String, Vec<&'static str>>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut agents = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             let value: serde_json::Value = serde_json::from_str(source)
                 .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
             let Some(usage) = value.get("usage") else {
@@ -714,11 +795,12 @@ fn usage_activity_agents() -> &'static BTreeMap<String, Vec<&'static str>> {
     })
 }
 
+#[cfg(feature = "full")]
 fn usage_products() -> &'static BTreeMap<String, &'static str> {
     static VALUE: OnceLock<BTreeMap<String, &'static str>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut products = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             let value: serde_json::Value = serde_json::from_str(source)
                 .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
             let Some(usage) = value.get("usage") else {
@@ -743,6 +825,7 @@ fn usage_products() -> &'static BTreeMap<String, &'static str> {
 
 /// PostgreSQL CASE that maps session/plugin ids onto adapter slots.
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn diagnostic_agent_case_sql(column: &str) -> String {
     let index = adapter_index();
     let mut by_slot: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -771,6 +854,7 @@ pub(crate) fn diagnostic_agent_case_sql(column: &str) -> String {
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn normalize_disabled_provider_slot(slot: &str) -> String {
     let index = adapter_index();
     if let Some(&adapter) = index.plugin_to_slot.get(slot)
@@ -783,12 +867,14 @@ pub(crate) fn normalize_disabled_provider_slot(slot: &str) -> String {
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn adapter_runtime_enabled(slot: &str, disabled: &[String]) -> bool {
     adapter_occupants(slot)
         .iter()
         .any(|id| !disabled.iter().any(|candidate| candidate == id))
 }
 
+#[cfg(feature = "machine-host")]
 fn adapter_occupants(slot: &str) -> Vec<&'static str> {
     let index = adapter_index();
     let Some((&static_slot, plugins)) = index.slot_to_plugins.get_key_value(slot) else {
@@ -815,6 +901,7 @@ pub(crate) fn loopback_origin_for(plugin_id: &str) -> Option<&'static str> {
 
 /// Inventory copy declared next to `loopback_origin`.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn loopback_detail(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
@@ -823,6 +910,7 @@ pub(crate) fn loopback_detail(plugin_id: &str) -> Option<&'static str> {
 
 /// Whether the loopback occupant also needs the package-less model catalog.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn loopback_requires_catalog(plugin_id: &str) -> bool {
     loopback_gateways()
         .get(plugin_id)
@@ -831,24 +919,28 @@ pub(crate) fn loopback_requires_catalog(plugin_id: &str) -> bool {
 
 /// Plugins that expose a loopback gateway, in host occupancy order.
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn loopback_plugins() -> Vec<(&'static str, &'static str)> {
-    ADAPTER_HOSTS
-        .iter()
+    adapter_hosts()
         .filter_map(|(plugin_id, _)| {
-            loopback_origin_for(plugin_id).map(|origin| (*plugin_id, origin))
+            loopback_origin_for(plugin_id).map(|origin| (plugin_id, origin))
         })
         .collect()
 }
 
 struct LoopbackGateway {
     origin: &'static str,
+    #[cfg(feature = "machine-host")]
     detail: Option<&'static str>,
+    #[cfg(feature = "machine-host")]
     requires_catalog: bool,
     catalog: Option<&'static str>,
+    #[cfg(feature = "full")]
     env: Option<&'static str>,
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn loopback_env(plugin_id: &str) -> Option<&'static str> {
     loopback_gateways()
         .get(plugin_id)
@@ -863,6 +955,7 @@ pub(crate) fn loopback_catalog(plugin_id: &str) -> Option<&'static str> {
 }
 
 #[must_use]
+#[cfg(feature = "machine-host")]
 pub(crate) fn available_loopback_catalog(plugin_id: &str) -> Option<std::path::PathBuf> {
     let catalog = std::path::PathBuf::from(loopback_catalog(plugin_id)?);
     catalog.is_file().then_some(catalog)
@@ -872,21 +965,16 @@ fn loopback_gateways() -> &'static BTreeMap<&'static str, LoopbackGateway> {
     static VALUE: OnceLock<BTreeMap<&'static str, LoopbackGateway>> = OnceLock::new();
     VALUE.get_or_init(|| {
         let mut gateways = BTreeMap::new();
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             if source.contains("\"loopback_origin\"") {
-                gateways.insert(*plugin_id, parse_loopback_gateway(plugin_id, source));
+                gateways.insert(plugin_id, parse_loopback_gateway(plugin_id, source));
             }
         }
         gateways
     })
 }
 
-#[must_use]
-pub(crate) fn claude_deepseek_loopback_origin() -> &'static str {
-    loopback_origin_for("claude-deepseek")
-        .expect("claude-deepseek host.json must declare loopback_origin")
-}
-
+#[cfg(feature = "full")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CacheProtectionPolicy {
     pub min_hit_tokens: u64,
@@ -900,10 +988,11 @@ pub(crate) struct CacheProtectionPolicy {
 }
 
 #[must_use]
-pub(crate) fn deepseek_cache_protection() -> CacheProtectionPolicy {
+#[cfg(feature = "full")]
+pub(crate) fn cache_protection_policy() -> CacheProtectionPolicy {
     static VALUE: OnceLock<CacheProtectionPolicy> = OnceLock::new();
     *VALUE.get_or_init(|| {
-        for (plugin_id, source) in ADAPTER_HOSTS {
+        for (plugin_id, source) in adapter_hosts() {
             if source.contains("\"cache_protection\"") {
                 return cache_protection(plugin_id, source);
             }
@@ -913,22 +1002,15 @@ pub(crate) fn deepseek_cache_protection() -> CacheProtectionPolicy {
 }
 
 #[must_use]
-pub(crate) fn codex_deepseek_loopback_origin() -> &'static str {
-    loopback_origin_for("codex-deepseek")
-        .expect("codex-deepseek host.json must declare loopback_origin")
-}
-
-#[must_use]
-#[cfg(feature = "full")]
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 pub(crate) fn loopback_info_url(origin: &str) -> String {
     format!("{origin}/provider-info")
 }
 
 #[must_use]
-#[cfg(feature = "full")]
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 pub(crate) fn loopback_info_urls() -> String {
-    ADAPTER_HOSTS
-        .iter()
+    adapter_hosts()
         .filter_map(|(plugin_id, _)| loopback_origin_for(plugin_id))
         .map(loopback_info_url)
         .collect::<Vec<_>>()
@@ -936,20 +1018,12 @@ pub(crate) fn loopback_info_urls() -> String {
 }
 
 #[must_use]
-#[cfg(feature = "full")]
-pub(crate) fn deepseek_info_urls() -> String {
-    loopback_info_urls()
-}
-
-#[must_use]
 pub(crate) fn launch_plugin_ids() -> Vec<&'static str> {
-    NPM_PAYLOADS
-        .iter()
-        .map(|(plugin_id, _)| *plugin_id)
-        .collect()
+    npm_payloads().map(|(plugin_id, _)| plugin_id).collect()
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn cli_arguments(plugin_id: &str) -> &'static [&'static str] {
     cli_argument_index()
         .get(plugin_id)
@@ -957,16 +1031,17 @@ pub(crate) fn cli_arguments(plugin_id: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+#[cfg(feature = "full")]
 fn cli_argument_index() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
     static VALUE: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
     VALUE.get_or_init(|| {
-        NPM_PAYLOADS
-            .iter()
-            .map(|(plugin_id, source)| (*plugin_id, string_cli_arguments(plugin_id, source)))
+        npm_payloads()
+            .map(|(plugin_id, source)| (plugin_id, string_cli_arguments(plugin_id, source)))
             .collect()
     })
 }
 
+#[cfg(feature = "full")]
 fn string_cli_arguments(plugin_id: &str, source: &str) -> Vec<&'static str> {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} provider.json must parse: {error}"));
@@ -988,6 +1063,7 @@ fn string_cli_arguments(plugin_id: &str, source: &str) -> Vec<&'static str> {
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn environment(plugin_id: &str) -> &'static [(&'static str, &'static str)] {
     environment_index()
         .get(plugin_id)
@@ -995,18 +1071,19 @@ pub(crate) fn environment(plugin_id: &str) -> &'static [(&'static str, &'static 
         .unwrap_or(&[])
 }
 
+#[cfg(feature = "full")]
 fn environment_index() -> &'static BTreeMap<&'static str, Vec<(&'static str, &'static str)>> {
     static VALUE: OnceLock<BTreeMap<&'static str, Vec<(&'static str, &'static str)>>> =
         OnceLock::new();
     VALUE.get_or_init(|| {
-        NPM_PAYLOADS
-            .iter()
-            .map(|(plugin_id, source)| (*plugin_id, environment_strings(plugin_id, source)))
+        npm_payloads()
+            .map(|(plugin_id, source)| (plugin_id, environment_strings(plugin_id, source)))
             .collect()
     })
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn remove_environment(plugin_id: &str) -> &'static [&'static str] {
     remove_environment_index()
         .get(plugin_id)
@@ -1014,14 +1091,14 @@ pub(crate) fn remove_environment(plugin_id: &str) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+#[cfg(feature = "full")]
 fn remove_environment_index() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
     static VALUE: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
     VALUE.get_or_init(|| {
-        NPM_PAYLOADS
-            .iter()
+        npm_payloads()
             .map(|(plugin_id, source)| {
                 (
-                    *plugin_id,
+                    plugin_id,
                     string_list(plugin_id, source, "remove_environment"),
                 )
             })
@@ -1030,6 +1107,7 @@ fn remove_environment_index() -> &'static BTreeMap<&'static str, Vec<&'static st
 }
 
 #[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn remove_environment_prefixes(plugin_id: &str) -> &'static [&'static str] {
     remove_environment_prefix_index()
         .get(plugin_id)
@@ -1037,14 +1115,14 @@ pub(crate) fn remove_environment_prefixes(plugin_id: &str) -> &'static [&'static
         .unwrap_or(&[])
 }
 
+#[cfg(feature = "full")]
 fn remove_environment_prefix_index() -> &'static BTreeMap<&'static str, Vec<&'static str>> {
     static VALUE: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
     VALUE.get_or_init(|| {
-        NPM_PAYLOADS
-            .iter()
+        npm_payloads()
             .map(|(plugin_id, source)| {
                 (
-                    *plugin_id,
+                    plugin_id,
                     string_list(plugin_id, source, "remove_environment_prefixes"),
                 )
             })
@@ -1053,107 +1131,13 @@ fn remove_environment_prefix_index() -> &'static BTreeMap<&'static str, Vec<&'st
 }
 
 #[must_use]
-pub(crate) fn grok() -> &'static [&'static str] {
-    cli_arguments("grok")
-}
-
-#[must_use]
-pub(crate) fn grok_env() -> String {
-    join_env(grok())
-}
-
-#[must_use]
-pub(crate) fn codex() -> &'static [&'static str] {
-    cli_arguments("codex")
-}
-
-#[must_use]
-pub(crate) fn gemini() -> &'static [&'static str] {
-    cli_arguments("gemini")
-}
-
-#[must_use]
-pub(crate) fn gemini_env() -> String {
-    join_env(gemini())
-}
-
-#[must_use]
-pub(crate) fn claude_deepseek_environment() -> &'static [(&'static str, &'static str)] {
-    environment("claude-deepseek")
-}
-
-#[must_use]
-pub(crate) fn claude_deepseek_remove_env() -> &'static [&'static str] {
-    remove_environment("claude-deepseek")
-}
-
-#[must_use]
-pub(crate) fn claude_deepseek_remove_env_prefixes() -> &'static [&'static str] {
-    remove_environment_prefixes("claude-deepseek")
-}
-
-#[must_use]
-pub(crate) fn codex_deepseek_environment() -> &'static [(&'static str, &'static str)] {
-    environment("codex-deepseek")
-}
-
-#[must_use]
-pub(crate) fn codex_deepseek_remove_env() -> &'static [&'static str] {
-    remove_environment("codex-deepseek")
-}
-
-#[must_use]
-pub(crate) fn codex_deepseek_remove_env_prefixes() -> &'static [&'static str] {
-    remove_environment_prefixes("codex-deepseek")
-}
-
-#[must_use]
-pub(crate) fn claude_deepseek_auto_compact_window() -> &'static str {
-    required_environment_value(
-        claude_deepseek_environment(),
-        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-    )
-}
-
-#[must_use]
-pub(crate) fn claude_deepseek_max_output_tokens() -> &'static str {
-    required_environment_value(
-        claude_deepseek_environment(),
-        "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-    )
-}
-
-#[must_use]
-pub(crate) fn codex_deepseek_context_window() -> &'static str {
-    static VALUE: OnceLock<&'static str> = OnceLock::new();
-    VALUE.get_or_init(|| {
-        argument_assignment("codex-deepseek", CODEX_DEEPSEEK, "model_context_window")
-    })
-}
-
-#[must_use]
-pub(crate) fn codex_deepseek_auto_compact_token_limit() -> &'static str {
-    static VALUE: OnceLock<&'static str> = OnceLock::new();
-    VALUE.get_or_init(|| {
-        argument_assignment(
-            "codex-deepseek",
-            CODEX_DEEPSEEK,
-            "model_auto_compact_token_limit",
-        )
-    })
-}
-
-#[must_use]
+#[cfg(feature = "full")]
 pub(crate) fn isolated_config_toml(
     plugin_id: &str,
     catalog: &Path,
     sidecar_origin: &str,
 ) -> String {
-    let source = NPM_PAYLOADS
-        .iter()
-        .find(|(id, _)| *id == plugin_id)
-        .map(|(_, source)| *source)
-        .unwrap_or_else(|| panic!("{plugin_id} provider.json is missing"));
+    let source = provider_source(plugin_id);
     let mut top = Vec::new();
     let mut tables: Vec<(String, Vec<(String, String)>)> = Vec::new();
     for (key, value) in config_assignments(plugin_id, source, sidecar_origin) {
@@ -1208,12 +1192,7 @@ fn runtime_entrypoint(plugin_id: &str, source: &str) -> Option<&'static str> {
         .get("runtime")
         .and_then(|runtime| runtime.get("entrypoint"))
         .and_then(serde_json::Value::as_str)
-        .filter(|entrypoint| {
-            !entrypoint.is_empty()
-                && entrypoint
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        })?;
+        .filter(|entrypoint| valid_host_identifier(entrypoint))?;
     Some(Box::leak(text.to_owned().into_boxed_str()))
 }
 
@@ -1234,8 +1213,7 @@ fn runtime_is_cli_only(plugin_id: &str, source: &str) -> bool {
         .flatten()
         .filter_map(|component| component.get("kind").and_then(serde_json::Value::as_str))
         .collect();
-    kinds.iter().any(|kind| *kind == "provider_cli")
-        && !kinds.iter().any(|kind| *kind == "provider_adapter")
+    kinds.contains(&"provider_cli") && !kinds.contains(&"provider_adapter")
 }
 
 fn parse(plugin_id: &str, source: &str) -> Vec<&'static str> {
@@ -1257,6 +1235,7 @@ fn parse(plugin_id: &str, source: &str) -> Vec<&'static str> {
         .collect()
 }
 
+#[cfg(feature = "full")]
 fn environment_strings(plugin_id: &str, source: &str) -> Vec<(&'static str, &'static str)> {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} provider.json must parse: {error}"));
@@ -1276,9 +1255,12 @@ fn environment_strings(plugin_id: &str, source: &str) -> Vec<(&'static str, &'st
         .collect()
 }
 
+#[cfg(feature = "full")]
 const MAX_CACHE_MIN_HIT_TOKENS: u64 = 10_000_000;
+#[cfg(feature = "full")]
 const MAX_CACHE_INTERVAL_MS: u32 = 7 * 24 * 60 * 60 * 1_000;
 
+#[cfg(feature = "full")]
 fn cache_protection(plugin_id: &str, source: &str) -> CacheProtectionPolicy {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} host.json must parse: {error}"));
@@ -1308,6 +1290,7 @@ fn cache_protection(plugin_id: &str, source: &str) -> CacheProtectionPolicy {
     }
 }
 
+#[cfg(feature = "full")]
 fn required_cache_copy(
     plugin_id: &str,
     row: &serde_json::Value,
@@ -1338,6 +1321,7 @@ fn parse_loopback_gateway(plugin_id: &str, source: &str) -> LoopbackGateway {
     {
         panic!("{plugin_id} loopback_origin port is invalid");
     }
+    #[cfg(feature = "machine-host")]
     let detail = value
         .get("loopback_detail")
         .and_then(serde_json::Value::as_str)
@@ -1355,6 +1339,7 @@ fn parse_loopback_gateway(plugin_id: &str, source: &str) -> LoopbackGateway {
         .get("loopback_requires_catalog")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
+    #[cfg(feature = "full")]
     let env = value
         .get("loopback_env")
         .and_then(serde_json::Value::as_str)
@@ -1378,9 +1363,12 @@ fn parse_loopback_gateway(plugin_id: &str, source: &str) -> LoopbackGateway {
     }
     LoopbackGateway {
         origin: Box::leak(text.to_owned().into_boxed_str()),
+        #[cfg(feature = "machine-host")]
         detail,
+        #[cfg(feature = "machine-host")]
         requires_catalog,
         catalog,
+        #[cfg(feature = "full")]
         env,
     }
 }
@@ -1402,26 +1390,13 @@ fn optional_adapter_slot(plugin_id: &str, source: &str) -> Option<&'static str> 
     let text = value
         .get("adapter_slot")
         .and_then(serde_json::Value::as_str)?;
-    if text.is_empty()
-        || !text
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        || text.starts_with('-')
-        || text.ends_with('-')
-        || text.contains("--")
-    {
+    if !valid_host_identifier(text) {
         panic!("{plugin_id} adapter_slot is invalid");
     }
     Some(Box::leak(text.to_owned().into_boxed_str()))
 }
 
-fn required_environment_value(entries: &[(&'static str, &'static str)], key: &str) -> &'static str {
-    entries
-        .iter()
-        .find_map(|(name, value)| (*name == key).then_some(*value))
-        .unwrap_or_else(|| panic!("plugin environment missing {key}"))
-}
-
+#[cfg(feature = "full")]
 fn string_list(plugin_id: &str, source: &str, field: &str) -> Vec<&'static str> {
     let value: serde_json::Value = serde_json::from_str(source)
         .unwrap_or_else(|error| panic!("{plugin_id} provider.json must parse: {error}"));
@@ -1441,6 +1416,7 @@ fn string_list(plugin_id: &str, source: &str, field: &str) -> Vec<&'static str> 
         .collect()
 }
 
+#[cfg(feature = "full")]
 fn config_assignments(
     plugin_id: &str,
     source: &str,
@@ -1479,6 +1455,7 @@ fn config_assignments(
     assignments
 }
 
+#[cfg(feature = "full")]
 fn assignment_from_runtime_value(
     plugin_id: &str,
     argument: &serde_json::Value,
@@ -1508,6 +1485,7 @@ fn assignment_from_runtime_value(
     split_assignment(plugin_id, &format!("{prefix}{sidecar_origin}{suffix}"))
 }
 
+#[cfg(feature = "full")]
 fn split_assignment(plugin_id: &str, text: &str) -> (String, String) {
     let (key, value) = text
         .split_once('=')
@@ -1515,6 +1493,7 @@ fn split_assignment(plugin_id: &str, text: &str) -> (String, String) {
     (key.to_owned(), encode_toml_value(value))
 }
 
+#[cfg(feature = "full")]
 fn encode_toml_value(raw: &str) -> String {
     if raw.starts_with('{') && raw.ends_with('}') {
         raw.replace('{', "{ ")
@@ -1526,27 +1505,9 @@ fn encode_toml_value(raw: &str) -> String {
     }
 }
 
+#[cfg(feature = "full")]
 fn toml_quoted(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn argument_assignment(plugin_id: &str, source: &str, key: &str) -> &'static str {
-    let value: serde_json::Value = serde_json::from_str(source)
-        .unwrap_or_else(|error| panic!("{plugin_id} provider.json must parse: {error}"));
-    let prefix = format!("{key}=");
-    let text = value
-        .get("runtime")
-        .and_then(|runtime| runtime.get("arguments"))
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .find_map(|argument| argument.strip_prefix(prefix.as_str()))
-        .map(|raw| raw.trim_matches('"'))
-        .unwrap_or_else(|| {
-            panic!("{plugin_id} provider.json must declare runtime.arguments {key}=...")
-        });
-    Box::leak(text.to_owned().into_boxed_str())
 }
 
 fn join_env(args: &[&str]) -> String {
@@ -1567,55 +1528,77 @@ fn posix_quote(argument: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "full", feature = "machine-host"))]
 mod tests {
     use super::*;
 
+    fn environment_value(plugin_id: &str, key: &str) -> Option<&'static str> {
+        environment(plugin_id)
+            .iter()
+            .find_map(|(name, value)| (*name == key).then_some(*value))
+    }
+
     #[test]
+    fn machine_host_identifier_validation_matches_the_controller_boundary() {
+        for valid in ["future", "future-probe", "a1"] {
+            assert!(valid_host_identifier(valid));
+        }
+        for invalid in ["", "Future", "future--probe", "-future", "future-"] {
+            assert!(!valid_host_identifier(invalid));
+        }
+        assert!(!valid_host_identifier(&"a".repeat(65)));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // One inventory contract covers every bundled host payload.
     fn first_party_runtime_args_are_owned_by_plugin_payloads() {
-        assert!(codex().windows(2).any(|pair| {
+        assert!(cli_arguments("codex").windows(2).any(|pair| {
             pair == ["-c", "approval_policy=never"] || pair == ["-c", "approval_policy=\"never\""]
         }));
-        assert_eq!(gemini(), ["--acp"]);
-        assert_eq!(gemini_env(), "--acp");
-        assert!(grok().contains(&"--no-auto-update"));
-        assert!(grok().contains(&"--experimental-memory"));
-        assert!(grok().contains(&"agent"));
-        assert!(grok().contains(&"stdio"));
-        assert!(grok_env().contains("AGENTS.md"));
+        assert_eq!(cli_arguments("gemini"), ["--acp"]);
+        assert_eq!(join_env(cli_arguments("gemini")), "--acp");
+        assert!(cli_arguments("grok").contains(&"--no-auto-update"));
+        assert!(cli_arguments("grok").contains(&"--experimental-memory"));
+        assert!(cli_arguments("grok").contains(&"agent"));
+        assert!(cli_arguments("grok").contains(&"stdio"));
+        assert!(join_env(cli_arguments("grok")).contains("AGENTS.md"));
         assert_eq!(usage_product_label("xai"), Some("xAI"));
         assert_eq!(usage_product_label("openai"), Some("OpenAI"));
         assert_eq!(usage_product_label("deepseek"), Some("DeepSeek"));
         assert_eq!(usage_product_label("unknown"), None);
-        assert_eq!(claude_deepseek_auto_compact_window(), "819200");
-        assert_eq!(claude_deepseek_max_output_tokens(), "128000");
+        assert_eq!(
+            environment_value("claude-deepseek", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
+            Some("819200")
+        );
+        assert_eq!(
+            environment_value("claude-deepseek", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"),
+            Some("128000")
+        );
         assert!(
-            claude_deepseek_environment()
+            environment("claude-deepseek")
                 .iter()
                 .any(|(key, value)| *key == "ANTHROPIC_AUTH_TOKEN"
                     && *value == "cowboy-local-credential-boundary")
         );
         assert!(
-            !claude_deepseek_environment()
+            !environment("claude-deepseek")
                 .iter()
                 .any(|(key, _)| *key == "ANTHROPIC_BASE_URL")
         );
-        assert!(claude_deepseek_remove_env().contains(&"DISABLE_AUTO_COMPACT"));
+        assert!(remove_environment("claude-deepseek").contains(&"DISABLE_AUTO_COMPACT"));
         assert_eq!(
-            claude_deepseek_remove_env_prefixes(),
+            remove_environment_prefixes("claude-deepseek"),
             ["ANTHROPIC_", "CLAUDE_", "DEEPSEEK_"]
         );
         assert_eq!(
-            required_environment_value(codex_deepseek_environment(), "MODEL_PROVIDER"),
-            "deepseek-local"
+            environment_value("codex-deepseek", "MODEL_PROVIDER"),
+            Some("deepseek-local")
         );
-        assert!(codex_deepseek_remove_env().is_empty());
+        assert!(remove_environment("codex-deepseek").is_empty());
         assert_eq!(
-            codex_deepseek_remove_env_prefixes(),
+            remove_environment_prefixes("codex-deepseek"),
             ["CHATGPT_", "CODEX_", "DEEPSEEK_", "OPENAI_"]
         );
-        assert_eq!(codex_deepseek_context_window(), "680000");
-        assert_eq!(codex_deepseek_auto_compact_token_limit(), "646000");
         assert_eq!(
             npm_package_for_component("provider_cli", "codex"),
             Some("@openai/codex")
@@ -1670,38 +1653,50 @@ mod tests {
                 .any(|(id, slot)| *id == "claude-code" && *slot == "claude")
         );
         let detect = path_detect();
+        let grok_args = join_env(cli_arguments("grok"));
+        let gemini_args = join_env(cli_arguments("gemini"));
         assert!(detect.iter().any(|row| row.plugin_id == "codex"
             && row.command == "codex-acp"
             && row.args.is_none()));
         assert!(detect.iter().any(|row| row.plugin_id == "grok"
             && row.command == "grok"
-            && row.args.as_deref() == Some(grok_env().as_str())));
+            && row.args.as_deref() == Some(grok_args.as_str())));
         assert!(detect.iter().any(|row| row.plugin_id == "gemini"
             && row.command == "gemini"
-            && row.args.as_deref() == Some(gemini_env().as_str())));
+            && row.args.as_deref() == Some(gemini_args.as_str())));
         assert!(detect.iter().any(|row| row.plugin_id == "claude-code"
             && row.command == "claude-agent-acp"
             && row.args.is_none()));
         assert!(!detect.iter().any(|row| row.plugin_id == "claude-deepseek"));
         assert!(!detect.iter().any(|row| row.plugin_id == "codex-deepseek"));
-        assert_eq!(occupancy_slots(), ["codex", "grok", "gemini", "claude"]);
+        assert_eq!(occupancy_slots(), ["claude", "codex", "gemini", "grok"]);
         assert_eq!(cli_command_for_slot("claude"), Some("claude"));
         assert_eq!(cli_command_for_slot("codex"), Some("codex"));
         assert_eq!(
-            cli_auth_for_slot("codex").map(|auth| (auth.kind, auth.argv.as_slice())),
-            Some((CliAuthKind::Exit, ["login", "status"].as_slice()))
+            cli_auth_for_slot("codex").map(|auth| (auth.kind.as_str(), auth.argv.as_slice())),
+            Some(("exit", ["login", "status"].as_slice()))
         );
         assert_eq!(
-            cli_auth_for_slot("claude").map(|auth| (auth.kind, auth.argv.as_slice())),
-            Some((CliAuthKind::Exit, ["auth", "status", "--json"].as_slice()))
+            cli_auth_for_slot("claude").map(|auth| (auth.kind.as_str(), auth.argv.as_slice())),
+            Some(("exit", ["auth", "status", "--json"].as_slice()))
         );
         assert_eq!(
-            cli_auth_for_slot("gemini").map(|auth| auth.kind),
-            Some(CliAuthKind::GeminiEnv)
+            cli_auth_for_slot("gemini").map(|auth| auth.kind.as_str()),
+            Some("rules-v1")
+        );
+        assert!(
+            cli_auth_for_slot("gemini")
+                .and_then(|auth| auth.rules.as_ref())
+                .is_some()
         );
         assert_eq!(
-            cli_auth_for_slot("grok").map(|auth| auth.kind),
-            Some(CliAuthKind::GrokJson)
+            cli_auth_for_slot("grok").map(|auth| auth.kind.as_str()),
+            Some("rules-v1")
+        );
+        assert!(
+            cli_auth_for_slot("grok")
+                .and_then(|auth| auth.rules.as_ref())
+                .is_some()
         );
         assert_eq!(adapter_entrypoint("codex"), Some("codex-acp"));
         assert_eq!(adapter_entrypoint("claude"), Some("claude-agent-acp"));
@@ -1736,48 +1731,40 @@ mod tests {
             provider_info_urls_env("deepseek"),
             "COWBOY_PROVIDER_INFO_DEEPSEEK_URLS"
         );
+        let codex_deepseek_origin =
+            loopback_origin_for("codex-deepseek").expect("codex DeepSeek loopback origin");
+        assert_eq!(codex_deepseek_origin, "http://127.0.0.1:61137");
         assert_eq!(
-            usage_reset_id_for_collector("openai-appserver"),
-            Some("codex")
+            loopback_origin_for("claude-deepseek"),
+            Some("http://127.0.0.1:61138")
         );
-        assert_eq!(usage_reset_id_for_collector("xai-billing"), Some("xai"));
-        assert_eq!(usage_reset_id_for_collector("deepseek-store"), None);
-        assert_eq!(codex_deepseek_loopback_origin(), "http://127.0.0.1:61137");
-        assert_eq!(claude_deepseek_loopback_origin(), "http://127.0.0.1:61138");
-        assert_eq!(deepseek_cache_protection().min_hit_tokens, 64_000);
-        assert_eq!(deepseek_cache_protection().min_hit_label, "64K");
-        assert_eq!(deepseek_cache_protection().interval_ms, 28_800_000);
-        assert_eq!(deepseek_cache_protection().interval_label, "8h");
-        assert_eq!(deepseek_cache_protection().option_name, "Cache protection");
-        assert_eq!(deepseek_cache_protection().option_on, "Auto · recommended");
-        assert_eq!(deepseek_cache_protection().option_off, "Off");
-        assert!(
-            deepseek_cache_protection()
-                .option_description
-                .contains("64K")
-        );
+        assert_eq!(cache_protection_policy().min_hit_tokens, 64_000);
+        assert_eq!(cache_protection_policy().min_hit_label, "64K");
+        assert_eq!(cache_protection_policy().interval_ms, 28_800_000);
+        assert_eq!(cache_protection_policy().interval_label, "8h");
+        assert_eq!(cache_protection_policy().option_name, "Cache protection");
+        assert_eq!(cache_protection_policy().option_on, "Auto · recommended");
+        assert_eq!(cache_protection_policy().option_off, "Off");
+        assert!(cache_protection_policy().option_description.contains("64K"));
         #[cfg(feature = "full")]
         assert_eq!(
             loopback_info_urls(),
-            "http://127.0.0.1:61137/provider-info,http://127.0.0.1:61138/provider-info"
+            "http://127.0.0.1:61138/provider-info,http://127.0.0.1:61137/provider-info"
         );
-        #[cfg(feature = "full")]
-        assert_eq!(deepseek_info_urls(), loopback_info_urls());
         let rendered = isolated_config_toml(
             "codex-deepseek",
             Path::new(
                 "/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json",
             ),
-            codex_deepseek_loopback_origin(),
+            codex_deepseek_origin,
         );
         assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
+        assert!(rendered.contains("model_context_window = 680000"));
+        assert!(rendered.contains("model_auto_compact_token_limit = 646000"));
         assert!(rendered.contains(
             "model_catalog_json = \"/nix/var/nix/profiles/columbus-components/codex-deepseek/share/codex-deepseek/codex-models.json\""
         ));
-        assert!(rendered.contains(&format!(
-            "base_url = \"{}/v1\"",
-            codex_deepseek_loopback_origin()
-        )));
+        assert!(rendered.contains(&format!("base_url = \"{}/v1\"", codex_deepseek_origin)));
         assert!(rendered.contains("[model_providers.deepseek-local]"));
         assert!(rendered.contains("[features]\nmemories = true"));
         assert!(rendered.contains("[memories]\ndisable_on_external_context = true"));
@@ -1799,6 +1786,12 @@ mod tests {
             Some("CLAUDE_CONFIG_DIR")
         );
         assert_eq!(isolated_home_env("codex"), None);
+        assert_eq!(isolated_home_settings("codex-deepseek"), None);
+        assert_eq!(
+            isolated_home_settings("claude-deepseek")
+                .and_then(|settings| settings.get("autoCompactEnabled")),
+            Some(&serde_json::Value::Bool(true))
+        );
         assert!(isolated_shell("claude-deepseek"));
         assert!(!isolated_shell("codex-deepseek"));
         assert!(!isolated_shell("claude-code"));
@@ -1835,8 +1828,8 @@ mod tests {
         assert_eq!(
             loopback_plugins(),
             [
-                ("codex-deepseek", "http://127.0.0.1:61137"),
                 ("claude-deepseek", "http://127.0.0.1:61138"),
+                ("codex-deepseek", "http://127.0.0.1:61137"),
             ]
         );
         assert_eq!(

@@ -1,5 +1,6 @@
 import { LinearProgress, Stack, Typography } from "@mui/material";
 import type { ProviderUsageSlotContext } from "./usageLimits";
+import { ProviderUsageActivityDetails } from "./ProviderUsageActivityDetails";
 
 /** Host-kit presentation for a `provider.usage` plugin slot. */
 export function ProviderUsage({
@@ -51,6 +52,22 @@ export function ProviderUsage({
         <Typography variant="body2" color="text.secondary">
           {context.emptyMessage}
         </Typography>
+      )}
+    </Stack>
+  );
+}
+
+/** Cowboy-owned detail renderer for usage plugins with activity telemetry. */
+export function ProviderUsageActivity({
+  context,
+}: {
+  context: ProviderUsageSlotContext;
+}): React.JSX.Element {
+  return (
+    <Stack spacing={2}>
+      <ProviderUsage context={context} />
+      {context.showDetails && context.usage && (
+        <ProviderUsageActivityDetails usage={context.usage} />
       )}
     </Stack>
   );

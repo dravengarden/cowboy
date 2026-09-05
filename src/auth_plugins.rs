@@ -7,10 +7,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, ensure};
+use cowboy_plugin_sdk::PluginRendererId;
 use serde::Deserialize;
 
 use crate::oidc::{OidcProvider, OidcProviderRuntimeDocument};
+use crate::plugin_activation::{HostActivationPolicy, HostReleasePin, HostSourcePolicy};
 use crate::plugin_catalog::PluginCatalog;
+use crate::plugin_runtime::{PluginRuntime, PublicHostPlugin};
 
 const CONFIG_SCHEMA_V1: &str = "dravengarden.cowboy.authentication/v1";
 const CONFIG_SCHEMA_V2: &str = "dravengarden.cowboy.authentication/v2";
@@ -158,6 +161,7 @@ pub(crate) struct ProductAuthentication {
     pub automation: AutomationServerPolicy,
     login_method_order: Vec<String>,
     providers: BTreeMap<String, Arc<OidcProvider>>,
+    host_releases: Vec<HostReleasePin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -477,6 +481,7 @@ impl ProductAuthentication {
             automation: AutomationServerPolicy::default(),
             login_method_order: Vec::new(),
             providers: BTreeMap::new(),
+            host_releases: Vec::new(),
         }
     }
 
@@ -501,6 +506,7 @@ impl ProductAuthentication {
             login_method_order: resolve_login_method_order(None, true, &provider_ids)
                 .expect("default login method order"),
             providers,
+            host_releases: Vec::new(),
         }
     }
 
@@ -540,6 +546,7 @@ impl ProductAuthentication {
             "too many Authentication Providers"
         );
         let mut providers = BTreeMap::new();
+        let mut host_releases = Vec::new();
         for selected in document.providers {
             let contract = catalog.resolve_authentication_provider(
                 &selected.plugin_id,
@@ -551,6 +558,11 @@ impl ProductAuthentication {
                 "Authentication Provider identity mismatch"
             );
             let provider = Arc::new(OidcProvider::load_plugin(&contract, selected.oidc)?);
+            host_releases.push(HostReleasePin {
+                plugin_id: selected.plugin_id,
+                plugin_version: selected.plugin_version,
+                artifact_digest: selected.artifact_digest,
+            });
             ensure!(
                 providers
                     .insert(provider.id().to_owned(), provider)
@@ -607,7 +619,50 @@ impl ProductAuthentication {
             automation,
             login_method_order,
             providers,
+            host_releases,
         })
+    }
+
+    /// The login driver and its public host must use the same exact release.
+    /// Legacy hostless OIDC remains supported only during bootstrap migration.
+    pub(crate) fn configure_host_policy(&self, policy: &mut HostActivationPolicy) -> Result<()> {
+        let catalog_only = policy.source == HostSourcePolicy::CatalogOnly;
+        ensure!(
+            !catalog_only
+                || self
+                    .providers
+                    .keys()
+                    .all(|id| self.host_releases.iter().any(|pin| &pin.plugin_id == id)),
+            "catalog_only requires signed Authentication Provider selections; migrate legacy OIDC configuration first"
+        );
+        for pin in &self.host_releases {
+            policy.pin(pin.clone(), catalog_only)?;
+        }
+        for id in &self.login_method_order {
+            policy.authentication_methods.insert(
+                id.clone(),
+                if id == PASSWORD_LOGIN_METHOD {
+                    PluginRendererId::LoginPasswordV1
+                } else {
+                    PluginRendererId::LoginOidcV1
+                },
+            );
+        }
+        policy.require_webauthn_storage |= self.passkeys.enabled;
+        Ok(())
+    }
+
+    pub(crate) fn public_host_plugins(&self, runtime: &PluginRuntime) -> Vec<PublicHostPlugin> {
+        runtime
+            .default_hosts()
+            .into_iter()
+            .filter(|host| host.public_auth_surface())
+            .filter(|host| {
+                self.login_method_order.contains(&host.id)
+                    || (self.passkeys.enabled && host.slots.contains(&"account.panel"))
+            })
+            .map(|host| host.public_descriptor(true))
+            .collect()
     }
 
     pub(crate) fn provider(&self, id: &str) -> Option<&Arc<OidcProvider>> {
@@ -780,12 +835,42 @@ fn read_document(path: &Path) -> Result<AuthenticationDocument> {
         bytes.len() as u64 <= MAX_CONFIG_BYTES,
         "authentication config is too large"
     );
-    serde_json::from_slice(&bytes).context("decoding authentication config")
+    decode_private_json(&bytes, "authentication config")
+}
+
+/// JSON's default errors can echo invalid values and unknown field names from
+/// secret-bearing configuration. Keep only the category and source position.
+pub(crate) fn decode_private_json<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    name: &'static str,
+) -> Result<T> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "decoding {name}: {:?} error at line {}, column {}",
+            error.classify(),
+            error.line(),
+            error.column()
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_configuration_parse_errors_never_echo_values_or_unknown_field_names() {
+        for input in [
+            br#"{"schema":"dravengarden.cowboy.authentication/v2","password":{"enabled":"fixture-secret"}}"#.as_slice(),
+            br#"{"schema":"dravengarden.cowboy.authentication/v2","fixture-secret":"misplaced credential"}"#.as_slice(),
+            br#"{"schema": "fixture-secret" "invalid"}"#.as_slice(),
+        ] {
+            let error = decode_private_json::<AuthenticationDocument>(input, "authentication config").unwrap_err();
+            let detail = format!("{error:#}");
+            assert!(detail.contains("line") && detail.contains("column"));
+            assert!(!detail.contains("fixture-secret") && !detail.contains("misplaced credential"));
+        }
+    }
 
     #[test]
     fn default_policy_keeps_password_and_passkeys_available() {

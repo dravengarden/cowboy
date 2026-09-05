@@ -1,7 +1,66 @@
 {
   "schema_version": 1,
   "adapter_slot": "grok",
-  "cli_auth": "grok-json",
+  "cli_auth": "rules-v1",
+  "cli_auth_rules": {
+    "rules": [
+      {
+        "when": {
+          "op": "any",
+          "values": [
+            { "op": "nonempty", "source": { "kind": "env", "name": "XAI_API_KEY" } },
+            { "op": "nonempty", "source": { "kind": "env", "name": "GROK_CODE_XAI_API_KEY" } },
+            { "op": "nonempty", "source": { "kind": "env", "name": "GROK_DEPLOYMENT_KEY" } }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "xAI credential" }
+      },
+      {
+        "when": { "op": "nonempty", "source": { "kind": "env", "name": "GROK_AUTH_PROVIDER_COMMAND" } },
+        "outcome": { "state": "signed-in", "detail": "Grok external auth provider" }
+      },
+      {
+        "when": {
+          "op": "json-object",
+          "source": { "kind": "env", "name": "GROK_AUTH" },
+          "nonempty_string_fields": ["key"],
+          "string_fields": ["auth_mode", "create_time", "user_id"],
+          "root_or_values": true
+        },
+        "outcome": { "state": "signed-in", "detail": "Grok account" }
+      },
+      {
+        "when": {
+          "op": "any",
+          "values": [
+            {
+              "op": "json-object",
+              "source": { "kind": "file", "path": "${GROK_AUTH_PATH}" },
+              "nonempty_string_fields": ["key"],
+              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "root_or_values": true
+            },
+            {
+              "op": "json-object",
+              "source": { "kind": "file", "path": "${GROK_HOME}/auth.json" },
+              "nonempty_string_fields": ["key"],
+              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "root_or_values": true
+            },
+            {
+              "op": "json-object",
+              "source": { "kind": "file", "path": "${HOME}/.grok/auth.json" },
+              "nonempty_string_fields": ["key"],
+              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "root_or_values": true
+            }
+          ]
+        },
+        "outcome": { "state": "signed-in", "detail": "Grok account" }
+      }
+    ],
+    "fallback": { "state": "signed-out" }
+  },
   "visual": {
     "light": { "primary": "#44403C", "secondary": "#78716C" },
     "dark": { "primary": "#E8E4DC", "secondary": "#C4B5A0" }
@@ -13,18 +72,44 @@
     "provider.settings"
   ],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "provider.usage": "provider-usage-v1",
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
   },
   "usage": {
     "account": "xai",
-    "collector": "xai-billing",
+    "collector": "command",
+    "collector_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_GROK,COWBOY_ACP_GROK_CMD,GROK_AUTH,GROK_AUTH_PATH,GROK_HOME,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
+      "--allow-read=${ENV:GROK_AUTH_PATH},${ENV:GROK_HOME}/auth.json,${ENV:HOME}/.grok/auth.json",
+      "--allow-run=grok,${ENV:COWBOY_PLUGIN_COMMAND_GROK},${ENV:COWBOY_ACP_GROK_CMD}",
+      "--allow-net=grok.com:443",
+      "${PLUGIN_DIR}/collector/index.js",
+      "grok"
+    ],
     "reset": "xai",
+    "reset_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_GROK,COWBOY_ACP_GROK_CMD,GROK_AUTH,GROK_AUTH_PATH,GROK_HOME,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
+      "--allow-read=${ENV:GROK_AUTH_PATH},${ENV:GROK_HOME}/auth.json,${ENV:HOME}/.grok/auth.json",
+      "--allow-run=grok,${ENV:COWBOY_PLUGIN_COMMAND_GROK},${ENV:COWBOY_ACP_GROK_CMD}",
+      "--allow-net=grok.com:443",
+      "${PLUGIN_DIR}/collector/index.js",
+      "grok"
+    ],
     "reset_claim": "before-attempt",
     "product": "xAI",
-    "parser": "xai-credits",
-    "error": "xai-billing",
     "error_auth": "Sign in to Grok Build in Machines, then refresh xAI usage.",
     "error_config": "Grok Build usage is not configured on this Machine.",
     "error_fetch": "Grok Build could not fetch xAI usage.",

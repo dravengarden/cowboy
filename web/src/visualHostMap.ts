@@ -1,4 +1,7 @@
-import { bundledHostPlugins } from "./bundledHostPlugins.ts";
+import {
+  isPluginArtifactDigest,
+  isPluginIdentifier,
+} from "@cowboy/plugin-api/runtime";
 
 export type ProviderVisual = {
   primary: string;
@@ -35,39 +38,72 @@ function readVisual(host: object): ProviderSurfaceColors | undefined {
   return light && dark ? { light, dark } : undefined;
 }
 
-function collectVisuals(hosts: unknown): Record<string, ProviderSurfaceColors> {
-  const colors: Record<string, ProviderSurfaceColors> = {};
+type VisualMaps = {
+  defaults: Record<string, ProviderSurfaceColors>;
+  exact: Record<string, ProviderSurfaceColors>;
+};
+
+function exactVisualKey(
+  pluginId: string,
+  pluginVersion: string,
+  artifactDigest: string,
+): string {
+  return `${pluginId}\u0000${pluginVersion}\u0000${artifactDigest}`;
+}
+
+function collectVisuals(hosts: unknown): VisualMaps {
+  const colors: VisualMaps = { defaults: {}, exact: {} };
   if (!Array.isArray(hosts)) return colors;
   for (const host of hosts) {
     if (host === null || typeof host !== "object") continue;
-    const id = (host as { id?: unknown }).id;
+    const row = host as {
+      id?: unknown;
+      plugin_version?: unknown;
+      artifact_digest?: unknown;
+      default_for_id?: unknown;
+    };
+    const candidateId = row.id;
     const visual = readVisual(host);
-    if (typeof id !== "string" || id === "" || !visual) continue;
-    colors[id] = visual;
+    if (!isPluginIdentifier(candidateId) || !visual) continue;
+    const id = candidateId;
+    if (row.default_for_id === undefined || row.default_for_id === true) {
+      colors.defaults[id] = visual;
+    }
+    if (
+      typeof row.plugin_version === "string" &&
+      isPluginArtifactDigest(row.artifact_digest)
+    ) {
+      colors.exact[
+        exactVisualKey(id, row.plugin_version, row.artifact_digest)
+      ] = visual;
+    }
   }
   return colors;
 }
 
-const bundledVisuals = collectVisuals(bundledHostPlugins);
-let overlayVisuals: Record<string, ProviderSurfaceColors> = {};
+let overlayVisuals: VisualMaps = { defaults: {}, exact: {} };
 
-/** Overlay Provider surface colors declared by activated host plugins. */
+/** Replace Provider surface colors from the activated, validated host inventory. */
 export function applyVisualHostPlugins(hosts: unknown): void {
   overlayVisuals = collectVisuals(hosts);
 }
 
-/** First-party surface colors generated from bundled host.json. */
-export const BUNDLED_PROVIDER_SURFACE_COLORS: Record<
-  string,
-  ProviderSurfaceColors
-> = bundledVisuals;
-
 export function providerSurfaceColors(): Record<string, ProviderSurfaceColors> {
-  return { ...bundledVisuals, ...overlayVisuals };
+  return { ...overlayVisuals.defaults };
 }
 
 export function providerSurfaceColor(
   provider: string,
+  providerVersion?: string,
+  providerDigest?: string,
 ): ProviderSurfaceColors | undefined {
-  return overlayVisuals[provider] ?? bundledVisuals[provider];
+  if ((providerVersion === undefined) !== (providerDigest === undefined)) {
+    return undefined;
+  }
+  if (providerVersion !== undefined && providerDigest !== undefined) {
+    return overlayVisuals.exact[
+      exactVisualKey(provider, providerVersion, providerDigest)
+    ];
+  }
+  return overlayVisuals.defaults[provider];
 }

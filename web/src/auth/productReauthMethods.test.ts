@@ -13,8 +13,8 @@ const providers: ProductOidcProvider[] = [{
   start_url: "/api/auth/oidc/start",
 }];
 const hostPlugins: AuthHostPlugin[] = [
-  { id: "password", label: "Password" },
-  { id: "cardea", label: "Cardea SSO" },
+  { id: "password", slots: ["login.method"], label: "Password" },
+  { id: "cardea", slots: ["login.method"], label: "Cardea SSO" },
 ];
 const accountMethods = productAccountVerificationMethods(
   ["cardea", "password"],
@@ -46,8 +46,14 @@ Deno.test("primary reauthentication keeps the session's provider method", () => 
 });
 
 Deno.test("login method labels prefer host plugins over OIDC display names", () => {
-  assertEquals(loginMethodLabel("password", hostPlugins, providers), "Password");
-  assertEquals(loginMethodLabel("cardea", hostPlugins, providers), "Cardea SSO");
+  assertEquals(
+    loginMethodLabel("password", hostPlugins, providers),
+    "Password",
+  );
+  assertEquals(
+    loginMethodLabel("cardea", hostPlugins, providers),
+    "Cardea SSO",
+  );
   assertEquals(loginMethodLabel("password", [], providers), "password");
   assertEquals(loginMethodLabel("cardea", [], providers), "Cardea");
 });

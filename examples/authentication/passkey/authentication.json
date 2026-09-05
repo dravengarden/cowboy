@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "id": "passkey",
+  "version": "1.0.0",
+  "display_name": "Passkeys",
+  "button_label": "Use a passkey",
+  "protocol": { "kind": "webauthn", "configuration": {} }
+}

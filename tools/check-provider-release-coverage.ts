@@ -18,6 +18,7 @@ interface PluginRelease {
   artifact_digest: string;
   artifact_url: string;
   publisher: string;
+  host_bundle_digest?: string;
   signature: string;
   runtime_artifacts: Array<{ components: RuntimeComponent[] }>;
 }
@@ -112,7 +113,10 @@ async function validatePublishedRelease(
   releasePath: string,
   release: PluginRelease,
 ): Promise<void> {
-  assert(release.release_schema === 1, "unsupported release schema");
+  assert(
+    release.release_schema === 1 || release.release_schema === 2,
+    "unsupported release schema",
+  );
   assert(release.signature.trim().length > 0, "release is unsigned");
   const artifactDigest = digestValue(release.artifact_digest);
   digestValue(release.package_digest);
@@ -120,6 +124,21 @@ async function validatePublishedRelease(
   const packagePath = `${stem}.cowboy-plugin`;
   assert(await exists(packagePath), "catalog package is missing");
   await validateFileDigest(packagePath, release.package_digest);
+  const hostBundlePath = `${stem}.hostbundle.json`;
+  if (release.release_schema === 2) {
+    assert(
+      release.host_bundle_digest !== undefined,
+      "release schema 2 has no host bundle digest",
+    );
+    assert(await exists(hostBundlePath), "catalog host bundle is missing");
+    await validateFileDigest(hostBundlePath, release.host_bundle_digest);
+  } else {
+    assert(
+      release.host_bundle_digest === undefined,
+      "release schema 1 cannot bind a host bundle",
+    );
+    assert(!await exists(hostBundlePath), "catalog host bundle is unbound");
+  }
   await validateArtifact(
     catalogRoot,
     release.artifact_url,

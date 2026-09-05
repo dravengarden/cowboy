@@ -1,18 +1,19 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   HUMAN_COMPOSER_ORIGIN,
-  isGrokRuntimeTaskPrompt,
+  isAgentReviewTaskPrompt,
   isHumanPrompt,
   isInternalRuntimePrompt,
   resolvePromptOrigin,
   runtimePromptPresentation,
 } from "./promptOrigin";
 
-const GROK_REVIEW_FOLLOW_UP = `The reviewer found issues. The review_file is at: /tmp/grok-1000/grok-design-review-d58766af.md
+const AGENT_REVIEW_FOLLOW_UP =
+  `The reviewer found issues. The review_file is at: /tmp/agent-1000/design-review-d58766af.md
 
 Read the review_file. Address ALL issues with Status: open -- including nits.
 
-For each issue, revise /tmp/grok-1000/grok-design-doc-d58766af.md
+For each issue, revise /tmp/agent-1000/design-doc-d58766af.md
 Then update the review_file:
 - Status: open -> addressed
 - Add a Response field
@@ -58,15 +59,15 @@ Deno.test("resolvePromptOrigin prefers the persisted source object", () => {
   assertEquals(resolvePromptOrigin({}, "Ship it"), HUMAN_COMPOSER_ORIGIN);
   assertEquals(isHumanPrompt(HUMAN_COMPOSER_ORIGIN), true);
   assertEquals(isHumanPrompt({ actor: "agent", source: "runtime" }), false);
-  assertEquals(isGrokRuntimeTaskPrompt(GROK_REVIEW_FOLLOW_UP), true);
-  assertEquals(isInternalRuntimePrompt(GROK_REVIEW_FOLLOW_UP), true);
+  assertEquals(isAgentReviewTaskPrompt(AGENT_REVIEW_FOLLOW_UP), true);
+  assertEquals(isInternalRuntimePrompt(AGENT_REVIEW_FOLLOW_UP), true);
   assertEquals(
-    resolvePromptOrigin({}, GROK_REVIEW_FOLLOW_UP),
-    { actor: "agent", source: "review", provider: "grok" },
+    resolvePromptOrigin({}, AGENT_REVIEW_FOLLOW_UP),
+    { actor: "agent", source: "review" },
   );
-  assertEquals(isGrokRuntimeTaskPrompt("Read the review_file please"), false);
+  assertEquals(isAgentReviewTaskPrompt("Read the review_file please"), false);
   assertEquals(
-    isGrokRuntimeTaskPrompt("The reviewer found issues in my PR"),
+    isAgentReviewTaskPrompt("The reviewer found issues in my PR"),
     false,
   );
 });
@@ -81,11 +82,11 @@ Deno.test("runtime presentation hides reminder markup from the title", () => {
   assertEquals(presented.raw?.includes("<system-reminder>"), false);
 });
 
-Deno.test("Grok review follow-ups collapse to a Grok note instead of a human bubble", () => {
+Deno.test("agent review follow-ups collapse to a note instead of a human bubble", () => {
   const presented = runtimePromptPresentation(
-    GROK_REVIEW_FOLLOW_UP,
-    { actor: "agent", source: "review", provider: "grok" },
+    AGENT_REVIEW_FOLLOW_UP,
+    { actor: "agent", source: "review", provider: "future-agent" },
   );
   assertEquals(presented.title, "Addressing review findings");
-  assertEquals(presented.raw?.includes("/tmp/grok-1000/"), true);
+  assertEquals(presented.raw?.includes("/tmp/agent-1000/"), true);
 });

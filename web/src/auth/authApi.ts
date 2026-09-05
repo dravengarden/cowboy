@@ -1,3 +1,11 @@
+import {
+  installPluginRuntimeHosts,
+  isPluginGeneration,
+  isPluginIdentifier,
+  isPluginSlotId,
+  type PluginSlotId,
+} from "@cowboy/plugin-api/runtime";
+
 export type ProductRole = "owner" | "operator" | "viewer";
 export type RegistrationMode = "disabled" | "token" | "open";
 
@@ -42,6 +50,7 @@ export interface AuthLoginFields {
 
 export interface AuthHostPlugin {
   id: string;
+  slots: PluginSlotId[];
   label?: string;
   fields?: AuthLoginFields;
 }
@@ -59,7 +68,9 @@ const DEFAULT_PASSWORD_LOGIN_FIELDS: Required<AuthLoginFields> = {
 export function passwordLoginFields(
   hostPlugins: readonly AuthHostPlugin[] | undefined,
 ): Required<AuthLoginFields> {
-  const fields = hostPlugins?.find((plugin) => plugin.id === PASSWORD_LOGIN_METHOD)
+  const fields = hostPlugins?.find((plugin) =>
+    plugin.id === PASSWORD_LOGIN_METHOD
+  )
     ?.fields;
   return {
     account: fields?.account ?? DEFAULT_PASSWORD_LOGIN_FIELDS.account,
@@ -379,14 +390,29 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     status.host_plugins = record.host_plugins.flatMap(
       (host): AuthHostPlugin[] => {
         if (host == null || typeof host !== "object") return [];
-        const candidate = host as { id?: unknown; label?: unknown };
+        const candidate = host as {
+          id?: unknown;
+          generation?: unknown;
+          label?: unknown;
+          slots?: unknown;
+        };
+        const id = candidate.id;
+        const generation = candidate.generation;
         if (
-          typeof candidate.id !== "string" ||
-          !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate.id)
+          !isPluginIdentifier(id) ||
+          !isPluginGeneration(generation) ||
+          !Array.isArray(candidate.slots) ||
+          !candidate.slots.every((slot) =>
+            typeof slot === "string" && isPluginSlotId(slot)
+          ) ||
+          new Set(candidate.slots).size !== candidate.slots.length
         ) {
           return [];
         }
-        const plugin: AuthHostPlugin = { id: candidate.id };
+        const plugin: AuthHostPlugin = {
+          id,
+          slots: [...candidate.slots] as PluginSlotId[],
+        };
         if (typeof candidate.label === "string") {
           const label = candidate.label.trim();
           if (label.length > 0) plugin.label = label;
@@ -395,7 +421,9 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
         if (fields !== null && typeof fields === "object") {
           const record = fields as Record<string, unknown>;
           const parsed: AuthLoginFields = {};
-          for (const key of ["account", "secret", "confirm", "setup"] as const) {
+          for (
+            const key of ["account", "secret", "confirm", "setup"] as const
+          ) {
             const value = record[key];
             if (typeof value === "string" && value.trim() !== "") {
               parsed[key] = value.trim();
@@ -457,6 +485,46 @@ async function readPublicJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) as T : {}) as T;
 }
 
+export interface AuthProtocolRequest {
+  method?: "GET" | "POST" | "PUT" | "DELETE";
+  body?: unknown;
+  signal?: AbortSignal;
+}
+
+/** Restricted transport for Cowboy-owned authentication renderers. */
+export function authProtocolRequest<T = unknown>(
+  path: string,
+  request: AuthProtocolRequest = {},
+): Promise<T> {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    throw new TypeError("invalid product-auth protocol path");
+  }
+  if (
+    !/^\/api\/auth\/[A-Za-z0-9%._~/-]+$/.test(path) ||
+    path.includes("//") ||
+    decoded.split("/").some((component) =>
+      component === "." || component === ".."
+    )
+  ) {
+    throw new TypeError("product-auth plugins may only call /api/auth/*");
+  }
+  const method = request.method ?? "GET";
+  if (method === "GET" && request.body !== undefined) {
+    throw new TypeError("GET product-auth requests cannot have a body");
+  }
+  return readJson<T>(path, {
+    method,
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
+    ...(request.body === undefined ? {} : {
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request.body),
+    }),
+  });
+}
+
 function authApiError(
   status: number,
   statusText: string,
@@ -507,7 +575,14 @@ export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
   }
   try {
     const text = await response.text();
-    const body = authStatusFromJson(text ? JSON.parse(text) : {});
+    const decoded = text ? JSON.parse(text) : {};
+    if (decoded != null && typeof decoded === "object") {
+      const hosts = installPluginRuntimeHosts(
+        (decoded as { host_plugins?: unknown }).host_plugins,
+      );
+      (decoded as { host_plugins?: unknown }).host_plugins = hosts;
+    }
+    const body = authStatusFromJson(decoded);
     if (!body) return { kind: "unsupported", httpStatus: response.status };
     return { kind: "ok", httpStatus: 200, body };
   } catch {
@@ -592,6 +667,7 @@ export interface DeviceAuthorizationInfo {
 }
 
 export const authApi = {
+  request: authProtocolRequest,
   status: () => fetchAuthStatus(),
   me: () => readJson<ProductMe>("/api/auth/me"),
   login: (account: string, password: string) =>
@@ -653,8 +729,7 @@ export const authApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ scope, provider_logout: providerLogout }),
     }),
-  listSessions: () =>
-    readJson<ProductSessionInventory>("/api/auth/sessions"),
+  listSessions: () => readJson<ProductSessionInventory>("/api/auth/sessions"),
   deleteSession: (id: string) =>
     readJson<{ ok: boolean }>(
       `/api/auth/sessions/${encodeURIComponent(id)}`,

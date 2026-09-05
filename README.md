@@ -108,6 +108,10 @@ Open <http://127.0.0.1:3333>. Product login is off by default for local
 development. SQLite is the zero-operations store; PostgreSQL implements the
 same Store API for larger deployments.
 
+Omit the database URL for an in-memory development store. Use
+`cowboy store-copy --source postgresql://… --destination sqlite:///…` for a
+fail-closed production migration into a new SQLite file.
+
 To add another Linux or macOS host, build the target-platform bootstrap with
 <code>just build-machine-bootstrap</code>. Create a one-time enrollment code in
 Cowboy, then run the generated command on that Machine:
@@ -231,6 +235,14 @@ just check
 tests, Web typechecking/lint/tests, Plugin conformance, site tests, and release
 builds. For local HMR, run <code>just dev</code> and
 <code>just dev-web</code> in separate terminals.
+
+`just test-postgres` runs the ignored PostgreSQL contracts and is included in
+`just check`. It uses the pinned Nix PostgreSQL executable, not an existing
+database service, and gives each test a fresh database in a private temporary
+cluster with only a Unix socket. Inherited PostgreSQL connection settings and
+test URLs are ignored. The fixture is removed on success or failure after the
+server stops; failed shutdown retains it and fails the gate. Run it as a
+non-root user. Plain `cargo test` still skips this separate group.
 
 <details>
 <summary><strong>Repository layout</strong></summary>

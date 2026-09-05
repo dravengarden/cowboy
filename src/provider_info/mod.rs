@@ -4,25 +4,11 @@
 //! provider so Codex and Claude Code sessions backed by one DeepSeek key never
 //! become duplicate account cards.
 
-mod anthropic;
-mod deepseek;
-mod deepseek_pricing;
-mod gemini;
-mod openai;
-mod xai;
-mod xai_account;
-
 use serde_json::{Value, json};
 
 use crate::core::SessionMeta;
-use crate::plugin_host::{PluginUsageSpec, UsageSessionOverlay};
+use crate::plugin_host::{PluginUsageSpec, UsageSessionRateLimits};
 use crate::usage::ProviderUsage;
-
-pub(crate) use deepseek::collect as collect_deepseek;
-pub(crate) use deepseek_pricing::decorate_activity as decorate_deepseek_activity;
-pub(crate) use openai::collect as collect_openai;
-pub(crate) use xai::collect as collect_xai;
-pub(crate) use xai_account::redeem_reset as redeem_xai_reset;
 
 pub(crate) fn overlay_session_usage(
     mut snapshot: crate::usage::UsageSnapshot,
@@ -34,11 +20,14 @@ pub(crate) fn overlay_session_usage(
         let Some((_, session, usage)) = sessions
             .iter()
             .filter(|session| {
-                catalog.account_usage_provider(
-                    &session.provider,
-                    &session.provider_version,
-                    &session.provider_generation_digest,
-                ) == Some(provider.provider)
+                catalog
+                    .account_usage_provider(
+                        &session.provider,
+                        &session.provider_version,
+                        &session.provider_generation_digest,
+                    )
+                    .as_deref()
+                    == Some(provider.provider)
             })
             .filter_map(|session| {
                 session
@@ -56,17 +45,22 @@ pub(crate) fn overlay_session_usage(
         let empty = binding.and_then(|binding| binding.empty.as_deref());
         let source = binding
             .map(|binding| crate::usage::intern_usage_str(binding.product_label().to_owned()));
-        match session_overlay(bindings, provider.provider) {
-            UsageSessionOverlay::AnthropicRateLimit => {
-                anthropic::overlay(provider, &usage.raw, empty, source);
+        if provider.status != "available"
+            && let Some(empty) = empty
+        {
+            provider.error = Some(empty.to_owned());
+        }
+        if let Some(projection) = binding.and_then(|binding| binding.session_rate_limits.as_ref())
+            && let Some(limits) = project_session_rate_limits(&usage.raw, projection)
+        {
+            if provider.rate_limits.is_none() {
+                provider.rate_limits = Some(limits);
             }
-            UsageSessionOverlay::GeminiSessionOnly => {
-                gemini::overlay(provider, empty);
-                if let Some(source) = source {
-                    provider.source = source;
-                }
+            provider.status = "available";
+            provider.error = None;
+            if let Some(source) = source {
+                provider.source = source;
             }
-            UsageSessionOverlay::None | UsageSessionOverlay::Unknown => {}
         }
         let latest = json!({ "agent": session.provider, "session": usage.raw });
         match provider.activity.as_mut().and_then(Value::as_object_mut) {
@@ -83,11 +77,22 @@ pub(crate) fn overlay_session_usage(
     snapshot
 }
 
-fn session_overlay(bindings: &[PluginUsageSpec], account: &str) -> UsageSessionOverlay {
-    bindings
+fn project_session_rate_limits(raw: &Value, projection: &UsageSessionRateLimits) -> Option<Value> {
+    let limits = raw.pointer(&projection.pointer)?;
+    if !projection
+        .required_number_fields
         .iter()
-        .find(|binding| binding.account == account)
-        .map_or(UsageSessionOverlay::None, |binding| binding.session_overlay)
+        .all(|field| limits.get(field).is_some_and(Value::is_number))
+        || !projection
+            .required_string_fields
+            .iter()
+            .all(|field| limits.get(field).is_some_and(Value::is_string))
+    {
+        return None;
+    }
+    let mut projected = serde_json::Map::new();
+    projected.insert(projection.target.clone(), limits.clone());
+    Some(Value::Object(projected))
 }
 
 pub(crate) fn unavailable(
@@ -123,27 +128,29 @@ pub(crate) fn error(
 mod tests {
     use super::*;
     use crate::plugin_host::{
-        UsageCollectorKind, UsageErrorKind, UsageLimitParserKind, UsageResetClaim, UsageWidgetKind,
+        UsageCollectorKind, UsageErrorKind, UsageLimitParserKind, UsageResetClaim,
+        UsageSessionOverlay, UsageWidgetKind,
     };
 
-    fn binding(account: &str, overlay: UsageSessionOverlay) -> PluginUsageSpec {
+    fn binding(account: &str, projection: Option<UsageSessionRateLimits>) -> PluginUsageSpec {
         PluginUsageSpec {
             account: account.to_owned(),
             collector: UsageCollectorKind::Session,
             reset: None,
             product: None,
-            parser: UsageLimitParserKind::GenericBuckets,
-            error: UsageErrorKind::Raw,
+            parser: UsageLimitParserKind::new("generic-buckets"),
+            error: UsageErrorKind::new("raw"),
             error_auth: None,
             error_config: None,
             error_fetch: None,
             order: None,
             top_bar_windows: Vec::new(),
-            widget: UsageWidgetKind::None,
+            widget: UsageWidgetKind::new("none"),
             widget_shape: crate::plugin_host::UsageWidgetShape::None,
             widget_window: None,
             reset_claim: UsageResetClaim::AfterSuccess,
-            session_overlay: overlay,
+            session_overlay: UsageSessionOverlay::default(),
+            session_rate_limits: projection,
             empty: None,
             available_status: None,
             omit_empty_limits: false,
@@ -154,31 +161,42 @@ mod tests {
             activity_agents: Vec::new(),
             activity_models: Vec::new(),
             cache_protection: None,
+            collector_sidecars: Vec::new(),
             collector_argv: Vec::new(),
+            reset_argv: Vec::new(),
             activity: false,
         }
     }
 
     #[test]
-    fn session_overlay_follows_plugin_binding_not_account_id() {
-        let bindings = [binding(
-            "custom-claude",
-            UsageSessionOverlay::AnthropicRateLimit,
-        )];
-        assert_eq!(
-            session_overlay(&bindings, "custom-claude"),
-            UsageSessionOverlay::AnthropicRateLimit
+    fn session_rate_limits_follow_a_generic_json_projection() {
+        let projection = UsageSessionRateLimits {
+            pointer: "/metadata/limits".to_owned(),
+            target: "rateLimits".to_owned(),
+            required_number_fields: vec!["utilization".to_owned()],
+            required_string_fields: vec!["kind".to_owned()],
+        };
+        let projected = project_session_rate_limits(
+            &json!({"metadata":{"limits":{"utilization":23.5,"kind":"five_hour"}}}),
+            &projection,
+        )
+        .unwrap();
+        assert_eq!(projected["rateLimits"]["utilization"], 23.5);
+        assert!(
+            project_session_rate_limits(
+                &json!({"metadata":{"limits":{"utilization":"23.5","kind":"five_hour"}}}),
+                &projection,
+            )
+            .is_none()
         );
+
+        let binding = binding("future-provider", Some(projection));
         assert_eq!(
-            session_overlay(&bindings, "anthropic"),
-            UsageSessionOverlay::None
-        );
-        assert_eq!(
-            session_overlay(
-                &[binding("gemini", UsageSessionOverlay::GeminiSessionOnly)],
-                "gemini"
-            ),
-            UsageSessionOverlay::GeminiSessionOnly
+            binding
+                .session_rate_limits
+                .as_ref()
+                .map(|value| value.pointer.as_str()),
+            Some("/metadata/limits")
         );
     }
 }

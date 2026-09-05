@@ -21,7 +21,10 @@ async function sha256(path: string): Promise<string> {
   const data = await bytes(path);
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+    data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength,
+    ) as ArrayBuffer,
   );
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, "0"))
@@ -42,15 +45,17 @@ Deno.test("Cowboy 1703 brand assets cover every app surface", async () => {
     assertEquals(await pngSize(path), size, path);
   }
 
-  for (const alias of [
-    "web/public/cowboy-app-icon-180.png",
-    "web/public/cowboy-app-icon-180-v2.png",
-    "web/public/cowboy-app-icon-180-v3.png",
-    "web/public/apple-touch-icon.png",
-    "web/public/apple-touch-icon-precomposed.png",
-    "web/public/apple-touch-icon-180x180.png",
-    "web/public/apple-touch-icon-180x180-precomposed.png",
-  ]) {
+  for (
+    const alias of [
+      "web/public/cowboy-app-icon-180.png",
+      "web/public/cowboy-app-icon-180-v2.png",
+      "web/public/cowboy-app-icon-180-v3.png",
+      "web/public/apple-touch-icon.png",
+      "web/public/apple-touch-icon-precomposed.png",
+      "web/public/apple-touch-icon-180x180.png",
+      "web/public/apple-touch-icon-180x180-precomposed.png",
+    ]
+  ) {
     await assertSame("web/public/cowboy-app-icon-180-v4.png", alias);
   }
   await assertSame(
@@ -61,27 +66,37 @@ Deno.test("Cowboy 1703 brand assets cover every app surface", async () => {
     "web/public/apple-touch-icon-167x167.png",
     "web/public/apple-touch-icon-167x167-precomposed.png",
   );
-  for (const alias of [
-    "web/public/cowboy-app-icon-192.png",
-    "web/public/icon-192.png",
-  ]) {
+  for (
+    const alias of [
+      "web/public/cowboy-app-icon-192.png",
+      "web/public/icon-192.png",
+    ]
+  ) {
     await assertSame("web/public/cowboy-app-icon-192-v4.png", alias);
   }
-  for (const alias of [
-    "web/public/cowboy-app-icon-512-v3.png",
-    "web/public/cowboy-app-icon-512.png",
-    "web/public/cowboy-app-icon-maskable-512-v4.png",
-    "web/public/cowboy-app-icon-maskable-512.png",
-    "web/public/icon-512.png",
-    "web/public/maskable-512.png",
-  ]) {
+  for (
+    const alias of [
+      "web/public/cowboy-app-icon-512-v3.png",
+      "web/public/cowboy-app-icon-512.png",
+      "web/public/cowboy-app-icon-maskable-512-v4.png",
+      "web/public/cowboy-app-icon-maskable-512.png",
+      "web/public/icon-512.png",
+      "web/public/maskable-512.png",
+    ]
+  ) {
     await assertSame("web/public/cowboy-app-icon-512-v4.png", alias);
   }
 
   const ico = await bytes("web/public/cowboy-favicon-v4.ico");
   assertEquals([...ico.subarray(0, 4)], [0, 0, 1, 0]);
-  await assertSame("web/public/cowboy-favicon-v4.ico", "web/public/cowboy-favicon-v3.ico");
-  await assertSame("web/public/cowboy-favicon-v4.ico", "web/public/favicon.ico");
+  await assertSame(
+    "web/public/cowboy-favicon-v4.ico",
+    "web/public/cowboy-favicon-v3.ico",
+  );
+  await assertSame(
+    "web/public/cowboy-favicon-v4.ico",
+    "web/public/favicon.ico",
+  );
   const icns = await bytes("apps/macos-installer/Resources/Cowboy.icns");
   assertEquals(new TextDecoder().decode(icns.subarray(0, 4)), "icns");
   await assertSame(

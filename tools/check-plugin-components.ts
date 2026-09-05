@@ -91,6 +91,21 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
 const activeComponents = new Map(
   active.components.map((component) => [component.id, component]),
 );
+const distributableManifests = [...Deno.readDirSync("components")]
+  .filter((entry) => entry.isDirectory)
+  .flatMap((entry) =>
+    ["package.json", "Cargo.toml"]
+      .map((manifest) => `components/${entry.name}/${manifest}`)
+      .filter(exists)
+  )
+  .sort();
+assertSameSet(
+  active.components.flatMap((component) =>
+    component.package ? [component.package.manifest] : []
+  ),
+  distributableManifests,
+  "active component package registry",
+);
 for (const component of active.components) {
   assert(
     validComponentId(component.id),

@@ -67,38 +67,20 @@ pub fn origin_from_cmid(cmid: Option<&str>) -> PromptOrigin {
     }
 }
 
-/// Grok Build's design-review / writer loop injects a user-role prompt
-/// without `<system-reminder>` wrappers. Several fingerprints are required
-/// so a human mentioning "review_file" stays a human bubble.
-pub fn is_grok_runtime_task_prompt(text: &str) -> bool {
+/// Detect the structured review follow-up used by agent-side reviewer/writer
+/// loops. Several independent fingerprints are required so a human merely
+/// mentioning `review_file` stays a human bubble.
+pub fn is_agent_review_task_prompt(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return false;
     }
     let lowered = trimmed.to_ascii_lowercase();
-    let mut hits = 0u8;
-    if lowered.contains("/tmp/grok-") {
-        hits += 2;
-    }
-    if lowered.contains("grok-design-review-") || lowered.contains("grok-design-doc-") {
-        hits += 2;
-    }
-    if lowered.contains("the reviewer found issues") {
-        hits += 2;
-    }
-    if lowered.contains("review_file") {
-        hits += 1;
-    }
-    if lowered.contains("status: open") && lowered.contains("addressed") {
-        hits += 1;
-    }
-    if lowered.contains("add a response field") {
-        hits += 1;
-    }
-    if lowered.contains("wontfix") && lowered.contains("needs-user-input") {
-        hits += 1;
-    }
-    hits >= 3
+    lowered.contains("the reviewer found issues")
+        && lowered.contains("review_file")
+        && ((lowered.contains("status: open") && lowered.contains("addressed"))
+            || lowered.contains("add a response field")
+            || (lowered.contains("wontfix") && lowered.contains("needs-user-input")))
 }
 
 pub fn is_internal_runtime_prompt(text: &str) -> bool {
@@ -106,7 +88,7 @@ pub fn is_internal_runtime_prompt(text: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    if is_grok_runtime_task_prompt(trimmed) {
+    if is_agent_review_task_prompt(trimmed) {
         return true;
     }
     let lowered = trimmed.to_ascii_lowercase();
@@ -160,8 +142,8 @@ pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
         .pointer("/content/text")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if is_grok_runtime_task_prompt(text) {
-        apply_prompt_origin(update, &PromptOrigin::agent("review", "grok"));
+    if is_agent_review_task_prompt(text) {
+        apply_prompt_origin(update, &PromptOrigin::agent("review", provider_id));
         return;
     }
     if is_internal_runtime_prompt(text) {
@@ -171,8 +153,8 @@ pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
 
 /// Whether two ACP user-content blocks are the same prompt piece.
 ///
-/// Grok (and any agent that "accepts" a prompt by echoing it) reserializes the
-/// same type/text/url/data. Extra keys must not keep a replay visible.
+/// An agent that "accepts" a prompt by echoing it may reserialize the same
+/// type/text/url/data. Extra keys must not keep a replay visible.
 pub fn user_content_equiv(left: &Value, right: &Value) -> bool {
     let left_type = left.get("type").and_then(Value::as_str);
     if left_type != right.get("type").and_then(Value::as_str) {
@@ -264,41 +246,41 @@ mod tests {
     }
 
     #[test]
-    fn grok_review_follow_up_is_agent_owned() {
+    fn structured_review_follow_up_is_owned_by_the_current_agent() {
         let prompt = "The reviewer found issues. The review_file is at: /tmp/grok-1000/grok-design-review-d58766af.md\n\nRead the review_file. Address ALL issues with Status: open -- including nits.\nThen update the review_file:\n- Status: open -> addressed\n- Add a Response field\nYou may set wontfix or needs-user-input.";
-        assert!(is_grok_runtime_task_prompt(prompt));
+        assert!(is_agent_review_task_prompt(prompt));
         assert!(is_internal_runtime_prompt(prompt));
-        assert!(!is_grok_runtime_task_prompt("Read the review_file please"));
-        assert!(!is_grok_runtime_task_prompt(
+        assert!(!is_agent_review_task_prompt("Read the review_file please"));
+        assert!(!is_agent_review_task_prompt(
             "The reviewer found issues in my PR"
         ));
         let mut update = serde_json::json!({
             "sessionUpdate": "user_message_chunk",
             "content": { "type": "text", "text": prompt }
         });
-        annotate_inbound_user_prompt(&mut update, "grok");
+        annotate_inbound_user_prompt(&mut update, "future-agent");
         assert_eq!(update["promptOrigin"]["actor"], "agent");
         assert_eq!(update["promptOrigin"]["source"], "review");
-        assert_eq!(update["promptOrigin"]["provider"], "grok");
+        assert_eq!(update["promptOrigin"]["provider"], "future-agent");
         assert!(!is_human_prompt_update(&update));
     }
 
     #[test]
-    fn inbound_annotation_stamps_grok_runtime() {
+    fn inbound_annotation_stamps_the_current_runtime() {
         let mut update = serde_json::json!({
             "sessionUpdate": "user_message_chunk",
             "content": { "type": "text", "text": "<system-reminder>done</system-reminder>" }
         });
-        annotate_inbound_user_prompt(&mut update, "grok");
+        annotate_inbound_user_prompt(&mut update, "future-agent");
         assert_eq!(update["promptOrigin"]["actor"], "agent");
         assert_eq!(update["promptOrigin"]["source"], "runtime");
-        assert_eq!(update["promptOrigin"]["provider"], "grok");
+        assert_eq!(update["promptOrigin"]["provider"], "future-agent");
         assert_eq!(update["autoResumed"], true);
         assert!(!is_human_prompt_update(&update));
     }
 
     #[test]
-    fn inbound_grok_prompt_echo_consumes_the_cowboy_echo() {
+    fn inbound_prompt_echo_consumes_the_cowboy_echo() {
         let mut remaining = vec![
             serde_json::json!({"type": "image", "mimeType": "image/jpeg", "url": "blob:1"}),
             serde_json::json!({"type": "text", "text": "why two messages?"}),

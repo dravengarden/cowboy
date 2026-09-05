@@ -1,6 +1,5 @@
 import { currentProviderEntry } from "./providerCatalogRegistry";
 import {
-  BUNDLED_PROVIDER_SURFACE_COLORS,
   providerSurfaceColor,
   providerSurfaceColors,
   type ProviderVisual,
@@ -9,11 +8,6 @@ import {
 export type ThemeMode = "light" | "dark";
 export type { ProviderVisual } from "./visualHostMap.ts";
 export { applyVisualHostPlugins } from "./visualHostMap.ts";
-
-/** Distinct, theme-readable accents. Catalog metadata can still supply a
- *  package-specific pair; host.json keeps first-party Providers from collapsing
- *  into Cowboy purple or vanishing on dark paper (Grok shipped #18181B). */
-export const PROVIDER_SURFACE_COLORS = BUNDLED_PROVIDER_SURFACE_COLORS;
 
 /** Relative luminance of a #RRGGBB accent, or null when the token is not hex. */
 export function providerAccentLuminance(accent: string): number | null {
@@ -57,7 +51,11 @@ export function providerVisual(
   providerVersion?: string,
   providerDigest?: string,
 ): ProviderVisual {
-  const authored = providerSurfaceColor(provider);
+  const authored = providerSurfaceColor(
+    provider,
+    providerVersion,
+    providerDigest,
+  );
   if (authored) return authored[mode];
   const packaged = currentProviderEntry(
     provider,

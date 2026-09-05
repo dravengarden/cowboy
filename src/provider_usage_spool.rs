@@ -587,67 +587,37 @@ fn valid_keepalive_algorithm(value: &str) -> bool {
         })
 }
 
-fn expected_model_family(model: &str) -> &'static str {
-    let normalized = model
-        .trim()
-        .to_ascii_lowercase()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
-    if normalized.starts_with("deepseek-v4-pro") {
-        "pro"
-    } else if normalized.starts_with("deepseek-v4-flash")
-        || matches!(normalized.as_str(), "deepseek-chat" | "deepseek-reasoner")
-    {
-        "flash"
-    } else {
-        "unknown"
-    }
+fn valid_dimension_slug(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+}
+
+fn valid_dimension_text(value: &str, max_len: usize) -> bool {
+    (1..=max_len).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
 }
 
 fn valid_v3_dimensions(event: &GatewayUsage) -> bool {
-    let model = event.resolved_model.as_deref().unwrap_or(&event.model);
     let session_valid = match event.session_attribution.as_str() {
         "response_lineage" | "prefix_root" | "explicit" => event.session_fingerprint.is_some(),
         "unattributed" => event.session_fingerprint.is_none(),
         _ => false,
     };
-    let lane_valid = match (event.producer_id.as_str(), event.agent.as_str()) {
-        ("codex-deepseek", "codex") => {
-            event.client_protocol == "responses"
-                && matches!(event.operation.as_str(), "responses" | "compact")
-                && matches!(
-                    event.upstream_protocol.as_str(),
-                    "responses" | "chat_completions"
-                )
-                && ((event.upstream_protocol == "responses" && event.translation_mode == "native")
-                    || (event.upstream_protocol == "chat_completions"
-                        && event.translation_mode == "responses_to_chat"))
-        }
-        ("claude-deepseek", "claude") => {
-            event.operation == "messages"
-                && event.client_protocol == "anthropic_messages"
-                && event.upstream_protocol == "anthropic_messages"
-                && matches!(
-                    event.translation_mode.as_str(),
-                    "native" | "anthropic_compat"
-                )
-        }
-        _ => false,
-    };
-    let request_role_valid = matches!(
-        event.request_role.as_str(),
-        "unknown" | "executor" | "planner" | "subagent" | "reviewer"
-    );
     event.protocol == event.upstream_protocol
-        && event.model_family == expected_model_family(model)
-        && request_role_valid
-        && matches!(event.thinking_mode.as_str(), "enabled" | "disabled")
-        && matches!(
-            event.reasoning_effort.as_str(),
-            "default" | "low" | "high" | "max"
-        )
+        && valid_dimension_slug(&event.model_family)
+        && valid_dimension_text(&event.request_role, 64)
+        && valid_dimension_text(&event.client_protocol, 64)
+        && valid_dimension_text(&event.upstream_protocol, 64)
+        && valid_dimension_text(&event.translation_mode, 64)
+        && valid_dimension_text(&event.thinking_mode, 64)
+        && valid_dimension_text(&event.reasoning_effort, 64)
         && matches!(event.traffic_source.as_str(), "unattributed" | "cowboy")
         && (event.traffic_source != "cowboy" || event.session_attribution == "explicit")
         && session_valid
@@ -663,12 +633,11 @@ fn valid_v3_dimensions(event: &GatewayUsage) -> bool {
         && event
             .resolved_model
             .as_ref()
-            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+            .is_none_or(|value| valid_dimension_text(value, 128))
         && event
             .model_revision
             .as_ref()
-            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
-        && lane_valid
+            .is_none_or(|value| valid_dimension_text(value, 128))
 }
 
 fn valid_v4_dimensions(event: &GatewayUsage) -> bool {
@@ -756,33 +725,22 @@ fn valid_usage_token_algebra(event: &GatewayUsage) -> bool {
 fn validate(event: &GatewayUsage) -> Result<()> {
     if event.event_id.is_empty()
         || event.event_id.len() > 128
-        || event.producer_id.is_empty()
-        || event.producer_id.len() > 128
-        || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude")
+        || !valid_dimension_slug(&event.producer_id)
+        || !valid_dimension_slug(&event.provider)
+        || !valid_dimension_slug(&event.agent)
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
-        || event.model.len() > 128
+        || !valid_dimension_text(&event.model, 128)
         || !(100..=599).contains(&event.status)
         || !matches!(event.schema_version, 1..=4)
-        || !matches!(
-            event.operation.as_str(),
-            "legacy" | "responses" | "compact" | "messages" | "chat_completions"
-        )
-        || !matches!(
-            event.protocol.as_str(),
-            "legacy" | "responses" | "chat_completions" | "anthropic_messages"
-        )
+        || !valid_dimension_text(&event.operation, 64)
+        || !valid_dimension_text(&event.protocol, 64)
         || !matches!(
             event.cache_observation.as_str(),
             "legacy" | "absent" | "derived" | "explicit"
-        )
-        || !matches!(
-            (event.producer_id.as_str(), event.agent.as_str()),
-            ("codex-deepseek", "codex") | ("claude-deepseek", "claude")
         )
         || !metrics_within_bounds(event)
         || !valid_usage_token_algebra(event)
@@ -805,22 +763,6 @@ fn validate(event: &GatewayUsage) -> Result<()> {
             || event.compatibility_fixes.is_none())
     {
         anyhow::bail!("incomplete gateway usage event");
-    }
-    if event.schema_version == 2
-        && !matches!(
-            (
-                event.agent.as_str(),
-                event.operation.as_str(),
-                event.protocol.as_str()
-            ),
-            (
-                "codex",
-                "responses" | "compact",
-                "responses" | "chat_completions"
-            ) | ("claude", "messages", "anthropic_messages")
-        )
-    {
-        anyhow::bail!("inconsistent gateway usage dimensions");
     }
     if event.schema_version >= 3 && !valid_v3_dimensions(event) {
         anyhow::bail!("invalid version three gateway usage dimensions");
@@ -1070,11 +1012,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_provider_and_invalid_status() {
+    fn rejects_malformed_dimensions_and_invalid_status() {
         let (spool, path) = spool();
         let mut value: serde_json::Value =
             serde_json::from_slice(&event("event-2")).expect("parse event");
-        value["provider"] = "not-deepseek".into();
+        value["provider"] = "Not_A_Slug".into();
+        assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
+
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("event-3")).expect("parse event");
         value["status"] = 99.into();
         assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
         assert!(spool.pending_batch().expect("empty batch").is_none());
@@ -1083,16 +1029,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_producer_and_lane_mismatch() {
+    fn accepts_generic_provider_producer_and_protocol_dimensions() {
         let (spool, path) = spool();
-        for (producer, agent) in [("custom-deepseek", "codex"), ("codex-deepseek", "claude")] {
-            let mut value: serde_json::Value =
-                serde_json::from_slice(&event(producer)).expect("parse event");
-            value["producer_id"] = producer.into();
-            value["agent"] = agent.into();
-            assert!(spool.ingest(&serde_json::to_vec(&value).unwrap()).is_err());
-        }
-        assert!(spool.pending_batch().expect("empty batch").is_none());
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&event("future-event")).expect("parse event");
+        value["producer_id"] = "future-runtime".into();
+        value["provider"] = "future-provider".into();
+        value["agent"] = "future-agent".into();
+        value["model"] = "future/model-1".into();
+        value["model_family"] = "future-family".into();
+        value["request_role"] = "scheduler".into();
+        value["operation"] = "generate".into();
+        value["protocol"] = "future-protocol".into();
+        value["client_protocol"] = "future-client".into();
+        value["upstream_protocol"] = "future-protocol".into();
+        value["translation_mode"] = "future-translation".into();
+        value["thinking_mode"] = "adaptive".into();
+        value["reasoning_effort"] = "medium".into();
+        spool
+            .ingest(&serde_json::to_vec(&value).unwrap())
+            .expect("generic signed-plugin dimensions accepted by the local spool");
+
+        let MachineEvent::ProviderUsageBatch {
+            producer_id,
+            events,
+            ..
+        } = spool
+            .pending_batch()
+            .expect("read batch")
+            .expect("batch exists")
+        else {
+            panic!("unexpected event")
+        };
+        assert_eq!(producer_id, "future-runtime");
+        assert_eq!(events[0].provider, "future-provider");
+        assert_eq!(events[0].agent, "future-agent");
+        assert_eq!(events[0].operation, "generate");
         drop(spool);
         let _ = std::fs::remove_file(path);
     }

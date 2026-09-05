@@ -7,17 +7,33 @@ use std::collections::HashMap;
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::machine_protocol::{MachineCommand, MachineEvent};
+use crate::machine_protocol::{
+    MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
+    PluginInventory,
+};
 
 const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 // Workspace preparation can run ten sequential Git commands, each bounded to
 // 30 seconds on the Machine. Keep the controller alive beyond that complete
 // Machine-side envelope so it never abandons a still-running preparation.
 const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
-const CACHE_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const PROVIDER_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PROVIDER_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+const PLUGIN_HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);
 
 type PendingResponse = oneshot::Sender<Result<serde_json::Value, String>>;
+
+#[derive(Debug)]
+pub(crate) struct PluginHostRequestError {
+    pub started: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectedPluginInventory {
+    pub machine_id: String,
+    pub plugin: PluginInventory,
+}
 
 struct PendingRequestGuard<'a> {
     pending: &'a RwLock<HashMap<String, PendingResponse>>,
@@ -33,8 +49,8 @@ impl Drop for PendingRequestGuard<'_> {
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     if adapter == "workspace" {
         WORKSPACE_ADAPTER_TIMEOUT
-    } else if adapter == "deepseek-cache-status" {
-        CACHE_STATUS_ADAPTER_TIMEOUT
+    } else if adapter == "provider-cache-status" {
+        PROVIDER_STATUS_ADAPTER_TIMEOUT
     } else {
         DEFAULT_ADAPTER_TIMEOUT
     }
@@ -52,6 +68,7 @@ struct Connection {
 pub struct MachineControl {
     connections: RwLock<HashMap<String, Connection>>,
     events: RwLock<HashMap<String, Vec<MachineEvent>>>,
+    plugin_inventory: RwLock<HashMap<String, Vec<PluginInventory>>>,
     pending: RwLock<HashMap<String, PendingResponse>>,
 }
 
@@ -64,6 +81,7 @@ impl MachineControl {
         protocol: u16,
         tx: mpsc::UnboundedSender<MachineCommand>,
     ) {
+        self.plugin_inventory.write().remove(&machine_id);
         self.connections.write().insert(
             machine_id,
             Connection {
@@ -104,6 +122,7 @@ impl MachineControl {
             .is_some_and(|connection| connection.epoch == epoch)
         {
             connections.remove(machine_id);
+            self.plugin_inventory.write().remove(machine_id);
         }
     }
 
@@ -112,6 +131,7 @@ impl MachineControl {
     /// exits; subsequent reconnects fail durable identity validation.
     pub fn disconnect(&self, machine_id: &str) {
         self.connections.write().remove(machine_id);
+        self.plugin_inventory.write().remove(machine_id);
     }
 
     pub fn send(&self, machine_id: &str, command: MachineCommand) -> Result<(), String> {
@@ -139,6 +159,29 @@ impl MachineControl {
         // if a future caller accidentally routes one through this method.
         if matches!(&event, MachineEvent::ProviderAuthRefreshCandidate { .. }) {
             return;
+        }
+        if let MachineEvent::PluginHostResponse {
+            request_id,
+            accepted,
+            started,
+            payload,
+            detail,
+        } = &event
+        {
+            if let Some(sender) = self.pending.write().remove(request_id) {
+                let _ = sender.send(Ok(serde_json::json!({
+                    "accepted": accepted,
+                    "started": started,
+                    "payload": payload,
+                    "detail": detail,
+                })));
+            }
+            return;
+        }
+        if let MachineEvent::PluginInventory { plugins, .. } = &event {
+            self.plugin_inventory
+                .write()
+                .insert(machine_id.to_owned(), plugins.clone());
         }
         let correlated = match &event {
             MachineEvent::AdapterResponse {
@@ -253,11 +296,124 @@ impl MachineControl {
         }
     }
 
+    pub async fn plugin_host_request(
+        &self,
+        machine_id: &str,
+        plugin: &PluginInventory,
+        operation: PluginHostOperation,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, PluginHostRequestError> {
+        let request_id = format!(
+            "plugin-host-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |value| value.as_nanos())
+        );
+        let (tx, rx) = oneshot::channel();
+        self.pending.write().insert(request_id.clone(), tx);
+        let _pending = PendingRequestGuard {
+            pending: &self.pending,
+            request_id: &request_id,
+        };
+        self.send(
+            machine_id,
+            MachineCommand::InvokePluginHost {
+                request_id: request_id.clone(),
+                plugin_id: plugin.plugin_id.clone(),
+                plugin_version: plugin.plugin_version.clone(),
+                generation_digest: plugin.generation_digest.clone(),
+                auth_generation: plugin.auth_generation,
+                operation,
+                payload,
+            },
+        )
+        .map_err(|detail| PluginHostRequestError {
+            started: false,
+            detail,
+        })?;
+        let response = match tokio::time::timeout(PLUGIN_HOST_TIMEOUT, rx).await {
+            Ok(Ok(Ok(response))) => response,
+            Ok(Ok(Err(detail))) => {
+                return Err(PluginHostRequestError {
+                    started: true,
+                    detail,
+                });
+            }
+            Ok(Err(_)) => {
+                return Err(PluginHostRequestError {
+                    started: true,
+                    detail: "Machine Plugin host response channel closed".to_owned(),
+                });
+            }
+            Err(_) => {
+                return Err(PluginHostRequestError {
+                    started: true,
+                    detail: "Machine Plugin host request timed out".to_owned(),
+                });
+            }
+        };
+        let accepted = response
+            .get("accepted")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let started = response
+            .get("started")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        if !accepted {
+            return Err(PluginHostRequestError {
+                started,
+                detail: response
+                    .get("detail")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("Machine rejected Plugin host request")
+                    .to_owned(),
+            });
+        }
+        response
+            .get("payload")
+            .cloned()
+            .filter(|payload| !payload.is_null())
+            .ok_or_else(|| PluginHostRequestError {
+                started: true,
+                detail: "Machine Plugin host response has no payload".to_owned(),
+            })
+    }
+
     #[must_use]
     pub fn connected_machine_ids(&self) -> Vec<String> {
         let mut ids: Vec<_> = self.connections.read().keys().cloned().collect();
         ids.sort();
         ids
+    }
+
+    #[must_use]
+    pub(crate) fn connected_plugin_inventory(&self) -> Vec<ConnectedPluginInventory> {
+        let connections = self.connections.read();
+        let inventories = self.plugin_inventory.read();
+        let mut inventory = connections
+            .iter()
+            .filter(|(_, connection)| connection.protocol >= PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION)
+            .filter_map(|(machine_id, _)| {
+                inventories
+                    .get(machine_id)
+                    .cloned()
+                    .map(|plugins| (machine_id, plugins))
+            })
+            .flat_map(|(machine_id, plugins)| {
+                plugins.into_iter().map(|plugin| ConnectedPluginInventory {
+                    machine_id: machine_id.clone(),
+                    plugin,
+                })
+            })
+            .collect::<Vec<_>>();
+        inventory.sort_by(|left, right| {
+            left.machine_id
+                .cmp(&right.machine_id)
+                .then(left.plugin.plugin_id.cmp(&right.plugin.plugin_id))
+        });
+        inventory
     }
 
     #[must_use]
@@ -275,6 +431,26 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::machine_protocol::{
+        PluginInstallationState, ProviderMaterializationState, ProviderReplicaState,
+    };
+
+    fn plugin_inventory(id: &str) -> PluginInventory {
+        PluginInventory {
+            plugin_id: id.to_owned(),
+            plugin_version: "1.2.3".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
+            generation_digest: format!("sha256:{}", "ab".repeat(32)),
+            contract_fingerprint: format!("sha256:{}", "cd".repeat(32)),
+            state: PluginInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: Some(4),
+            replica_state: ProviderReplicaState::Current,
+            materialization_state: ProviderMaterializationState::Current,
+            detail: None,
+        }
+    }
 
     #[test]
     fn workspace_requests_cover_the_complete_machine_preparation_envelope() {
@@ -284,7 +460,7 @@ mod tests {
         );
         assert_eq!(adapter_timeout("zed"), std::time::Duration::from_secs(40));
         assert_eq!(
-            adapter_timeout("deepseek-cache-status"),
+            adapter_timeout("provider-cache-status"),
             std::time::Duration::from_secs(3)
         );
     }
@@ -311,6 +487,129 @@ mod tests {
         );
 
         assert!(control.events("hawk").is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_host_payload_is_correlated_without_entering_event_history() {
+        let control = Arc::new(MachineControl::default());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("hawk".to_owned(), "epoch".to_owned(), false, 7, tx);
+        let plugin = plugin_inventory("codex");
+        let requester = Arc::clone(&control);
+        let request = tokio::spawn(async move {
+            requester
+                .plugin_host_request(
+                    "hawk",
+                    &plugin,
+                    PluginHostOperation::CollectUsage,
+                    serde_json::json!({ "provider": "openai" }),
+                )
+                .await
+        });
+        let MachineCommand::InvokePluginHost { request_id, .. } =
+            rx.recv().await.expect("Plugin host command")
+        else {
+            panic!("wrong command");
+        };
+        control.record(
+            "hawk",
+            MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: true,
+                started: true,
+                payload: Some(serde_json::json!({ "account": { "email": "private" } })),
+                detail: None,
+            },
+        );
+        assert_eq!(
+            request.await.expect("request task").expect("host response")["account"]["email"],
+            "private"
+        );
+        assert!(control.events("hawk").is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_host_preflight_rejection_preserves_not_started() {
+        let control = Arc::new(MachineControl::default());
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("hawk".to_owned(), "epoch".to_owned(), false, 7, tx);
+        let plugin = plugin_inventory("codex");
+        let requester = Arc::clone(&control);
+        let request = tokio::spawn(async move {
+            requester
+                .plugin_host_request(
+                    "hawk",
+                    &plugin,
+                    PluginHostOperation::ResetUsage,
+                    serde_json::json!({}),
+                )
+                .await
+        });
+        let MachineCommand::InvokePluginHost { request_id, .. } =
+            rx.recv().await.expect("Plugin host command")
+        else {
+            panic!("wrong command");
+        };
+        control.record(
+            "hawk",
+            MachineEvent::PluginHostResponse {
+                request_id,
+                accepted: false,
+                started: false,
+                payload: None,
+                detail: Some("exact generation changed".to_owned()),
+            },
+        );
+        let error = request
+            .await
+            .expect("request task")
+            .expect_err("preflight rejection");
+        assert!(!error.started);
+        assert_eq!(error.detail, "exact generation changed");
+        assert!(control.events("hawk").is_empty());
+    }
+
+    #[test]
+    fn exact_host_inventory_is_independent_of_bounded_history_and_old_protocols() {
+        let control = MachineControl::default();
+        let (old_tx, _) = mpsc::unbounded_channel();
+        control.install("old".to_owned(), "old-epoch".to_owned(), false, 6, old_tx);
+        control.record(
+            "old",
+            MachineEvent::PluginInventory {
+                plugins: vec![plugin_inventory("codex")],
+                observed_at_ms: 1,
+            },
+        );
+        let (current_tx, _) = mpsc::unbounded_channel();
+        control.install(
+            "current".to_owned(),
+            "current-epoch".to_owned(),
+            false,
+            7,
+            current_tx,
+        );
+        control.record(
+            "current",
+            MachineEvent::PluginInventory {
+                plugins: vec![plugin_inventory("codex")],
+                observed_at_ms: 1,
+            },
+        );
+        for index in 0..70 {
+            control.record(
+                "current",
+                MachineEvent::CommandResult {
+                    request_id: format!("unmatched-{index}"),
+                    accepted: true,
+                    detail: None,
+                },
+            );
+        }
+        let inventory = control.connected_plugin_inventory();
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].machine_id, "current");
+        assert_eq!(inventory[0].plugin.plugin_id, "codex");
     }
 
     #[test]
@@ -505,6 +804,30 @@ mod tests {
             let error = control.send("old", command).unwrap_err();
             assert!(error.contains("requires 5"));
         }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn plugin_host_execution_requires_machine_protocol_seven() {
+        let control = MachineControl::default();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        control.install("old".to_owned(), "epoch".to_owned(), false, 6, tx);
+        let plugin = plugin_inventory("codex");
+        let error = control
+            .send(
+                "old",
+                MachineCommand::InvokePluginHost {
+                    request_id: "usage".to_owned(),
+                    plugin_id: plugin.plugin_id,
+                    plugin_version: plugin.plugin_version,
+                    generation_digest: plugin.generation_digest,
+                    auth_generation: plugin.auth_generation,
+                    operation: PluginHostOperation::CollectUsage,
+                    payload: serde_json::json!({}),
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("requires 7"));
         assert!(rx.try_recv().is_err());
     }
 }

@@ -5,12 +5,22 @@
 
 #![warn(clippy::pedantic)]
 
+mod authentication_host;
+mod cli_auth;
+pub mod host;
+
+pub use cli_auth::{
+    CliAuthCondition, CliAuthOutcome, CliAuthProbeState, CliAuthRule, CliAuthRuleSet, CliAuthSource,
+};
+pub use host::*;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use cowboy_provider_sdk::{
-    AgentRuntimeBinding, PlatformRuntimeArtifacts, PlatformTarget, PrivateComponentKind,
-    ProviderArtifactFormat, ProviderArtifactProbe, ProviderPackage,
+    AgentRuntimeBinding, PACKAGE_SCHEMA_VERSION as PROVIDER_PACKAGE_SCHEMA_VERSION,
+    PlatformRuntimeArtifacts, PlatformTarget, PrivateComponentKind, ProviderArtifactFormat,
+    ProviderArtifactProbe, ProviderPackage,
     RUNTIME_BINDING_SCHEMA_VERSION as PROVIDER_RUNTIME_BINDING_SCHEMA_VERSION,
     ReleasedPrivateComponent,
 };
@@ -19,8 +29,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use url::Url;
 
+pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 1;
+pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
+pub const RELEASE_SCHEMA_VERSION: u16 = 2;
+pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
+pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
+pub const CODE_INTELLIGENCE_SCHEMA_VERSION: u16 = 1;
+pub const HOST_BUNDLE_SCHEMA_VERSION: u16 = 1;
+pub const HOST_BUNDLE_SCHEMA: &str = "dravengarden.cowboy.plugin-hostbundle/v1";
 pub const PLUGIN_RELEASE_SIGNATURE_NAMESPACE: &str = "cowboy-plugin-release-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,9 +123,38 @@ pub struct AuthenticationProviderContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "configuration", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "configuration",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+#[allow(clippy::large_enum_variant)] // Preserve the existing OIDC SDK constructor; contracts are bounded, cold Catalog data.
 pub enum AuthenticationProtocol {
     OpenIdConnect(OpenIdConnectContract),
+    LocalPassword(LocalAuthenticationContract),
+    Webauthn(LocalAuthenticationContract),
+}
+
+/// Select an existing Controller-owned local protocol driver. Algorithms,
+/// secrets, relying-party policy, users, and sessions are never package data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LocalAuthenticationContract {}
+
+impl<'de> Deserialize<'de> for LocalAuthenticationContract {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        // A derived empty struct also accepts `[]`; the public contract
+        // intentionally permits only an empty object, never policy or secrets.
+        let fields = BTreeMap::<String, serde::de::IgnoredAny>::deserialize(deserializer)?;
+        if !fields.is_empty() {
+            return Err(serde::de::Error::custom(
+                "local authentication configuration must be an empty object",
+            ));
+        }
+        Ok(Self {})
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,9 +214,100 @@ pub struct PluginRelease {
     pub publisher: String,
     pub contract_fingerprint: String,
     pub component_release: String,
+    /// Exact bytes of the Controller host artifact. Schema 2 makes this part of
+    /// the outer Plugin release identity instead of a parallel signed release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_bundle_digest: Option<String>,
     pub signature: String,
     pub supported_platforms: Vec<PlatformTarget>,
     pub runtime_artifacts: Vec<PluginRuntimeArtifacts>,
+}
+
+/// Exact generic contract requirements derived from one validated Plugin
+/// release. Provider payload requirements remain a separate, narrower
+/// capability contract; these fields cover the outer Plugin decoder and host
+/// integration used by every installable kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCompatibilityRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_sdk_version: Option<String>,
+    pub manifest_schema: u16,
+    pub package_schema: u16,
+    pub release_schema: u16,
+    pub plugin_kind: PluginKind,
+    pub payload_schema: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_bundle_schema: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_schema: Option<u16>,
+}
+
+/// Signed, generic Plugin decoder capabilities advertised by one Machine.
+/// A Controller uses this envelope before sending package or host bytes; the
+/// Machine still repeats complete validation during installation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginContractInventory {
+    pub plugin_sdk_version: String,
+    pub min_manifest_schema: u16,
+    pub max_manifest_schema: u16,
+    pub min_package_schema: u16,
+    pub max_package_schema: u16,
+    pub min_release_schema: u16,
+    pub max_release_schema: u16,
+    pub min_agent_provider_schema: u16,
+    pub max_agent_provider_schema: u16,
+    pub min_authentication_provider_schema: u16,
+    pub max_authentication_provider_schema: u16,
+    pub min_code_intelligence_schema: u16,
+    pub max_code_intelligence_schema: u16,
+    pub min_host_bundle_schema: u16,
+    pub max_host_bundle_schema: u16,
+    pub min_host_schema: u16,
+    pub max_host_schema: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginCompatibilityCode {
+    CapabilityInventoryUnavailable,
+    CapabilityInventoryInvalid,
+    ReleaseContractInvalid,
+    PluginSdkUnsupported,
+    ManifestSchemaUnsupported,
+    PackageSchemaUnsupported,
+    ReleaseSchemaUnsupported,
+    PayloadSchemaUnsupported,
+    HostBundleSchemaUnsupported,
+    HostSchemaUnsupported,
+    PlatformUnsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCompatibilityProblem {
+    pub code: PluginCompatibilityCode,
+    pub detail: String,
+}
+
+impl PluginCompatibilityProblem {
+    #[must_use]
+    pub fn capability_inventory_unavailable() -> Self {
+        Self {
+            code: PluginCompatibilityCode::CapabilityInventoryUnavailable,
+            detail: "This Cowboy Machine predates generic Plugin compatibility negotiation. Update Cowboy Machine before installing or upgrading Plugins."
+                .to_owned(),
+        }
+    }
+
+    #[must_use]
+    pub fn new(code: PluginCompatibilityCode, detail: impl Into<String>) -> Self {
+        Self {
+            code,
+            detail: detail.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +359,332 @@ pub struct PluginArtifactProbe {
     pub timeout_ms: u64,
 }
 
+impl PluginCompatibilityRequirements {
+    /// Derive the outer compatibility requirements from a release that has
+    /// already reached the Controller's trusted Catalog boundary.
+    ///
+    /// # Errors
+    /// Returns when the release, SDK dependency, payload schema, or host
+    /// capability description is inconsistent.
+    pub fn for_release(
+        package: &PluginPackage,
+        release: &PluginRelease,
+        host_bundle_schema: Option<u16>,
+        host_schema: Option<u16>,
+    ) -> Result<Self> {
+        release.validate_for(package)?;
+        let plugin_sdk_version = package
+            .manifest
+            .components
+            .iter()
+            .find(|component| component.id == "cowboy.plugin-sdk")
+            .map(|component| component.version.clone());
+        let payload_schema = match &package.payload {
+            PluginPayload::AgentProvider(provider) => provider.package_schema,
+            PluginPayload::AuthenticationProvider(contract) => contract.schema_version,
+            PluginPayload::CodeIntelligence(contract) => contract.schema_version,
+        };
+        let requirements = Self {
+            plugin_sdk_version,
+            manifest_schema: package.manifest.schema_version,
+            package_schema: package.package_schema,
+            release_schema: release.release_schema,
+            plugin_kind: package.manifest.kind,
+            payload_schema,
+            host_bundle_schema,
+            host_schema,
+        };
+        requirements.validate()?;
+        ensure!(
+            requirements.host_bundle_schema.is_some() == release.host_bundle_digest.is_some(),
+            "plugin host compatibility does not match the signed release"
+        );
+        Ok(requirements)
+    }
+
+    /// Validate one release-derived generic compatibility description.
+    ///
+    /// # Errors
+    /// Returns when versions or host capability fields are malformed.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(version) = &self.plugin_sdk_version {
+            validate_version(version, "Plugin SDK version")?;
+        }
+        for (label, value) in [
+            ("Plugin manifest schema", self.manifest_schema),
+            ("Plugin package schema", self.package_schema),
+            ("Plugin release schema", self.release_schema),
+            ("Plugin payload schema", self.payload_schema),
+        ] {
+            ensure!(value > 0, "invalid {label}");
+        }
+        ensure!(
+            self.host_bundle_schema.is_some() == self.host_schema.is_some(),
+            "Plugin host compatibility is incomplete"
+        );
+        if let Some(schema) = self.host_bundle_schema {
+            ensure!(schema > 0, "invalid Plugin host-bundle schema");
+        }
+        if let Some(schema) = self.host_schema {
+            ensure!(schema > 0, "invalid Plugin host schema");
+        }
+        match self.release_schema {
+            RELEASE_SCHEMA_MIN_VERSION => ensure!(
+                self.host_bundle_schema.is_none(),
+                "Plugin release schema 1 cannot declare host compatibility"
+            ),
+            RELEASE_SCHEMA_VERSION => ensure!(
+                self.host_bundle_schema.is_some(),
+                "Plugin release schema 2 requires host compatibility"
+            ),
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+impl PluginContractInventory {
+    #[must_use]
+    pub fn current_machine(host_schema: u16) -> Self {
+        Self {
+            plugin_sdk_version: PLUGIN_SDK_VERSION.to_owned(),
+            min_manifest_schema: MANIFEST_SCHEMA_VERSION,
+            max_manifest_schema: MANIFEST_SCHEMA_VERSION,
+            min_package_schema: PACKAGE_SCHEMA_VERSION,
+            max_package_schema: PACKAGE_SCHEMA_VERSION,
+            min_release_schema: RELEASE_SCHEMA_MIN_VERSION,
+            max_release_schema: RELEASE_SCHEMA_VERSION,
+            min_agent_provider_schema: PROVIDER_PACKAGE_SCHEMA_VERSION,
+            max_agent_provider_schema: PROVIDER_PACKAGE_SCHEMA_VERSION,
+            min_authentication_provider_schema: AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION,
+            max_authentication_provider_schema: AUTHENTICATION_PROVIDER_SCHEMA_VERSION,
+            min_code_intelligence_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
+            max_code_intelligence_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
+            min_host_bundle_schema: HOST_BUNDLE_SCHEMA_VERSION,
+            max_host_bundle_schema: HOST_BUNDLE_SCHEMA_VERSION,
+            min_host_schema: host_schema,
+            max_host_schema: host_schema,
+        }
+    }
+
+    /// Validate one advertised Machine capability envelope.
+    ///
+    /// # Errors
+    /// Returns when a version is malformed or a supported interval is empty.
+    pub fn validate(&self) -> Result<()> {
+        validate_version(&self.plugin_sdk_version, "Machine Plugin SDK version")?;
+        for (label, minimum, maximum) in [
+            (
+                "Plugin manifest schema",
+                self.min_manifest_schema,
+                self.max_manifest_schema,
+            ),
+            (
+                "Plugin package schema",
+                self.min_package_schema,
+                self.max_package_schema,
+            ),
+            (
+                "Plugin release schema",
+                self.min_release_schema,
+                self.max_release_schema,
+            ),
+            (
+                "Agent Provider payload schema",
+                self.min_agent_provider_schema,
+                self.max_agent_provider_schema,
+            ),
+            (
+                "Authentication Provider payload schema",
+                self.min_authentication_provider_schema,
+                self.max_authentication_provider_schema,
+            ),
+            (
+                "code-intelligence payload schema",
+                self.min_code_intelligence_schema,
+                self.max_code_intelligence_schema,
+            ),
+            (
+                "Plugin host-bundle schema",
+                self.min_host_bundle_schema,
+                self.max_host_bundle_schema,
+            ),
+            (
+                "Plugin host schema",
+                self.min_host_schema,
+                self.max_host_schema,
+            ),
+        ] {
+            ensure!(
+                minimum > 0 && minimum <= maximum,
+                "invalid {label} interval"
+            );
+        }
+        Ok(())
+    }
+
+    /// Return a typed incompatibility before package bytes cross the Machine
+    /// control channel.
+    #[must_use]
+    pub fn compatibility_problem(
+        &self,
+        requirements: &PluginCompatibilityRequirements,
+        plugin_id: &str,
+        plugin_version: &str,
+        supported_platforms: &[PlatformTarget],
+        target: &PlatformTarget,
+    ) -> Option<PluginCompatibilityProblem> {
+        if let Err(error) = self.validate() {
+            return Some(PluginCompatibilityProblem::new(
+                PluginCompatibilityCode::CapabilityInventoryInvalid,
+                format!("Cowboy Machine reported an invalid Plugin capability inventory: {error}"),
+            ));
+        }
+        if let Err(error) = requirements.validate() {
+            return Some(PluginCompatibilityProblem::new(
+                PluginCompatibilityCode::ReleaseContractInvalid,
+                format!("Plugin release has an invalid compatibility contract: {error}"),
+            ));
+        }
+        let update = |requirement: &str| {
+            format!(
+                "Plugin {plugin_id} {plugin_version} requires {requirement}. Update Cowboy Machine before installing or upgrading this Plugin."
+            )
+        };
+        if let Some(problem) = self.schema_problem(requirements, plugin_id, plugin_version) {
+            return Some(problem);
+        }
+        if let Some(required_sdk) = &requirements.plugin_sdk_version {
+            let required_sdk = Version::parse(required_sdk).ok()?;
+            let machine_sdk = Version::parse(&self.plugin_sdk_version).ok()?;
+            if required_sdk.major != machine_sdk.major || required_sdk > machine_sdk {
+                return Some(PluginCompatibilityProblem::new(
+                    PluginCompatibilityCode::PluginSdkUnsupported,
+                    update(&format!("Cowboy Plugin SDK {required_sdk}")),
+                ));
+            }
+        }
+        if !supported_platforms.contains(target) {
+            return Some(PluginCompatibilityProblem::new(
+                PluginCompatibilityCode::PlatformUnsupported,
+                format!(
+                    "Plugin {plugin_id} {plugin_version} is not published for this Cowboy Machine platform."
+                ),
+            ));
+        }
+        None
+    }
+
+    fn schema_problem(
+        &self,
+        requirements: &PluginCompatibilityRequirements,
+        plugin_id: &str,
+        plugin_version: &str,
+    ) -> Option<PluginCompatibilityProblem> {
+        let (min_payload, max_payload, payload_label) = match requirements.plugin_kind {
+            PluginKind::AgentProvider => (
+                self.min_agent_provider_schema,
+                self.max_agent_provider_schema,
+                "Agent Provider payload schema",
+            ),
+            PluginKind::AuthenticationProvider => (
+                self.min_authentication_provider_schema,
+                self.max_authentication_provider_schema,
+                "Authentication Provider payload schema",
+            ),
+            PluginKind::CodeIntelligence => (
+                self.min_code_intelligence_schema,
+                self.max_code_intelligence_schema,
+                "code-intelligence payload schema",
+            ),
+        };
+        for (value, minimum, maximum, code, label) in [
+            (
+                requirements.manifest_schema,
+                self.min_manifest_schema,
+                self.max_manifest_schema,
+                PluginCompatibilityCode::ManifestSchemaUnsupported,
+                "Plugin manifest schema",
+            ),
+            (
+                requirements.package_schema,
+                self.min_package_schema,
+                self.max_package_schema,
+                PluginCompatibilityCode::PackageSchemaUnsupported,
+                "Plugin package schema",
+            ),
+            (
+                requirements.release_schema,
+                self.min_release_schema,
+                self.max_release_schema,
+                PluginCompatibilityCode::ReleaseSchemaUnsupported,
+                "Plugin release schema",
+            ),
+            (
+                requirements.payload_schema,
+                min_payload,
+                max_payload,
+                PluginCompatibilityCode::PayloadSchemaUnsupported,
+                payload_label,
+            ),
+        ] {
+            if !(minimum..=maximum).contains(&value) {
+                return Some(plugin_requirement_problem(
+                    code,
+                    plugin_id,
+                    plugin_version,
+                    label,
+                    value,
+                ));
+            }
+        }
+        for (schema, minimum, maximum, code, label) in [
+            (
+                requirements.host_bundle_schema,
+                self.min_host_bundle_schema,
+                self.max_host_bundle_schema,
+                PluginCompatibilityCode::HostBundleSchemaUnsupported,
+                "Plugin host-bundle schema",
+            ),
+            (
+                requirements.host_schema,
+                self.min_host_schema,
+                self.max_host_schema,
+                PluginCompatibilityCode::HostSchemaUnsupported,
+                "Plugin host schema",
+            ),
+        ] {
+            if let Some(schema) = schema
+                && !(minimum..=maximum).contains(&schema)
+            {
+                return Some(plugin_requirement_problem(
+                    code,
+                    plugin_id,
+                    plugin_version,
+                    label,
+                    schema,
+                ));
+            }
+        }
+        None
+    }
+}
+
+fn plugin_requirement_problem(
+    code: PluginCompatibilityCode,
+    plugin_id: &str,
+    plugin_version: &str,
+    label: &str,
+    value: u16,
+) -> PluginCompatibilityProblem {
+    PluginCompatibilityProblem::new(
+        code,
+        format!(
+            "Plugin {plugin_id} {plugin_version} requires {label} {value}. Update Cowboy Machine before installing or upgrading this Plugin."
+        ),
+    )
+}
+
 impl PluginManifest {
     /// Validate the generic identity and exact component dependency graph.
     ///
@@ -229,7 +693,7 @@ impl PluginManifest {
     /// are invalid or incomplete.
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == 1,
+            self.schema_version == MANIFEST_SCHEMA_VERSION,
             "unsupported plugin manifest schema"
         );
         validate_id(&self.id, "plugin id")?;
@@ -354,6 +818,28 @@ impl PluginPackage {
         }
     }
 
+    /// Check host semantics and capability ownership against this package.
+    ///
+    /// # Errors
+    /// Rejects missing required hosts, executable Authentication hosts, and
+    /// renderer/capability claims inconsistent with the selected protocol.
+    pub fn validate_host_contract(&self, files: Option<&BTreeMap<String, String>>) -> Result<()> {
+        let host = files
+            .map(|files| {
+                let source = files
+                    .get("host.json")
+                    .context("host bundle is missing host.json")?;
+                let host = PluginHostSpec::from_json(source.as_bytes())?;
+                host.validate_runtime_files(files)?;
+                Ok::<_, anyhow::Error>(host)
+            })
+            .transpose()?;
+        if let Some(contract) = self.authentication_provider() {
+            authentication_host::validate(contract, host.as_ref(), files)?;
+        }
+        Ok(())
+    }
+
     fn expected_platforms(&self) -> BTreeSet<PlatformTarget> {
         match &self.payload {
             PluginPayload::AgentProvider(provider) => provider
@@ -426,9 +912,31 @@ impl PluginRelease {
     /// or digest mismatches.
     pub fn validate_for(&self, package: &PluginPackage) -> Result<()> {
         ensure!(
-            self.release_schema == RELEASE_SCHEMA_VERSION,
+            (RELEASE_SCHEMA_MIN_VERSION..=RELEASE_SCHEMA_VERSION).contains(&self.release_schema),
             "unsupported plugin release schema"
         );
+        match self.release_schema {
+            RELEASE_SCHEMA_MIN_VERSION => ensure!(
+                self.host_bundle_digest.is_none(),
+                "plugin release schema 1 cannot bind a host bundle"
+            ),
+            RELEASE_SCHEMA_VERSION => {
+                let digest = self
+                    .host_bundle_digest
+                    .as_deref()
+                    .context("plugin release schema 2 requires a host bundle")?;
+                validate_digest(digest, "plugin host bundle digest")?;
+            }
+            _ => unreachable!("release schema interval was checked"),
+        }
+        if package.authentication_provider().is_some_and(|contract| {
+            !matches!(contract.protocol, AuthenticationProtocol::OpenIdConnect(_))
+        }) {
+            ensure!(
+                self.host_bundle_digest.is_some(),
+                "local Authentication Plugin requires a release-bound host bundle"
+            );
+        }
         ensure!(
             self.plugin_id == package.manifest.id,
             "plugin release id mismatch"
@@ -477,7 +985,8 @@ impl PluginRelease {
         let legacy_artifact_digest = self.legacy_artifact_digest()?;
         ensure!(
             self.artifact_digest == canonical_artifact_digest
-                || self.artifact_digest == legacy_artifact_digest,
+                || (self.release_schema == RELEASE_SCHEMA_MIN_VERSION
+                    && self.artifact_digest == legacy_artifact_digest),
             "plugin composite artifact digest mismatch"
         );
         if package.agent_provider().is_some() {
@@ -491,7 +1000,7 @@ impl PluginRelease {
     /// # Errors
     /// Returns an error when the release identity cannot be serialized.
     pub fn computed_artifact_digest(&self) -> Result<String> {
-        fingerprint_json(&serde_json::json!({
+        let mut identity = serde_json::json!({
             "release_schema": self.release_schema,
             "plugin_id": self.plugin_id,
             "plugin_version": self.plugin_version,
@@ -502,7 +1011,17 @@ impl PluginRelease {
             "component_release": self.component_release,
             "supported_platforms": self.supported_platforms,
             "runtime_artifacts": self.runtime_artifacts,
-        }))
+        });
+        if let Some(digest) = &self.host_bundle_digest {
+            identity
+                .as_object_mut()
+                .context("plugin release identity is not an object")?
+                .insert(
+                    "host_bundle_digest".to_owned(),
+                    serde_json::Value::String(digest.clone()),
+                );
+        }
+        fingerprint_json(&identity)
     }
 
     fn legacy_artifact_digest(&self) -> Result<String> {
@@ -613,7 +1132,7 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
         }
         (PluginKind::CodeIntelligence, PluginPayload::CodeIntelligence(contract)) => {
             ensure!(
-                contract.schema_version == 1,
+                contract.schema_version == CODE_INTELLIGENCE_SCHEMA_VERSION,
                 "unsupported code-intelligence contract"
             );
             ensure!(
@@ -643,7 +1162,8 @@ fn validate_authentication_provider(
     contract: &AuthenticationProviderContract,
 ) -> Result<()> {
     ensure!(
-        contract.schema_version == 1,
+        (AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION..=AUTHENTICATION_PROVIDER_SCHEMA_VERSION)
+            .contains(&contract.schema_version),
         "unsupported authentication contract"
     );
     ensure!(
@@ -660,6 +1180,21 @@ fn validate_authentication_provider(
     );
     match &contract.protocol {
         AuthenticationProtocol::OpenIdConnect(oidc) => validate_oidc_contract(oidc),
+        AuthenticationProtocol::LocalPassword(_) | AuthenticationProtocol::Webauthn(_) => {
+            ensure!(
+                contract.schema_version >= 2,
+                "local authentication protocols require schema 2"
+            );
+            ensure!(
+                manifest.components.iter().any(|component| {
+                    component.id == "cowboy.plugin-sdk"
+                        && Version::parse(&component.version)
+                            .is_ok_and(|version| version >= Version::new(1, 5, 0))
+                }),
+                "local authentication protocols require Plugin SDK 1.5 or newer"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -862,6 +1397,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // One fixture covers legacy and current auth release identities.
     fn authentication_plugin_is_data_only_and_rejects_reserved_parameters() {
         let manifest = PluginManifest {
             schema_version: 1,
@@ -919,7 +1455,7 @@ mod tests {
 
         let package_bytes = package.canonical_bytes().unwrap();
         let mut legacy_release = PluginRelease {
-            release_schema: RELEASE_SCHEMA_VERSION,
+            release_schema: RELEASE_SCHEMA_MIN_VERSION,
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
             plugin_kind: package.manifest.kind,
@@ -929,6 +1465,7 @@ mod tests {
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: package.contract_fingerprint.clone(),
             component_release: package.component_release.clone(),
+            host_bundle_digest: None,
             signature: "legacy-signature".to_owned(),
             supported_platforms: Vec::new(),
             runtime_artifacts: Vec::new(),
@@ -940,8 +1477,27 @@ mod tests {
         );
         legacy_release.validate_for(&package).unwrap();
 
+        let mut host_release = legacy_release.clone();
+        host_release.release_schema = RELEASE_SCHEMA_VERSION;
+        host_release.host_bundle_digest = Some(format!("sha256:{}", "a".repeat(64)));
+        host_release.artifact_digest = host_release.computed_artifact_digest().unwrap();
+        host_release.validate_for(&package).unwrap();
+        let first_host_identity = host_release.artifact_digest.clone();
+        host_release.host_bundle_digest = Some(format!("sha256:{}", "b".repeat(64)));
+        host_release.artifact_digest = host_release.computed_artifact_digest().unwrap();
+        assert_ne!(host_release.artifact_digest, first_host_identity);
+        host_release.artifact_digest = host_release.legacy_artifact_digest().unwrap();
+        assert!(host_release.validate_for(&package).is_err());
+
+        let mut missing_host = legacy_release.clone();
+        missing_host.release_schema = RELEASE_SCHEMA_VERSION;
+        missing_host.artifact_digest = missing_host.computed_artifact_digest().unwrap();
+        assert!(missing_host.validate_for(&package).is_err());
+
         let mut too_many_scopes = contract.clone();
-        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut too_many_scopes.protocol;
+        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut too_many_scopes.protocol else {
+            panic!("OIDC fixture");
+        };
         oidc.scopes = std::iter::once("openid".to_owned())
             .chain((0..32).map(|index| format!("scope-{index}")))
             .collect();
@@ -954,7 +1510,9 @@ mod tests {
             .is_err()
         );
 
-        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut contract.protocol;
+        let AuthenticationProtocol::OpenIdConnect(oidc) = &mut contract.protocol else {
+            panic!("OIDC fixture");
+        };
         oidc.authorization_parameters.insert(
             "redirect_uri".to_owned(),
             "https://attacker.example".to_owned(),
@@ -966,6 +1524,68 @@ mod tests {
                 PluginPayload::AuthenticationProvider(contract),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn generic_machine_inventory_rejects_outer_release_and_host_schemas() {
+        let target = PlatformTarget {
+            os: cowboy_provider_sdk::OperatingSystem::Linux,
+            architecture: cowboy_provider_sdk::Architecture::X86_64,
+        };
+        let requirements = PluginCompatibilityRequirements {
+            plugin_sdk_version: Some(PLUGIN_SDK_VERSION.to_owned()),
+            manifest_schema: MANIFEST_SCHEMA_VERSION,
+            package_schema: PACKAGE_SCHEMA_VERSION,
+            release_schema: RELEASE_SCHEMA_VERSION,
+            plugin_kind: PluginKind::CodeIntelligence,
+            payload_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
+            host_bundle_schema: Some(HOST_BUNDLE_SCHEMA_VERSION),
+            host_schema: Some(1),
+        };
+        let current = PluginContractInventory::current_machine(1);
+        assert_eq!(
+            current.compatibility_problem(
+                &requirements,
+                "zed",
+                "1.0.0",
+                std::slice::from_ref(&target),
+                &target,
+            ),
+            None
+        );
+
+        let mut old_release = current.clone();
+        old_release.max_release_schema = 1;
+        assert_eq!(
+            old_release
+                .compatibility_problem(
+                    &requirements,
+                    "zed",
+                    "1.0.0",
+                    std::slice::from_ref(&target),
+                    &target,
+                )
+                .unwrap()
+                .code,
+            PluginCompatibilityCode::ReleaseSchemaUnsupported
+        );
+
+        let mut old_host = current;
+        old_host.min_host_schema = 2;
+        old_host.max_host_schema = 2;
+        assert_eq!(
+            old_host
+                .compatibility_problem(
+                    &requirements,
+                    "zed",
+                    "1.0.0",
+                    std::slice::from_ref(&target),
+                    &target,
+                )
+                .unwrap()
+                .code,
+            PluginCompatibilityCode::HostSchemaUnsupported
         );
     }
 }

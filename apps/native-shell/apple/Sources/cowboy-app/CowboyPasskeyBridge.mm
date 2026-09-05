@@ -572,7 +572,13 @@ __attribute__((constructor)) static void cowboyInstallPasskeyBridge(void) {
                                                          contentWorld:WKContentWorld.pageWorld
                                                                  name:@"cowboyPasskeyBrowser"];
                         NSString *source =
-                            @"window.__cowboyNativePasskeyBridgeVersion=1;"
+                            @"window.__COWBOY_NATIVE_PLUGIN_HOST=Object.freeze({"
+                             @"version:'1.0.0',capabilities:Object.freeze(['webauthn']),"
+                             @"invoke:function(capability,request){try{"
+                             @"if(capability!=='webauthn'){return Promise.reject(new Error('Unknown native capability'))}"
+                             @"return window.webkit.messageHandlers.cowboyPasskey.postMessage(request)"
+                             @"}catch(error){return Promise.reject(error)}}});"
+                             @"window.__cowboyNativePasskeyBridgeVersion=1;"
                              @"window.__cowboyNativePasskey=function(request){try{"
                              @"return window.webkit.messageHandlers.cowboyPasskey.postMessage(request)"
                              @"}catch(error){return Promise.reject(error)}};"

@@ -3,7 +3,9 @@ import {
   compareProviderVersions,
   evaluateExpression,
   initialProviderState,
+  type PluginContractInventory,
   projectAgentPluginInventory,
+  PROVIDER_SDK_VERSION,
   type ProviderCatalogEntry,
   providerCompatibilityProblem,
   type ProviderContractInventory,
@@ -12,6 +14,7 @@ import {
   type ProviderUiManifest,
   transitionProvider,
   validateMachineProviderInventory,
+  validatePluginContractInventory,
   validateProviderCatalog,
   validateProviderContractInventory,
   validateProviderManifest,
@@ -206,6 +209,19 @@ Deno.test("Provider SDK validates and executes linked typed logic", () => {
   });
   assertEquals(result.state.open, true);
   assertEquals(result.effect?.capability, "install_on_machine");
+});
+
+Deno.test("Provider SDK accepts a future account usage namespace", () => {
+  const future = manifest();
+  future.host.account_usage = { provider: "future-cloud" };
+  validateProviderManifest(future);
+
+  future.host.account_usage.provider = "Future Cloud";
+  assertThrows(
+    () => validateProviderManifest(future),
+    Error,
+    "Invalid Provider account usage contract",
+  );
 });
 
 Deno.test("Machine Plugin inventory projects only Agent capability entries", () => {
@@ -856,6 +872,16 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
     contract_fingerprint: `sha256:${"3".repeat(64)}`,
     supported_platforms: [{ os: "linux", architecture: "x86_64" }],
     manifest: legacyManifest,
+    compatibility_requirements: {
+      plugin_sdk_version: "1.4.2",
+      manifest_schema: 1,
+      package_schema: 1,
+      release_schema: 2,
+      plugin_kind: "agent_provider",
+      payload_schema: 2,
+      host_bundle_schema: 1,
+      host_schema: 1,
+    },
   };
   const currentManifest = uiManifest();
   currentManifest.version = "2.0.0";
@@ -888,10 +914,30 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
     max_host_schema: 1,
     machine_contract: 4,
   };
+  const pluginMachine: PluginContractInventory = {
+    plugin_sdk_version: "1.4.2",
+    min_manifest_schema: 1,
+    max_manifest_schema: 1,
+    min_package_schema: 1,
+    max_package_schema: 1,
+    min_release_schema: 1,
+    max_release_schema: 2,
+    min_agent_provider_schema: 2,
+    max_agent_provider_schema: 2,
+    min_authentication_provider_schema: 1,
+    max_authentication_provider_schema: 1,
+    min_code_intelligence_schema: 1,
+    max_code_intelligence_schema: 1,
+    min_host_bundle_schema: 1,
+    max_host_bundle_schema: 1,
+    min_host_schema: 1,
+    max_host_schema: 1,
+  };
   const target = {
     platform: "linux" as const,
     architecture: "x86_64" as const,
     provider_contracts: legacyMachine,
+    plugin_contracts: pluginMachine,
   };
   assertEquals(latestCompatibleProviderEntries([current, legacy], target), [
     legacy,
@@ -935,6 +981,7 @@ Deno.test("Machine Provider capabilities select the newest compatible release", 
     providerCompatibilityProblem(current, {
       platform: "linux",
       architecture: "x86_64",
+      plugin_contracts: pluginMachine,
     })?.code,
     "capability_inventory_unavailable",
   );
@@ -958,6 +1005,64 @@ Deno.test("Machine Provider capability inventories reject unknown fields", () =>
       }),
     Error,
     "Invalid Machine Provider capability inventory",
+  );
+});
+
+Deno.test("generic Plugin capabilities reject a newer outer release before install", () => {
+  const provider = uiManifest();
+  const entry: ProviderCatalogEntry = {
+    provider_id: provider.id,
+    provider_version: provider.version,
+    package_digest: `sha256:${"1".repeat(64)}`,
+    artifact_digest: `sha256:${"2".repeat(64)}`,
+    authentication_scope: "none-v1",
+    release_state: "ready",
+    publisher: provider.publisher,
+    contract_fingerprint: `sha256:${"3".repeat(64)}`,
+    supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+    manifest: provider,
+    compatibility_requirements: {
+      plugin_sdk_version: "1.4.2",
+      manifest_schema: 1,
+      package_schema: 1,
+      release_schema: 2,
+      plugin_kind: "agent_provider",
+      payload_schema: 2,
+      host_bundle_schema: 1,
+      host_schema: 1,
+    },
+  };
+  const pluginContracts: PluginContractInventory = {
+    plugin_sdk_version: "1.4.2",
+    min_manifest_schema: 1,
+    max_manifest_schema: 1,
+    min_package_schema: 1,
+    max_package_schema: 1,
+    min_release_schema: 1,
+    max_release_schema: 1,
+    min_agent_provider_schema: 2,
+    max_agent_provider_schema: 2,
+    min_authentication_provider_schema: 1,
+    max_authentication_provider_schema: 1,
+    min_code_intelligence_schema: 1,
+    max_code_intelligence_schema: 1,
+    min_host_bundle_schema: 1,
+    max_host_bundle_schema: 1,
+    min_host_schema: 1,
+    max_host_schema: 1,
+  };
+  assertEquals(
+    providerCompatibilityProblem(entry, {
+      platform: "linux",
+      architecture: "x86_64",
+      plugin_contracts: pluginContracts,
+    })?.code,
+    "plugin_release_schema_unsupported",
+  );
+  assertThrows(
+    () => validatePluginContractInventory({ ...pluginContracts, future: 2 }),
+    Error,
+    "Invalid Machine Plugin capability inventory",
   );
 });
 
@@ -1032,11 +1137,12 @@ Deno.test("Provider SDK enforces semantic release identity and precedence", () =
 
 Deno.test("Provider SDK rejects incompatible authoring SDK versions before rendering", () => {
   const newer = manifest();
-  newer.sdk_version = "3.1.10";
+  const [major, minor, patch] = PROVIDER_SDK_VERSION.split(".").map(Number);
+  newer.sdk_version = `${major}.${minor}.${patch! + 1}`;
   assertThrows(() => validateProviderManifest(newer), Error, "is incompatible");
 
   const current = manifest();
-  current.sdk_version = "3.1.9";
+  current.sdk_version = PROVIDER_SDK_VERSION;
   validateProviderManifest(current);
 
   const oldMajor = manifest();

@@ -26,6 +26,17 @@ defaults.
 
 ## Versioned server configuration
 
+Authentication policy is distinct from the bytes implementing a login method.
+`COWBOY_PLUGIN_HOST_CONFIG` selects exact signed host releases and optionally
+retires source bootstrap with `catalog_only`. OIDC driver identities from the
+authentication configuration are also the host pins; conflicting selections
+fail startup. Catalog-only readiness includes WebAuthn storage for durable
+admin authentication even when Product authentication is disabled. Public auth
+status advertises only configured login methods and enabled account panels,
+not every published Authentication Plugin. The configuration and one-way
+cutover contract are documented under
+[Controller host activation](../plugin-packages.md#controller-host-activation).
+
 `COWBOY_AUTH_CONFIG` schema v2 owns the limits and enforcement mode:
 
 ```json

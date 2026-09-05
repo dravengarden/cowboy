@@ -1138,11 +1138,21 @@ fn queue_persisted_config(
     let Some(preferences) = preferences.as_object() else {
         return;
     };
+    let Some(meta) = shared
+        .hub
+        .session_list()
+        .into_iter()
+        .find(|meta| meta.id == session_id)
+    else {
+        return;
+    };
+    let configuration = meta.provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&meta.provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    );
     let Some(options) = options else {
         for (config_id, value) in preferences {
-            if config_id == crate::deepseek_context::CONFIG_ID
-                || config_id == crate::deepseek_cache::CONFIG_ID
-            {
+            if crate::managed_config::is_managed(&configuration, config_id) {
                 continue;
             }
             queue_config_value(shared, session_id, config_id, value.clone());
@@ -1153,9 +1163,7 @@ fn queue_persisted_config(
         return;
     };
     for (config_id, value) in preferences {
-        if config_id == crate::deepseek_context::CONFIG_ID
-            || config_id == crate::deepseek_cache::CONFIG_ID
-        {
+        if crate::managed_config::is_managed(&configuration, config_id) {
             continue;
         }
         let Some(option) = options

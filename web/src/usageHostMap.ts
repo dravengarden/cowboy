@@ -1,4 +1,4 @@
-import { bundledHostPlugins } from "./bundledHostPlugins.ts";
+import { isPluginIdentifier } from "@cowboy/plugin-api/runtime";
 
 export type UsageActivityAgent = {
   id: string;
@@ -48,7 +48,9 @@ type UsageMaps = {
   cacheProtection: Record<string, UsageCacheProtection>;
 };
 
-function parseCacheProtection(value: unknown): UsageCacheProtection | undefined {
+function parseCacheProtection(
+  value: unknown,
+): UsageCacheProtection | undefined {
   if (value === null || typeof value !== "object") return undefined;
   const row = value as {
     min_hit_tokens?: unknown;
@@ -114,7 +116,6 @@ function readUsage(host: object): {
   cacheProtection?: UsageCacheProtection;
 } {
   const record = host as {
-    usage_account?: unknown;
     usage?: {
       account?: unknown;
       reset?: unknown;
@@ -141,70 +142,63 @@ function readUsage(host: object): {
       cache_protection?: unknown;
     };
   };
-  const account = typeof record.usage?.account === "string"
-    ? record.usage.account
-    : typeof record.usage_account === "string"
-    ? record.usage_account
+  const usage = record.usage;
+  const account = typeof usage?.account === "string"
+    ? usage.account
     : undefined;
-  const reset = typeof record.usage?.reset === "string"
-    ? record.usage.reset
+  const resetValue = usage?.reset;
+  const reset = isPluginIdentifier(resetValue) ? resetValue : undefined;
+  const product = typeof usage?.product === "string"
+    ? usage.product
     : undefined;
-  const product = typeof record.usage?.product === "string"
-    ? record.usage.product
+  const parserValue = usage?.parser;
+  const parser = isPluginIdentifier(parserValue) ? parserValue : undefined;
+  const errorValue = usage?.error;
+  const error = isPluginIdentifier(errorValue) ? errorValue : undefined;
+  const order = typeof usage?.order === "number" &&
+      Number.isInteger(usage.order) && usage.order >= 0
+    ? usage.order
     : undefined;
-  const parser = typeof record.usage?.parser === "string"
-    ? record.usage.parser
-    : undefined;
-  const error = typeof record.usage?.error === "string"
-    ? record.usage.error
-    : undefined;
-  const order = typeof record.usage?.order === "number" &&
-      Number.isInteger(record.usage.order) && record.usage.order >= 0
-    ? record.usage.order
-    : undefined;
-  const topBarWindows = Array.isArray(record.usage?.top_bar_windows)
-    ? record.usage.top_bar_windows.filter((
+  const topBarWindows = Array.isArray(usage?.top_bar_windows)
+    ? usage.top_bar_windows.filter((
       minutes,
     ): minutes is number =>
       typeof minutes === "number" && Number.isFinite(minutes) && minutes > 0
     )
     : undefined;
-  const widget = typeof record.usage?.widget === "string"
-    ? record.usage.widget
+  const widgetValue = usage?.widget;
+  const widget = isPluginIdentifier(widgetValue) ? widgetValue : undefined;
+  const empty = typeof usage?.empty === "string" ? usage.empty : undefined;
+  const availableStatus = typeof usage?.available_status === "string"
+    ? usage.available_status
     : undefined;
-  const empty = typeof record.usage?.empty === "string"
-    ? record.usage.empty
-    : undefined;
-  const availableStatus = typeof record.usage?.available_status === "string"
-    ? record.usage.available_status
-    : undefined;
-  const omitEmptyLimits = record.usage?.omit_empty_limits === true
+  const omitEmptyLimits = usage?.omit_empty_limits === true
     ? true
-    : record.usage?.omit_empty_limits === false
+    : usage?.omit_empty_limits === false
     ? false
     : undefined;
-  const widgetShape = typeof record.usage?.widget_shape === "string"
-    ? record.usage.widget_shape
+  const widgetShape = typeof usage?.widget_shape === "string"
+    ? usage.widget_shape
     : undefined;
-  const widgetWindow = typeof record.usage?.widget_window === "number" &&
-      Number.isFinite(record.usage.widget_window) &&
-      record.usage.widget_window > 0
-    ? record.usage.widget_window
+  const widgetWindow = typeof usage?.widget_window === "number" &&
+      Number.isFinite(usage.widget_window) &&
+      usage.widget_window > 0
+    ? usage.widget_window
     : undefined;
-  const errorAuth = typeof record.usage?.error_auth === "string"
-    ? record.usage.error_auth
+  const errorAuth = typeof usage?.error_auth === "string"
+    ? usage.error_auth
     : undefined;
-  const errorConfig = typeof record.usage?.error_config === "string"
-    ? record.usage.error_config
+  const errorConfig = typeof usage?.error_config === "string"
+    ? usage.error_config
     : undefined;
-  const errorFetch = typeof record.usage?.error_fetch === "string"
-    ? record.usage.error_fetch
+  const errorFetch = typeof usage?.error_fetch === "string"
+    ? usage.error_fetch
     : undefined;
-  const limitIdPrefix = typeof record.usage?.limit_id_prefix === "string"
-    ? record.usage.limit_id_prefix
+  const limitIdPrefix = typeof usage?.limit_id_prefix === "string"
+    ? usage.limit_id_prefix
     : undefined;
-  const limitLabels = Array.isArray(record.usage?.limit_labels)
-    ? record.usage.limit_labels.flatMap((entry): UsageLimitLabel[] => {
+  const limitLabels = Array.isArray(usage?.limit_labels)
+    ? usage.limit_labels.flatMap((entry): UsageLimitLabel[] => {
       if (entry === null || typeof entry !== "object") return [];
       const label = entry as {
         id?: unknown;
@@ -225,14 +219,14 @@ function readUsage(host: object): {
       }];
     })
     : undefined;
-  const widgetBalanceLabel = typeof record.usage?.widget_balance_label === "string"
-    ? record.usage.widget_balance_label
+  const widgetBalanceLabel = typeof usage?.widget_balance_label === "string"
+    ? usage.widget_balance_label
     : undefined;
-  const widgetSpendLabel = typeof record.usage?.widget_spend_label === "string"
-    ? record.usage.widget_spend_label
+  const widgetSpendLabel = typeof usage?.widget_spend_label === "string"
+    ? usage.widget_spend_label
     : undefined;
-  const activityAgents = Array.isArray(record.usage?.activity_agents)
-    ? record.usage.activity_agents.flatMap((entry): UsageActivityAgent[] => {
+  const activityAgents = Array.isArray(usage?.activity_agents)
+    ? usage.activity_agents.flatMap((entry): UsageActivityAgent[] => {
       if (entry === null || typeof entry !== "object") return [];
       const agent = entry as { id?: unknown; label?: unknown };
       if (typeof agent.id !== "string" || typeof agent.label !== "string") {
@@ -241,8 +235,8 @@ function readUsage(host: object): {
       return [{ id: agent.id, label: agent.label }];
     })
     : undefined;
-  const activityModels = Array.isArray(record.usage?.activity_models)
-    ? record.usage.activity_models.flatMap((entry): UsageActivityAgent[] => {
+  const activityModels = Array.isArray(usage?.activity_models)
+    ? usage.activity_models.flatMap((entry): UsageActivityAgent[] => {
       if (entry === null || typeof entry !== "object") return [];
       const model = entry as { id?: unknown; label?: unknown };
       if (typeof model.id !== "string" || typeof model.label !== "string") {
@@ -251,7 +245,7 @@ function readUsage(host: object): {
       return [{ id: model.id, label: model.label }];
     })
     : undefined;
-  const cacheProtection = parseCacheProtection(record.usage?.cache_protection);
+  const cacheProtection = parseCacheProtection(usage?.cache_protection);
   return {
     ...(account ? { account } : {}),
     ...(reset ? { reset } : {}),
@@ -259,9 +253,7 @@ function readUsage(host: object): {
     ...(parser ? { parser } : {}),
     ...(error ? { error } : {}),
     ...(order === undefined ? {} : { order }),
-    ...(topBarWindows && topBarWindows.length > 0
-      ? { topBarWindows }
-      : {}),
+    ...(topBarWindows && topBarWindows.length > 0 ? { topBarWindows } : {}),
     ...(widget ? { widget } : {}),
     ...(empty ? { empty } : {}),
     ...(availableStatus ? { availableStatus } : {}),
@@ -314,161 +306,151 @@ function collectUsageMaps(hosts: unknown): UsageMaps {
   if (!Array.isArray(hosts)) return maps;
   for (const host of hosts) {
     if (host === null || typeof host !== "object") continue;
+    const defaultForId = (host as { default_for_id?: unknown }).default_for_id;
+    if (defaultForId !== undefined && defaultForId !== true) continue;
     const id = (host as { id?: unknown }).id;
     const usage = readUsage(host);
-    if (typeof id !== "string" || id === "" || !usage.account) continue;
-    maps.plugins[usage.account] = id;
-    if (usage.reset) maps.resets[usage.account] = usage.reset;
-    if (usage.product) maps.products[usage.account] = usage.product;
-    if (usage.parser) maps.parsers[usage.account] = usage.parser;
-    if (usage.error) maps.errors[usage.account] = usage.error;
-    if (usage.order !== undefined) maps.orders[usage.account] = usage.order;
-    if (usage.topBarWindows) maps.windows[usage.account] = usage.topBarWindows;
-    if (usage.widget) maps.widgets[usage.account] = usage.widget;
-    if (usage.empty) maps.empties[usage.account] = usage.empty;
+    const account = usage.account;
+    if (!isPluginIdentifier(id) || !isPluginIdentifier(account)) continue;
+    maps.plugins[account] = id;
+    if (usage.reset) maps.resets[account] = usage.reset;
+    if (usage.product) maps.products[account] = usage.product;
+    if (usage.parser) maps.parsers[account] = usage.parser;
+    if (usage.error) maps.errors[account] = usage.error;
+    if (usage.order !== undefined) maps.orders[account] = usage.order;
+    if (usage.topBarWindows) maps.windows[account] = usage.topBarWindows;
+    if (usage.widget) maps.widgets[account] = usage.widget;
+    if (usage.empty) maps.empties[account] = usage.empty;
     if (usage.availableStatus) {
-      maps.statuses[usage.account] = usage.availableStatus;
+      maps.statuses[account] = usage.availableStatus;
     }
     if (usage.omitEmptyLimits !== undefined) {
-      maps.omits[usage.account] = usage.omitEmptyLimits;
+      maps.omits[account] = usage.omitEmptyLimits;
     }
-    if (usage.widgetShape) maps.shapes[usage.account] = usage.widgetShape;
+    if (usage.widgetShape) maps.shapes[account] = usage.widgetShape;
     if (usage.widgetWindow !== undefined) {
-      maps.widgetWindows[usage.account] = usage.widgetWindow;
+      maps.widgetWindows[account] = usage.widgetWindow;
     }
-    if (usage.errorAuth) maps.authCopy[usage.account] = usage.errorAuth;
-    if (usage.errorConfig) maps.configCopy[usage.account] = usage.errorConfig;
-    if (usage.errorFetch) maps.fetchCopy[usage.account] = usage.errorFetch;
-    if (usage.limitIdPrefix) maps.prefixes[usage.account] = usage.limitIdPrefix;
-    if (usage.limitLabels) maps.labelRows[usage.account] = usage.limitLabels;
+    if (usage.errorAuth) maps.authCopy[account] = usage.errorAuth;
+    if (usage.errorConfig) maps.configCopy[account] = usage.errorConfig;
+    if (usage.errorFetch) maps.fetchCopy[account] = usage.errorFetch;
+    if (usage.limitIdPrefix) maps.prefixes[account] = usage.limitIdPrefix;
+    if (usage.limitLabels) maps.labelRows[account] = usage.limitLabels;
     if (usage.widgetBalanceLabel) {
-      maps.balanceLabels[usage.account] = usage.widgetBalanceLabel;
+      maps.balanceLabels[account] = usage.widgetBalanceLabel;
     }
     if (usage.widgetSpendLabel) {
-      maps.spendLabels[usage.account] = usage.widgetSpendLabel;
+      maps.spendLabels[account] = usage.widgetSpendLabel;
     }
     if (usage.activityAgents) {
-      maps.activityAgents[usage.account] = usage.activityAgents;
+      maps.activityAgents[account] = usage.activityAgents;
     }
     if (usage.activityModels) {
-      maps.activityModels[usage.account] = usage.activityModels;
+      maps.activityModels[account] = usage.activityModels;
     }
     if (usage.cacheProtection) {
-      maps.cacheProtection[usage.account] = usage.cacheProtection;
+      maps.cacheProtection[account] = usage.cacheProtection;
     }
   }
   return maps;
 }
 
-const bundledUsage = collectUsageMaps(bundledHostPlugins);
 let overlayUsage = emptyUsageMaps();
 
-/** Overlay account→plugin ids declared by activated host plugins. */
+/** Replace account capability data from the activated, validated host inventory. */
 export function applyUsageHostPlugins(hosts: unknown): void {
   overlayUsage = collectUsageMaps(hosts);
 }
 
 /** Map account-usage provider ids onto Agent Plugin slot ids. */
 export function usagePluginId(provider: string): string {
-  return overlayUsage.plugins[provider] ?? bundledUsage.plugins[provider] ??
-    provider;
+  return overlayUsage.plugins[provider] ?? provider;
 }
 
 /** Map account-usage provider ids onto usage-reset API ids. */
 export function usageResetId(provider: string): string | undefined {
-  return overlayUsage.resets[provider] ?? bundledUsage.resets[provider];
+  return overlayUsage.resets[provider];
 }
 
 /** Display name for an account-usage provider id. */
 export function usageProductLabel(provider: string): string {
-  return overlayUsage.products[provider] ?? bundledUsage.products[provider] ??
-    provider;
+  return overlayUsage.products[provider] ?? provider;
 }
 
-/** Closed usage-limit parser declared by the account's host plugin. */
+/** Opaque usage-limit capability declared by the account's host plugin. */
 export function usageLimitParser(provider: string): string {
-  return overlayUsage.parsers[provider] ?? bundledUsage.parsers[provider] ??
-    "generic-buckets";
+  return overlayUsage.parsers[provider] ?? "generic-buckets";
 }
 
-/** Closed usage-error presentation declared by the account's host plugin. */
+/** Opaque usage-error capability declared by the account's host plugin. */
 export function usageErrorKind(provider: string): string {
-  return overlayUsage.errors[provider] ?? bundledUsage.errors[provider] ??
-    "raw";
+  return overlayUsage.errors[provider] ?? "raw";
 }
 
 /** First-party card order. Unknown accounts stay insertion-stable. */
 export function usageCardOrder(provider: string): number {
-  return overlayUsage.orders[provider] ?? bundledUsage.orders[provider] ??
-    Number.MAX_SAFE_INTEGER;
+  return overlayUsage.orders[provider] ?? Number.MAX_SAFE_INTEGER;
 }
 
 /** Optional top-bar window minutes declared by the account's host plugin. */
 export function usageTopBarWindowMinutes(
   provider: string,
 ): number[] | undefined {
-  const windows = overlayUsage.windows[provider] ??
-    bundledUsage.windows[provider];
+  const windows = overlayUsage.windows[provider];
   return windows && windows.length > 0 ? windows : undefined;
 }
 
-/** Closed desktop-widget kind declared by the account's host plugin. */
+/** Opaque desktop-widget kind declared by the account's host plugin. */
 export function usageWidgetKind(provider: string): string {
-  return overlayUsage.widgets[provider] ?? bundledUsage.widgets[provider] ??
-    "none";
+  return overlayUsage.widgets[provider] ?? "none";
 }
 
 /** Optional empty-state copy declared by the account's host plugin. */
 export function usageEmptyMessage(provider: string): string | undefined {
-  return overlayUsage.empties[provider] ?? bundledUsage.empties[provider];
+  return overlayUsage.empties[provider];
 }
 
 /** Badge shown when the account is available and has no plan name. */
 export function usageAvailableStatus(provider: string): string | undefined {
-  return overlayUsage.statuses[provider] ?? bundledUsage.statuses[provider];
+  return overlayUsage.statuses[provider];
 }
 
 /** Whether the host should skip the generic empty-limit fallback copy. */
 export function usageOmitEmptyLimits(provider: string): boolean {
-  if (Object.hasOwn(overlayUsage.omits, provider)) {
-    return overlayUsage.omits[provider] === true;
-  }
-  return bundledUsage.omits[provider] === true;
+  return overlayUsage.omits[provider] === true;
 }
 
 /** Compact desktop-widget shape declared by the account's host plugin. */
 export function usageWidgetShape(
   provider: string,
 ): "percent" | "balance" | "none" {
-  const shape = overlayUsage.shapes[provider] ?? bundledUsage.shapes[provider];
+  const shape = overlayUsage.shapes[provider];
   return shape === "percent" || shape === "balance" ? shape : "none";
 }
 
 /** Optional compact-widget window minutes declared by the account's host plugin. */
 export function usageWidgetWindow(provider: string): number | undefined {
-  return overlayUsage.widgetWindows[provider] ??
-    bundledUsage.widgetWindows[provider];
+  return overlayUsage.widgetWindows[provider];
 }
 
 /** Auth-failure copy declared by the account's host plugin. */
 export function usageErrorAuth(provider: string): string | undefined {
-  return overlayUsage.authCopy[provider] ?? bundledUsage.authCopy[provider];
+  return overlayUsage.authCopy[provider];
 }
 
 /** Configuration-failure copy declared by the account's host plugin. */
 export function usageErrorConfig(provider: string): string | undefined {
-  return overlayUsage.configCopy[provider] ?? bundledUsage.configCopy[provider];
+  return overlayUsage.configCopy[provider];
 }
 
 /** Fetch-failure copy declared by the account's host plugin. */
 export function usageErrorFetch(provider: string): string | undefined {
-  return overlayUsage.fetchCopy[provider] ?? bundledUsage.fetchCopy[provider];
+  return overlayUsage.fetchCopy[provider];
 }
 
 /** Prefix for parser-owned limit row ids, e.g. claude-five_hour. */
 export function usageLimitIdPrefix(provider: string): string {
-  return overlayUsage.prefixes[provider] ?? bundledUsage.prefixes[provider] ??
-    provider;
+  return overlayUsage.prefixes[provider] ?? provider;
 }
 
 /** Presentation for one parser-owned rate-limit type. */
@@ -476,9 +458,7 @@ export function usageLimitLabel(
   provider: string,
   kind: string,
 ): { label: string; windowMinutes?: number } {
-  const labels = overlayUsage.labelRows[provider] ??
-    bundledUsage.labelRows[provider] ??
-    [];
+  const labels = overlayUsage.labelRows[provider] ?? [];
   const match = labels.find((entry) => entry.id === kind);
   if (!match) return { label: "Plan usage" };
   return {
@@ -496,24 +476,12 @@ export function usageLimitRowId(provider: string, kind: string): string {
 
 /** Compact-widget balance row label declared by the account's host plugin. */
 export function usageWidgetBalanceLabel(provider: string): string {
-  return overlayUsage.balanceLabels[provider] ??
-    bundledUsage.balanceLabels[provider] ??
-    "Balance";
+  return overlayUsage.balanceLabels[provider] ?? "Balance";
 }
 
 /** Compact-widget spend row label declared by the account's host plugin. */
 export function usageWidgetSpendLabel(provider: string): string {
-  return overlayUsage.spendLabels[provider] ??
-    bundledUsage.spendLabels[provider] ??
-    "24h spend";
-}
-
-function mergedRows<T>(
-  overlay: Record<string, T>,
-  bundled: Record<string, T>,
-): T[] {
-  const byAccount = { ...bundled, ...overlay };
-  return Object.values(byAccount);
+  return overlayUsage.spendLabels[provider] ?? "24h spend";
 }
 
 function uniqueAgents(rows: UsageActivityAgent[][]): UsageActivityAgent[] {
@@ -534,13 +502,9 @@ export function usageActivityAgents(
   provider?: string,
 ): UsageActivityAgent[] {
   if (provider) {
-    return overlayUsage.activityAgents[provider] ??
-      bundledUsage.activityAgents[provider] ??
-      [];
+    return overlayUsage.activityAgents[provider] ?? [];
   }
-  return uniqueAgents(
-    mergedRows(overlayUsage.activityAgents, bundledUsage.activityAgents),
-  );
+  return uniqueAgents(Object.values(overlayUsage.activityAgents));
 }
 
 /** Telemetry agent ids declared by host plugins. */
@@ -562,13 +526,9 @@ export function usageActivityModels(
   provider?: string,
 ): UsageActivityAgent[] {
   if (provider) {
-    return overlayUsage.activityModels[provider] ??
-      bundledUsage.activityModels[provider] ??
-      [];
+    return overlayUsage.activityModels[provider] ?? [];
   }
-  return uniqueAgents(
-    mergedRows(overlayUsage.activityModels, bundledUsage.activityModels),
-  );
+  return uniqueAgents(Object.values(overlayUsage.activityModels));
 }
 
 /** Telemetry model-family ids declared by host plugins. */
@@ -589,13 +549,9 @@ function firstCacheProtection(
   provider?: string,
 ): UsageCacheProtection | undefined {
   if (provider) {
-    return overlayUsage.cacheProtection[provider] ??
-      bundledUsage.cacheProtection[provider];
+    return overlayUsage.cacheProtection[provider];
   }
-  return mergedRows(
-    overlayUsage.cacheProtection,
-    bundledUsage.cacheProtection,
-  )[0];
+  return Object.values(overlayUsage.cacheProtection)[0];
 }
 
 /** Prompt-cache protection thresholds declared by host plugins. */

@@ -18,12 +18,12 @@ import {
 } from "react";
 import {
   authApi,
+  type AuthHostPlugin,
   isRecentProductAuthRequired,
   type ProductAutomationServerPolicy,
   type ProductCapacityServerPolicy,
   type ProductLogoutScope,
   type ProductLogoutServerPolicy,
-  type AuthHostPlugin,
   type ProductMe,
   productMeFromJson,
   type ProductOidcProvider,
@@ -61,6 +61,7 @@ import {
 
 export interface ProductAuthValue {
   me: ProductMe;
+  hostPlugins: AuthHostPlugin[];
   passkeys: ProductPasskeyServerPolicy | undefined;
   session: ProductSessionServerPolicy | undefined;
   capacity: ProductCapacityServerPolicy | undefined;
@@ -523,6 +524,7 @@ export function ProductAuthGate({
       <ProductAuthContext.Provider
         value={{
           me,
+          hostPlugins,
           passkeys: passkeyPolicy,
           session: sessionPolicy,
           capacity: capacityPolicy,

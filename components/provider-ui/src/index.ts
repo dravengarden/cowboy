@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.9" as const;
+export const PROVIDER_SDK_VERSION = "3.1.10" as const;
 
 export type SurfaceSlot =
   | "card"
@@ -172,7 +172,7 @@ interface HostIntegrationBase {
     fallback_command: string;
   };
   account_usage?: {
-    provider: "openai" | "anthropic" | "deepseek" | "gemini" | "xai";
+    provider: string;
   };
   features: Array<"cache_protection_v1">;
   tool_presentations: Array<{
@@ -478,6 +478,43 @@ export interface ProviderCatalogEntry {
     architecture: "x86_64" | "aarch64";
   }>;
   manifest: ProviderUiManifest;
+  /** Outer Plugin decoder requirements for signed generic releases. Legacy
+   * Provider-only Catalog rows omit this transition field. */
+  compatibility_requirements?: PluginCompatibilityRequirements;
+}
+
+export interface PluginCompatibilityRequirements {
+  plugin_sdk_version?: string;
+  manifest_schema: number;
+  package_schema: number;
+  release_schema: number;
+  plugin_kind:
+    | "agent_provider"
+    | "authentication_provider"
+    | "code_intelligence";
+  payload_schema: number;
+  host_bundle_schema?: number;
+  host_schema?: number;
+}
+
+export interface PluginContractInventory {
+  plugin_sdk_version: string;
+  min_manifest_schema: number;
+  max_manifest_schema: number;
+  min_package_schema: number;
+  max_package_schema: number;
+  min_release_schema: number;
+  max_release_schema: number;
+  min_agent_provider_schema: number;
+  max_agent_provider_schema: number;
+  min_authentication_provider_schema: number;
+  max_authentication_provider_schema: number;
+  min_code_intelligence_schema: number;
+  max_code_intelligence_schema: number;
+  min_host_bundle_schema: number;
+  max_host_bundle_schema: number;
+  min_host_schema: number;
+  max_host_schema: number;
 }
 
 export interface ProviderContractInventory {
@@ -494,6 +531,18 @@ export interface ProviderContractInventory {
 }
 
 export type ProviderCompatibilityCode =
+  | "plugin_capability_inventory_unavailable"
+  | "plugin_capability_inventory_invalid"
+  | "plugin_release_contract_unavailable"
+  | "plugin_release_contract_invalid"
+  | "plugin_sdk_unsupported"
+  | "plugin_manifest_schema_unsupported"
+  | "plugin_package_schema_unsupported"
+  | "plugin_release_schema_unsupported"
+  | "plugin_payload_schema_unsupported"
+  | "plugin_host_bundle_schema_unsupported"
+  | "plugin_host_schema_unsupported"
+  | "plugin_platform_unsupported"
   | "capability_inventory_unavailable"
   | "capability_inventory_invalid"
   | "provider_sdk_unsupported"
@@ -513,6 +562,7 @@ export interface ProviderCompatibilityTarget {
   platform: "linux" | "macos";
   architecture: "x86_64" | "aarch64";
   provider_contracts?: ProviderContractInventory;
+  plugin_contracts?: PluginContractInventory;
 }
 
 export interface ProviderAuthenticationStatus {
@@ -800,6 +850,14 @@ export function validateProviderCatalog(
     // Their runtime compatibility is evaluated separately; presentation is
     // safe as long as the data-only UI and host schemas remain supported.
     validateProviderUiManifestContract(manifest, false);
+    if (raw.compatibility_requirements !== undefined) {
+      const requirements = validatePluginCompatibilityRequirements(
+        raw.compatibility_requirements,
+      );
+      if (requirements.plugin_kind !== "agent_provider") {
+        throw new Error("Provider Catalog has non-Agent Plugin requirements");
+      }
+    }
     if (
       raw.provider_id !== manifest.id ||
       raw.provider_version !== manifest.version ||
@@ -1556,9 +1614,8 @@ function validateProviderUiManifestContract(
   if (
     accountUsage !== undefined && (!isRecord(accountUsage) ||
       !hasOnlyKeys(accountUsage, ["provider"]) ||
-      !["openai", "anthropic", "deepseek", "gemini", "xai"].includes(
-        String(accountUsage.provider),
-      ))
+      typeof accountUsage.provider !== "string" ||
+      !isIdentifier(accountUsage.provider))
   ) {
     throw new Error("Invalid Provider account usage contract");
   }
@@ -2438,13 +2495,264 @@ export function compareProviderVersions(left: string, right: string): number {
   return 0;
 }
 
+function isSchemaInterval(minimum: unknown, maximum: unknown): boolean {
+  return typeof minimum === "number" && Number.isSafeInteger(minimum) &&
+    typeof maximum === "number" && Number.isSafeInteger(maximum) &&
+    minimum > 0 && minimum <= maximum;
+}
+
+export function validatePluginCompatibilityRequirements(
+  input: unknown,
+): PluginCompatibilityRequirements {
+  if (
+    !isRecord(input) ||
+    !hasOnlyKeys(input, [
+      "plugin_sdk_version",
+      "manifest_schema",
+      "package_schema",
+      "release_schema",
+      "plugin_kind",
+      "payload_schema",
+      "host_bundle_schema",
+      "host_schema",
+    ]) ||
+    (input.plugin_sdk_version !== undefined &&
+      (typeof input.plugin_sdk_version !== "string" ||
+        !parseSemanticVersion(input.plugin_sdk_version))) ||
+    !["agent_provider", "authentication_provider", "code_intelligence"]
+      .includes(String(input.plugin_kind)) ||
+    ![
+      input.manifest_schema,
+      input.package_schema,
+      input.release_schema,
+      input.payload_schema,
+    ].every((value) =>
+      typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ) ||
+    (input.host_bundle_schema !== undefined &&
+      (typeof input.host_bundle_schema !== "number" ||
+        !Number.isSafeInteger(input.host_bundle_schema) ||
+        input.host_bundle_schema < 1)) ||
+    (input.host_schema !== undefined &&
+      (typeof input.host_schema !== "number" ||
+        !Number.isSafeInteger(input.host_schema) || input.host_schema < 1)) ||
+    (input.host_bundle_schema === undefined) !==
+      (input.host_schema === undefined) ||
+    (input.release_schema === 1 && input.host_bundle_schema !== undefined) ||
+    (input.release_schema === 2 && input.host_bundle_schema === undefined)
+  ) {
+    throw new Error("Invalid Plugin release compatibility requirements");
+  }
+  return input as unknown as PluginCompatibilityRequirements;
+}
+
+export function validatePluginContractInventory(
+  input: unknown,
+): PluginContractInventory {
+  if (
+    !isRecord(input) ||
+    !hasOnlyKeys(input, [
+      "plugin_sdk_version",
+      "min_manifest_schema",
+      "max_manifest_schema",
+      "min_package_schema",
+      "max_package_schema",
+      "min_release_schema",
+      "max_release_schema",
+      "min_agent_provider_schema",
+      "max_agent_provider_schema",
+      "min_authentication_provider_schema",
+      "max_authentication_provider_schema",
+      "min_code_intelligence_schema",
+      "max_code_intelligence_schema",
+      "min_host_bundle_schema",
+      "max_host_bundle_schema",
+      "min_host_schema",
+      "max_host_schema",
+    ]) ||
+    typeof input.plugin_sdk_version !== "string" ||
+    !parseSemanticVersion(input.plugin_sdk_version) ||
+    !isSchemaInterval(input.min_manifest_schema, input.max_manifest_schema) ||
+    !isSchemaInterval(input.min_package_schema, input.max_package_schema) ||
+    !isSchemaInterval(input.min_release_schema, input.max_release_schema) ||
+    !isSchemaInterval(
+      input.min_agent_provider_schema,
+      input.max_agent_provider_schema,
+    ) ||
+    !isSchemaInterval(
+      input.min_authentication_provider_schema,
+      input.max_authentication_provider_schema,
+    ) ||
+    !isSchemaInterval(
+      input.min_code_intelligence_schema,
+      input.max_code_intelligence_schema,
+    ) ||
+    !isSchemaInterval(
+      input.min_host_bundle_schema,
+      input.max_host_bundle_schema,
+    ) ||
+    !isSchemaInterval(input.min_host_schema, input.max_host_schema)
+  ) {
+    throw new Error("Invalid Machine Plugin capability inventory");
+  }
+  return input as unknown as PluginContractInventory;
+}
+
+function pluginCompatibilityProblem(
+  entry: ProviderCatalogEntry,
+  target: ProviderCompatibilityTarget,
+): ProviderCompatibilityProblem | undefined {
+  if (entry.compatibility_requirements === undefined) {
+    return entry.release_state === "ready"
+      ? {
+        code: "plugin_release_contract_unavailable",
+        detail:
+          "This release predates the generic Plugin lifecycle and cannot be installed or upgraded on this Machine.",
+      }
+      : undefined;
+  }
+  if (target.plugin_contracts === undefined) {
+    return {
+      code: "plugin_capability_inventory_unavailable",
+      detail:
+        "This Cowboy Machine predates generic Plugin compatibility negotiation. Update Cowboy Machine before installing or upgrading Plugins.",
+    };
+  }
+  let requirements: PluginCompatibilityRequirements;
+  let inventory: PluginContractInventory;
+  try {
+    requirements = validatePluginCompatibilityRequirements(
+      entry.compatibility_requirements,
+    );
+  } catch {
+    return {
+      code: "plugin_release_contract_invalid",
+      detail: "Plugin release has an invalid compatibility contract.",
+    };
+  }
+  try {
+    inventory = validatePluginContractInventory(target.plugin_contracts);
+  } catch {
+    return {
+      code: "plugin_capability_inventory_invalid",
+      detail:
+        "Cowboy Machine reported an invalid Plugin capability inventory. Update Cowboy Machine before installing or upgrading Plugins.",
+    };
+  }
+  const update = (requirement: string): string =>
+    `Plugin ${entry.provider_id} ${entry.provider_version} requires ${requirement}. Update Cowboy Machine before installing or upgrading this Plugin.`;
+  const unsupported = (
+    value: number,
+    minimum: number,
+    maximum: number,
+    code: ProviderCompatibilityCode,
+    label: string,
+  ): ProviderCompatibilityProblem | undefined =>
+    value < minimum || value > maximum
+      ? { code, detail: update(`${label} ${String(value)}`) }
+      : undefined;
+  const structural = unsupported(
+    requirements.manifest_schema,
+    inventory.min_manifest_schema,
+    inventory.max_manifest_schema,
+    "plugin_manifest_schema_unsupported",
+    "Plugin manifest schema",
+  ) ?? unsupported(
+    requirements.package_schema,
+    inventory.min_package_schema,
+    inventory.max_package_schema,
+    "plugin_package_schema_unsupported",
+    "Plugin package schema",
+  ) ?? unsupported(
+    requirements.release_schema,
+    inventory.min_release_schema,
+    inventory.max_release_schema,
+    "plugin_release_schema_unsupported",
+    "Plugin release schema",
+  );
+  if (structural) return structural;
+  if (requirements.plugin_sdk_version !== undefined) {
+    const requiredSdk = parseSemanticVersion(requirements.plugin_sdk_version);
+    const machineSdk = parseSemanticVersion(inventory.plugin_sdk_version);
+    if (
+      requiredSdk === null || machineSdk === null ||
+      requiredSdk.major !== machineSdk.major ||
+      compareProviderVersions(
+          requirements.plugin_sdk_version,
+          inventory.plugin_sdk_version,
+        ) > 0
+    ) {
+      return {
+        code: "plugin_sdk_unsupported",
+        detail: update(
+          `Cowboy Plugin SDK ${requirements.plugin_sdk_version}`,
+        ),
+      };
+    }
+  }
+  const payloadInterval = requirements.plugin_kind === "agent_provider"
+    ? [
+      inventory.min_agent_provider_schema,
+      inventory.max_agent_provider_schema,
+      "Agent Provider payload schema",
+    ] as const
+    : requirements.plugin_kind === "authentication_provider"
+    ? [
+      inventory.min_authentication_provider_schema,
+      inventory.max_authentication_provider_schema,
+      "Authentication Provider payload schema",
+    ] as const
+    : [
+      inventory.min_code_intelligence_schema,
+      inventory.max_code_intelligence_schema,
+      "code-intelligence payload schema",
+    ] as const;
+  const payload = unsupported(
+    requirements.payload_schema,
+    payloadInterval[0],
+    payloadInterval[1],
+    "plugin_payload_schema_unsupported",
+    payloadInterval[2],
+  );
+  if (payload) return payload;
+  if (requirements.host_bundle_schema !== undefined) {
+    const hostBundle = unsupported(
+      requirements.host_bundle_schema,
+      inventory.min_host_bundle_schema,
+      inventory.max_host_bundle_schema,
+      "plugin_host_bundle_schema_unsupported",
+      "Plugin host-bundle schema",
+    );
+    if (hostBundle) return hostBundle;
+  }
+  if (requirements.host_schema !== undefined) {
+    const host = unsupported(
+      requirements.host_schema,
+      inventory.min_host_schema,
+      inventory.max_host_schema,
+      "plugin_host_schema_unsupported",
+      "Plugin host schema",
+    );
+    if (host) return host;
+  }
+  if (
+    !entry.supported_platforms.some((candidate) =>
+      candidate.os === target.platform &&
+      candidate.architecture === target.architecture
+    )
+  ) {
+    return {
+      code: "plugin_platform_unsupported",
+      detail:
+        `Plugin ${entry.provider_id} ${entry.provider_version} is not published for this Cowboy Machine platform.`,
+    };
+  }
+  return undefined;
+}
+
 export function validateProviderContractInventory(
   input: unknown,
 ): ProviderContractInventory {
-  const interval = (minimum: unknown, maximum: unknown): boolean =>
-    typeof minimum === "number" && Number.isSafeInteger(minimum) &&
-    typeof maximum === "number" && Number.isSafeInteger(maximum) &&
-    minimum > 0 && minimum <= maximum;
   if (
     !isRecord(input) ||
     !hasOnlyKeys(input, [
@@ -2461,13 +2769,13 @@ export function validateProviderContractInventory(
     ]) ||
     typeof input.provider_sdk_version !== "string" ||
     !parseSemanticVersion(input.provider_sdk_version) ||
-    !interval(input.min_package_schema, input.max_package_schema) ||
-    !interval(
+    !isSchemaInterval(input.min_package_schema, input.max_package_schema) ||
+    !isSchemaInterval(
       input.min_runtime_binding_schema,
       input.max_runtime_binding_schema,
     ) ||
-    !interval(input.min_ui_schema, input.max_ui_schema) ||
-    !interval(input.min_host_schema, input.max_host_schema) ||
+    !isSchemaInterval(input.min_ui_schema, input.max_ui_schema) ||
+    !isSchemaInterval(input.min_host_schema, input.max_host_schema) ||
     typeof input.machine_contract !== "number" ||
     !Number.isSafeInteger(input.machine_contract) ||
     input.machine_contract < 1
@@ -2481,6 +2789,8 @@ export function providerCompatibilityProblem(
   entry: ProviderCatalogEntry,
   target: ProviderCompatibilityTarget,
 ): ProviderCompatibilityProblem | undefined {
+  const pluginProblem = pluginCompatibilityProblem(entry, target);
+  if (pluginProblem) return pluginProblem;
   if (target.provider_contracts === undefined) {
     return {
       code: "capability_inventory_unavailable",

@@ -21,10 +21,9 @@ import {
 } from "@mui/icons-material";
 import { copyText } from "./clipboard";
 import {
-  DEFAULT_DIAGNOSTIC_LOG_FILTERS,
   cloneDiagnosticLogFilters,
-  loadDiagnosticLogFilters,
-  persistDiagnosticLogFilters,
+  DEFAULT_DIAGNOSTIC_LOG_FILTERS,
+  diagnosticKindLabel,
   type DiagnosticLogAgent,
   type DiagnosticLogDetail,
   type DiagnosticLogFilters,
@@ -33,21 +32,25 @@ import {
   type DiagnosticLogSeverity,
   type DiagnosticLogState,
   type DiagnosticLogSummary,
-  diagnosticKindLabel,
   diagnosticLogUrl,
+  loadDiagnosticLogFilters,
+  persistDiagnosticLogFilters,
 } from "./diagnosticLogs";
 import { NetworkButton } from "./NetworkActionFeedback";
 import {
   ActiveFilterChips,
-  type FilterChipOption,
   FilterButton,
+  type FilterChipOption,
   MultiSelectChipGroup,
   TimeRangeButton,
 } from "./ObservabilityFilters";
 import { Sheet } from "./Sheet";
 import { usageActivityAgents } from "./usageHostMap";
 
-const SEVERITY_ACCENT: Record<DiagnosticLogSeverity, (theme: import("@mui/material").Theme) => string> = {
+const SEVERITY_ACCENT: Record<
+  DiagnosticLogSeverity,
+  (theme: import("@mui/material").Theme) => string
+> = {
   critical: (theme) => theme.palette.mode === "dark" ? "#ff4d6d" : "#c9184a",
   error: (theme) => theme.palette.mode === "dark" ? "#ff8a65" : "#c2410c",
   warning: (theme) => theme.palette.warning.main,
@@ -84,11 +87,14 @@ function agentOptions(): FilterChipOption<DiagnosticLogAgent>[] {
   return usageActivityAgents().map((agent, index) => ({
     value: agent.id,
     label: agent.label,
-    color: AGENT_OPTION_COLORS[index % AGENT_OPTION_COLORS.length],
+    color: AGENT_OPTION_COLORS[index % AGENT_OPTION_COLORS.length]!,
   }));
 }
 
-function optionLabel<T extends string>(options: readonly FilterChipOption<T>[], value: T): string {
+function optionLabel<T extends string>(
+  options: readonly FilterChipOption<T>[],
+  value: T,
+): string {
   return options.find((option) => option.value === value)?.label ?? value;
 }
 
@@ -127,12 +133,18 @@ function LogDetail({
     return (
       <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 1 }}>
         <CircularProgress size={15} />
-        <Typography variant="caption" color="text.secondary">Loading detail…</Typography>
+        <Typography variant="caption" color="text.secondary">
+          Loading detail…
+        </Typography>
       </Stack>
     );
   }
   if (state.error || !state.value) {
-    return <Typography variant="caption" color="error.main">{state.error ?? "Detail unavailable"}</Typography>;
+    return (
+      <Typography variant="caption" color="error.main">
+        {state.error ?? "Detail unavailable"}
+      </Typography>
+    );
   }
   return (
     <Stack spacing={1.5} sx={{ pt: 1.25 }}>
@@ -162,7 +174,9 @@ function LogDetail({
             }}
           >
             {section.fields.map((field, index) => {
-              const copyKey = `${state.value?.id ?? "detail"}:${section.title}:${field.label}`;
+              const copyKey = `${
+                state.value?.id ?? "detail"
+              }:${section.title}:${field.label}`;
               return (
                 <Box
                   key={`${section.title}:${field.label}`}
@@ -170,7 +184,8 @@ function LogDetail({
                   sx={{
                     minWidth: 0,
                     display: "grid",
-                    gridTemplateColumns: "minmax(96px, 0.36fr) minmax(0, 1fr) 24px",
+                    gridTemplateColumns:
+                      "minmax(96px, 0.36fr) minmax(0, 1fr) 24px",
                     columnGap: 1,
                     alignItems: "start",
                     px: 0.25,
@@ -209,7 +224,9 @@ function LogDetail({
                           onClick={() => onCopy(copyKey, field.value)}
                           sx={{ width: 24, height: 24, p: 0, mt: -0.35 }}
                         >
-                          {copiedKey === copyKey ? <Check sx={{ fontSize: 14 }} /> : <ContentCopy sx={{ fontSize: 13 }} />}
+                          {copiedKey === copyKey
+                            ? <Check sx={{ fontSize: 14 }} />
+                            : <ContentCopy sx={{ fontSize: 13 }} />}
                         </IconButton>
                       </Tooltip>
                     )
@@ -222,12 +239,30 @@ function LogDetail({
       ))}
       {state.value.evidence !== undefined && (
         <Box component="details">
-          <Typography component="summary" variant="caption" color="text.secondary" sx={{ cursor: "pointer" }}>
+          <Typography
+            component="summary"
+            variant="caption"
+            color="text.secondary"
+            sx={{ cursor: "pointer" }}
+          >
             Structured evidence
           </Typography>
           <Box
             component="pre"
-            sx={{ m: 0, mt: 0.6, p: 1.25, maxHeight: 280, overflow: "auto", border: 1, borderColor: "divider", borderRadius: 1.5, bgcolor: "action.hover", fontSize: "0.68rem", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+            sx={{
+              m: 0,
+              mt: 0.6,
+              p: 1.25,
+              maxHeight: 280,
+              overflow: "auto",
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1.5,
+              bgcolor: "action.hover",
+              fontSize: "0.68rem",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+            }}
           >
             {detailEvidence(state.value.evidence)}
           </Box>
@@ -237,10 +272,16 @@ function LogDetail({
   );
 }
 
-export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Element {
+export function UsageLogs(
+  { dense = false }: { dense?: boolean },
+): React.JSX.Element {
   const runtimeOptions = agentOptions();
-  const [filters, setFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
-  const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(() => loadDiagnosticLogFilters());
+  const [filters, setFilters] = useState<DiagnosticLogFilters>(() =>
+    loadDiagnosticLogFilters()
+  );
+  const [draftFilters, setDraftFilters] = useState<DiagnosticLogFilters>(() =>
+    loadDiagnosticLogFilters()
+  );
   const [filterOpen, setFilterOpen] = useState(false);
   const [logs, setLogs] = useState<DiagnosticLogSummary[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -248,7 +289,12 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [details, setDetails] = useState<Record<string, { loading: boolean; value?: DiagnosticLogDetail; error?: string }>>({});
+  const [details, setDetails] = useState<
+    Record<
+      string,
+      { loading: boolean; value?: DiagnosticLogDetail; error?: string }
+    >
+  >({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const rangeAnchorMs = useRef(Date.now());
 
@@ -269,7 +315,11 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
         diagnosticLogUrl(filters, cursor, rangeAnchorMs.current),
         signal ? { signal } : {},
       );
-      if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+      if (!response.ok) {
+        throw new Error(
+          await response.text() || `HTTP ${String(response.status)}`,
+        );
+      }
       const page = await response.json() as DiagnosticLogPage;
       setLogs((current) => {
         if (!append) return page.items;
@@ -281,7 +331,11 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
       setError(null);
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
-      setError(cause instanceof Error ? cause.message : "Could not load diagnostic logs");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not load diagnostic logs",
+      );
     } finally {
       if (append) setLoadingMore(false);
       else setLoading(false);
@@ -314,7 +368,10 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
     void copyText(value).then((copied) => {
       if (!copied) return;
       setCopiedKey(key);
-      globalThis.setTimeout(() => setCopiedKey((current) => current === key ? null : current), 1_500);
+      globalThis.setTimeout(
+        () => setCopiedKey((current) => current === key ? null : current),
+        1_500,
+      );
     });
   };
 
@@ -327,26 +384,50 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
     setDetails((current) => ({ ...current, [entry.id]: { loading: true } }));
     void fetch(`/api/logs/${encodeURIComponent(entry.id)}`)
       .then(async (response) => {
-        if (!response.ok) throw new Error(await response.text() || `HTTP ${String(response.status)}`);
+        if (!response.ok) {
+          throw new Error(
+            await response.text() || `HTTP ${String(response.status)}`,
+          );
+        }
         return response.json() as Promise<DiagnosticLogDetail>;
       })
-      .then((value) => setDetails((current) => ({ ...current, [entry.id]: { loading: false, value } })))
-      .catch((cause) => setDetails((current) => ({
-        ...current,
-        [entry.id]: {
-          loading: false,
-          error: cause instanceof Error ? cause.message : "Could not load detail",
-        },
-      })));
+      .then((value) =>
+        setDetails((current) => ({
+          ...current,
+          [entry.id]: { loading: false, value },
+        }))
+      )
+      .catch((cause) =>
+        setDetails((current) => ({
+          ...current,
+          [entry.id]: {
+            loading: false,
+            error: cause instanceof Error
+              ? cause.message
+              : "Could not load detail",
+          },
+        }))
+      );
   };
 
   return (
     <Stack spacing={1.25} sx={{ mt: dense ? 0 : 1 }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={1}
+      >
         <Box>
-          <Typography variant={dense ? "subtitle2" : "overline"} fontWeight={750}>Diagnostic logs</Typography>
+          <Typography
+            variant={dense ? "subtitle2" : "overline"}
+            fontWeight={750}
+          >
+            Diagnostic logs
+          </Typography>
           <Typography variant="caption" color="text.secondary" display="block">
-            Serious failures by default; include retryable and audit events from Filters
+            Serious failures by default; include retryable and audit events from
+            Filters
           </Typography>
         </Box>
         <NetworkButton
@@ -359,10 +440,16 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
         </NetworkButton>
       </Stack>
       <Stack spacing={0.75}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+        <Stack
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          sx={{ minWidth: 0 }}
+        >
           <TimeRangeButton
             value={filters.timeRange}
-            onChange={(timeRange) => setFilters((current) => ({ ...current, timeRange }))}
+            onChange={(timeRange) =>
+              setFilters((current) => ({ ...current, timeRange }))}
             defaultValue={DEFAULT_DIAGNOSTIC_LOG_FILTERS.timeRange}
             maxDurationMs={365 * 86_400_000}
           />
@@ -373,27 +460,50 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
             ...filters.kinds.map((value) => ({
               key: `kind:${value}`,
               label: optionLabel(KIND_OPTIONS, value),
-              color: KIND_OPTIONS.find((option) => option.value === value)?.color,
-              onDelete: () => setFilters((current) => ({ ...current, kinds: current.kinds.filter((item) => item !== value) })),
+              color: KIND_OPTIONS.find((option) => option.value === value)
+                ?.color,
+              onDelete: () =>
+                setFilters((current) => ({
+                  ...current,
+                  kinds: current.kinds.filter((item) => item !== value),
+                })),
             })),
             ...filters.severities.map((value) => ({
               key: `severity:${value}`,
               label: optionLabel(SEVERITY_OPTIONS, value),
-              color: SEVERITY_OPTIONS.find((option) => option.value === value)?.color,
-              accent: SEVERITY_OPTIONS.find((option) => option.value === value)?.accent,
-              onDelete: () => setFilters((current) => ({ ...current, severities: current.severities.filter((item) => item !== value) })),
+              color: SEVERITY_OPTIONS.find((option) => option.value === value)
+                ?.color,
+              accent: SEVERITY_OPTIONS.find((option) => option.value === value)
+                ?.accent,
+              onDelete: () =>
+                setFilters((current) => ({
+                  ...current,
+                  severities: current.severities.filter((item) =>
+                    item !== value
+                  ),
+                })),
             })),
             ...filters.states.map((value) => ({
               key: `state:${value}`,
               label: optionLabel(STATE_OPTIONS, value),
-              color: STATE_OPTIONS.find((option) => option.value === value)?.color,
-              onDelete: () => setFilters((current) => ({ ...current, states: current.states.filter((item) => item !== value) })),
+              color: STATE_OPTIONS.find((option) => option.value === value)
+                ?.color,
+              onDelete: () =>
+                setFilters((current) => ({
+                  ...current,
+                  states: current.states.filter((item) => item !== value),
+                })),
             })),
             ...filters.agents.map((value) => ({
               key: `agent:${value}`,
               label: optionLabel(runtimeOptions, value),
-              color: runtimeOptions.find((option) => option.value === value)?.color,
-              onDelete: () => setFilters((current) => ({ ...current, agents: current.agents.filter((item) => item !== value) })),
+              color: runtimeOptions.find((option) => option.value === value)
+                ?.color,
+              onDelete: () =>
+                setFilters((current) => ({
+                  ...current,
+                  agents: current.agents.filter((item) => item !== value),
+                })),
             })),
           ]}
         />
@@ -408,29 +518,81 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
         floatingActions={false}
       >
         <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
-          <MultiSelectChipGroup label="Type" options={KIND_OPTIONS} value={draftFilters.kinds} onChange={(kinds) => setDraftFilters((current) => ({ ...current, kinds }))} />
-          <MultiSelectChipGroup label="Severity" options={SEVERITY_OPTIONS} value={draftFilters.severities} onChange={(severities) => setDraftFilters((current) => ({ ...current, severities }))} />
-          <Typography variant="caption" color="text.secondary" sx={{ mt: -1.25 }}>
-            Critical and Error are blocking or session-ending. Warning includes retryable provider attempts and cache disruption.
+          <MultiSelectChipGroup
+            label="Type"
+            options={KIND_OPTIONS}
+            value={draftFilters.kinds}
+            onChange={(kinds) =>
+              setDraftFilters((current) => ({ ...current, kinds }))}
+          />
+          <MultiSelectChipGroup
+            label="Severity"
+            options={SEVERITY_OPTIONS}
+            value={draftFilters.severities}
+            onChange={(severities) =>
+              setDraftFilters((current) => ({ ...current, severities }))}
+          />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ mt: -1.25 }}
+          >
+            Critical and Error are blocking or session-ending. Warning includes
+            retryable provider attempts and cache disruption.
           </Typography>
-          <MultiSelectChipGroup label="State" options={STATE_OPTIONS} value={draftFilters.states} onChange={(states) => setDraftFilters((current) => ({ ...current, states }))} />
-          <MultiSelectChipGroup label="Runtime" options={runtimeOptions} value={draftFilters.agents} onChange={(agents) => setDraftFilters((current) => ({ ...current, agents }))} />
+          <MultiSelectChipGroup
+            label="State"
+            options={STATE_OPTIONS}
+            value={draftFilters.states}
+            onChange={(states) =>
+              setDraftFilters((current) => ({ ...current, states }))}
+          />
+          <MultiSelectChipGroup
+            label="Runtime"
+            options={runtimeOptions}
+            value={draftFilters.agents}
+            onChange={(agents) =>
+              setDraftFilters((current) => ({ ...current, agents }))}
+          />
           <Stack direction="row" spacing={1} justifyContent="space-between">
             <Stack direction="row" spacing={0.5}>
-              <Button onClick={() => setDraftFilters((current) => ({ ...current, kinds: [], severities: [], states: [], agents: [] }))}>Clear selections</Button>
+              <Button
+                onClick={() =>
+                  setDraftFilters((current) => ({
+                    ...current,
+                    kinds: [],
+                    severities: [],
+                    states: [],
+                    agents: [],
+                  }))}
+              >
+                Clear selections
+              </Button>
               <Button onClick={resetFilters}>Reset</Button>
             </Stack>
             <Stack direction="row" spacing={1}>
               <Button onClick={() => setFilterOpen(false)}>Cancel</Button>
-              <Button variant="contained" onClick={() => { setFilters(draftFilters); setFilterOpen(false); }}>Apply</Button>
+              <Button
+                variant="contained"
+                onClick={() => {
+                  setFilters(draftFilters);
+                  setFilterOpen(false);
+                }}
+              >
+                Apply
+              </Button>
             </Stack>
           </Stack>
         </Stack>
       </Sheet>
       <Divider />
-      {error && <Typography variant="caption" color="error.main">{error}</Typography>}
+      {error && (
+        <Typography variant="caption" color="error.main">{error}</Typography>
+      )}
       {!error && !loading && logs.length === 0 && (
-        <Typography variant="body2" color="text.secondary">No diagnostic activity matches these filters.</Typography>
+        <Typography variant="body2" color="text.secondary">
+          No diagnostic activity matches these filters.
+        </Typography>
       )}
       <Stack spacing={0.75}>
         {logs.map((entry) => {
@@ -439,11 +601,14 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
           const meta = [
             diagnosticKindLabel(entry.kind),
             entry.agent
-              ? runtimeOptions.find((option) => option.value === entry.agent)?.label ??
+              ? runtimeOptions.find((option) => option.value === entry.agent)
+                ?.label ??
                 entry.agent
               : undefined,
             entry.model,
-            entry.session_ref ? `session ${shortRef(entry.session_ref)}` : undefined,
+            entry.session_ref
+              ? `session ${shortRef(entry.session_ref)}`
+              : undefined,
           ].filter((value): value is string => value !== undefined);
           return (
             <Box
@@ -457,37 +622,107 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
                 bgcolor: (theme) => alpha(theme.palette.text.primary, 0.035),
               }}
             >
-              <Box sx={{ width: 8, height: 8, mt: 0.65, borderRadius: "50%", bgcolor: SEVERITY_ACCENT[entry.severity] }} />
+              <Box
+                sx={{
+                  width: 8,
+                  height: 8,
+                  mt: 0.65,
+                  borderRadius: "50%",
+                  bgcolor: SEVERITY_ACCENT[entry.severity],
+                }}
+              />
               <Box sx={{ minWidth: 0 }}>
                 <Stack direction="row" spacing={0.5} alignItems="flex-start">
                   <ButtonBase
                     onClick={() => toggleDetail(entry)}
                     aria-expanded={expanded}
-                    sx={{ display: "block", flex: 1, minWidth: 0, textAlign: "left", borderRadius: 1 }}
+                    sx={{
+                      display: "block",
+                      flex: 1,
+                      minWidth: 0,
+                      textAlign: "left",
+                      borderRadius: 1,
+                    }}
                   >
-                    <Stack direction="row" justifyContent="space-between" spacing={1}>
-                      <Stack direction="row" spacing={0.6} alignItems="center" sx={{ minWidth: 0 }}>
-                        <Typography variant="body2" fontWeight={700} noWrap>{entry.title}</Typography>
-                        <Chip label={entry.state} size="small" sx={{ height: 19, fontSize: "0.62rem" }} />
+                    <Stack
+                      direction="row"
+                      justifyContent="space-between"
+                      spacing={1}
+                    >
+                      <Stack
+                        direction="row"
+                        spacing={0.6}
+                        alignItems="center"
+                        sx={{ minWidth: 0 }}
+                      >
+                        <Typography variant="body2" fontWeight={700} noWrap>
+                          {entry.title}
+                        </Typography>
+                        <Chip
+                          label={entry.state}
+                          size="small"
+                          sx={{ height: 19, fontSize: "0.62rem" }}
+                        />
                       </Stack>
-                      <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>{time(entry.occurred_at_ms)}</Typography>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ flexShrink: 0 }}
+                      >
+                        {time(entry.occurred_at_ms)}
+                      </Typography>
                     </Stack>
-                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.15, overflowWrap: "anywhere" }}>
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{
+                        display: "block",
+                        mt: 0.15,
+                        overflowWrap: "anywhere",
+                      }}
+                    >
                       {meta.join(" · ")}
                     </Typography>
-                    <Typography variant="body2" sx={{ mt: 0.35, overflowWrap: "anywhere" }}>{entry.summary}</Typography>
+                    <Typography
+                      variant="body2"
+                      sx={{ mt: 0.35, overflowWrap: "anywhere" }}
+                    >
+                      {entry.summary}
+                    </Typography>
                   </ButtonBase>
-                  <Tooltip title={copiedKey === entry.id ? "Copied" : "Copy log ID"}>
-                    <IconButton size="small" aria-label="Copy log ID" onClick={() => copy(entry.id, entry.id)} sx={{ mt: -0.35 }}>
-                      {copiedKey === entry.id ? <Check sx={{ fontSize: 16 }} /> : <ContentCopy sx={{ fontSize: 15 }} />}
+                  <Tooltip
+                    title={copiedKey === entry.id ? "Copied" : "Copy log ID"}
+                  >
+                    <IconButton
+                      size="small"
+                      aria-label="Copy log ID"
+                      onClick={() => copy(entry.id, entry.id)}
+                      sx={{ mt: -0.35 }}
+                    >
+                      {copiedKey === entry.id
+                        ? <Check sx={{ fontSize: 16 }} />
+                        : <ContentCopy sx={{ fontSize: 15 }} />}
                     </IconButton>
                   </Tooltip>
-                  <IconButton size="small" aria-label={expanded ? "Collapse log detail" : "Expand log detail"} onClick={() => toggleDetail(entry)} sx={{ mt: -0.35 }}>
-                    {expanded ? <ExpandLess sx={{ fontSize: 18 }} /> : <ExpandMore sx={{ fontSize: 18 }} />}
+                  <IconButton
+                    size="small"
+                    aria-label={expanded
+                      ? "Collapse log detail"
+                      : "Expand log detail"}
+                    onClick={() => toggleDetail(entry)}
+                    sx={{ mt: -0.35 }}
+                  >
+                    {expanded
+                      ? <ExpandLess sx={{ fontSize: 18 }} />
+                      : <ExpandMore sx={{ fontSize: 18 }} />}
                   </IconButton>
                 </Stack>
                 {expanded && detailState && (
-                  <LogDetail state={detailState} copiedKey={copiedKey} onCopy={copy} />
+                  <LogDetail
+                    state={detailState}
+                    copiedKey={copiedKey}
+                    onCopy={copy}
+                  />
                 )}
               </Box>
             </Box>
@@ -505,7 +740,8 @@ export function UsageLogs({ dense = false }: { dense?: boolean }): React.JSX.Ele
         </Button>
       )}
       <Typography variant="caption" color="text.disabled">
-        Lists and details load on demand. PostgreSQL keeps the durable index; raw service evidence remains in VictoriaLogs.
+        Lists and details load on demand. PostgreSQL keeps the durable index;
+        raw service evidence remains in VictoriaLogs.
       </Typography>
     </Stack>
   );

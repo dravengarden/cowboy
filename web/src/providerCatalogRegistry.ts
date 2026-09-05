@@ -8,6 +8,7 @@ import {
   type ProviderCompatibilityTarget,
   validateProviderCatalog,
 } from "@cowboy/provider-ui";
+import { installPluginRuntimeHosts } from "@cowboy/plugin-api/runtime";
 import { applyOccupancyHostPlugins } from "./occupancyHostMap";
 import { applyVisualHostPlugins } from "./visualHostMap";
 import { applyUsageHostPlugins } from "./usageHostMap";
@@ -30,10 +31,13 @@ export async function loadProviderCatalog(
           (await response.text()).trim() || "Could not load Providers",
         );
       }
-      const payload = await response.json() as { platform?: { hosts?: unknown } };
-      applyUsageHostPlugins(payload.platform?.hosts);
-      applyOccupancyHostPlugins(payload.platform?.hosts);
-      applyVisualHostPlugins(payload.platform?.hosts);
+      const payload = await response.json() as {
+        platform?: { hosts?: unknown };
+      };
+      const hosts = installPluginRuntimeHosts(payload.platform?.hosts, true);
+      applyUsageHostPlugins(hosts);
+      applyOccupancyHostPlugins(hosts);
+      applyVisualHostPlugins(hosts);
       const catalog = validateProviderCatalog(payload);
       cached = catalog;
       for (const listener of listeners) listener();

@@ -5,11 +5,12 @@ import {
   shortResetTime,
   topBarUsageLimits,
 } from "./usageLimits";
+import { usageWidgetBalanceLabel, usageWidgetSpendLabel } from "./usageHostMap";
 import {
-  usageWidgetBalanceLabel,
-  usageWidgetSpendLabel,
-} from "./usageHostMap";
-import { usageWidgetForAccount, usageWidgetHasBalance } from "./usageWidget";
+  formatCompactCurrency,
+  usageWidgetForAccount,
+  usageWidgetHasBalance,
+} from "./usageWidget";
 
 /** Session-sheet queue and page-view row. These stay off the first
  *  screen; the collapsed label must still name the live state. */
@@ -88,10 +89,6 @@ export type SessionProviderUsageRow = {
   remaining?: number;
 };
 
-function compactCny(value: number): string {
-  return `¥${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
-}
-
 /** Compact account windows for the session Provider facts list.
  *  Remaining-percent windows keep a sibling Resets row so the sheet stays a
  *  two-column list. DeepSeek exposes balance rather than a percent window. */
@@ -110,12 +107,12 @@ export function sessionProviderUsageRows(
       {
         id: widget.kind,
         label: usageWidgetBalanceLabel(usage.provider),
-        value: compactCny(widget.balanceCny),
+        value: formatCompactCurrency(widget.balance, widget.currency),
       },
       {
         id: `${usage.provider}-spend`,
         label: usageWidgetSpendLabel(usage.provider),
-        value: compactCny(widget.spend24hCny),
+        value: formatCompactCurrency(widget.spend24h, widget.currency),
       },
     ];
   }

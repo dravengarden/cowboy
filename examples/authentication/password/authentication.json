@@ -1,0 +1,8 @@
+{
+  "schema_version": 2,
+  "id": "password",
+  "version": "1.0.0",
+  "display_name": "Password",
+  "button_label": "Sign in with password",
+  "protocol": { "kind": "local_password", "configuration": {} }
+}

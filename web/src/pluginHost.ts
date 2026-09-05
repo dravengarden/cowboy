@@ -1,85 +1,99 @@
 import * as React from "react";
-import Visibility from "@mui/icons-material/Visibility";
-import VisibilityOff from "@mui/icons-material/VisibilityOff";
 import {
-  Alert,
-  Box,
-  Button,
-  Divider,
-  IconButton,
-  InputAdornment,
-  LinearProgress,
-  Stack,
-  TextField,
-  Typography,
-} from "@mui/material";
-import type { CowboyPluginHost } from "@cowboy/plugin-api";
-import { authApi } from "./auth/authApi";
-import { PasswordStrength } from "./admin/PasswordStrength";
-import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
+  installPluginRenderers,
+  type PluginRendererRegistry,
+  type PluginSlotProps,
+} from "@cowboy/plugin-api";
 import { ProviderSurface } from "./ProviderSurface";
-import { DeepSeekDetails } from "../../plugins/claude-deepseek/ui/DeepSeekDetails";
-import { ProviderUsage } from "./pluginUsage";
+import { ProviderUsage, ProviderUsageActivity } from "./pluginUsage";
+import type { ProviderUsageSlotContext } from "./usageLimits";
+import {
+  type LoginMethodContext,
+  LoginMethodFallback,
+} from "./auth/ProductLoginPage";
+import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
 
-declare global {
-  interface Window {
-    __COWBOY_PLUGIN_HOST?: CowboyPluginHost;
-  }
+function contextRecord(context: unknown): Record<string, unknown> | null {
+  return context != null && typeof context === "object"
+    ? context as Record<string, unknown>
+    : null;
 }
 
-export function installCowboyPluginHost(
-  components: CowboyPluginHost["components"] = {},
-): void {
-  globalThis.__COWBOY_PLUGIN_HOST = {
-    version: "1.0.0",
-    React,
-    ui: {
-      Alert,
-      Box,
-      Button,
-      Divider,
-      IconButton,
-      InputAdornment,
-      LinearProgress,
-      Stack,
-      TextField,
-      Typography,
-    },
-    icons: {
-      Visibility,
-      VisibilityOff,
-    },
-    components: {
-      PasswordStrength,
-      PasskeysPanel: ProductPasskeysPanel,
-      ProviderSurface,
-      ProviderUsage,
-      DeepSeekDetails,
-      ...components,
-    },
-    auth: {
-      login: (account, password) => authApi.login(account, password),
-      register: (account, password) => authApi.register(account, password),
-      setup: (token) => authApi.setup(token),
-    },
-    call: async (pluginId, body) => {
-      const response = await fetch(
-        `/api/plugins/${encodeURIComponent(pluginId)}/call`,
-        {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body ?? {}),
-        },
-      );
-      if (!response.ok) {
-        throw new Error(`plugin call failed: HTTP ${String(response.status)}`);
-      }
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        return await response.json();
-      }
-      return await response.text();
-    },
+function LoginPasswordRenderer({ context }: PluginSlotProps): unknown {
+  if (contextRecord(context)?.kind !== "password") {
+    throw new TypeError("login-password-v1 requires a password context");
+  }
+  return React.createElement(LoginMethodFallback, {
+    context: context as LoginMethodContext,
+  });
+}
+
+function LoginOidcRenderer({ context }: PluginSlotProps): unknown {
+  if (contextRecord(context)?.kind !== "oidc") {
+    throw new TypeError("login-oidc-v1 requires an OIDC context");
+  }
+  return React.createElement(LoginMethodFallback, {
+    context: context as LoginMethodContext,
+  });
+}
+
+function AccountPasskeysRenderer(): unknown {
+  return React.createElement(ProductPasskeysPanel);
+}
+
+function ProviderSurfaceRenderer({ context }: PluginSlotProps): unknown {
+  const row = contextRecord(context);
+  if (
+    !row ||
+    !["provider.setup", "provider.empty", "provider.settings"].includes(
+      String(row.kind),
+    )
+  ) {
+    throw new TypeError("provider-surface-v1 requires a lifecycle context");
+  }
+  const surface = context as React.ComponentProps<typeof ProviderSurface> & {
+    kind: string;
   };
+  return React.createElement(ProviderSurface, {
+    manifest: surface.manifest,
+    slot: surface.slot,
+    host: surface.host,
+    ...(surface.onEffect ? { onEffect: surface.onEffect } : {}),
+    ...(surface.blockedCapabilities
+      ? { blockedCapabilities: surface.blockedCapabilities }
+      : {}),
+  });
+}
+
+function ProviderUsageRenderer({ context }: PluginSlotProps): unknown {
+  if (contextRecord(context)?.kind !== "provider.usage") {
+    throw new TypeError("provider-usage-v1 requires a usage context");
+  }
+  return React.createElement(ProviderUsage, {
+    context: context as ProviderUsageSlotContext,
+  });
+}
+
+function ProviderUsageActivityRenderer({ context }: PluginSlotProps): unknown {
+  if (contextRecord(context)?.kind !== "provider.usage") {
+    throw new TypeError(
+      "provider-usage-activity-v1 requires a usage context",
+    );
+  }
+  return React.createElement(ProviderUsageActivity, {
+    context: context as ProviderUsageSlotContext,
+  });
+}
+
+const COWBOY_RENDERERS: PluginRendererRegistry = {
+  "login-password-v1": LoginPasswordRenderer,
+  "login-oidc-v1": LoginOidcRenderer,
+  "account-passkeys-v1": AccountPasskeysRenderer,
+  "provider-surface-v1": ProviderSurfaceRenderer,
+  "provider-usage-v1": ProviderUsageRenderer,
+  "provider-usage-activity-v1": ProviderUsageActivityRenderer,
+};
+
+export function installCowboyPluginRenderers(): void {
+  installPluginRenderers(COWBOY_RENDERERS);
 }

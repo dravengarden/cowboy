@@ -2,12 +2,7 @@ import { Box } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
-import { ProductPasskeysPanel } from "../auth/ProductPasskeysPanel";
-import { PluginSlot } from "@cowboy/plugin-api";
-
-if (globalThis.__COWBOY_PLUGIN_HOST) {
-  globalThis.__COWBOY_PLUGIN_HOST.components.PasskeysPanel = ProductPasskeysPanel;
-}
+import { ProductAccountPluginPanels } from "../auth/ProductAccountPluginPanels";
 import { ProductDevicesPanel } from "../auth/ProductDevicesPanel";
 import { ProductSessionCapacityPanel } from "../auth/ProductSessionCapacityPanel";
 import type { Mode as ThemeMode } from "../theme";
@@ -29,7 +24,10 @@ function DesktopAccountCommands(): React.JSX.Element {
 function EnabledDesktopAccountCommands({
   me,
   signOut,
-}: Pick<ReturnType<typeof useProductAuth>, "me" | "signOut">): React.JSX.Element {
+}: Pick<
+  ReturnType<typeof useProductAuth>,
+  "me" | "signOut"
+>): React.JSX.Element {
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -69,41 +67,39 @@ function EnabledDesktopAccountCommands({
   useDesktopCommand(sessionsCommand);
   return (
     <>
-    <DesktopModal
-      open={sessionsOpen}
-      onClose={() => setSessionsOpen(false)}
-      title="Sessions & capacity"
-      description="Service-enforced limits, live client leases, and signed-in sessions."
-      width={620}
-    >
-      <Box sx={{ px: 2.25, py: 2 }}>
-        <ProductSessionCapacityPanel />
-      </Box>
-    </DesktopModal>
-    <DesktopModal
-      open={devicesOpen}
-      onClose={() => setDevicesOpen(false)}
-      title="CLI & ACP access"
-      description={`Browser-approved CLI and ACP credentials for ${me.account}. Browser sessions and Passkeys are managed separately.`}
-      width={520}
-    >
-      <Box sx={{ px: 2.25, py: 2 }}>
-        <ProductDevicesPanel />
-      </Box>
-    </DesktopModal>
-    <DesktopModal
-      open={passkeysOpen}
-      onClose={() => setPasskeysOpen(false)}
-      title="Passkeys"
-      description="Password login stays first. A Passkey can periodically lock this view while agents keep running."
-      width={520}
-    >
-      <Box sx={{ px: 2.25, py: 2 }}>
-        <PluginSlot pluginId="passkey" slot="account.panel">
-          <ProductPasskeysPanel />
-        </PluginSlot>
-      </Box>
-    </DesktopModal>
+      <DesktopModal
+        open={sessionsOpen}
+        onClose={() => setSessionsOpen(false)}
+        title="Sessions & capacity"
+        description="Service-enforced limits, live client leases, and signed-in sessions."
+        width={620}
+      >
+        <Box sx={{ px: 2.25, py: 2 }}>
+          <ProductSessionCapacityPanel />
+        </Box>
+      </DesktopModal>
+      <DesktopModal
+        open={devicesOpen}
+        onClose={() => setDevicesOpen(false)}
+        title="CLI & ACP access"
+        description={`Browser-approved CLI and ACP credentials for ${me.account}. Browser sessions and Passkeys are managed separately.`}
+        width={520}
+      >
+        <Box sx={{ px: 2.25, py: 2 }}>
+          <ProductDevicesPanel />
+        </Box>
+      </DesktopModal>
+      <DesktopModal
+        open={passkeysOpen}
+        onClose={() => setPasskeysOpen(false)}
+        title="Passkeys"
+        description="Password login stays first. A Passkey can periodically lock this view while agents keep running."
+        width={520}
+      >
+        <Box sx={{ px: 2.25, py: 2 }}>
+          <ProductAccountPluginPanels />
+        </Box>
+      </DesktopModal>
     </>
   );
 }

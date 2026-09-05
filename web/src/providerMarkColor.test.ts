@@ -1,5 +1,11 @@
 import { assertEquals } from "jsr:@std/assert";
-import { readableProviderAccent } from "./providerVisual.ts";
+import {
+  applyVisualHostPlugins,
+  readableProviderAccent,
+} from "./providerVisual.ts";
+import { testFirstPartyHostPlugins } from "./testFirstPartyHostInventory.test.ts";
+
+applyVisualHostPlugins(testFirstPartyHostPlugins());
 
 Deno.test("Grok cream stays on dark paper and darkens on light paper", () => {
   assertEquals(readableProviderAccent("#E8E4DC", "dark", "#FFFFFF"), "#E8E4DC");

@@ -3,9 +3,10 @@
   "slots": ["account.panel"],
   "native_capabilities": ["webauthn"],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "account.panel": "account-passkeys-v1"
+    }
   },
   "storage": {
     "postgres": {

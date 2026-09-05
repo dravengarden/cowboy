@@ -1,8 +1,18 @@
 import { assert, assertEquals } from "jsr:@std/assert";
-import { bundledHostPlugins } from "./bundledHostPlugins.ts";
 import {
   applyUsageHostPlugins,
+  usageActivityAgentIds,
+  usageActivityAgentLabel,
+  usageActivityAgents,
+  usageActivityModelIds,
+  usageActivityModelLabel,
+  usageActivityModels,
   usageAvailableStatus,
+  usageCacheIntervalLabel,
+  usageCacheIntervalMs,
+  usageCacheMinHitLabel,
+  usageCacheMinHitTokens,
+  usageCacheOptionName,
   usageCardOrder,
   usageEmptyMessage,
   usageErrorAuth,
@@ -17,17 +27,6 @@ import {
   usageProductLabel,
   usageResetId,
   usageTopBarWindowMinutes,
-  usageActivityAgentIds,
-  usageActivityAgentLabel,
-  usageActivityAgents,
-  usageActivityModelIds,
-  usageActivityModelLabel,
-  usageActivityModels,
-  usageCacheIntervalLabel,
-  usageCacheIntervalMs,
-  usageCacheMinHitLabel,
-  usageCacheMinHitTokens,
-  usageCacheOptionName,
   usageWidgetBalanceLabel,
   usageWidgetKind,
   usageWidgetShape,
@@ -35,22 +34,39 @@ import {
   usageWidgetWindow,
 } from "./usageHostMap.ts";
 
-Deno.test("first-party usage maps are generated from bundled host.json", () => {
-  const source = Deno.readTextFileSync(new URL("./usageHostMap.ts", import.meta.url));
-  assert(source.includes("bundledHostPlugins"));
+function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
+  const root = new URL("../../plugins/", import.meta.url);
+  return [...Deno.readDirSync(root)]
+    .filter((entry) => entry.isDirectory)
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      try {
+        const host = JSON.parse(
+          Deno.readTextFileSync(new URL(`${entry.name}/host.json`, root)),
+        ) as Record<string, unknown>;
+        return [{ id: entry.name, ...host }];
+      } catch (reason) {
+        if (reason instanceof Deno.errors.NotFound) return [];
+        throw reason;
+      }
+    });
+}
+
+const FIRST_PARTY_HOSTS = firstPartyHosts();
+applyUsageHostPlugins(FIRST_PARTY_HOSTS);
+
+function restoreFirstPartyHosts(): void {
+  applyUsageHostPlugins(FIRST_PARTY_HOSTS);
+}
+
+Deno.test("usage maps have no source-compiled first-party inventory", () => {
+  const source = Deno.readTextFileSync(
+    new URL("./usageHostMap.ts", import.meta.url),
+  );
+  assertEquals(source.includes("bundledHostPlugins"), false);
   assertEquals(source.includes("FALLBACK_USAGE_PLUGIN_IDS"), false);
   assertEquals(source.includes('provider = "deepseek"'), false);
-  assertEquals(
-    bundledHostPlugins.map((host) => host.id),
-    [
-      "codex",
-      "codex-deepseek",
-      "grok",
-      "gemini",
-      "claude-code",
-      "claude-deepseek",
-    ],
-  );
+  assert(FIRST_PARTY_HOSTS.length > 0);
 });
 
 Deno.test("usage plugin ids map account providers onto agent plugins", () => {
@@ -62,16 +78,16 @@ Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("future-b"), "future-b");
 });
 
-Deno.test("activated host plugins overlay usage account mapping", () => {
+Deno.test("activated host inventory replaces usage account mapping", () => {
   try {
     applyUsageHostPlugins([
-      { id: "custom-grok", usage_account: "xai" },
+      { id: "custom-grok", usage: { account: "xai" } },
       { id: "password", slots: ["login.method"] },
     ]);
     assertEquals(usagePluginId("xai"), "custom-grok");
-    assertEquals(usagePluginId("openai"), "codex");
+    assertEquals(usagePluginId("openai"), "openai");
   } finally {
-    applyUsageHostPlugins([]);
+    restoreFirstPartyHosts();
   }
   assertEquals(usagePluginId("xai"), "grok");
 });
@@ -89,11 +105,11 @@ Deno.test("host usage specs overlay reset ids and product labels", () => {
     }]);
     assertEquals(usagePluginId("xai"), "grok");
     assertEquals(usageResetId("xai"), "xai");
-    assertEquals(usageResetId("openai"), "codex");
+    assertEquals(usageResetId("openai"), undefined);
     assertEquals(usageProductLabel("xai"), "Grok Build");
-    assertEquals(usageProductLabel("openai"), "OpenAI");
+    assertEquals(usageProductLabel("openai"), "openai");
   } finally {
-    applyUsageHostPlugins([]);
+    restoreFirstPartyHosts();
   }
   assertEquals(usageProductLabel("xai"), "xAI");
 });
@@ -133,17 +149,17 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
     assertEquals(usageErrorAuth("openai"), "Custom OpenAI auth");
     assertEquals(usageErrorConfig("openai"), "Custom OpenAI config");
     assertEquals(usageErrorFetch("openai"), "Custom OpenAI fetch");
-    assertEquals(usageLimitParser("xai"), "xai-credits");
-    assertEquals(usageCardOrder("xai"), 1);
+    assertEquals(usageLimitParser("xai"), "generic-buckets");
+    assertEquals(usageCardOrder("xai"), Number.MAX_SAFE_INTEGER);
     assertEquals(usageTopBarWindowMinutes("xai"), undefined);
   } finally {
-    applyUsageHostPlugins([]);
+    restoreFirstPartyHosts();
   }
-  assertEquals(usageLimitParser("xai"), "xai-credits");
-  assertEquals(usageLimitParser("anthropic"), "anthropic-utilization");
+  assertEquals(usageLimitParser("xai"), "generic-buckets");
+  assertEquals(usageLimitParser("anthropic"), "generic-buckets");
   assertEquals(usageLimitParser("gemini"), "generic-buckets");
-  assertEquals(usageErrorKind("openai"), "openai-auth");
-  assertEquals(usageErrorKind("xai"), "xai-billing");
+  assertEquals(usageErrorKind("openai"), "raw");
+  assertEquals(usageErrorKind("xai"), "raw");
   assertEquals(usageErrorKind("gemini"), "raw");
   assertEquals(usageCardOrder("openai"), 0);
   assertEquals(usageTopBarWindowMinutes("openai"), [300, 10080]);
@@ -192,7 +208,9 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
     label: "5h",
     windowMinutes: 300,
   });
-  assertEquals(usageLimitLabel("anthropic", "unknown"), { label: "Plan usage" });
+  assertEquals(usageLimitLabel("anthropic", "unknown"), {
+    label: "Plan usage",
+  });
   assertEquals(usageWidgetBalanceLabel("deepseek"), "Balance");
   assertEquals(usageWidgetSpendLabel("deepseek"), "24h spend");
   assertEquals(usageWidgetBalanceLabel("openai"), "Balance");
@@ -235,7 +253,7 @@ Deno.test("host usage specs overlay cache-protection thresholds", () => {
     assertEquals(usageCacheIntervalLabel(), "1h");
     assertEquals(usageCacheOptionName(), "Prompt cache");
   } finally {
-    applyUsageHostPlugins([]);
+    restoreFirstPartyHosts();
   }
   assertEquals(usageCacheMinHitTokens(), 64_000);
   assertEquals(usageCacheIntervalLabel(), "8h");
@@ -254,7 +272,7 @@ Deno.test("host usage specs overlay activity model families", () => {
     assertEquals(usageActivityModelLabel("flash"), "Lite");
     assertEquals(usageActivityModelLabel("pro"), "pro");
   } finally {
-    applyUsageHostPlugins([]);
+    restoreFirstPartyHosts();
   }
   assertEquals(usageActivityModelIds(), ["flash", "pro"]);
   assertEquals(usageActivityModelLabel("pro"), "Pro");

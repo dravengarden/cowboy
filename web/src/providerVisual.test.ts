@@ -1,5 +1,6 @@
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";
-import { PROVIDER_SURFACE_COLORS, providerVisual } from "./providerVisual.ts";
+import { providerVisual } from "./providerVisual.ts";
+import { applyVisualHostPlugins } from "./visualHostMap.ts";
 
 Deno.test("catalog-unavailable Providers use theme-safe generic visuals", () => {
   const dark = providerVisual("future-agent", "dark");
@@ -10,8 +11,25 @@ Deno.test("catalog-unavailable Providers use theme-safe generic visuals", () => 
   assertNotEquals(dark.primary, light.primary);
 });
 
-Deno.test("first-party Providers keep distinct readable accents", () => {
-  const ids = Object.keys(PROVIDER_SURFACE_COLORS);
+Deno.test("runtime host Providers keep distinct readable accents", () => {
+  const hosts = [
+    {
+      id: "future-a",
+      visual: {
+        light: { primary: "#111111", secondary: "#222222" },
+        dark: { primary: "#EEEEEE", secondary: "#DDDDDD" },
+      },
+    },
+    {
+      id: "future-b",
+      visual: {
+        light: { primary: "#333333", secondary: "#444444" },
+        dark: { primary: "#CCCCCC", secondary: "#BBBBBB" },
+      },
+    },
+  ];
+  applyVisualHostPlugins(hosts);
+  const ids = hosts.map((host) => host.id);
   const darkPrimaries = new Set(
     ids.map((id) => providerVisual(id, "dark").primary),
   );
@@ -20,7 +38,6 @@ Deno.test("first-party Providers keep distinct readable accents", () => {
   );
   assertEquals(darkPrimaries.size, ids.length);
   assertEquals(lightPrimaries.size, ids.length);
-  assertNotEquals(providerVisual("grok", "dark").primary, "#18181B");
-  assertEquals(providerVisual("grok", "dark").primary, "#E8E4DC");
-  assertEquals(providerVisual("claude-code", "dark").primary, "#E08A6A");
+  assertEquals(providerVisual("future-a", "dark").primary, "#EEEEEE");
+  applyVisualHostPlugins([]);
 });

@@ -12,8 +12,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _, symlink};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
@@ -25,8 +26,8 @@ use cowboy_plugin_sdk::{
 };
 use cowboy_provider_sdk::{
     AgentRuntimeBinding, Architecture, OperatingSystem, PlatformRuntimeArtifacts,
-    ProviderArtifactFormat, ProviderPackage, RefreshOwnership, ReleasedPrivateComponent,
-    RuntimeContract,
+    PrivateComponentKind, ProviderArtifactFormat, ProviderPackage, RefreshOwnership,
+    ReleasedPrivateComponent, RuntimeContract, RuntimeSidecar, RuntimeSidecarTransport,
 };
 use futures::StreamExt as _;
 use sha2::{Digest as _, Sha256};
@@ -35,9 +36,12 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use crate::legacy_provider_release::LegacyProviderRelease;
 use crate::machine_auth::LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE;
 use crate::machine_protocol::{
-    DesiredPlugin, Platform, PluginInstallationState, PluginInventory, PortableCredentialBundle,
-    ProviderAuthAction, ProviderMaterializationState, ProviderReplicaState, SealedProviderAuth,
+    DesiredPlugin, Platform, PluginHostOperation, PluginInstallationState, PluginInventory,
+    PortableCredentialBundle, ProviderAuthAction, ProviderMaterializationState,
+    ProviderReplicaState, SealedProviderAuth,
 };
+use crate::plugin_host::{PluginHostSpec, PluginUsageSidecar};
+use crate::plugin_host_bundle::{MAX_HOST_BUNDLE_BYTES, PluginHostBundle};
 
 const MAX_PROVIDER_PACKAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROVIDER_RUNTIME_ARTIFACT_BYTES: usize = 1024 * 1024 * 1024;
@@ -60,6 +64,32 @@ pub(crate) struct ProviderLaunchContext {
     pub remove_environment: BTreeSet<String>,
     pub remove_environment_prefixes: BTreeSet<String>,
     pub home: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) struct PluginHostInvocationFailure {
+    pub started: bool,
+    pub error: anyhow::Error,
+}
+
+impl From<anyhow::Error> for PluginHostInvocationFailure {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            started: false,
+            error,
+        }
+    }
+}
+
+struct PreparedUsageSidecars {
+    children: Vec<tokio::process::Child>,
+    targets: Vec<serde_json::Value>,
+}
+
+struct ResolvedPluginHostInvocation {
+    command: Vec<String>,
+    environment: BTreeMap<String, String>,
+    collector_sidecars: Vec<PluginUsageSidecar>,
 }
 
 pub(crate) struct ExportedAuthCandidate {
@@ -175,6 +205,18 @@ struct ProviderActivationSnapshot {
     rollback: Option<String>,
 }
 
+fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
+    ensure!(
+        matches!(
+            package.manifest.kind,
+            cowboy_plugin_sdk::PluginKind::AgentProvider
+                | cowboy_plugin_sdk::PluginKind::CodeIntelligence
+        ),
+        "Machine installer received a Controller-only Plugin kind"
+    );
+    Ok(())
+}
+
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
@@ -221,6 +263,9 @@ impl MachinePluginStore {
             "Plugin package exceeds 8 MiB"
         );
         let plugin_package = desired.release.validate_bytes(&bytes)?;
+        ensure_machine_installable_kind(&plugin_package)?;
+        let (host_bundle, host_bundle_bytes) =
+            desired_plugin_host_bundle(desired, &plugin_package)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
             &desired.publisher_public_key,
             PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
@@ -234,7 +279,12 @@ impl MachinePluginStore {
         )?;
         if matches!(plugin_package.payload, PluginPayload::CodeIntelligence(_)) {
             return self
-                .install_code_intelligence_plugin(&plugin_package, desired)
+                .install_code_intelligence_plugin(
+                    &plugin_package,
+                    desired,
+                    host_bundle.as_ref(),
+                    host_bundle_bytes.as_deref(),
+                )
                 .await;
         }
         let package = plugin_package
@@ -278,6 +328,7 @@ impl MachinePluginStore {
             desired.publisher_public_key.as_bytes(),
             0o600,
         )?;
+        stage_plugin_host_bundle(&content, host_bundle.as_ref(), host_bundle_bytes.as_deref())?;
 
         let runtime = stage_provider_runtime(&content, runtime_artifacts).await?;
         let launch_command = runtime
@@ -310,6 +361,8 @@ impl MachinePluginStore {
         &self,
         package: &PluginPackage,
         desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
     ) -> Result<PluginInventory> {
         let artifacts = matching_plugin_runtime_artifacts(
             &desired.release.runtime_artifacts,
@@ -345,6 +398,7 @@ impl MachinePluginStore {
             desired.publisher_public_key.as_bytes(),
             0o600,
         )?;
+        stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
         stage_provider_runtime(&content, &runtime_artifacts).await?;
         let inventory = PluginInventory {
             plugin_id: package.manifest.id.clone(),
@@ -479,6 +533,250 @@ impl MachinePluginStore {
         }
         output.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
         Ok(output)
+    }
+
+    pub async fn invoke_host(
+        &self,
+        plugin_id: &str,
+        plugin_version: &str,
+        generation_digest: &str,
+        auth_generation: Option<u64>,
+        operation: PluginHostOperation,
+        mut payload: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let resolved = self
+            .resolve_host_invocation(
+                plugin_id,
+                plugin_version,
+                generation_digest,
+                auth_generation,
+                operation,
+                &mut payload,
+            )
+            .map_err(PluginHostInvocationFailure::from)?;
+        let mut environment = resolved.environment;
+        let mut prepared_sidecars = if operation == PluginHostOperation::CollectUsage {
+            self.prepare_usage_sidecars(&resolved.collector_sidecars)
+                .await
+                .map_err(PluginHostInvocationFailure::from)?
+        } else {
+            PreparedUsageSidecars {
+                children: Vec::new(),
+                targets: Vec::new(),
+            }
+        };
+        if !prepared_sidecars.targets.is_empty() {
+            environment.insert(
+                "COWBOY_PLUGIN_SIDECAR_TARGETS".to_owned(),
+                serde_json::to_string(&prepared_sidecars.targets)
+                    .map_err(anyhow::Error::from)
+                    .map_err(PluginHostInvocationFailure::from)?,
+            );
+            environment.insert(
+                "COWBOY_PLUGIN_SIDECAR_URLS".to_owned(),
+                prepared_sidecars
+                    .targets
+                    .iter()
+                    .filter_map(|target| target.get("url").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        let (program, command_args) = resolved
+            .command
+            .split_first()
+            .context("Plugin host operation has no executable")
+            .map_err(PluginHostInvocationFailure::from)?;
+        let input = serde_json::to_vec(&payload)
+            .map_err(anyhow::Error::from)
+            .map_err(PluginHostInvocationFailure::from)?;
+        let output = crate::plugin_process::run_plugin_command_with_environment(
+            program,
+            command_args,
+            &input,
+            &environment,
+        )
+        .await;
+        for child in &mut prepared_sidecars.children {
+            let _ = child.kill().await;
+        }
+        let output = output.map_err(|failure| PluginHostInvocationFailure {
+            started: failure.started,
+            error: failure.error,
+        })?;
+        if !output.status.success() {
+            return Err(PluginHostInvocationFailure {
+                started: true,
+                error: anyhow::anyhow!(
+                    "Plugin host command exited {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            });
+        }
+        serde_json::from_slice(&output.stdout)
+            .context("parsing Plugin host command response")
+            .map_err(|error| PluginHostInvocationFailure {
+                started: true,
+                error,
+            })
+    }
+
+    fn resolve_host_invocation(
+        &self,
+        plugin_id: &str,
+        plugin_version: &str,
+        generation_digest: &str,
+        auth_generation: Option<u64>,
+        operation: PluginHostOperation,
+        payload: &mut serde_json::Value,
+    ) -> Result<ResolvedPluginHostInvocation> {
+        validate_plugin_id(plugin_id)?;
+        let active = self
+            .inventory_one(plugin_id)?
+            .context("Plugin is not active on this Machine")?;
+        ensure!(
+            active.state == PluginInstallationState::Active
+                && active.plugin_version == plugin_version
+                && active.generation_digest == generation_digest
+                && active.auth_generation == auth_generation,
+            "active Plugin or authentication generation changed before host invocation"
+        );
+        let (plugin, release, content) =
+            self.verified_plugin_generation(plugin_id, generation_digest)?;
+        ensure!(
+            plugin.manifest.version == plugin_version,
+            "stored Plugin version does not match host invocation"
+        );
+        let host = verified_plugin_host_bundle(&plugin, &release, &content)?
+            .context("exact Plugin generation has no signed host bundle")?;
+        let spec = PluginHostSpec::from_json(host.files["host.json"].as_bytes())
+            .context("decoding installed Plugin host contract")?;
+        let usage = spec
+            .usage
+            .context("installed Plugin host has no usage capability")?;
+        let (command, operation_name) = match operation {
+            PluginHostOperation::CollectUsage => (&usage.collector_argv, "collect"),
+            PluginHostOperation::ResetUsage => (&usage.reset_argv, "consume_reset"),
+            PluginHostOperation::DecorateActivity => (&usage.collector_argv, "decorate_activity"),
+        };
+        ensure!(!command.is_empty(), "Plugin host operation has no command");
+        payload
+            .as_object_mut()
+            .context("Plugin host invocation payload must be an object")?
+            .insert(
+                "operation".to_owned(),
+                serde_json::Value::String(operation_name.to_owned()),
+            );
+        plugin
+            .agent_provider()
+            .context("usage host is not attached to an Agent Provider")?;
+        let launch = self.launch_context(plugin_id, generation_digest, auth_generation)?;
+        let host_root = content.join("host").to_string_lossy().into_owned();
+        Ok(ResolvedPluginHostInvocation {
+            command: command
+                .iter()
+                .map(|argument| argument.replace("${PLUGIN_DIR}", &host_root))
+                .collect(),
+            environment: plugin_host_environment(&launch)?,
+            collector_sidecars: usage.collector_sidecars,
+        })
+    }
+
+    async fn prepare_usage_sidecars(
+        &self,
+        targets: &[PluginUsageSidecar],
+    ) -> Result<PreparedUsageSidecars> {
+        let inventory = self.inventory()?;
+        let mut prepared = PreparedUsageSidecars {
+            children: Vec::new(),
+            targets: Vec::new(),
+        };
+        for target in targets {
+            let mut candidates = Vec::new();
+            for installed in &inventory {
+                let Ok((plugin, release, content)) = self
+                    .verified_plugin_generation(&installed.plugin_id, &installed.generation_digest)
+                else {
+                    continue;
+                };
+                let Ok(Some(host)) = verified_plugin_host_bundle(&plugin, &release, &content)
+                else {
+                    continue;
+                };
+                let Ok(spec) = PluginHostSpec::from_json(host.files["host.json"].as_bytes()) else {
+                    continue;
+                };
+                if spec.adapter_slot.as_deref() != Some(target.adapter_slot.as_str()) {
+                    continue;
+                }
+                let Some(package) = plugin.agent_provider() else {
+                    continue;
+                };
+                let Some(sidecar) = package
+                    .manifest
+                    .runtime
+                    .sidecars
+                    .iter()
+                    .find(|sidecar| sidecar.id == target.sidecar)
+                    .cloned()
+                else {
+                    continue;
+                };
+                candidates.push((installed, package.clone(), sidecar));
+            }
+            ensure!(
+                candidates.len() <= 1,
+                "multiple active Plugin generations satisfy usage sidecar {:?}",
+                target.id
+            );
+            let Some((installed, package, sidecar)) = candidates.pop() else {
+                continue;
+            };
+            let launch = match self.launch_context(
+                &installed.plugin_id,
+                &installed.generation_digest,
+                installed.auth_generation,
+            ) {
+                Ok(launch) => launch,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        plugin_id = installed.plugin_id,
+                        lane = target.id,
+                        "usage sidecar launch context is unavailable"
+                    );
+                    continue;
+                }
+            };
+            match start_usage_sidecar(
+                &package,
+                &sidecar,
+                &launch,
+                &self.platform,
+                &self.architecture,
+            )
+            .await
+            {
+                Ok((child, base_url)) => {
+                    prepared.children.push(child);
+                    prepared.targets.push(serde_json::json!({
+                        "id": target.id,
+                        "url": format!("{base_url}{}", target.path),
+                    }));
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        plugin_id = installed.plugin_id,
+                        lane = target.id,
+                        "usage sidecar is unavailable"
+                    );
+                }
+            }
+        }
+        Ok(prepared)
     }
 
     pub fn launch_context(
@@ -2941,6 +3239,347 @@ fn runtime_command(package_path: &Path, command: &str) -> Result<PathBuf> {
     Ok(executable)
 }
 
+fn desired_plugin_host_bundle(
+    desired: &DesiredPlugin,
+    package: &PluginPackage,
+) -> Result<(Option<PluginHostBundle>, Option<Vec<u8>>)> {
+    let bytes = desired
+        .host_bundle_base64
+        .as_deref()
+        .map(|encoded| {
+            ensure!(
+                encoded.len() <= MAX_HOST_BUNDLE_BYTES.saturating_mul(4).div_ceil(3) + 4,
+                "encoded Plugin host bundle is too large"
+            );
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .context("decoding Plugin host bundle")
+        })
+        .transpose()?;
+    let bundle = PluginHostBundle::from_bytes_for_package(
+        bytes.as_deref(),
+        &package.manifest.id,
+        &package.manifest.version,
+        &desired.release.package_digest,
+        desired.release.host_bundle_digest.as_deref(),
+    )?;
+    package.validate_host_contract(bundle.as_ref().map(|bundle| &bundle.files))?;
+    Ok((bundle, bytes))
+}
+
+fn verified_plugin_host_bundle(
+    package: &PluginPackage,
+    release: &cowboy_plugin_sdk::PluginRelease,
+    content: &Path,
+) -> Result<Option<PluginHostBundle>> {
+    let path = content.join("plugin-hostbundle.json");
+    let bytes = match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+                "stored Plugin host bundle is not a regular file"
+            );
+            Some(fs::read(&path).context("reading stored Plugin host bundle")?)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).context("inspecting stored Plugin host bundle"),
+    };
+    let bundle = PluginHostBundle::from_bytes_for_package(
+        bytes.as_deref(),
+        &package.manifest.id,
+        &package.manifest.version,
+        &release.package_digest,
+        release.host_bundle_digest.as_deref(),
+    )?;
+    package.validate_host_contract(bundle.as_ref().map(|bundle| &bundle.files))?;
+    if let Some(bundle) = &bundle {
+        ensure!(
+            installed_host_files_match(&content.join("host"), bundle)?,
+            "installed Plugin host files failed integrity verification"
+        );
+    } else {
+        ensure!(
+            !content.join("host").exists(),
+            "unbound Plugin generation contains host files"
+        );
+    }
+    Ok(bundle)
+}
+
+fn plugin_host_environment(context: &ProviderLaunchContext) -> Result<BTreeMap<String, String>> {
+    const SAFE_AMBIENT: &[&str] = &[
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "NIX_SSL_CERT_FILE",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+        "USER",
+    ];
+    let mut environment = SAFE_AMBIENT
+        .iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| ((*name).to_owned(), value))
+        })
+        .collect::<BTreeMap<_, _>>();
+    environment.extend(context.environment.clone());
+    if let Some(home) = &context.home {
+        let home = home.to_string_lossy().into_owned();
+        environment.insert("HOME".to_owned(), home.clone());
+        environment.insert("XDG_CONFIG_HOME".to_owned(), format!("{home}/.config"));
+        environment.insert("XDG_DATA_HOME".to_owned(), format!("{home}/.local/share"));
+        environment.insert("XDG_CACHE_HOME".to_owned(), format!("{home}/.cache"));
+    }
+    let commands = context
+        .environment
+        .get(crate::provider_behavior::COMPONENT_COMMANDS_ENV)
+        .context("exact Provider component command map is missing")?;
+    let commands: BTreeMap<String, String> =
+        serde_json::from_str(commands).context("decoding exact Provider component commands")?;
+    let mut names = BTreeSet::new();
+    for (command, executable) in commands {
+        let name = plugin_component_environment_name(&command)?;
+        ensure!(
+            names.insert(name.clone()),
+            "Provider component commands have an environment-name collision"
+        );
+        environment.insert(name, executable);
+    }
+    Ok(environment)
+}
+
+fn plugin_component_environment_name(command: &str) -> Result<String> {
+    ensure!(!command.is_empty(), "Provider component command is empty");
+    let normalized = command
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                byte.to_ascii_uppercase() as char
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    ensure!(
+        normalized.bytes().any(|byte| byte.is_ascii_alphanumeric()),
+        "Provider component command has no environment-safe characters"
+    );
+    Ok(format!("COWBOY_PLUGIN_COMMAND_{normalized}"))
+}
+
+async fn start_usage_sidecar(
+    package: &ProviderPackage,
+    sidecar: &RuntimeSidecar,
+    context: &ProviderLaunchContext,
+    platform: &Platform,
+    architecture: &str,
+) -> Result<(tokio::process::Child, String)> {
+    ensure!(
+        sidecar.component.kind == PrivateComponentKind::ProviderGateway,
+        "usage sidecar component is not a Provider gateway"
+    );
+    let payload = matching_payload(package, platform, architecture)?;
+    let component = payload
+        .private_components
+        .iter()
+        .find(|component| {
+            component.kind == sidecar.component.kind && component.slot == sidecar.component.slot
+        })
+        .context("usage sidecar component is absent from the platform payload")?;
+    let executable = runtime_command(&context.package_path, &component.command)?;
+    let RuntimeSidecarTransport::LoopbackHttpV1 {
+        listen_argument,
+        health_path,
+        timeout_ms,
+    } = &sidecar.transport;
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .context("allocating usage sidecar loopback port")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    let base_url = format!("http://{address}");
+    let health_url = format!("{base_url}{health_path}");
+
+    let mut command = tokio::process::Command::new(&executable);
+    command
+        .args(&sidecar.arguments)
+        .arg(listen_argument)
+        .arg(address.to_string())
+        .current_dir(
+            executable
+                .parent()
+                .context("usage sidecar executable has no parent")?,
+        )
+        .env_clear()
+        .envs(usage_sidecar_environment(context, sidecar)?)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("spawning usage sidecar {}", executable.display()))?;
+    let deadline = Instant::now() + Duration::from_millis(*timeout_ms);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(250))
+        .build()?;
+    loop {
+        if let Some(status) = child.try_wait().context("polling usage sidecar")? {
+            bail!("usage sidecar exited before readiness: {status}");
+        }
+        if client
+            .get(&health_url)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+        {
+            return Ok((child, base_url));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill().await;
+            bail!("usage sidecar readiness timed out");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn usage_sidecar_environment(
+    context: &ProviderLaunchContext,
+    sidecar: &RuntimeSidecar,
+) -> Result<BTreeMap<String, String>> {
+    const BASELINE_NAMES: &[&str] = &[
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOGNAME",
+        "NIX_SSL_CERT_FILE",
+        "PATH",
+        "SHELL",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "TMPDIR",
+        "USER",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+    ];
+    let baseline = plugin_host_environment(context)?;
+    let mut environment = BASELINE_NAMES
+        .iter()
+        .filter_map(|name| {
+            baseline
+                .get(*name)
+                .map(|value| ((*name).to_owned(), value.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    environment.extend(sidecar.environment.clone());
+    for name in &sidecar.auth_environment {
+        environment.insert(
+            name.clone(),
+            context
+                .environment
+                .get(name)
+                .with_context(|| format!("usage sidecar auth projection {name:?} is missing"))?
+                .clone(),
+        );
+    }
+    Ok(environment)
+}
+
+fn stage_plugin_host_bundle(
+    content: &Path,
+    bundle: Option<&PluginHostBundle>,
+    bytes: Option<&[u8]>,
+) -> Result<()> {
+    let host_root = content.join("host");
+    let bundle_path = content.join("plugin-hostbundle.json");
+    let Some(bundle) = bundle else {
+        ensure!(
+            bytes.is_none() && !host_root.exists() && !bundle_path.exists(),
+            "unbound Plugin generation contains host files"
+        );
+        return Ok(());
+    };
+    let bytes = bytes.context("validated Plugin host bundle bytes are missing")?;
+    if host_root.exists() {
+        ensure!(
+            installed_host_files_match(&host_root, bundle)?,
+            "retained Plugin host files failed integrity verification"
+        );
+    } else {
+        let temporary = content.join(format!(
+            ".host-staging-{}-{}",
+            std::process::id(),
+            ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let stage = (|| -> Result<()> {
+            fs::create_dir(&temporary)?;
+            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o700))?;
+            for (relative, source) in &bundle.files {
+                let destination = temporary.join(relative);
+                ensure_within(&temporary, &destination)?;
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent)?;
+                    set_directory_chain_permissions(&temporary, parent)?;
+                }
+                atomic_write(&destination, source.as_bytes(), 0o600)?;
+            }
+            fs::rename(&temporary, &host_root)?;
+            Ok(())
+        })();
+        if stage.is_err() {
+            let _ = fs::remove_dir_all(&temporary);
+        }
+        stage.context("staging exact Plugin host files")?;
+    }
+    atomic_write(&bundle_path, bytes, 0o600)?;
+    Ok(())
+}
+
+fn installed_host_files_match(root: &Path, bundle: &PluginHostBundle) -> Result<bool> {
+    let mut installed = BTreeMap::new();
+    collect_installed_host_files(root, root, &mut installed)?;
+    Ok(installed == bundle.files)
+}
+
+fn collect_installed_host_files(
+    root: &Path,
+    directory: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let metadata = entry.file_type()?;
+        ensure!(
+            !metadata.is_symlink(),
+            "Plugin host tree contains a symlink"
+        );
+        if metadata.is_dir() {
+            collect_installed_host_files(root, &entry.path(), files)?;
+            continue;
+        }
+        ensure!(
+            metadata.is_file(),
+            "Plugin host tree contains a special file"
+        );
+        let relative = entry
+            .path()
+            .strip_prefix(root)
+            .context("Plugin host file escaped its generation")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(entry.path())?;
+        files.insert(relative, source);
+    }
+    Ok(())
+}
+
 fn read_installed_runtime(content: &Path) -> Result<InstalledRuntimeMetadata> {
     let metadata_path = content.join("runtime/metadata.json");
     let metadata: InstalledRuntimeMetadata = serde_json::from_slice(
@@ -3266,6 +3905,7 @@ mod tests {
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: plugin_package.contract_fingerprint.clone(),
             component_release,
+            host_bundle_digest: None,
             signature: String::new(),
             supported_platforms: package
                 .manifest
@@ -3320,6 +3960,30 @@ mod tests {
                 })
                 .collect(),
         };
+        let host_bundle = PluginHostBundle {
+            schema: crate::plugin_host_bundle::HOST_BUNDLE_SCHEMA.to_owned(),
+            plugin_id: package.manifest.id.clone(),
+            plugin_version: package.manifest.version.clone(),
+            package_digest: release.package_digest.clone(),
+            files: BTreeMap::from([
+                (
+                    "host.json".to_owned(),
+                    r#"{"schema_version":1,"adapter_slot":"gemini","usage":{"account":"fixture","collector":"command","collector_argv":["@plugin-js","run","--allow-env=COWBOY_PLUGIN_COMMAND_GEMINI,HOME","--allow-run=${ENV:COWBOY_PLUGIN_COMMAND_GEMINI}","${PLUGIN_DIR}/collector/index.js"]}}"#
+                        .to_owned(),
+                ),
+                (
+                    "collector/index.js".to_owned(),
+                    r#"const request = JSON.parse(await new Response(Deno.stdin.readable).text()); console.log(JSON.stringify({operation: request.operation, command: Deno.env.get("COWBOY_PLUGIN_COMMAND_GEMINI"), home: Deno.env.get("HOME")}));"#
+                        .to_owned(),
+                ),
+            ]),
+        };
+        host_bundle.validate().unwrap();
+        let host_bundle_bytes = serde_json::to_vec(&host_bundle).unwrap();
+        release.host_bundle_digest = Some(format!(
+            "sha256:{:x}",
+            Sha256::digest(host_bundle_bytes.as_slice())
+        ));
         release.artifact_digest = release.computed_artifact_digest().unwrap();
         let root = std::env::temp_dir().join(format!(
             "cowboy-provider-install-test-{}-{}",
@@ -3339,6 +4003,9 @@ mod tests {
             release: release.clone(),
             package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
             publisher_public_key: publisher.public_key().to_owned(),
+            host_bundle_base64: Some(
+                base64::engine::general_purpose::STANDARD.encode(&host_bundle_bytes),
+            ),
         };
         let store =
             MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".to_owned())
@@ -3358,6 +4025,63 @@ mod tests {
         let envelope = seal_auth_for_test(&store, &package, &service_signer, 1, &bundle);
         let first_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(first_receipt.auth_generation_advanced);
+        let collected = store
+            .invoke_host(
+                "gemini",
+                &package.manifest.version,
+                &release.artifact_digest,
+                Some(1),
+                PluginHostOperation::CollectUsage,
+                serde_json::json!({ "operation": "spoofed" }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(collected["operation"], "collect");
+        assert!(
+            collected["command"].as_str().is_some_and(
+                |command| command.contains("/generations/") && command.ends_with("/bin")
+            )
+        );
+        assert!(
+            collected["home"]
+                .as_str()
+                .is_some_and(|home| home.ends_with("/runtime/generations/1/home"))
+        );
+        let wrong_auth = store
+            .invoke_host(
+                "gemini",
+                &package.manifest.version,
+                &release.artifact_digest,
+                Some(2),
+                PluginHostOperation::CollectUsage,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert!(!wrong_auth.started);
+        let installed_collector = root
+            .join("machine/plugins/gemini/generations")
+            .join(digest_generation_name(&release.artifact_digest).unwrap())
+            .join("content/host/collector/index.js");
+        fs::write(&installed_collector, b"console.log('{}')").unwrap();
+        let tampered = store
+            .invoke_host(
+                "gemini",
+                &package.manifest.version,
+                &release.artifact_digest,
+                Some(1),
+                PluginHostOperation::CollectUsage,
+                serde_json::json!({}),
+            )
+            .await
+            .unwrap_err();
+        assert!(!tampered.started);
+        assert!(tampered.error.to_string().contains("integrity"));
+        fs::write(
+            &installed_collector,
+            host_bundle.files["collector/index.js"].as_bytes(),
+        )
+        .unwrap();
         let replayed_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(!replayed_receipt.auth_generation_advanced);
         let auth_root = root.join("machine/provider-auth/providers/gemini");
@@ -3472,7 +4196,7 @@ mod tests {
         use cowboy_plugin_sdk::{
             CodeIntelligenceContract, PluginArtifactFormat, PluginArtifactProbe,
             PluginComponentKind, PluginManifest, PluginPackage, PluginPayload, PluginRelease,
-            PluginRuntimeArtifacts, RELEASE_SCHEMA_VERSION, ReleasedPluginComponent,
+            PluginRuntimeArtifacts, RELEASE_SCHEMA_MIN_VERSION, ReleasedPluginComponent,
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
         let script = b"#!/bin/sh\nexit 0\n".to_vec();
@@ -3509,7 +4233,7 @@ mod tests {
         .unwrap();
         let bytes = package.canonical_bytes().unwrap();
         let mut release = PluginRelease {
-            release_schema: RELEASE_SCHEMA_VERSION,
+            release_schema: RELEASE_SCHEMA_MIN_VERSION,
             plugin_id: "zed".to_owned(),
             plugin_version,
             plugin_kind: cowboy_plugin_sdk::PluginKind::CodeIntelligence,
@@ -3519,6 +4243,7 @@ mod tests {
             publisher: package.manifest.publisher.clone(),
             contract_fingerprint: package.contract_fingerprint.clone(),
             component_release,
+            host_bundle_digest: None,
             signature: String::new(),
             supported_platforms: vec![cowboy_provider_sdk::PlatformTarget {
                 os: OperatingSystem::Linux,
@@ -3564,6 +4289,7 @@ mod tests {
                 release: release.clone(),
                 package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
                 publisher_public_key: publisher.public_key().to_owned(),
+                host_bundle_base64: None,
             })
             .await
             .unwrap();

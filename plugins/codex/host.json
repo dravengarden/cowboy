@@ -14,16 +14,37 @@
     "provider.settings"
   ],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "provider.usage": "provider-usage-v1",
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
   },
   "usage": {
     "account": "openai",
-    "collector": "openai-appserver",
+    "collector": "command",
+    "collector_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_CODEX,COWBOY_CODEX_COMMAND",
+      "--allow-run=codex,${ENV:COWBOY_PLUGIN_COMMAND_CODEX},${ENV:COWBOY_CODEX_COMMAND}",
+      "${PLUGIN_DIR}/collector/index.js"
+    ],
     "reset": "codex",
+    "reset_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_CODEX,COWBOY_CODEX_COMMAND",
+      "--allow-run=codex,${ENV:COWBOY_PLUGIN_COMMAND_CODEX},${ENV:COWBOY_CODEX_COMMAND}",
+      "${PLUGIN_DIR}/collector/index.js"
+    ],
     "product": "OpenAI",
-    "error": "openai-auth",
     "error_auth": "OpenAI usage authorization expired. Sign in to Codex again.",
     "order": 0,
     "top_bar_windows": [300, 10080],

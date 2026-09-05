@@ -325,8 +325,14 @@ fn validate_encryption_public_key(value: &str) -> Result<()> {
 
 fn ensure_reset_provider(provider: &str) -> Result<()> {
     anyhow::ensure!(
-        matches!(provider, "codex" | "xai"),
-        "unsupported reset provider"
+        (1..=64).contains(&provider.len())
+            && provider
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            && !provider.starts_with('-')
+            && !provider.ends_with('-')
+            && !provider.contains("--"),
+        "invalid reset provider id"
     );
     Ok(())
 }
@@ -650,11 +656,10 @@ fn cache_transition_cause(
         "compatibility_rewrite"
     } else if changed("static_prefix_fingerprint") {
         "static_prefix_changed"
-    } else if (json_scalar(current, "agent").as_deref() != Some("codex")
-        || current
-            .get("has_previous_response_id")
-            .and_then(serde_json::Value::as_bool)
-            != Some(true))
+    } else if current
+        .get("has_previous_response_id")
+        .and_then(serde_json::Value::as_bool)
+        != Some(true)
         && json_i64(current, "input_item_count")
             .zip(json_i64(previous, "input_item_count"))
             .is_some_and(|(current, previous)| current < previous)
@@ -6263,7 +6268,7 @@ impl PostgresStorage {
                   WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite'
                   WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix
                     THEN 'static_prefix_changed'
-                  WHEN (agent <> 'codex' OR has_previous_response_id IS NOT TRUE)
+                  WHEN has_previous_response_id IS NOT TRUE
                     AND input_item_count < previous_input_item_count THEN 'history_rewrite'
                   WHEN EXISTS (
                     SELECT 1 FROM provider_usage_events failed
@@ -6995,67 +7000,53 @@ fn valid_provider_usage_keepalive_algorithm(value: &str) -> bool {
         })
 }
 
-fn provider_usage_model_family(model: &str) -> &'static str {
-    let normalized = model
-        .trim()
-        .to_ascii_lowercase()
-        .rsplit('/')
-        .next()
-        .unwrap_or_default()
-        .to_owned();
-    if normalized.starts_with("deepseek-v4-pro") {
-        "pro"
-    } else if normalized.starts_with("deepseek-v4-flash")
-        || matches!(normalized.as_str(), "deepseek-chat" | "deepseek-reasoner")
+fn valid_provider_usage_text(value: &str, max_len: usize) -> bool {
+    (1..=max_len).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii() && !byte.is_ascii_control())
+}
+
+fn valid_provider_usage_activity_dimensions(values: &[String]) -> bool {
+    values.len() <= crate::plugin_host::MAX_ACTIVITY_ENTRIES
+        && values
+            .iter()
+            .all(|value| crate::plugin_host::validate_plugin_id(value).is_ok())
+        && values.iter().collect::<HashSet<_>>().len() == values.len()
+}
+
+fn validate_provider_usage_activity_filter(
+    provider: &str,
+    from_ms: i64,
+    to_ms: i64,
+    agents: &[String],
+    model_families: &[String],
+) -> Result<i64> {
+    let window_ms = to_ms.saturating_sub(from_ms);
+    if crate::plugin_host::validate_plugin_id(provider).is_err()
+        || !(60_000..=i64::from(30 * 86_400) * 1_000).contains(&window_ms)
+        || !valid_provider_usage_activity_dimensions(agents)
+        || !valid_provider_usage_activity_dimensions(model_families)
     {
-        "flash"
-    } else {
-        "unknown"
+        anyhow::bail!("invalid provider usage activity filter");
     }
+    Ok(window_ms)
 }
 
 fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
-    let model = event.resolved_model.as_deref().unwrap_or(&event.model);
     let session_valid = match event.session_attribution.as_str() {
         "response_lineage" | "prefix_root" | "explicit" => event.session_fingerprint.is_some(),
         "unattributed" => event.session_fingerprint.is_none(),
         _ => false,
     };
-    let lane_valid = match (event.producer_id.as_str(), event.agent.as_str()) {
-        ("codex-deepseek", "codex") => {
-            event.client_protocol == "responses"
-                && matches!(event.operation.as_str(), "responses" | "compact")
-                && matches!(
-                    event.upstream_protocol.as_str(),
-                    "responses" | "chat_completions"
-                )
-                && ((event.upstream_protocol == "responses" && event.translation_mode == "native")
-                    || (event.upstream_protocol == "chat_completions"
-                        && event.translation_mode == "responses_to_chat"))
-        }
-        ("claude-deepseek", "claude") => {
-            event.operation == "messages"
-                && event.client_protocol == "anthropic_messages"
-                && event.upstream_protocol == "anthropic_messages"
-                && matches!(
-                    event.translation_mode.as_str(),
-                    "native" | "anthropic_compat"
-                )
-        }
-        _ => false,
-    };
-    let request_role_valid = matches!(
-        event.request_role.as_str(),
-        "unknown" | "executor" | "planner" | "subagent" | "reviewer"
-    );
     event.protocol == event.upstream_protocol
-        && event.model_family == provider_usage_model_family(model)
-        && request_role_valid
-        && matches!(event.thinking_mode.as_str(), "enabled" | "disabled")
-        && matches!(
-            event.reasoning_effort.as_str(),
-            "default" | "low" | "high" | "max"
-        )
+        && crate::plugin_host::validate_plugin_id(&event.model_family).is_ok()
+        && valid_provider_usage_text(&event.request_role, 64)
+        && valid_provider_usage_text(&event.client_protocol, 64)
+        && valid_provider_usage_text(&event.upstream_protocol, 64)
+        && valid_provider_usage_text(&event.translation_mode, 64)
+        && valid_provider_usage_text(&event.thinking_mode, 64)
+        && valid_provider_usage_text(&event.reasoning_effort, 64)
         && matches!(event.traffic_source.as_str(), "unattributed" | "cowboy")
         && (event.traffic_source != "cowboy" || event.session_attribution == "explicit")
         && session_valid
@@ -7071,12 +7062,11 @@ fn valid_provider_usage_v3_dimensions(event: &crate::machine_protocol::ProviderU
         && event
             .resolved_model
             .as_ref()
-            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
+            .is_none_or(|value| valid_provider_usage_text(value, 128))
         && event
             .model_revision
             .as_ref()
-            .is_none_or(|value| !value.is_empty() && value.len() <= 128)
-        && lane_valid
+            .is_none_or(|value| valid_provider_usage_text(value, 128))
 }
 
 fn valid_provider_usage_v4_dimensions(event: &crate::machine_protocol::ProviderUsageEvent) -> bool {
@@ -7169,36 +7159,22 @@ fn validate_provider_usage_event(
     event: &crate::machine_protocol::ProviderUsageEvent,
 ) -> Result<()> {
     if event.producer_id != producer_id
-        || event.provider != "deepseek"
-        || !matches!(event.agent.as_str(), "codex" | "claude")
+        || crate::plugin_host::validate_plugin_id(producer_id).is_err()
+        || crate::plugin_host::validate_plugin_id(&event.provider).is_err()
+        || crate::plugin_host::validate_plugin_id(&event.agent).is_err()
         || event.account_fingerprint.len() != 16
         || !event
             .account_fingerprint
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
-        || event.model.len() > 128
+        || !valid_provider_usage_text(&event.model, 128)
         || !(100..=599).contains(&event.status)
         || !matches!(event.schema_version, 1..=4)
-        || !matches!(
-            event.operation.as_str(),
-            "legacy" | "responses" | "compact" | "messages" | "chat_completions"
-        )
-        || !matches!(
-            event.protocol.as_str(),
-            "legacy" | "responses" | "chat_completions" | "anthropic_messages"
-        )
+        || !valid_provider_usage_text(&event.operation, 64)
+        || !valid_provider_usage_text(&event.protocol, 64)
         || !matches!(
             event.cache_observation.as_str(),
             "legacy" | "absent" | "derived" | "explicit"
-        )
-        || !matches!(
-            (
-                producer_id,
-                event.producer_id.as_str(),
-                event.agent.as_str()
-            ),
-            ("codex-deepseek", "codex-deepseek", "codex")
-                | ("claude-deepseek", "claude-deepseek", "claude")
         )
         || !provider_usage_metrics_within_bounds(event)
         || !valid_provider_usage_token_algebra(event)
@@ -7221,22 +7197,6 @@ fn validate_provider_usage_event(
             || event.compatibility_fixes.is_none())
     {
         anyhow::bail!("incomplete provider usage event");
-    }
-    if event.schema_version == 2
-        && !matches!(
-            (
-                event.agent.as_str(),
-                event.operation.as_str(),
-                event.protocol.as_str()
-            ),
-            (
-                "codex",
-                "responses" | "compact",
-                "responses" | "chat_completions"
-            ) | ("claude", "messages", "anthropic_messages")
-        )
-    {
-        anyhow::bail!("inconsistent provider usage dimensions");
     }
     if event.schema_version >= 3 && !valid_provider_usage_v3_dimensions(event) {
         anyhow::bail!("invalid version three provider usage dimensions");
@@ -7321,10 +7281,56 @@ mod provider_usage_validation_tests {
     }
 
     #[test]
-    fn controller_rejects_unknown_usage_producer() {
+    fn controller_accepts_generic_usage_producer_and_rejects_envelope_mismatch() {
         let mut candidate = event();
-        candidate.producer_id = "custom-deepseek".to_owned();
-        assert!(validate_provider_usage_event("custom-deepseek", &candidate).is_err());
+        candidate.producer_id = "future-gateway".to_owned();
+        candidate.provider = "future-account".to_owned();
+        candidate.agent = "future-agent".to_owned();
+        candidate.model = "future/model-v1".to_owned();
+        candidate.model_family = "standard".to_owned();
+        candidate.resolved_model = Some("future/model-v1".to_owned());
+        assert!(validate_provider_usage_event("future-gateway", &candidate).is_ok());
+        assert!(validate_provider_usage_event("other-gateway", &candidate).is_err());
+    }
+
+    #[test]
+    fn activity_filter_validation_is_generic_and_bounded() {
+        let dimensions = (0..crate::plugin_host::MAX_ACTIVITY_ENTRIES)
+            .map(|index| format!("dimension-{index}"))
+            .collect::<Vec<_>>();
+        assert!(
+            validate_provider_usage_activity_filter(
+                "future-account",
+                1_000,
+                61_000,
+                &dimensions,
+                &[],
+            )
+            .is_ok()
+        );
+
+        let mut oversized = dimensions.clone();
+        oversized.push("one-too-many".to_owned());
+        assert!(
+            validate_provider_usage_activity_filter(
+                "future-account",
+                1_000,
+                61_000,
+                &oversized,
+                &[],
+            )
+            .is_err()
+        );
+        assert!(
+            validate_provider_usage_activity_filter(
+                "future-account",
+                1_000,
+                61_000,
+                &["duplicate".to_owned(), "duplicate".to_owned()],
+                &[],
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -8020,7 +8026,7 @@ async fn load_provider_usage_low_hit(
                THEN 'reasoning_configuration_changed' \
              WHEN compatibility_fixes > 0 THEN 'compatibility_rewrite' \
              WHEN static_prefix_fingerprint IS DISTINCT FROM previous_static_prefix THEN 'static_prefix_changed' \
-             WHEN (agent <> 'codex' OR has_previous_response_id IS NOT TRUE) \
+             WHEN has_previous_response_id IS NOT TRUE \
                AND input_item_count < previous_input_item_count THEN 'history_rewrite' \
              WHEN request_prefix_fingerprint = previous_request_prefix \
                AND previous_cache_hit_tokens * 10 >= \
@@ -8222,9 +8228,9 @@ impl PostgresStorage {
     }
 
     /// Query one bounded, provider-owned telemetry view without refreshing
-    /// account balance facts. Filters are closed enums at the HTTP boundary;
-    /// this method repeats validation because persistence is the authority for
-    /// long-lived diagnostic data.
+    /// account balance facts. The HTTP boundary checks each filter against the
+    /// signed Plugin declaration; persistence repeats generic slug, cardinality,
+    /// uniqueness, and time bounds for long-lived diagnostic data.
     pub async fn provider_usage_activity(
         &self,
         provider: &str,
@@ -8233,30 +8239,13 @@ impl PostgresStorage {
         agents: &[String],
         model_families: &[String],
     ) -> Result<serde_json::Value> {
-        let window_ms = to_ms.saturating_sub(from_ms);
-        if provider != "deepseek"
-            || !(60_000..=i64::from(30 * 86_400) * 1_000).contains(&window_ms)
-            || agents.len() > 2
-            || model_families.len() > 2
-            || agents
-                .iter()
-                .any(|value| !matches!(value.as_str(), "codex" | "claude"))
-            || model_families
-                .iter()
-                .any(|value| !matches!(value.as_str(), "flash" | "pro"))
-            || agents
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != agents.len()
-            || model_families
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != model_families.len()
-        {
-            anyhow::bail!("invalid provider usage activity filter");
-        }
+        let window_ms = validate_provider_usage_activity_filter(
+            provider,
+            from_ms,
+            to_ms,
+            agents,
+            model_families,
+        )?;
         let agent = (agents.len() == 1).then(|| agents[0].as_str());
         let model_family = (model_families.len() == 1).then(|| model_families[0].as_str());
         let window_seconds = window_ms / 1_000;
@@ -8692,6 +8681,25 @@ mod storage_contract_tests {
     }
 
     #[test]
+    fn reset_provider_ids_use_plugin_slug_contract() {
+        for provider in ["codex", "xai", "future-reset", "provider2"] {
+            ensure_reset_provider(provider).unwrap();
+        }
+        for provider in [
+            "",
+            "Future",
+            "-future",
+            "future-",
+            "future--reset",
+            "future_reset",
+        ] {
+            assert!(ensure_reset_provider(provider).is_err(), "{provider:?}");
+        }
+        assert!(ensure_reset_provider(&"a".repeat(64)).is_ok());
+        assert!(ensure_reset_provider(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
     fn machine_encryption_key_must_be_canonical_and_contributory() {
         let secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
         let public = x25519_dalek::PublicKey::from(&secret);
@@ -8851,44 +8859,49 @@ mod storage_contract_tests {
         store.delete_provider_reset("codex").await?;
         assert!(store.load_provider_reset("codex").await?.is_none());
 
+        let future_provider = "future-reset";
         store
-            .upsert_provider_reset("xai", fire_at_ms + 2_000, "storage-contract-xai-reset")
+            .upsert_provider_reset(
+                future_provider,
+                fire_at_ms + 2_000,
+                "storage-contract-future-reset",
+            )
             .await?;
-        let xai = store
-            .load_provider_reset("xai")
+        let future = store
+            .load_provider_reset(future_provider)
             .await?
-            .context("scheduled xAI provider action was not restored")?;
-        assert_eq!(xai.fire_at_ms, fire_at_ms + 2_000);
+            .context("scheduled plugin-declared provider action was not restored")?;
+        assert_eq!(future.fire_at_ms, fire_at_ms + 2_000);
         assert!(
             !store
-                .claim_provider_reset("xai", "stale-storage-contract-key")
+                .claim_provider_reset(future_provider, "stale-storage-contract-key")
                 .await?
         );
         store
             .append_provider_action_log(
-                "xai",
+                future_provider,
                 "scheduled",
                 "scheduled",
                 "contract",
-                "xAI storage contract action",
+                "plugin-declared storage contract action",
                 None,
-                Some("storage-contract-xai-reset"),
+                Some("storage-contract-future-reset"),
                 fire_at_ms + 2_000,
             )
             .await?;
-        let xai_log = store
+        let future_log = store
             .provider_action_logs(10)
             .await?
             .into_iter()
-            .find(|log| log.provider == "xai")
-            .context("xAI provider action log was not restored")?;
-        assert_eq!(xai_log.status, "scheduled");
+            .find(|log| log.provider == future_provider)
+            .context("plugin-declared provider action log was not restored")?;
+        assert_eq!(future_log.status, "scheduled");
         assert!(
             store
-                .claim_provider_reset("xai", "storage-contract-xai-reset")
+                .claim_provider_reset(future_provider, "storage-contract-future-reset")
                 .await?
         );
-        assert!(store.load_provider_reset("xai").await?.is_none());
+        assert!(store.load_provider_reset(future_provider).await?.is_none());
         Ok(())
     }
 
@@ -9005,11 +9018,27 @@ mod storage_contract_tests {
         store
             .upsert_external_passkey_ceremony(&external_ceremony)
             .await?;
+        let restored_ceremony = store
+            .external_passkey_ceremony(&external_ceremony.transaction_hash, created_at_ms + 1)
+            .await?
+            .context("external Passkey ceremony was not restored")?;
+        // PostgreSQL jsonb normalizes whitespace/key order; the contract is
+        // identical ceremony data, not an identical JSON serialization.
         assert_eq!(
-            store
-                .external_passkey_ceremony(&external_ceremony.transaction_hash, created_at_ms + 1,)
-                .await?,
-            Some(external_ceremony.clone())
+            serde_json::from_str::<serde_json::Value>(&restored_ceremony.ceremony_json)?,
+            serde_json::from_str::<serde_json::Value>(&external_ceremony.ceremony_json)?
+        );
+        assert_eq!(
+            restored_ceremony.transaction_hash,
+            external_ceremony.transaction_hash
+        );
+        assert_eq!(
+            restored_ceremony.expires_at_ms,
+            external_ceremony.expires_at_ms
+        );
+        assert_eq!(
+            restored_ceremony.created_at_ms,
+            external_ceremony.created_at_ms
         );
         assert!(
             store
@@ -10594,7 +10623,7 @@ mod storage_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "set COWBOY_TEST_POSTGRES_URL to an isolated empty database"]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
     async fn postgres_complete_legacy_ledger_is_marked_without_reapplying_schema() {
         let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
             .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
@@ -10607,6 +10636,17 @@ mod storage_contract_tests {
         let StorageBackend::Postgres(storage) = &store.backend else {
             panic!("expected PostgreSQL backend");
         };
+        // Compare the complete current ledger, including post-baseline
+        // migrations and their checksums, instead of freezing a version count.
+        let ledger_before: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap();
+        assert!(ledger_before.iter().any(|(version, _, success)| {
+            *version == crate::migration_compat::POSTGRES_BASELINE_VERSION && *success
+        }));
         sqlx::query("DELETE FROM _sqlx_migrations WHERE version = $1")
             .bind(crate::migration_compat::POSTGRES_BASELINE_VERSION)
             .execute(&storage.pool)
@@ -10619,12 +10659,13 @@ mod storage_contract_tests {
 
         store.migrate().await.unwrap();
 
-        let versions: Vec<i64> =
-            sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
-                .fetch_all(&storage.pool)
-                .await
-                .unwrap();
-        assert_eq!(versions, (1_i64..=41).collect::<Vec<_>>());
+        let ledger_after: Vec<(i64, Vec<u8>, bool)> = sqlx::query_as(
+            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
+        )
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap();
+        assert_eq!(ledger_after, ledger_before);
         let machines_after: i64 = sqlx::query_scalar("SELECT count(*) FROM machines")
             .fetch_one(&storage.pool)
             .await
@@ -10634,7 +10675,7 @@ mod storage_contract_tests {
     }
 
     #[tokio::test]
-    #[ignore = "set COWBOY_TEST_POSTGRES_URL to an isolated empty database"]
+    #[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
     async fn postgres_implements_storage_contract() {
         let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
             .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");

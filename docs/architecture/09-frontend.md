@@ -256,6 +256,18 @@ and routes to native commands where the PWA can't reach (lock-screen, native fil
 picker). `AppErrorBoundary` + `ConnectionBanner` degrade gracefully when the WS
 drops.
 
+Native wrappers use the same signed plugin presentation as browsers. The
+versioned `/api/plugins` platform inventory supplies each host's slots,
+data-only renderer selections, immutable generation digest, and required
+native capabilities. `PluginSlot` resolves those selections against a closed
+table of Cowboy-owned renderers; plugins cannot provide React, JavaScript,
+HTML, CSS, DOM behavior, or a downloadable UI entry. Account panels and login
+methods are enumerated from slot claims rather than a plugin-ID switch.
+Native-only effects use native-host API `1.0.0` through
+`window.__COWBOY_NATIVE_PLUGIN_HOST`, and Web invokes a capability only when it
+is declared by both the signed plugin generation and the wrapper. Unknown,
+undeclared, or version-mismatched capabilities fail closed.
+
 The iOS shell must tame the document `WKWebView.scrollView` so it does not
 compete with JS spatial drawers. Safari/PWA has no extra 150ms
 `delaysContentTouches` gate on an `overflow: hidden` page; Wry's WKWebView

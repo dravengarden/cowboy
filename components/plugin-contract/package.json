@@ -1,12 +1,17 @@
 {
   "name": "@cowboy/plugin-contract",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "exports": {
     "./schema.json": "./schema.json",
-    "./authentication-provider.schema.json": "./authentication-provider.schema.json"
+    "./authentication-provider.schema.json": "./authentication-provider.schema.json",
+    "./authentication-provider-v2.schema.json": "./authentication-provider-v2.schema.json"
   },
-  "files": ["schema.json", "authentication-provider.schema.json"],
+  "files": [
+    "schema.json",
+    "authentication-provider.schema.json",
+    "authentication-provider-v2.schema.json"
+  ],
   "publishConfig": {
     "access": "public"
   }

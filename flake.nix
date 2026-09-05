@@ -56,11 +56,13 @@
         ./components/code-intelligence/contract.json
       ];
       plugin-contract-files = plugin-sdk-files ++ provider-sdk-files ++ provider-manifest-files;
-      # First-party host UI is discovered by build.rs. Keep the filter tight so
-      # README/worker edits do not restart the controller.
+      # Bootstrap hosts and signed authentication fixtures are discovered by
+      # build.rs and the Controller tests. Keep package payloads in the filtered
+      # source so the hermetic check phase exercises the same Catalog cutover.
       plugin-host-files = [
         (pkgs.lib.fileset.fileFilter (file:
-          file.name == "host.json" || file.hasExt "js" || file.hasExt "css"
+          file.name == "host.json" || file.name == "plugin.json" ||
+          file.name == "authentication.json"
         ) ./examples/authentication)
         (pkgs.lib.fileset.fileFilter (file:
           file.name == "host.json" || file.hasExt "js" || file.hasExt "css"
@@ -92,10 +94,17 @@
         fileset = pkgs.lib.fileset.unions ([
           ./Cargo.toml
           ./Cargo.lock
+          ./build.rs
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
           ./src/claude_shell.rs
+          ./src/cgroup.rs
+          ./src/first_party_sources.rs
+          ./src/plugin_auth_probe.rs
+          ./src/plugin_host.rs
+          ./src/plugin_host_bundle.rs
+          ./src/plugin_process.rs
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
@@ -140,9 +149,10 @@
       # Only behavior that runs inside a detached session contributes to the
       # pool generation. A control-plane-only change updates Cowboy without
       # draining live ACP sessions.
-      worker-generation-files = [
+      worker-generation-files = pkgs.lib.fileset.toList (pkgs.lib.fileset.unions ([
         ./Cargo.toml
         ./Cargo.lock
+        ./build.rs
         ./worker-generation.txt
         ./src/acp.rs
         ./src/agent_model.rs
@@ -150,15 +160,20 @@
         ./src/bin/cowboy-codex-app-server.rs
         ./src/cgroup.rs
         ./src/claude_shell.rs
+        ./src/first_party_sources.rs
         ./src/plugin_runtime_args.rs
         ./src/provider/deepseek_cache.rs
         ./src/provider/deepseek_context.rs
+        ./src/provider/managed_config.rs
         ./src/provider/mod.rs
+        ./src/provider_behavior.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
         ./src/worker.rs
         ./src/bin/cowboy-acp-worker.rs
-      ];
+      ] ++ plugin-contract-files ++ [
+        (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)
+      ]));
       worker-generation = "worker-" + builtins.substring 0 20 (
         builtins.hashString "sha256" (
           pkgs.lib.concatMapStringsSep ":"
@@ -243,9 +258,14 @@
         ];
         nativeBuildInputs = [ pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
-        nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh ];
+        nativeCheckInputs = [ pkgs.cacert pkgs.gitMinimal pkgs.openssh deno ];
         preCheck = ''
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+        '';
+        # current_exe resolves the release symlink to this package, so the
+        # closed Plugin runtime must be beside the real executable too.
+        postInstall = ''
+          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
         '';
         passthru.workerGeneration = worker-generation;
         meta = {
@@ -273,10 +293,11 @@
         nativeBuildInputs = [ pkgs.makeWrapper pkgs.pkg-config ];
         buildInputs = [ pkgs.openssl ];
         postInstall = ''
+          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
           wrapProgram $out/bin/cowboy \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
           wrapProgram $out/bin/cowboy-machine \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
         '';
         doCheck = false;
         meta = {
@@ -366,6 +387,7 @@
         pkgs.runCommand "cowboy-controller-release" { } ''
           mkdir -p "$out/bin" "$out/etc/cowboy-release"
           ln -s ${cowboy}/bin/cowboy "$out/bin/cowboy"
+          ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
           cat >"$out/etc/cowboy-release/source.json" <<'EOF'
           ${builtins.toJSON (release-source "controller" false)}
           EOF
@@ -397,6 +419,7 @@
           "$out/bin/cowboy-machine-install"
         ln -s ${cowboy-machine}/bin/cowboy \
           "$out/bin/cowboy"
+        ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
         ln -s ${cowboy}/bin/cowboy-codex-app-server \
           "$out/bin/cowboy-codex-app-server"
@@ -433,13 +456,22 @@
         test -e ${cowboy-src}/plugins/zed/plugin.json
         test -e ${cowboy-src}/build.rs
         test -e ${cowboy-src}/plugins/grok/host.json
-        test -e ${cowboy-src}/plugins/grok/ui/index.js
+        test -e ${cowboy-src}/plugins/grok/collector/index.js
+        test ! -e ${cowboy-src}/plugins/grok/ui/index.js
         test -e ${cowboy-src}/examples/authentication/password/host.json
-        test -e ${cowboy-src}/examples/authentication/google/ui/index.js
+        test -e ${cowboy-src}/examples/authentication/password/plugin.json
+        test -e ${cowboy-src}/examples/authentication/password/authentication.json
+        test -e ${cowboy-src}/examples/authentication/passkey/plugin.json
+        test -e ${cowboy-src}/examples/authentication/passkey/authentication.json
+        test -e ${cowboy-src}/examples/authentication/google/host.json
+        test ! -e ${cowboy-src}/examples/authentication/google/ui/index.js
         test ! -e ${cowboy-src}/examples/authentication/README.md
         test ! -e ${cowboy-src}/components/provider-runtime/lock.json
         test -e ${machine-src}/components/provider-sdk/Cargo.toml
         test -e ${machine-src}/components/plugin-sdk/Cargo.toml
+        test -e ${machine-src}/build.rs
+        test -e ${machine-src}/src/first_party_sources.rs
+        test -e ${machine-src}/src/plugin_process.rs
         test -e ${machine-src}/plugins/gemini/provider.json
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml
@@ -457,9 +489,11 @@
         test ! -e ${cowboy}/bin/cowboy-machine
         test ! -e ${cowboy}/bin/cowboy-machine-install
         test -x ${cowboy}/bin/cowboy-codex-app-server
+        test -x ${cowboy}/bin/cowboy-plugin-js
         test -x ${cowboy-machine}/bin/cowboy-machine
         test -x ${cowboy-machine}/bin/cowboy-machine-install
         test -x ${cowboy-machine}/bin/cowboy
+        test -x ${cowboy-machine}/bin/cowboy-plugin-js
         test -x ${cowboy-code-adapter}/bin/cowboy-code-adapter
         touch "$out"
       '';
@@ -554,6 +588,9 @@
           jq
           go
           nodejs_24
+          # Ephemeral, socket-only database for the PostgreSQL contract gate.
+          # This is a developer/test dependency, not a Controller runtime input.
+          (lib.getBin postgresql)
         ] ++ [ deno ];
 
         shellHook = ''

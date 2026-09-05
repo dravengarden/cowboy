@@ -1,6 +1,6 @@
 # Installable Plugin packages
 
-Status: Plugin package/release schema v1, Agent Provider payload schema v2,
+Status: Plugin package schema v1, Plugin release schemas v1-2, Agent Provider payload schema v2,
 Agent runtime-binding schema v2, and host integration schema v2 implementation
 contract. The in-tree
 `LaunchSpec` registry remains only as a compatibility fallback for pre-package
@@ -193,6 +193,96 @@ error boundaries, and destructive-action confirmation. A Provider may arrange
 approved primitives inside declared slots and constraints, so its card can have
 a distinct layout without taking over the application shell.
 
+The release-bound `host.json` follows the same boundary for shell-level Plugin slots.
+Its `ui.renderers` object maps every declared slot to one versioned identifier
+from Cowboy's closed renderer set. Host bundles contain only `host.json` and
+optional `collector/**` runtime programs; `ui/**` and other browser-executable
+files are rejected and the Controller exposes no Plugin UI file route.
+
+Authentication payload schema 2 adds `local_password` and `webauthn` to the
+schema-1 OIDC protocol. Their public `configuration` must be exactly `{}`;
+neither a package nor its host may override Controller authentication policy or
+carry secrets. The shared SDK validates each host against the owning payload:
+password selects `login-password-v1`, OIDC selects `login-oidc-v1`, and WebAuthn
+selects `account-passkeys-v1` with the `webauthn` native capability and its own
+storage migrations. All Authentication host bundles contain only `host.json`;
+collector files, RPC, CLI probes, Agent bindings, and unrelated capabilities
+are rejected even with a valid publisher signature. Local protocols require
+Plugin SDK 1.5+ and release schema 2; stripping their host bundle or declaring
+payload schema 1 fails validation. Existing schema-1 OIDC releases remain valid,
+including hostless releases that grant no host capabilities.
+
+Password and Passkey now have independent sources under
+`examples/authentication/` and use the same SDK build/bind/sign/verify/publish
+commands as every Plugin. Catalog replacement of their bootstrap hosts keeps
+the same storage namespace and migration bytes, preserving credential rows.
+Their enablement and session policy remain in Controller configuration; they
+are not OIDC entries in its `providers` array and cannot install on Machines.
+The Controller's separate host activation configuration selects exact releases;
+publication is not a production cutover.
+
+Released usage collectors, resets, and activity transforms run through a typed
+protocol-seven request to an active exact Plugin generation on a Machine. The
+Controller supplies only a closed operation and bounded JSON; the Machine
+selects argv from the release-bound host bundle, revalidates its staged bytes,
+and resolves the exact component commands and authentication home. Optional
+signed `usage.collector_sidecars` rows bind a collector lane to an adapter
+slot, Provider sidecar id, and bounded HTTP path. The Machine resolves those
+against active exact generations under the same lifecycle lock, creates
+invocation-local loopback endpoints, and injects only the resulting target
+map. Missing lanes may degrade independently; ambiguous slot matches fail
+closed. Collector responses bypass ordinary Machine event history.
+
+Bootstrap collectors and Controller RPC sidecars run only through Cowboy's Plugin
+JavaScript runtime. The runtime clears the process environment, disables
+configuration, prompts, remote modules, npm, writes, and imports, and accepts
+only scoped read, process, and network grants. A signed host may derive an
+exact file, executable, or URL host from an explicitly granted environment
+variable; bare filesystem, process, and network grants fail validation. Every
+invocation has bounded input/output/time and its cgroup or process group is
+reaped on every exit path.
+
+The activated Controller descriptor is not an API type. `/api/plugins` and the
+public authentication status expose an explicit, least-privilege projection:
+immutable host generation, slots and renderer choices, labels, visual and
+login copy, native capability names, adapter occupancy, and usage presentation
+data. Storage readiness, collector/reset/RPC commands, reset and session
+execution policy, and generation filesystem paths remain Controller-private.
+Web rejects a host projection without a lowercase 64-hex immutable generation
+before it can contribute a renderer, native capability, usage map, visual, or
+occupancy alias.
+
+The Controller release may carry source-bundled first-party host data as an
+explicit bootstrap/development fallback for an ID with no trusted Catalog
+release. The first trusted external release for that ID disables this fallback
+before host-bundle selection. A missing bundle or an ambiguous latest release
+therefore disables the host generation instead of silently combining a signed
+package with stale Controller-bundled behavior.
+
+Controller host activation is an immutable snapshot keyed by
+`(plugin_id, plugin_version, artifact_digest)`. Every released host generation
+is staged beside the others. An exact startup host selection owns its ID's
+default; otherwise at most one unambiguous latest release may be the default
+for stateless Agent/Code or bootstrap ID-only calls. A released host declaring
+Controller storage has no default without an exact selection, in either source
+mode and regardless of Plugin kind. In Catalog-only mode an unselected
+Authentication release likewise has no default. Catalog refresh validates and stages the
+complete candidate set, applies every required Plugin migration, and then swaps
+the Catalog entries and host runtime together. A failure publishes neither
+half, while operations already in flight retain their previous snapshot and
+exact generation paths. Previously activated exact generations remain
+addressable while sessions and requests drain. Once a trusted Catalog release
+has established authority for an ID, a private persistent authority marker also
+prevents a later empty or interrupted Catalog scan, including after restart,
+from re-enabling the source fallback.
+
+The public host projection carries the exact Plugin version, composite artifact
+digest, immutable host generation, and whether it is the ID's default. Machine
+cards, session visuals, renderer slots, and occupancy accounting select the
+installed or recorded exact identity. An exact miss fails closed and never
+borrows another release's host; legacy ID-only callers may use only the explicit
+default.
+
 Every component ID resolves to a versioned prop, child, event, and resource
 schema. Assets declare an ID, role, media type, digest, accessible label, and
 either a constrained vector path or inline bytes. Unknown components, fields,
@@ -211,15 +301,17 @@ runtime, options, lifecycle logic, authentication contract, and generation
 remain pinned to the exact package.
 
 Machine compatibility is an attested runtime fact, not a guess from its
-application version. Every current Machine includes a strict
-`ProviderContractInventory` in its signed hello. It declares its Provider SDK,
-package/release/UI/host schema intervals, Machine contract, platform, and
-architecture. Cowboy Controller verifies that inventory, applies the same
-closed compatibility predicate as the TypeScript SDK immediately before every
-install or upgrade, and returns a stable typed incompatibility code plus safe
-detail when the operation is rejected. Web selects the newest compatible ready
-Catalog release and omits unavailable lifecycle actions. A legacy Machine with
-no attested inventory must be updated before Provider lifecycle operations.
+application version. Every current Machine includes a strict generic
+`PluginContractInventory` and a narrower `ProviderContractInventory` in its
+signed hello. The generic envelope declares Plugin SDK and manifest,
+package/release, payload-kind, host-bundle, and host-contract schema intervals;
+the Provider envelope declares Provider SDK, package/runtime-binding/UI/host
+intervals and Machine contract. Cowboy Controller applies both relevant closed
+predicates immediately before every install or upgrade and returns a stable
+typed incompatibility code plus safe detail when either is rejected. Web uses
+the same composition to select the newest compatible ready release and omits
+unavailable lifecycle actions. A legacy Machine with no attested generic
+inventory must be updated before it can receive a new Plugin generation.
 
 ## Typed linked logic
 
@@ -273,12 +365,22 @@ executable delivery:
 - `.release.json` binds the package to a complete runtime-artifact matrix. Each
   target contains the exact private component kind, slot, dependency, version,
   logical command, immutable URL, SHA-256 digest, format, entrypoint, and probe.
+- A Plugin with Controller host behavior uses release schema 2.
+  `host_bundle_digest` binds the exact `.hostbundle.json` bytes into the same
+  composite identity; the sidecar has no independent signature or lifecycle.
 - `artifact_digest` is recomputed from the package digest, release schema,
-  Plugin identity, contract fingerprint, component release, target matrix, and every runtime
-  binding. The Ed25519 release signature covers that composite identity and a
-  fingerprint of the runtime matrix.
+  Plugin identity, contract fingerprint, component release, optional host
+  bundle, target matrix, and every runtime binding. The single Ed25519 release
+  signature covers that composite identity.
 
-`plugin-build` intentionally creates an unsigned, unbound release envelope.
+`cowboy-plugin-pack build` is the independent package builder. It intentionally
+creates an unsigned release envelope and, when `host.json` exists, writes and
+binds the adjacent host bundle in the same SDK-only invocation before signing.
+The builder and Catalog both deserialize the versioned
+`cowboy_plugin_sdk::PluginHostSpec` and run the same closed semantic, storage,
+process-grant, and signed-runtime-file validation. The Machine repeats that
+validation when it stages an exact generation; sharing the contract does not
+replace validation at each trust boundary.
 Such a package may appear in the Catalog as `release_state=unbound` so its UI
 can be reviewed, but Cowboy disables install and upgrade. For a production
 Agent Plugin release, `plugin-build` creates the data-only package,
@@ -319,15 +421,16 @@ package:
 ]
 ```
 
-Plugin package/release schema 1, Provider payload schema 2, Agent runtime
+Plugin package schema 1, Plugin release schemas 1-2, Provider payload schema 2, Agent runtime
 binding schema 2, UI schemas 1-2, host integration schemas 1-2, logic schema 1,
-auth schema 1, Cowboy Provider SDK 3.0, Controller contract 2, Provider Machine
-contract 4, and Machine protocol 6 are independently checked.
-The SDK version is a coarse authoring filter: Cowboy accepts only the same SDK
-major and a Provider SDK version no newer than the validating host. A newer SDK
-or a different major fails the Provider build, Catalog ingestion, Machine
-installation, and Web manifest validation. Structural validation and recomputed
-fingerprints remain authoritative even when that SemVer pre-filter passes.
+auth schema 1, the generic Plugin and Provider SDK versions, Controller contract
+2, Provider Machine contract 4, and Machine protocol 7 are independently
+checked. An SDK version is a coarse authoring filter: Cowboy accepts only the
+same SDK major and a version no newer than the validating host. A newer SDK or a
+different major fails the relevant build, Catalog, pre-install compatibility,
+Machine installation, or Web validation boundary. Structural validation and
+recomputed fingerprints remain authoritative even when that SemVer pre-filter
+passes.
 Validation proves, among other things:
 
 1. unknown fields and enum values are rejected;
@@ -340,7 +443,11 @@ Validation proves, among other things:
    commands, composite digest, publisher key, and signature all agree.
 
 The Controller repeats package and signature validation at Catalog ingestion.
-The target Machine repeats it again, selects only its exact platform, downloads
+Publication copies every immutable package, runtime, and host artifact first
+and atomically installs the release envelope last as the Catalog commit marker;
+a concurrent refresh ignores package bytes without that marker.
+The target Machine repeats it again, selects only its exact platform, authenticates
+and stages the release-bound host bundle in the same immutable generation, downloads
 runtime bytes over HTTPS (loopback HTTP is test-only), enforces size and archive
 path limits, verifies each SHA-256 digest, runs every component probe and the
 Provider launch probe, and changes the active link only after success. A
@@ -487,6 +594,135 @@ the Service login and other Machine replicas.
 
 ## Catalog and Machine installation
 
+### Controller host activation
+
+`--plugin-host-config` / `COWBOY_PLUGIN_HOST_CONFIG` names an absolute, private
+regular JSON file (0600, no symlink, at most 128 KiB). It is Controller policy,
+not a package field or a second release/install lifecycle. For example:
+
+```json
+{
+  "schema": "dravengarden.cowboy.plugin-host-activation/v1",
+  "source_policy": "catalog_only",
+  "hosts": [
+    {
+      "plugin_id": "password",
+      "plugin_version": "1.0.0",
+      "artifact_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "plugin_id": "passkey",
+      "plugin_version": "1.0.0",
+      "artifact_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
+```
+
+The digests above are placeholders, not release receipts. Use the composite
+`artifact_digest` from each independently verified signed release, not its
+package or host-bundle digest. Selections require exact stable SemVer and
+lowercase SHA-256, reject duplicate IDs and unknown fields, and stay immutable
+for the Controller process lifetime. Changing a selection requires an explicit
+Controller restart; Catalog refresh does not reread this policy file.
+
+Before restarting, run the candidate Controller binary with the intended
+Service user, environment, and `serve` arguments, adding `--check-plugin-hosts`:
+
+```bash
+cowboy serve --check-plugin-hosts
+```
+
+This short example assumes the actual Service configuration is already in the
+environment. Include the same data directory, Catalog, host/auth config,
+Product-auth toggle, and database flags as the planned start; omitting them
+checks a different configuration. The legacy PostgreSQL and OIDC flags follow
+the same rules as startup. Do not put database passwords directly in shell
+history; retain the Service's protected environment/configuration mechanism.
+
+The check shares startup's exact configuration, signature, host-contract and
+selection validator but performs no initialization. Missing Catalog roots are
+read as empty inventories, never created by inspection or refresh. It does not
+create Service identities, caches, directories, generations or authority
+markers; connect to a database; run migrations/Plugins; call a login endpoint;
+or start a listener. Ordinary startup now also completes this preflight before
+creating Service state. Only the host/login selection subset of `serve`
+configuration is checked; unrelated Machine component manifests, Web roots and
+listener availability are not validated. JSON errors in private host,
+Authentication and legacy
+OIDC configuration report category and line/column without echoing values or
+unknown field names that might contain misplaced credentials.
+
+Success exits zero and emits a data-only
+`dravengarden.cowboy.plugin-host-preflight/v1` report with
+`status: "configuration_valid"`, the source policy and observed cutover marker,
+merged exact selections, required login renderers/WebAuthn storage, and chosen
+Catalog defaults. It contains no private account mapping, credential, database
+URL, migration SQL or execution command. `not_checked` explicitly lists runtime
+artifact bytes, generation staging, database migrations, credential import and
+live authentication. This is a point-in-time configuration check, not an
+activation receipt or proof that the database, filesystem permissions, runtime
+artifacts or real login work. Recheck changed inputs and still verify the
+authorized activation. A failed check exits nonzero without altering state.
+
+The optional file defaults to `bootstrap` when absent. `bootstrap` retains the
+per-ID source migration fallback but honors every supplied exact pin. This
+source-only compatibility path is not permission to migrate a published host:
+all release-bound storage hosts require explicit selection in both source modes.
+When durable admin/Product WebAuthn needs storage, bootstrap preflight checks
+the effective selected and eligible source hosts. A published or previously
+authoritative WebAuthn ID cannot silently reuse a source host; missing selection
+fails before core database connection/migration with an exact-selection error.
+`catalog_only` disables all source hosts, including IDs never previously seen
+in the Catalog. It requires release-bound Authentication hosts matching every
+enabled login method and exactly one selected WebAuthn storage host whenever
+Product Passkeys **or durable admin authentication** need it. This readiness
+check runs before connecting/migrating the core database, staging host
+generations, or running Plugin migrations. Legacy non-Plugin OIDC configuration
+must be migrated first; hostless OIDC is only a bootstrap compatibility path.
+
+Exact OIDC driver selections from `COWBOY_AUTH_CONFIG` are automatically merged
+into the host policy. A conflicting explicit host selection fails startup; the
+login driver and its public renderer cannot come from different releases.
+Password/Passkey enablement, account mapping, secrets, session and capacity
+policy remain in the existing authentication configuration. Selecting their
+host bytes does not enable those policies. `/api/auth/status` projects only
+configured login methods and enabled account panels, using their selected
+defaults; publishing another login Plugin does not advertise it as enabled.
+
+Every refresh preflights the pinned identities before staging or migrations.
+Missing pinned releases reject the entire refresh and retain the current
+Catalog/runtime snapshot. Publishing a higher Authentication version neither
+switches the default nor runs its storage migrations. Any explicitly selected
+host that cannot activate makes startup fail; it cannot be replaced with an
+empty runtime or a bootstrap host. The migration boundary applies to every
+Plugin kind: unselected storage hosts stay available by exact Catalog identity
+but have no default or active namespace, and refresh/restart cannot create or
+advance their schema. Select their exact composite digest in `hosts` and restart
+explicitly to authorize migration. Omitting a selection leaves existing data
+intact; it does not delete a namespace. Stateless Agent/Code ID-only defaults
+may still follow the unambiguous Catalog latest; if that release adds storage,
+the ID has no implicit default, including no fallback to an older stateless
+release. Machine/session behavior remains exact-pinned.
+
+After a successful Catalog-only activation, the Controller durably records
+`plugins/.catalog-only-v1` before publishing its runtime. The marker is one-way:
+later missing configuration or an attempted `bootstrap` restart fails closed,
+including when the Catalog is empty. Corrupt or symlink markers also fail
+closed. A failed activation does not record a completed cutover. Do not delete
+the marker to work around missing releases; restore the verified Catalog and
+the intended exact policy. Preserve Plugin IDs and historical migration bytes
+when replacing bootstrap hosts so existing Passkey namespaces and credentials
+remain usable. A different storage Plugin ID is a separate data migration,
+not a transparent version upgrade. Existing signed generations remain available
+to captured operations while they drain.
+
+This opt-in cutover path does not itself sign, publish, deploy, restart a
+Controller, or install/upgrade anything on a Machine. Default bootstrap code
+remains for existing deployments until their authorized cutovers are verified.
+
+### Machine installation
+
 Publishing and installation are separate state transitions:
 
 ```text
@@ -527,11 +763,13 @@ generation's materialization acknowledgement when auth is required. If auth
 commit fails after the runtime link changes, the Machine restores the exact
 previous active and rollback links before returning the failure.
 
-Plugin install, uninstall, retained-generation reactivation, and Provider
-refresh CAS events use Machine protocol 6. Agent Provider login commands remain
-capability-specific. Protocol negotiation keeps lifecycle commands compatible
-with protocol 5 peers while runtime refresh observation remains disabled until
-both sides negotiate protocol 6.
+Plugin install/upgrade, generic compatibility negotiation, and exact host
+execution use Machine protocol 7. Agent Provider login commands remain
+capability-specific. Protocol negotiation keeps uninstall and retained exact
+generation reactivation compatible with protocol 5 peers, runtime refresh
+observation remains disabled until both sides negotiate protocol 6, and new
+installation plus released collector/reset/activity execution remains
+unavailable until both sides negotiate protocol 7.
 
 ## Sessions and uninstall
 
@@ -612,8 +850,9 @@ or gateway.
 
 The Plugin Catalog compiles all seven first-party manifests as typed
 `unbound` entries and loads installable releases only from its trusted external
-Catalog directory. The default is `<controller-data-dir>/plugin-catalog` and
-may be overridden with `--plugin-catalog-dir`. `plugin-publish` installs publisher public keys,
+Catalog directory. The default is `<controller-data-dir>/plugins/catalog` (the
+legacy `<controller-data-dir>/plugin-catalog` remains a read-only compatibility
+root) and may be overridden with `--plugin-catalog-dir`. `plugin-publish` installs publisher public keys,
 Catalog package/release pairs, receipts, and immutable bytes below
 `artifacts/<sha256>/<filename>`. The Controller serves only those confined
 content-addressed files at `/plugin-artifacts/<sha256>/<filename>`, with an

@@ -3,9 +3,6 @@ import { assert, assertEquals } from "jsr:@std/assert";
 const passwordHost = await Deno.readTextFile(
   new URL("../../examples/authentication/password/host.json", import.meta.url),
 );
-const passwordUi = await Deno.readTextFile(
-  new URL("../../examples/authentication/password/ui/index.js", import.meta.url),
-);
 const login = await Deno.readTextFile(
   new URL("./auth/ProductLoginPage.tsx", import.meta.url),
 );
@@ -30,19 +27,11 @@ Deno.test("login methods mount through an isolated plugin slot", () => {
   assert(login.includes("onSubmit: submit"));
   assert(login.includes("onAuthed"));
   assert(login.includes("onStart: submitProvider"));
-  assert(login.includes("auth.startOidc"));
-  assert(login.includes("getCowboyPluginHost().auth"));
-  assertEquals(login.includes("authApi.login"), false);
-  assertEquals(login.includes("authApi.register"), false);
-  assertEquals(login.includes("authApi.setup"), false);
+  assert(login.includes("authApi.request"));
+  assertEquals(login.includes("getCowboyPluginHost"), false);
   assert(passwordHost.includes('"label": "Password"'));
-  assert(passwordUi.includes("submitPassword"));
-  assert(passwordUi.includes("context.fieldLabels?.account"));
-  assert(passwordUi.includes("context.fieldLabels?.secret"));
-  assert(passwordUi.includes("host().auth"));
-  assert(passwordUi.includes('type: "button"'));
-  assert(passwordUi.includes("PasswordStrength"));
-  assert(passwordUi.includes("passwordrules"));
+  assert(passwordHost.includes('"login.method": "login-password-v1"'));
+  assertEquals(passwordHost.includes("ui/index.js"), false);
 });
 
 const providerManagement = await Deno.readTextFile(
@@ -55,7 +44,7 @@ Deno.test("provider lifecycle surfaces mount through plugin slots", () => {
   assert(providerManagement.includes("context={{"));
   assert(providerManagement.includes("kind,"));
   assert(providerManagement.includes("onEffect"));
-  assert(providerManagement.includes('providerId={entry.provider_id}'));
+  assert(providerManagement.includes("providerId={entry.provider_id}"));
   assert(providerManagement.includes('slot="provider.card"'));
   assert(providerManagement.includes("ProviderManagementCard"));
 });
@@ -117,14 +106,20 @@ Deno.test("provider usage cards mount through plugin slots", () => {
   assert(usageLimitsSource.includes("usageLimitLabel"));
   assertEquals(usageLimitsSource.includes('five_hour: { label: "5h"'), false);
   assertEquals(usageLimitsSource.includes("`claude-${kind}`"), false);
-  assertEquals(usageLimitsSource.includes('if (parser === "xai-credits")'), false);
+  assertEquals(
+    usageLimitsSource.includes('if (parser === "xai-credits")'),
+    false,
+  );
   assertEquals(
     usageLimitsSource.includes('if (parser === "anthropic-utilization"'),
     false,
   );
-  assert(usageLimitsSource.includes("USAGE_LIMIT_PARSERS"));
-  assert(usageLimitsSource.includes("USAGE_ERROR_PRESENTERS"));
-  assertEquals(usageLimitsSource.includes('if (kind === "openai-auth")'), false);
+  assertEquals(usageLimitsSource.includes("USAGE_LIMIT_PARSERS"), false);
+  assertEquals(usageLimitsSource.includes("USAGE_ERROR_PRESENTERS"), false);
+  assertEquals(
+    usageLimitsSource.includes('if (kind === "openai-auth")'),
+    false,
+  );
   assertEquals(usageWidget.includes("function deepseekBalanceCny"), false);
   assertEquals(usageWidget.includes("function deepseekSpend24h"), false);
   assert(usageWidget.includes("activityCacheStats"));
@@ -134,7 +129,8 @@ Deno.test("provider usage cards mount through plugin slots", () => {
   assert(claudeCodeHost.includes('"limit_id_prefix": "claude"'));
   assert(claudeCodeHost.includes('"id": "five_hour"'));
   assert(claudeCodeHost.includes('"adapter_slot": "claude"'));
-  assert(machineState.includes("occupancyProviderIds"));
+  assert(machineState.includes("providerOccupancySlot"));
+  assert(machineState.includes("session.provider_generation_digest"));
   assertEquals(machineState.includes('slot === "claude"'), false);
   const diagnosticLogs = Deno.readTextFileSync(
     new URL("./diagnosticLogs.ts", import.meta.url),
@@ -145,95 +141,93 @@ Deno.test("provider usage cards mount through plugin slots", () => {
   );
   assertEquals(usageLogs.includes('id: "codex", label: "Codex"'), false);
   assert(
-    !new RegExp("<PluginSlot[\\s\\S]*DesktopUsageExtras[\\s\\S]*<\\/PluginSlot>")
+    !new RegExp(
+      "<PluginSlot[\\s\\S]*DesktopUsageExtras[\\s\\S]*<\\/PluginSlot>",
+    )
       .test(desktopUsage),
   );
-  assert(!infoSheet.includes("<PluginSlot") || !new RegExp(
-    "<PluginSlot[\\s\\S]*ConfirmSheet[\\s\\S]*<\\/PluginSlot>",
-  ).test(infoSheet));
+  assert(
+    !infoSheet.includes("<PluginSlot") || !new RegExp(
+      "<PluginSlot[\\s\\S]*ConfirmSheet[\\s\\S]*<\\/PluginSlot>",
+    ).test(infoSheet),
+  );
 });
 
-const sharedUsage = await Deno.readTextFile(
-  new URL("../../plugins/provider-usage-slot.js", import.meta.url),
-);
 const pluginHost = await Deno.readTextFile(
   new URL("./pluginHost.ts", import.meta.url),
 );
+const pluginApi = await Deno.readTextFile(
+  new URL("../../components/plugin-api/types.ts", import.meta.url),
+);
+const appleNativeBridge = await Deno.readTextFile(
+  new URL(
+    "../../apps/native-shell/apple/Sources/cowboy-app/CowboyPasskeyBridge.mm",
+    import.meta.url,
+  ),
+);
 
-Deno.test("host kit installs shared provider and account components", () => {
+Deno.test("host kit exposes only closed Cowboy-owned renderers", () => {
   assert(pluginHost.includes("ProviderUsage"));
-  assert(pluginHost.includes("DeepSeekDetails"));
   assert(pluginHost.includes("ProviderSurface"));
-  assert(pluginHost.includes("PasskeysPanel"));
-  assert(pluginHost.includes("authApi.login"));
-  assert(pluginHost.includes("authApi.register"));
-  assert(pluginHost.includes("authApi.setup"));
+  assert(pluginHost.includes("ProductPasskeysPanel"));
+  assert(pluginHost.includes("LoginMethodFallback"));
   assert(pluginHost.includes('from "./pluginUsage"'));
-  assert(pluginHost.includes("/api/plugins/"));
-  assert(pluginHost.includes("/call"));
-  assert(pluginHost.includes("plugins/claude-deepseek/ui/DeepSeekDetails"));
+  assertEquals(pluginHost.includes("DeepSeekDetails"), false);
+  assertEquals(pluginHost.includes("plugins/claude-deepseek"), false);
+  assert(pluginApi.includes("host.ui.renderers[slot]"));
+  assert(pluginApi.includes("installPluginRuntimeHosts"));
+  assert(pluginApi.includes("__COWBOY_NATIVE_PLUGIN_HOST"));
+  assert(pluginApi.includes("supportsNativePluginCapability"));
+  assertEquals(pluginApi.includes("__COWBOY_PLUGIN_HOST"), false);
+  assertEquals(pluginApi.includes("@vite-ignore"), false);
+  assertEquals(pluginApi.includes("import("), false);
+  assertEquals(pluginHost.includes("/api/plugins/"), false);
+  assert(appleNativeBridge.includes("__COWBOY_NATIVE_PLUGIN_HOST"));
+  assert(
+    appleNativeBridge.includes("capabilities:Object.freeze(['webauthn'])"),
+  );
 });
 
 for (const id of ["grok", "codex", "claude-code", "gemini"]) {
-  const usage = await Deno.readTextFile(
-    new URL(`../../plugins/${id}/ui/index.js`, import.meta.url),
+  const host = await Deno.readTextFile(
+    new URL(`../../plugins/${id}/host.json`, import.meta.url),
   );
-  Deno.test(`${id} usage module reuses the host ProviderUsage component`, () => {
-    assertEquals(usage, sharedUsage);
-    assert(usage.includes("components.ProviderUsage"));
-    assert(usage.includes("components.ProviderSurface"));
-    assert(usage.includes('"provider.usage": ProviderUsageSlot'));
-    assert(usage.includes('"provider.setup": ProviderLifecycleSlot'));
-    assert(usage.includes('"provider.settings": ProviderLifecycleSlot'));
+  Deno.test(`${id} selects closed provider renderers with data`, () => {
+    assert(host.includes('"provider.usage": "provider-usage-v1"'));
+    assert(host.includes('"provider.setup": "provider-surface-v1"'));
+    assert(host.includes('"provider.settings": "provider-surface-v1"'));
+    assertEquals(host.includes("ui/index.js"), false);
   });
 }
 
-const claudeDeepseekUsage = await Deno.readTextFile(
-  new URL("../../plugins/claude-deepseek/ui/index.js", import.meta.url),
+const claudeDeepseekHost = await Deno.readTextFile(
+  new URL("../../plugins/claude-deepseek/host.json", import.meta.url),
 );
-Deno.test("claude-deepseek usage module mounts host DeepSeek details", () => {
-  assertEquals(claudeDeepseekUsage === sharedUsage, false);
-  assert(claudeDeepseekUsage.includes("components.ProviderUsage"));
-  assert(claudeDeepseekUsage.includes("components.DeepSeekDetails"));
-  assert(claudeDeepseekUsage.includes("context.showDetails"));
-  assert(claudeDeepseekUsage.includes('"provider.usage": ProviderUsageSlot'));
-  assert(claudeDeepseekUsage.includes("components.ProviderSurface"));
-  const details = Deno.readTextFileSync(
-    new URL(
-      "../../plugins/claude-deepseek/ui/DeepSeekDetails.tsx",
-      import.meta.url,
-    ),
-  );
+Deno.test("activity usage is a closed core renderer selected by host data", () => {
   assert(
-    details.includes(
-      "`/api/usage/${encodeURIComponent(usage.provider)}/activity?",
+    claudeDeepseekHost.includes(
+      '"provider.usage": "provider-usage-activity-v1"',
     ),
   );
-  assert(details.includes("from \"../../../web/src/activityUsage\""));
-  assert(details.includes("activityCacheStats"));
-  assert(details.includes("usageActivityAgentLabel"));
-  assert(details.includes("usageActivityModelLabel"));
-  assert(details.includes("usageCacheMinHitLabel"));
-  assert(details.includes("usageCacheIntervalLabel"));
-  assert(details.includes("usageCacheOptionName"));
-  assertEquals(details.includes("DEEPSEEK_CACHE_MIN_HIT_LABEL"), false);
-  assertEquals(details.includes("DEEPSEEK_CACHE_BASE_INTERVAL_LABEL"), false);
-  assertEquals(details.includes('agent === "claude"'), false);
-  assertEquals(details.includes('agent === "codex"'), false);
-  assertEquals(details.includes('family === "flash"'), false);
-  assertEquals(details.includes('family === "pro"'), false);
-  assertEquals(details.includes("DEEPSEEK_MODELS"), false);
-  assertEquals(details.includes("/api/usage/deepseek/activity"), false);
+  assert(pluginHost.includes("ProviderUsageActivityRenderer"));
+  assert(pluginHost.includes("ProviderUsageActivity"));
+});
+
+const passkeyHost = await Deno.readTextFile(
+  new URL("../../examples/authentication/passkey/host.json", import.meta.url),
+);
+Deno.test("passkey account panel selects a Cowboy-owned renderer", () => {
+  assert(passkeyHost.includes('"account.panel": "account-passkeys-v1"'));
+  assert(pluginHost.includes("ProductPasskeysPanel"));
+  assertEquals(passkeyHost.includes("ui/index.js"), false);
 });
 
 for (const id of ["google", "apple", "cloudflare-email"]) {
-  const oidc = await Deno.readTextFile(
-    new URL(`../../examples/authentication/${id}/ui/index.js`, import.meta.url),
+  const host = await Deno.readTextFile(
+    new URL(`../../examples/authentication/${id}/host.json`, import.meta.url),
   );
-  Deno.test(`${id} login module is a host-kit OIDC slot`, () => {
-    assert(oidc.includes('context.kind !== "oidc"'));
-    assert(oidc.includes('"login.method": OidcLogin') || oidc.includes("OidcLogin"));
-    assert(oidc.includes("__COWBOY_PLUGIN_HOST"));
-    assert(oidc.includes("host().auth?.startOidc"));
+  Deno.test(`${id} login method selects the closed OIDC renderer`, () => {
+    assert(host.includes('"login.method": "login-oidc-v1"'));
+    assertEquals(host.includes("ui/index.js"), false);
   });
 }

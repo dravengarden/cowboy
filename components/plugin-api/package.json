@@ -1,9 +1,10 @@
 {
   "name": "@cowboy/plugin-api",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "type": "module",
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./runtime": "./types.ts"
   },
   "files": ["*.ts", "*.tsx"],
   "peerDependencies": {

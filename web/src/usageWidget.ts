@@ -25,8 +25,9 @@ export type UsagePercentWidget = {
 export type UsageBalanceWidget = {
   kind: string;
   label: string;
-  balanceCny: number;
-  spend24hCny: number;
+  currency: string;
+  balance: number;
+  spend24h: number;
   spend24hPriceCoverage: number | undefined;
   cacheHitRate: number;
   cacheMissRate: number;
@@ -38,10 +39,20 @@ export type UsageWidgetProvider = UsagePercentWidget | UsageBalanceWidget;
 export function usageWidgetHasBalance(
   provider: UsageWidgetProvider,
 ): provider is UsageBalanceWidget {
-  return "balanceCny" in provider;
+  return "balance" in provider;
 }
 
-function accountBalanceCny(usage: ProviderUsage): number | undefined {
+export function formatCompactCurrency(
+  value: number,
+  currency: string,
+): string {
+  return `${currency} ${value < 0.01 ? value.toFixed(3) : value.toFixed(2)}`;
+}
+
+function accountBalance(
+  usage: ProviderUsage,
+  currency: string,
+): number | undefined {
   const accountViews = Array.isArray(usage.account?.accounts)
     ? usage.account.accounts.map(record).filter((account) =>
       account !== undefined
@@ -61,7 +72,7 @@ function accountBalanceCny(usage: ProviderUsage): number | undefined {
     )
     : [];
   const amounts = balances.flatMap((balance) => {
-    if (balance.currency !== "CNY") return [];
+    if (balance.currency !== currency) return [];
     const raw = typeof balance.total_balance === "string"
       ? Number(balance.total_balance)
       : num(balance.total_balance);
@@ -73,12 +84,20 @@ function accountBalanceCny(usage: ProviderUsage): number | undefined {
 }
 
 function activitySpend24h(usage: ProviderUsage):
-  | { amount: number; priceCoverage: number | undefined }
+  | { amount: number; currency: string; priceCoverage: number | undefined }
   | undefined {
+  const currency = record(usage.activity?.pricing)?.currency;
+  if (typeof currency !== "string" || !/^[A-Z]{3}$/.test(currency)) {
+    return undefined;
+  }
   const rolling = record(usage.activity?.last24Hours);
   const cost = activityCostStats(record(record(rolling?.cost)?.summary));
   return cost && cost.totalTokens > 0
-    ? { amount: cost.estimatedCny, priceCoverage: cost.priceCoverageRate }
+    ? {
+      amount: cost.estimatedCost,
+      currency,
+      priceCoverage: cost.priceCoverageRate,
+    }
     : undefined;
 }
 
@@ -99,15 +118,17 @@ function percentWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
 }
 
 function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
-  const balanceCny = accountBalanceCny(usage);
   const spend24h = activitySpend24h(usage);
+  const balance = spend24h
+    ? accountBalance(usage, spend24h.currency)
+    : undefined;
   const rolling = record(usage.activity?.last24Hours);
   const rollingSummary = record(rolling?.summary);
   const cache = activityCacheStats(rollingSummary);
   const requests = num(rollingSummary?.requests);
   const blockingErrors = num(rollingSummary?.blockingErrors) ?? 0;
   if (
-    balanceCny === undefined ||
+    balance === undefined ||
     spend24h === undefined ||
     cache.hitRate === undefined ||
     cache.missRate === undefined ||
@@ -116,8 +137,9 @@ function balanceWidget(usage: ProviderUsage): UsageWidgetProvider | undefined {
   return {
     kind: usageWidgetKind(usage.provider),
     label: usageProductLabel(usage.provider),
-    balanceCny,
-    spend24hCny: spend24h.amount,
+    currency: spend24h.currency,
+    balance,
+    spend24h: spend24h.amount,
     spend24hPriceCoverage: spend24h.priceCoverage,
     cacheHitRate: cache.hitRate,
     cacheMissRate: cache.missRate,

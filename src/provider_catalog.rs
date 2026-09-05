@@ -6,7 +6,7 @@ mod service_catalog {
     use std::sync::Arc;
 
     use anyhow::{Context as _, Result, bail, ensure};
-    use base64::Engine as _;
+    use cowboy_plugin_sdk::PluginCompatibilityRequirements;
     use cowboy_provider_sdk::{
         PlatformTarget, ProviderPackage, ProviderUiManifest, StandardProviderSource, build_package,
     };
@@ -17,23 +17,7 @@ mod service_catalog {
     use crate::machine_auth::{LEGACY_PROVIDER_RELEASE_SIGNATURE_NAMESPACE, verify_namespaced};
     use crate::machine_protocol::DesiredPlugin;
 
-    const EMBEDDED_SOURCES: [(&str, &str); 6] = [
-        (
-            "claude-code",
-            include_str!("../plugins/claude-code/provider.json"),
-        ),
-        ("codex", include_str!("../plugins/codex/provider.json")),
-        ("gemini", include_str!("../plugins/gemini/provider.json")),
-        ("grok", include_str!("../plugins/grok/provider.json")),
-        (
-            "claude-deepseek",
-            include_str!("../plugins/claude-deepseek/provider.json"),
-        ),
-        (
-            "codex-deepseek",
-            include_str!("../plugins/codex-deepseek/provider.json"),
-        ),
-    ];
+    const EMBEDDED_SOURCES: &[(&str, &str)] = crate::first_party_sources::PROVIDER_SOURCES;
 
     #[derive(Debug, Clone, Serialize)]
     pub(crate) struct CatalogEntry {
@@ -55,6 +39,8 @@ mod service_catalog {
         pub contract_fingerprint: String,
         pub supported_platforms: Vec<PlatformTarget>,
         pub manifest: ProviderUiManifest,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub compatibility_requirements: Option<PluginCompatibilityRequirements>,
     }
 
     #[derive(Debug, Clone, Copy, Serialize)]
@@ -83,7 +69,7 @@ mod service_catalog {
             plugin_catalog: Arc<crate::plugin_catalog::PluginCatalog>,
         ) -> Result<Self> {
             let mut embedded = BTreeMap::new();
-            for (expected_id, source) in EMBEDDED_SOURCES {
+            for &(expected_id, source) in EMBEDDED_SOURCES {
                 let source: StandardProviderSource = serde_json::from_str(source)
                     .with_context(|| format!("decoding embedded Provider {expected_id}"))?;
                 let package = build_package(source.compile()?)?;
@@ -121,6 +107,7 @@ mod service_catalog {
                         })
                         .collect(),
                     manifest: package.manifest.ui_projection(),
+                    compatibility_requirements: None,
                 };
                 ensure!(
                     embedded.insert(key, entry).is_none(),
@@ -155,7 +142,6 @@ mod service_catalog {
         }
 
         pub(crate) fn refresh_external(&self) -> Result<usize> {
-            self.plugin_catalog.refresh_external()?;
             let mut next = BTreeMap::new();
             for desired in self.plugin_catalog.released_plugins() {
                 if desired.release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
@@ -278,16 +264,16 @@ mod service_catalog {
             provider_id: &str,
             version: &str,
             digest: &str,
-        ) -> Option<&'static str> {
+        ) -> Option<String> {
             self.package(provider_id, version, digest)
                 .and_then(|package| package.manifest.host.account_usage)
-                .map(|usage| usage.provider.as_str())
+                .map(|usage| usage.provider)
         }
     }
 
     fn catalog_artifact(desired: DesiredPlugin) -> Result<CatalogArtifact> {
-        let bytes = base64::engine::general_purpose::STANDARD.decode(&desired.package_base64)?;
-        let plugin_package = desired.release.validate_bytes(&bytes)?;
+        let (plugin_package, compatibility_requirements) =
+            crate::plugin_catalog::desired_plugin_compatibility(&desired)?;
         let package = plugin_package
             .agent_provider()
             .context("Agent Plugin has no Provider payload")?
@@ -305,6 +291,7 @@ mod service_catalog {
             contract_fingerprint: package.contract_fingerprint.clone(),
             supported_platforms: release.supported_platforms.clone(),
             manifest: package.manifest.ui_projection(),
+            compatibility_requirements: Some(compatibility_requirements),
         };
         Ok(CatalogArtifact { entry, package })
     }
@@ -360,6 +347,7 @@ mod service_catalog {
                 contract_fingerprint: package.contract_fingerprint.clone(),
                 supported_platforms: release.supported_platforms,
                 manifest: package.manifest.ui_projection(),
+                compatibility_requirements: None,
             };
             insert_unique(target, CatalogArtifact { entry, package })?;
         }
@@ -523,7 +511,7 @@ mod service_catalog {
         }
 
         #[test]
-        fn embedded_catalog_contains_all_six_first_party_providers() {
+        fn embedded_catalog_contains_every_discovered_first_party_provider() {
             let root = std::env::temp_dir().join(format!(
                 "cowboy-provider-catalog-test-{}",
                 std::process::id()
@@ -537,20 +525,11 @@ mod service_catalog {
                 .into_iter()
                 .map(|entry| entry.provider_id)
                 .collect();
-            assert_eq!(
-                ids,
-                [
-                    "claude-code",
-                    "claude-deepseek",
-                    "codex",
-                    "codex-deepseek",
-                    "gemini",
-                    "grok",
-                ]
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-            );
+            let expected = crate::first_party_sources::PROVIDER_SOURCES
+                .iter()
+                .map(|(id, _)| (*id).to_owned())
+                .collect();
+            assert_eq!(ids, expected);
             assert!(catalog.entries().iter().all(|entry| {
                 matches!(entry.release_state, AgentPluginReleaseState::Unbound)
                     && entry.artifact_digest.is_none()
@@ -689,7 +668,7 @@ mod service_catalog {
                 catalog
                     .published_artifact_path(&format!("sha256:{digest}"), "codex.tar.gz")
                     .unwrap(),
-                root.join("plugin-catalog/artifacts")
+                root.join("plugins/catalog/artifacts")
                     .join(&digest)
                     .join("codex.tar.gz")
             );

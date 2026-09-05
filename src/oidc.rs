@@ -449,8 +449,10 @@ impl JsonWebKeySet {
 
 impl OidcProvider {
     pub fn load(path: &Path) -> Result<Self> {
-        let document: ProviderDocument = serde_json::from_slice(&read_protected_file(path)?)
-            .context("decoding OIDC provider config")?;
+        let document: ProviderDocument = crate::auth_plugins::decode_private_json(
+            &read_protected_file(path)?,
+            "OIDC provider config",
+        )?;
         anyhow::ensure!(
             document.schema == CONFIG_SCHEMA,
             "unsupported OIDC provider config"
@@ -565,7 +567,9 @@ impl OidcProvider {
         contract: &AuthenticationProviderContract,
         runtime: OidcProviderRuntimeDocument,
     ) -> Result<Self> {
-        let AuthenticationProtocol::OpenIdConnect(protocol) = &contract.protocol;
+        let AuthenticationProtocol::OpenIdConnect(protocol) = &contract.protocol else {
+            anyhow::bail!("configured Authentication Provider does not select the OIDC driver");
+        };
         anyhow::ensure!(
             valid_identifier(&contract.id),
             "authentication Plugin id is invalid"

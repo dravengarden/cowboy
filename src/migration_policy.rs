@@ -41,6 +41,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0042_external_passkey_ceremonies.sql",
         "35db4fea677f551e76fdf142909adaa13f9d575912bd5f91686b6d02cf60db2a",
     ),
+    (
+        "0043_generic_provider_actions.sql",
+        "3bd9b415a7383131c7a86270678457c8dba7c17799f46058b588b0b557b60d44",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -79,6 +83,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
         "0016_external_passkey_ceremonies.sql",
         "86158d233ffb5a5e4764defee6599d5262ae2a6b07c56fa52261589cb342e2ae",
     ),
+    (
+        "0017_generic_provider_actions.sql",
+        "88f5de5cf290331ba2974ac2051a85a40cb2ffbef644c46f582f4e13a1038226",
+    ),
 ];
 
 fn assert_published_migrations_are_immutable(
@@ -116,6 +124,131 @@ fn published_postgres_migrations_are_immutable() {
 fn published_sqlite_migrations_are_immutable() {
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/sqlite");
     assert_published_migrations_are_immutable(&directory, PUBLISHED_SQLITE_MIGRATIONS);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // One migration fixture verifies preservation and both new constraints.
+fn sqlite_generic_provider_actions_migration_preserves_rows_and_accepts_plugin_ids() {
+    let connection = rusqlite::Connection::open_in_memory().expect("open SQLite database");
+    connection
+        .execute_batch(
+            r"
+            CREATE TABLE scheduled_provider_actions (
+                provider TEXT PRIMARY KEY CHECK (provider IN ('codex', 'xai')),
+                action TEXT NOT NULL CHECK (action = 'rate_limit_reset'),
+                fire_at_ms INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at_ms INTEGER
+            );
+            CREATE TABLE provider_action_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL CHECK (provider IN ('codex', 'xai')),
+                action TEXT NOT NULL CHECK (action = 'rate_limit_reset'),
+                trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'scheduled')),
+                status TEXT NOT NULL CHECK (
+                    status IN ('scheduled', 'started', 'retrying', 'succeeded', 'failed', 'unknown', 'cancelled')
+                ),
+                phase TEXT NOT NULL,
+                message TEXT NOT NULL,
+                credit_id TEXT,
+                idempotency_suffix TEXT,
+                created_at_ms INTEGER NOT NULL
+            );
+            CREATE INDEX provider_action_logs_created_idx
+                ON provider_action_logs(created_at_ms DESC);
+            INSERT INTO scheduled_provider_actions VALUES
+                ('codex', 'rate_limit_reset', 100, 'codex-reset', 2, 200);
+            INSERT INTO provider_action_logs
+                (id, provider, action, trigger, status, phase, message, created_at_ms)
+            VALUES (41, 'xai', 'rate_limit_reset', 'scheduled', 'succeeded', 'done', 'ok', 100);
+            ",
+        )
+        .expect("create predecessor Provider-action schema");
+    connection
+        .execute_batch(include_str!(
+            "../migrations/sqlite/0017_generic_provider_actions.sql"
+        ))
+        .expect("apply generic Provider-action migration");
+
+    let preserved: (String, i64) = connection
+        .query_row(
+            "SELECT idempotency_key, attempt_count FROM scheduled_provider_actions \
+             WHERE provider = 'codex'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read preserved scheduled Provider action");
+    assert_eq!(preserved, ("codex-reset".to_owned(), 2));
+    let preserved_log: String = connection
+        .query_row(
+            "SELECT provider FROM provider_action_logs WHERE id = 41",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read preserved Provider action log");
+    assert_eq!(preserved_log, "xai");
+
+    connection
+        .execute(
+            "INSERT INTO scheduled_provider_actions \
+             (provider, action, fire_at_ms, idempotency_key, next_attempt_at_ms) \
+             VALUES ('future-reset', 'rate_limit_reset', 300, 'future-reset', 300)",
+            [],
+        )
+        .expect("insert a plugin-declared reset provider");
+    connection
+        .execute(
+            "INSERT INTO provider_action_logs \
+             (provider, action, trigger, status, phase, message, created_at_ms) \
+             VALUES ('future-reset', 'rate_limit_reset', 'scheduled', 'scheduled', 'queued', 'ok', 300)",
+            [],
+        )
+        .expect("insert a plugin-declared Provider action log");
+    let next_log_id: i64 = connection
+        .query_row(
+            "SELECT id FROM provider_action_logs WHERE provider = 'future-reset'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read plugin-declared Provider action log");
+    assert_eq!(
+        next_log_id, 42,
+        "AUTOINCREMENT sequence must survive rebuild"
+    );
+
+    for provider in [
+        "",
+        "Future",
+        "-future",
+        "future-",
+        "future--reset",
+        "future_reset",
+    ] {
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO scheduled_provider_actions \
+                     (provider, action, fire_at_ms, idempotency_key, next_attempt_at_ms) \
+                     VALUES (?1, 'rate_limit_reset', 400, ?1, 400)",
+                    [provider],
+                )
+                .is_err(),
+            "database accepted invalid Provider action id {provider:?}"
+        );
+    }
+    let oversized_provider = "a".repeat(65);
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO provider_action_logs \
+                 (provider, action, trigger, status, phase, message, created_at_ms) \
+                 VALUES (?1, 'rate_limit_reset', 'scheduled', 'scheduled', 'queued', 'bad', 400)",
+                [&oversized_provider],
+            )
+            .is_err(),
+        "database accepted an oversized Provider action id"
+    );
 }
 
 #[test]

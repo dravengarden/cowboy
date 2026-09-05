@@ -3,9 +3,7 @@ import {
   usageCardOrder,
   usageErrorAuth,
   usageErrorFetch,
-  usageErrorKind,
   usageLimitLabel,
-  usageLimitParser,
   usageLimitRowId,
   usageProductLabel,
   usageResetId,
@@ -111,93 +109,79 @@ export interface UsageLimit {
   windowMinutes?: number;
 }
 
-type UsageErrorPresenter = (
-  usage: ProviderUsage,
-  error: string,
-  product: string,
-  provider: string,
-) => string;
-
-function presentRaw(
-  _usage: ProviderUsage,
-  error: string,
-): string {
-  return error;
+function authenticationError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return normalized.includes("authentication required") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("not signed in") ||
+    normalized.includes("401") || normalized.includes("403");
 }
 
-function presentOpenaiAuth(
+function transientError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return normalized.includes("service unavailable") ||
+    normalized.includes("temporarily unavailable") ||
+    normalized.includes("timed out") || normalized.includes("timeout") ||
+    normalized.includes("429") || /\b5\d\d\b/.test(normalized);
+}
+
+/**
+ * Extract useful text from a JSON-RPC-like command error without exposing its
+ * encoded envelope. Command names and plugin error identifiers are opaque to
+ * the host, so classification is based on the returned shape and content.
+ */
+function structuredErrorDetail(error: string): string | undefined {
+  const objectStart = error.indexOf("{");
+  if (objectStart < 0) return undefined;
+  try {
+    const payload = record(JSON.parse(error.slice(objectStart)));
+    const detail = typeof payload?.data === "string"
+      ? payload.data.trim()
+      : typeof payload?.message === "string"
+      ? payload.message.trim()
+      : undefined;
+    return detail || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function presentGenericError(
   usage: ProviderUsage,
   error: string,
   product: string,
   provider: string,
 ): string {
   if (error.startsWith(`${product} usage `)) return error;
-  const normalized = error.toLowerCase();
-  if (
-    normalized.includes("authentication required") ||
-    normalized.includes("unauthorized") ||
-    normalized.includes("not signed in") ||
-    normalized.includes("401") || normalized.includes("403")
-  ) {
+  const detail = structuredErrorDetail(error);
+  const classification = detail ?? error;
+  if (authenticationError(classification)) {
     return usageErrorAuth(provider) ??
       `${product} usage authorization expired. Sign in again.`;
   }
-  if (
-    normalized.includes("service unavailable") ||
-    normalized.includes("temporarily unavailable") ||
-    normalized.includes("timed out") || normalized.includes("timeout") ||
-    normalized.includes("429") || /\b5\d\d\b/.test(normalized)
-  ) {
+  if (transientError(classification)) {
     return usage.refresh?.stale
       ? `${product} usage is temporarily unavailable. Showing the last update.`
       : `${product} usage is temporarily unavailable. Cowboy will retry automatically.`;
   }
-  return `${product} usage could not be refreshed.`;
-}
-
-function presentXaiBilling(
-  _usage: ProviderUsage,
-  error: string,
-  product: string,
-  provider: string,
-): string {
-  if (!error.startsWith("_x.ai/billing:")) return error;
-  const encoded = error.slice("_x.ai/billing:".length).trim();
-  const fetchCopy = usageErrorFetch(provider) ??
-    `${product} usage could not be refreshed.`;
-  try {
-    const rpcError = record(JSON.parse(encoded));
-    const detail = typeof rpcError?.data === "string"
-      ? rpcError.data.trim()
-      : typeof rpcError?.message === "string"
-      ? rpcError.message.trim()
-      : "";
-    if (detail.toLowerCase().includes("authentication required")) {
-      return usageErrorAuth(provider) ??
-        `${product} usage authorization expired. Sign in again.`;
-    }
-    return detail ? `${fetchCopy}: ${detail}` : fetchCopy;
-  } catch {
-    return fetchCopy;
+  if (detail) {
+    const fetchCopy = usageErrorFetch(provider) ??
+      `${product} usage could not be refreshed.`;
+    return `${fetchCopy}: ${detail}`;
   }
+  return error;
 }
-
-const USAGE_ERROR_PRESENTERS: Record<string, UsageErrorPresenter> = {
-  "openai-auth": presentOpenaiAuth,
-  "xai-billing": presentXaiBilling,
-};
 
 export function providerUsageErrorMessage(
   usage: ProviderUsage | undefined,
   fallback: string,
 ): string {
-  const error = usage?.error?.trim();
+  if (!usage) return fallback;
+  const error = usage.error?.trim();
   if (!error) return fallback;
-  const provider = usage.provider ?? "";
+  const provider = usage.provider;
   const product = provider ? usageProductLabel(provider) : "Provider";
-  const kind = provider ? usageErrorKind(provider) : "raw";
-  const present = USAGE_ERROR_PRESENTERS[kind] ?? presentRaw;
-  return present(usage, error, product, provider);
+  return presentGenericError(usage, error, product, provider);
 }
 
 export function providerUsageRefreshLabel(
@@ -226,9 +210,31 @@ export function windowLabel(minutes: number | undefined): string {
   return `${String(Math.round(minutes / 1440))}d`;
 }
 
-type UsageLimitParser = (usage: ProviderUsage) => UsageLimit[] | undefined;
+function periodWindowMinutes(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase();
+  const count = Number(normalized.match(/\d+/)?.[0] ?? "1");
+  if (!Number.isFinite(count) || count <= 0) return undefined;
+  if (normalized.includes("minute")) return count;
+  if (normalized.includes("hour")) return count * 60;
+  if (normalized.includes("day")) return count * 1440;
+  if (normalized.includes("week")) return count * 10080;
+  if (normalized.includes("month")) return count * 43200;
+  return undefined;
+}
 
-function parseXaiCredits(usage: ProviderUsage): UsageLimit[] | undefined {
+function periodWindowLabel(
+  value: string | undefined,
+  windowMinutes: number | undefined,
+): string {
+  const normalized = value?.toLowerCase() ?? "";
+  if (normalized.includes("week")) return "Weekly";
+  if (normalized.includes("month")) return "Monthly";
+  return windowLabel(windowMinutes);
+}
+
+/** Parse a common percent/period credit document without a provider branch. */
+function parseCreditWindow(usage: ProviderUsage): UsageLimit[] | undefined {
   const config = record(usage.rate_limits?.config);
   if (!config) return undefined;
   const period = record(config.currentPeriod);
@@ -257,27 +263,18 @@ function parseXaiCredits(usage: ProviderUsage): UsageLimit[] | undefined {
     : typeof config.billingPeriodEnd === "string"
     ? Date.parse(config.billingPeriodEnd)
     : Number.NaN;
-  const windowMinutes = periodType.includes("WEEKLY")
-    ? 10080
-    : periodType.includes("MONTHLY")
-    ? 43200
-    : undefined;
+  const windowMinutes = periodWindowMinutes(periodType);
   return [{
     id: `${usage.provider}-included-credits`,
-    label: windowMinutes === 10080
-      ? "Weekly"
-      : windowMinutes === 43200
-      ? "Monthly"
-      : "Included credits",
+    label: periodWindowLabel(periodType, windowMinutes),
     remaining: Math.round(100 - Math.min(100, Math.max(0, percent))),
     ...(Number.isFinite(reset) ? { resetsAt: reset / 1000 } : {}),
     ...(windowMinutes === undefined ? {} : { windowMinutes }),
   }];
 }
 
-function parseAnthropicUtilization(
-  usage: ProviderUsage,
-): UsageLimit[] | undefined {
+/** Parse utilization events emitted by any session/provider adapter. */
+function parseUtilization(usage: ProviderUsage): UsageLimit[] | undefined {
   const rateRoot = record(usage.rate_limits?.rateLimits);
   if (!rateRoot) return undefined;
   const utilization = num(rateRoot.utilization);
@@ -310,7 +307,7 @@ function parseGenericBuckets(usage: ProviderUsage): UsageLimit[] {
     : rateRoot
     ? [{ id: "default", bucket: rateRoot }]
     : [];
-  return source.flatMap(({ id, bucket }) => {
+  const bucketsResult = source.flatMap(({ id, bucket }) => {
     const prefix = typeof bucket.limitName === "string"
       ? bucket.limitName
       : undefined;
@@ -333,17 +330,14 @@ function parseGenericBuckets(usage: ProviderUsage): UsageLimit[] {
     (left.windowMinutes ?? Number.MAX_SAFE_INTEGER) -
     (right.windowMinutes ?? Number.MAX_SAFE_INTEGER)
   );
-}
 
-const USAGE_LIMIT_PARSERS: Record<string, UsageLimitParser> = {
-  "xai-credits": parseXaiCredits,
-  "anthropic-utilization": parseAnthropicUtilization,
-};
+  if (bucketsResult.length > 0) return bucketsResult;
+  return parseUtilization(usage) ?? parseCreditWindow(usage) ?? [];
+}
 
 export function usageLimits(usage: ProviderUsage | undefined): UsageLimit[] {
   if (!usage) return [];
-  const parser = usageLimitParser(usage.provider);
-  return USAGE_LIMIT_PARSERS[parser]?.(usage) ?? parseGenericBuckets(usage);
+  return parseGenericBuckets(usage);
 }
 
 /** Compact account summary for the Desktop top bar.

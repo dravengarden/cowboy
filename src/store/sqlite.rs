@@ -781,6 +781,24 @@ async fn load_provider_usage_records(
         .context("load SQLite provider usage records")
 }
 
+async fn load_diagnostic_provider_usage_records(
+    pool: &SqlitePool,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<Vec<ProviderUsageRecord>> {
+    let query = format!(
+        "SELECT {PROVIDER_USAGE_COLUMNS} FROM provider_usage_events \
+         WHERE occurred_at_ms >= ?1 AND occurred_at_ms <= ?2 \
+         ORDER BY occurred_at_ms, sequence"
+    );
+    sqlx::query_as(&query)
+        .bind(from_ms)
+        .bind(to_ms)
+        .fetch_all(pool)
+        .await
+        .context("load SQLite diagnostic provider usage records")
+}
+
 fn usage_breakdown(records: &[ProviderUsageRecord]) -> ProviderUsageBreakdown {
     let mut breakdown = ProviderUsageBreakdown::default();
     for record in records {
@@ -898,7 +916,7 @@ fn low_hit_cause(
         "compatibility_rewrite"
     } else if current.static_prefix_fingerprint != previous.static_prefix_fingerprint {
         "static_prefix_changed"
-    } else if (current.agent != "codex" || current.has_previous_response_id != Some(true))
+    } else if current.has_previous_response_id != Some(true)
         && current
             .input_item_count
             .zip(previous.input_item_count)
@@ -5346,13 +5364,10 @@ impl SqliteStorage {
             })
             .collect::<Vec<_>>();
 
-        let provider_records = load_provider_usage_records(
+        let provider_records = load_diagnostic_provider_usage_records(
             &self.pool,
-            "deepseek",
             filter.since_ms.saturating_sub(30 * 60 * 1_000),
             filter.until_ms,
-            None,
-            None,
         )
         .await?;
         let mut previous = std::collections::HashMap::<
@@ -5794,30 +5809,13 @@ impl SqliteStorage {
         agents: &[String],
         model_families: &[String],
     ) -> Result<serde_json::Value> {
-        let window_ms = to_ms.saturating_sub(from_ms);
-        if provider != "deepseek"
-            || !(60_000..=i64::from(30 * 86_400) * 1_000).contains(&window_ms)
-            || agents.len() > 2
-            || model_families.len() > 2
-            || agents
-                .iter()
-                .any(|value| !matches!(value.as_str(), "codex" | "claude"))
-            || model_families
-                .iter()
-                .any(|value| !matches!(value.as_str(), "flash" | "pro"))
-            || agents
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != agents.len()
-            || model_families
-                .iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                != model_families.len()
-        {
-            anyhow::bail!("invalid provider usage activity filter");
-        }
+        let window_ms = validate_provider_usage_activity_filter(
+            provider,
+            from_ms,
+            to_ms,
+            agents,
+            model_families,
+        )?;
         let agent = (agents.len() == 1).then(|| agents[0].as_str());
         let model_family = (model_families.len() == 1).then(|| model_families[0].as_str());
         let window_seconds = window_ms / 1_000;

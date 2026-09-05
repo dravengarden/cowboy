@@ -56,7 +56,8 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assert(appSource.includes("ProductDevicesPanel"));
   assert(appSource.includes("ProductSessionCapacityPanel"));
   assertEquals(appSource.includes("ProductTokensPanel"), false);
-  assert(appSource.includes("ProductPasskeysPanel"));
+  assert(appSource.includes("<ProductAccountPluginPanels />"));
+  assertEquals(appSource.includes('pluginId="passkey"'), false);
   assert(appSource.includes("ProductAccountMenu"));
   assert(appSource.includes('id="account"'));
   assert(appSource.includes('data-settings-section="code"'));
@@ -71,7 +72,7 @@ Deno.test("mobile Account keeps its independent cards visibly separated", () => 
   assert(routeEnd > routeStart);
   const accountRoute = appSource.slice(routeStart, routeEnd);
   assert(
-    /<Stack data-mobile-account-sections spacing=\{2\}>[\s\S]*<ProductSessionCapacityPanel \/>[\s\S]*<ProductPasskeysPanel \/>[\s\S]*<ProductDevicesPanel hideWhenEmpty \/>[\s\S]*<ProductAccountMenu \/>[\s\S]*<\/Stack>/u
+    /<Stack data-mobile-account-sections spacing=\{2\}>[\s\S]*<ProductSessionCapacityPanel \/>[\s\S]*<ProductAccountPluginPanels \/>[\s\S]*<ProductDevicesPanel hideWhenEmpty \/>[\s\S]*<ProductAccountMenu \/>[\s\S]*<\/Stack>/u
       .test(accountRoute),
   );
 });

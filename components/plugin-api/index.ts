@@ -1,16 +1,19 @@
 export {
+  type CowboyNativePluginHost,
+  installPluginRenderers,
+  installPluginRuntimeHosts,
+  invokeNativePluginCapability,
+  loadPluginSlot,
   PLUGIN_HOST_API_VERSION,
+  PLUGIN_NATIVE_HOST_API_VERSION,
+  PLUGIN_RENDERER_IDS,
+  PLUGIN_RENDERER_SCHEMA_VERSION,
   PLUGIN_SLOT_IDS,
-  type CowboyPluginAuth,
-  type CowboyPluginHost,
-  type PluginModuleLoader,
+  type PluginRendererId,
+  type PluginRendererRegistry,
   type PluginSlotComponent,
   type PluginSlotId,
   type PluginSlotProps,
-  defaultPluginModuleLoader,
-  getCowboyPluginHost,
-  loadPluginSlot,
-  setPluginModuleLoader,
+  supportsNativePluginCapability,
 } from "./types.ts";
-export { resolvePluginSlotComponent } from "./resolve.ts";
 export { PluginSlot, PluginSlotBoundary } from "./slot.tsx";

@@ -5,6 +5,7 @@
   "loopback_env": "ANTHROPIC_BASE_URL",
   "adapter_slot": "claude",
   "isolated_home_env": "CLAUDE_CONFIG_DIR",
+  "isolated_home_settings": { "autoCompactEnabled": true },
   "isolated_shell": true,
   "isolated_shell_env": ["CLAUDE_CODE_SHELL", "SHELL"],
   "visual": {
@@ -18,13 +19,43 @@
     "provider.settings"
   ],
   "ui": {
-    "entry": "ui/index.js",
-    "host_api": "1.0.0",
-    "ui_kit": "1.0.0"
+    "schema_version": 1,
+    "renderers": {
+      "provider.usage": "provider-usage-activity-v1",
+      "provider.setup": "provider-surface-v1",
+      "provider.empty": "provider-surface-v1",
+      "provider.settings": "provider-surface-v1"
+    }
   },
   "usage": {
     "account": "deepseek",
-    "collector": "deepseek-store",
+    "collector": "command",
+    "collector_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_SIDECAR_TARGETS,COWBOY_PLUGIN_SIDECAR_URLS,COWBOY_PROVIDER_INFO_DEEPSEEK_URLS,COWBOY_PROVIDER_INFO_URLS",
+      "--allow-net=${ENV_URL_HOSTS:COWBOY_PLUGIN_SIDECAR_URLS},${ENV_URL_HOSTS:COWBOY_PROVIDER_INFO_DEEPSEEK_URLS},${ENV_URL_HOSTS:COWBOY_PROVIDER_INFO_URLS}",
+      "${PLUGIN_DIR}/collector/index.js",
+      "deepseek",
+      "codex",
+      "claude"
+    ],
+    "collector_sidecars": [
+      {
+        "id": "codex",
+        "adapter_slot": "codex",
+        "sidecar": "deepseek-gateway",
+        "path": "/provider-info"
+      },
+      {
+        "id": "claude",
+        "adapter_slot": "claude",
+        "sidecar": "deepseek-gateway",
+        "path": "/provider-info"
+      }
+    ],
     "activity": true,
     "product": "DeepSeek",
     "order": 3,

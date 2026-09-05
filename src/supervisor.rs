@@ -282,8 +282,8 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let configuration = session_configuration(&meta);
-        let budget = self.deepseek_context_budget(session_id, &configuration);
-        let cache_protection = self.deepseek_cache_protection(session_id, &configuration);
+        let budget = self.managed_context_budget(session_id, &configuration);
+        let cache_protection = self.managed_cache_protection(session_id, &configuration);
         runtime.ensure(StartSession {
             session_id: session_id.to_owned(),
             provider: spec.id.clone(),
@@ -418,8 +418,8 @@ impl Supervisor {
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let configuration = session_configuration(&meta);
-        let budget = self.deepseek_context_budget(session_id, &configuration);
-        let cache_protection = self.deepseek_cache_protection(session_id, &configuration);
+        let budget = self.managed_context_budget(session_id, &configuration);
+        let cache_protection = self.managed_cache_protection(session_id, &configuration);
         Ok(StartSession {
             session_id: meta.id,
             provider: meta.provider,
@@ -439,26 +439,22 @@ impl Supervisor {
         })
     }
 
-    fn deepseek_context_budget(
+    fn managed_context_budget(
         &self,
         session_id: &str,
         configuration: &cowboy_provider_sdk::ConfigurationBehavior,
     ) -> Option<crate::deepseek_context::ContextBudget> {
         let preferences = self.hub.config_preferences(session_id)?;
-        let model = preferences.get("model").and_then(serde_json::Value::as_str);
-        let requested = preferences
-            .get(crate::deepseek_context::CONFIG_ID)
-            .and_then(serde_json::Value::as_str);
-        crate::deepseek_context::launch_budget(configuration, model, requested)
+        crate::managed_config::context_budget(configuration, &preferences)
     }
 
-    fn deepseek_cache_protection(
+    fn managed_cache_protection(
         &self,
         session_id: &str,
         configuration: &cowboy_provider_sdk::ConfigurationBehavior,
     ) -> Option<bool> {
         let preferences = self.hub.config_preferences(session_id)?;
-        crate::deepseek_cache::selected(&preferences, configuration)
+        crate::managed_config::cache_protection(configuration, &preferences)
     }
 
     /// Tear down a session's detached worker. Hub state is the caller's
@@ -574,100 +570,55 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Apply one Cowboy-owned `DeepSeek` context profile. This setting changes
-    /// process startup rather than an ACP option, so recycle only this idle
-    /// worker while preserving both the Cowboy and native agent session ids.
-    pub fn set_deepseek_context_profile(
+    /// Apply a Cowboy-managed configuration effect selected by the session's
+    /// signed Provider behavior. Managed settings change process startup rather
+    /// than ACP state, so recycle only this idle worker while preserving both
+    /// the Cowboy and native agent session ids. Returns `false` when the option
+    /// is ordinary adapter-owned protocol data.
+    pub fn set_managed_config_option(
         &self,
         session_id: &str,
+        config_id: &str,
         value: serde_json::Value,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
-        let profile = value
-            .as_str()
-            .ok_or_else(|| "DeepSeek context profile must be a string id".to_owned())?;
         let meta = self
             .hub
             .session_list()
             .into_iter()
             .find(|meta| meta.id == session_id)
             .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let configuration = session_configuration(&meta);
+        let Some(effect) = crate::managed_config::effect_for_id(&configuration, config_id) else {
+            return Ok(false);
+        };
         if matches!(meta.status, Status::Busy | Status::Starting)
             || self.hub.session_has_in_flight_prompt(session_id)
         {
             return Err(
-                "wait for the current turn to finish before changing the context budget".to_owned(),
+                "wait for the current turn to finish before changing this managed setting"
+                    .to_owned(),
             );
         }
         let preferences = self
             .hub
             .config_preferences(session_id)
             .unwrap_or_else(|| serde_json::json!({}));
-        let model = preferences.get("model").and_then(serde_json::Value::as_str);
-        let configuration = session_configuration(&meta);
-        crate::deepseek_context::resolve(&configuration, model, profile)?;
+        let unchanged = crate::managed_config::change_is_unchanged(
+            effect,
+            &configuration,
+            &preferences,
+            &value,
+        )?;
         self.runtime_for_session(session_id)?;
-        let unchanged = preferences
-            .get(crate::deepseek_context::CONFIG_ID)
-            .and_then(serde_json::Value::as_str)
-            == Some(profile);
-        self.hub.set_config_preference(
-            session_id,
-            crate::deepseek_context::CONFIG_ID.to_owned(),
-            value,
-        )?;
+        self.hub
+            .set_config_preference(session_id, config_id.to_owned(), value)?;
         if unchanged {
-            return Ok(());
+            return Ok(true);
         }
         self.resolve_and_persist_cwd(session_id)?;
-        self.recycle_session_inner(session_id)
-    }
-
-    /// Enable or disable Cowboy-owned `DeepSeek` cache protection. The policy is
-    /// carried in a local HTTP header, never in the model prompt. Recycle only
-    /// an idle worker so an active agent turn is never interrupted.
-    pub fn set_deepseek_cache_protection(
-        &self,
-        session_id: &str,
-        value: serde_json::Value,
-    ) -> Result<(), String> {
-        let _lifecycle = self.lifecycle.lock();
-        let enabled = value
-            .as_bool()
-            .ok_or_else(crate::deepseek_cache::boolean_required_message)?;
-        let meta = self
-            .hub
-            .session_list()
-            .into_iter()
-            .find(|meta| meta.id == session_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
-        let configuration = session_configuration(&meta);
-        if !crate::deepseek_cache::supported_behavior(&configuration) {
-            return Err(crate::deepseek_cache::unavailable_message());
-        }
-        if matches!(meta.status, Status::Busy | Status::Starting)
-            || self.hub.session_has_in_flight_prompt(session_id)
-        {
-            return Err(
-                "wait for the current turn to finish before changing cache protection".to_owned(),
-            );
-        }
-        let preferences = self
-            .hub
-            .config_preferences(session_id)
-            .unwrap_or_else(|| serde_json::json!({}));
-        let unchanged =
-            crate::deepseek_cache::selected(&preferences, &configuration) == Some(enabled);
-        self.hub.set_config_preference(
-            session_id,
-            crate::deepseek_cache::CONFIG_ID.to_owned(),
-            value,
-        )?;
-        if unchanged {
-            return Ok(());
-        }
-        self.resolve_and_persist_cwd(session_id)?;
-        self.recycle_session_inner(session_id)
+        self.recycle_session_inner(session_id)?;
+        Ok(true)
     }
 
     /// Reconcile and recycle every session rooted in a Columbus project after
@@ -1503,7 +1454,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn changing_deepseek_context_recycles_only_the_idle_session() {
+    async fn changing_a_managed_context_budget_recycles_only_the_idle_session() {
         let root = TestDir::new();
         let cwd = root.path().join("checkout");
         std::fs::create_dir_all(&cwd).expect("checkout");
@@ -1532,7 +1483,7 @@ mod tests {
         hub.set_status("s", Status::Busy, None);
         assert!(
             supervisor
-                .set_deepseek_context_profile("s", serde_json::json!("830k"))
+                .set_managed_config_option("s", "deepseek_context", serde_json::json!("830k"),)
                 .expect_err("busy session must reject a process-level config change")
                 .contains("current turn")
         );
@@ -1542,9 +1493,11 @@ mod tests {
         );
 
         hub.set_status("s", Status::Running, None);
-        supervisor
-            .set_deepseek_context_profile("s", serde_json::json!("830k"))
-            .expect("idle context change");
+        assert!(
+            supervisor
+                .set_managed_config_option("s", "deepseek_context", serde_json::json!("830k"),)
+                .expect("idle context change")
+        );
 
         assert_eq!(hub.status("s"), Some(Status::Starting));
         assert_eq!(

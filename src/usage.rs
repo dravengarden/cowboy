@@ -8,7 +8,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,12 +15,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use crate::core::SessionMeta;
-use crate::plugin_host::{PluginUsageSpec, UsageCollectorKind};
+use crate::machine_protocol::{PluginHostOperation, PluginInstallationState, PluginInventory};
+use crate::plugin_host::PluginUsageSpec;
+use crate::plugin_process::run_plugin_command;
 
 pub const AUTO_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_mins(5);
 const MANUAL_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
@@ -61,10 +60,6 @@ struct CachedUsageSnapshot {
     providers: Vec<CachedProviderUsage>,
     #[serde(default)]
     reset_schedules: BTreeMap<String, ResetSchedule>,
-    #[serde(default)]
-    codex_reset_schedule: Option<ResetSchedule>,
-    #[serde(default)]
-    xai_reset_schedule: Option<ResetSchedule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +95,7 @@ pub struct ResetSchedule {
     pub fire_at_ms: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResetResult {
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,9 +119,8 @@ impl std::error::Error for ResetError {}
 
 #[derive(Clone)]
 pub struct UsageService {
-    bindings: Vec<PluginUsageSpec>,
-    codex_command: String,
-    grok_spec: Option<crate::provider::LaunchSpec>,
+    bindings: UsageBindingSource,
+    machine_control: Arc<crate::machine_control::MachineControl>,
     store: Option<crate::store::Store>,
     snapshot: Arc<Mutex<UsageSnapshot>>,
     refresh_lock: Arc<Mutex<()>>,
@@ -136,31 +130,78 @@ pub struct UsageService {
     warming: Arc<AtomicBool>,
 }
 
+enum PluginCommandRoute {
+    Bootstrap,
+    Machine {
+        machine_id: String,
+        plugin: PluginInventory,
+    },
+    Unavailable(String),
+}
+
+#[derive(Clone)]
+enum UsageBindingSource {
+    #[cfg(test)]
+    Static(Arc<Vec<PluginUsageSpec>>),
+    Catalog(Arc<crate::plugin_catalog::PluginCatalog>),
+}
+
+impl UsageBindingSource {
+    fn current(&self) -> Vec<PluginUsageSpec> {
+        match self {
+            #[cfg(test)]
+            Self::Static(bindings) => bindings.as_ref().clone(),
+            Self::Catalog(catalog) => catalog
+                .runtime()
+                .map_or_else(Vec::new, |runtime| runtime.usage_bindings()),
+        }
+    }
+}
+
 impl UsageService {
     #[cfg(test)]
-    pub fn new(
-        codex_command: String,
-        store: Option<crate::store::Store>,
-        cache_path: Option<PathBuf>,
-    ) -> Self {
-        Self::with_bindings(codex_command, store, cache_path, Vec::new())
+    pub fn new(store: Option<crate::store::Store>, cache_path: Option<PathBuf>) -> Self {
+        Self::with_bindings(store, cache_path, Vec::new())
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn with_bindings(
-        codex_command: String,
         store: Option<crate::store::Store>,
         cache_path: Option<PathBuf>,
         bindings: Vec<PluginUsageSpec>,
     ) -> Self {
-        // Never let an account-card refresh cold-install a provider through
-        // npx. Production Machine configuration supplies the managed command;
-        // local development simply reports Grok billing as unavailable.
-        let grok_spec = std::env::var("COWBOY_ACP_GROK_CMD")
-            .ok()
-            .filter(|command| !command.trim().is_empty())
-            .and_then(|_| crate::provider::lookup("grok"));
-        let snapshot = cache_path
+        Self::with_binding_source(
+            store,
+            cache_path,
+            UsageBindingSource::Static(Arc::new(bindings)),
+            Arc::new(crate::machine_control::MachineControl::default()),
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn with_plugin_catalog(
+        store: Option<crate::store::Store>,
+        cache_path: Option<PathBuf>,
+        catalog: Arc<crate::plugin_catalog::PluginCatalog>,
+        machine_control: Arc<crate::machine_control::MachineControl>,
+    ) -> Self {
+        Self::with_binding_source(
+            store,
+            cache_path,
+            UsageBindingSource::Catalog(catalog),
+            machine_control,
+        )
+    }
+
+    fn with_binding_source(
+        store: Option<crate::store::Store>,
+        cache_path: Option<PathBuf>,
+        bindings: UsageBindingSource,
+        machine_control: Arc<crate::machine_control::MachineControl>,
+    ) -> Self {
+        let initial_bindings = bindings.current();
+        let mut snapshot = cache_path
             .as_deref()
             .and_then(load_cached_snapshot)
             .unwrap_or_else(|| UsageSnapshot {
@@ -168,13 +209,13 @@ impl UsageService {
                 next_refresh_at_ms: 0,
                 refresh_interval_ms: i64::try_from(AUTO_REFRESH_INTERVAL.as_millis())
                     .unwrap_or(i64::MAX),
-                providers: bindings.iter().map(placeholder_usage).collect(),
+                providers: initial_bindings.iter().map(placeholder_usage).collect(),
                 reset_schedules: BTreeMap::new(),
             });
+        align_snapshot_bindings(&mut snapshot, &initial_bindings);
         Self {
             bindings,
-            codex_command,
-            grok_spec,
+            machine_control,
             store,
             snapshot: Arc::new(Mutex::new(snapshot)),
             refresh_lock: Arc::new(Mutex::new(())),
@@ -186,21 +227,161 @@ impl UsageService {
     }
 
     #[must_use]
-    pub fn plugin_bindings(&self) -> &[PluginUsageSpec] {
-        &self.bindings
+    pub fn plugin_bindings(&self) -> Vec<PluginUsageSpec> {
+        self.bindings.current()
+    }
+
+    fn command_route(&self, account: &str, operation: PluginHostOperation) -> PluginCommandRoute {
+        #[cfg(not(test))]
+        let UsageBindingSource::Catalog(catalog) = &self.bindings;
+        #[cfg(test)]
+        let catalog = match &self.bindings {
+            UsageBindingSource::Static(_) => return PluginCommandRoute::Bootstrap,
+            UsageBindingSource::Catalog(catalog) => catalog,
+        };
+        let Some(runtime) = catalog.runtime() else {
+            return PluginCommandRoute::Unavailable(
+                "Plugin host is temporarily unavailable: runtime is not active".to_owned(),
+            );
+        };
+        let released_hosts = runtime.exact_usage_hosts(account);
+        if released_hosts.is_empty() {
+            return PluginCommandRoute::Bootstrap;
+        }
+        let hosts = released_hosts
+            .iter()
+            .filter(|host| {
+                host.usage.as_ref().is_some_and(|usage| match operation {
+                    PluginHostOperation::CollectUsage => !usage.collector_argv.is_empty(),
+                    PluginHostOperation::ResetUsage => !usage.reset_argv.is_empty(),
+                    PluginHostOperation::DecorateActivity => {
+                        usage.activity && !usage.collector_argv.is_empty()
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        if hosts.is_empty() {
+            return PluginCommandRoute::Unavailable(
+                "Released Plugin host does not support this usage operation".to_owned(),
+            );
+        }
+        let installed = self.machine_control.connected_plugin_inventory();
+        let mut candidates = hosts
+            .into_iter()
+            .flat_map(|host| {
+                installed
+                    .iter()
+                    .filter(move |installed| {
+                        installed.plugin.state == PluginInstallationState::Active
+                            && host.id == installed.plugin.plugin_id
+                            && host.plugin_version.as_deref()
+                                == Some(installed.plugin.plugin_version.as_str())
+                            && host.artifact_digest.as_deref()
+                                == Some(installed.plugin.generation_digest.as_str())
+                    })
+                    .map(move |installed| {
+                        (
+                            host.plugin_version.as_deref().unwrap_or_default(),
+                            installed.machine_id.clone(),
+                            installed.plugin.clone(),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            semver::Version::parse(right.0)
+                .ok()
+                .cmp(&semver::Version::parse(left.0).ok())
+                .then(left.1.cmp(&right.1))
+                .then(left.2.generation_digest.cmp(&right.2.generation_digest))
+        });
+        candidates.into_iter().next().map_or_else(
+            || {
+                PluginCommandRoute::Unavailable(
+                    "Plugin host is temporarily unavailable: no connected Machine has a matching exact generation"
+                        .to_owned(),
+                )
+            },
+            |(_, machine_id, plugin)| PluginCommandRoute::Machine { machine_id, plugin },
+        )
+    }
+
+    /// Let the signed collector add Provider-owned, data-only projections to
+    /// an activity response. A missing or incompatible transform degrades to
+    /// the generic Cowboy aggregate instead of breaking the activity surface.
+    pub async fn decorate_activity(&self, provider: &str, activity: Value) -> Value {
+        let bindings = self.bindings.current();
+        let Some(binding) = bindings.iter().find(|binding| {
+            binding.account == provider && binding.activity && !binding.collector_argv.is_empty()
+        }) else {
+            return activity;
+        };
+        let request = json!({
+            "operation": "decorate_activity",
+            "provider": provider,
+            "activity": activity,
+        });
+        let result = async {
+            let response =
+                match self.command_route(&binding.account, PluginHostOperation::DecorateActivity) {
+                    PluginCommandRoute::Machine { machine_id, plugin } => self
+                        .machine_control
+                        .plugin_host_request(
+                            &machine_id,
+                            &plugin,
+                            PluginHostOperation::DecorateActivity,
+                            request.clone(),
+                        )
+                        .await
+                        .map_err(|error| anyhow::anyhow!(error.detail))?,
+                    PluginCommandRoute::Unavailable(detail) => bail!(detail),
+                    PluginCommandRoute::Bootstrap => {
+                        let (program, args) = binding
+                            .collector_argv
+                            .split_first()
+                            .context("plugin activity transform argv is empty")?;
+                        let encoded = serde_json::to_vec(&request)?;
+                        let output = run_plugin_command(program, args, &encoded)
+                            .await
+                            .map_err(|failure| failure.error)?;
+                        anyhow::ensure!(
+                            output.status.success(),
+                            "plugin activity transform exited {}: {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr).trim()
+                        );
+                        serde_json::from_slice(&output.stdout)
+                            .context("parsing plugin activity transform JSON")?
+                    }
+                };
+            let transformed: PluginActivityTransform = serde_json::from_value(response)
+                .context("parsing plugin activity transform response")?;
+            Ok::<_, anyhow::Error>(transformed.activity)
+        }
+        .await;
+        match result {
+            Ok(transformed) => transformed,
+            Err(error) => {
+                tracing::warn!(%error, provider, "plugin activity transform is unavailable");
+                request.get("activity").cloned().unwrap_or(Value::Null)
+            }
+        }
     }
 
     #[must_use]
     pub fn reset_provider_ids(&self) -> Vec<String> {
         self.bindings
+            .current()
             .iter()
             .filter_map(|binding| binding.reset.clone())
             .collect()
     }
 
     #[must_use]
+    #[cfg(test)]
     pub fn exposes_activity(&self, account: &str) -> bool {
         self.bindings
+            .current()
             .iter()
             .any(|binding| binding.account == account && binding.activity)
     }
@@ -208,37 +389,41 @@ impl UsageService {
     #[must_use]
     pub fn reset_claims_before_attempt(&self, reset_id: &str) -> bool {
         self.bindings
+            .current()
             .iter()
             .find(|binding| binding.reset.as_deref() == Some(reset_id))
             .is_some_and(PluginUsageSpec::claims_reset_before_attempt)
     }
 
     async fn collect_binding(&self, binding: &PluginUsageSpec) -> ProviderUsage {
-        let usage = if !binding.collector_argv.is_empty() {
-            collect_command(binding).await
+        let usage = if !binding.collector_argv.is_empty() || binding.collector.is_command() {
+            collect_command(
+                binding,
+                self.store.as_ref(),
+                self.command_route(&binding.account, PluginHostOperation::CollectUsage),
+                &self.machine_control,
+            )
+            .await
+        } else if binding.collector.is_session() {
+            placeholder_usage(binding)
         } else {
-            match binding.collector {
-                UsageCollectorKind::OpenaiAppserver => {
-                    collect_openai_usage(&self.codex_command, binding).await
-                }
-                UsageCollectorKind::DeepseekStore => {
-                    collect_deepseek_usage(self.store.as_ref(), binding).await
-                }
-                UsageCollectorKind::XaiBilling => {
-                    collect_configured_xai_usage(self.grok_spec.as_ref(), binding).await
-                }
-                UsageCollectorKind::Command => collect_command(binding).await,
-                UsageCollectorKind::Session | UsageCollectorKind::Unknown => {
-                    placeholder_usage(binding)
-                }
-            }
+            crate::provider_info::error(
+                intern_usage_str(binding.account.clone()),
+                intern_usage_str(binding.product_label().to_owned()),
+                format!(
+                    "usage collector {} has no plugin command",
+                    binding.collector.as_str()
+                ),
+            )
         };
         bind_collected_usage(usage, binding)
     }
 
     pub async fn snapshot(&self) -> UsageSnapshot {
+        let bindings = self.bindings.current();
         let reset_schedules = self.reset_schedules.lock().await.clone();
         let mut snapshot = self.snapshot.lock().await.clone();
+        align_snapshot_bindings(&mut snapshot, &bindings);
         apply_reset_schedules(&mut snapshot, &reset_schedules);
         self.maybe_warm(&snapshot);
         snapshot
@@ -251,8 +436,8 @@ impl UsageService {
     }
 
     /// Automatic refreshes favor a flat memory profile over minimum wall time.
-    /// Codex and Grok collectors are separate, short-lived but comparatively
-    /// heavy processes; running them one after another prevents their RSS peaks
+    /// Plugin collectors are separate, short-lived but potentially heavy
+    /// processes; running them one after another prevents their RSS peaks
     /// from stacking inside the controller service cgroup. Explicit user
     /// refreshes keep the concurrent path above.
     pub(crate) async fn refresh_background(&self) -> UsageSnapshot {
@@ -261,15 +446,16 @@ impl UsageService {
 
     async fn refresh_with_policy(&self, low_peak: bool) -> UsageSnapshot {
         let _guard = self.refresh_lock.lock().await;
+        let bindings = self.bindings.current();
         let mut current = self.snapshot.lock().await.clone();
+        align_snapshot_bindings(&mut current, &bindings);
         let policy = if low_peak {
             RefreshPolicy::Background
         } else {
             RefreshPolicy::Manual
         };
         let attempted_at_ms = now_ms();
-        let due: Vec<PluginUsageSpec> = self
-            .bindings
+        let due: Vec<PluginUsageSpec> = bindings
             .iter()
             .filter(|binding| binding.refreshable())
             .filter(|binding| {
@@ -301,9 +487,9 @@ impl UsageService {
         };
         let completed_at_ms = now_ms();
         for attempt in attempts {
-            reconcile_provider_attempt(&mut current, attempt, completed_at_ms, &self.bindings);
+            reconcile_provider_attempt(&mut current, attempt, completed_at_ms, &bindings);
         }
-        update_snapshot_refresh_times(&mut current, completed_at_ms, &self.bindings);
+        update_snapshot_refresh_times(&mut current, completed_at_ms, &bindings);
         let reset_schedules = self.reset_schedules.lock().await.clone();
         apply_reset_schedules(&mut current, &reset_schedules);
         *self.snapshot.lock().await = current.clone();
@@ -316,7 +502,7 @@ impl UsageService {
             return;
         }
         let current_time_ms = now_ms();
-        if !self.bindings.iter().any(|binding| {
+        if !self.bindings.current().iter().any(|binding| {
             binding.refreshable()
                 && provider_refresh_due(
                     find_provider(snapshot, &binding.account),
@@ -360,8 +546,8 @@ impl UsageService {
         provider: &str,
         policy: RefreshPolicy,
     ) -> Result<UsageSnapshot> {
-        let Some(binding) = self
-            .bindings
+        let bindings = self.bindings.current();
+        let Some(binding) = bindings
             .iter()
             .find(|binding| binding.account == provider)
             .cloned()
@@ -373,6 +559,7 @@ impl UsageService {
         }
         let _guard = self.refresh_lock.lock().await;
         let mut snapshot = self.snapshot.lock().await.clone();
+        align_snapshot_bindings(&mut snapshot, &bindings);
         let attempted_at_ms = now_ms();
         if !provider_refresh_due(find_provider(&snapshot, provider), attempted_at_ms, policy) {
             let reset_schedules = self.reset_schedules.lock().await.clone();
@@ -381,8 +568,8 @@ impl UsageService {
         }
         let replacement = self.collect_binding(&binding).await;
         let completed_at_ms = now_ms();
-        reconcile_provider_attempt(&mut snapshot, replacement, completed_at_ms, &self.bindings);
-        update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &self.bindings);
+        reconcile_provider_attempt(&mut snapshot, replacement, completed_at_ms, &bindings);
+        update_snapshot_refresh_times(&mut snapshot, completed_at_ms, &bindings);
         let reset_schedules = self.reset_schedules.lock().await.clone();
         apply_reset_schedules(&mut snapshot, &reset_schedules);
         *self.snapshot.lock().await = snapshot.clone();
@@ -409,8 +596,8 @@ impl UsageService {
         expected_credit_id: Option<&str>,
     ) -> std::result::Result<ResetResult, ResetError> {
         let _guard = self.reset_lock.lock().await;
-        let Some(binding) = self
-            .bindings
+        let bindings = self.bindings.current();
+        let Some(binding) = bindings
             .iter()
             .find(|candidate| candidate.reset.as_deref() == Some(provider))
         else {
@@ -420,177 +607,20 @@ impl UsageService {
                 source: anyhow::anyhow!("provider does not support usage resets"),
             });
         };
-        let account = binding.account.clone();
-        match binding.collector {
-            UsageCollectorKind::OpenaiAppserver => {
-                self.consume_nearest_codex_reset(&account, idempotency_key, expected_credit_id)
-                    .await
-            }
-            UsageCollectorKind::XaiBilling => {
-                self.consume_nearest_xai_reset(&account, expected_credit_id)
-                    .await
-            }
-            UsageCollectorKind::DeepseekStore
-            | UsageCollectorKind::Session
-            | UsageCollectorKind::Command
-            | UsageCollectorKind::Unknown => Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source: anyhow::anyhow!("provider does not support usage resets"),
-            }),
-        }
-    }
-
-    async fn consume_nearest_codex_reset(
-        &self,
-        account: &str,
-        idempotency_key: &str,
-        expected_credit_id: Option<&str>,
-    ) -> std::result::Result<ResetResult, ResetError> {
-        let usage = tokio::time::timeout(
-            std::time::Duration::from_secs(12),
-            collect_codex(&self.codex_command),
-        )
-        .await
-        .context("refresh before Codex reset timed out")
-        .and_then(|result| result)
-        .map_err(|source| ResetError {
-            call_may_have_reached_provider: false,
-            credit_id: None,
-            source,
-        })?;
-        let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
-            .context("no available Codex reset credit")
-            .map_err(|source| ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source,
-            })?;
-        if expected_credit_id.is_some_and(|expected| expected != credit_id) {
-            return Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: Some(credit_id),
-                source: anyhow::anyhow!(
-                    "nearest Codex reset credit changed; refresh and confirm again"
-                ),
-            });
-        }
-        let mut server = JsonRpcProcess::start(&self.codex_command)
-            .await
-            .map_err(|source| ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: Some(credit_id.clone()),
-                source,
-            })?;
-        let response = server
-            .request(
-                "account/rateLimitResetCredit/consume",
-                json!({ "creditId": credit_id, "idempotencyKey": idempotency_key }),
+        if !binding.reset_argv.is_empty() {
+            return consume_plugin_reset(
+                binding,
+                idempotency_key,
+                expected_credit_id,
+                self.command_route(&binding.account, PluginHostOperation::ResetUsage),
+                &self.machine_control,
             )
-            .await
-            .map_err(|source| ResetError {
-                // Once the consume frame is written, a missing/error response is
-                // ambiguous. Never retry automatically: the provider may have
-                // committed the credit before the transport failed.
-                call_may_have_reached_provider: true,
-                credit_id: Some(credit_id.clone()),
-                source,
-            })?;
-        let outcome = response
-            .get("outcome")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned();
-        let _ = self
-            .refresh_provider_with_policy(account, RefreshPolicy::Force)
             .await;
-        Ok(ResetResult {
-            outcome,
-            credit_id: Some(credit_id),
-        })
-    }
-
-    async fn consume_nearest_xai_reset(
-        &self,
-        account: &str,
-        expected_credit_id: Option<&str>,
-    ) -> std::result::Result<ResetResult, ResetError> {
-        let binding = self
-            .bindings
-            .iter()
-            .find(|binding| binding.account == account);
-        let Some(spec) = self.grok_spec.as_ref() else {
-            return Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source: anyhow::anyhow!(
-                    "{}",
-                    binding
-                        .and_then(|binding| binding.error_config.as_deref())
-                        .unwrap_or("usage is not configured")
-                ),
-            });
-        };
-        let account_id = intern_usage_str(account.to_owned());
-        let product = intern_usage_str(
-            binding
-                .map(PluginUsageSpec::product_label)
-                .unwrap_or("Provider")
-                .to_owned(),
-        );
-        // The billing ACP request refreshes Grok's OIDC credential before the
-        // account bridge reads reset availability from the same official file.
-        let usage = tokio::time::timeout(
-            std::time::Duration::from_secs(12),
-            crate::provider_info::collect_xai(
-                spec,
-                account_id,
-                product,
-                binding.and_then(|binding| binding.error_auth.as_deref()),
-                binding.and_then(|binding| binding.error_fetch.as_deref()),
-            ),
-        )
-        .await
-        .context("refresh before xAI reset timed out")
-        .and_then(|result| result)
-        .map_err(|source| ResetError {
+        }
+        Err(ResetError {
             call_may_have_reached_provider: false,
             credit_id: None,
-            source,
-        })?;
-        let credit_id = nearest_available_credit_id(usage.rate_limits.as_ref())
-            .context("no available xAI reset")
-            .map_err(|source| ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: None,
-                source,
-            })?;
-        if expected_credit_id.is_some_and(|expected| expected != credit_id) {
-            return Err(ResetError {
-                call_may_have_reached_provider: false,
-                credit_id: Some(credit_id),
-                source: anyhow::anyhow!("nearest xAI reset changed; refresh and confirm again"),
-            });
-        }
-        let remaining = crate::provider_info::redeem_xai_reset(&credit_id)
-            .await
-            .map_err(|source| ResetError {
-                // RedeemReset has no provider idempotency key. Once the HTTP
-                // request is sent, never retry automatically after an error.
-                call_may_have_reached_provider: true,
-                credit_id: Some(credit_id.clone()),
-                source,
-            })?;
-        let outcome = format!(
-            "consumed; {remaining} reset{} remaining",
-            if remaining == 1 { "" } else { "s" }
-        );
-        let _ = self
-            .refresh_provider_with_policy(account, RefreshPolicy::Force)
-            .await;
-        Ok(ResetResult {
-            outcome,
-            credit_id: Some(credit_id),
+            source: anyhow::anyhow!("provider reset has no plugin command"),
         })
     }
 }
@@ -599,7 +629,6 @@ impl UsageService {
 enum RefreshPolicy {
     Manual,
     Background,
-    Force,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,7 +661,6 @@ fn provider_refresh_due(
     match policy {
         RefreshPolicy::Manual => current_time_ms >= refresh.manual_refresh_after_ms,
         RefreshPolicy::Background => current_time_ms >= refresh.next_auto_refresh_at_ms,
-        RefreshPolicy::Force => true,
     }
 }
 
@@ -844,64 +872,32 @@ fn update_snapshot_refresh_times(
     snapshot.refresh_interval_ms = duration_ms(AUTO_REFRESH_INTERVAL);
 }
 
+fn align_snapshot_bindings(snapshot: &mut UsageSnapshot, bindings: &[PluginUsageSpec]) {
+    let mut aligned = Vec::with_capacity(bindings.len());
+    for binding in bindings {
+        if aligned
+            .iter()
+            .any(|usage: &ProviderUsage| usage.provider == binding.account)
+        {
+            continue;
+        }
+        aligned.push(
+            snapshot
+                .providers
+                .iter()
+                .find(|usage| usage.provider == binding.account)
+                .cloned()
+                .unwrap_or_else(|| placeholder_usage(binding)),
+        );
+    }
+    snapshot.providers = aligned;
+}
+
 fn apply_reset_schedules(
     snapshot: &mut UsageSnapshot,
     schedules: &BTreeMap<String, ResetSchedule>,
 ) {
     snapshot.reset_schedules.clone_from(schedules);
-}
-
-fn cached_reset_schedules(cached: &CachedUsageSnapshot) -> BTreeMap<String, ResetSchedule> {
-    let mut schedules = cached.reset_schedules.clone();
-    insert_legacy_reset_schedule(
-        &mut schedules,
-        "openai-appserver",
-        cached.codex_reset_schedule.as_ref(),
-    );
-    insert_legacy_reset_schedule(
-        &mut schedules,
-        "xai-billing",
-        cached.xai_reset_schedule.as_ref(),
-    );
-    schedules
-}
-
-fn insert_legacy_reset_schedule(
-    schedules: &mut BTreeMap<String, ResetSchedule>,
-    collector: &str,
-    schedule: Option<&ResetSchedule>,
-) {
-    let Some(schedule) = schedule else {
-        return;
-    };
-    let key = crate::plugin_runtime_args::usage_reset_id_for_collector(collector)
-        .unwrap_or(collector)
-        .to_owned();
-    schedules.entry(key).or_insert_with(|| schedule.clone());
-}
-
-fn nearest_available_credit_id(rate_limits: Option<&Value>) -> Option<String> {
-    let credits = rate_limits?
-        .get("rateLimitResetCredits")?
-        .get("credits")?
-        .as_array()?;
-    credits
-        .iter()
-        .filter(|credit| credit.get("status").and_then(Value::as_str) == Some("available"))
-        .filter_map(|credit| {
-            let id = credit.get("id")?.as_str()?.to_owned();
-            let expires = credit
-                .get("expiresAt")
-                .and_then(Value::as_i64)
-                .unwrap_or(i64::MAX);
-            let granted = credit
-                .get("grantedAt")
-                .and_then(Value::as_i64)
-                .unwrap_or(i64::MAX);
-            Some(((expires, granted, id.clone()), id))
-        })
-        .min_by(|left, right| left.0.cmp(&right.0))
-        .map(|(_, id)| id)
 }
 
 /// Overlay the newest live ACP usage per provider onto the account snapshot.
@@ -951,7 +947,7 @@ fn intern_dynamic(value: String) -> &'static str {
 fn load_cached_snapshot(path: &Path) -> Option<UsageSnapshot> {
     let bytes = std::fs::read(path).ok()?;
     let cached: CachedUsageSnapshot = serde_json::from_slice(&bytes).ok()?;
-    let reset_schedules = cached_reset_schedules(&cached);
+    let reset_schedules = cached.reset_schedules;
     Some(UsageSnapshot {
         refreshed_at_ms: cached.refreshed_at_ms,
         next_refresh_at_ms: cached.next_refresh_at_ms,
@@ -1009,32 +1005,58 @@ fn unavailable_providers() -> Vec<ProviderUsage> {
         .collect()
 }
 
-async fn collect_command(binding: &PluginUsageSpec) -> ProviderUsage {
+async fn collect_command(
+    binding: &PluginUsageSpec,
+    store: Option<&crate::store::Store>,
+    route: PluginCommandRoute,
+    machine_control: &crate::machine_control::MachineControl,
+) -> ProviderUsage {
     let product = intern_usage_str(binding.product_label().to_owned());
     let account = intern_usage_str(binding.account.clone());
-    let Some((program, args)) = binding.collector_argv.split_first() else {
-        return crate::provider_info::unavailable(
-            account,
-            product,
-            "plugin collector argv is empty",
-        );
+    let attached_activity = if binding.activity {
+        Some(collector_activity(store, &binding.account).await)
+    } else {
+        None
     };
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    match tokio::time::timeout(std::time::Duration::from_secs(12), async {
-        let output = command.output().await?;
-        anyhow::ensure!(
-            output.status.success(),
-            "plugin collector exited {}",
-            output.status
-        );
-        let collected: CachedProviderUsage = serde_json::from_slice(&output.stdout)
-            .context("parsing plugin collector usage JSON")?;
+    let request = json!({
+        "operation": "collect",
+        "provider": binding.account,
+        "product": binding.product_label(),
+        "activity": attached_activity,
+    });
+    let result = async {
+        let response = match route {
+            PluginCommandRoute::Machine { machine_id, plugin } => machine_control
+                .plugin_host_request(
+                    &machine_id,
+                    &plugin,
+                    PluginHostOperation::CollectUsage,
+                    request,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!(error.detail))?,
+            PluginCommandRoute::Unavailable(detail) => bail!(detail),
+            PluginCommandRoute::Bootstrap => {
+                let (program, args) = binding
+                    .collector_argv
+                    .split_first()
+                    .context("plugin collector argv is empty")?;
+                let request = serde_json::to_vec(&request)?;
+                let output = run_plugin_command(program, args, &request)
+                    .await
+                    .map_err(|failure| failure.error)?;
+                anyhow::ensure!(
+                    output.status.success(),
+                    "plugin collector exited {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                serde_json::from_slice(&output.stdout)
+                    .context("parsing plugin collector usage JSON")?
+            }
+        };
+        let collected: CachedProviderUsage =
+            serde_json::from_value(response).context("parsing plugin collector usage response")?;
         Ok(ProviderUsage {
             provider: intern_usage_str(collected.provider),
             status: intern_usage_str(collected.status),
@@ -1042,231 +1064,163 @@ async fn collect_command(binding: &PluginUsageSpec) -> ProviderUsage {
             observed_at_ms: collected.observed_at_ms,
             account: collected.account,
             rate_limits: collected.rate_limits,
-            activity: collected.activity,
+            activity: collected.activity.or(attached_activity),
             error: collected.error,
             refresh: collected.refresh,
         })
-    })
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
-        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
+    }
+    .await;
+    match result {
+        Ok(value) => value,
+        Err(error) => crate::provider_info::error(account, product, format!("{error:#}")),
     }
 }
 
-fn collector_identity(binding: &PluginUsageSpec) -> (&'static str, &'static str) {
-    (
-        intern_usage_str(binding.account.clone()),
-        intern_usage_str(binding.product_label().to_owned()),
-    )
-}
-
-async fn collect_openai_usage(command: &str, binding: &PluginUsageSpec) -> ProviderUsage {
-    let (account, product) = collector_identity(binding);
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(12),
-        crate::provider_info::collect_openai(command),
-    )
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
-        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
-    }
-}
-
-async fn collect_deepseek_usage(
-    store: Option<&crate::store::Store>,
-    binding: &PluginUsageSpec,
-) -> ProviderUsage {
-    let (account, product) = collector_identity(binding);
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(12),
-        crate::provider_info::collect_deepseek(store, &binding.account, binding.product_label()),
-    )
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
-        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
-    }
-}
-
-async fn collect_configured_xai_usage(
-    spec: Option<&crate::provider::LaunchSpec>,
-    binding: &PluginUsageSpec,
-) -> ProviderUsage {
-    let (account, product) = collector_identity(binding);
-    let Some(spec) = spec else {
-        return crate::provider_info::unavailable(
-            account,
-            product,
-            binding
-                .error_config
-                .as_deref()
-                .unwrap_or("usage is not configured"),
-        );
+async fn collector_activity(store: Option<&crate::store::Store>, account: &str) -> Value {
+    let Some(store) = store else {
+        return json!({
+            "source": "cowboy",
+            "windowDays": 14,
+            "retentionDays": 30,
+            "availableAgents": [],
+            "summary": null,
+            "coverage": { "producers": [] },
+            "unavailableReason": "Cowboy persistence is disabled",
+        });
     };
-    collect_xai_usage(spec, account, product, binding).await
-}
-
-async fn collect_xai_usage(
-    spec: &crate::provider::LaunchSpec,
-    account: &'static str,
-    product: &'static str,
-    binding: &PluginUsageSpec,
-) -> ProviderUsage {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(12),
-        crate::provider_info::collect_xai(
-            spec,
-            account,
-            product,
-            binding.error_auth.as_deref(),
-            binding.error_fetch.as_deref(),
-        ),
-    )
-    .await
-    {
-        Ok(Ok(value)) => value,
-        Ok(Err(error)) => crate::provider_info::error(account, product, format!("{error:#}")),
-        Err(_) => crate::provider_info::error(account, product, "refresh timed out".to_owned()),
-    }
-}
-
-pub(crate) async fn collect_codex(command: &str) -> Result<ProviderUsage> {
-    let mut server = JsonRpcProcess::start(command).await?;
-    let account = server
-        .request("account/read", json!({ "refreshToken": false }))
-        .await?;
-    let rate_limits = server.request("account/rateLimits/read", json!({})).await?;
-    if !has_supported_rate_limit_shape(&rate_limits) {
-        tracing::warn!(
-            provider = "codex",
-            source = "codex-app-server",
-            "usage collector received an unknown rate-limit schema; exposing an empty summary"
-        );
-    }
-    // Usage activity is newer than rateLimits and may be unavailable for API-key
-    // or Bedrock auth. Keep limits useful even when this optional call fails.
-    let activity = server.request("account/usage/read", json!({})).await.ok();
-    Ok(ProviderUsage {
-        provider: "codex",
-        status: "available",
-        source: "codex-app-server",
-        observed_at_ms: now_ms(),
-        account: Some(account),
-        rate_limits: Some(rate_limits),
-        activity,
-        error: None,
-        refresh: None,
-    })
-}
-
-fn has_supported_rate_limit_shape(value: &Value) -> bool {
-    value.get("rateLimits").is_some_and(Value::is_object)
-        || value
-            .get("rateLimitsByLimitId")
-            .is_some_and(Value::is_object)
-}
-
-struct JsonRpcProcess {
-    child: Child,
-    stdin: ChildStdin,
-    lines: Lines<BufReader<ChildStdout>>,
-    next_id: u64,
-}
-
-impl JsonRpcProcess {
-    async fn start(command: &str) -> Result<Self> {
-        let mut child = Command::new(command)
-            .args([
-                "app-server",
-                "--stdio",
-                "-c",
-                "features.memories=false",
-                "-c",
-                "analytics.enabled=false",
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .with_context(|| format!("start Codex usage collector: {command}"))?;
-        let stdin = child.stdin.take().context("collector stdin")?;
-        let stdout = child.stdout.take().context("collector stdout")?;
-        let mut out = Self {
-            child,
-            stdin,
-            lines: BufReader::new(stdout).lines(),
-            next_id: 1,
-        };
-        out.request(
-            "initialize",
+    match store.provider_usage_summary(account, 14, 30).await {
+        Ok(activity) => activity,
+        Err(error) => {
+            tracing::warn!(%error, provider = account, "plugin usage telemetry is unavailable");
             json!({
-                "clientInfo": { "name": "cowboy-usage", "title": "Cowboy", "version": env!("CARGO_PKG_VERSION") },
-                "capabilities": { "experimentalApi": true }
-            }),
-        ).await?;
-        out.notify("initialized", json!({})).await?;
-        Ok(out)
-    }
-
-    async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
-        self.write(&json!({ "id": id, "method": method, "params": params }))
-            .await?;
-        loop {
-            let line = self
-                .lines
-                .next_line()
-                .await
-                .context("read app-server")?
-                .context("app-server closed")?;
-            let message: Value = serde_json::from_str(&line)
-                .with_context(|| format!("parse app-server message: {line}"))?;
-            if message.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            if let Some(error) = message.get("error") {
-                bail!("{method}: {error}");
-            }
-            return Ok(message.get("result").cloned().unwrap_or(Value::Null));
+                "source": "cowboy",
+                "windowDays": 14,
+                "retentionDays": 30,
+                "availableAgents": [],
+                "summary": null,
+                "coverage": { "producers": [] },
+                "telemetryError": "Cowboy request telemetry is unavailable",
+            })
         }
     }
+}
 
-    async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
-        self.write(&json!({ "method": method, "params": params }))
+async fn consume_plugin_reset(
+    binding: &PluginUsageSpec,
+    idempotency_key: &str,
+    expected_credit_id: Option<&str>,
+    route: PluginCommandRoute,
+    machine_control: &crate::machine_control::MachineControl,
+) -> std::result::Result<ResetResult, ResetError> {
+    let request = json!({
+        "operation": "consume_reset",
+        "provider": binding.account,
+        "idempotency_key": idempotency_key,
+        "expected_credit_id": expected_credit_id,
+    });
+    let response = match route {
+        PluginCommandRoute::Machine { machine_id, plugin } => machine_control
+            .plugin_host_request(
+                &machine_id,
+                &plugin,
+                PluginHostOperation::ResetUsage,
+                request,
+            )
             .await
-    }
-
-    async fn write(&mut self, value: &Value) -> Result<()> {
-        self.stdin
-            .write_all(serde_json::to_string(value)?.as_bytes())
-            .await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await.context("flush app-server")
+            .map_err(|error| ResetError {
+                call_may_have_reached_provider: error.started,
+                credit_id: None,
+                source: anyhow::anyhow!(error.detail),
+            })?,
+        PluginCommandRoute::Unavailable(detail) => {
+            return Err(ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::anyhow!(detail),
+            });
+        }
+        PluginCommandRoute::Bootstrap => {
+            let Some((program, args)) = binding.reset_argv.split_first() else {
+                return Err(ResetError {
+                    call_may_have_reached_provider: false,
+                    credit_id: None,
+                    source: anyhow::anyhow!("plugin reset argv is empty"),
+                });
+            };
+            let request = serde_json::to_vec(&request).map_err(|source| ResetError {
+                call_may_have_reached_provider: false,
+                credit_id: None,
+                source: anyhow::Error::new(source).context("serialize plugin usage reset request"),
+            })?;
+            let output = run_plugin_command(program, args, &request)
+                .await
+                .map_err(|failure| ResetError {
+                    call_may_have_reached_provider: failure.started,
+                    credit_id: None,
+                    source: failure.error,
+                })?;
+            if !output.status.success() {
+                return Err(ResetError {
+                    call_may_have_reached_provider: true,
+                    credit_id: None,
+                    source: anyhow::anyhow!(
+                        "plugin usage reset exited {}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ),
+                });
+            }
+            serde_json::from_slice(&output.stdout).map_err(|source| ResetError {
+                call_may_have_reached_provider: true,
+                credit_id: None,
+                source: anyhow::Error::new(source).context("parsing plugin usage reset result"),
+            })?
+        }
+    };
+    match serde_json::from_value::<PluginResetCommandResponse>(response) {
+        Ok(PluginResetCommandResponse::Success(result)) => Ok(result),
+        Ok(PluginResetCommandResponse::Failure { error }) => Err(ResetError {
+            call_may_have_reached_provider: error.call_may_have_reached_provider,
+            credit_id: error.credit_id,
+            source: anyhow::anyhow!(error.message),
+        }),
+        Err(source) => Err(ResetError {
+            call_may_have_reached_provider: true,
+            credit_id: None,
+            source: anyhow::Error::new(source).context("parsing plugin usage reset result"),
+        }),
     }
 }
 
-impl Drop for JsonRpcProcess {
-    fn drop(&mut self) {
-        let _ = self.child.start_kill();
-    }
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PluginResetCommandResponse {
+    Success(ResetResult),
+    Failure { error: PluginResetCommandError },
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginResetCommandError {
+    message: String,
+    #[serde(default)]
+    call_may_have_reached_provider: bool,
+    #[serde(default)]
+    credit_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginActivityTransform {
+    activity: Value,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin_host::UsageErrorKind;
+    use crate::plugin_host::{UsageCollectorKind, UsageErrorKind};
 
     #[test]
     fn reset_claim_and_ids_follow_plugin_bindings() {
         let service = UsageService::with_bindings(
-            "codex".to_owned(),
             None,
             None,
             vec![openai_usage_binding(), xai_like_binding("xai")],
@@ -1280,30 +1234,30 @@ mod tests {
     }
 
     #[test]
-    fn activity_endpoint_follows_deepseek_store_collector() {
+    fn activity_endpoint_follows_plugin_activity_capability() {
         let service = UsageService::with_bindings(
-            "codex".to_owned(),
             None,
             None,
             vec![
                 openai_usage_binding(),
                 PluginUsageSpec {
                     account: "custom-ds".to_owned(),
-                    collector: UsageCollectorKind::DeepseekStore,
+                    collector: UsageCollectorKind::Named("future-command".to_owned()),
                     reset: None,
                     product: Some("DeepSeek".to_owned()),
-                    parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
-                    error: UsageErrorKind::Raw,
+                    parser: crate::plugin_host::UsageLimitParserKind::new("generic-buckets"),
+                    error: UsageErrorKind::new("raw"),
                     error_auth: None,
                     error_config: None,
                     error_fetch: None,
                     order: None,
                     top_bar_windows: Vec::new(),
-                    widget: crate::plugin_host::UsageWidgetKind::DeepseekBalance,
+                    widget: crate::plugin_host::UsageWidgetKind::new("deepseek-balance"),
                     widget_shape: crate::plugin_host::UsageWidgetShape::Balance,
                     widget_window: None,
                     reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
-                    session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+                    session_overlay: crate::plugin_host::UsageSessionOverlay::new("none"),
+                    session_rate_limits: None,
                     empty: None,
                     available_status: Some("API".to_owned()),
                     omit_empty_limits: true,
@@ -1314,7 +1268,9 @@ mod tests {
                     activity_agents: Vec::new(),
                     activity_models: Vec::new(),
                     cache_protection: None,
+                    collector_sidecars: Vec::new(),
                     collector_argv: Vec::new(),
+                    reset_argv: Vec::new(),
                     activity: true,
                 },
             ],
@@ -1328,28 +1284,95 @@ mod tests {
     async fn collector_argv_parses_plugin_json_stdout() {
         let mut binding = openai_usage_binding();
         binding.account = "future".to_owned();
-        binding.collector = UsageCollectorKind::OpenaiAppserver;
+        binding.collector = UsageCollectorKind::Command;
         binding.collector_argv = vec![
             "sh".to_owned(),
             "-c".to_owned(),
-            "printf '%s' '{\"provider\":\"future\",\"status\":\"available\",\"source\":\"cmd\",\"observed_at_ms\":1}'"
+            "read -r _request || true; printf '%s' '{\"provider\":\"future\",\"status\":\"available\",\"source\":\"cmd\",\"observed_at_ms\":1}'"
                 .to_owned(),
         ];
-        let usage = collect_command(&binding).await;
+        let control = crate::machine_control::MachineControl::default();
+        let usage = collect_command(&binding, None, PluginCommandRoute::Bootstrap, &control).await;
         assert_eq!(usage.provider, "future");
         assert_eq!(usage.status, "available");
         assert_eq!(usage.source, "cmd");
         assert_eq!(usage.observed_at_ms, 1);
     }
 
+    #[tokio::test]
+    async fn signed_collector_can_decorate_filtered_activity() {
+        let mut binding = openai_usage_binding();
+        binding.account = "future".to_owned();
+        binding.activity = true;
+        binding.collector_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "read -r _request || true; printf '%s' '{\"activity\":{\"requests\":3,\"price\":\"signed\"}}'"
+                .to_owned(),
+        ];
+        let service = UsageService::with_bindings(None, None, vec![binding]);
+        let activity = service
+            .decorate_activity("future", json!({ "requests": 3 }))
+            .await;
+        assert_eq!(activity["requests"], 3);
+        assert_eq!(activity["price"], "signed");
+    }
+
+    #[tokio::test]
+    async fn reset_argv_parses_plugin_success() {
+        let mut binding = openai_usage_binding();
+        binding.reset_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "read -r _request || true; printf '%s' '{\"outcome\":\"consumed\",\"credit_id\":\"credit-1\"}'"
+                .to_owned(),
+        ];
+        let control = crate::machine_control::MachineControl::default();
+        let result = consume_plugin_reset(
+            &binding,
+            "attempt-1",
+            Some("credit-1"),
+            PluginCommandRoute::Bootstrap,
+            &control,
+        )
+        .await
+        .expect("plugin reset result");
+        assert_eq!(result.outcome, "consumed");
+        assert_eq!(result.credit_id.as_deref(), Some("credit-1"));
+    }
+
+    #[tokio::test]
+    async fn reset_argv_preserves_plugin_failure_ambiguity() {
+        let mut binding = openai_usage_binding();
+        binding.reset_argv = vec![
+            "sh".to_owned(),
+            "-c".to_owned(),
+            "read -r _request || true; printf '%s' '{\"error\":{\"message\":\"provider outcome is unknown\",\"call_may_have_reached_provider\":true,\"credit_id\":\"credit-2\"}}'"
+                .to_owned(),
+        ];
+        let control = crate::machine_control::MachineControl::default();
+        let error = consume_plugin_reset(
+            &binding,
+            "attempt-2",
+            Some("credit-2"),
+            PluginCommandRoute::Bootstrap,
+            &control,
+        )
+        .await
+        .expect_err("plugin reset failure");
+        assert!(error.call_may_have_reached_provider);
+        assert_eq!(error.credit_id.as_deref(), Some("credit-2"));
+        assert_eq!(error.to_string(), "provider outcome is unknown");
+    }
+
     fn openai_usage_binding() -> PluginUsageSpec {
         PluginUsageSpec {
             account: "openai".to_owned(),
-            collector: UsageCollectorKind::OpenaiAppserver,
+            collector: UsageCollectorKind::Command,
             reset: Some("codex".to_owned()),
             product: Some("OpenAI".to_owned()),
-            parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
-            error: crate::plugin_host::UsageErrorKind::OpenaiAuth,
+            parser: crate::plugin_host::UsageLimitParserKind::new("generic-buckets"),
+            error: crate::plugin_host::UsageErrorKind::new("openai-auth"),
             error_auth: Some(
                 "OpenAI usage authorization expired. Sign in to Codex again.".to_owned(),
             ),
@@ -1357,11 +1380,12 @@ mod tests {
             error_fetch: None,
             order: Some(0),
             top_bar_windows: vec![300, 10_080],
-            widget: crate::plugin_host::UsageWidgetKind::OpenaiWeekly,
+            widget: crate::plugin_host::UsageWidgetKind::new("openai-weekly"),
             widget_shape: crate::plugin_host::UsageWidgetShape::Percent,
             widget_window: Some(10_080),
             reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
-            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::new("none"),
+            session_rate_limits: None,
             empty: None,
             available_status: None,
             omit_empty_limits: false,
@@ -1372,7 +1396,9 @@ mod tests {
             activity_agents: Vec::new(),
             activity_models: Vec::new(),
             cache_protection: None,
+            collector_sidecars: Vec::new(),
             collector_argv: Vec::new(),
+            reset_argv: Vec::new(),
             activity: false,
         }
     }
@@ -1426,18 +1452,9 @@ mod tests {
 
     #[tokio::test]
     async fn empty_bindings_do_not_invent_account_cards() {
-        let service = UsageService::with_bindings("codex".to_owned(), None, None, Vec::new());
+        let service = UsageService::with_bindings(None, None, Vec::new());
         let snapshot = service.snapshot().await;
         assert!(snapshot.providers.is_empty());
-    }
-
-    #[test]
-    fn unknown_rate_limit_schema_degrades_without_panicking() {
-        assert!(!has_supported_rate_limit_shape(&json!({ "future": [] })));
-        assert!(has_supported_rate_limit_shape(&json!({ "rateLimits": {} })));
-        assert!(has_supported_rate_limit_shape(
-            &json!({ "rateLimitsByLimitId": {} })
-        ));
     }
 
     #[test]
@@ -1561,21 +1578,22 @@ mod tests {
             successful_usage("deepseek", 1),
             &PluginUsageSpec {
                 account: "custom-ds".to_owned(),
-                collector: UsageCollectorKind::DeepseekStore,
+                collector: UsageCollectorKind::Named("future-command".to_owned()),
                 reset: None,
                 product: Some("DeepSeek".to_owned()),
-                parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
-                error: UsageErrorKind::Raw,
+                parser: crate::plugin_host::UsageLimitParserKind::new("generic-buckets"),
+                error: UsageErrorKind::new("raw"),
                 error_auth: None,
                 error_config: None,
                 error_fetch: None,
                 order: None,
                 top_bar_windows: Vec::new(),
-                widget: crate::plugin_host::UsageWidgetKind::DeepseekBalance,
+                widget: crate::plugin_host::UsageWidgetKind::new("deepseek-balance"),
                 widget_shape: crate::plugin_host::UsageWidgetShape::Balance,
                 widget_window: None,
                 reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
-                session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+                session_overlay: crate::plugin_host::UsageSessionOverlay::new("none"),
+                session_rate_limits: None,
                 empty: None,
                 available_status: Some("API".to_owned()),
                 omit_empty_limits: true,
@@ -1586,7 +1604,9 @@ mod tests {
                 activity_agents: Vec::new(),
                 activity_models: Vec::new(),
                 cache_protection: None,
+                collector_sidecars: Vec::new(),
                 collector_argv: Vec::new(),
+                reset_argv: Vec::new(),
                 activity: false,
             },
         );
@@ -1596,11 +1616,11 @@ mod tests {
     fn xai_like_binding(account: &str) -> PluginUsageSpec {
         PluginUsageSpec {
             account: account.to_owned(),
-            collector: UsageCollectorKind::XaiBilling,
+            collector: UsageCollectorKind::Command,
             reset: Some("xai".to_owned()),
             product: Some("Grok Build".to_owned()),
-            parser: crate::plugin_host::UsageLimitParserKind::XaiCredits,
-            error: UsageErrorKind::XaiBilling,
+            parser: crate::plugin_host::UsageLimitParserKind::new("xai-credits"),
+            error: UsageErrorKind::new("xai-billing"),
             error_auth: Some(
                 "Sign in to Grok Build in Machines, then refresh xAI usage.".to_owned(),
             ),
@@ -1608,11 +1628,12 @@ mod tests {
             error_fetch: Some("Grok Build could not fetch xAI usage.".to_owned()),
             order: None,
             top_bar_windows: Vec::new(),
-            widget: crate::plugin_host::UsageWidgetKind::XaiIncluded,
+            widget: crate::plugin_host::UsageWidgetKind::new("xai-included"),
             widget_shape: crate::plugin_host::UsageWidgetShape::Percent,
             widget_window: None,
             reset_claim: crate::plugin_host::UsageResetClaim::BeforeAttempt,
-            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::new("none"),
+            session_rate_limits: None,
             empty: None,
             available_status: None,
             omit_empty_limits: false,
@@ -1623,7 +1644,9 @@ mod tests {
             activity_agents: Vec::new(),
             activity_models: Vec::new(),
             cache_protection: None,
+            collector_sidecars: Vec::new(),
             collector_argv: Vec::new(),
+            reset_argv: Vec::new(),
             activity: false,
         }
     }
@@ -1633,7 +1656,7 @@ mod tests {
         let custom = xai_like_binding("custom-xai");
         assert_eq!(
             public_usage_error(
-                &[custom.clone()],
+                std::slice::from_ref(&custom),
                 "custom-xai",
                 UsageFailureKind::Authentication,
                 false,
@@ -1663,18 +1686,19 @@ mod tests {
             collector: UsageCollectorKind::Session,
             reset: None,
             product: Some("Future".to_owned()),
-            parser: crate::plugin_host::UsageLimitParserKind::GenericBuckets,
-            error: UsageErrorKind::Raw,
+            parser: crate::plugin_host::UsageLimitParserKind::new("generic-buckets"),
+            error: UsageErrorKind::new("raw"),
             error_auth: None,
             error_config: None,
             error_fetch: None,
             order: None,
             top_bar_windows: Vec::new(),
-            widget: crate::plugin_host::UsageWidgetKind::None,
+            widget: crate::plugin_host::UsageWidgetKind::new("none"),
             widget_shape: crate::plugin_host::UsageWidgetShape::None,
             widget_window: None,
             reset_claim: crate::plugin_host::UsageResetClaim::AfterSuccess,
-            session_overlay: crate::plugin_host::UsageSessionOverlay::None,
+            session_overlay: crate::plugin_host::UsageSessionOverlay::new("none"),
+            session_rate_limits: None,
             empty: None,
             available_status: None,
             omit_empty_limits: false,
@@ -1685,7 +1709,9 @@ mod tests {
             activity_agents: Vec::new(),
             activity_models: Vec::new(),
             cache_protection: None,
+            collector_sidecars: Vec::new(),
             collector_argv: Vec::new(),
+            reset_argv: Vec::new(),
             activity: false,
         };
         assert_eq!(
@@ -1719,24 +1745,6 @@ mod tests {
             1_000 + duration_ms(AUTO_REFRESH_INTERVAL) - 1,
             RefreshPolicy::Background,
         ));
-        assert!(provider_refresh_due(
-            Some(&usage),
-            1_000,
-            RefreshPolicy::Force,
-        ));
-    }
-
-    #[test]
-    fn reset_selector_only_chooses_nearest_available_credit() {
-        let limits = json!({ "rateLimitResetCredits": { "credits": [
-            { "id": "later", "status": "available", "expiresAt": 300 },
-            { "id": "used", "status": "redeemed", "expiresAt": 50 },
-            { "id": "nearest", "status": "available", "expiresAt": 100 }
-        ]}});
-        assert_eq!(
-            nearest_available_credit_id(Some(&limits)).as_deref(),
-            Some("nearest")
-        );
     }
 
     #[test]
@@ -1782,7 +1790,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_schedules_are_isolated_by_provider() {
-        let service = UsageService::new("codex".to_owned(), None, None);
+        let service = UsageService::new(None, None);
         service
             .set_reset_schedule("codex", Some(ResetSchedule { fire_at_ms: 100 }))
             .await;
@@ -1818,24 +1826,22 @@ mod tests {
     }
 
     #[test]
-    fn legacy_named_reset_schedules_import_into_the_plugin_keyed_map() {
+    fn cached_reset_schedules_remain_plugin_keyed() {
+        let mut reset_schedules = BTreeMap::new();
+        reset_schedules.insert("future".to_owned(), ResetSchedule { fire_at_ms: 100 });
         let cached = CachedUsageSnapshot {
             refreshed_at_ms: 1,
             next_refresh_at_ms: 2,
             refresh_interval_ms: 3,
             providers: Vec::new(),
-            reset_schedules: BTreeMap::new(),
-            codex_reset_schedule: Some(ResetSchedule { fire_at_ms: 100 }),
-            xai_reset_schedule: Some(ResetSchedule { fire_at_ms: 200 }),
+            reset_schedules,
         };
-        let schedules = cached_reset_schedules(&cached);
         assert_eq!(
-            schedules.get("codex").map(|value| value.fire_at_ms),
+            cached
+                .reset_schedules
+                .get("future")
+                .map(|value| value.fire_at_ms),
             Some(100)
-        );
-        assert_eq!(
-            schedules.get("xai").map(|value| value.fire_at_ms),
-            Some(200)
         );
     }
 }

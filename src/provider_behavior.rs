@@ -20,24 +20,7 @@ pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehavior
         ConfigurationBehavior, PermissionBehavior, ProviderBehaviorContract, SessionBehavior,
         TurnEndBehavior,
     };
-    const LEGACY_SOURCES: [(&str, &str); 6] = [
-        (
-            "claude-code",
-            include_str!("../plugins/claude-code/provider.json"),
-        ),
-        ("codex", include_str!("../plugins/codex/provider.json")),
-        ("gemini", include_str!("../plugins/gemini/provider.json")),
-        ("grok", include_str!("../plugins/grok/provider.json")),
-        (
-            "claude-deepseek",
-            include_str!("../plugins/claude-deepseek/provider.json"),
-        ),
-        (
-            "codex-deepseek",
-            include_str!("../plugins/codex-deepseek/provider.json"),
-        ),
-    ];
-    if let Some((_, source)) = LEGACY_SOURCES
+    if let Some((_, source)) = crate::first_party_sources::PROVIDER_SOURCES
         .iter()
         .find(|(candidate, _)| *candidate == id)
         && let Ok(source) =

@@ -5,6 +5,16 @@ WebAuthn request/response contract. Apple shells may contribute only a native
 ceremony transport under `Sources/`; they do not own sessions or authentication
 provider state.
 
+Plugin presentation stays in the Controller-hosted Web surface on every Tauri
+platform. The shell does not compile Provider cards or plugin views. The Web
+client discovers each signed `host.json` slot and renderer selection through
+`/api/plugins`, then resolves it against Cowboy Web's closed renderer table.
+No plugin module is downloaded or executed. Native-only effects
+cross the versioned `window.__COWBOY_NATIVE_PLUGIN_HOST` ABI. A plugin can invoke
+only a capability named in both its signed `native_capabilities` list and the
+shell's advertised capability list; unknown or undeclared capabilities fail
+closed.
+
 `CowboyPasskeyBridge.mm` is copied into Tauri's generated Apple project before
 a native build. It reports native Passkeys as available only when the app's
 `Info.plist` contains the exact relying-party ID in
@@ -12,6 +22,11 @@ a native build. It reports native Passkeys as available only when the app's
 that key must also be signed with the matching Associated Domains entitlement,
 and the Cowboy origin must publish the matching `webcredentials` association.
 AuthenticationServices independently enforces both requirements.
+
+The bridge advertises `webauthn` through native-host API `1.0.0`. The older
+Passkey-specific globals remain during the shell compatibility window, but new
+plugin integrations use the generic capability host rather than adding a new
+global bridge per plugin.
 
 SideStore/free-team builds leave the key absent. The shared web transport
 registry then uses Cowboy's PKCE-bound system-Safari ceremony. This is an
