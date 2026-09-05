@@ -409,12 +409,12 @@ public struct ManagedMachineSummary: Codable, Equatable, Sendable {
             return ManagedMachineHealthState(rawValue: health.state) ?? .degraded
         }
         switch status {
-        case "online": connected ? .ready : .degraded
-        case "reconnecting": .reconnecting
-        case "updating": .updating
-        case "degraded": .degraded
-        case "offline": .offline
-        default: .degraded
+        case "online": return connected ? .ready : .degraded
+        case "reconnecting": return .reconnecting
+        case "updating": return .updating
+        case "degraded": return .degraded
+        case "offline": return .offline
+        default: return .degraded
         }
     }
 
