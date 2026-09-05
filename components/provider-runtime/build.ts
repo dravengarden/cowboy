@@ -48,6 +48,7 @@ interface NodeNpmRecipe {
   version: string;
   package_dir: string;
   script: string;
+  launcher?: string;
   probe: string[];
 }
 
@@ -201,7 +202,9 @@ function pluginComponentKind(kind: string): string {
     acp_runtime: "acp_runtime",
   };
   const value = mapped[kind];
-  if (!value) throw new Error(`unsupported Agent Plugin component kind ${kind}`);
+  if (!value) {
+    throw new Error(`unsupported Agent Plugin component kind ${kind}`);
+  }
   return value;
 }
 
@@ -300,9 +303,25 @@ async function buildComponent(
           if (!(error instanceof Deno.errors.NotFound)) throw error;
         });
       await Deno.mkdir(`${stage}/bin`, { recursive: true });
+      if (recipe.launcher) {
+        if (!/^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher)) {
+          throw new Error("unsafe private launcher source");
+        }
+        await Deno.copyFile(
+          join(runtimeRoot, recipe.launcher),
+          `${stage}/app/cowboy-launch.mjs`,
+        );
+        await Deno.writeTextFile(
+          `${stage}/bin/cowboy-configured-cli`,
+          '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
+          { mode: 0o755 },
+        );
+      }
       await Deno.writeTextFile(
         `${stage}/bin/${command}`,
-        `#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=\${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/${recipe.script}" "$@"\n`,
+        `#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=\${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/${
+          recipe.launcher ? "cowboy-launch.mjs" : recipe.script
+        }" "$@"\n`,
         { mode: 0o755 },
       );
       await writeProvenance(

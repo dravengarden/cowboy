@@ -99,6 +99,7 @@
       "version": "1.10.0",
       "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+      "launcher": "packages/codex-acp/launch.mjs",
       "probe": ["--version"]
     },
     "google-gemini-cli": {

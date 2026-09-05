@@ -310,6 +310,10 @@ fn generated_epoch() -> String {
 /// Run one detached worker until its ACP session and acknowledged outbox have
 /// both drained.
 pub async fn run(args: WorkerArgs) -> Result<()> {
+    // The detached worker has its own process and never enters Cli::run.
+    // Reqwest's provider-neutral TLS feature also needs this before a plain
+    // loopback sidecar Client is constructed during Provider preparation.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let prepared = provider::prepare(&args.provider).await?;
     let spec = prepared.spec.clone();
     let provider_behavior = (!args.provider_generation_digest.is_empty())

@@ -58,3 +58,20 @@ That opt-in layer applies the tracked Associated Domains entitlement. Once the
 bundle is signed by the declared Apple team, its WKWebView uses the same direct
 browser transport as the PWA. Apple rejects an ad-hoc app carrying this
 restricted entitlement, so the two configurations must remain separate.
+
+## Native capability conformance
+
+From a clean committed Cowboy worktree on an arm64 Mac with Xcode, run
+`just native-plugin-conformance`. This owns a fresh temporary iOS Simulator and
+compiles the production bridge into a minimal UIKit/WKWebView test app. Eight
+checks cover the actual versioned ABI, immutable capability inventory,
+unknown/malformed requests, unentitled Passkey rejection, foreign browser URL
+rejection and idempotent browser close. It neither opens a real login nor uses
+an existing Simulator, app or keychain. The receipt lives in
+`dist/native-plugin-conformance/receipt.json`; the temporary app/Simulator are
+removed even on failure.
+
+This is native bridge acceptance, not a reproducible build of the full Tauri
+product shell or physical-device/Associated Domains acceptance. The repository
+currently owns the overlay but not the complete generated Tauri shell source;
+an unversioned remote `cowboy-shell` directory is not a release source.

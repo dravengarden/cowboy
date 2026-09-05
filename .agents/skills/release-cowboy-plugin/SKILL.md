@@ -174,6 +174,20 @@ In addition, require all applicable Provider gates below:
   bindings, and prove worker teardown reaps the sidecar. Run old/new generation
   sessions concurrently when a Provider has sidecars so upgrade drain cannot
   be satisfied by sharing replacement runtime bytes.
+- `just plugin-runtime-probe <release> <artifact-root>` hashes and probes the
+  actual target's artifacts in private temporary homes. On Linux,
+  `just agent-worker-conformance <release> <artifact-root> <absolute-worker>`
+  drives the real detached worker in a loopback-only network namespace with
+  fake auth. Add `--previous <release> --previous-artifacts <root>` for distinct
+  generation coexistence and `--receipt <path>` for durable local evidence.
+  This checks ACP initialize/session-new, declared sidecar paths and ports,
+  worker stop and descendant drain; it never prompts a model. Upstream startup
+  that needs an unimplemented network/auth fixture is an unresolved gate, not
+  permission to use Service credentials or downgrade the expected result.
+- Native ABI changes run `just native-plugin-conformance` on an arm64 Mac
+  from committed Git source. This compiles the production bridge into a fresh
+  Simulator WKWebView fixture. It does not replace full product-shell builds,
+  Associated Domains or physical-device/login acceptance.
 - Run unit, integration, failure-path, authentication-state, and upgrade tests.
   Never put real credentials in fixtures or logs.
 - Run applicable typed Service-authentication tests with hermetic bundles.

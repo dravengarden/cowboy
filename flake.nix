@@ -570,6 +570,9 @@
           jq
           go
           nodejs_24
+          python3
+          util-linux
+          iproute2
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)

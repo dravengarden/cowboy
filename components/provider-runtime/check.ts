@@ -45,6 +45,7 @@ interface NodeNpmRecipe {
   version: string;
   package_dir: string;
   script: string;
+  launcher?: string;
 }
 
 interface GitGoRecipe {
@@ -276,6 +277,13 @@ async function validateNpmRecipe(
   dependency: ExactDependency,
   recipe: NodeNpmRecipe,
 ): Promise<void> {
+  if (recipe.launcher !== undefined) {
+    assert(
+      /^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher) &&
+        (await Deno.lstat(join(runtimeRoot, recipe.launcher))).isFile,
+      `${providerId}: ${dependency.id} launcher is not an owned regular source`,
+    );
+  }
   assert(
     safeEntrypoint(recipe.script),
     `${providerId}: ${dependency.id} script is unsafe`,

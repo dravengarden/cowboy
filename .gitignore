@@ -9,6 +9,8 @@ web/dist/
 /site-dist/
 dist/plugins/
 dist/provider-runtime-cache/
+dist/native-plugin-conformance/
+tools/__pycache__/
 *.tsbuildinfo
 
 # Nix

@@ -654,3 +654,86 @@ At this checkpoint, no production signatures, Catalog writes, private policy
 changes, credential mutations, component activation or bootstrap deletion have
 occurred. The user's continuation authorizes gated publication and Controller
 restart; implementation/build success alone is not a production receipt.
+
+### Post-build behavioral findings — release candidate 2.6.0
+
+`7c063918` committed and published the owned-runtime implementation on the task
+branch, not `main`. Its clean Nix build produced Controller
+`/nix/store/y1qcz0xv1l3kfkz525c7mj0s07a9mnxx-cowboy-controller-release`, Web
+`/nix/store/24z159qmz7j906hxl25230pyi91hw995-cowboy-web-release`, source boundary
+`/nix/store/igrpcj6m0hg713aj9fsy63g7wwihzv8w-cowboy-source-boundary`, Zed integration
+`/nix/store/08krsf8lais3cm38xy49i1mb190vybvh-cowboy-zed-integration`, and SDK
+`/nix/store/0x1jbcajy22n8yrj4ingq3mkrdkj1nia-cowboy-plugin-pack-1.6.0`.
+**Do not activate that Controller candidate:** subsequent real-worker testing
+found a detached-worker startup defect not exercised by its Nix unit suite.
+
+The owned loopback-only worker harness exposed two concrete defects:
+
+1. The detached worker did not install the TLS crypto provider before constructing
+   its sidecar readiness HTTP client. Reqwest 0.13's provider-neutral build
+   panicked even for plain loopback HTTP. Worker startup now installs ring
+   explicitly before Provider preparation, independently of Controller startup.
+2. `codex-acp@1.10.0` starts Codex App Server without forwarding its `-c`
+   arguments. Exact installed packages therefore lost declared routing/config,
+   unlike legacy homes containing prewritten TOML. The private runtime archive
+   now owns an argument-forwarding launcher with four regression tests, while
+   Cowboy core remains Provider-neutral. Standard Codex declares the upstream
+   adapter's existing API-key initialization request for projected API keys.
+
+These runtime packaging changes append component release **2.6.0**, bump
+`cowboy.provider-runtime` to **1.1.2**, six Agent packages to **3.1.13**, and
+Zed to **1.2.1**, following the existing coordinated component-release gate.
+SDK **1.6.0**, Provider SDK/UI **3.1.10** and all upstream dependency pins are
+unchanged. Earlier candidate signatures/digests must not be reused.
+
+Behavior evidence so far, before final clean rebuilding:
+
+- A temporary real-worker test passes for Claude DeepSeek **3.1.8 / 3.1.12**
+  concurrently, with distinct released runtimes/sidecar ports. Both create
+  native ACP sessions; stopping the old worker leaves the new one ready, then
+  both fully drain their running descendants. This uses only fake declared
+  credential files and a private loopback-only network namespace.
+- With the new launcher, the Codex DeepSeek prototype passes real initialize,
+  session-new, sidecar readiness and complete worker/descendant stop. Its final
+  new-version and distinct-generation receipts still need rebuilding.
+- The new harness initially omitted required credential-file fixtures and
+  waited for a legacy Ready event instead of the current native-session-ID +
+  Running events. Both harness mistakes were corrected; do not classify those
+  failures as product defects. Gemini/Grok and normal-account startup still
+  need appropriate isolated upstream/auth startup fixtures or separately
+  authorized acceptance; they have not been declared passed.
+- The registered Mac fetched the committed task branch into the isolated
+  `/tmp/cowboy-plugin-native.bxw89h/source` worktree. All **41 native Manager
+  tests** pass and the production Passkey bridge passes iOS Simulator syntax
+  compilation, with an existing deprecated UIWindow fallback warning.
+  A new owned `just native-plugin-conformance` compiles this bridge into a real
+  WKWebView test app on a fresh disposable Simulator; record its execution
+  separately. It does not claim a full Tauri or physical-device build.
+- The Mac's existing `/Users/dravenchen/cowboy-shell` has no Git metadata. The
+  tracked Cowboy source has only the native overlay, not the full shell crate.
+  Its source ownership/location has been asked of the user; the existing shell
+  was not overwritten or treated as reproducible release input.
+- Cardea **d54b994** built **1.2.0** with the clean immutable SDK above:
+  package `sha256:00c1db4e8111b6ed5216e629ecdebe7279cdde8ff90a8a56deb251b9f8065a2b`,
+  host bundle `sha256:9dc62540150eee892d0ddccf3a0080083453c8a279083a0b814d8c365da2f91a`.
+  Existing publisher public-key fingerprints match their independently selected
+  Catalog trust keys. No production private key has been used for signing yet.
+
+Production publication/cutover remains gated. No Catalog write, real Service
+Provider login, Machine installation/activation, Controller restart or host
+policy modification has occurred during this follow-up.
+
+The complete `just check-compact` gate passes for this follow-up: **664 Rust
+library tests**, all **6 isolated PostgreSQL tests**, **1,142 Web tests**, SDK
+and adapter suites, audits, lint, formatting, type checks and release builds.
+The conformance recipe now preserves the caller's non-root UID inside its
+private network namespace. Each fixture also uses a unique session/cgroup ID
+across concurrent runs and Plugins; previous parallel failures sharing the old
+ID were invalid evidence. Six harness regression tests cover those isolation
+requirements alongside archive and protocol safety.
+
+After correcting those fixture identities, normal Claude, Gemini and Grok
+**3.1.13** all pass real worker initialize/session-new and complete descendant
+drain with fake auth and no external network. Their earlier interrupted
+parallel attempts do not establish missing upstream startup fixtures. Repeat
+these against the final clean-build worker and matrices for release receipts.

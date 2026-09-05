@@ -73,6 +73,9 @@ build-machine-bootstrap:
 macos-installer-test:
     swift test --package-path apps/macos-installer
 
+native-plugin-conformance:
+    bash tools/native-plugin-conformance.sh
+
 macos-installer-build:
     bash apps/macos-installer/scripts/build-app.sh --build-backend
 
@@ -213,6 +216,14 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 zed-plugin-conformance ADAPTER SERVER:
     COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
 
+# Exact artifact probes run on the actual target OS. Worker acceptance additionally
+# isolates all networking to a private Linux loopback and uses only fake auth.
+plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
+    python3 tools/plugin_runtime_conformance.py "{{RELEASE}}" "{{ARTIFACTS}}" {{ARGS}}
+
+agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.
@@ -222,12 +233,14 @@ provider-release-coverage CATALOG:
 # Cross-language package/linker conformance. This is also the Agent Plugin
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
+    node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
     deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
     deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
     deno test tools/plugin-publication-receipt_test.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
+    python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
     deno run --allow-read components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets

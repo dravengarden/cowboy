@@ -629,6 +629,34 @@ the Service login and other Machine replicas.
 
 ## Catalog and Machine installation
 
+### Released runtime behavior acceptance
+
+The repository-owned `just plugin-runtime-probe <release> <artifact-root>`
+checks package/component digests, bounded archive extraction and each declared
+probe on the actual target platform. Artifact roots may be a Plugin's
+`dist/plugins/<id>` directory or a published Catalog. These are behavior checks,
+not substitutes for the SDK and independent signature verification.
+
+On Linux, `just agent-worker-conformance <release> <artifact-root>
+<absolute-worker>` additionally starts the real detached ACP worker in a fresh
+user/network namespace containing only loopback. It materializes declared
+required API-key files using fake data, never Service credentials, and sends no
+inference prompt. The gate checks initialize/session-new, exact sidecar
+executables/readiness, stop and descendant drain. Optional `--previous` and
+`--previous-artifacts` inputs must name another exact release; both workers
+must coexist with distinct sidecar ports, and stopping the older worker must
+leave the newer one usable. `--receipt <path>` records successful evidence.
+Providers needing additional upstream startup fixtures remain unaccepted until
+those fixtures or separately authorized acceptance are available.
+
+The private Codex adapter archive supplies a bounded configuration launcher:
+the package's `-c` arguments are passed to its exact Codex CLI, since upstream
+`codex-acp` does not consume or forward those arguments. No Cowboy Controller
+Provider-ID branch or ambient executable is involved. The normal Codex package
+also declares the adapter's API-key initialization request, which uses only its
+already projected replica environment and is unnecessary for an existing
+native account. This is not a Service login/refresh action.
+
 ### Controller host activation
 
 `--plugin-host-config` / `COWBOY_PLUGIN_HOST_CONFIG` names an absolute, private

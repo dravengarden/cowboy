@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "claude-code",
-  "version": "3.1.12",
-  "component_release": "2.5.0",
+  "version": "3.1.13",
+  "component_release": "2.6.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -12,6 +12,6 @@
     { "id": "cowboy.plugin-api", "version": "1.1.1" },
     { "id": "cowboy.provider-sdk", "version": "3.1.10" },
     { "id": "cowboy.provider-ui", "version": "3.1.10" },
-    { "id": "cowboy.provider-runtime", "version": "1.1.0" }
+    { "id": "cowboy.provider-runtime", "version": "1.1.2" }
   ]
 }
