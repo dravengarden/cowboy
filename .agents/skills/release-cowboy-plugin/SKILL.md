@@ -108,10 +108,22 @@ guessing from a moving branch.
 Run the Provider's complete deterministic gate inside its documented toolchain.
 In addition, require all applicable Provider gates below:
 
-- Validate generic Plugin package/release schema 1 plus the payload-specific
-  schema (Provider payload 2 and Agent runtime binding 2 today); recompute
+- Validate generic Plugin package schema 1 and release schemas 1-2 plus the
+  payload-specific schema (Provider payload 2 and Agent runtime binding 2
+  today); recompute
   requirements from the actual UI IR, runtime contract, authentication
   contract, component release, and artifact matrix.
+- For host behavior, require release schema 2 to bind the exact
+  `.hostbundle.json` into the outer composite digest and signature. Validate
+  `PluginHostSpec`, closed renderer/slot ownership and every signed runtime
+  reference through the shared Plugin SDK. Browser-executable `ui/**` and
+  unbound or independently signed host sidecars are not release inputs.
+- For Authentication payloads, validate schema-1 OIDC or schema-2
+  `local_password`/`webauthn` and their host ownership together. Local protocols
+  require a bound host and exactly empty public configuration; all
+  Authentication bundles contain only `host.json`. Build examples with
+  `just example-auth-bundle <id>`; do not put credentials or Controller policy
+  into the package. `just example-auth-build-all` covers these sources.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog
@@ -205,8 +217,8 @@ release authority permits it.
      dist/plugins/<plugin-id>/runtime/runtime-artifacts.json
    ```
 
-   This uses `components/provider-runtime-lock.json` and the isolated npm v3 lock payloads
-   under `components/provider-runtime-packages/`, probes supported host artifacts, assigns
+   This uses `components/provider-runtime/lock.json` and the isolated npm v3 lock payloads
+   under `components/provider-runtime/packages/`, probes Linux x86_64 artifacts, assigns
    content-addressed HTTPS URLs, assigns the package its own digest-bound HTTPS
    URL, and binds the runtime-artifact matrix. A
    gateway probe must terminate without credentials; use its owned help/version
@@ -215,6 +227,9 @@ release authority permits it.
    kind/slot/dependency/version/command, mutable URL, unsafe entrypoint, invalid
    digest, or invalid probe. It computes the composite `artifact_digest` over
    the package and full runtime matrix.
+   Cross-built/downloaded macOS bytes are not macOS execution evidence. Keep
+   probes credential-free: preserve the configured CA trust and build tools,
+   but remove inherited Provider credentials and configuration-home overrides.
 3. Sign the complete release with the configured Ed25519 Plugin publisher
    identity, then verify it with the independently selected public key.
 4. Publish the package, adjacent signed release envelope, trusted public key,
@@ -265,6 +280,17 @@ Do not perform or refresh a Cowboy Service login as release verification. Use
 hermetic auth fixtures unless the Provider's repository gate explicitly
 requires an authorized smoke test, and never publish the resulting credential
 state.
+
+Controller host activation is separate from publication as well. For an
+explicitly requested host cutover, follow
+[`Controller host activation`](../../../docs/plugin-packages.md#controller-host-activation):
+exact-pin every released storage host and the enabled Authentication hosts,
+resolve hostless/legacy OIDC before `catalog_only`, and run the candidate
+`cowboy serve --check-plugin-hosts` with the intended Service environment and
+arguments. Its configuration-only report does not prove migration, runtime or
+real-login success. Deploy only through the owning component activator after
+release coverage and the required acceptance evidence pass; retain bootstrap
+and legacy-generation support until their verified migration and drain.
 
 Return an upgrade and release receipt containing the Provider ID, old and new
 Provider versions, old and new dependency pins, source commit, artifact digest,
