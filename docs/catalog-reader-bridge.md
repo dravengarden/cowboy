@@ -6,6 +6,11 @@ coexist with append-only publication of newer Plugin formats; it does not
 upgrade a Provider, SDK, Machine protocol, authentication implementation, host
 runtime, Web bundle or SQL migration.
 
+The activation candidate also incorporates fresh `origin/main` revision
+`4741d063b94084b13d6c3beab97a3a43371f55d3`, which changes only Web source/tests
+and their documentation. Those changes do not alter the Controller backport;
+this task builds and activates only the Controller release, not a Web release.
+
 The reader inspects the release envelope before the package. No envelope means
 an incomplete publication, not a candidate. An envelope with a future schema
 is ignored without parsing its package or trusting its claimed ID/version. It
@@ -41,6 +46,16 @@ predecessor. Inspect the machine-owned activator's rollback receipt/floor; never
 fake it by repointing a profile. Subsequent host activation still needs its own
 accepted forward/recovery transition. Keep all old signed releases and their
 immutable bytes in the Catalog while old consumers require them.
+
+For Hawk's installed Columbus activator `a872284`, rollback restores the
+`previousRelease` captured from the active profile under the machine lock for
+that transaction only. After success is Git-pinned, receipted and the journal
+removed, the next transaction captures the now-active bridge as its predecessor.
+An older `previousRelease` in a completed receipt is historical evidence, not
+an automatic post-success downgrade target. Verify this implementation and the
+actual profile/receipt/journal together; do not infer the next rollback target
+from the previous Nix generation number. Manual post-success rollback requires
+a new descendant revert that preserves the applicable compatibility boundary.
 
 From the repository root in its pinned shell:
 

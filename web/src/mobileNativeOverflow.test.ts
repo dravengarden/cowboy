@@ -37,3 +37,17 @@ Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () 
   assert(reviewApp.includes("settings.softWrap"));
   assert(reviewApp.includes('data-mobile-overflow-layer'));
 });
+
+Deno.test("Code Review samples navigation position after scroll goes idle", () => {
+  assert(codeViewer.includes("createMobileCodeScrollIdleReporter"));
+  const listenerStart = codeViewer.indexOf("if (onVisibleLine) {");
+  const listenerEnd = codeViewer.indexOf(
+    "\n    values.push(\n      EditorView.updateListener",
+    listenerStart + 1,
+  );
+  assert(listenerStart >= 0 && listenerEnd > listenerStart);
+  const activeScrollListener = codeViewer.slice(listenerStart, listenerEnd);
+  assert(activeScrollListener.includes("visibleLineReporterRef.current?.schedule"));
+  assertEquals(activeScrollListener.includes("getBoundingClientRect"), false);
+  assertEquals(activeScrollListener.includes("documentTop"), false);
+});

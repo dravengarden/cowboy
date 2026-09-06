@@ -123,6 +123,8 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("code pane must not flash"));
   assert(webAgents.includes("a swipe that drops frames is a product bug"));
   assert(spatialContract.includes("no horizontal bar"));
+  assert(spatialContract.includes("Visible-line persistence is post-scroll work"));
+  assert(spatialContract.includes("must not synchronously read"));
 });
 
 Deno.test("product pager first tracking frames only write transform", () => {
