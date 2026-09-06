@@ -4,6 +4,9 @@ core-extraction implementation and the subsequent design-review corrections.
 Preserve the task history and continue from
 **Completion record** and **Design review addendum** below. The earlier
 starting-state inventory is retained only to explain what was removed.
+The latest native follow-up is **Owned full native shell and clean-build
+acceptance — 2026-09-06** at the end of this document; it supersedes the earlier
+claim that the shell source still needed to be located.
 
 ## Goal
 
@@ -709,10 +712,12 @@ Behavior evidence so far, before final clean rebuilding:
   A new owned `just native-plugin-conformance` compiles this bridge into a real
   WKWebView test app on a fresh disposable Simulator; record its execution
   separately. It does not claim a full Tauri or physical-device build.
-- The Mac's existing `/Users/dravenchen/cowboy-shell` has no Git metadata. The
-  tracked Cowboy source has only the native overlay, not the full shell crate.
-  Its source ownership/location has been asked of the user; the existing shell
-  was not overwritten or treated as reproducible release input.
+- The Mac's existing `/Users/dravenchen/cowboy-shell` has no Git metadata and
+  was not overwritten or treated as reproducible release input. At this
+  checkpoint only the current branch's native overlay had been located.
+  **Later correction:** the full shell already existed in this same Cowboy
+  repository's `tauri-shell` branch. Its owned integration and clean builds
+  are recorded in the final native-shell checkpoint below.
 - Cardea **d54b994** built **1.2.0** with the clean immutable SDK above:
   package `sha256:00c1db4e8111b6ed5216e629ecdebe7279cdde8ff90a8a56deb251b9f8065a2b`,
   host bundle `sha256:9dc62540150eee892d0ddccf3a0080083453c8a279083a0b814d8c365da2f91a`.
@@ -781,8 +786,9 @@ also passes all **8 real WKWebView ABI tests** on a freshly created iOS 26.5
 Simulator. Its receipt is
 `dist/native-plugin-conformance/macbook-air-3b281bea.json`; the test Simulator
 was removed. This is not a full Tauri App or physical-device/passkey login
-receipt. The full shell's version-controlled source location is still needed;
-the unversioned Mac shell was not modified.
+receipt. At this checkpoint the full shell's version-controlled source location
+was still needed; this was subsequently resolved from the same repository's
+`tauri-shell` branch, as recorded below. The unversioned Mac shell was not modified.
 
 Zed's owned static adapter and exact server pass the real temporary-package
 install/open/uninstall-drain/reactivation gate. Adapter
@@ -848,3 +854,112 @@ skill now calls out live/predecessor Catalog-reader compatibility explicitly.
 The disposable Mac artifact directory and transfer-only tar were removed after
 all receipts were copied back; exact candidate packages and local receipts are
 retained. The isolated Mac Git worktree remains available for continuation.
+
+### Owned full native shell and clean-build acceptance — 2026-09-06
+
+The native source/build blocker is resolved. The complete shell was already
+version-controlled in **this Cowboy repository**, on `tauri-shell` at
+`627e63288fee0cdfdacebfcd04f1180d62f5e356`. Its handwritten Tauri, loader,
+Apple sources and keyboard geometry tests were selectively integrated under
+`apps/native-shell`; its obsolete Controller/Web history was not merged.
+Neither the unversioned Mac shell nor a personal iOS-bridge plugin is a source
+or execution dependency. Tauri/Wry, pinned registry/Swift packages and Apple's
+Xcode/SDK remain normal third-party framework/toolchain dependencies. The thin
+client intentionally connects to the Cowboy Controller at runtime.
+
+The final App source and builder are committed at
+**`d852d45242b21bb5e744fcd2450df1e1f788a41e`**. Portable Simulator controls and
+acceptance assertions are completed at
+**`b7ba99ed6d1bcf000901a62f40ecefc59a4dce96`**; its native source/builder bytes
+are unchanged from the build revision. Both are pushed on
+`cowboy/sess-1788279284752`. Mainline's Passkey bridge / native Plugin ABI
+**1.0.0**, Cowboy 1703 icons, root Cargo manifests/lock, backend and component
+sources remain byte-identical to the preceding `35197ec0` checkpoint.
+Keyboard/composer algorithms were not redesigned during consolidation.
+
+Owned build and acceptance entry points:
+
+- `just native-shell-check`: source ownership, exact dependency pins, capability
+  boundaries, portable SSH argument transport and keyboard geometry. The full
+  `just check` gate now includes it.
+- `just native-shell-build {macos|ios-sim|ios} [--debug]`: requires a clean Git
+  commit and the preinstalled pinned Apple toolchain; stages only tracked
+  native source into a fresh build directory, regenerates Xcode from the owned
+  specification and builds with `--locked`. It never selects an old App or
+  static library from a DerivedData glob, installs an App, or changes signing
+  credentials/provisioning. Receipts are emitted only after successful builds
+  and actual dependency-resolution checks.
+- `just native-plugin-conformance`: both production Objective-C bridges in a
+  real WKWebView fixture, using a newly created disposable Simulator.
+- `just native-shell-smoke <receipt.json>`: verifies the exact recorded Debug
+  Simulator executable, signs only a disposable copy and runs the actual
+  Tauri App in its own new Simulator. No existing App or Simulator is used.
+
+The predecessor native Cargo.lock omitted the root opener/haptics dependencies;
+the new independent lock reconciles those exact pins without changing the
+Controller lock. Rust **1.97.1**, Tauri CLI **2.11.2**, XcodeGen **2.46.0** and
+the direct framework crates are pinned in `apps/native-shell/toolchain.json`.
+Apple builds also resolve Swift packages outside Cargo.lock: the builder now
+audits each actual SwiftRs consumer against an exact Git revision. Tauri and
+haptics use SwiftRs **1.0.7**; opener uses **1.0.6**. Missing, unexpected or
+mismatched Swift dependencies fail the receipt gate.
+
+The owned Settings action now passes opener's actual `url` argument with a
+local-only `app-settings:` scope; remote permissions allow default web/mail/tel
+URLs, not file-manager access. The eval bridge is Debug-Simulator-only,
+explicitly opted in at launch, bound only to `127.0.0.1`, requires the exact
+Simulator identity header, rejects browser Origin requests, and has bounded
+HTTP parsing. The redundant Network-framework endpoint/port argument that
+prevented its listener from starting was corrected and verified in the actual
+App. The device Release binary contains no Simulator eval-bridge markers.
+SSH controls require an explicit registered Mac worktree and explicit Simulator
+UUID; tests pass with macOS's Bash 3 as well as the pinned Linux shell.
+
+All three full targets built successfully from clean source on the registered
+arm64 Mac, using Xcode **26.6 / 17F113**, iOS SDK **26.5**:
+
+| Target | Profile / signing | Executable SHA-256 |
+| --- | --- | --- |
+| macOS arm64 | Release / ad-hoc | `eacb54e78eec1121cf372456064b561c8eaa26e1b3a2f77f9581e05571a5adfe` |
+| iOS Simulator arm64 | Debug / no distribution signing | `bcf9a6128f718a2c50992268b8c0aab1460132c152cc72f474b034dc916deccb` |
+| iOS device arm64 | Release / unsigned | `5293e8b2a6a86a237571d6312ca98c1a4e2bd78a25cab0751946e87c2570df83` |
+
+All use native lock SHA-256
+`dfac063f4be9e2f4249996942dc0f5775c4686376a4e9802f771f11050bfd174`.
+Exact Apps and full build receipts remain under the isolated Mac Git worktree
+`/tmp/cowboy-plugin-native.bxw89h/source/dist/native-shell/`, in
+`macos-d852d45242b2.P2tEPA`, `ios-sim-d852d45242b2.iLbjmy`, and
+`ios-d852d45242b2.6taBiL`, respectively. The macOS bundle additionally passes
+`codesign --verify --deep --strict`; the device archive was confirmed unsigned.
+Generated receipts were copied back to this Hawk task worktree at
+`dist/native-shell/receipts-d852d452/` (`macos-build.json`, `ios-sim-build.json`,
+`ios-build.json`, `ios-sim-smoke.json`, `native-abi.json`). Cross-machine source
+exchange used Git only; SCP carried generated receipts, not source.
+
+Acceptance completed at `b7ba99ed`:
+
+- **12 native source/control tests**, source/lock validation, shell syntax and
+  keyboard geometry pass on both Hawk and Mac.
+- **13 actual Tauri App checks** pass on a fresh iOS 26.5 Simulator: native
+  keyboard markers and tweak bridges, Tauri IPC, immutable Plugin ABI,
+  unknown-capability and unentitled-Passkey denial, opener file rejection,
+  HTTP access boundaries and expected iPhone WebKit/origin. This receipt is
+  for the bundled `tauri://localhost` document; it is not an authenticated
+  remote SPA or real-login acceptance receipt.
+- **10 WKWebView native ABI/coexistence checks** pass with both production
+  Objective-C bridges compiled together. Both exclusive test Simulators and
+  disposable App copies were removed; the original build Apps remain intact.
+- This slice also passed the **5 worktree-dependency tests**, **34 selected
+  Web auth/Plugin/native/brand tests**, Web typecheck/oxlint, native Rust format,
+  Python syntax and `git diff --check`. The earlier complete core gate belongs
+  to `3b281bea`; it was not rerun or relabeled as a native-build result.
+
+This resolves the missing-full-shell provenance and build/ABI portion of
+blocker 4 above. Distribution signing/notarization, Associated Domains,
+physical-device keyboard/swipe behavior and real Passkey/Provider login remain
+separate acceptance steps. The physical-iPhone pasted-image caret/IME issue
+in PITFALLS #69 is still open. Codex DeepSeek predecessor drain, compatible
+Catalog publication/rollback and authorized host-policy activation remain
+unresolved as recorded in the previous checkpoint. No production publication,
+existing-App installation, real login, Controller/Web/Machine activation or
+host-policy/credential change occurred during this native follow-up.
