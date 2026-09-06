@@ -64,7 +64,9 @@ bridge, baseline and successor releases. Add `--publication <bound-release.json>
 for each actual candidate after setting its final artifact URL and binding its
 complete runtime matrix. These optional checks keep every proof field and
 package/host byte intact, sign only temporary copies, and record each reader's
-exact inventory. Choose a public legacy fixture with a different publisher
+exact inventory. Bound hosts use a temporary exact Host policy pin, including
+storage hosts that cannot acquire migration authority from Catalog defaults.
+Choose a public legacy fixture with a different publisher
 from the candidates to preserve its real signature and trust key. Incompatible
 candidates produce a failing receipt and nonzero exit; safely skipped future
 envelopes remain unavailable to the legacy reader. No production signing key

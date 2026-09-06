@@ -95,6 +95,21 @@ def publication_reader_result(result, legacy, publication, allow_skip=False):
         return dict(status="invalid_report")
 
 
+def publication_host_arguments(executable, data, catalog, publication):
+    arguments = reader_arguments(executable, data, catalog, candidate=True)
+    if publication.get("host_bundle_digest"):
+        # Storage hosts deliberately never become defaults from publication
+        # alone. Validate the exact host using temporary read-only policy,
+        # without granting any production migration/activation authority.
+        policy = catalog.parent / "candidate-host-policy.json"
+        with policy.open("x") as output:
+            output.write(json.dumps(dict(schema="dravengarden.cowboy.plugin-host-activation/v1",
+                                         source_policy="bootstrap", hosts=[immutable_identity(publication)])))
+        policy.chmod(0o600)
+        arguments.extend(["--plugin-host-config", policy])
+    return arguments
+
+
 def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
                           legacy_package, legacy_release, legacy_key, legacy):
     require(envelope.name.endswith(".release.json"), "Publication input must be a release envelope")
@@ -145,7 +160,7 @@ def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
         for _ in range(2)]
     candidate_result = publication_reader_result(
         command(*reader_arguments(candidate, data, catalog), success=False), legacy, publication)
-    host_result = command(*reader_arguments(candidate, data, catalog, candidate=True), success=False)
+    host_result = command(*publication_host_arguments(candidate, data, catalog, publication), success=False)
     host_valid = False
     if host_result.returncode == 0:
         try:
@@ -163,6 +178,8 @@ def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
                 source_envelope_sha256=original[envelope], package_digest=original[package],
                 host_bundle_digest=original.get(host), bridge_cold_reads=bridge_results,
                 candidate=candidate_result, candidate_host_preflight=host_valid,
+                candidate_host_policy="temporary_exact_pin" if host_args else "bootstrap_without_pin",
+                candidate_host_error=None if host_valid else (host_result.stderr or host_result.stdout)[-2000:],
                 reader_compatible=(all(result["status"] in ("visible", "skipped_future_envelope") for result in bridge_results)
                                    and candidate_result["status"] == "visible" and host_valid),
                 production_signature_checked=False)

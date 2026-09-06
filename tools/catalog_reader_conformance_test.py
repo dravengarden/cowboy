@@ -2,11 +2,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from catalog_reader_conformance import (candidate_reads_both, command, immutable_identity,
-                                        publication_reader_result, reader_arguments, unsigned_envelope)
+                                        publication_host_arguments, publication_reader_result,
+                                        reader_arguments, unsigned_envelope)
 
 
 class CatalogReaderHarnessTests(unittest.TestCase):
@@ -107,6 +109,30 @@ class PublicationReaderTests(unittest.TestCase):
                             ("runtime_artifacts", []), ("host_bundle_digest", "sha256:new")]:
             with self.subTest(name=name):
                 self.assertNotEqual(unsigned_envelope(release), unsigned_envelope(dict(fixture, **{name: value})))
+
+    def test_bound_host_uses_exact_private_fixture_policy_without_initialization(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            publication = dict(self.publication, host_bundle_digest="sha256:host")
+            args = publication_host_arguments(Path("/nix/store/fixture/bin/cowboy"), root / "data", root / "catalog", publication)
+            policy = args[args.index("--plugin-host-config") + 1]
+            self.assertEqual(policy.parent, root)
+            self.assertEqual(policy.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(policy.read_text()), dict(
+                schema="dravengarden.cowboy.plugin-host-activation/v1", source_policy="bootstrap",
+                hosts=[immutable_identity(publication)]))
+            self.assertIn("--check-plugin-hosts", args)
+            self.assertFalse((root / "data").exists())
+            self.assertFalse((root / "catalog").exists())
+            with self.assertRaises(FileExistsError):
+                publication_host_arguments(Path("/nix/store/fixture/bin/cowboy"), root / "data", root / "catalog", publication)
+
+    def test_hostless_release_does_not_get_an_invalid_host_pin(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = publication_host_arguments(Path("/nix/store/fixture/bin/cowboy"), root / "data", root / "catalog", self.publication)
+            self.assertNotIn("--plugin-host-config", args)
+            self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == "__main__":

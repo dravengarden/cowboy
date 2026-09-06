@@ -264,7 +264,8 @@ envelope and bound host into isolated Catalogs, sign only those copies with a
 temporary key, and preserve all release proof fields. Choose a public legacy
 fixture with a different publisher so its original signature/trust remain
 intact. The gate records each exact identity, two bridge cold reads, and the
-successor's Catalog/Host preflight. Reader incompatibility writes a failing
+successor's Catalog/Host preflight using a temporary exact pin for bound hosts
+(storage never acquires authority from a Catalog default). Reader incompatibility writes a failing
 receipt and exits nonzero. A safely skipped future envelope is not Catalog
 availability; report it as waiting for a compatible reader. These fixtures do
 not replace production signature verification, complete target-Catalog/policy
