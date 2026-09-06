@@ -131,8 +131,7 @@ const passkeys=await host.invoke("webauthn",{action:"capabilities",rp_id:"cowboy
 check("unentitled shell fails closed",passkeys.ok===true && passkeys.available===false);
 denied=false;try{await window.__TAURI__.core.invoke("plugin:opener|open_url",
   {url:"file:///cowboy-conformance-must-not-open"})}catch(error){
-  denied=String(error).includes("not allowed") || String(error).includes("Forbidden") ||
-    String(error).includes("forbidden");
+  denied=String(error)==="Not allowed to open url file:///cowboy-conformance-must-not-open";
 }
 check("opener rejects local files",denied);
 return JSON.stringify({tests,origin:location.origin,user_agent:navigator.userAgent});
