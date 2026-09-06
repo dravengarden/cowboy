@@ -98,10 +98,11 @@ for state_path in (build / "target").rglob("workspace-state.json"):
         if package["kind"] != "remoteSourceControl":
             continue
         state = dependency["state"]["checkoutState"]
-        pin = dict(version=state.get("version"), revision=state.get("revision"))
-        if toolchain["swiftPackages"].get(package["location"]) != pin:
-            raise SystemExit("Unpinned Swift package: " + package["location"])
-        swift_packages[package["location"]] = pin
+        consumer = state_path.parent.name
+        pin = dict(url=package["location"], version=state.get("version"), revision=state.get("revision"))
+        if toolchain["swiftPackages"].get(consumer) != pin:
+            raise SystemExit("Unpinned Swift package for " + consumer + ": " + package["location"])
+        swift_packages[consumer] = pin
 if platform != "macos" and swift_packages != toolchain["swiftPackages"]:
     raise SystemExit("Incomplete Swift dependency receipt")
 report = dict(source_revision=revision, platform=platform, profile=profile,

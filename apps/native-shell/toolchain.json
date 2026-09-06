@@ -3,9 +3,20 @@
   "tauriCli": "2.11.2",
   "xcodegen": "2.46.0",
   "swiftPackages": {
-    "https://github.com/Brendonovich/swift-rs": {
+    "Tauri": {
+      "url": "https://github.com/Brendonovich/swift-rs",
       "version": "1.0.7",
       "revision": "f64a4514de07f450ec5b6aa297624cd3479d9579"
+    },
+    "tauri-plugin-haptics": {
+      "url": "https://github.com/Brendonovich/swift-rs",
+      "version": "1.0.7",
+      "revision": "f64a4514de07f450ec5b6aa297624cd3479d9579"
+    },
+    "tauri-plugin-opener": {
+      "url": "https://github.com/Brendonovich/swift-rs",
+      "version": "1.0.6",
+      "revision": "b5ed223fcdab165bc21219c1925dc1e77e2bef5e"
     }
   },
   "crates": {
