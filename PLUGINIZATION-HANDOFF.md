@@ -16,6 +16,9 @@ The historical signing entrypoints were recovered without changing trust. The
 active bridge still skips these schema-2 releases; authenticated Catalog refresh
 and UI availability have not been accepted. Zed and Codex DeepSeek remain
 unpublished for their separate reader/coexistence blockers.
+The latest follow-up is **Nested Code reader candidate and coexistence recheck**
+below: a separate immutable reader candidate now passes Zed's exact-format gate,
+but is not activated. Codex DeepSeek's historical-generation failure remains.
 
 ## Goal
 
@@ -1544,3 +1547,113 @@ Remaining boundaries, without repeating completed builds/signing discovery:
    acceptance are not implied by Catalog publication or read-only preflight.
 4. Machine installation, real-login and signed/physical Apple acceptance remain
    separate. The physical-iPhone pasted-image caret issue remains unresolved.
+
+## Nested Code reader candidate and coexistence recheck — 2026-09-06
+
+This continuation made source changes and isolated/read-only checks only. It
+did not sign with production keys, publish Plugins, activate a component, change
+Host/storage policy, use real credentials or restart a resident process.
+
+The separate bridge branch `cowboy/catalog-reader-bridge-sess-1788279284752`
+now contains clean source **`c0911dd012bad4191f2936491c3879346cffbd25`**. Its
+worktree is `/tmp/cowboy-reader-bridge.omgJIH/source`. This is a narrow descendant
+of the live `1814cb19` reader, not a merge of the full Plugin migration. It changes
+only `src/plugin_catalog.rs`, the read-only diagnostic in `src/server.rs`, and
+its bridge documentation. SDK, Plugin manifests, runtime pins, Machine protocol,
+Web bundle, Host activation and SQL migrations remain unchanged.
+
+For a supported outer release schema, the new reader verifies the package
+digest before inspecting the explicit nested Code schema. Only Code payloads
+newer than its supported schema 1 are excluded. Manifest and payload Code kinds
+must agree; outer package schema, positive integer format fields and duplicate
+field rejection are checked. Package reads are regular-file-only, no-follow,
+nonblocking and bounded by the existing Machine 8 MiB limit. Supported Code
+payloads still undergo complete SDK/signature validation. No arbitrary decoder
+failure or Plugin ID is used as an exclusion rule, and future claimed identities
+cannot mask a supported signed release. Pre-Host authority guards remain intact.
+
+The main task's acceptance-tool source is
+**`3b1d9596b3de06cfa1fe18713155e93f49974712`**. Its harness requires an explicit
+`supported_code_payload_schema` diagnostic limit, an independently SDK-verified
+exact Code payload, and unchanged legacy inventory before accepting
+`skipped_future_code_payload`. Candidate visibility and exact Host preflight
+remain mandatory. Source package/proof fields are preserved; only disposable
+fixture signatures are substituted, with no change to the legacy trust key.
+
+Pinned-shell verification passed:
+
+- Bridge reader unit tests: **11 passed**; complete library suite: **521 passed,
+  2 ignored**; Rust formatting and Clippy with denied warnings passed.
+- Acceptance-harness unit tests: **15 passed**.
+- Clean Nix Controller build:
+  `/nix/store/3dyzn3nl2djxsi5b2xxarzcrbfkiwsx6-cowboy-controller-release`.
+  The clean source receipt names `c0911dd0`; executable SHA-256 is
+  `9aabe79b5218de95e0b72d03813cd1e4bd48377b7f89514abe7914dfa5ebf685`.
+- The owned actual-reader gate passed all **17 generic checks and 9 exact
+  publication preflights** against this bridge, historical `c293e0e9`, accepted
+  successor `8b7dc9ba` and immutable SDK 1.6.0. Zed 1.2.1 retains exact composite
+  digest `ff7735efdbd7da0d78858f82d63e2840a667759734e85260cc938e91a05ebe28`,
+  outer release schema 1 and Code payload schema 2. Both new-bridge cold reads
+  safely exclude it; the full successor reads it and passes Host preflight.
+  The other eight exact, already-published versions retain their accepted
+  future-envelope exclusion behavior.
+- A negative control using the **actual live `1814cb19` reader** still produces
+  a failing receipt: both cold reads reject Zed's `code_intelligence_server`.
+  The extended harness does not reinterpret this failure as a safe skip.
+
+At **2026-09-06T08:18:25Z**, a separate read-only audit of the complete production
+Catalog verified all **42 production signatures**, retained all **178 original
+files**, and compared all **224 files** before/after inspection. Live reader and
+both new-bridge cold reads expose exactly the same **34 supported identities**;
+the host-capable successor exposes all **42**. No Service directory is created,
+and all reader processes run in loopback-only network namespaces with a closed
+credential-free environment. Zed's unpublished bytes are tested separately in
+the owned temporary fixture; this is **not** a complete 43-release production
+Catalog or Zed production-signature acceptance.
+
+The public package/envelope/trust tree hash remains
+`f1b84802e80d129c7b9dad007398558e5d2c9e3433926ec807870dfd270b8f07`.
+Controller profile/receipt/Git pin remain `1814cb19`, with no in-progress
+transaction; PID **2472823** stays active with **NRestarts=0**. Public health and
+version checks pass with the same Web version. Resident Machine **3991423** and
+Zed adapter **3991201** remain present. The built `c0911dd0` reader is **not** the
+active or established rollback floor. Separately authorize its Controller-only
+activation, verify the owned transaction and resulting floor, and then repeat
+the remaining canonical release gates before signing/publishing Zed.
+
+Codex DeepSeek was independently rechecked without modifying its historical
+release. The exact 3.1.8/new 3.1.13 coexistence command fails at **07:54:39Z**
+while starting **3.1.8**, before the new generation starts. The published upstream
+`codex-acp` 1.10.0 archive calls `spawn(codexPath, ["app-server"], ...)` and drops
+the signed `-c` routing/configuration arguments. The exact-package launch path
+in both historical and current workers bypasses the old package-less home
+configuration helper. This reproduces `Authentication required` under the
+isolated fake-auth fixture; it is not evidence of a missing external Cowboy
+dependency or a reason to consume real credentials. The new private launcher
+already fixes argument forwarding, and a fresh new-only run with the accepted
+`8b7dc9ba` worker passes all three artifact probes, initialize/session-new and
+stop/descendant-drain. It explicitly reports generation coexistence as
+`not_checked`; it cannot satisfy the failed old/new gate. Keep 3.1.13 unpublished
+and full Controller coverage blocked pending an accepted historical-generation
+transition. Do not replace signed old bytes or weaken the coexistence test.
+
+New durable local evidence (SHA-256):
+
+- `dist/catalog-reader-conformance/3b1d9596-live-reader-zed-block.json`:
+  `04ee26ac9490e2d454715a81eae9acba86b34b58832169e29b4f24b2330a5378`.
+- `dist/catalog-reader-conformance/3b1d9596-nested-code-nine-publications.json`:
+  `f60e793c1718b1c8bda9ddf76d85d2a8baaa666ef32f685717bf8b1bddf03707`.
+- `dist/catalog-reader-conformance/3b1d9596-complete-live-catalog-reader-followup.json`:
+  `88e766e6ce17d95a96535d4c97dd1753f9ccf9a835eadc289a3ef7e6429a6921`.
+  Its one-off read-only script is `reader-followup-audit.mjs` beside the receipt;
+  it records the exact source/gate and does not replace the owned release tools.
+- `dist/provider-runtime-cache/codex-deepseek-9579a11a-coexistence-failure-diagnostic.json`:
+  `1d45f82a7d2e2e8d0757b9f8924007c3e2a528628a98d89c7d629d1533d1b0d1`.
+  This preserves the failed command output, **not** a successful acceptance
+  receipt; the success-only worker harness did not emit one for that failed run.
+- `dist/provider-runtime-cache/codex-deepseek-reader-followup-new-only.json`:
+  `aeabed06419c69d8cfa0faccd5f9c9e8fc02b520d19e851a6c951b8e8268983e`.
+
+Normal admin refresh, full Controller/Web/Host selection, storage recovery,
+Machine installation, real-login and physical Apple acceptance remain separate
+as recorded above. Nothing in this reader backport accepts those transitions.

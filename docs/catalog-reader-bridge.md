@@ -44,6 +44,21 @@ and validate the candidate, including its Host preflight. An older reader with
 no advertised nested limit, an unexplained missing identity, or a nonzero exit
 remains a failure. This changes no release schema, signed package or SDK pin.
 
+The follow-up candidate is now built from clean bridge source
+`c0911dd012bad4191f2936491c3879346cffbd25` as
+`/nix/store/3dyzn3nl2djxsi5b2xxarzcrbfkiwsx6-cowboy-controller-release`.
+The actual-reader gate from acceptance-tool source `3b1d9596b3de` passes 17
+generic checks and all nine exact publication preflights, including Zed 1.2.1.
+The live `1814cb19` negative control still fails Zed's nested runtime variant.
+Complete production-Catalog inspection verifies all 42 signatures and preserves
+the same 34 supported identities across two new-reader cold starts, without
+changing any of its 224 files. Exact receipts and limits are in
+`PLUGINIZATION-HANDOFF.md`, **Nested Code reader candidate and coexistence recheck**.
+This is a built/tested candidate only: the live profile remains `1814cb19`, and
+Zed remains unpublished pending separately authorized reader activation and the
+remaining release gates. The full Controller's Codex DeepSeek coexistence block
+is independent of this narrow backport.
+
 Read-only inspection uses the same Catalog reader:
 
 ```sh
