@@ -34,10 +34,9 @@ import WebKit
       simulatorID = identity
       let params = NWParameters.tcp
       params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!)
-      let listener = try NWListener(
-        using: params,
-        on: NWEndpoint.Port(rawValue: port)!
-      )
+      // requiredLocalEndpoint already supplies the port. Passing it again as
+      // NWListener's `on` argument is rejected by Network.framework (EINVAL).
+      let listener = try NWListener(using: params)
       listener.newConnectionHandler = { [weak self] connection in
         self?.handle(connection)
       }
