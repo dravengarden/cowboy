@@ -280,6 +280,13 @@ pub struct ServeArgs {
     #[arg(long)]
     pub check_plugin_hosts: bool,
 
+    /// Inspect supported signed Catalog releases without creating Service state,
+    /// connecting to storage, running a Plugin, or starting a listener. Does not
+    /// validate host policy or login configuration; use `--check-plugin-hosts`
+    /// for activation preflight.
+    #[arg(long, conflicts_with = "check_plugin_hosts")]
+    pub check_plugin_catalog: bool,
+
     /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
     /// daemon runs in pure in-memory mode without restart recovery.
     #[arg(long, env = "COWBOY_DATABASE_URL")]
@@ -555,6 +562,45 @@ mod tests {
     use clap::Parser as _;
 
     use super::{Cli, Command, mask_secret};
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn catalog_inspection_and_host_preflight_are_distinct_commands() {
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "serve",
+                "--check-plugin-catalog",
+                "--check-plugin-hosts",
+            ])
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "full")]
+    async fn catalog_inspection_does_not_validate_host_policy_or_create_service_state() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-cli-catalog-{}", uuid::Uuid::new_v4()));
+        for (catalog_only, hosts) in [(true, false), (false, true), (false, false)] {
+            let mut args = super::ServeArgs::test_plugin_check(&root);
+            args.check_plugin_hosts = hosts;
+            args.check_plugin_catalog = catalog_only;
+            args.plugin_catalog_dir = Some(root.join("missing-catalog"));
+            args.plugin_host_config = Some(root.join("missing-policy.json"));
+            args.auth_config = Some(root.join("missing-auth.json"));
+            args.machine_components_manifest = Some(root.join("missing-components.json"));
+            args.product_auth_enabled = true;
+            args.database_url = Some(format!("sqlite://{}", root.join("state.db").display()));
+            let result = crate::server::serve(args).await;
+            assert_eq!(
+                result.is_ok(),
+                catalog_only,
+                "unexpected check result: {result:?}"
+            );
+            assert!(!root.exists());
+        }
+    }
 
     #[tokio::test]
     #[cfg(feature = "full")]
