@@ -4,9 +4,9 @@ core-extraction implementation and the subsequent design-review corrections.
 Preserve the task history and continue from
 **Completion record** and **Design review addendum** below. The earlier
 starting-state inventory is retained only to explain what was removed.
-The latest native follow-up is **Owned full native shell and clean-build
-acceptance — 2026-09-06** at the end of this document; it supersedes the earlier
-claim that the shell source still needed to be located.
+The latest native follow-ups are **Owned full native shell and clean-build
+acceptance** and **Remote logged-out native App acceptance** at the end of this
+document; they supersede the earlier missing-source and local-loader-only gates.
 
 ## Goal
 
@@ -963,3 +963,49 @@ Catalog publication/rollback and authorized host-policy activation remain
 unresolved as recorded in the previous checkpoint. No production publication,
 existing-App installation, real login, Controller/Web/Machine activation or
 host-policy/credential change occurred during this native follow-up.
+
+### Remote logged-out native App acceptance — 2026-09-06
+
+The preceding 13-check full-App receipt could finish on the bundled local
+loader. It did not establish that the remote Web UI retained working native
+capabilities after navigation. This gap is now covered by the owned
+`just native-shell-smoke <exact-build-receipt.json> --remote` gate, implemented
+and pushed at **`208b2cbb20bb5604ec809d37675dfe2db5369aea`**.
+
+On the registered arm64 Mac, the exact unchanged `d852d452` Debug Simulator App
+passes **21 end-to-end checks** on a newly created iOS 26.5 Simulator. It reaches
+`https://cowboy.stormbird.xyz`, renders the real sign-in form, retains the
+immutable native Plugin ABI and tweak bridges, successfully executes permitted
+remote haptics IPC, rejects local-file and local-only Settings URL access, and
+returns the expected logged-out JSON shape from `GET /api/auth/status`.
+The probe uses no credentials, follows no auth redirects, submits no forms and
+starts no Passkey/OIDC ceremony. The loader navigates normally; the test never
+forces its URL. The first probe already observed the remote document on this
+run, as recorded in `initial_shell_origin`.
+
+The gate now distinguishes `shell` from `remote-logged-out` acceptance. Each
+attempt writes into its own fresh directory; a failed rerun cannot leave an
+older success at its receipt path. The remote probe rejects a local/stuck loader,
+unrendered UI, wrong origin/port, incompatible or authenticated status response,
+missing native bridge, missing opener command, unauthorized positive IPC and
+overbroad Settings permissions. The updated native gate passes **22 Deno tests
+and 5 Python harness tests**, source/lock validation, shell syntax and keyboard
+geometry on both Hawk and Mac.
+
+The remote receipt is retained on Hawk at
+`dist/native-shell/receipts-d852d452/remote-208b2cbb.json`, SHA-256
+`bc4ecb835d0fa53cf22360c8076313ba3b50bae23a180c9afa28b65c8acb4033`.
+Its Mac source is
+`dist/native-shell/ios-sim-d852d45242b2.iLbjmy/acceptance-remote-logged-out-208b2cbb20bb.yg1ucydx/smoke-receipt.json`
+under the same isolated worktree. The disposable App and Simulator were removed;
+the original executable digest is still
+`bcf9a6128f718a2c50992268b8c0aab1460132c152cc72f474b034dc916deccb`.
+No native App/builder source changed, so the preceding clean platform builds
+remain the exact accepted inputs, not newly rebuilt or relabeled binaries.
+
+This is acceptance of the **remote logged-out page**, not a real login. Signed
+distribution, Associated Domains and physical-device/IME acceptance still need
+the selected Apple signing configuration/device and separate authority. The
+earlier Plugin publication, predecessor-drain and host-policy blockers are
+unchanged. No production publication, service activation, real account access
+or existing-App installation occurred during this follow-up.
