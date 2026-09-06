@@ -22,6 +22,8 @@ use serde::Serialize;
 use crate::machine_auth::verify_namespaced;
 use crate::machine_protocol::DesiredPlugin;
 
+pub(crate) const SUPPORTED_CODE_PAYLOAD_SCHEMA: u32 = 1;
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PluginCatalogEntry {
     pub plugin_id: String,
@@ -117,12 +119,11 @@ impl PluginCatalog {
             // Publication installs this commit marker last. Inspect its format
             // before the package: newer packages may be opaque to this reader.
             // Unsupported releases grant no identity, host or install authority.
-            let Some(release) = read_supported_release(&path.with_extension("release.json"))?
+            let Some((release, bytes)) =
+                read_supported_release(&path.with_extension("release.json"), &path)?
             else {
                 continue;
             };
-            let bytes = fs::read(&path)
-                .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
             let package = PluginPackage::from_bytes(&bytes)
                 .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
             release
@@ -306,11 +307,10 @@ pub(crate) fn ensure_pre_host_cutover(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_supported_release(path: &Path) -> Result<Option<PluginRelease>> {
+fn read_regular_catalog_file(path: &Path, maximum: u64) -> Result<Option<Vec<u8>>> {
     use std::io::Read as _;
     use std::os::unix::fs::OpenOptionsExt as _;
 
-    const MAX_ENVELOPE_BYTES: u64 = 1024 * 1024;
     let file = match fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -318,18 +318,32 @@ fn read_supported_release(path: &Path) -> Result<Option<PluginRelease>> {
     {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("opening Plugin release marker"),
+        Err(error) => return Err(error).context("opening Plugin Catalog file"),
     };
     ensure!(
         file.metadata()?.is_file(),
-        "Plugin release marker must be a regular file"
+        "Plugin Catalog input must be a regular file"
     );
     let mut bytes = Vec::new();
-    file.take(MAX_ENVELOPE_BYTES + 1).read_to_end(&mut bytes)?;
+    file.take(maximum + 1).read_to_end(&mut bytes)?;
     ensure!(
-        bytes.len() as u64 <= MAX_ENVELOPE_BYTES,
-        "Plugin release marker is too large"
+        bytes.len() as u64 <= maximum,
+        "Plugin Catalog input is too large"
     );
+    Ok(Some(bytes))
+}
+
+fn read_supported_release(
+    path: &Path,
+    package_path: &Path,
+) -> Result<Option<(PluginRelease, Vec<u8>)>> {
+    const MAX_ENVELOPE_BYTES: u64 = 1024 * 1024;
+    // Match the existing Machine package input limit; never read an unbounded
+    // or linked package just to inspect a newer nested format discriminator.
+    const MAX_PACKAGE_BYTES: u64 = 8 * 1024 * 1024;
+    let Some(bytes) = read_regular_catalog_file(path, MAX_ENVELOPE_BYTES)? else {
+        return Ok(None);
+    };
     // Deliberately inspect only the format discriminator. Serde still rejects
     // absent, duplicate, non-integer and negative schema fields. No unsigned
     // Plugin ID, version, URL or other future field influences the inventory.
@@ -347,9 +361,66 @@ fn read_supported_release(path: &Path) -> Result<Option<PluginRelease>> {
         );
         return Ok(None);
     }
-    Ok(Some(
+    #[derive(serde::Deserialize)]
+    struct SupportedHeader {
+        plugin_kind: PluginKind,
+        package_digest: String,
+    }
+    let supported: SupportedHeader =
+        serde_json::from_slice(&bytes).context("decoding supported Plugin release header")?;
+    let package = read_regular_catalog_file(package_path, MAX_PACKAGE_BYTES)?
+        .context("committed Plugin release has no package")?;
+    ensure!(
+        PluginPackage::artifact_digest(&package) == supported.package_digest,
+        "Plugin package digest mismatch"
+    );
+    // A hostless Code payload can change schema without changing outer release
+    // schema 1. Inspect its explicit nested format before decoding the runtime
+    // component enum. Never catch arbitrary decoder errors as compatibility.
+    if supported.plugin_kind == PluginKind::CodeIntelligence && is_future_code_payload(&package)? {
+        tracing::warn!("unsupported Code payload skipped by pre-cutover Catalog reader");
+        return Ok(None);
+    }
+    Ok(Some((
         serde_json::from_slice(&bytes).context("decoding supported Plugin release")?,
-    ))
+        package,
+    )))
+}
+
+fn is_future_code_payload(bytes: &[u8]) -> Result<bool> {
+    // Derive these small headers directly rather than going through Value:
+    // serde must see and reject duplicate discriminators at every level.
+    #[derive(serde::Deserialize)]
+    struct KindHeader {
+        kind: PluginKind,
+    }
+    #[derive(serde::Deserialize)]
+    struct ContractHeader {
+        schema_version: u32,
+    }
+    #[derive(serde::Deserialize)]
+    struct PayloadHeader {
+        kind: PluginKind,
+        contract: ContractHeader,
+    }
+    #[derive(serde::Deserialize)]
+    struct PackageHeader {
+        package_schema: u32,
+        manifest: KindHeader,
+        payload: PayloadHeader,
+    }
+    let header: PackageHeader =
+        serde_json::from_slice(bytes).context("decoding Code payload format header")?;
+    ensure!(
+        header.package_schema == u32::from(cowboy_plugin_sdk::PACKAGE_SCHEMA_VERSION)
+            && header.manifest.kind == PluginKind::CodeIntelligence
+            && header.payload.kind == PluginKind::CodeIntelligence
+            && header.payload.contract.schema_version > 0,
+        "invalid Code payload format header"
+    );
+    // This pre-cutover SDK supports only Code payload 1. Future payloads are
+    // opaque exclusions, not verified releases, defaults or install targets.
+    Ok(header.payload.contract.schema_version > SUPPORTED_CODE_PAYLOAD_SCHEMA)
 }
 
 fn catalog_artifact(
@@ -412,6 +483,154 @@ mod tests {
         }
     }
 
+    fn future_code_package(schema: u32) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "package_schema": 1,
+            "manifest": {"kind": "code_intelligence", "id": "future-engine"},
+            "payload": {"kind": "code_intelligence", "contract": {
+                "schema_version": schema, "runtime": {"opaque_future_graph": true}
+            }}
+        }))
+        .unwrap()
+    }
+
+    fn write_future_code_fixture(path: &Path, bytes: &[u8]) {
+        fs::write(path, bytes).unwrap();
+        fs::write(
+            path.with_extension("release.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "release_schema": 1,
+                "plugin_kind": "code_intelligence",
+                "plugin_id": "google",
+                "plugin_version": "999.0.0",
+                "package_digest": PluginPackage::artifact_digest(bytes),
+                "runtime_artifacts": [{"os": "linux", "architecture": "x86_64",
+                    "components": [{"kind": "future_server"}]}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn reader_skips_future_code_format_without_trusting_its_identity() {
+        for schema in [2, 3] {
+            let fixture = ReaderFixture::new();
+            let catalog_root = fixture.0.join("catalog");
+            fs::create_dir(&catalog_root).unwrap();
+            let path = catalog_root.join("not-a-provider-id.cowboy-plugin");
+            write_future_code_fixture(&path, &future_code_package(schema));
+            let data = fixture.0.join("not-created-service");
+            let catalog = PluginCatalog::inspect(&data, Some(catalog_root.clone())).unwrap();
+            assert_eq!(catalog.refresh_external().unwrap(), 0);
+            assert!(catalog.resolve("google", Some("999.0.0"), None).is_err());
+            assert!(catalog.resolve("future-engine", None, None).is_err());
+            assert!(
+                PluginCatalog::inspect(&data, Some(catalog_root))
+                    .unwrap()
+                    .released_plugins()
+                    .is_empty()
+            );
+            assert!(!data.exists());
+        }
+    }
+
+    #[test]
+    fn code_payload_discriminators_reject_downgrades_duplicates_and_wrong_kinds() {
+        assert!(!is_future_code_payload(&future_code_package(1)).unwrap());
+        let valid = r#"{"package_schema":1,"manifest":{"kind":"code_intelligence"},"payload":{"kind":"code_intelligence","contract":{"schema_version":2}}}"#;
+        assert!(is_future_code_payload(valid.as_bytes()).unwrap());
+        for invalid in [
+            valid.replace(
+                "\"package_schema\":1",
+                "\"package_schema\":1,\"package_schema\":2",
+            ),
+            valid.replace("\"package_schema\":1", "\"package_schema\":2"),
+            valid.replace("\"manifest\":", "\"manifest\":{},\"manifest\":"),
+            valid.replace("\"payload\":", "\"payload\":{},\"payload\":"),
+            valid.replace("\"contract\":", "\"contract\":{},\"contract\":"),
+            valid.replace(
+                "\"kind\":\"code_intelligence\"",
+                "\"kind\":\"code_intelligence\",\"kind\":\"code_intelligence\"",
+            ),
+            valid.replace(
+                "\"schema_version\":2",
+                "\"schema_version\":2,\"schema_version\":1",
+            ),
+            valid.replace(
+                "\"schema_version\":2",
+                "\"schema_version\":1,\"schema_version\":2",
+            ),
+            valid.replace("\"schema_version\":2", "\"schema_version\":0"),
+            valid.replace("\"schema_version\":2", "\"schema_version\":-1"),
+            valid.replace("\"schema_version\":2", "\"schema_version\":2.0"),
+            valid.replace("\"schema_version\":2", "\"schema_version\":\"2\""),
+            valid.replace("\"schema_version\":2", "\"schema_version\":true"),
+            valid.replace("\"schema_version\":2", "\"schema_version\":null"),
+            valid.replace("\"schema_version\":2", "\"other\":2"),
+            valid.replacen(
+                "\"kind\":\"code_intelligence\"",
+                "\"kind\":\"agent_provider\"",
+                1,
+            ),
+            valid.replace(
+                "\"payload\":{\"kind\":\"code_intelligence\"",
+                "\"payload\":{\"kind\":\"authentication_provider\"",
+            ),
+        ] {
+            assert!(
+                is_future_code_payload(invalid.as_bytes()).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn reader_never_turns_unknown_supported_code_components_into_a_skip() {
+        let fixture = ReaderFixture::new();
+        let path = fixture.0.join("supported.cowboy-plugin");
+        write_future_code_fixture(&path, &future_code_package(1));
+        let error =
+            read_supported_release(&path.with_extension("release.json"), &path).unwrap_err();
+        assert!(format!("{error:#}").contains("unknown variant `future_server`"));
+    }
+
+    #[test]
+    fn future_code_inspection_rejects_tampering_missing_linked_and_oversized_packages() {
+        use std::os::unix::net::UnixListener;
+        let fixture = ReaderFixture::new();
+        let path = fixture.0.join("future.cowboy-plugin");
+        let release = path.with_extension("release.json");
+        let bytes = future_code_package(2);
+        write_future_code_fixture(&path, &bytes);
+        fs::write(&path, future_code_package(3)).unwrap();
+        assert!(read_supported_release(&release, &path).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(read_supported_release(&release, &path).is_err());
+        let target = fixture.0.join("linked-target");
+        fs::write(&target, &bytes).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(read_supported_release(&release, &path).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(read_supported_release(&release, &path).is_err());
+        fs::remove_dir(&path).unwrap();
+        let socket = UnixListener::bind(&path).unwrap();
+        assert!(read_supported_release(&release, &path).is_err());
+        drop(socket);
+        fs::remove_file(&path).unwrap();
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(8 * 1024 * 1024 + 1)
+            .unwrap();
+        assert!(
+            read_supported_release(&release, &path)
+                .unwrap_err()
+                .to_string()
+                .contains("too large")
+        );
+    }
+
     #[test]
     fn reader_inspection_and_refresh_never_create_missing_catalog_or_service_state() {
         let fixture = ReaderFixture::new();
@@ -465,13 +684,13 @@ mod tests {
         ] {
             fs::write(&path, bytes).unwrap();
             assert!(
-                read_supported_release(&path).is_err(),
+                read_supported_release(&path, &fixture.0.join("unused.cowboy-plugin")).is_err(),
                 "accepted invalid envelope: {bytes}"
             );
         }
         fs::write(&path, vec![b' '; 1024 * 1024 + 1]).unwrap();
         assert!(
-            read_supported_release(&path)
+            read_supported_release(&path, &fixture.0.join("unused.cowboy-plugin"))
                 .unwrap_err()
                 .to_string()
                 .contains("too large")
@@ -485,10 +704,10 @@ mod tests {
         let target = fixture.0.join("target");
         fs::write(&target, br#"{"release_schema":2}"#).unwrap();
         std::os::unix::fs::symlink(&target, &marker).unwrap();
-        assert!(read_supported_release(&marker).is_err());
+        assert!(read_supported_release(&marker, &fixture.0.join("unused.cowboy-plugin")).is_err());
         fs::remove_file(&marker).unwrap();
         fs::create_dir(&marker).unwrap();
-        assert!(read_supported_release(&marker).is_err());
+        assert!(read_supported_release(&marker, &fixture.0.join("unused.cowboy-plugin")).is_err());
     }
 
     #[test]
@@ -648,6 +867,18 @@ mod tests {
         .unwrap();
         assert_eq!(catalog.refresh_external().unwrap(), 1);
         let restarted = PluginCatalog::open(&root, Some(catalog_root.clone())).unwrap();
+        assert_eq!(
+            restarted
+                .resolve_authentication_provider("google", "1.0.0", &release.artifact_digest)
+                .unwrap(),
+            contract
+        );
+        drop(restarted);
+        // A nested future Code schema has the same no-authority behavior even
+        // if it claims the exact ID of this independently signed login Plugin.
+        write_future_code_fixture(&future, &future_code_package(2));
+        assert_eq!(catalog.refresh_external().unwrap(), 1);
+        let restarted = PluginCatalog::inspect(&root, Some(catalog_root.clone())).unwrap();
         assert_eq!(
             restarted
                 .resolve_authentication_provider("google", "1.0.0", &release.artifact_digest)

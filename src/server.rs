@@ -811,6 +811,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 "schema": "dravengarden.cowboy.catalog-reader-preflight/v1",
                 "status": "readable",
                 "supported_release_schema": cowboy_plugin_sdk::RELEASE_SCHEMA_VERSION,
+                "supported_code_payload_schema": crate::plugin_catalog::SUPPORTED_CODE_PAYLOAD_SCHEMA,
                 "releases": released,
                 "not_checked": ["runtime_artifact_bytes", "host_activation", "database_migrations", "real_login"],
             }))?

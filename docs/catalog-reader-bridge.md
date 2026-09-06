@@ -21,6 +21,23 @@ supported release aborts refresh while preserving the old snapshot, and fails
 cold start. Malformed/ambiguous headers, symlinks, non-regular envelopes and
 envelopes over 1 MiB are rejected rather than treated as future releases.
 
+The follow-up reader candidate also handles hostless future Code payloads,
+whose outer release schema can remain 1. Before decoding runtime component
+variants it checks the exact package digest and explicit nested Code schema.
+Only a payload newer than the supported Code schema 1 is skipped, without
+trusting its identity. Both manifest and payload must have the Code kind and
+the package must use the supported outer package schema. Missing, duplicate,
+zero or non-integer discriminators fail closed. Packages must be regular,
+non-linked files no larger than the existing Machine limit of 8 MiB. Supported
+Code schema 1 retains all SDK and signature checks; arbitrary decode errors
+never become a compatibility skip. This is a format rule, not a Plugin-ID
+exception, and does not upgrade the SDK or activate a Code runtime.
+
+This follow-up is a build/test candidate, not an activated reader floor. Its
+publication gate must inspect each exact fully bound release using the actual
+immutable reader and successor binaries. The older `1814cb19e152` reader cannot
+decode Zed 1.2.1's Code schema 2 even though its outer release schema is 1.
+
 Read-only inspection uses the same Catalog reader:
 
 ```sh
@@ -31,6 +48,8 @@ cowboy serve --check-plugin-catalog \
 
 It creates no state, opens no database/listener and runs no Plugin or login.
 Its public JSON report lists only supported, verified exact release identities.
+It advertises `supported_code_payload_schema: 1` so the conformance harness can
+distinguish an explicit future-format exclusion from unexplained inventory loss.
 It is not runtime, host-policy, migration or authentication acceptance.
 
 This is **not** a rollback of activated Plugin hosts/storage. Both inspection
