@@ -10,6 +10,9 @@ document; they supersede the earlier missing-source and local-loader-only gates.
 The latest Controller candidate is recorded in **Host-capable successor
 integration and acceptance** below. It incorporates the active reader bridge;
 the full Plugin migration itself is still not deployed.
+The latest publication status is **Exact publication reader preflight** below:
+Zed is incompatible with the live bridge, and production signing is awaiting
+the existing publisher signing entrypoints. No new Plugin was published.
 
 ## Goal
 
@@ -1271,3 +1274,98 @@ acceptance. Recheck the live reader/rollback floor if any activation intervenes;
 the bridge still cannot recover a post-cutover Host database. Codex DeepSeek
 predecessor drain, real login, signed/physical Apple acceptance and the known
 physical-iPhone pasted-image caret issue remain unresolved as recorded above.
+
+### Exact publication reader preflight — 2026-09-06
+
+The continuation advanced production-publication preparation only. It did not
+authorize or perform a Controller/Web/Machine activation, Host policy/storage
+cutover, Machine installation, credential use, or a new publisher identity.
+
+The original generic bridge gate was insufficient as a per-release publication
+gate: its schema-2 Password fixture cannot prove that a new nested payload or
+runtime component enum inside a schema-1 envelope is safe. Tool commits
+`e47815d9cfcff94e88bdf2b6b4424d736d06276f` and
+`064fbaa976e8b2a0d564c54c4fc0168afa3301db` add repeated
+`--publication <fully-bound-release.json>` arguments to the existing owned
+`just catalog-reader-conformance` recipe. They do not change any Plugin version,
+SDK, runtime lock, production executable or applied migration.
+
+Each exact candidate is copied into its own temporary Catalog beside an
+independently verified public legacy release. Only its copied signature is
+replaced with a disposable fixture signature; package/host bytes, URLs, runtime
+matrix, composite digest and all other envelope fields must stay identical.
+Two actual bridge cold reads, the successor's Catalog inventory and its Host
+preflight are checked. Bound hosts use temporary exact policy pins, so Passkey
+storage never acquires migration authority just from being published. The first
+new harness receipt incorrectly expected unpinned storage to become a default;
+the final receipt below supersedes that fixture-only failure. Production Host
+policy was never read into or changed by this test.
+
+Final clean-source receipt:
+`dist/catalog-reader-conformance/exact-publications-with-host-pins.json`, SHA-256
+`9c0980ee68c39f6fe8b53daef70e9bd0895b281e3f9a4ada32ca0d38d070e90d`.
+It records acceptance source `064fbaa9`, active bridge `1814cb19`, baseline
+`c293e0e9`, successor `8b7dc9ba` and immutable Plugin SDK 1.6.0. The public legacy
+fixture is Cardea **1.0.0**, publisher `dravengarden-cardea`, deliberately distinct
+from both candidate publishers so its original signature and trust remain
+intact. This does not change the production Cardea **1.1.0** selection; that
+exact public release also passed the original 17-check gate this turn in
+`dist/catalog-reader-conformance/d8b56432-publication-preflight.json`.
+
+All **17 generic checks** pass. Of **10 exact candidates**, the successor reads
+all ten and accepts their temporary Host policy. The bridge safely skips the
+nine schema-2 candidates but rejects Zed. Accordingly the full-set receipt has
+`ok: false` and the command exits **1**; it is a publication block, not an
+all-green release receipt.
+
+| Candidates | Exact version | Reader result / remaining release block |
+| --- | --- | --- |
+| Claude Code, Claude DeepSeek, Codex, Gemini, Grok | 3.1.13 each | Bridge skips; successor accepts. Production signing/publication remains pending. |
+| Codex DeepSeek | 3.1.13 | Reader check passes, but the separately required old/new generation coexistence gate remains unresolved. Keep unpublished. |
+| Password, Passkey | 1.0.0 each | Bridge skips; successor accepts with temporary exact Host pins. No production Host/storage authority granted. |
+| Cardea | 1.2.0 | Bridge skips; successor accepts. External source remains clean `d54b9945e2e451ed41d468b416c25ca272fb3361`; its separate publisher signing entrypoint is needed. |
+| Zed | 1.2.1 | **Blocked:** release schema 1 carries Code payload 2 and `code_intelligence_server`, which the live bridge cannot decode. |
+
+Zed's exact blocked digest is
+`sha256:ff7735efdbd7da0d78858f82d63e2840a667759734e85260cc938e91a05ebe28`.
+The actual bridge fails with `decoding supported Plugin release` / unknown
+variant `code_intelligence_server`, before package decoding. Existing Zed
+runtime/install/drain evidence does not fix this reader incompatibility. Do
+not append this release to the live Catalog, bump its envelope artificially,
+or add a dummy Host to force a skip. A compatible reader transition needs its
+own accepted deployment boundary before Zed publication.
+
+The new reader-harness unit suite passes **13 tests**, adjacent runtime-harness
+tests pass **6**, the skill validator passes, and `git diff --check` passes.
+The canonical release skill and bridge documentation now distinguish Code
+payload schema from release schema and require exact-candidate reader checks.
+The earlier full `check-compact` result and native/runtime receipts are retained;
+no new full application or runtime build is claimed for this tooling-only slice.
+Local unsigned envelopes were rebound to their retained exact runtime matrices
+after the earlier full gate rebuilt unbound outputs. All ten composite digests
+still match the candidate inventory above. Inputs for those payloads/runtimes
+are unchanged since `3b281bea`; this is fixture preparation, not a new signed
+release or substitute for final clean-source production build/verification.
+
+Production remains on `1814cb19`, PID **2472823**, `active`, `NRestarts=0`, with
+`/healthz` healthy. The profile, successful activation receipt and Git pin agree;
+`/var/lib/hawk-component-deployments/cowboy-controller/in-progress.json` is absent.
+The 34-release public package/envelope/trust tree hash remains
+`bbcfdc252b204af42e7c8abed1ffe2bd37cb225ffc106d5927c679c3c5789767`.
+No production Catalog, trust key, Service policy or runtime was changed.
+
+No configured production private-key path or signing service was found in the
+repository release commands, machine-policy source or named publishing
+environment variables. The user was asked for the existing signing entrypoint,
+not key contents. Independently selected trusted public-key fingerprints are:
+
+- `cowboy-first-party`: `SHA256:a/VJzmHD/94vMVQMNZTktSR9P3apkkKnnWzXrtn02hg`.
+- `dravengarden-cardea-v2`: `SHA256:dgZQop0bAHwB4fD3SF08WNn6+7XNl8UTfG/IhO4Tvcs`.
+
+Match the provided signing identity to those existing keys; do not create or
+replace trust, borrow login/SSH identities, or search unrelated private homes.
+The nine safely skipped candidates are **not available for installation** on
+the bridge. Missing production signatures/URL receipts/full Catalog acceptance
+and the independent Codex DeepSeek drain gate still apply. Host policy/storage,
+Machine installation, real login and signed/physical Apple acceptance remain
+separate unfinished boundaries.
