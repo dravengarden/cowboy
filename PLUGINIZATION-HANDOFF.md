@@ -1089,3 +1089,95 @@ host-policy activation, production signing/publication, real authentication,
 Codex DeepSeek predecessor drain and signed/physical Apple acceptance remain
 unresolved. This follow-up activated no component, changed no machine policy,
 used no production signing key and accessed no real account.
+
+### Authorized reader bridge Controller activation — 2026-09-06
+
+The user authorized the previously proposed Controller-only activation and
+automatic-rollback-target acceptance, excluding new Plugin publication and
+machine-policy changes. The compatible reader is now **active on Hawk**.
+
+Before dispatch, fresh `origin/main` was `4741d063`, a Web-only scroll-measurement
+change descending from the deployed `c293e0e9`. The separate bridge branch
+integrated it without changing the already accepted Controller implementation,
+SDKs, Providers, authentication or migrations. The clean, pushed activation
+commit is **`1814cb19e152b417d0c611914ac984d8a5428597`** on
+`cowboy/catalog-reader-bridge-sess-1788279284752`. Verification on that merged
+source passed **517 Rust library tests (2 ignored), 1106 Web tests, Web
+typecheck/oxlint, all-target Clippy and Rust format**. The six current Agent
+Providers, all at 3.1.8, passed exact public release/artifact coverage. The Web
+source was integrated for ancestry, not deployed. Its initial direct Deno test
+invocation lacked DOM types; the repository-owned separate tsc check and full
+Deno runtime test gate both passed without changing either gate or product code.
+
+The exact clean immutable Controller release is
+`/nix/store/2d5gbc5pvd2mzrxi97r03nnaj3vln84g-cowboy-controller-release`.
+Its executable SHA-256 remains
+`cd3b7ae3aec43c4744d1a613e754616f670474ec20edda35a8659c711bed85d6`:
+Nix reused the byte-identical accepted Controller derivation and built the
+new source-bound release wrapper. Both pre-dispatch and post-activation
+three-reader conformance passed **13 checks**, with the latter resolving the
+actual active component profile as its bridge input. The actual public Catalog
+also passed read-only inspection with all **34 signed releases** intact.
+
+The existing machine-owned `cowboy-controller-activate` recipe dispatched
+`hawk-cowboy-controller-activate.service` once. The transaction completed at
+**2026-09-06 04:50:23 UTC** (12:50:23 CST), with `outcome: succeeded`,
+`phase: committed`, `maintenance: false`, no recovery and no incomplete journal.
+Receipt: `/var/lib/hawk-component-deployments/cowboy-controller/current.json`;
+transaction **`1788670188239711739-1814cb19e152`**. Controller profile generation
+is now **151**, and the machine-owned Git pin agrees with `1814cb19`. The running
+process is PID **2472823**, replacing 986810, and its `/proc` executable matches
+the exact accepted Nix bytes. The service has no automatic restart loop.
+
+Post-activation acceptance additionally verified:
+
+- `/healthz` is healthy; Hawk and Falcon are online with unchanged active ACP
+  generations `worker-a4ad441efe0461691687` and `worker-e11838bbb2e6e27902da`.
+- All **19 existing worker PIDs and start times** are unchanged. Hawk Machine
+  PID 3991423 and Zed adapter PID 3991201 and their start times are unchanged.
+- Host system, Machine and Web roots and the service-unit policy are unchanged.
+  SPA `/version` remains `fa264f43802c4cd374b31e01b160766c`; root and `sw.js`
+  cache headers, ETags and lengths match the pre-activation snapshot.
+- The public logged-out authentication configuration is byte-identical. Every
+  public Catalog package, release envelope and publisher key is byte-identical;
+  the sorted tree digest is
+  `bbcfdc252b204af42e7c8abed1ffe2bd37cb225ffc106d5927c679c3c5789767`.
+  No real login, new Plugin signing/publication, host activation, machine policy
+  change, Machine restart or manual profile manipulation occurred.
+
+The rollback audit resolves an important distinction in the previous
+checkpoint. The installed Columbus activator, exact source
+`a8722843904e17462add70af0f9743d2d4815546`, captures the active profile under its
+machine lock as each transaction's predecessor. It automatically restores that
+snapshot only for an uncommitted failed activation. After this successful
+receipt/Git pin and journal removal, the **next** transaction's rollback target
+is the active `1814cb19` bridge, not historical generation 150 merely because it
+appears as `previousRelease` in this completed receipt. Thus the current reader
+and next transaction's effective pre-cutover reader floor are now accepted by
+actual artifact tests plus the installed transaction implementation and live
+state. No extra restart, forced production failure or profile rewriting was
+used. Recheck the floor before publication or after another activation. A
+post-host/storage-cutover rollback is still unaccepted and cannot use this
+legacy bridge; authority markers must never be deleted to make it start.
+
+Local evidence is under `dist/catalog-reader-conformance/`:
+
+- `1814cb19-pre-activation.json` and `1814cb19-active-reader.json`: SHA-256
+  `988a028679c524314311419dfa827c27eab6820af9b21d2d6bf6b46b2f3d0641`.
+- `1814cb19-activation.json`: SHA-256
+  `82186f22f64d2ed08617ce3d5583f4cb9dd1562709756f41733f537a2d4c85fb`,
+  containing the machine receipt, 13 post-activation checks, continuity,
+  immutable identities, rollback observations and explicit untested boundaries.
+
+The activator's existing keep-20 policy pruned only the oldest generation-131
+profile reference; its Nix artifact was confirmed still present. No business
+data was deleted. The bridge source is pushed to its topic branch and pinned by
+the machine. The machine receipt's `published: false` specifically means the
+commit is not yet on `origin/main`; do not relabel it as a mainline publication.
+Later Controller candidates must integrate this active revision and freshly
+fetched main, retain the new host-capable implementation during conflict
+resolution, rebuild and revalidate. The prior `3b281bea` full-migration artifact
+is still format evidence, not an ancestry-valid deploy candidate after this
+activation. New Plugin production signing/publication, host-policy/storage
+cutover and recovery, Codex DeepSeek predecessor drain, real authentication,
+and signed/physical Apple acceptance remain separate unfinished boundaries.

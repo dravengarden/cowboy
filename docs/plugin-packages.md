@@ -660,8 +660,9 @@ native account. This is not a Service login/refresh action.
 ### Controller host activation
 
 Publication must remain safe for the live Catalog reader and the automatic
-rollback predecessor. A schema-1-only Controller cannot start against a Catalog
-containing schema-2 releases, even when the candidate Controller accepts both.
+rollback predecessor. A legacy Controller that parses packages before their
+release schema can fail against schema-2 publications, even when the candidate
+Controller accepts both.
 Do not satisfy candidate release coverage by placing unreadable packages into
 the predecessor's live Catalog. First accept a reader-compatible bridge or an
 owned cutover transaction that switches/restores the Catalog and Controller
@@ -670,7 +671,7 @@ Catalog bytes, host selections or migrated storage. Keep any one-way storage
 transition behind its separate migration/recovery acceptance.
 
 The owned `just catalog-reader-conformance` gate compares exact immutable
-bridge, deployed-baseline and candidate Controller releases. From clean
+bridge, pre-bridge baseline and candidate Controller releases. From clean
 committed source in the pinned Linux shell:
 
 ```bash
@@ -700,6 +701,22 @@ floor, publishes a release, checks real login, or reverses migrated storage.
 After host authority is activated, recovery needs a host-capable Controller
 and its accepted policy, not this legacy reader. Keep the bridge backport
 separate from the full Plugin migration branch.
+
+Determine the rollback target from the installed activator, not a historical
+Nix generation number. Hawk's Columbus activator at `a872284` snapshots the
+then-active profile as `previousRelease` under the machine lock. Failure before
+successful commit restores that transaction's snapshot. After success is
+Git-pinned and receipted and the journal is removed, the next transaction
+captures the now-active release as its predecessor; the old `previousRelease`
+in a completed receipt is not an automatic post-success downgrade path. A
+compatible bridge can therefore establish the next transaction's reader floor
+without an extra deployment, provided the actual profile, successful receipt,
+Git pin and absence of an incomplete journal agree. Recheck these observations
+before publication and after any intervening activation. A later manual
+rollback requires a compatible descendant revert. This verifies the reader
+target and transaction contract, not a live fault-injection test or the ability
+to undo host/storage activation; the latter still needs its separate recovery
+acceptance.
 
 Inspect the actual service unit and configuration generator, not a stale source
 checkout or only the current private JSON. If `ExecStartPre` regenerates an
