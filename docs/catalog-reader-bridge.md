@@ -23,6 +23,27 @@ reader still attempts to decode that supported outer envelope and its package.
 Do not infer publication safety from its schema number or from a different
 Plugin's successful schema-2 fixture.
 
+The separate `cowboy/catalog-reader-bridge-sess-1788279284752` branch now prepares
+a follow-up reader candidate for that nested Code boundary. It remains a
+pre-Host backport, not the full Controller or an activated production floor.
+After validating the exact envelope/package digest, it inspects only the
+explicit Code format headers. Outer package schema 1, matching manifest/payload
+Code kinds, and a positive integer Code schema newer than 1 are required for
+exclusion. Duplicate or malformed discriminators fail closed; packages must
+be regular, non-linked files within the existing Machine 8 MiB limit. Supported
+Code schema 1 still requires the complete old SDK and signature checks.
+Unknown variants and arbitrary parse failures never become compatibility skips,
+and an excluded future identity cannot replace any supported signed release.
+
+That candidate advertises `supported_code_payload_schema: 1` in its read-only
+report. The owned publication gate accepts `skipped_future_code_payload` only
+when the exact package has first passed the successor SDK verifier, its nested
+Code schema exceeds the reader's explicit limit, and both cold reads retain
+exactly the independent signed legacy identity. The successor must still read
+and validate the candidate, including its Host preflight. An older reader with
+no advertised nested limit, an unexplained missing identity, or a nonzero exit
+remains a failure. This changes no release schema, signed package or SDK pin.
+
 Read-only inspection uses the same Catalog reader:
 
 ```sh
@@ -69,8 +90,8 @@ storage hosts that cannot acquire migration authority from Catalog defaults.
 Choose a public legacy fixture with a different publisher
 from the candidates to preserve its real signature and trust key. Incompatible
 candidates produce a failing receipt and nonzero exit; safely skipped future
-envelopes remain unavailable to the legacy reader. No production signing key
-is used. This is neither runtime acceptance nor a production publication or
+envelopes or Code payloads remain unavailable to the legacy reader. No production
+signing key is used. This is neither runtime acceptance nor a production publication or
 full Catalog/Host-policy test. Review the receipt's `not_checked` fields and
 apply the canonical release skill's remaining gates before publishing.
 

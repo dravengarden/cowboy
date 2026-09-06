@@ -55,24 +55,55 @@ class PublicationReaderTests(unittest.TestCase):
         self.publication = dict(plugin_id="candidate", plugin_version="2.0.0", artifact_digest="sha256:candidate",
                                 release_schema=2)
 
-    def report(self, releases, supported=1):
+    def report(self, releases, supported=1, supported_code=None):
         return subprocess.CompletedProcess([], 0, json.dumps(dict(
             schema="dravengarden.cowboy.catalog-reader-preflight/v1", status="readable",
-            supported_release_schema=supported, releases=releases)), "")
+            supported_release_schema=supported, supported_code_payload_schema=supported_code, releases=releases)), "")
 
-    def inspect(self, result, allow_skip=True):
-        return publication_reader_result(result, self.legacy, self.publication, allow_skip)["status"]
+    def inspect(self, result, allow_skip=True, code_payload_schema=None):
+        return publication_reader_result(result, self.legacy, self.publication, allow_skip, code_payload_schema)["status"]
 
     def test_visible_requires_both_exact_identities_regardless_of_order(self):
         entries = [self.legacy, immutable_identity(self.publication)]
         self.assertEqual(self.inspect(self.report(entries)), "visible")
         self.assertEqual(self.inspect(self.report(list(reversed(entries)))), "visible")
 
-    def test_only_a_future_outer_envelope_can_be_safely_skipped(self):
+    def test_only_a_future_outer_envelope_can_be_skipped_without_nested_schema_evidence(self):
         self.assertEqual(self.inspect(self.report([self.legacy])), "skipped_future_envelope")
         self.assertEqual(self.inspect(self.report([self.legacy]), allow_skip=False), "unexpected_inventory")
         self.publication["release_schema"] = 1
         self.assertEqual(self.inspect(self.report([self.legacy])), "unexpected_inventory")
+
+    def test_future_code_skip_requires_explicit_reader_limit_and_verified_payload_schema(self):
+        self.publication.update(release_schema=1, plugin_kind="code_intelligence")
+        report = self.report([self.legacy], supported_code=1)
+        self.assertEqual(self.inspect(report, code_payload_schema=2), "skipped_future_code_payload")
+        self.assertEqual(self.inspect(report, allow_skip=False, code_payload_schema=2), "unexpected_inventory")
+        self.assertEqual(self.inspect(report), "unexpected_inventory")
+        for supported in [None, "1", True, 0, -1, 2]:
+            with self.subTest(supported=supported):
+                self.assertEqual(self.inspect(self.report([self.legacy], supported_code=supported), code_payload_schema=2),
+                                 "unexpected_inventory")
+        for schema in [None, "2", True, 0, -1, 1]:
+            with self.subTest(schema=schema):
+                self.assertEqual(self.inspect(report, code_payload_schema=schema), "unexpected_inventory")
+        for supported in [None, "1", True, 0, -1]:
+            with self.subTest(supported_release=supported):
+                self.assertEqual(self.inspect(self.report([self.legacy], supported=supported, supported_code=1),
+                                              code_payload_schema=2), "unexpected_inventory")
+
+    def test_future_code_skip_never_grants_missing_changed_or_duplicate_identity(self):
+        self.publication.update(release_schema=1, plugin_kind="code_intelligence")
+        for entries in [[], [immutable_identity(self.publication)], [self.legacy, self.legacy],
+                        [dict(self.legacy, artifact_digest="sha256:other")]]:
+            with self.subTest(entries=entries):
+                self.assertEqual(self.inspect(self.report(entries, supported_code=1), code_payload_schema=2),
+                                 "unexpected_inventory")
+        for kind in [None, "agent_provider", "authentication_provider", "storage_provider"]:
+            with self.subTest(kind=kind):
+                self.publication["plugin_kind"] = kind
+                self.assertEqual(self.inspect(self.report([self.legacy], supported_code=1), code_payload_schema=2),
+                                 "unexpected_inventory")
 
     def test_skipped_schema_needs_an_explicit_positive_integer_reader_limit(self):
         for supported in [None, "1", True, 0, -1, 2]:
@@ -89,8 +120,9 @@ class PublicationReaderTests(unittest.TestCase):
                 self.assertEqual(self.inspect(self.report(entries)), "unexpected_inventory")
 
     def test_unsupported_nested_payload_failure_is_not_a_safe_skip(self):
+        self.publication.update(release_schema=1, plugin_kind="code_intelligence")
         result = subprocess.CompletedProcess([], 1, "", "unknown variant code_intelligence_server")
-        report = publication_reader_result(result, self.legacy, self.publication, allow_skip=True)
+        report = publication_reader_result(result, self.legacy, self.publication, allow_skip=True, code_payload_schema=2)
         self.assertEqual(report["status"], "rejected")
         self.assertEqual(report["exit_code"], 1)
         self.assertIn("code_intelligence_server", report["detail"])

@@ -73,7 +73,7 @@ def unsigned_envelope(release):
     return {name: value for name, value in release.items() if name != "signature"}
 
 
-def publication_reader_result(result, legacy, publication, allow_skip=False):
+def publication_reader_result(result, legacy, publication, allow_skip=False, code_payload_schema=None):
     if result.returncode != 0:
         return dict(status="rejected", exit_code=result.returncode, detail=result.stderr[-2000:])
     try:
@@ -90,6 +90,18 @@ def publication_reader_result(result, legacy, publication, allow_skip=False):
                 and publication["release_schema"] > supported
                 and actual == [immutable_identity(legacy)]):
             return dict(status="skipped_future_envelope")
+        supported_code = report.get("supported_code_payload_schema")
+        # A missing identity is not evidence of compatibility. The bridge must
+        # explicitly advertise its nested-format limit, and the caller supplies
+        # the Code schema only after the exact package passes SDK verification.
+        if (allow_skip and type(supported) is int and supported > 0
+                and type(publication["release_schema"]) is int
+                and 0 < publication["release_schema"] <= supported
+                and publication.get("plugin_kind") == "code_intelligence"
+                and type(code_payload_schema) is int
+                and type(supported_code) is int and 0 < supported_code < code_payload_schema
+                and actual == [immutable_identity(legacy)]):
+            return dict(status="skipped_future_code_payload")
         return dict(status="unexpected_inventory")
     except (ValueError, RuntimeError, KeyError, TypeError):
         return dict(status="invalid_report")
@@ -153,10 +165,17 @@ def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
     command(pack, "verify", fixture_package, fixture_release, key.with_suffix(".pub"), *host_args)
     require(unsigned_envelope(json.loads(fixture_release.read_text())) == unsigned_envelope(publication),
             "Fixture signing changed the candidate release proof")
+    code_payload_schema = None
+    if publication["plugin_kind"] == "code_intelligence":
+        payload = json.loads(fixture_package.read_text())["payload"]
+        require(payload["kind"] == "code_intelligence", "Verified Code package has a different payload kind")
+        code_payload_schema = payload["contract"]["schema_version"]
+        require(type(code_payload_schema) is int and code_payload_schema > 0, "Invalid verified Code payload schema")
     shutil.copyfile(key.with_suffix(".pub"), trust / (publication["publisher"] + ".pub"))
     data = catalog.parent / "not-created-service"
     bridge_results = [publication_reader_result(
-        command(*reader_arguments(bridge, data, catalog), success=False), legacy, publication, allow_skip=True)
+        command(*reader_arguments(bridge, data, catalog), success=False), legacy, publication,
+        allow_skip=True, code_payload_schema=code_payload_schema)
         for _ in range(2)]
     candidate_result = publication_reader_result(
         command(*reader_arguments(candidate, data, catalog), success=False), legacy, publication)
@@ -175,12 +194,14 @@ def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
     require(not data.exists(), "Publication reader inspection created Service state")
     require(all(digest(path) == value for path, value in original.items()), "Publication inputs changed during inspection")
     return dict(release=immutable_identity(publication), release_schema=publication["release_schema"],
+                code_payload_schema=code_payload_schema,
                 source_envelope_sha256=original[envelope], package_digest=original[package],
                 host_bundle_digest=original.get(host), bridge_cold_reads=bridge_results,
                 candidate=candidate_result, candidate_host_preflight=host_valid,
                 candidate_host_policy="temporary_exact_pin" if host_args else "bootstrap_without_pin",
                 candidate_host_error=None if host_valid else (host_result.stderr or host_result.stdout)[-2000:],
-                reader_compatible=(all(result["status"] in ("visible", "skipped_future_envelope") for result in bridge_results)
+                reader_compatible=(all(result["status"] in ("visible", "skipped_future_envelope", "skipped_future_code_payload")
+                                       for result in bridge_results)
                                    and candidate_result["status"] == "visible" and host_valid),
                 production_signature_checked=False)
 
