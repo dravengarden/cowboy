@@ -12,6 +12,7 @@
   "permissions": [
     "core:default",
     "opener:allow-open-url",
+    "opener:allow-default-urls",
     "haptics:allow-impact-feedback",
     "haptics:allow-notification-feedback",
     "haptics:allow-selection-feedback",

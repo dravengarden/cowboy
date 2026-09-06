@@ -77,6 +77,12 @@ a new disposable Simulator. This does not replace a full Tauri build or device
 acceptance. See [Apple capability policy](apple/README.md) and
 [Simulator controls](../../docs/ios-simulator.md).
 
+`just native-shell-smoke <ios-sim build receipt.json>` additionally verifies the
+actual Tauri App in its own newly-created Simulator. It signs only a disposable
+copy of the exact recorded binary, checks real IPC/native-ABI coexistence and
+the eval listener's access boundary, then deletes the Simulator and copy. No
+existing App, browser, keychain or device is used; real login is not exercised.
+
 The simulator eval listener is compiled only for Debug Simulator builds and
 requires `COWBOY_SIM_BRIDGE=1` at launch. It binds 127.0.0.1, requires the exact
 Simulator identity header, rejects browser-origin requests, and exposes no CORS

@@ -88,11 +88,28 @@ info = plistlib.loads(info_path.read_bytes())
 binary = app / ("Contents/MacOS" if platform == "macos" else "") / info["CFBundleExecutable"]
 if info["CFBundleIdentifier"] != "top.thundersparrow.cowboy":
     raise SystemExit("Unexpected native bundle identifier")
+toolchain = json.loads((build / "apps/native-shell/toolchain.json").read_text())
+swift_packages = {}
+for state_path in (build / "target").rglob("workspace-state.json"):
+    if "swift-rs" not in state_path.parts:
+        continue
+    for dependency in json.loads(state_path.read_text())["object"]["dependencies"]:
+        package = dependency["packageRef"]
+        if package["kind"] != "remoteSourceControl":
+            continue
+        state = dependency["state"]["checkoutState"]
+        pin = dict(version=state.get("version"), revision=state.get("revision"))
+        if toolchain["swiftPackages"].get(package["location"]) != pin:
+            raise SystemExit("Unpinned Swift package: " + package["location"])
+        swift_packages[package["location"]] = pin
+if platform != "macos" and swift_packages != toolchain["swiftPackages"]:
+    raise SystemExit("Incomplete Swift dependency receipt")
 report = dict(source_revision=revision, platform=platform, profile=profile,
     app=str(app), executable_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
     lock_sha256=hashlib.sha256((build / "apps/native-shell/tauri/Cargo.lock").read_bytes()).hexdigest(),
     xcode=subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
-    toolchain=json.loads((build / "apps/native-shell/toolchain.json").read_text()),
+    toolchain=toolchain, swift_packages=swift_packages,
+    rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
     signing="ad-hoc" if platform == "macos" else "unsigned",
     installed=False, real_login="not_checked", physical_device="not_checked")
 (build / "receipt.json").write_text(json.dumps(report, indent=2) + "\n")

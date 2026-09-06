@@ -225,3 +225,64 @@ Deno.test("native build is locked, fresh and build-only", async () => {
     );
   }
 });
+
+Deno.test("bundled Settings opener uses the actual URL argument and a closed scope", async () => {
+  const loader = await Deno.readTextFile(
+    resolve(root, "apps/native-shell/loader/index.html"),
+  );
+  const start = loader.indexOf("async function openSettings()");
+  const end = loader.indexOf('document.getElementById("open-settings")', start);
+  assert(start > 0 && end > start, "missing loader Settings action");
+  let called = false;
+  const run = new Function(
+    "globalThis",
+    "hint",
+    "APP_NAME",
+    loader.slice(start, end) + "\nreturn openSettings();",
+  );
+  await run(
+    {
+      __TAURI__: {
+        core: {
+          invoke(command: string, args: Record<string, string>) {
+            assert(
+              command === "plugin:opener|open_url",
+              "wrong opener command",
+            );
+            assert(
+              args.url === "app-settings:" && !("path" in args),
+              "wrong opener argument",
+            );
+            called = true;
+            return Promise.resolve();
+          },
+        },
+      },
+    },
+    { style: {} },
+    "Cowboy",
+  );
+  assert(called, "loader did not invoke Settings opener");
+  const local = JSON.parse(
+    await Deno.readTextFile(
+      resolve(root, "apps/native-shell/tauri/capabilities/default.json"),
+    ),
+  );
+  assert(
+    JSON.stringify(local.permissions[1]) === JSON.stringify({
+      identifier: "opener:allow-open-url",
+      allow: [{ url: "app-settings:" }],
+    }),
+    "loader opener scope must be app-settings only",
+  );
+  const remote = JSON.parse(
+    await Deno.readTextFile(
+      resolve(root, "apps/native-shell/tauri/capabilities/remote-haptics.json"),
+    ),
+  );
+  assert(
+    remote.permissions.includes("opener:allow-default-urls") &&
+      !remote.permissions.includes("opener:default"),
+    "web links must not gain file-manager permissions",
+  );
+});

@@ -90,6 +90,10 @@ native-shell-check:
 native-shell-build PLATFORM="ios-sim" *ARGS:
     bash tools/build-native-shell.sh {{PLATFORM}} {{ARGS}}
 
+# Sign a disposable copy and launch it only in an exclusively-created Simulator.
+native-shell-smoke RECEIPT:
+    python3 tools/native_shell_smoke.py "{{RECEIPT}}"
+
 macos-installer-build:
     bash apps/macos-installer/scripts/build-app.sh --build-backend
 

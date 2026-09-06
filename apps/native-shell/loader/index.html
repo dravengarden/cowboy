@@ -247,7 +247,7 @@
           }
           if (t?.core?.invoke) {
             await t.core.invoke("plugin:opener|open_url", {
-              path: "app-settings:",
+              url: "app-settings:",
             });
             return;
           }

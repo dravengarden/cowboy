@@ -2,6 +2,12 @@
   "rust": "1.97.1",
   "tauriCli": "2.11.2",
   "xcodegen": "2.46.0",
+  "swiftPackages": {
+    "https://github.com/Brendonovich/swift-rs": {
+      "version": "1.0.7",
+      "revision": "f64a4514de07f450ec5b6aa297624cd3479d9579"
+    }
+  },
   "crates": {
     "tauri": "2.11.2",
     "tauri-build": "2.6.2",
