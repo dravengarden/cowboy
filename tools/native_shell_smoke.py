@@ -68,6 +68,7 @@ def main():
         allocation.bind(("127.0.0.1", 0))
         port = allocation.getsockname()[1]
     simulator = None
+    app_pid = None
     tests = []
 
     def check(name, value):
@@ -87,12 +88,15 @@ def main():
             runtime = max(choices, key=lambda r: tuple(map(int, r["version"].split("."))))["identifier"]
             simulator = command("xcrun", "simctl", "create", "Cowboy Tauri Smoke " + revision[:8],
                                 "com.apple.CoreSimulator.SimDeviceType.iPhone-16", runtime, capture=True)
+            print("Smoke Simulator: " + simulator + ", loopback port: " + str(port), flush=True)
             command("xcrun", "simctl", "boot", simulator)
             command("xcrun", "simctl", "bootstatus", simulator, "-b")
             command("xcrun", "simctl", "install", simulator, str(app))
             environment = dict(os.environ, SIMCTL_CHILD_COWBOY_SIM_BRIDGE="1",
                                SIMCTL_CHILD_COWBOY_SIM_DEVPORT=str(port))
-            command("xcrun", "simctl", "launch", simulator, BUNDLE_ID, env=environment)
+            launched = command("xcrun", "simctl", "launch", simulator, BUNDLE_ID, env=environment, capture=True)
+            print(launched, flush=True)
+            app_pid = launched.rsplit(": ", 1)[-1]
             deadline = time.monotonic() + 90
             while True:
                 try:
@@ -157,6 +161,16 @@ return JSON.stringify({tests,origin:location.origin,user_agent:navigator.userAge
             destination = receipt_path.parent / "smoke-receipt.json"
             destination.write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report, indent=2), flush=True)
+        except Exception:
+            if simulator and app_pid and app_pid.isdigit():
+                diagnostic = subprocess.run(
+                    ["xcrun", "simctl", "spawn", simulator, "log", "show", "--last", "4m",
+                     "--style", "compact", "--predicate", "processIdentifier == " + app_pid],
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    timeout=30, check=False)
+                (receipt_path.parent / "smoke-failure.log").write_text(diagnostic.stdout)
+                print("\n".join(diagnostic.stdout.splitlines()[-50:]), file=sys.stderr, flush=True)
+            raise
         finally:
             if simulator:
                 for operation in ["shutdown", "delete"]:
