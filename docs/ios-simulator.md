@@ -52,6 +52,31 @@ native-host version and user agent. The local loader starts at
 a PWA or a native shell. Check `window.__cowboyNativeShell` and
 `window.__COWBOY_NATIVE_PLUGIN_HOST` as well.
 
+For automated full-App acceptance, pass the exact successful Debug Simulator
+build receipt. Both commands create and remove their own Simulator and sign only
+a disposable copy of that App; they never install over an existing App:
+
+```sh
+just native-shell-smoke dist/native-shell/<exact-build>/receipt.json
+just native-shell-smoke dist/native-shell/<exact-build>/receipt.json --remote
+```
+
+The default checks the actual native App/ABI but may finish on the bundled
+loader. `--remote` additionally waits for that loader's own navigation to the
+exact Cowboy HTTPS origin and a rendered logged-out sign-in form. It checks
+positive remote haptics IPC, rejection of local files and the local-only Settings
+URL, plus one credential-free, non-cached `GET /api/auth/status`. It never forces
+navigation, submits a form, starts a Passkey/OIDC ceremony, or accesses an account.
+Unavailable networking, a stuck loader or missing remote capabilities fail this
+gate; a local-loader result is never substituted for remote acceptance.
+
+Each attempt retains a separate `acceptance-<mode>-<revision>.<nonce>/` directory
+beside the build receipt, printed at startup. A passing attempt writes
+`smoke-receipt.json`; a failed attempt writes `failure.json` and, when available,
+an App-only Simulator log. This prevents an older successful receipt from being
+mistaken for the result of a failed rerun. Neither mode establishes signed
+distribution, real-login, physical-device or keyboard/swipe acceptance.
+
 The isolated `just native-plugin-conformance` fixture creates and removes its
 own Simulator and app. It does not connect to a real login or validate a full
 Tauri bundle. Layout, keyboard, gesture and physical-device acceptance must not

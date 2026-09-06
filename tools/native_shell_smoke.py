@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Accept an exact Debug Tauri bundle using only a newly created Simulator."""
+import argparse
 import hashlib
 import json
 import os
@@ -16,6 +17,43 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE_ID = "top.thundersparrow.cowboy"
+REMOTE_ORIGIN = "https://cowboy.stormbird.xyz"
+
+
+def probe_script(remote):
+    source = (ROOT / "tools/native-shell-probe.js").read_text()
+    return source + "\nreturn JSON.stringify(await probeCowboyNativeShell(" + json.dumps(remote) + "));"
+
+
+def valid_probe(report, remote):
+    if not isinstance(report, dict):
+        return False
+    tests = report.get("tests")
+    expected_count = 15 if remote else 7
+    return (isinstance(tests, list) and len(tests) == expected_count
+            and all(isinstance(test, str) and test for test in tests)
+            and len(set(tests)) == expected_count
+            and report.get("phase") == ("remote-logged-out" if remote else "shell")
+            and report.get("origin") in ([REMOTE_ORIGIN] if remote else ["tauri://localhost", REMOTE_ORIGIN])
+            and isinstance(report.get("user_agent"), str))
+
+
+def wait_for_probe(port, simulator, remote):
+    script = probe_script(remote)
+    deadline = time.monotonic() + (150 if remote else 90)
+    payload = ""
+    while True:
+        try:
+            status, payload = request(port, simulator, "/aeval", script)
+            report = json.loads(payload) if status == 200 else None
+            if valid_probe(report, remote):
+                return report
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Actual Tauri/WKWebView " + ("remote" if remote else "shell")
+                               + " smoke failed: " + str(payload))
+        time.sleep(1)
 
 
 def command(*args, capture=False, env=None):
@@ -38,11 +76,16 @@ def request(port, identity, path, body=None, extra=None):
 
 
 def main():
-    if sys.platform != "darwin" or len(sys.argv) != 2:
-        raise SystemExit("On a Mac: python3 tools/native_shell_smoke.py <build receipt.json>")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("receipt", type=Path, help="exact Debug Simulator build receipt.json")
+    parser.add_argument("--remote", action="store_true",
+                        help="also require the real remote logged-out Cowboy page; never logs in")
+    args = parser.parse_args()
+    if sys.platform != "darwin":
+        raise SystemExit("Actual native acceptance requires a Mac")
     if command("git", "status", "--porcelain", capture=True):
         raise SystemExit("Native acceptance requires a clean committed worktree")
-    receipt_path = Path(sys.argv[1]).resolve(strict=True)
+    receipt_path = args.receipt.resolve(strict=True)
     receipt_path.relative_to(ROOT / "dist/native-shell")
     build = json.loads(receipt_path.read_text())
     if build.get("platform") != "ios-sim" or build.get("profile") != "debug":
@@ -70,6 +113,12 @@ def main():
     simulator = None
     app_pid = None
     tests = []
+    mode = "remote-logged-out" if args.remote else "shell"
+    # A failed rerun must not leave an older success at its receipt location.
+    # Retain each attempt's diagnostics separately from immutable build inputs.
+    output = Path(tempfile.mkdtemp(prefix="acceptance-" + mode + "-" + revision[:12] + ".",
+                                   dir=receipt_path.parent))
+    print("Acceptance output: " + str(output), flush=True)
 
     def check(name, value):
         if not value:
@@ -112,62 +161,34 @@ def main():
             check("browser origin rejected", request(port, simulator, "/ping",
                   extra={"Origin": "https://foreign.invalid"})[0] == 403)
             check("eval requires POST", request(port, simulator, "/eval")[0] == 403)
-            # Wait only for the owned loader/remote document to finish its one
-            # navigation. This never enters credentials or initiates login.
-            script = """
-const tests=[];
-const check=(name,value)=>{if(!value)throw Error(name);tests.push(name)};
-check("native keyboard shell",window.__cowboyNativeShell===true);
-check("Tauri IPC present",typeof window.__TAURI__?.core?.invoke==="function");
-check("native tweaks present",typeof window.__cowboySelectionHaptic==="function" &&
-  typeof window.__cowboyReadClipboard==="function" &&
-  window.__cowboyAuthenticationBrowserBridgeVersion===2);
-const host=window.__COWBOY_NATIVE_PLUGIN_HOST;
-check("immutable Plugin ABI coexists",host?.version==="1.0.0" && Object.isFrozen(host) &&
-  Object.isFrozen(host.capabilities));
-let denied=false;try{await host.invoke("unknown",{})}catch{denied=true}
-check("unknown Plugin capability rejected",denied);
-const passkeys=await host.invoke("webauthn",{action:"capabilities",rp_id:"cowboy.stormbird.xyz"});
-check("unentitled shell fails closed",passkeys.ok===true && passkeys.available===false);
-denied=false;try{await window.__TAURI__.core.invoke("plugin:opener|open_url",
-  {url:"file:///cowboy-conformance-must-not-open"})}catch(error){
-  denied=String(error)==="Not allowed to open url file:///cowboy-conformance-must-not-open";
-}
-check("opener rejects local files",denied);
-return JSON.stringify({tests,origin:location.origin,user_agent:navigator.userAgent});
-"""
-            deadline = time.monotonic() + 90
-            payload = ""
-            while True:
-                try:
-                    status, payload = request(port, simulator, "/aeval", script)
-                    report = json.loads(payload) if status == 200 else None
-                    if report and len(report.get("tests", [])) == 7:
-                        break
-                except (OSError, ValueError, urllib.error.URLError):
-                    pass
-                if time.monotonic() >= deadline:
-                    raise RuntimeError("Actual Tauri/WKWebView smoke failed: " + str(payload))
-                time.sleep(1)
+            # First accept the actual shell, then (only when requested) wait
+            # for its own loader navigation. Never force navigation or submit
+            # a login: a stuck local loader must fail remote acceptance.
+            shell = wait_for_probe(port, simulator, False)
+            report = wait_for_probe(port, simulator, True) if args.remote else shell
             tests.extend(report["tests"])
             check("expected shell origin", report["origin"] in
-                  ["tauri://localhost", "https://cowboy.stormbird.xyz"])
+                  ["tauri://localhost", REMOTE_ORIGIN])
             check("iPhone WebKit", "iPhone" in report["user_agent"] and "AppleWebKit" in report["user_agent"])
             report.update(ok=True, tests=tests, source_revision=source_revision,
                           acceptance_revision=revision, simulator_runtime=runtime,
                           executable_sha256=build["executable_sha256"],
+                          acceptance_scope=mode, initial_shell_origin=shell["origin"],
                           real_login="not_checked", physical_device="not_checked")
-            destination = receipt_path.parent / "smoke-receipt.json"
+            destination = output / "smoke-receipt.json"
             destination.write_text(json.dumps(report, indent=2) + "\n")
             print(json.dumps(report, indent=2), flush=True)
-        except Exception:
+        except Exception as error:
+            (output / "failure.json").write_text(json.dumps(dict(
+                ok=False, source_revision=source_revision, acceptance_revision=revision,
+                acceptance_scope=mode, error=str(error)), indent=2) + "\n")
             if simulator and app_pid and app_pid.isdigit():
                 diagnostic = subprocess.run(
                     ["xcrun", "simctl", "spawn", simulator, "log", "show", "--last", "4m",
                      "--style", "compact", "--predicate", "processIdentifier == " + app_pid],
                     text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     timeout=30, check=False)
-                (receipt_path.parent / "smoke-failure.log").write_text(diagnostic.stdout)
+                (output / "smoke-failure.log").write_text(diagnostic.stdout)
                 print("\n".join(diagnostic.stdout.splitlines()[-50:]), file=sys.stderr, flush=True)
             raise
         finally:

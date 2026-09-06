@@ -78,9 +78,10 @@ native-plugin-conformance:
 
 # Source/dependency and keyboard checks also run on Linux in the pinned shell.
 native-shell-check:
-    deno fmt --check tools/check-native-shell.ts tools/check-native-shell_test.ts
-    deno check tools/check-native-shell.ts tools/check-native-shell_test.ts
-    deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts
+    deno fmt --check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe.js tools/native-shell-probe_test.ts
+    deno check tools/check-native-shell.ts tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
+    deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
+    python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     deno run --allow-read tools/check-native-shell.ts
     bash -n tools/build-native-shell.sh tools/cowboysim.sh tools/cowboysim-remote.sh
     bash tools/check-keyboard-geometry.sh
@@ -91,8 +92,8 @@ native-shell-build PLATFORM="ios-sim" *ARGS:
     bash tools/build-native-shell.sh {{PLATFORM}} {{ARGS}}
 
 # Sign a disposable copy and launch it only in an exclusively-created Simulator.
-native-shell-smoke RECEIPT:
-    python3 tools/native_shell_smoke.py "{{RECEIPT}}"
+native-shell-smoke RECEIPT *ARGS:
+    python3 tools/native_shell_smoke.py "{{RECEIPT}}" {{ARGS}}
 
 macos-installer-build:
     bash apps/macos-installer/scripts/build-app.sh --build-backend
