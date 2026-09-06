@@ -1,57 +1,63 @@
-# Cowboy iOS Simulator bridge
+# Cowboy iOS Simulator controls
 
-Cowboy's Debug iOS shell exposes its WKWebView through a Debug-only loopback
-server on Mac port `4171`. The project-owned Mac control surface is
-[`tools/cowboysim.sh`](../tools/cowboysim.sh); the generic Codex plugin only
-provides the SSH transport.
+The full native shell, build entry and Simulator helper belong to this
+repository. No installed Codex plugin or fixed Mac shell directory is needed.
+Build from a clean Cowboy Git worktree on the Mac; see
+[native shell](../apps/native-shell/README.md). Exchange source revisions through
+Git, not SCP.
 
-The Hawk wrapper uses the Mac's stable Stormbird overlay address by default.
-Override `IOS_SIM_MAC_HOST` only when validating another Mac or an isolated
-bridge.
+The Debug Simulator eval bridge is opt-in, binds only 127.0.0.1 (default port
+4171), checks the exact Simulator identity and rejects browser-origin requests.
+Release and physical-device builds contain no listener. It is local developer
+automation, not a public HTTP API.
 
-Install or refresh the helper from the Cowboy checkout on Hawk:
+Select a Simulator explicitly. The helper never chooses another task's booted
+device and never installs an app. Once you have separately authorized installing
+the exact Debug build into that Simulator:
 
-```bash
-scp tools/cowboysim.sh dravenchen@100.64.0.2:/tmp/cowboysim.sh.new
-ssh dravenchen@100.64.0.2 'install -m 0755 /tmp/cowboysim.sh.new "$HOME/cowboy-shell/tools/cowboysim.sh" && rm /tmp/cowboysim.sh.new'
+```sh
+export COWBOY_SIM_UDID="<selected Simulator UUID>"
+bash tools/cowboysim.sh launch
+bash tools/cowboysim.sh status
+bash tools/cowboysim.sh eval 'document.title'
+bash tools/cowboysim.sh aeval 'return await window.__COWBOY_NATIVE_PLUGIN_HOST.invoke("webauthn", {action:"capabilities",rp_id:"cowboy.stormbird.xyz"})'
+bash tools/cowboysim.sh shot /tmp/cowboy-simulator.png
 ```
 
-From Hawk, invoke it through the repo wrapper, which resolves the installed
-`ios-simulator-bridge` plugin and the Mac helper path:
+`launch` explicitly cold-starts the selected installed app and enables its
+bridge using Simulator child environment variables. It does not modify global
+Simulator preferences or install a new app. Choose a distinct
+`COWBOY_SIM_DEVPORT` for concurrently running tasks.
 
-```bash
-tools/cowboysim-remote.sh status
-tools/cowboysim-remote.sh launch
-tools/cowboysim-remote.sh eval document.title
-tools/cowboysim-remote.sh shot
+From Hawk, use Cowboy's direct SSH wrapper. Configure the stable `macbook-air`
+SSH alias, or select another trusted alias with `COWBOY_SIM_MAC_HOST`.
+The remote path is required and must identify the root of a Cowboy Git worktree:
+
+```sh
+export COWBOY_SIM_REMOTE_WORKTREE="/absolute/path/to/session-cowboy-worktree"
+export COWBOY_SIM_UDID="<selected Simulator UUID>"
+bash tools/cowboysim-remote.sh status
+bash tools/cowboysim-remote.sh eval 'document.querySelector("title")?.textContent'
 ```
 
-The Simulator helper expects a Debug Cowboy shell containing
-`CowboyDevBridge.swift`; release and physical-device builds must not expose the
-listener. `launch` boots and waits for the configured Simulator before starting
-the installed app, so it is safe after a Simulator shutdown. Override a changed
-default device with `COWBOY_SIM_UDID` on the Mac.
+The wrapper forwards the selected Simulator/port and quotes each argument
+through both SSH and the remote shell. JavaScript with quotes, shell symbols or
+newlines stays data. Missing worktree/device selection fails closed. The wrapper
+does not resolve personal plugin caches, copy source, or accept unknown SSH keys.
 
-Before accepting evidence, `status` must report all of:
+Before accepting evidence, confirm the chosen UUID, bridge response, URL,
+native-host version and user agent. The local loader starts at
+`tauri://localhost` and then intentionally navigates to
+`https://cowboy.stormbird.xyz`; the remote origin alone does not prove the App is
+a PWA or a native shell. Check `window.__cowboyNativeShell` and
+`window.__COWBOY_NATIVE_PLUGIN_HOST` as well.
 
-- `CowboyDevBridge: ok`;
-- `app origin: tauri://localhost`;
-- `document title: Cowboy`;
-- an iPhone user agent.
+The isolated `just native-plugin-conformance` fixture creates and removes its
+own Simulator and app. It does not connect to a real login or validate a full
+Tauri bundle. Layout, keyboard, gesture and physical-device acceptance must not
+be inferred from that fixture.
 
-Prefer `eval` with selector-driven DOM actions over pixel taps. Use `shot` only
-for visual evidence. The bridge can prove real WKWebView layout and behavior,
-but physical-device-only interactions still require device acceptance.
-
-The image-adjacent empty-line caret is one of those device-only cases.
-Simulator HID Return (`axe key 40`) updates CM6 and still draws a CSS
-`caret-color` beam on an empty `.cm-line` whose `Range` height is 0. A
-physical iPhone keeps the UIKit caret on the previous measurable text
-(the block image or its landing glyph). Treat `caret_height=0` and the
-user's painted caret as the signal; a purple Simulator caret after Return
-is not reproduction and is not acceptance. The helper also currently
-reaches the installed PWA (`https://cowboy.stormbird.xyz`), not the
-Debug `tauri://localhost` shell — another reason paste / keyboard /
-caret must not be signed off from Simulator screenshots.
-The Hawk wrapper base64-encodes `eval` source before SSH, so selectors and
-multi-statement scripts arrive without remote-shell quoting changes.
+The physical-iPhone image-adjacent caret issue remains open (PITFALLS #69).
+Simulator HID Return can update CM6 and draw a CSS caret on an empty line whose
+Range height is zero; an iPhone may leave its UIKit caret at the prior measurable
+text. A Simulator screenshot is not acceptance for that bug.

@@ -76,6 +76,20 @@ macos-installer-test:
 native-plugin-conformance:
     bash tools/native-plugin-conformance.sh
 
+# Source/dependency and keyboard checks also run on Linux in the pinned shell.
+native-shell-check:
+    deno fmt --check tools/check-native-shell.ts tools/check-native-shell_test.ts
+    deno check tools/check-native-shell.ts tools/check-native-shell_test.ts
+    deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts
+    deno run --allow-read tools/check-native-shell.ts
+    bash -n tools/build-native-shell.sh tools/cowboysim.sh tools/cowboysim-remote.sh
+    bash tools/check-keyboard-geometry.sh
+    cargo metadata --locked --no-deps --format-version 1 --manifest-path apps/native-shell/tauri/Cargo.toml >/dev/null
+
+# Build only, from clean Git source on a Mac. Never installs or launches an app.
+native-shell-build PLATFORM="ios-sim" *ARGS:
+    bash tools/build-native-shell.sh {{PLATFORM}} {{ARGS}}
+
 macos-installer-build:
     bash apps/macos-installer/scripts/build-app.sh --build-backend
 
@@ -292,7 +306,7 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
-check: toolchain-check provider-check site-check fmt lint dependencies typecheck feature-check test test-postgres build
+check: toolchain-check native-shell-check provider-check site-check fmt lint dependencies typecheck feature-check test test-postgres build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

@@ -1,0 +1,16 @@
+{
+  "rust": "1.97.1",
+  "tauriCli": "2.11.2",
+  "xcodegen": "2.46.0",
+  "crates": {
+    "tauri": "2.11.2",
+    "tauri-build": "2.6.2",
+    "tauri-plugin-opener": "2.5.4",
+    "tauri-plugin-haptics": "2.3.2"
+  },
+  "sourceProvenance": {
+    "repository": "https://github.com/dravengarden/cowboy",
+    "revision": "627e63288fee0cdfdacebfcd04f1180d62f5e356",
+    "paths": ["src-tauri", "loader", "tools/check-keyboard-geometry.sh", "tools/cowboy-keyboard-geometry-test.c"]
+  }
+}

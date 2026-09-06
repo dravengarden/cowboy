@@ -1,0 +1,34 @@
+[package]
+name = "cowboy-app"
+version = "0.1.0"
+description = "cowboy native shell — WKWebView around the hawk cowboy UI"
+edition = "2021"
+publish = false
+rust-version = "1.97.1"
+
+# Independent native closure: never link Tauri into the Controller or Machine.
+[workspace]
+resolver = "3"
+
+# Mobile (iOS/Android) links the app as a shared/static lib loaded by the
+# platform entry point; desktop uses the rlib + the main.rs binary. All three
+# crate-types are required for `tauri ios`/`android` to build.
+[lib]
+name = "cowboy_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.2", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.2", features = [] }
+# Only native command the shell exposes: open the iOS app-settings page from the
+# loader's "去设置开启" button (where the Local Network toggle lives). On iOS the
+# opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
+# loader's error card never shows (desktop/Android).
+tauri-plugin-opener = "=2.5.4"
+# Native OS haptics (UIImpactFeedbackGenerator on iOS). The remote cowboy UI calls
+# `plugin:haptics|impact_feedback` on DetentSheet open — iOS Safari/PWA has no
+# reliable web haptic, so this is the only way to make sheets buzz. Granted to the
+# remote origin via capabilities/remote-haptics.json.
+tauri-plugin-haptics = "=2.3.2"

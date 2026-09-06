@@ -10,6 +10,9 @@ web/dist/
 dist/plugins/
 dist/provider-runtime-cache/
 dist/native-plugin-conformance/
+dist/native-shell/
+apps/native-shell/tauri/target/
+apps/native-shell/tauri/gen/
 tools/__pycache__/
 *.tsbuildinfo
 

@@ -1,31 +1,18 @@
 #!/usr/bin/env bash
-# Hawk-side convenience wrapper around the generic iOS Simulator Bridge plugin.
+# Direct SSH transport to an explicitly selected Cowboy Git worktree on a Mac.
+# No personal plugin, fixed home directory or source-copy deployment.
 set -euo pipefail
-
-# Reach the Mac through Stormbird's stable overlay address. Callers can still
-# override this when validating another Mac or an isolated bridge.
-export IOS_SIM_MAC_HOST="${IOS_SIM_MAC_HOST:-dravenchen@100.64.0.2}"
-
-resolver="${IOS_SIM_REMOTE_RESOLVER:-}"
-if [ -z "$resolver" ]; then
-  for candidate in \
-    "$HOME"/.codex/plugins/cache/liveview-development/ios-simulator-bridge/*/scripts/ios-sim-remote
-  do
-    if [ -x "$candidate" ]; then
-      resolver="$candidate"
-    fi
-  done
-fi
-
-if [ -z "$resolver" ] || [ ! -x "$resolver" ]; then
-  echo "FATAL: installed ios-simulator-bridge resolver not found" >&2
-  exit 1
-fi
-
-if { [ "${1:-}" = "eval" ] || [ "${1:-}" = "aeval" ]; } && [ "$#" -eq 2 ]; then
-  # Encode locally so complex JavaScript remains one shell-safe SSH argument.
-  encoded="$(printf '%s' "$2" | base64 --wrap=0)"
-  exec "$resolver" '$HOME/cowboy-shell/tools/cowboysim.sh' "${1}64" "$encoded"
-fi
-
-exec "$resolver" '$HOME/cowboy-shell/tools/cowboysim.sh' "$@"
+remote_host="${COWBOY_SIM_MAC_HOST:-macbook-air}"
+remote_worktree="${COWBOY_SIM_REMOTE_WORKTREE:?set an absolute Cowboy Git worktree path on the Mac}"
+case "$remote_host" in ""|-*|*[!a-zA-Z0-9_.@-]*) echo "invalid SSH host alias" >&2; exit 2;; esac
+case "$remote_worktree" in /*) ;; *) echo "remote worktree must be absolute" >&2; exit 2;; esac
+quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+remote_command="cd $(quote "$remote_worktree") && test -f tools/cowboysim.sh && test \"\$(git rev-parse --show-toplevel)\" = \"\$(pwd -P)\" && exec env"
+for name in COWBOY_SIM_UDID COWBOY_SIM_DEVPORT; do
+  if [ -n "${!name:-}" ]; then remote_command+=" $(quote "$name=${!name}")"; fi
+done
+remote_command+=" bash tools/cowboysim.sh"
+for arg in "$@"; do remote_command+=" $(quote "$arg")"; done
+# The remote login shell may be fish. Pass a single safely-quoted POSIX body.
+exec ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UpdateHostKeys=no \
+  -o ConnectTimeout=8 -- "$remote_host" "/bin/sh -ec $(quote "$remote_command")"

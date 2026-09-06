@@ -1,4 +1,8 @@
-# Apple native shell overlay
+# Apple native shell sources
+
+The full shell and clean build entry are owned by [Cowboy](../README.md).
+This directory is the source template; the builder stages it into a fresh
+generated Apple project, including both native tweaks and the Passkey bridge.
 
 Cowboy's web bundle owns account state, server ceremonies, and the standard
 WebAuthn request/response contract. Apple shells may contribute only a native
@@ -15,8 +19,8 @@ only a capability named in both its signed `native_capabilities` list and the
 shell's advertised capability list; unknown or undeclared capabilities fail
 closed.
 
-`CowboyPasskeyBridge.mm` is copied into Tauri's generated Apple project before
-a native build. It reports native Passkeys as available only when the app's
+`CowboyPasskeyBridge.mm` is included in Tauri's generated Apple project on every
+iOS build. It reports native Passkeys as available only when the app's
 `Info.plist` contains the exact relying-party ID in
 `CowboyNativePasskeyRelyingPartyIdentifiers`. A production build that enables
 that key must also be signed with the matching Associated Domains entitlement,
@@ -51,7 +55,7 @@ An official Passkey-enabled macOS release additionally merges
 ```sh
 APPLE_SIGNING_IDENTITY="Developer ID Application: ..." \
   cargo tauri build --bundles app \
-  --config src-tauri/tauri.macos.passkeys.conf.json
+  --config tauri.macos.passkeys.conf.json
 ```
 
 That opt-in layer applies the tracked Associated Domains entitlement. Once the
@@ -63,15 +67,16 @@ restricted entitlement, so the two configurations must remain separate.
 
 From a clean committed Cowboy worktree on an arm64 Mac with Xcode, run
 `just native-plugin-conformance`. This owns a fresh temporary iOS Simulator and
-compiles the production bridge into a minimal UIKit/WKWebView test app. Eight
+compiles both production bridges into a minimal UIKit/WKWebView test app. Ten
 checks cover the actual versioned ABI, immutable capability inventory,
 unknown/malformed requests, unentitled Passkey rejection, foreign browser URL
-rejection and idempotent browser close. It neither opens a real login nor uses
+rejection, idempotent browser close, native-tweak coexistence and foreign-origin
+clipboard rejection. It neither opens a real login nor uses
 an existing Simulator, app or keychain. The receipt lives in
 `dist/native-plugin-conformance/receipt.json`; the temporary app/Simulator are
 removed even on failure.
 
-This is native bridge acceptance, not a reproducible build of the full Tauri
-product shell or physical-device/Associated Domains acceptance. The repository
-currently owns the overlay but not the complete generated Tauri shell source;
-an unversioned remote `cowboy-shell` directory is not a release source.
+This is native bridge acceptance, not full Tauri product or physical-device/
+Associated Domains acceptance. The full shell source and build entry now live
+in the [parent directory](../README.md); an unversioned remote directory is
+never a release source.

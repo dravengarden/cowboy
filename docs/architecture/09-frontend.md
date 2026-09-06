@@ -257,6 +257,11 @@ picker). `AppErrorBoundary` + `ConnectionBanner` degrade gracefully when the WS
 drops.
 
 Native wrappers use the same signed plugin presentation as browsers. The
+complete Tauri shell is owned under `apps/native-shell`, including its isolated
+Cargo lock, local connection loader, Apple sources and XcodeGen specification.
+`just native-shell-build` stages only clean Git source and never installs an App;
+neither a personal plugin cache nor an unversioned Mac directory is a dependency.
+The
 versioned `/api/plugins` platform inventory supplies each host's slots,
 data-only renderer selections, immutable generation digest, and required
 native capabilities. `PluginSlot` resolves those selections against a closed

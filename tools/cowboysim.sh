@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Cowboy's project-owned control surface for its DEBUG iOS Simulator shell.
-# This script runs on the Mac and is normally invoked through ios-sim-remote.
+# This script runs on the Mac; cowboysim-remote.sh supplies the owned SSH path.
 set -euo pipefail
-
-export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 
 BID="top.thundersparrow.cowboy"
 DEVPORT="${COWBOY_SIM_DEVPORT:-4171}"
-FALLBACK_SIM="${COWBOY_SIM_UDID:-D89613B8-4B25-4486-A690-5A7205AC2788}"
+if [ "${1:-help}" = help ]; then
+  echo "COWBOY_SIM_UDID=<explicit simulator> bash tools/cowboysim.sh {boot|launch|status|ping|eval|aeval|url|reload|appearance|shot|log}"
+  exit 0
+fi
+SIM="${COWBOY_SIM_UDID:?select a Simulator explicitly; no implicit booted device}"
+[[ "$SIM" =~ ^[0-9A-Fa-f-]{36}$ ]] || { echo "invalid simulator UDID" >&2; exit 2; }
+[[ "$DEVPORT" =~ ^[0-9]+$ ]] && ((DEVPORT > 1023 && DEVPORT <= 65535)) || { echo "invalid bridge port" >&2; exit 2; }
 
-sim_udid() {
-  local booted
-  booted="$(xcrun simctl list devices booted 2>/dev/null | grep -oE '[0-9A-F-]{36}' | head -1 || true)"
-  printf '%s\n' "${booted:-$FALLBACK_SIM}"
+bridge_curl() {
+  curl -H "X-Cowboy-Simulator: $SIM" "$@"
 }
-
-SIM="$(sim_udid)"
 
 boot_simulator() {
   xcrun simctl boot "$SIM" 2>/dev/null || true
@@ -23,13 +23,13 @@ boot_simulator() {
 }
 
 bridge_ping() {
-  curl -fsS -m 3 "http://127.0.0.1:$DEVPORT/ping"
+  bridge_curl -fsS -m 3 "http://127.0.0.1:$DEVPORT/ping"
 }
 
 dev_eval() {
   local source="$1" tries=0 output=""
   while [ "$tries" -lt 8 ]; do
-    output="$(curl -fsS -m 6 --data-binary "$source" "http://127.0.0.1:$DEVPORT/eval" 2>/dev/null)" && {
+    output="$(bridge_curl -fsS -m 6 --data-binary "$source" "http://127.0.0.1:$DEVPORT/eval" 2>/dev/null)" && {
       if [ -n "$output" ]; then
         printf '%s\n' "$output"
         return 0
@@ -54,7 +54,8 @@ case "$command" in
     # should not require callers to remember a separate `boot` first.
     boot_simulator
     xcrun simctl terminate "$SIM" "$BID" 2>/dev/null || true
-    xcrun simctl launch "$SIM" "$BID"
+    SIMCTL_CHILD_COWBOY_SIM_BRIDGE=1 SIMCTL_CHILD_COWBOY_SIM_DEVPORT="$DEVPORT" \
+      xcrun simctl launch "$SIM" "$BID"
     dev_eval 'document.title' >/dev/null
     ;;
   appearance)
@@ -64,12 +65,12 @@ case "$command" in
     ;;
   shot)
     boot_simulator
-    output="${1:-$HOME/cowboysim.png}"
+    output="${1:?explicit screenshot output path required}"
     xcrun simctl io "$SIM" screenshot "$output"
     echo "$output"
     ;;
   ping)
-    bridge_ping || echo "(down)"
+    bridge_ping
     ;;
   eval)
     dev_eval "${1:?JavaScript expression required}"
@@ -81,11 +82,11 @@ case "$command" in
     dev_eval "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)"
     ;;
   aeval)
-    curl -fsS -m 20 --data-binary "${1:?JavaScript body required}" \
+    bridge_curl -fsS -m 20 --data-binary "${1:?JavaScript body required}" \
       "http://127.0.0.1:$DEVPORT/aeval"
     ;;
   aeval64)
-    curl -fsS -m 20 \
+    bridge_curl -fsS -m 20 \
       --data-binary "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)" \
       "http://127.0.0.1:$DEVPORT/aeval"
     ;;
@@ -114,7 +115,8 @@ case "$command" in
       echo "CowboyDevBridge: down"
     fi
     ;;
-  help | *)
-    sed -n '2,23p' "$0"
+  *)
+    echo "unknown command: $command" >&2
+    exit 2
     ;;
 esac
