@@ -1009,3 +1009,83 @@ the selected Apple signing configuration/device and separate authority. The
 earlier Plugin publication, predecessor-drain and host-policy blockers are
 unchanged. No production publication, service activation, real account access
 or existing-App installation occurred during this follow-up.
+
+### Pre-cutover Catalog reader bridge acceptance — 2026-09-06
+
+The reader-compatibility portion of the publication blocker now has an
+implemented and accepted **pre-cutover bridge**, not a production activation.
+The separate branch `cowboy/catalog-reader-bridge-sess-1788279284752` is pushed
+at **`f0b59e6824b04a8e1db6c4c46bd2c8c7f523be7e`**, based exactly on the deployed
+Controller source `c293e0e91d00744cf4d82034c1be789b30c5e44c`. Its isolated Git
+worktree is `/tmp/cowboy-reader-bridge.omgJIH/source`. Do not merge this legacy
+branch wholesale into the full Plugin migration branch.
+
+The backport changes only Catalog reading, a read-only CLI check, the early
+startup guard, and its owned documentation. It does not upgrade SDKs, Providers,
+authentication, Machine/Web behavior or SQL migrations. The old reader used to
+parse a package before checking its release envelope: even an incomplete new
+publication could break refresh. The bridge inspects the bounded, regular,
+non-symlink envelope first, skips missing commit markers and future schemas
+without trusting their identity or parsing their packages, and retains every
+existing validation/signature check for supported schema-1 releases. Invalid
+supported releases still reject refresh without replacing the old snapshot.
+`serve --check-plugin-catalog` creates no Service state. Both inspection and
+normal startup reject Catalog-only or per-host authority markers before
+initialization, so this bridge cannot bypass a completed host/storage cutover.
+
+The clean immutable `.#cowboy-controller-release` build succeeded:
+
+- Release: `/nix/store/lb895dwqwyxxsd1ipcwvn0ldx1jximh1-cowboy-controller-release`.
+- Controller executable SHA-256:
+  `cd3b7ae3aec43c4744d1a613e754616f670474ec20edda35a8659c711bed85d6`.
+- Bridge checks: **517 Rust library tests passed, 2 ignored**, all-target Clippy
+  with warnings denied, Rust format and `git diff --check` passed. Seven of
+  those tests directly exercise the Catalog bridge. The Nix build also ran its
+  deterministic package checks; no existing gate was disabled.
+
+The owned `just catalog-reader-conformance` harness is committed and pushed on
+the main task branch at **`b05d9173343631051e8b1116c19e40b1adf815d1`**. Its
+**4 unit tests and 13 actual-binary checks passed**. In a fresh loopback-only
+network namespace, with no inherited Service/Provider credentials, it copied
+the exact public signed Cardea 1.1.0 release into a temporary Catalog and built,
+temporarily signed and independently verified a schema-2 Password fixture.
+
+| Exact Controller source | Actual mixed-Catalog result |
+| --- | --- |
+| Deployed baseline `c293e0e9` | Reproduced new-package validation failure before database/listener startup |
+| Bridge `f0b59e68` | Preserved the exact signed Cardea identity across partial publication, complete publication and cold restart |
+| Candidate `3b281bea` | Reported both exact signed identities, with the new release-bound host present |
+
+The gate also rejects a bad supported signature and refuses both inspection
+and normal bridge startup after either authority marker. Public production
+inputs remain byte-identical. Temporary fixture keys and Service directories
+were deleted before the exclusive success receipt was written at
+`dist/catalog-reader-conformance/f0b59e68.json`, SHA-256
+`c9001d39adc690e157066bf36e9f7c75f59b4fa5d8a7d2571941f2c636482764`.
+The receipt records all three immutable Nix roots, executable/source digests,
+the verifier and exact fixture identities. Generated receipts are Git-ignored;
+the harness itself remains part of `provider-check`.
+
+A separate read-only bridge inspection of the actual public
+`/var/lib/cowboy/plugin-catalog` accepted **34 signed releases**. It used no
+private auth configuration, with authentication disabled for inspection, and
+is not acceptance of the Service's real login or host policy. The live service
+remains active at Controller profile generation 150, source `c293e0e9`, with
+`NRestarts=0`; its profile, Catalog and running process were not changed.
+
+The repository release skill now routes bridge work through this three-reader
+gate and explicitly retains the actual active/automatic-rollback floor as an
+unaccepted boundary. The pre-existing documentation wrapping is not Deno's
+canonical format (also confirmed on pre-change source); no unrelated whole-file
+reformat was performed.
+
+Before publication, the machine-owned workflow must still establish and accept
+compatible readers for **both** the active Controller and its real automatic
+rollback target. Activating this bridge once does not make an incompatible
+predecessor safe. After host authority/storage activation, recovery instead
+requires an accepted host-capable Controller and policy; never delete markers,
+repoint profiles manually or treat this bridge as database rollback. Separate
+host-policy activation, production signing/publication, real authentication,
+Codex DeepSeek predecessor drain and signed/physical Apple acceptance remain
+unresolved. This follow-up activated no component, changed no machine policy,
+used no production signing key and accessed no real account.

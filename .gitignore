@@ -11,6 +11,7 @@ dist/plugins/
 dist/provider-runtime-cache/
 dist/native-plugin-conformance/
 dist/native-shell/
+dist/catalog-reader-conformance/
 apps/native-shell/tauri/target/
 apps/native-shell/tauri/gen/
 tools/__pycache__/
