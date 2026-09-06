@@ -782,6 +782,41 @@ fn scheduled_reset_failure_policy(
 
 /// Start the HTTP/WebSocket server and the agent supervisor.
 pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
+    crate::plugin_catalog::ensure_pre_host_cutover(&args.data_dir)?;
+    if args.check_plugin_catalog {
+        let catalog = crate::plugin_catalog::PluginCatalog::inspect(
+            &args.data_dir,
+            args.plugin_catalog_dir.clone(),
+        )?;
+        let released = catalog
+            .entries()
+            .into_iter()
+            .filter(|entry| {
+                matches!(
+                    entry.release_state,
+                    crate::plugin_catalog::PluginReleaseState::Ready
+                )
+            })
+            .map(|entry| {
+                serde_json::json!({
+                    "plugin_id": entry.plugin_id,
+                    "plugin_version": entry.plugin_version,
+                    "artifact_digest": entry.artifact_digest,
+                })
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema": "dravengarden.cowboy.catalog-reader-preflight/v1",
+                "status": "readable",
+                "supported_release_schema": cowboy_plugin_sdk::RELEASE_SCHEMA_VERSION,
+                "releases": released,
+                "not_checked": ["runtime_artifact_bytes", "host_activation", "database_migrations", "real_login"],
+            }))?
+        );
+        return Ok(());
+    }
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
     let desired_machine_components = if let Some(path) = &args.machine_components_manifest {

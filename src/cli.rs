@@ -268,6 +268,11 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_PLUGIN_CATALOG_DIR")]
     pub plugin_catalog_dir: Option<PathBuf>,
 
+    /// Inspect supported signed Catalog releases without creating Service state,
+    /// connecting to storage, running a Plugin, or starting a listener.
+    #[arg(long, default_value_t = false)]
+    pub check_plugin_catalog: bool,
+
     /// `PostgreSQL` or `SQLite` URL for durable Cowboy state. When absent the
     /// daemon runs in pure in-memory mode without restart recovery.
     #[arg(long, env = "COWBOY_DATABASE_URL")]

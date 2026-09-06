@@ -61,6 +61,14 @@ pub(crate) struct PluginCatalog {
 
 impl PluginCatalog {
     pub(crate) fn open(data_dir: &Path, root: Option<PathBuf>) -> Result<Self> {
+        let catalog = Self::inspect(data_dir, root)?;
+        fs::create_dir_all(&catalog.root)
+            .with_context(|| format!("creating Plugin Catalog {}", catalog.root.display()))?;
+        Ok(catalog)
+    }
+
+    pub(crate) fn inspect(data_dir: &Path, root: Option<PathBuf>) -> Result<Self> {
+        ensure_pre_host_cutover(data_dir)?;
         let embedded = crate::plugin::first_party_plugins()
             .iter()
             .map(|manifest| {
@@ -94,29 +102,32 @@ impl PluginCatalog {
     }
 
     pub(crate) fn refresh_external(&self) -> Result<usize> {
-        fs::create_dir_all(&self.root)
-            .with_context(|| format!("creating Plugin Catalog {}", self.root.display()))?;
         let trust_root = self.root.join("trusted-publishers");
         let mut next = BTreeMap::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("reading Plugin Catalog {}", self.root.display()))?
-        {
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("reading Plugin Catalog"),
+        };
+        for entry in entries.into_iter().flatten() {
             let path = entry?.path();
             if path.extension().and_then(|value| value.to_str()) != Some("cowboy-plugin") {
                 continue;
             }
+            // Publication installs this commit marker last. Inspect its format
+            // before the package: newer packages may be opaque to this reader.
+            // Unsupported releases grant no identity, host or install authority.
+            let Some(release) = read_supported_release(&path.with_extension("release.json"))?
+            else {
+                continue;
+            };
             let bytes = fs::read(&path)
                 .with_context(|| format!("reading Plugin artifact {}", path.display()))?;
             let package = PluginPackage::from_bytes(&bytes)
                 .with_context(|| format!("validating Plugin artifact {}", path.display()))?;
-            let release_path = path.with_extension("release.json");
-            let release: PluginRelease = serde_json::from_slice(
-                &fs::read(&release_path)
-                    .with_context(|| format!("reading {}", release_path.display()))?,
-            )?;
             release
                 .validate_bytes(&bytes)
-                .with_context(|| format!("validating Plugin release {}", release_path.display()))?;
+                .with_context(|| format!("validating Plugin release for {}", path.display()))?;
             let key_path = trust_root.join(format!("{}.pub", package.manifest.publisher));
             let public_key = fs::read_to_string(&key_path)
                 .with_context(|| format!("reading trusted publisher {}", key_path.display()))?;
@@ -270,6 +281,77 @@ impl PluginCatalog {
     }
 }
 
+/// This bridge is a pre-cutover reader, not a downgrade of activated Plugin
+/// hosts/storage. Reject one-way authority before startup writes any state.
+pub(crate) fn ensure_pre_host_cutover(data_dir: &Path) -> Result<()> {
+    fn absent(path: &Path) -> Result<()> {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).context("inspecting Plugin cutover authority"),
+            Ok(_) => anyhow::bail!(
+                "Catalog reader bridge cannot run after Plugin host authority activation; retain a host-capable Controller"
+            ),
+        }
+    }
+    absent(&data_dir.join("plugins/.catalog-only-v1"))?;
+    let live = data_dir.join("plugins/live");
+    let entries = match fs::read_dir(&live) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("inspecting Plugin host authority"),
+    };
+    for entry in entries {
+        absent(&entry?.path().join(".catalog-authority-v1"))?;
+    }
+    Ok(())
+}
+
+fn read_supported_release(path: &Path) -> Result<Option<PluginRelease>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    const MAX_ENVELOPE_BYTES: u64 = 1024 * 1024;
+    let file = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("opening Plugin release marker"),
+    };
+    ensure!(
+        file.metadata()?.is_file(),
+        "Plugin release marker must be a regular file"
+    );
+    let mut bytes = Vec::new();
+    file.take(MAX_ENVELOPE_BYTES + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_ENVELOPE_BYTES,
+        "Plugin release marker is too large"
+    );
+    // Deliberately inspect only the format discriminator. Serde still rejects
+    // absent, duplicate, non-integer and negative schema fields. No unsigned
+    // Plugin ID, version, URL or other future field influences the inventory.
+    #[derive(serde::Deserialize)]
+    struct Header {
+        release_schema: u32,
+    }
+    let header: Header =
+        serde_json::from_slice(&bytes).context("decoding Plugin release header")?;
+    ensure!(header.release_schema > 0, "invalid Plugin release schema");
+    if header.release_schema > u32::from(cowboy_plugin_sdk::RELEASE_SCHEMA_VERSION) {
+        tracing::warn!(
+            schema = header.release_schema,
+            "unsupported Plugin release skipped by pre-cutover Catalog reader"
+        );
+        return Ok(None);
+    }
+    Ok(Some(
+        serde_json::from_slice(&bytes).context("decoding supported Plugin release")?,
+    ))
+}
+
 fn catalog_artifact(
     package: PluginPackage,
     bytes: Vec<u8>,
@@ -310,6 +392,125 @@ fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ReaderFixture(PathBuf);
+
+    impl ReaderFixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "cowboy-catalog-reader-test-{}",
+                uuid::Uuid::new_v4()
+            ));
+            fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+
+    impl Drop for ReaderFixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn reader_inspection_and_refresh_never_create_missing_catalog_or_service_state() {
+        let fixture = ReaderFixture::new();
+        let data = fixture.0.join("missing-service");
+        let catalog = PluginCatalog::inspect(&data, None).unwrap();
+        assert!(!data.exists());
+        assert_eq!(catalog.refresh_external().unwrap(), 0);
+        assert!(!data.exists());
+    }
+
+    #[test]
+    fn reader_ignores_uncommitted_and_future_packages_without_decoding_them() {
+        let fixture = ReaderFixture::new();
+        let catalog_root = fixture.0.join("catalog");
+        fs::create_dir(&catalog_root).unwrap();
+        fs::write(
+            catalog_root.join("future.cowboy-plugin"),
+            b"not a supported package",
+        )
+        .unwrap();
+        let catalog = PluginCatalog::open(&fixture.0, Some(catalog_root.clone())).unwrap();
+        assert_eq!(catalog.refresh_external().unwrap(), 0);
+        fs::write(catalog_root.join("future.release.json"),
+            br#"{"release_schema":2,"plugin_id":"codex","plugin_version":"999.0.0","future_field":{"opaque":true}}"#).unwrap();
+        assert_eq!(catalog.refresh_external().unwrap(), 0);
+        assert!(catalog.resolve("codex", Some("999.0.0"), None).is_err());
+        assert!(
+            catalog
+                .entries()
+                .iter()
+                .all(|entry| matches!(entry.release_state, PluginReleaseState::Unbound))
+        );
+        let restarted = PluginCatalog::open(&fixture.0, Some(catalog_root)).unwrap();
+        assert!(restarted.released_plugins().is_empty());
+    }
+
+    #[test]
+    fn reader_rejects_malformed_or_ambiguous_headers_and_bad_supported_releases() {
+        let fixture = ReaderFixture::new();
+        let path = fixture.0.join("release.json");
+        for bytes in [
+            "not-json",
+            "{}",
+            "{\"release_schema\":0}",
+            "{\"release_schema\":-1}",
+            "{\"release_schema\":1.5}",
+            "{\"release_schema\":\"2\"}",
+            "{\"release_schema\":1,\"release_schema\":2}",
+            "{\"release_schema\":2,\"release_schema\":1}",
+            "{\"release_schema\":1,\"future_field\":true}",
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert!(
+                read_supported_release(&path).is_err(),
+                "accepted invalid envelope: {bytes}"
+            );
+        }
+        fs::write(&path, vec![b' '; 1024 * 1024 + 1]).unwrap();
+        assert!(
+            read_supported_release(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("too large")
+        );
+    }
+
+    #[test]
+    fn reader_rejects_linked_or_non_regular_release_markers() {
+        let fixture = ReaderFixture::new();
+        let marker = fixture.0.join("release.json");
+        let target = fixture.0.join("target");
+        fs::write(&target, br#"{"release_schema":2}"#).unwrap();
+        std::os::unix::fs::symlink(&target, &marker).unwrap();
+        assert!(read_supported_release(&marker).is_err());
+        fs::remove_file(&marker).unwrap();
+        fs::create_dir(&marker).unwrap();
+        assert!(read_supported_release(&marker).is_err());
+    }
+
+    #[test]
+    fn reader_never_downgrades_catalog_only_or_per_plugin_authority() {
+        for marker in [
+            "plugins/.catalog-only-v1",
+            "plugins/live/future/.catalog-authority-v1",
+        ] {
+            let fixture = ReaderFixture::new();
+            let marker = fixture.0.join(marker);
+            fs::create_dir_all(marker.parent().unwrap()).unwrap();
+            assert!(ensure_pre_host_cutover(&fixture.0).is_ok());
+            fs::write(&marker, b"authority").unwrap();
+            assert!(ensure_pre_host_cutover(&fixture.0).is_err());
+            assert!(PluginCatalog::open(&fixture.0, None).is_err());
+            assert!(!fixture.0.join("plugin-catalog").exists());
+            assert_eq!(fs::read(&marker).unwrap(), b"authority");
+            fs::remove_file(&marker).unwrap();
+            std::os::unix::fs::symlink("absent-target", &marker).unwrap();
+            assert!(ensure_pre_host_cutover(&fixture.0).is_err());
+        }
+    }
 
     #[test]
     fn embedded_catalog_contains_agent_and_code_plugins() {
@@ -418,7 +619,7 @@ mod tests {
         )
         .unwrap();
 
-        let catalog = PluginCatalog::open(&root, Some(catalog_root)).unwrap();
+        let catalog = PluginCatalog::open(&root, Some(catalog_root.clone())).unwrap();
         assert!(catalog.released_plugins().is_empty());
         assert_eq!(
             catalog
@@ -435,6 +636,43 @@ mod tests {
                 )
                 .is_err()
         );
+        // Append-only publication cannot let an opaque newer-format entry
+        // shadow, replace or lend authority to this exact signed legacy login.
+        let future = catalog_root.join("future.cowboy-plugin");
+        fs::write(&future, b"future package bytes").unwrap();
+        assert_eq!(catalog.refresh_external().unwrap(), 1);
+        fs::write(
+            future.with_extension("release.json"),
+            br#"{"release_schema":2,"plugin_id":"google","plugin_version":"1.0.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(catalog.refresh_external().unwrap(), 1);
+        let restarted = PluginCatalog::open(&root, Some(catalog_root.clone())).unwrap();
+        assert_eq!(
+            restarted
+                .resolve_authentication_provider("google", "1.0.0", &release.artifact_digest)
+                .unwrap(),
+            contract
+        );
+        drop(restarted);
+        // Corrupt supported releases remain fatal, never silently ignored. A
+        // failed refresh retains the old complete snapshot; cold start fails.
+        let mut bad_release = release.clone();
+        bad_release.signature.clear();
+        fs::write(
+            future.with_extension("release.json"),
+            serde_json::to_vec(&bad_release).unwrap(),
+        )
+        .unwrap();
+        fs::write(&future, &bytes).unwrap();
+        assert!(catalog.refresh_external().is_err());
+        assert_eq!(
+            catalog
+                .resolve_authentication_provider("google", "1.0.0", &release.artifact_digest)
+                .unwrap(),
+            contract
+        );
+        assert!(PluginCatalog::open(&root, Some(catalog_root)).is_err());
         drop(catalog);
         drop(identity);
         fs::remove_dir_all(root).unwrap();
