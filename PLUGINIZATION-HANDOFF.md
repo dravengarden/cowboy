@@ -7,6 +7,9 @@ starting-state inventory is retained only to explain what was removed.
 The latest native follow-ups are **Owned full native shell and clean-build
 acceptance** and **Remote logged-out native App acceptance** at the end of this
 document; they supersede the earlier missing-source and local-loader-only gates.
+The latest Controller candidate is recorded in **Host-capable successor
+integration and acceptance** below. It incorporates the active reader bridge;
+the full Plugin migration itself is still not deployed.
 
 ## Goal
 
@@ -1181,3 +1184,90 @@ is still format evidence, not an ancestry-valid deploy candidate after this
 activation. New Plugin production signing/publication, host-policy/storage
 cutover and recovery, Codex DeepSeek predecessor drain, real authentication,
 and signed/physical Apple acceptance remain separate unfinished boundaries.
+
+### Host-capable successor integration and acceptance — 2026-09-06
+
+The clean, pushed full-migration candidate is now
+**`8b7dc9ba83f04c116338c5110dfccb21f7486f36`**, merging previous task head
+`0c771214` with the live bridge `1814cb19`. A second fresh fetch confirmed
+`origin/main` remained `4741d063`; both main and the active bridge are ancestors
+of this candidate. This replaces `3b281bea` as the ancestry-valid full-solution
+build, not as a production activation receipt. Source is published to the
+existing task topic branch, not `origin/main`.
+
+Conflict resolution retained the new Host implementation, exact selections,
+one-way authority, storage preflight and atomic Catalog/runtime snapshots.
+Only the bridge's bounded, regular-file, no-follow envelope-first reader and
+read-only Catalog diagnostic were carried forward. The successor accepts and
+strictly verifies schemas 1/2, skips opaque future formats before touching their
+package, and never trusts skipped identity fields to satisfy a host pin.
+Malformed/duplicate headers, unsupported file types, envelopes over 1 MiB,
+invalid supported signatures and unbound/tampered host bundles still fail
+closed. Tests exercise both signed release schemas, partial publication, cold
+restart, retained snapshots and missing exact pins after Catalog-only cutover.
+
+`serve --check-plugin-catalog` is retained for reader inspection only and is
+mutually exclusive with `--check-plugin-hosts`. The latter and normal startup
+still validate the complete host/login policy before any Service initialization.
+The successor deliberately does not inherit the legacy bridge's unconditional
+post-cutover refusal; it must remain able to restart accepted Host generations
+under their exact policy. `docs/catalog-reader-bridge.md` now distinguishes
+the separate legacy bridge from this host-capable successor.
+
+The complete pinned-shell `just check-compact` passed: **670 Rust library tests
+(8 ignored by the ordinary gate), 6 PostgreSQL tests in separate disposable
+databases, 1144 Web tests**, SDK/Provider/Plugin and conformance-harness tests,
+24 native source/probe tests plus 5 native smoke-harness tests, format, Clippy,
+oxlint, typecheck, dependency and feature-slice checks, and production builds
+for Web, Controller and the isolated Zed adapter. The gate still reports the
+non-fatal existing transitive `spin 0.9.8` yanked warning under SQLx/flume;
+advisory/license/source checks pass. No dependency lock was changed.
+
+The first full gate exposed the pinned `cargo-machete 0.9.2 --with-metadata`
+build-script false positive, independently reproduced for `cowboy-app` and
+confirmed against [upstream issue #127](https://github.com/bnjbvr/cargo-machete/issues/127)
+and its versioned source. `tauri-build` is used by the owned `build.rs`, not a
+borrowed shell source. Its narrow documented metadata exception is backed by a
+source gate requiring that actual build entrypoint, with regressions for a
+removed call and disabled build script. There is no blanket dependency-check
+bypass. Compared with the accepted native build source `d852d452`, the only
+native application file change is this audit metadata; executable code, pins,
+lock and platform configuration are unchanged. No new Apple binary/device
+acceptance is claimed.
+
+Both immutable Nix release wrappers report exact source `8b7dc9ba` and
+`dirty: false`:
+
+- Controller: `/nix/store/3lcadxf8cx7icihsisa7sp5hs8qpcxza-cowboy-controller-release`;
+  executable SHA-256
+  `0bf8da455675447a6f07accfe215b083beaec7c17003e844595cc3d998f51fe5`.
+- Web: `/nix/store/1d2jwrh8a3f17247rihlza3k0x77lnhq-cowboy-web-release`, resolving
+  to `/nix/store/cpqvd5p51j9dhn505q7rd35qi07nx0x3-cowboy-web-0.1.0`.
+
+The extended actual-reader gate passed **17 checks** against the active profile
+(`1814cb19`), the immutable pre-bridge baseline (`c293e0e9`) and this successor.
+New checks cover opaque schema-3 exclusion, the successor's Catalog-only
+diagnostic, refusal of an unsigned future identity used as an exact host pin,
+and strict rejection of invalid supported schema-2 releases. Receipt:
+`dist/catalog-reader-conformance/8b7dc9ba-integrated-candidate.json`, SHA-256
+`de2eb4ad65f0d0b75767cc713e7a84bb0609acc696442400c254aae0f950138d`.
+The harness runs with a closed environment in a user/network namespace and
+uses only copied public releases plus a disposable fixture signing key.
+Temporary fixture state and that key were removed before writing the receipt.
+
+Separate read-only, empty-environment/network-isolated inspection of the actual
+public Catalog returned the same **34 exact signed identities** from both the
+bridge and successor, without creating the designated Service directory.
+Hawk remains on Controller `1814cb19`, PID **2472823**, `active`, `NRestarts=0`,
+with `/healthz` healthy and its Web root unchanged. This turn activated no
+component, published no Plugin, changed no Service policy or production
+credential, and used no production signing key. SDKs, Plugin versions, runtime
+locks and applied migrations are unchanged.
+
+Before any full-solution activation, separately authorize and finish production
+signing/publication and exact release coverage, the machine-owned generated
+Host/Authentication policy change, and host/storage forward-and-recovery
+acceptance. Recheck the live reader/rollback floor if any activation intervenes;
+the bridge still cannot recover a post-cutover Host database. Codex DeepSeek
+predecessor drain, real login, signed/physical Apple acceptance and the known
+physical-iPhone pasted-image caret issue remain unresolved as recorded above.
