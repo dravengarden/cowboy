@@ -4,8 +4,9 @@
 set -euo pipefail
 native_platform="${1:-ios-sim}"
 shift || true
-native_debug=()
-if [ "${1:-}" = --debug ]; then native_debug=(--debug); shift; fi
+native_flags=(--ci)
+native_profile=release
+if [ "${1:-}" = --debug ]; then native_flags+=(--debug); native_profile=debug; shift; fi
 if [ "$#" != 0 ]; then
   echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios} [--debug]" >&2
   exit 2
@@ -33,6 +34,12 @@ test "$(cargo tauri --version)" = "tauri-cli $native_cli" || {
 }
 if [ "$native_platform" != macos ]; then
   test "$(xcodegen --version)" = "Version: $native_xcodegen"
+  native_triple=aarch64-apple-ios
+  if [ "$native_platform" = ios-sim ]; then native_triple=aarch64-apple-ios-sim; fi
+  rustup target list --installed | grep -Fxq "$native_triple" || {
+    echo "Install the pinned Rust target first: rustup target add --toolchain $native_rust $native_triple" >&2
+    exit 1
+  }
 fi
 xcodebuild -version
 # Credentials are neither inputs to nor side effects of this unsigned/ad-hoc
@@ -52,10 +59,8 @@ git archive "$native_revision" apps/native-shell | tar -xf - -C "$native_build"
 native_source="$native_build/apps/native-shell"
 export CARGO_TARGET_DIR="$native_build/target"
 cd "$native_source/tauri"
-native_profile=release
-if [ "${#native_debug[@]}" -ne 0 ]; then native_profile=debug; fi
 if [ "$native_platform" = macos ]; then
-  cargo tauri build --ci --bundles app --target aarch64-apple-darwin "${native_debug[@]}" -- --locked
+  cargo tauri build --bundles app --target aarch64-apple-darwin "${native_flags[@]}" -- --locked
   native_app="$CARGO_TARGET_DIR/aarch64-apple-darwin/$native_profile/bundle/macos/Cowboy.app"
 else
   mkdir -p gen/apple
@@ -67,7 +72,7 @@ else
   xcodegen generate --spec gen/apple/project.yml
   native_target=aarch64
   if [ "$native_platform" = ios-sim ]; then native_target=aarch64-sim; fi
-  cargo tauri ios build --ci --no-sign --archive-only --target "$native_target" "${native_debug[@]}" -- --locked
+  cargo tauri ios build --no-sign --archive-only --target "$native_target" "${native_flags[@]}" -- --locked
   native_app="$native_source/tauri/gen/apple/build/cowboy-app_iOS.xcarchive/Products/Applications/Cowboy.app"
 fi
 test -d "$native_app" || { echo "Build returned no app at its exact output path: $native_app" >&2; exit 1; }

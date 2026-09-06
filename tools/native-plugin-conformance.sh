@@ -22,7 +22,7 @@ cp apps/native-shell/apple/Conformance/Info.plist "$native_app/Info.plist"
 xcrun --sdk iphonesimulator clang++ -fobjc-arc -fblocks \
   -target arm64-apple-ios15.0-simulator \
   -framework UIKit -framework WebKit -framework AuthenticationServices \
-  -framework SafariServices -framework UniformTypeIdentifiers \
+  -framework SafariServices -framework UniformTypeIdentifiers -framework CoreGraphics \
   apps/native-shell/apple/Conformance/main.mm \
   apps/native-shell/apple/Sources/cowboy-app/CowboyPasskeyBridge.mm \
   apps/native-shell/apple/Sources/cowboy-app/CowboyNativeTweaks.mm \
