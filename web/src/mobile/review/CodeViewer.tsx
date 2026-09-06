@@ -36,7 +36,9 @@ import {
 import { rankAndDedupeInspectCandidates } from "./symbolCandidateModel";
 import {
   bindCodeViewerSwipeFreeze,
+  createMobileCodeScrollIdleReporter,
   isMobileCodeSwipeFrozen,
+  type MobileCodeScrollIdleReporter,
 } from "../../mobileCodeSurface";
 import type { CodeLanguage } from "./codeApi";
 import { restoreReviewScrollTop } from "./reviewScrollPosition";
@@ -385,11 +387,32 @@ export default function CodeViewer({
   const appliedRevealRequest = useRef<number | undefined>(undefined);
   const appliedScrollRestore = useRef<string | undefined>(undefined);
   const scrollRestoreFrame = useRef(0);
+  const onVisibleLineRef = useRef(onVisibleLine);
+  onVisibleLineRef.current = onVisibleLine;
+  const visibleLineReporterRef = useRef<
+    MobileCodeScrollIdleReporter<EditorView> | null
+  >(null);
+  visibleLineReporterRef.current ??= createMobileCodeScrollIdleReporter(
+    (view) => {
+      const report = onVisibleLineRef.current;
+      if (
+        !report || view !== editorRef.current || isMobileCodeSwipeFrozen()
+      ) return;
+      // Geometry is required for wrap-on code because the page, rather than
+      // `.cm-scroller`, owns Y scroll. Read it once after momentum settles;
+      // doing this in every viewport update forces WebKit layout mid-scroll.
+      const top = view.lineBlockAtHeight(
+        view.scrollDOM.getBoundingClientRect().top - view.documentTop,
+      );
+      report(view.state.doc.lineAt(top.from).number);
+    },
+  );
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
 
   useEffect(() => {
     return () => {
       globalThis.cancelAnimationFrame(scrollRestoreFrame.current);
+      visibleLineReporterRef.current?.cancel();
       freezeDisposeRef.current?.();
       freezeDisposeRef.current = undefined;
     };
@@ -741,11 +764,7 @@ export default function CodeViewer({
       values.push(
         EditorView.updateListener.of((update) => {
           if (!update.viewportChanged || isMobileCodeSwipeFrozen()) return;
-          const top = update.view.lineBlockAtHeight(
-            update.view.scrollDOM.getBoundingClientRect().top -
-              update.view.documentTop,
-          );
-          onVisibleLine(update.view.state.doc.lineAt(top.from).number);
+          visibleLineReporterRef.current?.schedule(update.view);
         }),
       );
     }

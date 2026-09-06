@@ -262,6 +262,13 @@ page layer scroll, like README. Wrap-off keeps the inner XY scroller
 and the native bar. Do not flatten `.cm-scroller` overflow on claim
 (remasure) and do not hide paint.
 
+Visible-line persistence is post-scroll work. A CodeMirror
+`viewportChanged` listener runs inside its scroll measurement cycle, so it
+must not synchronously read `getBoundingClientRect()` / `documentTop` or start
+the persistence mutation there. Coalesce updates to the newest viewport and
+sample its exact line once native momentum has been idle; tab scroll offsets
+remain ref-only and do not render during the gesture.
+
 Retries that failed and must not return:
 
 - Flatten `.cm-scroller` overflow on claim — remasures CM.

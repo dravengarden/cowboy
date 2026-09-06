@@ -11,6 +11,58 @@
 
 export const MOBILE_CODE_SWIPE_START = "cowboy:transcript-direct-manipulation-start";
 export const MOBILE_CODE_SWIPE_END = "cowboy:transcript-direct-manipulation-end";
+export const MOBILE_CODE_SCROLL_IDLE_MS = 120;
+
+export interface MobileCodeScrollIdleReporter<T> {
+  schedule: (value: T) => void;
+  cancel: () => void;
+}
+
+interface MobileCodeScrollIdleClock {
+  setTimeout: (callback: () => void, delay: number) => number;
+  clearTimeout: (timer: number) => void;
+}
+
+/** Keep navigation persistence out of CodeMirror's active scroll measurement.
+ *  Only the newest viewport matters once native momentum has gone idle. */
+export function createMobileCodeScrollIdleReporter<T>(
+  report: (value: T) => void,
+  delay = MOBILE_CODE_SCROLL_IDLE_MS,
+  clock: MobileCodeScrollIdleClock = {
+    setTimeout: (callback, timeout) => globalThis.setTimeout(callback, timeout),
+    clearTimeout: (timer) => globalThis.clearTimeout(timer),
+  },
+): MobileCodeScrollIdleReporter<T> {
+  let timer: number | undefined;
+  let pending: T | undefined;
+  let hasPending = false;
+  let generation = 0;
+  const flush = (scheduledGeneration: number): void => {
+    if (scheduledGeneration !== generation) return;
+    timer = undefined;
+    if (!hasPending) return;
+    const value = pending as T;
+    pending = undefined;
+    hasPending = false;
+    report(value);
+  };
+  return {
+    schedule: (value) => {
+      pending = value;
+      hasPending = true;
+      if (timer !== undefined) clock.clearTimeout(timer);
+      const scheduledGeneration = ++generation;
+      timer = clock.setTimeout(() => flush(scheduledGeneration), delay);
+    },
+    cancel: () => {
+      if (timer !== undefined) clock.clearTimeout(timer);
+      generation += 1;
+      timer = undefined;
+      pending = undefined;
+      hasPending = false;
+    },
+  };
+}
 
 export const mobileCodeRestLayerSx = {
   overflow: "hidden",
