@@ -244,6 +244,16 @@ the Controller executable does not undo Catalog bytes, generated host policy,
 or Plugin migrations. Controller restart authorization does not implicitly
 authorize the separate NixOS service-policy maintenance boundary.
 
+For a pre-cutover legacy-reader bridge, use the owned
+`just catalog-reader-conformance <bridge-release> <baseline-release>
+<candidate-release> <immutable-sdk-pack> <public-legacy-package> <new-receipt>`
+gate from clean committed source in the pinned Linux shell. It uses the actual
+immutable binaries, copied public legacy bytes and a temporary signed future
+fixture with no Service credentials or external network. Inspect its exact
+identities and `not_checked` fields; it does not accept or alter the actual
+active/rollback floor. A bridge that refuses activated host authority is not a
+post-migration rollback target. Never delete authority markers to reuse it.
+
 1. Commit the complete Provider change according to its repository policy.
 2. Build the final data-only package and every declared runtime target from
    that exact clean commit:

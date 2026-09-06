@@ -243,6 +243,11 @@ plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
 agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
 
+# Actual immutable readers, public old bytes and a temporary signed future
+# fixture. Never publishes, activates, or uses production signing credentials.
+catalog-reader-conformance BRIDGE BASELINE CANDIDATE SDK LEGACY_PACKAGE RECEIPT:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/catalog_reader_conformance.py "$@"' conformance "{{BRIDGE}}" "{{BASELINE}}" "{{CANDIDATE}}" "{{SDK}}" "{{LEGACY_PACKAGE}}" --receipt "{{RECEIPT}}"
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.
@@ -260,6 +265,7 @@ provider-check: plugin-check
     deno test tools/plugin-publication-receipt_test.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
+    python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
     deno run --allow-read components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
     cargo test --locked -p cowboy-plugin-sdk --all-targets

@@ -669,6 +669,38 @@ configuration together. A component profile rollback alone does not restore
 Catalog bytes, host selections or migrated storage. Keep any one-way storage
 transition behind its separate migration/recovery acceptance.
 
+The owned `just catalog-reader-conformance` gate compares exact immutable
+bridge, deployed-baseline and candidate Controller releases. From clean
+committed source in the pinned Linux shell:
+
+```bash
+just catalog-reader-conformance /nix/store/BRIDGE-controller-release \
+  /nix/store/BASELINE-controller-release /nix/store/CANDIDATE-controller-release \
+  /nix/store/SDK/bin/cowboy-plugin-pack /absolute/public/legacy.cowboy-plugin \
+  dist/catalog-reader-conformance/unique-receipt.json
+```
+
+Use real immutable paths, not the placeholders above. The bridge must descend
+from the exact baseline. The legacy package, adjacent release and publisher
+public key must be independently verifiable schema-1 bytes. The test copies
+them into a temporary Catalog, creates and independently verifies a schema-2
+fixture with a temporary signing key, and uses a loopback-only network namespace
+with no inherited Service/Provider credentials. It exercises the old reader's
+actual incompatibility, the bridge's exact legacy selection across partial and
+complete publication and cold restart, candidate parsing of both signed
+identities, supported-signature rejection, and the bridge's refusal after
+one-way host authority. Only disposable copies are modified; fixture keys and
+data are deleted before writing the exclusive success receipt.
+
+The pre-cutover bridge's `serve --check-plugin-catalog` performs read-only
+Catalog inspection, not host-policy or authentication validation. Its normal
+startup also refuses existing Catalog-only/per-host authority markers. This
+gate neither changes nor accepts the actual active/automatic-rollback profile
+floor, publishes a release, checks real login, or reverses migrated storage.
+After host authority is activated, recovery needs a host-capable Controller
+and its accepted policy, not this legacy reader. Keep the bridge backport
+separate from the full Plugin migration branch.
+
 Inspect the actual service unit and configuration generator, not a stale source
 checkout or only the current private JSON. If `ExecStartPre` regenerates an
 Authentication selection, changing its output file will be undone at restart.
