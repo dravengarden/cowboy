@@ -10,9 +10,12 @@ document; they supersede the earlier missing-source and local-loader-only gates.
 The latest Controller candidate is recorded in **Host-capable successor
 integration and acceptance** below. It incorporates the active reader bridge;
 the full Plugin migration itself is still not deployed.
-The latest publication status is **Exact publication reader preflight** below:
-Zed is incompatible with the live bridge, and production signing is awaiting
-the existing publisher signing entrypoints. No new Plugin was published.
+The latest publication status is **Signed production publication and verification**
+below: eight exact Plugin versions are signed, published and publicly downloadable.
+The historical signing entrypoints were recovered without changing trust. The
+active bridge still skips these schema-2 releases; authenticated Catalog refresh
+and UI availability have not been accepted. Zed and Codex DeepSeek remain
+unpublished for their separate reader/coexistence blockers.
 
 ## Goal
 
@@ -1357,7 +1360,8 @@ No production Catalog, trust key, Service policy or runtime was changed.
 No configured production private-key path or signing service was found in the
 repository release commands, machine-policy source or named publishing
 environment variables. The user was asked for the existing signing entrypoint,
-not key contents. Independently selected trusted public-key fingerprints are:
+not key contents. This is the pre-investigation state, resolved in the signed
+publication record below. Independently selected trusted public-key fingerprints are:
 
 - `cowboy-first-party`: `SHA256:a/VJzmHD/94vMVQMNZTktSR9P3apkkKnnWzXrtn02hg`.
 - `dravengarden-cardea-v2`: `SHA256:dgZQop0bAHwB4fD3SF08WNn6+7XNl8UTfG/IhO4Tvcs`.
@@ -1369,3 +1373,174 @@ the bridge. Missing production signatures/URL receipts/full Catalog acceptance
 and the independent Codex DeepSeek drain gate still apply. Host policy/storage,
 Machine installation, real login and signed/physical Apple acceptance remain
 separate unfinished boundaries.
+
+### Signed production publication and verification — 2026-09-06
+
+The continuation followed the recovered historical publication workflow and the
+canonical `release-cowboy-plugin` gates. It published eight independent Plugin
+versions into `/var/lib/cowboy/plugin-catalog`; it did not activate a Controller,
+Web or Machine, grant Host/storage authority, install a Plugin on a registered
+Machine, log in, or modify Cardea Worker/client/accounts/approval policy.
+
+The historical publisher keys are separate from Provider Service login state:
+
+- `cowboy-first-party`: `/var/lib/cowboy/provider-signing/cowboy-first-party-v1`.
+- `dravengarden-cardea-v2`: `/var/lib/cowboy/provider-signing/dravengarden-cardea-v2`.
+
+Both private-key-derived public identities and their adjacent public files match
+the independently selected existing Catalog public-key fingerprints recorded
+above. Private files are mode `0600` in a `0700` directory. No private material
+was printed, no new identity was created, and no trust file was replaced.
+The directory's legacy `provider-signing` name is historical publication layout,
+not an instruction to use Provider login, SSH-agent or Machine identity keys.
+
+First-party source is clean committed
+`f38694ab45ff971a49b81a50cc08901a3d50db79`. Its product code, SDK, component
+releases, manifests, locks and Nix inputs are unchanged from the accepted full
+`8b7dc9ba` candidate. Cardea is independently built from clean pushed source
+`d54b9945e2e451ed41d468b416c25ca272fb3361` using immutable Plugin SDK **1.6.0**
+`/nix/store/rvjwyg4vhw0cpxvdjch6jhibzrw4iyh8-cowboy-plugin-pack-1.6.0/bin/cowboy-plugin-pack`
+(SHA-256 `0edf33fa632f2ecdfe5e4c0ef3c0dda94579d80a46b1ed193c8e5de092bc5b61`).
+
+| Plugin | Previous published version | Newly published version | Composite digest (`sha256:`) |
+| --- | --- | --- | --- |
+| claude-code | 3.1.8 | 3.1.13 | `9a560b3954a0596bbc407a6bb1eb6f84cb5c583ae6dbccc3c8b78f199552b315` |
+| claude-deepseek | 3.1.8 | 3.1.13 | `5463b29bc173c43b6cac91509a3f9e42ad6b78250848784e9101e1b526ea10a7` |
+| codex | 3.1.8 | 3.1.13 | `94f78b5850da128ff3dc744a73e2242e8a9389e5d39e595d902a21a1d1fe8304` |
+| gemini | 3.1.8 | 3.1.13 | `39d09b98e413cbd9a870d9653eaaf7f36bf50d1dbf74aa96a3ed9ad72f42ff8a` |
+| grok | 3.1.8 | 3.1.13 | `2d02cf583f0727f14fc47ba6efb322bff9d095686e7eef30d6a70c51ac5fbe32` |
+| password | none | 1.0.0 | `8bc0829d805cf17debdf79a374b8ca5039b0d58d9ee9f6a6e059f6a9c7a45c85` |
+| passkey | none | 1.0.0 | `3b4cc0e2bf9a6aeaa1b49bca0ac438c2906f51e66a949cca0d0f1b3993fa758f` |
+| cardea | 1.1.0 | 1.2.0 | `6003c3d6a3b27cd5c077892881cf8c68dc2c722e617581c9b6b530c7b2d309b3` |
+
+All eight are host-bound release schema 2. Each has its own immutable package,
+host bundle, signature and owner-produced Catalog receipt at
+`receipts/<id>-<version>-<composite-digest>.json`. The first seven use
+`cowboy-first-party`; Cardea uses `dravengarden-cardea-v2` and its own repository's
+`cowboy-plugin-build/sign/verify/publish` commands. First-party publication uses
+`plugin-sign/verify/publish`. Both publishers verify the independently selected
+Catalog key before writing, commit the envelope last, and reject byte-changing
+republication. No legacy files were removed or overwritten.
+
+Fresh verification this continuation:
+
+- `just provider-check` passed its Plugin/Provider SDK, UI, runtime-lock,
+  publication, component and harness gates. The earlier complete
+  `check-compact` result remains the full application gate; it was not rerun
+  for this publication/documentation-only slice.
+- All five Agent runtime matrices were rebuilt in the pinned shell from the
+  committed inputs with inherited Provider credentials/home overrides removed
+  and CA trust retained. All **18 platform-component artifacts** match the
+  retained candidate bytes. Rebuilds are preserved under
+  `dist/provider-runtime-cache/publication-rebuild-f38694ab/`; the earlier
+  runtime and native receipts were not overwritten. The retained actual arm64
+  Mac probe receipts match every newly rebuilt Mac artifact and composite
+  identity; this does not claim a new native-shell build or physical-device test.
+- The actual worker bundled with accepted Controller `8b7dc9ba`, executable
+  SHA-256 `f461c1a5c0d0d15d3e0a32d1ef602523201c19ec87109334230fbeac8508cc64`,
+  passed all five initialize/session-new and stop/descendant-drain gates.
+  Claude DeepSeek also passed concurrent **3.1.8 / 3.1.13** sessions using their
+  distinct original runtime bytes and two private gateway ports, then stopping
+  the old generation while the new remained alive. These tests use private
+  homes, fake auth and loopback-only namespaces; they send no model prompt.
+  Per-Plugin receipts are `<rebuild-root>/<id>/worker-conformance-8b7dc9ba.json`.
+- The owned exact-reader gate passed **17 generic checks plus all eight exact
+  publications** with temporary exact Host pins, including Passkey storage.
+  Immutable SDK verification then independently accepted every production
+  signature, package and bound host.
+- Cardea's clean package rebuild and four release-tool tests passed. Its
+  previously accepted complete `just verify` remains applicable; fresh
+  `just audit` passed RustSec and npm audit, with zero npm vulnerabilities.
+
+Before the first production Catalog write, the complete public Catalog was
+copied into `/tmp/cowboy-publication-20260906.vSmgIM/catalog`. The owner commands
+published all eight real signed releases into that isolated copy. Two cold
+reads by the actual live bridge preserved exactly the **34 original signed
+identities**, while the accepted successor read and verified all **42**.
+The copy and production baseline were rehashed; the original **178 files**
+(including runtime bytes, public trust and receipts) were unchanged. No test
+loaded production Service policy, credentials or databases, or created the
+designated temporary Service directory.
+
+Production publication then used the same independent owner commands, not a
+Catalog-directory switch. The complete cold-reader and immutable-signature
+checks passed again on the actual expanded Catalog. It contains **42 releases /
+224 files**, with all original 178 files preserved. The public
+package/envelope/trust tree hash, using the earlier recorded recipe, is now
+`f1b84802e80d129c7b9dad007398558e5d2c9e3433926ec807870dfd270b8f07`.
+Every one of the **26 bound package/runtime URL references (22 unique URLs)**
+was fetched over public HTTPS without credentials. All returned **200**, the
+exact signed SHA-256 bytes and ETag, and immutable cache headers; downloaded
+bytes totaled **869172910**. No real login was used as a release check.
+
+Durable local evidence under `dist/catalog-reader-conformance/` (all hashes are
+SHA-256; these are diagnostic receipts, not additional signed Plugin claims):
+
+- `publication-baseline-f38694ab.json`:
+  `4b56050f7d44aff47f8124f879a62c0c9e4c306a0b64cbbe88c90390e3c3f0b3`.
+- `f38694ab-eight-publications.json`:
+  `4d304e11629e15c7f72ba5f25d171054bc61cc9e2487ccbf572a96292c083873`.
+- `f38694ab-complete-signed-prepublication.json`:
+  `a881a1a386f4997ffc8891f0c77596a13d1e755c2da9830a32e62c9d9303494c`.
+- `f38694ab-complete-signed-postpublication.json`:
+  `54e0c7d755dfc5891d1820ac90991e6123c89d2fe1ffbe3c6efd23e289454f42`.
+- `f38694ab-publication-urls.json`:
+  `6b546630cec8a782ed1c990bab9d356c119e2d444fe755bd6ed25874e5822189`.
+- `f38694ab-release-ledger.json`:
+  `aaafca8af61c42af1d48a06ad46185427e8e01d436328b095f58a07a99626cbd`.
+  This records each old/new version, source, publisher, package/host/composite
+  and contract fingerprints, exact platform matrix, old/new private runtime
+  pins and digests, Catalog receipt, public URLs and conformance observations.
+  The five Agent authentication-contract fingerprints are unchanged. Their
+  dependency version pins are unchanged from 3.1.8, but some private adapter
+  and npm runtime artifacts differ under the newly versioned packages; do not
+  confuse pin equality with byte equality. Authentication Plugins use their
+  outer signed typed-contract fingerprint rather than inventing a Provider
+  authentication-fingerprint field.
+- `f38694ab-provider-release-coverage.json`:
+  `0a3ada35d9f7bdec4fab2e5e5d72e6ed420376c5a74d8c042b40120b1b441597`.
+  The owned coverage command exits **1**, correctly naming only
+  `codex-deepseek@3.1.13` as missing among embedded Agent Providers.
+
+The fresh runtime byte-audit receipt is
+`dist/provider-runtime-cache/publication-rebuild-f38694ab/final-byte-audit.json`,
+SHA-256 `b035edaa3514724e695c95f9b571200c2a25d4aebc1e8b9284cb0446aa2d12c7`.
+The complete-Catalog and public-URL checks' local read-only scripts are retained
+beside their receipts as `publication-audit.mjs` and `publication-url-audit.mjs`;
+all production lifecycle writes went through the repository-owned publishers.
+
+**Published bytes are not accepted UI availability.** The public
+`POST /api/plugins/catalog/refresh` request returned **401** without an admin
+session; the admin Catalog GET did likewise. No cookie was borrowed from a
+database/browser, no bootstrap/login token was consumed, and no login or auth
+policy bypass was performed. An authorized admin refresh is still required.
+Even after refresh the active schema-1 bridge will safely skip all eight new
+envelopes: compatible Controller/Host selection must be accepted separately
+before reporting them as ready for UI installation.
+
+The Controller remained `1814cb19`, PID **2472823**, `active`, `NRestarts=0`;
+public and loopback health checks passed. Its profile, completed receipt and
+deployment Git pin still agree, with no in-progress transaction. This is the
+then-active predecessor for the next owned Controller transaction. The receipt's
+historical `previousRelease` (`c293e0e9`) is incompatible with the expanded
+Catalog and must not be manually restored over it. The bridge still cannot
+recover a post-Host/storage cutover. The Web root remains the prior `kf3q...`
+artifact; public `/version` is `fa264f43802c4cd374b31e01b160766c` (not a Git
+revision). Resident Machine PID **3991423** and its isolated Zed adapter PID
+**3991201** remain present. No component or session restart was performed.
+
+Remaining boundaries, without repeating completed builds/signing discovery:
+
+1. Keep **Zed 1.2.1** unpublished until a separately accepted compatible reader
+   transition; its schema-1 `code_intelligence_server` failure is unchanged.
+2. Keep **Codex DeepSeek 3.1.13** unpublished until the distinct previous/new
+   generation conformance block is resolved. The previous upstream adapter's
+   dropped configuration and `AuthenticationRequired` failure are not fixed by
+   successful new-generation-only probes, replacement old bytes or credentials.
+   Full Controller release coverage remains blocked.
+3. Obtain a normal authorized admin Catalog refresh and then separately accept
+   the compatible Controller/Web transition and machine-owned generated exact
+   Host/Authentication policy. Host/storage forward/recovery and migration
+   acceptance are not implied by Catalog publication or read-only preflight.
+4. Machine installation, real-login and signed/physical Apple acceptance remain
+   separate. The physical-iPhone pasted-image caret issue remains unresolved.
