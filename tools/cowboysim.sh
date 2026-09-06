@@ -29,7 +29,7 @@ bridge_ping() {
 dev_eval() {
   local source="$1" tries=0 output=""
   while [ "$tries" -lt 8 ]; do
-    output="$(bridge_curl -fsS -m 6 --data-binary "$source" "http://127.0.0.1:$DEVPORT/eval" 2>/dev/null)" && {
+    output="$(bridge_curl -fsS -m 6 --data-raw "$source" "http://127.0.0.1:$DEVPORT/eval" 2>/dev/null)" && {
       if [ -n "$output" ]; then
         printf '%s\n' "$output"
         return 0
@@ -76,18 +76,17 @@ case "$command" in
     dev_eval "${1:?JavaScript expression required}"
     ;;
   eval64)
-    # The generic SSH resolver cannot preserve every shell metacharacter in a
-    # complex selector script. A base64 argument remains one inert word until
-    # it reaches this project-owned helper, where it is decoded exactly once.
+    # Compatibility for callers that already encode their script; the owned
+    # SSH wrapper preserves ordinary eval arguments without requiring base64.
     dev_eval "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)"
     ;;
   aeval)
-    bridge_curl -fsS -m 20 --data-binary "${1:?JavaScript body required}" \
+    bridge_curl -fsS -m 20 --data-raw "${1:?JavaScript body required}" \
       "http://127.0.0.1:$DEVPORT/aeval"
     ;;
   aeval64)
     bridge_curl -fsS -m 20 \
-      --data-binary "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)" \
+      --data-raw "$(printf '%s' "${1:?base64 JavaScript required}" | base64 -D)" \
       "http://127.0.0.1:$DEVPORT/aeval"
     ;;
   url)

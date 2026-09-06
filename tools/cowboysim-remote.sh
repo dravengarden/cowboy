@@ -6,7 +6,16 @@ remote_host="${COWBOY_SIM_MAC_HOST:-macbook-air}"
 remote_worktree="${COWBOY_SIM_REMOTE_WORKTREE:?set an absolute Cowboy Git worktree path on the Mac}"
 case "$remote_host" in ""|-*|*[!a-zA-Z0-9_.@-]*) echo "invalid SSH host alias" >&2; exit 2;; esac
 case "$remote_worktree" in /*) ;; *) echo "remote worktree must be absolute" >&2; exit 2;; esac
-quote() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+quote() {
+  # Avoid replacement-string quote rules that differ between Bash 3 and 5.
+  local value="$1"
+  printf "'"
+  while [[ "$value" == *"'"* ]]; do
+    printf '%s%s' "${value%%\'*}" "'\\''"
+    value="${value#*\'}"
+  done
+  printf "%s'" "$value"
+}
 remote_command="cd $(quote "$remote_worktree") && test -f tools/cowboysim.sh && test \"\$(git rev-parse --show-toplevel)\" = \"\$(pwd -P)\" && exec env"
 for name in COWBOY_SIM_UDID COWBOY_SIM_DEVPORT; do
   if [ -n "${!name:-}" ]; then remote_command+=" $(quote "$name=${!name}")"; fi
