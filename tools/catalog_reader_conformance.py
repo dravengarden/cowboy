@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare exact Controller readers using public legacy bytes and a temporary signed fixture."""
+"""Compare exact Controller readers using public legacy bytes and temporary signed fixtures."""
 import argparse
 import hashlib
 import json
@@ -69,6 +69,105 @@ def candidate_reads_both(report, legacy, future):
                     for release, has_host in ((legacy, False), (future, True))))
 
 
+def unsigned_envelope(release):
+    return {name: value for name, value in release.items() if name != "signature"}
+
+
+def publication_reader_result(result, legacy, publication, allow_skip=False):
+    if result.returncode != 0:
+        return dict(status="rejected", exit_code=result.returncode, detail=result.stderr[-2000:])
+    try:
+        report = json.loads(result.stdout)
+        require(isinstance(report, dict)
+                and report.get("schema") == "dravengarden.cowboy.catalog-reader-preflight/v1"
+                and report.get("status") == "readable", "Unexpected Catalog report")
+        actual = report.get("releases")
+        both = [immutable_identity(legacy), immutable_identity(publication)]
+        if actual == both or actual == list(reversed(both)):
+            return dict(status="visible")
+        supported = report.get("supported_release_schema")
+        if (allow_skip and type(supported) is int and supported > 0
+                and publication["release_schema"] > supported
+                and actual == [immutable_identity(legacy)]):
+            return dict(status="skipped_future_envelope")
+        return dict(status="unexpected_inventory")
+    except (ValueError, RuntimeError, KeyError, TypeError):
+        return dict(status="invalid_report")
+
+
+def publication_preflight(index, envelope, root, pack, key, bridge, candidate,
+                          legacy_package, legacy_release, legacy_key, legacy):
+    require(envelope.name.endswith(".release.json"), "Publication input must be a release envelope")
+    stem = envelope.name.removesuffix(".release.json")
+    package = envelope.with_name(stem + ".cowboy-plugin")
+    host = envelope.with_name(stem + ".hostbundle.json")
+    require(envelope.is_file() and not envelope.is_symlink(), "Publication envelope must be a regular file")
+    publication = json.loads(envelope.read_text())
+    require(publication.get("publisher") != legacy["publisher"],
+            "Choose a public legacy fixture with a different publisher; never replace its trust key")
+    require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", publication.get("publisher", "")),
+            "Invalid publication publisher")
+    sources = [envelope, package]
+    if publication.get("host_bundle_digest"):
+        sources.append(host)
+    else:
+        require(not host.exists() and not host.is_symlink(), "Publication has an unbound host bundle")
+    require(all(path.is_file() and not path.is_symlink() for path in sources),
+            "Publication inputs must be regular files")
+    original = {path: digest(path) for path in sources}
+
+    # Each exact release has an independent Catalog. Keep the legacy signature
+    # and trust key intact; sign only the candidate COPY with the disposable
+    # fixture key. No manifest, URL, runtime matrix or composite digest changes.
+    catalog = root / f"publication-{index}" / "catalog"
+    trust = catalog / "trusted-publishers"
+    trust.mkdir(parents=True)
+    shutil.copyfile(legacy_package, catalog / "legacy.cowboy-plugin")
+    shutil.copyfile(legacy_release, catalog / "legacy.release.json")
+    shutil.copyfile(legacy_key, trust / legacy_key.name)
+    fixture_package = catalog / "candidate.cowboy-plugin"
+    fixture_release = catalog / "candidate.release.json"
+    shutil.copyfile(package, fixture_package)
+    shutil.copyfile(envelope, fixture_release)
+    host_args = []
+    if host in sources:
+        fixture_host = catalog / "candidate.hostbundle.json"
+        shutil.copyfile(host, fixture_host)
+        host_args.append(fixture_host)
+    command(pack, "sign", fixture_package, fixture_release, key, *host_args)
+    command(pack, "verify", fixture_package, fixture_release, key.with_suffix(".pub"), *host_args)
+    require(unsigned_envelope(json.loads(fixture_release.read_text())) == unsigned_envelope(publication),
+            "Fixture signing changed the candidate release proof")
+    shutil.copyfile(key.with_suffix(".pub"), trust / (publication["publisher"] + ".pub"))
+    data = catalog.parent / "not-created-service"
+    bridge_results = [publication_reader_result(
+        command(*reader_arguments(bridge, data, catalog), success=False), legacy, publication, allow_skip=True)
+        for _ in range(2)]
+    candidate_result = publication_reader_result(
+        command(*reader_arguments(candidate, data, catalog), success=False), legacy, publication)
+    host_result = command(*reader_arguments(candidate, data, catalog, candidate=True), success=False)
+    host_valid = False
+    if host_result.returncode == 0:
+        try:
+            host_report = json.loads(host_result.stdout)
+            host_valid = (isinstance(host_report, dict)
+                          and host_report.get("schema") == "dravengarden.cowboy.plugin-host-preflight/v1"
+                          and host_report.get("status") == "configuration_valid"
+                          and dict(release=immutable_identity(publication), has_host_bundle=bool(host_args))
+                          in host_report.get("catalog_defaults", []))
+        except (ValueError, TypeError):
+            pass
+    require(not data.exists(), "Publication reader inspection created Service state")
+    require(all(digest(path) == value for path, value in original.items()), "Publication inputs changed during inspection")
+    return dict(release=immutable_identity(publication), release_schema=publication["release_schema"],
+                source_envelope_sha256=original[envelope], package_digest=original[package],
+                host_bundle_digest=original.get(host), bridge_cold_reads=bridge_results,
+                candidate=candidate_result, candidate_host_preflight=host_valid,
+                reader_compatible=(all(result["status"] in ("visible", "skipped_future_envelope") for result in bridge_results)
+                                   and candidate_result["status"] == "visible" and host_valid),
+                production_signature_checked=False)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bridge_release", type=Path)
@@ -77,6 +176,8 @@ def main():
     parser.add_argument("pack", type=Path)
     parser.add_argument("legacy_package", type=Path, help="public signed legacy package; never private auth config")
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--publication", type=Path, action="append", default=[],
+                        help="exact fully bound candidate envelope; repeat for each release, even with an old outer schema")
     args = parser.parse_args()
     require_worker_isolation()
     require(not command("git", "status", "--porcelain").stdout.strip(), "Conformance needs clean committed source")
@@ -189,20 +290,28 @@ def main():
                   and sorted(path.name for path in data.iterdir()) == ["plugins"])
             marker.unlink()
 
+        publications = [publication_preflight(index, envelope, root, pack, key, bridge, candidate,
+                                             legacy_package, legacy_release, legacy_key, legacy)
+                        for index, envelope in enumerate(args.publication)]
         check("public legacy inputs remain byte-identical", all(digest(path) == value for path, value in original_digests.items()))
-        report = dict(schema="dravengarden.cowboy.catalog-reader-conformance/v1", ok=True,
+        report = dict(schema="dravengarden.cowboy.catalog-reader-conformance/v1",
+                      ok=all(entry["reader_compatible"] for entry in publications),
                       acceptance_revision=revision, tests=tests,
                       baseline=baseline_record, bridge=bridge_record, candidate=candidate_record,
                       verifier=dict(path=str(pack), sha256=digest(pack)),
                       legacy=immutable_identity(legacy), future_fixture=immutable_identity(future),
+                      publication_preflights=publications,
                       catalog="temporary_only", network="isolated_loopback_only",
                       production_signing=False, production_publication=False, activation=False,
-                      not_checked=["active_and_rollback_profile_floor", "host_policy_cutover", "database_rollback", "real_login"])
+                      not_checked=["active_and_rollback_profile_floor", "complete_production_catalog", "production_signatures",
+                                   "runtime_execution", "host_policy_cutover", "database_rollback", "real_login"])
     # The temporary fixture publisher private key is already deleted here.
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     with args.receipt.open("x") as output:
         output.write(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
+    if not report["ok"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -127,8 +127,10 @@ In addition, require all applicable Provider gates below:
 - For Code Intelligence schema 2 (Plugin SDK 1.6+), require its complete exact
   adapter/server graph, typed command/socket/state bindings and bounded
   readiness command. Reject extra or missing targets/components and ambient
-  executable lookup. Schema-1 releases are retained legacy inputs, not complete
-  owned-runtime candidates. For Zed, build with
+  executable lookup. Code payload schema-1 packages are retained legacy inputs,
+  not complete owned-runtime candidates. Do not confuse the Code payload with
+  the outer release schema: hostless Code payload 2 still uses release schema 1.
+  For Zed, build with
   `just zed-plugin-runtime-build <artifact-base>` and run
   `just zed-plugin-conformance <absolute-adapter> <absolute-server>`. The latter
   exercises real binaries through temporary signing, Machine installation,
@@ -234,7 +236,7 @@ borrowing its working directory.
 Publish only when the user requested a release and the Provider repository's
 release authority permits it.
 
-Before writing a new package/release schema into a live Catalog, check the
+Before writing any new release into a live Catalog, check its exact bytes with the
 currently running Controller and its automatic rollback predecessor as readers,
 not just the candidate Controller. An older reader may reject the entire
 Catalog on refresh or restart. If either cannot read the new format, keep the
@@ -253,6 +255,21 @@ fixture with no Service credentials or external network. Inspect its exact
 identities and `not_checked` fields; it does not accept or alter the actual
 active/rollback floor. A bridge that refuses activated host authority is not a
 post-migration rollback target. Never delete authority markers to reuse it.
+
+Add `--publication <fully-bound-release.json>` for **every** actual candidate
+to that gate, including releases with an unchanged outer schema. A generic
+schema-2 Password fixture does not cover an incompatible Code payload/runtime
+enum inside release schema 1. The optional checks copy the exact package,
+envelope and bound host into isolated Catalogs, sign only those copies with a
+temporary key, and preserve all release proof fields. Choose a public legacy
+fixture with a different publisher so its original signature/trust remain
+intact. The gate records each exact identity, two bridge cold reads, and the
+successor's Catalog/Host preflight. Reader incompatibility writes a failing
+receipt and exits nonzero. A safely skipped future envelope is not Catalog
+availability; report it as waiting for a compatible reader. These fixtures do
+not replace production signature verification, complete target-Catalog/policy
+acceptance or runtime/platform/drain gates. Keep blocked versions unpublished;
+do not bump an envelope or add a dummy host merely to make the old reader skip.
 
 1. Commit the complete Provider change according to its repository policy.
 2. Build the final data-only package and every declared runtime target from

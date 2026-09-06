@@ -16,6 +16,13 @@ supported release aborts refresh while preserving the old snapshot, and fails
 cold start. Malformed/ambiguous headers, symlinks, non-regular envelopes and
 envelopes over 1 MiB are rejected rather than treated as future releases.
 
+The future-envelope skip is not a general payload-compatibility mechanism.
+For example, hostless Zed 1.2.1 has release schema 1 but Code payload schema 2,
+with an owned adapter/server graph and new runtime component variants. A legacy
+reader still attempts to decode that supported outer envelope and its package.
+Do not infer publication safety from its schema number or from a different
+Plugin's successful schema-2 fixture.
+
 Read-only inspection uses the same Catalog reader:
 
 ```sh
@@ -41,6 +48,29 @@ predecessor. Inspect the machine-owned activator's rollback receipt/floor; never
 fake it by repointing a profile. Subsequent host activation still needs its own
 accepted forward/recovery transition. Keep all old signed releases and their
 immutable bytes in the Catalog while old consumers require them.
+
+For Hawk's installed Columbus activator `a872284`, rollback restores the
+`previousRelease` captured from the active profile under the machine lock for
+that transaction only. After success is Git-pinned, receipted and the journal
+removed, the next transaction captures the now-active bridge as its predecessor.
+An older `previousRelease` in a completed receipt is historical evidence, not
+an automatic post-success downgrade target. Verify this implementation and the
+actual profile/receipt/journal together; do not infer the next rollback target
+from the previous Nix generation number. Manual post-success rollback requires
+a new descendant revert that preserves the applicable compatibility boundary.
+
+The owned `just catalog-reader-conformance` recipe compares actual immutable
+bridge, baseline and successor releases. Add `--publication <bound-release.json>`
+for each actual candidate after setting its final artifact URL and binding its
+complete runtime matrix. These optional checks keep every proof field and
+package/host byte intact, sign only temporary copies, and record each reader's
+exact inventory. Choose a public legacy fixture with a different publisher
+from the candidates to preserve its real signature and trust key. Incompatible
+candidates produce a failing receipt and nonzero exit; safely skipped future
+envelopes remain unavailable to the legacy reader. No production signing key
+is used. This is neither runtime acceptance nor a production publication or
+full Catalog/Host-policy test. Review the receipt's `not_checked` fields and
+apply the canonical release skill's remaining gates before publishing.
 
 From the repository root in its pinned shell:
 

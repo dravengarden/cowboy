@@ -1,10 +1,12 @@
+import json
 import os
 from pathlib import Path
 import subprocess
 import unittest
 from unittest.mock import patch
 
-from catalog_reader_conformance import candidate_reads_both, command, immutable_identity, reader_arguments
+from catalog_reader_conformance import (candidate_reads_both, command, immutable_identity,
+                                        publication_reader_result, reader_arguments, unsigned_envelope)
 
 
 class CatalogReaderHarnessTests(unittest.TestCase):
@@ -43,6 +45,68 @@ class CatalogReaderHarnessTests(unittest.TestCase):
         self.assertFalse(candidate_reads_both(report, legacy, future))
         report["catalog_defaults"] = []
         self.assertFalse(candidate_reads_both(report, legacy, future))
+
+
+class PublicationReaderTests(unittest.TestCase):
+    def setUp(self):
+        self.legacy = dict(plugin_id="legacy", plugin_version="1.0.0", artifact_digest="sha256:legacy")
+        self.publication = dict(plugin_id="candidate", plugin_version="2.0.0", artifact_digest="sha256:candidate",
+                                release_schema=2)
+
+    def report(self, releases, supported=1):
+        return subprocess.CompletedProcess([], 0, json.dumps(dict(
+            schema="dravengarden.cowboy.catalog-reader-preflight/v1", status="readable",
+            supported_release_schema=supported, releases=releases)), "")
+
+    def inspect(self, result, allow_skip=True):
+        return publication_reader_result(result, self.legacy, self.publication, allow_skip)["status"]
+
+    def test_visible_requires_both_exact_identities_regardless_of_order(self):
+        entries = [self.legacy, immutable_identity(self.publication)]
+        self.assertEqual(self.inspect(self.report(entries)), "visible")
+        self.assertEqual(self.inspect(self.report(list(reversed(entries)))), "visible")
+
+    def test_only_a_future_outer_envelope_can_be_safely_skipped(self):
+        self.assertEqual(self.inspect(self.report([self.legacy])), "skipped_future_envelope")
+        self.assertEqual(self.inspect(self.report([self.legacy]), allow_skip=False), "unexpected_inventory")
+        self.publication["release_schema"] = 1
+        self.assertEqual(self.inspect(self.report([self.legacy])), "unexpected_inventory")
+
+    def test_skipped_schema_needs_an_explicit_positive_integer_reader_limit(self):
+        for supported in [None, "1", True, 0, -1, 2]:
+            with self.subTest(supported=supported):
+                self.assertEqual(self.inspect(self.report([self.legacy], supported)), "unexpected_inventory")
+
+    def test_missing_extra_duplicate_or_changed_identity_is_not_compatibility(self):
+        publication = immutable_identity(self.publication)
+        for entries in [[], [publication], [self.legacy, publication, publication],
+                        [self.legacy, dict(publication, artifact_digest="sha256:other")],
+                        [dict(self.legacy, plugin_version="0.9.0"), publication],
+                        [self.legacy, dict(publication, unsigned_extra=True)]]:
+            with self.subTest(entries=entries):
+                self.assertEqual(self.inspect(self.report(entries)), "unexpected_inventory")
+
+    def test_unsupported_nested_payload_failure_is_not_a_safe_skip(self):
+        result = subprocess.CompletedProcess([], 1, "", "unknown variant code_intelligence_server")
+        report = publication_reader_result(result, self.legacy, self.publication, allow_skip=True)
+        self.assertEqual(report["status"], "rejected")
+        self.assertEqual(report["exit_code"], 1)
+        self.assertIn("code_intelligence_server", report["detail"])
+
+    def test_invalid_or_wrong_diagnostic_never_counts_as_reader_acceptance(self):
+        for stdout in ["not JSON", "[]", "null", "{}", '{"status":"readable"}']:
+            with self.subTest(stdout=stdout):
+                self.assertEqual(self.inspect(subprocess.CompletedProcess([], 0, stdout, "")), "invalid_report")
+
+    def test_fixture_signature_is_the_only_excluded_proof_field(self):
+        release = dict(self.publication, artifact_url="https://fixture.invalid/exact", signature="production",
+                       runtime_artifacts=[dict(components=[dict(artifact_digest="sha256:runtime")])])
+        fixture = dict(release, signature="temporary")
+        self.assertEqual(unsigned_envelope(release), unsigned_envelope(fixture))
+        for name, value in [("artifact_digest", "sha256:changed"), ("artifact_url", "https://fixture.invalid/other"),
+                            ("runtime_artifacts", []), ("host_bundle_digest", "sha256:new")]:
+            with self.subTest(name=name):
+                self.assertNotEqual(unsigned_envelope(release), unsigned_envelope(dict(fixture, **{name: value})))
 
 
 if __name__ == "__main__":
