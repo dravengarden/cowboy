@@ -21,6 +21,15 @@ Codex DeepSeek 3.1.14. Previous receipts remain historical evidence, not
 acceptance of these newly built packages. A newer name alone cannot resolve the
 broken predecessor gate.
 
+At clean source `bb69829b9cde2e3782326b3ac80bf7177d0127e1`, the new exact 3.1.14
+candidate passes Linux x86_64 single-generation startup and drain. Its normal
+3.1.8 coexistence attempt still fails before the older worker becomes ready.
+Separate candidate-first failure-isolation diagnostics pass against all five
+published predecessors: their startup rejection and fixture cleanup leave the
+candidate and its sidecar healthy. The handoff records the exact worker,
+composite identities and seven new private evidence hashes. These observations
+establish neither healthy coexistence nor migration of an existing session.
+
 ## Separate the questions
 
 | Question | Required evidence | Authority granted by this investigation |

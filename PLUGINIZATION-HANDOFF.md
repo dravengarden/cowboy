@@ -7,10 +7,11 @@ starting-state inventory is retained only to explain what was removed.
 The latest native follow-ups are **Owned full native shell and clean-build
 acceptance** and **Remote logged-out native App acceptance** at the end of this
 document; they supersede the earlier missing-source and local-loader-only gates.
-The latest Controller candidate is recorded in **Host-capable successor
-integration and acceptance** below. It incorporates the earlier envelope-reader bridge;
-the full Plugin migration itself is still not deployed.
-The latest publication status is **Independent Zed publication and postflight**
+The latest integrated source, Controller/Web builds and acceptance are recorded
+in **Remote-main rebase and historical-generation failure isolation** below.
+They include the earlier **Host-capable successor integration and acceptance**
+and envelope-reader bridge; the full Plugin migration is still not deployed.
+The latest production publication status is **Independent Zed publication and postflight**
 below: nine exact Plugin versions are signed, published and publicly downloadable
 (the earlier eight plus Zed 1.2.1). The historical signing identities and every
 previously published byte are preserved. The `c0911dd0` reader remains active:
@@ -20,7 +21,12 @@ have not been accepted. Codex DeepSeek remains unpublished because its
 historical-generation coexistence gate fails. **Codex DeepSeek historical
 baseline audit and immutable failure evidence** below confirms all five
 published predecessors fail isolated startup; 3.1.13 passes alone, not coexistence.
-The full Host-capable Controller,
+After rebase, component release **2.7.0** has six new Agent **3.1.14** candidates
+and Zed **1.2.2**, all unsigned and unpublished. The new Codex DeepSeek candidate
+passes alone and survives all five predecessors' startup failures in separate
+diagnostics; healthy coexistence and existing-session migration remain unproven.
+The current Controller publication-coverage gate therefore fails for all six
+3.1.14 versions, not only Codex DeepSeek. The full Host-capable Controller,
 Web, Machine and storage migration are still not deployed by this task.
 
 ## Goal
@@ -1997,3 +2003,158 @@ The exact signed-release coverage check still exits **1** only for
 its completed deployment receipt, Web root and ACP generation
 `worker-a4ad441efe0461691687` are unchanged. Loopback health is `ok`, Machine
 is online/connected, and no deployment transaction is in progress.
+
+## Remote-main rebase and historical-generation failure isolation — 2026-09-07
+
+The user requested **rebase remote latest main then keep going**. The task
+branch `cowboy/sess-1788279284752` was rebased onto freshly fetched
+`388d1c1d52b1fdb3dc9d049fd8bf167c14914d5c`; a final remote read still reports
+that main revision. The old task tip
+`3bf7db7c42e2c552ce455d2a07fa3d10ebdbcb69` remains reachable through the local
+backup branch `backup/pluginization-pre-rebase-20260907-3bf7db7c`, preserving
+historical release-source identities. Rebase replayed 37 non-merge commits.
+Only the task branch is the publication target, using an explicit lease on
+that old remote tip; remote main is not rewritten.
+
+### Integration and immutable component identities
+
+Commit `87392d54` restores the small merge-only native-source and Catalog-reader
+checks omitted by flattening the old merges, and appends component release
+**2.7.0**. All **11** upstream historical registry records through 2.3.2 and
+the task's **2.4.0, 2.4.1, 2.5.0, 2.6.0** records retain their exact JSON data.
+No historical release entry was regenerated from the integrated working tree.
+The changed IDB source needs a new identity, not reuse of either branch's
+already recorded 1.2.1 digest:
+
+| Integrated source | New version |
+| --- | --- |
+| Component release | 2.7.0 |
+| `cowboy.state-sync-idb` | 1.2.2 |
+| Each of the six independent Agent Plugins | 3.1.14 |
+| Zed Plugin and its adapter | 1.2.2 |
+| Web Service Worker cache | `cowboy-v1634` |
+
+The new IDB component digest is
+`sha256:1f00a2271e31c753258d7b7821a5ee117f73fb307585fccf9b2f6457faadc54f`.
+SDK/runtime dependency pins are unchanged. The integrated `idb.ts`, Web store,
+IDB regression tests and delivery-observability tests are byte-identical to
+remote main, preserving its closing-connection recovery, persistence tracing
+and unsent-bubble cleanup. Main's Machine credential-source repair is also
+preserved. Every task SQLx migration is unchanged from the pre-rebase backup.
+The upstream frozen Deno dependency hash is retained and accepted by the real
+Nix Web build.
+
+### Clean-source checks and build-only outputs
+
+Implementation/acceptance source is clean commit
+`bb69829b9cde2e3782326b3ac80bf7177d0127e1`. The complete pinned-shell
+`CARGO_INCREMENTAL=0 just check-compact` exits **0**, including **18 runtime
+harness tests**, **7 failure-isolation tests**, **15 Catalog harness tests**,
+**1,146 Web tests**, all six isolated PostgreSQL cases, Rust/SDK/native-source
+checks, lint, dependency/feature-slice gates and release builds. The existing
+core-only yanked `spin 0.9.8` warning remains. No physical-device, real-login or
+cross-platform execution acceptance is inferred from this gate.
+The repository release skill also passes `skill-creator` validation; its
+validator's PyYAML dependency was supplied by a temporary tool environment from
+the same pinned Nix input, without changing project dependencies.
+
+Both narrow Nix outputs were built from that exact clean source, with source
+receipts recording `dirty: false`, and **neither was activated**:
+
+- Controller: `/nix/store/845k4bl577pn12my6z3an438yaalb7f9-cowboy-controller-release`
+  (`result-plugin-rebase-controller`).
+- Web: `/nix/store/6b938f7cq1wm3x7yjg57zbwmfzrjmx6v-cowboy-web-release`
+  (`result-plugin-rebase-web`).
+
+The actual worker used below is
+`/nix/store/blgxj0d78h3fz3692kqr41njc7ky3fhi-cowboy-0.1.0/bin/cowboy-acp-worker`,
+SHA-256 `1998d59477f4ec0d04f0c970abd1d8eec0afdd3466f6b8c9b44c964087ff56bf`.
+
+### Separate diagnostic, unchanged release gate
+
+Commit `bb69829b` adds `just agent-generation-failure-isolation` and
+[`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
+It starts a healthy candidate before a historical worker, permits only an
+explicit terminal rejection before any observed native-session allocation,
+requires cleanup of recorded fixture descendants, verifies that the candidate
+and its sidecars survive, and then stops/drains the candidate. Timeouts,
+handshake/artifact failures, post-native-allocation failures and cleanup leaks
+do not qualify. Cleanup attempts every owned fixture generation even when one
+cleanup fails. No existing user session is inspected, rebound or stopped.
+
+The normal worker gate keeps its old-first order and successful coexistence
+assertions. Failure-isolation evidence uses its own schema and explicitly says
+`release_accepted: false`, `distinct_generation_coexistence: "not_proven"`.
+The canonical release skill documents this distinction; it does not introduce
+a broken-baseline exception, Provider-ID blacklist or second release lifecycle.
+
+The full gate rebuilt local data packages. The owned content-addressed URL and
+runtime-binding commands then bound the new **unsigned** Codex DeepSeek 3.1.14
+candidate to its existing exact runtime matrix:
+
+- Package: `1de3e869b3f0d0870a4c85871a5534ca28b06c40fe19913c24917e190bead014`.
+- Composite: `1d443d4c5133b6dcf7f5636c22e12228feb698afbe64d64843d56c7d1bb5fc1a`.
+- Bound host bundle: `2f5d4b864ee6c9eaab392174cdf06d23ce17475206a7c69edc50d7be125b7376`.
+
+All five production predecessor signatures were independently re-verified
+with the immutable SDK and existing trusted public key. Actual Linux x86_64
+execution used private loopback-only namespaces, temporary homes and unique
+fixture session identities, with fake declared auth and no inference prompt:
+
+- **3.1.14 alone:** exits **0**; initialize/session-new, sidecar readiness and
+  stop/drain pass. Coexistence is explicitly `not_checked`.
+- **3.1.8 → 3.1.14 normal coexistence:** exits **1** at
+  `previous_worker_startup`, after both artifact sets passed their probes.
+  The older worker rejects authentication before native allocation; the
+  candidate worker is not started in this old-first attempt. No acceptance
+  file exists. This retests new integrated identities, not a waiver or a
+  claim that the old baseline was repaired.
+- **3.1.14 followed separately by 3.1.2, 3.1.3, 3.1.6, 3.1.7 and 3.1.8:**
+  all five failure-isolation diagnostics exit **0**. Each predecessor rejects
+  startup and its recorded descendants drain; the new worker and its sidecar
+  survive, then stop/drain. This proves failure isolation for these fixtures,
+  not healthy coexistence, live-session health, native-history preservation,
+  installation, authentication migration, retirement or release acceptance.
+
+Seven new evidence files under `dist/provider-runtime-cache/` use prefix
+`bb69829b-codex-deepseek-`; all are mode **0600**, atomically create-only and
+separate from all previous evidence:
+
+| Suffix | SHA-256 |
+| --- | --- |
+| `3.1.14-single.json` | `110e86e46364ab0c5933a12cfd35a4bd5ea491b9fccfdbfb21c60ca79f1fbfd7` |
+| `3.1.2-failure-isolation.json` | `271adaf014093ba0af49ae4533ccbd941a2c63b038e7315f6c19b1fdf51d985e` |
+| `3.1.3-failure-isolation.json` | `1b4106c01ad28b57023acb580f14471ad9d35d2c0c549b159fac20ede51d2585` |
+| `3.1.6-failure-isolation.json` | `fc50d0401e8c0c65952920270504937022114e342e1a130d05424e3f0791eaa0` |
+| `3.1.7-failure-isolation.json` | `6717de1ff4bb4c978c0ad51ae0707d2536e8cb00618a74a229cd97143a126f46` |
+| `3.1.8-failure-isolation.json` | `e2a027bdc9f6bddd8f033d629971a7ce585a7c081bbb9533760a3e8201827b02` |
+| `3.1.8-to-3.1.14-failure.json` | `b5387697862f27d2bc4c58b8d14cd605b922667961d95f1349dbb3801ca5a629` |
+
+### Production unchanged; remaining release and migration work
+
+Read-only postflight compared every Catalog path and digest with the previous
+public snapshot: **43 releases / 230 files**, unchanged tree
+`038c0648097b4d1e5f615ad1cad2898fa05e9a50cc9a327d157ada38fc5b57b8`.
+The nine previously published versions remain intact. **All six new Agent
+3.1.14 versions and Zed 1.2.2 remain unsigned and unpublished.** The current
+Provider release-coverage command correctly exits **1** for all six Agent
+candidates. Zed 1.2.2 still needs its own portable runtime build/acceptance and
+publication; an ordinary adapter release build is not that gate.
+
+Current live observations are Controller **4158242**, Machine **258817** and
+Zed adapter **258617**, all active with zero restart counts. These match this
+turn's earlier observations; the Machine/Zed PIDs and Web root differ from the
+prior turn's historical record and were not changed by this task. The active
+Web root is `/nix/store/zzba80ajr1xzgcwzga149chyjys1szik-cowboy-web-0.1.0`.
+The Controller remains the `c0911dd0` reader with its successful committed
+receipt, SHA-256 `ea46738a64d0ac02f9e184e25eab850926f0e8c09e9cb2e871a32ddcb645ab7c`.
+Loopback health is `ok`, Hawk is online/connected, and its ACP generation is
+`worker-a4ad441efe0461691687`.
+
+The next substantive boundary is a reviewed broken-baseline release/retirement
+policy and disposable-fixture acceptance of real native resume/history through
+the existing idle-only **Load installed Provider** path. Production installation,
+live-session rebind/stop, Catalog retirement and Host/auth/storage cutover are
+separate operations. None was authorized or performed by this rebase and
+diagnostic work. Keep the failing release gate visible and preserve old bytes;
+do not treat these negative-path receipts as release permission.
