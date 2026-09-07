@@ -2292,3 +2292,64 @@ See [the complete publication record](docs/releases/plugin-publication-2026-09-0
 for exact identities, immutable Nix outputs, evidence paths, host-policy findings
 and remaining live-transition boundaries. Historical native-resume / first-turn
 configuration acceptance remains open; new-session startup did not prove it.
+
+## Confirmed Host and component rollout — 2026-09-07
+
+The user's subsequent confirmation authorized Hawk's separate authentication /
+Passkey storage maintenance. The earlier unactivated-component status above is
+superseded; the seven signed publications and historical receipts are unchanged.
+
+**Activated and verified:**
+
+- Hawk Controller and Web: committed Cowboy `7118cf33`. Controller bootstrap
+  import succeeded at 11:53:51 UTC; final catalog-only activation succeeded at
+  11:59:04 UTC. Web succeeded at 11:56:32 UTC, version
+  `fe9bf606cf496afbbd5f396b14eb5a20`, SW cache 1635.
+- Hawk and Falcon Machine: exact committed `1d0a5064` release, both connected
+  and online on `worker-4718f2ebbba9e4069713`. Hawk succeeded at 11:55:42 UTC;
+  Falcon at 12:11:33 UTC. All four component receipts and public HTML/SW bytes
+  and cache headers passed final read-only verification. Installed PWAs need a
+  hard reload.
+- Password 1.0.0, Passkey 1.0.0 and Cardea 1.2.0 are active signed Hosts under
+  catalog-only policy. Original Passkey rows were imported once into their
+  Plugin namespace; full-row hashes match, core rows remain unchanged and
+  integrity checks pass. No account/key/session policy was changed.
+
+Columbus `f334336e` added durable explicit compatible Controller recovery and
+Plugin-state backup. Independent review found two rollback/provenance edge
+cases; both were fixed, regression-tested and re-reviewed before deployment.
+`c9f16a0b` completed Hawk's catalog-only service policy. Both full NixOS
+transactions retained Controller/Machine/Zed PIDs; the component maintenance
+transactions owned their separate restarts. `3e0f0100` added explicit selection
+of the existing versioned deployment app through the normal Machine recipe.
+All changes passed `just verify` and were pushed to Columbus main.
+
+Falcon's installed `744a6f5` deployment reader still uses `/api/machines`, now
+correctly authenticated. Its first attempt restored the prior Machine but
+could not verify that recovery because of the same HTTP 401. The current
+owned transaction recovered the journal and completed the retry. Failed and
+recovered receipts remain intact. No Falcon NixOS switch or auth bypass was
+performed. For later Falcon Machine releases, use
+`cowboy-machine-activate <release> candidate` from a clean committed isolated
+Columbus worktree until a separately reviewed host release updates its tool.
+
+The actual immutable candidate/recovery binaries passed isolated core import,
+abrupt-restart/new-credential preservation, one-shot import and catalog-only
+recovery fixtures. Actual generated Service configuration passed both binaries'
+preflight before switching. Production backup sets `20260907T115254Z`,
+`20260907T115832Z` and `20260907T115942Z` include core, artifacts and Plugin
+state. The final archive passed an isolated restore with intact authority,
+import ledger and self-contained SQLite bytes; live storage was not restored.
+
+**Still open:** the user has not supplied a Cowboy Product API token file.
+Registered-Machine Plugin slot upgrades, authenticated Catalog/UI checks,
+actual login/native-history resume and first-prompt configuration restoration
+are not proved by component health. Do not borrow cookies or Provider secrets,
+mint bypass tokens, disable auth, delete authority markers or claim every
+installed Plugin is upgraded. Ask for only a mode-0600 token file path on Hawk.
+
+See [the updated release record](docs/releases/plugin-publication-2026-09-07.md)
+for exact closures, source commits and retained evidence. Detailed ignored
+receipts are under `dist/provider-runtime-cache/host-cutover-20260907/`,
+including `live-release.json`; durable host/component receipts remain in their
+machine-owned `/var/lib/*-deployments/` directories.
