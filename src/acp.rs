@@ -582,6 +582,54 @@ struct ConfigChange {
     value: serde_json::Value,
 }
 
+type ConfigFence = watch::Receiver<Option<Result<(), String>>>;
+
+/// A prompt snapshots the latest submitted mutation for each option. Queue
+/// acceptance is not an ACP acknowledgement; only a completed mutation opens
+/// its fence. Dropping a queued/spawned mutation fails closed.
+struct ConfigCompletion(watch::Sender<Option<Result<(), String>>>);
+
+impl ConfigCompletion {
+    fn new() -> (Self, ConfigFence) {
+        let (tx, rx) = watch::channel(None);
+        (Self(tx), rx)
+    }
+
+    fn finish(self, result: Result<(), String>) {
+        self.0.send_replace(Some(result));
+    }
+}
+
+impl Drop for ConfigCompletion {
+    fn drop(&mut self) {
+        self.0.send_if_modified(|result| {
+            if result.is_some() {
+                return false;
+            }
+            *result = Some(Err("configuration change did not complete".to_owned()));
+            true
+        });
+    }
+}
+
+struct TrackedConfig<T> {
+    change: T,
+    completion: ConfigCompletion,
+}
+
+async fn wait_config_fences(fences: Vec<ConfigFence>) -> Result<(), String> {
+    for mut fence in fences {
+        fence
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| "configuration queue closed".to_owned())?
+            .as_ref()
+            .expect("completed config fence")
+            .clone()?;
+    }
+    Ok(())
+}
+
 /// Run configuration mutations in submission order.
 ///
 /// ACP replies contain the provider's *whole* config snapshot. Sending two
@@ -608,9 +656,9 @@ async fn run_config_queue(
     cx: ConnectionTo<Agent>,
     state: Arc<ClientState>,
     acp_id: SessionId,
-    changes: mpsc::UnboundedReceiver<ConfigChange>,
+    changes: mpsc::UnboundedReceiver<TrackedConfig<ConfigChange>>,
 ) -> Result<(), Error> {
-    run_serial_config_queue(changes, move |change| {
+    run_serial_config_queue(changes, move |TrackedConfig { change, completion }| {
         let cx = cx.clone();
         let state = Arc::clone(&state);
         let acp_id = acp_id.clone();
@@ -635,17 +683,34 @@ async fn run_config_queue(
                         state.codex_full_access.store(selected, Ordering::SeqCst);
                     }
                     match serde_json::to_value(response.config_options) {
-                        Ok(options) => state.sink.set_config_options(&state.session_id, options),
+                        Ok(options) => {
+                            let confirmed = options.as_array().is_some_and(|options| {
+                                options.iter().any(|option| {
+                                    option.get("id").and_then(serde_json::Value::as_str)
+                                        == Some(config_id.as_str())
+                                        && option.get("currentValue") == Some(&value)
+                                })
+                            });
+                            state.sink.set_config_options(&state.session_id, options);
+                            if !confirmed {
+                                completion
+                                    .finish(Err(format!("provider did not confirm {config_id}")));
+                                return Ok(());
+                            }
+                        }
                         Err(error) => {
                             tracing::warn!(error = %error, "serializing set config response");
+                            return Ok(());
                         }
                     }
+                    completion.finish(Ok(()));
                 }
                 Err(error) => {
-                    state.sink.broadcast_error(
-                        Some(state.session_id.clone()),
-                        format!("set {config_id}: {error}"),
-                    );
+                    let detail = format!("set {config_id}: {error}");
+                    state
+                        .sink
+                        .broadcast_error(Some(state.session_id.clone()), detail.clone());
+                    completion.finish(Err(detail));
                 }
             }
             Ok(())
@@ -666,12 +731,12 @@ async fn run_grok_config_queue(
     mode_config_id: Option<&'static str>,
     mode_select: Option<Vec<SessionConfigSelectOption>>,
     usage_refresh: mpsc::UnboundedSender<()>,
-    mut changes: mpsc::UnboundedReceiver<GrokConfigChange>,
+    mut changes: mpsc::UnboundedReceiver<TrackedConfig<GrokConfigChange>>,
 ) -> Result<(), Error> {
     // One FIFO owns every Grok model/effort mutation. This keeps the state used
     // to build request N+1 authoritative after request N and prevents an older
     // response from overwriting a newer selection in Cowboy's UI.
-    while let Some(change) = changes.recv().await {
+    while let Some(TrackedConfig { change, completion }) = changes.recv().await {
         let (next_config, model_id, reasoning_effort) = {
             let Some(config) = grok_config.lock().as_ref().cloned() else {
                 sink.broadcast_error(
@@ -727,8 +792,10 @@ async fn run_grok_config_queue(
                     Ok(options) => sink.set_config_options(&session_id, options),
                     Err(error) => {
                         tracing::warn!(error = %error, "serializing Grok config options");
+                        continue;
                     }
                 }
+                completion.finish(Ok(()));
                 if usage_refresh.send(()).is_err() {
                     tracing::debug!(
                         session = %session_id,
@@ -1687,22 +1754,10 @@ async fn set_startup_config_option(
     acp_id: &SessionId,
     config_id: &str,
     value: &str,
-) -> Option<serde_json::Value> {
+) -> Option<Vec<SessionConfigOption>> {
     let req = SetSessionConfigOptionRequest::new(acp_id.clone(), config_id.to_owned(), value);
     match cx.send_request(req).block_task().await {
-        Ok(resp) => match serde_json::to_value(&resp.config_options) {
-            Ok(opts) => Some(opts),
-            Err(e) => {
-                tracing::warn!(
-                    session = %session_id,
-                    config_id,
-                    value,
-                    error = %e,
-                    "serializing startup config options failed"
-                );
-                None
-            }
-        },
+        Ok(resp) => Some(resp.config_options),
         Err(e) => {
             tracing::warn!(
                 session = %session_id,
@@ -2526,8 +2581,7 @@ async fn run_session(
     {
         tracing::info!(session = %session_id, "codex approval preset -> full access");
         state.codex_full_access.store(true, Ordering::SeqCst);
-        state.sink.set_config_options(&session_id, updated_options);
-        config_options = None;
+        config_options = Some(updated_options);
     }
 
     // Open every provider at its own full-access session mode when advertised.
@@ -2561,12 +2615,6 @@ async fn run_session(
             }
         }
     }
-
-    // Do not expose Running (which lets the broker drain queued prompts) until
-    // the startup permission mode is authoritative.
-    state.sink.set_status(&session_id, Status::Running, None);
-    // Startup landed — disarm the phase watchdog (see `agent_main`).
-    startup_phase.send_replace(StartupPhase::Ready);
 
     // Gemini (unlike codex) exposes its APPROVAL options as session MODES
     // (`availableModes` + `session/set_mode`), NOT config_options — so the codex
@@ -2641,12 +2689,15 @@ async fn run_session(
     // Surface every startup option in one authoritative array. This includes
     // standard config options (Codex), synthesized ACP modes (Gemini/Grok), and
     // Grok's pre-standard model/effort metadata.
-    if !surfaced_options.is_empty() {
-        match serde_json::to_value(&surfaced_options) {
-            Ok(v) => state.sink.set_config_options(&session_id, v),
-            Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
-        }
+    // An empty list is authoritative too: a replacement may remove all the
+    // old release's options. Publish this before Running so the Controller can
+    // reconcile persisted preferences before draining any queued prompt.
+    match serde_json::to_value(&surfaced_options) {
+        Ok(v) => state.sink.set_config_options(&session_id, v),
+        Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
     }
+    state.sink.set_status(&session_id, Status::Running, None);
+    startup_phase.send_replace(StartupPhase::Ready);
 
     let grok_usage_tx = if crate::provider::uses_xai_session_extensions(provider_id) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -2715,8 +2766,21 @@ async fn run_session(
 
     // Command loop. Prompt work runs in spawned tasks so Cancel and Permission
     // answers remain responsive; `prompt_lock` serializes the actual prompt
-    // RPCs. Config changes may still run concurrently with a turn.
+    // RPCs. A prompt waits for the config commands submitted before it; later
+    // changes may still run concurrently with the turn. Cancel and Permission
+    // never wait behind an upstream configuration RPC.
+    let mut config_fences: HashMap<String, ConfigFence> = HashMap::new();
     while let Some(cmd) = cmd_rx.recv().await {
+        let (config_completion, previous_config) =
+            if let AgentCommand::SetConfigOption { config_id, .. } = &cmd {
+                let (completion, fence) = ConfigCompletion::new();
+                (
+                    Some(completion),
+                    config_fences.insert(config_id.clone(), fence),
+                )
+            } else {
+                (None, None)
+            };
         match cmd {
             AgentCommand::Prompt(blocks, cmid, completion) => {
                 state.sink.set_status(&session_id, Status::Busy, None);
@@ -2758,6 +2822,7 @@ async fn run_session(
                 let capture_completion = completion.is_some();
                 let mut cancellation = state.prompt_cancellation.subscribe();
                 let cancellation_generation = *cancellation.borrow_and_update();
+                let fences = config_fences.values().cloned().collect();
                 cx.clone().spawn(async move {
                     let _prompt_guard = state.prompt_lock.lock().await;
                     if *cancellation.borrow_and_update() != cancellation_generation {
@@ -2770,6 +2835,24 @@ async fn run_session(
                                 stop_reason: "Cancelled".to_owned(),
                             },
                         );
+                        sink.set_status(&sid, Status::Running, None);
+                        return Ok(());
+                    }
+                    let configured = tokio::select! {
+                        result = wait_config_fences(fences) => result,
+                        _ = cancellation.changed() => Err("prompt cancelled before configuration completed".to_owned()),
+                    };
+                    if let Err(detail) = configured {
+                        if let Some(tx) = completion {
+                            let _ = tx.send(Err(detail.clone()));
+                        }
+                        let cancelled = *cancellation.borrow_and_update() != cancellation_generation;
+                        if !cancelled {
+                            sink.broadcast_error(Some(sid.clone()), format!("prompt blocked: {detail}"));
+                        }
+                        sink.push(&sid, Event::TurnEnd {
+                            stop_reason: if cancelled { "Cancelled" } else { "Error" }.to_owned(),
+                        });
                         sink.set_status(&sid, Status::Running, None);
                         return Ok(());
                     }
@@ -2988,7 +3071,13 @@ async fn run_session(
                 let current_session_mode = Arc::clone(&current_session_mode);
                 let mode_config_id = mode_config_id.expect("synthesized mode id");
                 let is_grok = crate::provider::uses_xai_session_extensions(provider_id);
+                let completion = config_completion.expect("config command completion");
                 cx.clone().spawn(async move {
+                    // Synthesized modes use their own RPC path. Keep repeated
+                    // changes to the same option FIFO just like native config.
+                    if let Some(previous) = previous_config {
+                        let _ = wait_config_fences(vec![previous]).await;
+                    }
                     let req = SetSessionModeRequest::new(acp, SessionModeId::new(mode_id.clone()));
                     match cx.send_request(req).block_task().await {
                         Ok(_) => {
@@ -3017,8 +3106,10 @@ async fn run_session(
                                 Ok(v) => sink.set_config_options(&sid, v),
                                 Err(e) => {
                                     tracing::warn!(error = %e, "re-serializing synthesized mode options");
+                                    return Ok(());
                                 }
                             }
+                            completion.finish(Ok(()));
                         }
                         Err(e) => sink.broadcast_error(Some(sid.clone()), format!("set mode: {e}")),
                     }
@@ -3056,7 +3147,12 @@ async fn run_session(
                             session_mode.as_deref(),
                         );
                         match serde_json::to_value(published) {
-                            Ok(options) => state.sink.set_config_options(&session_id, options),
+                            Ok(options) => {
+                                state.sink.set_config_options(&session_id, options);
+                                config_completion
+                                    .expect("config command completion")
+                                    .finish(Ok(()));
+                            }
                             Err(error) => {
                                 tracing::warn!(error = %error, "serializing Grok permission options");
                             }
@@ -3090,9 +3186,12 @@ async fn run_session(
                     continue;
                 };
                 if tx
-                    .send(GrokConfigChange {
-                        config_id: config_id.clone(),
-                        requested,
+                    .send(TrackedConfig {
+                        change: GrokConfigChange {
+                            config_id: config_id.clone(),
+                            requested,
+                        },
+                        completion: config_completion.expect("config command completion"),
                     })
                     .is_err()
                 {
@@ -3103,7 +3202,13 @@ async fn run_session(
                 }
             }
             AgentCommand::SetConfigOption { config_id, value } => {
-                if config_tx.send(ConfigChange { config_id, value }).is_err() {
+                if config_tx
+                    .send(TrackedConfig {
+                        change: ConfigChange { config_id, value },
+                        completion: config_completion.expect("config command completion"),
+                    })
+                    .is_err()
+                {
                     state.sink.broadcast_error(
                         Some(session_id.clone()),
                         "configuration queue closed".to_owned(),

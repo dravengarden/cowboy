@@ -69,6 +69,14 @@ provisioning. Distribution signing, device installation, Associated Domains,
 real login and physical keyboard/swipe acceptance remain separate release steps.
 An unsigned device archive cannot be installed without explicit signing.
 
+Device builds also package that exact App as `Cowboy.ipa` and record its path
+and SHA-256 in the build receipt. A machine-owned publisher may request an
+exclusive copy with `--receipt-path /absolute/new.json`; an existing file is
+never overwritten. The SideStore workflow fetches the clean public Cowboy
+revision through Git into a fresh Mac task checkout, calls this entry, verifies
+the receipt and IPA digest on Hawk, and then publishes through its normal
+versioned source. The old external Mac shell is not a source or artifact fallback.
+
 ## Acceptance
 
 `just native-plugin-conformance` on a Mac compiles both production Objective-C

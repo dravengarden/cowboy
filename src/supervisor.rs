@@ -314,11 +314,10 @@ impl Supervisor {
     /// agent process. Without reviving it here the first command returned
     /// `unknown session`, which the WS layer turns into a fire-and-forget
     /// [`Outbound::Error`], so the prompt never reached an agent (the Web UI
-    /// stayed empty). We lazily spawn a fresh
-    /// agent for the restored session and deliver the command to it. The new
-    /// agent starts without the prior turn's in-agent context — full
-    /// `session/load` replay is the deferred design §7 follow-up — but the
-    /// session continues and every surface stays in sync.
+    /// stayed empty). We lazily spawn an agent and resume the retained native
+    /// thread through `session/resume` or `session/load`. Failed restoration
+    /// never falls back to a blank session. Persisted configuration is restored
+    /// before the first queued prompt reaches that thread.
     ///
     /// [`Outbound::Error`]: crate::core::Outbound::Error
     ///

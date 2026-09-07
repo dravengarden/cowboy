@@ -77,11 +77,22 @@ new; absent resume support fails before session creation; genuine new sessions
 can still allocate an ID. Callback barriers, rather than sleeps, ensure replay
 actually occurs while load is pending.
 
+The 2026-09-08 completion review adds three resumed-turn byte-stream tests:
+the peer withholds model and reasoning replies while a prompt is queued;
+no prompt RPC is emitted before both authoritative selections arrive. Rejected
+configuration blocks that prompt, while Cancel stays responsive. Controller
+wire tests also retain the first cross-version prompt until the replacement
+advertises its own vocabulary (including an empty list), filter stale choices,
+preserve unsent input on startup failure, and cancel held input without sending
+it after startup. Standard, synthesized-mode and Grok configuration paths all
+carry completion fences; queue acceptance alone never releases a prompt.
+
 These tests establish Cowboy protocol behavior, not restoration of a particular
 upstream CLI's on-disk native history, complete Controller/Machine installation,
-or release acceptance. A full resumed-turn fixture must still verify that the
-first queued prompt observes completed configuration restoration, not merely
-that setting commands were queued before it.
+or release acceptance. The real upstream native-history acceptance remains a
+separate requirement. The signed 3.1.14/1.2.2 production installation is recorded
+in [the publication receipt](releases/plugin-publication-2026-09-07.md), not in
+this earlier preparation snapshot.
 
 ## Proposed transition using the existing lifecycle
 

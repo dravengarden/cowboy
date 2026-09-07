@@ -7,8 +7,17 @@ shift || true
 native_flags=(--ci)
 native_profile=release
 if [ "${1:-}" = --debug ]; then native_flags+=(--debug); native_profile=debug; shift; fi
+native_report_target=
+if [ "${1:-}" = --receipt-path ]; then
+  native_report_target="${2:?--receipt-path requires an absolute path}"
+  shift 2
+  case "$native_report_target" in /*) ;; *) echo "receipt path must be absolute" >&2; exit 2;; esac
+  test ! -e "$native_report_target" && test ! -L "$native_report_target" || {
+    echo "refusing to overwrite a native receipt" >&2; exit 1;
+  }
+fi
 if [ "$#" != 0 ]; then
-  echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios} [--debug]" >&2
+  echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios} [--debug] [--receipt-path /absolute/new.json]" >&2
   exit 2
 fi
 case "$native_platform" in macos|ios-sim|ios) ;; *) echo "unknown native platform" >&2; exit 2;; esac
@@ -77,11 +86,18 @@ else
 fi
 test -d "$native_app" || { echo "Build returned no app at its exact output path: $native_app" >&2; exit 1; }
 cmp "$native_source/tauri/Cargo.lock" "$native_repo/apps/native-shell/tauri/Cargo.lock"
+if [ "$native_platform" = ios ]; then
+  # The exact unsigned archive becomes a SideStore input. Signing and version
+  # publication stay with the machine-owned publisher, never this build step.
+  mkdir "$native_build/Payload"
+  ditto "$native_app" "$native_build/Payload/Cowboy.app"
+  ditto -c -k --keepParent "$native_build/Payload" "$native_build/Cowboy.ipa"
+fi
 # Record the actual executable and source bytes, not a glob-selected DerivedData
 # product or an old receipt. Failure above leaves no success receipt.
-python3 - "$native_app" "$native_revision" "$native_platform" "$native_profile" "$native_build" <<'PY'
+python3 - "$native_app" "$native_revision" "$native_platform" "$native_profile" "$native_build" "$native_report_target" <<'PY'
 import hashlib, json, pathlib, plistlib, subprocess, sys
-app, revision, platform, profile, build = sys.argv[1:]
+app, revision, platform, profile, build, receipt_target = sys.argv[1:]
 app, build = pathlib.Path(app), pathlib.Path(build)
 info_path = app / ("Contents/Info.plist" if platform == "macos" else "Info.plist")
 info = plistlib.loads(info_path.read_bytes())
@@ -113,6 +129,14 @@ report = dict(source_revision=revision, platform=platform, profile=profile,
     rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
     signing="ad-hoc" if platform == "macos" else "unsigned",
     installed=False, real_login="not_checked", physical_device="not_checked")
+if platform == "ios":
+    ipa = build / "Cowboy.ipa"
+    report.update(ipa=str(ipa), ipa_sha256=hashlib.sha256(ipa.read_bytes()).hexdigest())
 (build / "receipt.json").write_text(json.dumps(report, indent=2) + "\n")
+if receipt_target:
+    # Exclusive creation rejects a racing file/symlink too. The caller owns
+    # the parent directory; failure above never leaves a success receipt here.
+    with pathlib.Path(receipt_target).open("x") as receipt:
+        receipt.write(json.dumps(report, indent=2) + "\n")
 print(json.dumps(report, indent=2))
 PY

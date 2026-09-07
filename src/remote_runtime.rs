@@ -81,6 +81,9 @@ struct Shared {
     /// preference reconciliation. This prevents an agent that rejects a value
     /// from causing a config-option event/retry loop.
     config_sync_epochs: Mutex<HashMap<String, String>>,
+    /// Keep prompts controller-owned until a replacement advertises the new
+    /// release's supported configuration, including an authoritative empty list.
+    config_startups: Mutex<HashSet<String>>,
     /// Sessions being atomically recycled. Old-worker events and snapshots are
     /// acknowledged but ignored until the reset-flavoured stop is accepted, so
     /// a late `Running` edge cannot drain a force-pushed prompt into the worker
@@ -180,6 +183,14 @@ impl RemoteRuntime {
                         .collect(),
                 ),
                 config_sync_epochs: Mutex::new(HashMap::new()),
+                config_startups: Mutex::new(
+                    bootstrap
+                        .workers
+                        .iter()
+                        .filter(|worker| worker.state == WorkerState::Starting)
+                        .map(|worker| worker.session_id.clone())
+                        .collect(),
+                ),
                 resetting: Mutex::new(HashSet::new()),
                 highwaters: Mutex::new(HashMap::new()),
                 notify,
@@ -304,6 +315,13 @@ impl RemoteRuntime {
         }
         let session_id = session.session_id.clone();
         let key = format!("ensure:{session_id}");
+        if !self.has_worker(&session_id) {
+            self.shared
+                .config_startups
+                .lock()
+                .insert(session_id.clone());
+            self.shared.config_sync_epochs.lock().remove(&session_id);
+        }
         self.queue(key, CoreCommand::EnsureSession { session });
         // Queue session-owned preferences before any prompt. Validate them
         // against a live or persisted options snapshot when one exists; a
@@ -334,6 +352,38 @@ impl RemoteRuntime {
     }
 
     pub fn cancel(&self, session_id: &str) {
+        // A held prompt has not reached ACP: cancelling only the idle worker
+        // would let it run later. Record the cancelled turn without its RPC.
+        let cancelled = {
+            let startups = self.shared.config_startups.lock();
+            if startups.contains(session_id) {
+                take_pending_prompts(&self.shared, session_id)
+            } else {
+                Vec::new()
+            }
+        };
+        for command in cancelled {
+            let CoreCommand::Prompt { content, cmid, .. } = command else {
+                unreachable!("only prompts withdrawn")
+            };
+            let origin = crate::prompt_origin::origin_from_cmid(cmid.as_deref());
+            for (index, content) in content.into_iter().enumerate() {
+                let mut update =
+                    serde_json::json!({"sessionUpdate":"user_message_chunk", "content":content});
+                crate::prompt_origin::apply_prompt_origin(&mut update, &origin);
+                self.shared.hub.push_tagged(
+                    session_id,
+                    Event::Update { update },
+                    if index == 0 { cmid.clone() } else { None },
+                );
+            }
+            self.shared.hub.push(
+                session_id,
+                Event::TurnEnd {
+                    stop_reason: "Cancelled".to_owned(),
+                },
+            );
+        }
         let command_id = self.next_id("cancel");
         self.queue(
             command_id.clone(),
@@ -362,6 +412,11 @@ impl RemoteRuntime {
     }
 
     pub fn stop(&self, session_id: &str) {
+        fail_config_startup(
+            &self.shared,
+            session_id,
+            "session stopped before configuration completed",
+        );
         self.shared.declarations.lock().remove(session_id);
         self.shared.config_sync_epochs.lock().remove(session_id);
         let command_id = self.next_id("stop");
@@ -399,6 +454,10 @@ impl RemoteRuntime {
                     })
                 });
         self.shared.resetting.lock().insert(session_id.clone());
+        self.shared
+            .config_startups
+            .lock()
+            .insert(session_id.clone());
         self.shared.config_sync_epochs.lock().remove(&session_id);
         if !same_provider_release {
             // A lost acknowledgement can leave old-release values queued for
@@ -772,6 +831,12 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin>(
         .collect();
     commands.sort_by_key(|(_, command)| command_priority(command));
     for (key, command) in commands {
+        if let CoreCommand::Prompt { session_id, .. } = &command {
+            let startups = shared.config_startups.lock();
+            if startups.contains(session_id) || !shared.pending.lock().contains_key(&key) {
+                continue;
+            }
+        }
         write_broker_frame(writer, &Frame::CoreCommand { command }).await?;
         shared.sent.lock().insert(key);
     }
@@ -916,6 +981,19 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
+                    if let RuntimeEvent::Status {
+                        state: WorkerState::Crashed | WorkerState::Exited,
+                        detail,
+                    } = &event
+                    {
+                        fail_config_startup(
+                            shared,
+                            &session_id,
+                            detail
+                                .as_deref()
+                                .unwrap_or("worker exited before configuration completed"),
+                        );
+                    }
                     let worker = shared.workers.lock().get(&session_id).cloned();
                     let idle_guard = worker
                         .as_ref()
@@ -981,6 +1059,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                 );
             }
             if !accepted {
+                if matches!(&command, Some(CoreCommand::EnsureSession { .. })) || reset_stop {
+                    fail_config_startup(
+                        shared,
+                        &session_id,
+                        reason.as_deref().unwrap_or("worker startup rejected"),
+                    );
+                }
                 if reason.as_deref().is_some_and(|message| {
                     message.starts_with("session workspace was replaced or removed:")
                 }) {
@@ -1219,6 +1304,46 @@ fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
         worker.config_options.as_ref(),
         false,
     );
+    if shared.config_startups.lock().remove(&worker.session_id) {
+        let _ = shared.notify.send(());
+    }
+}
+
+fn fail_config_startup(shared: &Shared, session_id: &str, reason: &str) {
+    let rejected = {
+        let mut startups = shared.config_startups.lock();
+        if !startups.remove(session_id) {
+            return;
+        }
+        take_pending_prompts(shared, session_id)
+    };
+    for command in rejected {
+        handle_rejected_command(
+            &shared.hub,
+            session_id,
+            Some(command),
+            Some(reason.to_owned()),
+        );
+    }
+}
+
+fn take_pending_prompts(shared: &Shared, session_id: &str) -> Vec<CoreCommand> {
+    let mut rejected = Vec::new();
+    shared.pending.lock().retain(|key, command| {
+        if matches!(command, CoreCommand::Prompt { session_id: owner, .. } if owner == session_id) {
+            rejected.push((key.clone(), command.clone()));
+            false
+        } else {
+            true
+        }
+    });
+    rejected
+        .into_iter()
+        .map(|(key, command)| {
+            shared.sent.lock().remove(&key);
+            command
+        })
+        .collect()
 }
 
 fn queue_config_value(
@@ -1304,6 +1429,13 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         return false;
     }
     shared.hub.reconcile_provider_release(worker);
+    if matches!(worker.state, WorkerState::Crashed | WorkerState::Exited) {
+        fail_config_startup(
+            shared,
+            &worker.session_id,
+            "worker exited before configuration completed",
+        );
+    }
     let idle_guard = idle_snapshot_guard(shared, worker);
     if let Some(agent_session_id) = &worker.agent_session_id {
         shared
@@ -1710,6 +1842,7 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
         session.generation.clone_from(&shared.desired_generation);
     }
     shared.resetting.lock().insert(session_id.to_owned());
+    shared.config_startups.lock().insert(session_id.to_owned());
     shared.config_sync_epochs.lock().remove(session_id);
     shared
         .declarations
@@ -2211,6 +2344,143 @@ mod tests {
             .filter(|command| matches!(command, CoreCommand::SetConfigOption { .. }))
             .collect::<Vec<_>>();
         assert!(config_commands.is_empty());
+    }
+
+    async fn pending_wire_commands(runtime: &RemoteRuntime) -> Vec<CoreCommand> {
+        let mut bytes = Vec::new();
+        send_pending(&runtime.shared, &mut bytes).await.unwrap();
+        let mut input = bytes.as_slice();
+        let mut commands = Vec::new();
+        while let Some(frame) = read_frame(&mut input).await.unwrap() {
+            let Frame::CoreCommand { command } = frame else {
+                panic!("unexpected pending frame")
+            };
+            commands.push(command);
+        }
+        commands
+    }
+
+    #[tokio::test]
+    async fn cross_version_prompt_stays_owned_until_new_config_is_advertised() {
+        for empty_options in [false, true] {
+            let runtime =
+                RemoteRuntime::for_test(hub_with_stale_spark_preferences(), vec![snapshot("s")]);
+            let mut replacement = snapshot("s");
+            replacement.worker_epoch = "replacement".to_owned();
+            replacement
+                .launch
+                .as_mut()
+                .unwrap()
+                .provider_generation_digest = "new-plugin".to_owned();
+            runtime.reset(replacement.launch.clone().unwrap());
+            let prompt = runtime.prompt(
+                "s",
+                vec![serde_json::json!({"type":"text", "text":"first retained turn"})],
+                Some("retained".to_owned()),
+            );
+            let before = pending_wire_commands(&runtime).await;
+            assert!(
+                !before
+                    .iter()
+                    .any(|command| matches!(command, CoreCommand::Prompt { .. }))
+            );
+            assert!(!runtime.shared.sent.lock().contains(&prompt));
+            replacement.config_options = Some(if empty_options {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([{"id":"model", "currentValue":"new-default", "options":[
+                    {"value":"new-default"}, {"value":"gpt-5.3-codex-spark"}
+                ]}])
+            });
+            sync_config_for_worker(&runtime.shared, &replacement);
+            let after = pending_wire_commands(&runtime).await;
+            let prompt_index = after
+                .iter()
+                .position(|command| matches!(command, CoreCommand::Prompt { .. }))
+                .unwrap();
+            let configs: Vec<_> = after
+                .iter()
+                .enumerate()
+                .filter_map(|(index, command)| match command {
+                    CoreCommand::SetConfigOption {
+                        config_id, value, ..
+                    } => Some((index, config_id.as_str(), value)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(configs.len(), usize::from(!empty_options));
+            if !empty_options {
+                assert!(configs[0].0 < prompt_index);
+                assert_eq!(configs[0].1, "model");
+                assert_eq!(*configs[0].2, serde_json::json!("gpt-5.3-codex-spark"));
+            }
+            assert!(runtime.shared.sent.lock().contains(&prompt));
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_startup_returns_unsent_prompt_exactly_once() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.ensure(snapshot("s").launch.unwrap());
+        let prompt = runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text", "text":"keep queued"})],
+            Some("keep-cmid".to_owned()),
+        );
+        assert!(
+            !pending_wire_commands(&runtime)
+                .await
+                .iter()
+                .any(|command| matches!(command, CoreCommand::Prompt { .. }))
+        );
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Crashed;
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s".to_owned(), worker.clone());
+        for _ in 0..2 {
+            apply_snapshot(&runtime.shared, &worker);
+        }
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
+        assert!(!runtime.shared.pending.lock().contains_key(&prompt));
+        assert!(!runtime.shared.sent.lock().contains(&prompt));
+        assert!(!runtime.shared.config_startups.lock().contains("s"));
+    }
+
+    #[tokio::test]
+    async fn cancel_before_configuration_never_sends_the_held_prompt() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.ensure(snapshot("s").launch.unwrap());
+        let prompt = runtime.prompt(
+            "s",
+            vec![serde_json::json!({"type":"text", "text":"cancel before startup"})],
+            Some("cancel-cmid".to_owned()),
+        );
+        runtime.cancel("s");
+        runtime.cancel("s");
+        let mut worker = snapshot("s");
+        worker.config_options = Some(serde_json::json!([]));
+        sync_config_for_worker(&runtime.shared, &worker);
+        let commands = pending_wire_commands(&runtime).await;
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, CoreCommand::Prompt { .. }))
+        );
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, CoreCommand::Cancel { .. }))
+        );
+        assert!(!runtime.shared.sent.lock().contains(&prompt));
+        let events = hub.snapshot("s").unwrap().0;
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason } if stop_reason == "Cancelled")).count(), 1);
+        assert_eq!(events.iter().filter(|event| matches!(&event.event, Event::Update { update } if update.pointer("/content/text").and_then(serde_json::Value::as_str) == Some("cancel before startup"))).count(), 1);
+        assert_eq!(hub.session_info("s").unwrap().queue_count, 0);
     }
 
     #[tokio::test]

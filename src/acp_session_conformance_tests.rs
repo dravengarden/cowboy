@@ -318,6 +318,174 @@ fn resume_and_load() -> Value {
     json!({"loadSession": true, "sessionCapabilities": {"resume": {}}})
 }
 
+fn fixture_options(model: &str, effort: &str) -> Value {
+    json!([
+        {"id":"model", "name":"Model", "type":"select", "currentValue":model,
+         "options":[{"value":"old-model","name":"Old"},{"value":"saved-model","name":"Saved"}]},
+        {"id":"reasoning_effort", "name":"Reasoning", "type":"select", "currentValue":effort,
+         "options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}
+    ])
+}
+
+/// The peer withholds real ACP replies while a restored prompt is already
+/// queued. A command ACK from the Machine must not let that prompt bypass the
+/// provider's authoritative model + reasoning snapshot.
+#[allow(clippy::too_many_lines)] // Keep the held-reply protocol transcript in one place.
+async fn exercise_configured_resume(reject: bool, cancel: bool) {
+    let (state, sink) = fixture_state(true);
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let main_state = state.clone();
+    let client = Client.builder().connect_with(
+        ByteStreams::new(client_write.compat_write(), client_read.compat()),
+        async move |cx: ConnectionTo<Agent>| {
+            run_session(
+                &main_state,
+                cx,
+                Some(NATIVE.to_owned()),
+                PathBuf::from(CWD),
+                &mut command_rx,
+                "fixture-provider",
+                &startup,
+            )
+            .await
+        },
+    );
+    let peer = async {
+        let (read, mut write) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(read).lines();
+        for method in ["initialize", "session/resume"] {
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            let result = if method == "initialize" {
+                json!({"protocolVersion":1, "agentCapabilities":resume_and_load()})
+            } else {
+                assert_eq!(request["params"]["sessionId"], NATIVE);
+                assert_eq!(request["params"]["cwd"], CWD);
+                json!({"configOptions":fixture_options("old-model", "low")})
+            };
+            send_json(
+                &mut write,
+                json!({"jsonrpc":"2.0", "id":request["id"], "result":result}),
+            )
+            .await;
+        }
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        for (id, value) in [("model", "saved-model"), ("reasoning_effort", "high")] {
+            command_tx
+                .send(AgentCommand::SetConfigOption {
+                    config_id: id.to_owned(),
+                    value: json!(value),
+                })
+                .unwrap();
+        }
+        let (done, mut completed) = oneshot::channel();
+        command_tx
+            .send(AgentCommand::Prompt(
+                vec![
+                    serde_json::from_value(json!({"type":"text", "text":"queued after reload"}))
+                        .unwrap(),
+                ],
+                Some("restored-first-prompt".to_owned()),
+                Some(done),
+            ))
+            .unwrap();
+        for (index, id) in ["model", "reasoning_effort"].into_iter().enumerate() {
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], "session/set_config_option");
+            assert_eq!(request["params"]["sessionId"], NATIVE);
+            assert_eq!(request["params"]["configId"], id);
+            // Hold the authoritative reply. Neither the next mutation nor the
+            // first prompt may appear on the wire during this window.
+            assert!(
+                tokio::time::timeout(Duration::from_millis(50), lines.next_line())
+                    .await
+                    .is_err()
+            );
+            if cancel && index == 0 {
+                command_tx.send(AgentCommand::Cancel).unwrap();
+                let cancellation: Value =
+                    serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+                assert_eq!(cancellation["method"], "session/cancel");
+            }
+            let response = if reject && index == 0 {
+                json!({"jsonrpc":"2.0", "id":request["id"], "error":{
+                    "code":-32603, "message":"fixture rejects restored model"
+                }})
+            } else {
+                json!({"jsonrpc":"2.0", "id":request["id"], "result":{
+                    "configOptions":fixture_options("saved-model", if index == 0 {"low"} else {"high"})
+                }})
+            };
+            send_json(&mut write, response).await;
+        }
+        if reject || cancel {
+            let error = (&mut completed).await.unwrap().unwrap_err();
+            assert!(
+                error.contains(if cancel {
+                    "cancelled"
+                } else {
+                    "fixture rejects"
+                }),
+                "{error}"
+            );
+        } else {
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], "session/prompt");
+            assert_eq!(request["params"]["sessionId"], NATIVE);
+            assert_eq!(
+                sink.hub.persisted_config_options(SESSION),
+                Some(fixture_options("saved-model", "high"))
+            );
+            send_json(
+                &mut write,
+                json!({"jsonrpc":"2.0", "id":request["id"], "result":{"stopReason":"end_turn"}}),
+            )
+            .await;
+            assert!(completed.await.unwrap().is_ok());
+        }
+        drop(command_tx);
+        // Closing the command loop must not release a cancelled/rejected turn.
+        assert!(lines.next_line().await.unwrap().is_none());
+    };
+    let (result, ()) =
+        tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(client, peer) })
+            .await
+            .unwrap();
+    assert!(result.is_ok(), "{result:?}");
+    let observation = Observation {
+        result: Ok(()),
+        state,
+        sink,
+        requests: vec![],
+    };
+    observation.assert_retained_identity();
+    assert_eq!(&observation.texts()[..2], ["saved user", "saved answer"]);
+}
+
+#[tokio::test]
+async fn resumed_prompt_waits_for_authoritative_config_replies() {
+    exercise_configured_resume(false, false).await;
+}
+
+#[tokio::test]
+async fn rejected_restore_blocks_the_queued_prompt() {
+    exercise_configured_resume(true, false).await;
+}
+
+#[tokio::test]
+async fn cancel_stays_responsive_while_configuration_is_pending() {
+    exercise_configured_resume(false, true).await;
+}
+
 #[tokio::test]
 async fn resume_uses_native_identity_without_load_or_new() {
     let observed = exercise(true, resume_and_load(), false).await;

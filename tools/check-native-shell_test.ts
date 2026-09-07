@@ -196,6 +196,10 @@ Deno.test("native build is locked, fresh and build-only", async () => {
       "-- --locked",
       "--no-sign",
       "receipt.json",
+      "--receipt-path",
+      "ipa_sha256",
+      "ditto -c -k --keepParent",
+      'open("x")',
     ]
   ) {
     assert(

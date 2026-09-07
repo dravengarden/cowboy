@@ -4212,6 +4212,7 @@ fn session_id_from_sync_state(state: &str) -> Option<&str> {
         .filter(|id| !id.is_empty())
 }
 
+#[cfg(test)]
 async fn resolve_product_principal(
     product_auth_enabled: bool,
     store: Option<&Store>,
@@ -4242,8 +4243,43 @@ async fn resolve_product_request_principal(
     Some((product_principal(hub, &user), Some(session)))
 }
 
+/// The same authentication context serves API middleware and the standalone
+/// authentication router. A verified request extension is reused by handlers:
+/// sender-constrained proof nonces must never be consumed twice.
+struct ProductRequestAuth<'a> {
+    product_auth_enabled: bool,
+    store: Option<&'a Store>,
+    hub: &'a Hub,
+    device_access: &'a crate::client_auth::DeviceAccessSessions,
+    product_authentication: &'a crate::auth_plugins::ProductAuthentication,
+}
+
+impl<'a> From<&'a AppState> for ProductRequestAuth<'a> {
+    fn from(state: &'a AppState) -> Self {
+        Self {
+            product_auth_enabled: state.product_auth_enabled,
+            store: state.store.as_ref(),
+            hub: &state.hub,
+            device_access: &state.device_access,
+            product_authentication: &state.product_authentication,
+        }
+    }
+}
+
+impl<'a> From<&'a ProductAuthState> for ProductRequestAuth<'a> {
+    fn from(state: &'a ProductAuthState) -> Self {
+        Self {
+            product_auth_enabled: state.product_auth_enabled,
+            store: state.store.as_ref(),
+            hub: &state.hub,
+            device_access: &state.device_access,
+            product_authentication: &state.product_authentication,
+        }
+    }
+}
+
 async fn resolve_product_api_request_principal(
-    state: &AppState,
+    state: ProductRequestAuth<'_>,
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
@@ -4282,7 +4318,7 @@ async fn resolve_product_api_request_principal(
             );
             return Err(());
         }
-        let Some(store) = state.store.as_ref() else {
+        let Some(store) = state.store else {
             return Ok(None);
         };
         let user = store
@@ -4306,15 +4342,15 @@ async fn resolve_product_api_request_principal(
             });
         }
         return Ok(Some(AuthenticatedProductRequest {
-            principal: product_principal(&state.hub, &user),
+            principal: product_principal(state.hub, &user),
             cookie_session: None,
             device_identity: Some(identity),
         }));
     }
     Ok(resolve_product_request_principal(
         state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
+        state.store,
+        state.hub,
         headers,
     )
     .await
@@ -4573,7 +4609,7 @@ async fn enforce_product_api(
         _ => {}
     }
     let resolved = match resolve_product_api_request_principal(
-        &state,
+        ProductRequestAuth::from(state.as_ref()),
         &method,
         request.uri(),
         request.headers(),
@@ -6338,7 +6374,13 @@ async fn api_auth_oidc_backchannel_logout(
     }
 }
 
-async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) -> Response {
+async fn api_auth_me(
+    State(state): State<ProductAuthState>,
+    authenticated: Option<Extension<AuthenticatedProductRequest>>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+) -> Response {
     if !state.product_auth_enabled {
         return Json(serde_json::json!({
             "account": "local",
@@ -6347,23 +6389,22 @@ async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) 
         }))
         .into_response();
     }
-    let cookie_session = if crate::product_auth::bearer_token(&headers).is_none() {
-        product_session_and_user_from_cookie(&state, &headers)
-            .await
-            .map(|(session, _)| session)
-    } else {
-        None
+    let authenticated = match authenticated {
+        Some(Extension(authenticated)) => authenticated,
+        None => match resolve_product_api_request_principal(
+            ProductRequestAuth::from(&state),
+            &method,
+            &uri,
+            &headers,
+        )
+        .await
+        {
+            Ok(Some(authenticated)) => authenticated,
+            Ok(None) | Err(()) => return StatusCode::UNAUTHORIZED.into_response(),
+        },
     };
-    let Some(principal) = resolve_product_principal(
-        state.product_auth_enabled,
-        state.store.as_ref(),
-        &state.hub,
-        &headers,
-    )
-    .await
-    else {
-        return StatusCode::UNAUTHORIZED.into_response();
-    };
+    let principal = authenticated.principal;
+    let cookie_session = authenticated.cookie_session;
     let user = match state.store.as_ref() {
         Some(store) => store.user_by_id(&principal.user_id).await.ok().flatten(),
         None => None,
@@ -6378,10 +6419,10 @@ async fn api_auth_me(State(state): State<ProductAuthState>, headers: HeaderMap) 
         )
         .await
         {
-            Ok(me) => Json(me).into_response(),
+            Ok(me) => no_store_json(StatusCode::OK, me),
             Err(error) => product_session_policy_unavailable(error),
         },
-        None => Json(product_me(&state.hub, &principal.username)).into_response(),
+        None => no_store_json(StatusCode::OK, product_me(&state.hub, &principal.username)),
     }
 }
 
@@ -19678,6 +19719,243 @@ mod product_auth_api_tests {
             .unwrap();
         });
         (format!("http://{addr}"), handle)
+    }
+
+    fn me_proof_headers(
+        key: &SigningKey,
+        device: &str,
+        token: &str,
+        method: &str,
+        path: &str,
+        now: i64,
+    ) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+        for (name, value) in
+            crate::client_auth::signed_proof_headers(key, device, token, method, path, now).unwrap()
+        {
+            headers.insert(
+                header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+        }
+        headers
+    }
+
+    async fn me_test_user(store: &Store, disabled: bool) -> crate::store::ProductUser {
+        let now = auth_now_ms();
+        let user = crate::store::ProductUser {
+            id: "c".repeat(32),
+            username: "device-user".to_owned(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.to_owned(),
+            // These tests authorize an ephemeral proof key, never a password.
+            password_hash: "unused-device-fixture".to_owned(),
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: disabled.then_some(now),
+        };
+        store.insert_user(&user).await.unwrap();
+        user
+    }
+
+    #[tokio::test]
+    async fn auth_me_accepts_device_proofs_once_and_reuses_middleware_identity() {
+        let (store, root) = test_store().await;
+        let user = me_test_user(&store, false).await;
+        let state = auth_state(Hub::new(), Some(store));
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let public = crate::client_auth::public_key_to_base64(&key);
+        let device = "dddddddddddddddddddddddddddddddd";
+        let (token, _) = state
+            .device_access
+            .issue(device, &user.id, &public, auth_now_ms())
+            .unwrap();
+        let (base, server) = spawn_auth(state.clone()).await;
+        let client = reqwest::Client::new();
+        let path = "/api/auth/me?source=cli";
+        for (method, signed_path, now) in [
+            ("GET", "/api/plugins", auth_now_ms()),
+            ("POST", path, auth_now_ms()),
+            ("GET", "/api/auth/me?source=different", auth_now_ms()),
+            ("GET", path, auth_now_ms() - 3_600_000),
+        ] {
+            let response = client
+                .get(format!("{base}{path}"))
+                .headers(me_proof_headers(
+                    &key,
+                    device,
+                    &token,
+                    method,
+                    signed_path,
+                    now,
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        assert_eq!(
+            client
+                .get(format!("{base}{path}"))
+                .bearer_auth(&token)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let headers = me_proof_headers(&key, device, &token, "GET", path, auth_now_ms());
+        let response = client
+            .get(format!("{base}{path}"))
+            .headers(headers.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let me = response.json::<serde_json::Value>().await.unwrap();
+        assert_eq!(me["account"], "device-user");
+        assert!(me.get("access_token").is_none());
+        assert_eq!(
+            client
+                .get(format!("{base}{path}"))
+                .headers(headers)
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let headers = me_proof_headers(&key, device, &token, "GET", path, auth_now_ms());
+        let uri: Uri = path.parse().unwrap();
+        let verified = resolve_product_api_request_principal(
+            ProductRequestAuth::from(&state),
+            &Method::GET,
+            &uri,
+            &headers,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        // This is the production middleware's extension. The handler must not
+        // authenticate its already-consumed nonce a second time.
+        let response = api_auth_me(
+            State(state.clone()),
+            Some(Extension(verified)),
+            Method::GET,
+            uri,
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        state.device_access.revoke_device(device);
+        assert_eq!(
+            client
+                .get(format!("{base}{path}"))
+                .headers(me_proof_headers(
+                    &key,
+                    device,
+                    &token,
+                    "GET",
+                    path,
+                    auth_now_ms()
+                ))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        server.abort();
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_me_keeps_automation_policy_scopes_and_expiry() {
+        let (store, root) = test_store().await;
+        let user = me_test_user(&store, false).await;
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let public = crate::client_auth::public_key_to_base64(&key);
+        for (enabled, scope, age, expected) in [
+            (true, "api:read", 0, StatusCode::OK),
+            (false, "api:read", 0, StatusCode::UNAUTHORIZED),
+            (true, "sessions:write", 0, StatusCode::UNAUTHORIZED),
+            (true, "api:read", 3_600_000, StatusCode::UNAUTHORIZED),
+        ] {
+            let mut state = auth_state(Hub::new(), Some(store.clone()));
+            let mut authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
+            authentication.automation.enabled = enabled;
+            state.product_authentication = Arc::new(authentication);
+            let (token, _) = state
+                .device_access
+                .issue_automation(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    &user.id,
+                    &public,
+                    vec![scope.to_owned()],
+                    auth_now_ms() - age,
+                    60_000,
+                )
+                .unwrap();
+            let (base, server) = spawn_auth(state.clone()).await;
+            let response = reqwest::Client::new()
+                .get(format!("{base}/api/auth/me"))
+                .headers(me_proof_headers(
+                    &key,
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    &token,
+                    "GET",
+                    "/api/auth/me",
+                    auth_now_ms(),
+                ))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+            server.abort();
+            std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_me_rejects_disabled_device_users() {
+        let (store, root) = test_store().await;
+        let user = me_test_user(&store, true).await;
+        let state = auth_state(Hub::new(), Some(store));
+        let key = crate::client_auth::new_signing_key().unwrap();
+        let (token, _) = state
+            .device_access
+            .issue(
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                &user.id,
+                &crate::client_auth::public_key_to_base64(&key),
+                auth_now_ms(),
+            )
+            .unwrap();
+        let (base, server) = spawn_auth(state.clone()).await;
+        let response = reqwest::Client::new()
+            .get(format!("{base}/api/auth/me"))
+            .headers(me_proof_headers(
+                &key,
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                &token,
+                "GET",
+                "/api/auth/me",
+                auth_now_ms(),
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        server.abort();
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
     }
 
     #[tokio::test]

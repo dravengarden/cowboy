@@ -2,6 +2,19 @@ Cowboy pluginization started from commit `69defc1d` on branch
 `cowboy/sess-1788279284752`. This candidate contains the completed
 core-extraction implementation and the subsequent design-review corrections.
 
+**Completion implementation — 2026-09-08:** `/api/auth/me` now shares the
+validated device/automation principal with API middleware, without consuming
+proof nonces twice; signature binding, expiry, revocation, disabled users and
+automation scopes have regression coverage. Resumed prompts now wait for the
+replacement's supported options at the Controller boundary and authoritative
+configuration replies at the ACP boundary. Failure preserves unsent input;
+cancellation never releases it after startup. The native builder additionally
+produces an exact unsigned IPA and an exclusive, digest-bound publisher receipt.
+`just check-compact` passed: 693 main Rust tests, 1170 Web tests, six isolated
+PostgreSQL checks, and the native/Plugin/feature/dependency/build gates. These
+are implementation results, not yet a new production/native distribution
+receipt. See the migration document for the remaining real-history boundary.
+
 **Current production state — 2026-09-08 Asia/Shanghai:** all seven current
 Plugins are signed, published and installed on **both Hawk and Falcon**: six
 Agent Plugins **3.1.14**, Zed **1.2.2**, component release **2.7.0**. Final
