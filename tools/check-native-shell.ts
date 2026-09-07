@@ -32,6 +32,15 @@ export async function verifyNativeShell(repository: string): Promise<void> {
   const toolchain = JSON.parse(await read("toolchain.json"));
   const manifest = await read("tauri/Cargo.toml");
   const lock = await read("tauri/Cargo.lock");
+  // The pinned unused-dependency checker cannot scan build.rs. Keep its one
+  // documented build-dependency exception backed by the real closed entrypoint.
+  requireValue(
+    !/^\s*build\s*=/m.test(manifest) &&
+      /^\s*fn\s+main\(\)\s*\{\s*tauri_build::build\(\);?\s*\}\s*$/.test(
+        await read("tauri/build.rs"),
+      ),
+    "native build must invoke tauri_build::build from the default build.rs",
+  );
   requireValue(
     /^\[workspace\]$/m.test(manifest),
     "native crate needs an independent workspace",

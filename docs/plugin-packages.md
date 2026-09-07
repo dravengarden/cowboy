@@ -699,7 +699,8 @@ fixture with a temporary signing key, and uses a loopback-only network namespace
 with no inherited Service/Provider credentials. It exercises the old reader's
 actual incompatibility, the bridge's exact legacy selection across partial and
 complete publication and cold restart, candidate parsing of both signed
-identities, supported-signature rejection, and the bridge's refusal after
+identities, candidate future-schema exclusion and missing-pin rejection,
+supported-signature rejection, and the bridge's refusal after
 one-way host authority. Only disposable copies are modified; fixture keys and
 data are deleted before writing the exclusive success receipt.
 
@@ -708,6 +709,17 @@ Catalog inspection, not host-policy or authentication validation. Its normal
 startup also refuses existing Catalog-only/per-host authority markers. This
 gate neither changes nor accepts the actual active/automatic-rollback profile
 floor, publishes a release, checks real login, or reverses migrated storage.
+
+The host-capable Controller retains `--check-plugin-catalog` as a Catalog-only
+diagnostic, mutually exclusive with `--check-plugin-hosts`. It accepts signed
+schema-1/2 releases and skips future schemas before opening their package or
+trusting identity fields. Missing envelopes remain incomplete publication;
+malformed, ambiguous, linked, non-regular or oversized envelopes and invalid
+supported releases still fail closed. Skipped releases cannot satisfy an exact
+host pin. This diagnostic deliberately does not validate activation policy,
+including cutover authority; normal startup and `--check-plugin-hosts` still
+enforce that policy before creating Service state. The full Controller does
+not inherit the legacy bridge's blanket post-cutover refusal.
 After host authority is activated, recovery needs a host-capable Controller
 and its accepted policy, not this legacy reader. Keep the bridge backport
 separate from the full Plugin migration branch.

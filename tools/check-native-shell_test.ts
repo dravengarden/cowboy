@@ -54,6 +54,20 @@ Deno.test("complete native shell is owned by this checkout", () =>
 for (
   const [name, path, before, after, message] of [
     [
+      "unused native build dependency",
+      "tauri/build.rs",
+      "tauri_build::build()",
+      "",
+      "native build must invoke",
+    ],
+    [
+      "disabled native build script",
+      "tauri/Cargo.toml",
+      "[package]",
+      "[package]\nbuild = false",
+      "native build must invoke",
+    ],
+    [
       "unlocked manifest",
       "tauri/Cargo.toml",
       '"=2.11.2"',

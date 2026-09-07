@@ -2965,10 +2965,10 @@ mod tests {
         login_challenge_tokens, managed_provider_environment, npm_package_for_component,
         npm_script_shell_with, npm_update_is_confirmed_by_inventory, parse_workspaces,
         persist_enrolled_machine_id, pin_cli_runtime_args, provider_auth_roll_target,
-        provider_for_component, queue_controller_frame, reject_untrusted_workspace, resolve_runtime_machine_id,
-        select_code_adapter_executable, selected_zed_pair, send_frame_with_timeout,
-        validate_controller_url, workspace_path_allowed, write_controller_messages, write_runtime_frames,
-        write_runtime_frames_with_timeout,
+        provider_for_component, queue_controller_frame, reject_untrusted_workspace,
+        resolve_runtime_machine_id, select_code_adapter_executable, selected_zed_pair,
+        send_frame_with_timeout, validate_controller_url, workspace_path_allowed,
+        write_controller_messages, write_runtime_frames, write_runtime_frames_with_timeout,
     };
     use crate::machine_components::ComponentStore;
     use crate::machine_plugins::PluginInventoryReceipt;

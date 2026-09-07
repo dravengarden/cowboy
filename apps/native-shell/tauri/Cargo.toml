@@ -6,6 +6,12 @@ edition = "2021"
 publish = false
 rust-version = "1.97.1"
 
+# cargo-machete 0.9.2 --with-metadata collects build dependencies but does not
+# scan build.rs (https://github.com/bnjbvr/cargo-machete/issues/127). The native
+# source gate separately verifies the actual tauri_build::build() entrypoint.
+[package.metadata.cargo-machete]
+ignored = ["tauri-build"]
+
 # Independent native closure: never link Tauri into the Controller or Machine.
 [workspace]
 resolver = "3"

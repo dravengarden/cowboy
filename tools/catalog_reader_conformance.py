@@ -306,6 +306,41 @@ def main():
         check("candidate Controller reads both signed release formats",
               candidate_reads_both(latest_report, legacy, future) and not data.exists())
 
+        # The host-capable successor retains the bridge diagnostic, but does
+        # not inherit its blanket post-cutover startup prohibition. Future
+        # formats remain opaque even when their unsigned identity mimics a pin.
+        opaque_package = catalog / "opaque.cowboy-plugin"
+        opaque_package.write_bytes(b"not a supported package")
+        opaque = dict(immutable_identity(future), release_schema=3,
+                      artifact_digest="sha256:" + "0" * 64)
+        opaque_package.with_suffix(".release.json").write_text(json.dumps(opaque))
+        latest_report = json.loads(command(*reader_arguments(candidate, data, catalog, candidate=True)).stdout)
+        check("candidate ignores opaque future format without replacing signed defaults",
+              candidate_reads_both(latest_report, legacy, future) and not data.exists())
+        inventory = json.loads(command(*reader_arguments(candidate, data, catalog)).stdout)
+        check("candidate preserves the Catalog-only diagnostic with both exact releases",
+              inventory.get("schema") == "dravengarden.cowboy.catalog-reader-preflight/v1"
+              and inventory.get("status") == "readable"
+              and inventory.get("supported_release_schema") == 2
+              and sorted(inventory.get("releases", []), key=lambda entry: entry["plugin_id"])
+              == sorted([immutable_identity(legacy), immutable_identity(future)], key=lambda entry: entry["plugin_id"])
+              and not data.exists())
+        policy = root / "host-policy.json"
+        policy.write_text(json.dumps(dict(schema="dravengarden.cowboy.plugin-host-activation/v1",
+                                         source_policy="bootstrap", hosts=[immutable_identity(opaque)])))
+        policy.chmod(0o600)
+        rejected = command(*reader_arguments(candidate, data, catalog, candidate=True),
+                           "--plugin-host-config", policy, success=False)
+        check("future identity cannot satisfy an exact candidate host selection",
+              rejected.returncode != 0 and "missing from the trusted Catalog" in rejected.stderr
+              and not data.exists())
+        bad_future = dict(future, signature="")
+        new_release.write_text(json.dumps(bad_future))
+        rejected = command(*reader_arguments(candidate, data, catalog, candidate=True), success=False)
+        check("candidate rejects invalid supported schema-2 releases before initialization",
+              rejected.returncode != 0 and "unsigned" in rejected.stderr and not data.exists())
+        shutil.copyfile(envelope, new_release)
+
         # This only corrupts a disposable COPY, never a published signed release.
         bad = dict(legacy, signature="")
         old_release.write_text(json.dumps(bad))
