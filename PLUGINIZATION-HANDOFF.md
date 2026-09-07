@@ -10,10 +10,17 @@ replacement's supported options at the Controller boundary and authoritative
 configuration replies at the ACP boundary. Failure preserves unsent input;
 cancellation never releases it after startup. The native builder additionally
 produces an exact unsigned IPA and an exclusive, digest-bound publisher receipt.
-`just check-compact` passed: 693 main Rust tests, 1170 Web tests, six isolated
-PostgreSQL checks, and the native/Plugin/feature/dependency/build gates. These
-are implementation results, not yet a new production/native distribution
-receipt. See the migration document for the remaining real-history boundary.
+`just check-compact` passed: 696 main Rust tests, 1170 Web tests, six isolated
+PostgreSQL checks, and the native/Plugin/feature/dependency/build gates. The
+follow-up CLI login now verifies cached access against `/api/auth/me` and uses
+the owned rotating refresh path after a Controller restart; a cached expiry
+alone no longer reports successful login. Deployment health additionally proves
+workspace revision and sorted-ID fingerprint without exposing private paths.
+
+Native **0.1.28 / 20260907174051** is published through the canonical SideStore
+source from clean Cowboy `6edd2936`, using the project-owned unsigned IPA builder
+and digest-bound receipt. No external shell checkout or static-library overlay
+was used. Physical installation, Passkey/OIDC and IME acceptance remain open.
 
 **Current production state — 2026-09-08 Asia/Shanghai:** all seven current
 Plugins are signed, published and installed on **both Hawk and Falcon**: six
@@ -23,10 +30,13 @@ exact published digests. The Catalog has 50 signed releases; historical bytes
 and previous Agent generations remain intact.
 
 The Host/storage cutover is deployed with catalog-only authority. Current
-Controller is `313b3fee`, Web `54884f7e` (SW 1636), and both Machines use
-`1d0a5064` / `worker-4718f2ebbba9e4069713`. Explicit device approval succeeded;
-the latest continuation fixed an artifact-download root mismatch and completed
-installation without another Machine restart or rebinding existing sessions.
+Controller is `6edd2936`, Web `54884f7e` (SW 1636), and both Machines use
+`6edd2936` / `worker-8acc0548415e5404ac08`. Explicit device approval succeeded;
+`/api/auth/me` now returns 200 with `no-store` for the approved device. The
+follow-up cached-login and deployment-health changes still need their own
+Controller activation receipt. Cowboy main includes the implementation, and
+Hawk host `d82d576d` has retired the startup npm bootstrap without restarting
+the Controller during that host activation.
 See **Device approval and registered-Machine rollout** at the end and
 [the release record](docs/releases/plugin-publication-2026-09-07.md) for exact
 versions, authorization boundaries and receipts.
@@ -34,10 +44,14 @@ versions, authorization boundaries and receipts.
 Earlier sections are chronological evidence, not current pending-state lists.
 Preserve their failed acceptance records: the user waived historical-version
 coexistence for publication, not integrity or credential checks. Real
-Passkey/OIDC login, upstream native-history resume and live first-prompt
-configuration restoration remain unclaimed. Existing sessions retain their
-selected generations; do not stop/rebind them or delete old runtime state to
-make an installation report look complete.
+Passkey/OIDC login and physical input remain unclaimed. Two explicitly
+in-scope, visible, idle Codex 3.1.8 sessions have now resumed on installed
+3.1.14 with the same native IDs, auth generation 5, native/Cowboy history
+prefixes and all retained state. Their live model/reasoning options confirm
+the saved preferences. No inference prompt was sent; first-prompt ordering is
+covered separately by the deterministic protocol gate. Other sessions retain
+their selected generations; never stop/rebind invisible or busy work, or
+delete historical runtime/home state to make the report look complete.
 
 ## Goal
 

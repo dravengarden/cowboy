@@ -89,10 +89,42 @@ carry completion fences; queue acceptance alone never releases a prompt.
 
 These tests establish Cowboy protocol behavior, not restoration of a particular
 upstream CLI's on-disk native history, complete Controller/Machine installation,
-or release acceptance. The real upstream native-history acceptance remains a
-separate requirement. The signed 3.1.14/1.2.2 production installation is recorded
+or release acceptance. The live native-history evidence below is a separate
+acceptance check. The signed 3.1.14/1.2.2 production installation is recorded
 in [the publication receipt](releases/plugin-publication-2026-09-07.md), not in
 this earlier preparation snapshot.
+
+## Live native-history acceptance — 2026-09-08
+
+With Controller and both Machines on clean `6edd2936`, the approved product
+device used the existing idle-only reload endpoint for two visible Hawk Codex
+sessions: `sess-1788587997563` and `sess-1788749947513`. Each explicitly selected
+installed 3.1.14 (`sha256:293ae7ce9aeee75a1dbb88557d66466c4e9b35786988bb324c8d854d5d43fb55`)
+from 3.1.8. Both returned 202 and reached Running with their original native ID
+and auth generation 5. Read-only evidence proves the native JSONL byte prefix,
+the Cowboy event prefix, cwd, title, drafts, queue and persisted preferences
+are unchanged. Current upstream configuration options confirm both saved
+model/reasoning selections. No model prompt was sent, no cookie or Provider
+credential was copied, and no active turn was stopped.
+
+Private, create-only receipts under
+`dist/provider-runtime-cache/host-cutover-20260907/`:
+
+- `native-history-sess-1788587997563-observed-1788804451250.json`:
+  SHA-256 `224f54a283a740836bd38d65788eecb4db0f3e67c4236a516c40e75ed687762b`.
+- `native-history-sess-1788749947513-observed-1788804451453.json`:
+  SHA-256 `94bfcbee212d93a632006353dc048c2c1498d343ba30049a2aacb84ddb810619`.
+
+Each references its before-receipt and native history prefix hash. Cowboy
+events are hashed inside the read-only SQLite reader with `sha3_query` using
+the identical explicit sequence-bound SQL before and after; transcript text
+does not enter the receipt. Initial schema-1 evidence used different SQL text
+and was rejected before any mutation; only schema 2 is accepted.
+
+This accepts these two real native resumptions, not every retained session or
+an inferred live first prompt. Busy sessions and a product-invisible candidate
+were excluded. Unbound legacy sessions still need an authorized, compatible
+native-home transition before their restoration fallback can be retired.
 
 ## Proposed transition using the existing lifecycle
 
@@ -122,6 +154,7 @@ this earlier preparation snapshot.
    make a fixture pass. Existing sessions continue on their recorded generation
    until their own authorized transition or natural drain.
 
-Remaining work includes a reviewed release/retirement policy, actual native
-resume/history evidence, compatible Controller/Machine acceptance and any
-authorized production actions. Failure isolation alone completes none of these.
+The original preparation checklist above is historical. Two real native
+resumptions and their installed Controller/Machine acceptance are now recorded;
+remaining transitions still require per-session ownership, compatibility and
+idle-state checks. Failure isolation alone completes none of those transitions.

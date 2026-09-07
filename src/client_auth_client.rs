@@ -104,7 +104,7 @@ impl ClientAuthentication {
     pub(crate) async fn ensure_login(&self) -> Result<()> {
         match self {
             Self::Legacy(_) => Ok(()),
-            Self::Device(manager) => manager.ensure_credential(None).await.map(|_| ()),
+            Self::Device(manager) => manager.ensure_login().await,
         }
     }
 }
@@ -156,6 +156,39 @@ impl DeviceCredentialManager {
             cached: RwLock::new(None),
             local_mode: AtomicBool::new(false),
         })
+    }
+
+    async fn ensure_login(&self) -> Result<()> {
+        let url = self.base_url.join("api/auth/me")?;
+        let mut rejected_access = None;
+        for attempt in 0..2 {
+            let authorization = self
+                .authorize(&Method::GET, url.path(), rejected_access.as_deref())
+                .await?;
+            if authorization.bearer.is_none() {
+                // The live policy check explicitly selected local auth-off mode.
+                return Ok(());
+            }
+            let response = authorization
+                .apply_reqwest(self.http.get(url.clone()))?
+                .header(reqwest::header::CACHE_CONTROL, "no-cache")
+                .send()
+                .await
+                .context("validating Cowboy device login")?;
+            if response.status() == StatusCode::UNAUTHORIZED && attempt == 0 {
+                // Access grants are ephemeral across Controller restarts. Reuse
+                // the owned rotating-refresh path, including its process lock.
+                rejected_access = authorization.bearer;
+                continue;
+            }
+            ensure!(
+                response.status().is_success(),
+                "Cowboy device login validation failed with {}",
+                response.status()
+            );
+            return Ok(());
+        }
+        unreachable!("the second login validation always returns")
     }
 
     async fn authorize(
@@ -261,20 +294,17 @@ impl DeviceCredentialManager {
     }
 
     async fn refresh(&self, stored: &StoredDeviceCredential) -> Result<RefreshOutcome> {
-        let path = "/api/auth/device/refresh";
+        let url = self.base_url.join("api/auth/device/refresh")?;
         let key = crate::client_auth::signing_key_from_base64(&stored.private_key)?;
         let proof = crate::client_auth::signed_proof_headers(
             &key,
             &stored.device_id,
             &stored.refresh_token,
             Method::POST.as_str(),
-            path,
+            url.path(),
             now_ms(),
         )?;
-        let mut request = self
-            .http
-            .post(self.base_url.join(path.trim_start_matches('/'))?)
-            .bearer_auth(&stored.refresh_token);
+        let mut request = self.http.post(url).bearer_auth(&stored.refresh_token);
         for (name, value) in proof {
             request = request.header(name, value);
         }
@@ -702,6 +732,165 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
+
+    struct LoginFixture {
+        manager: Arc<DeviceCredentialManager>,
+        requests: Arc<std::sync::Mutex<Vec<String>>>,
+        server: tokio::task::JoinHandle<()>,
+        state_dir: PathBuf,
+    }
+
+    impl Drop for LoginFixture {
+        fn drop(&mut self) {
+            self.server.abort();
+            let _ = std::fs::remove_dir_all(&self.state_dir);
+        }
+    }
+
+    fn assert_fixture_proof(headers: &axum::http::HeaderMap, method: &str, path: &str) {
+        let token = headers["authorization"]
+            .to_str()
+            .unwrap()
+            .strip_prefix("Bearer ")
+            .unwrap();
+        let timestamp = headers[crate::client_auth::PROOF_TIME_HEADER]
+            .to_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let nonce = headers[crate::client_auth::PROOF_NONCE_HEADER]
+            .to_str()
+            .unwrap();
+        let proof = crate::client_auth::request_proof(method, path, token, timestamp, nonce);
+        let public = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+            .verifying_key()
+            .to_bytes();
+        crate::client_auth::verify_signature(
+            &public,
+            &proof,
+            headers[crate::client_auth::PROOF_SIGNATURE_HEADER]
+                .to_str()
+                .unwrap(),
+        )
+        .unwrap();
+    }
+
+    async fn login_fixture(stale: bool, validation: StatusCode) -> LoginFixture {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}/base/", listener.local_addr().unwrap());
+        let state_dir = std::env::temp_dir().join(format!(
+            "cowboy-login-validation-{}-{}",
+            std::process::id(),
+            rand::random::<u128>()
+        ));
+        let manager = Arc::new(
+            DeviceCredentialManager::new(
+                normalized_base_url(&origin).unwrap(),
+                Some(state_dir.clone()),
+                Some("Fixture client".to_owned()),
+            )
+            .unwrap(),
+        );
+        save_credential(
+            &manager.credential_path,
+            &StoredDeviceCredential {
+                version: CREDENTIAL_VERSION,
+                origin,
+                name: "Fixture client".to_owned(),
+                device_id: "0".repeat(32),
+                private_key: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7; 32]),
+                access_token: if stale { "stale" } else { "current" }.to_owned(),
+                access_expires_at_ms: now_ms() + 120_000,
+                refresh_token: "refresh-fixture".to_owned(),
+                refresh_expires_at_ms: now_ms() + 240_000,
+            },
+        )
+        .unwrap();
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let me_requests = requests.clone();
+        let refresh_requests = requests.clone();
+        let app = axum::Router::new()
+            .route(
+                "/base/api/auth/me",
+                axum::routing::get(move |headers: axum::http::HeaderMap| async move {
+                    assert_fixture_proof(&headers, "GET", "/base/api/auth/me");
+                    me_requests.lock().unwrap().push("me".to_owned());
+                    if headers["authorization"] == "Bearer stale" {
+                        StatusCode::UNAUTHORIZED
+                    } else {
+                        validation
+                    }
+                }),
+            )
+            .route(
+                "/base/api/auth/status",
+                axum::routing::get(|| async {
+                    axum::Json(serde_json::json!({"me": {"auth_enabled": true}}))
+                }),
+            )
+            .route(
+                "/base/api/auth/device/refresh",
+                axum::routing::post(move |headers: axum::http::HeaderMap| async move {
+                    assert_fixture_proof(&headers, "POST", "/base/api/auth/device/refresh");
+                    assert_eq!(headers["authorization"], "Bearer refresh-fixture");
+                    refresh_requests.lock().unwrap().push("refresh".to_owned());
+                    axum::Json(crate::client_auth::DeviceTokenResponse {
+                        device_id: "0".repeat(32),
+                        access_token: "current".to_owned(),
+                        access_expires_at_ms: now_ms() + 120_000,
+                        refresh_token: "rotated-fixture".to_owned(),
+                        refresh_expires_at_ms: now_ms() + 240_000,
+                    })
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        LoginFixture {
+            manager,
+            requests,
+            server,
+            state_dir,
+        }
+    }
+
+    #[tokio::test]
+    async fn login_checks_cached_access_and_recovers_controller_restart() {
+        let fixture = login_fixture(true, StatusCode::OK).await;
+        let authentication = ClientAuthentication::Device(fixture.manager.clone());
+        authentication.ensure_login().await.unwrap();
+        assert_eq!(*fixture.requests.lock().unwrap(), ["me", "refresh", "me"]);
+        let stored = load_credential(&fixture.manager.credential_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.access_token, "current");
+        assert_eq!(stored.refresh_token, "rotated-fixture");
+        authentication.ensure_login().await.unwrap();
+        assert_eq!(
+            *fixture.requests.lock().unwrap(),
+            ["me", "refresh", "me", "me"]
+        );
+    }
+
+    #[tokio::test]
+    async fn login_never_claims_success_after_validation_failure_or_retries_forever() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let fixture = login_fixture(true, status).await;
+            let authentication = ClientAuthentication::Device(fixture.manager.clone());
+            assert!(authentication.ensure_login().await.is_err());
+            assert_eq!(*fixture.requests.lock().unwrap(), ["me", "refresh", "me"]);
+        }
+        for status in [StatusCode::FORBIDDEN, StatusCode::SERVICE_UNAVAILABLE] {
+            let fixture = login_fixture(false, status).await;
+            let authentication = ClientAuthentication::Device(fixture.manager.clone());
+            assert!(authentication.ensure_login().await.is_err());
+            assert_eq!(*fixture.requests.lock().unwrap(), ["me"]);
+        }
+    }
 
     #[test]
     fn remote_login_requires_https() {
@@ -802,6 +991,7 @@ mod tests {
             .unwrap();
         assert!(authorization.bearer.is_none());
         assert!(authorization.proof_headers.is_empty());
+        authentication.ensure_login().await.unwrap();
         assert_eq!(
             std::fs::read_dir(&state_dir).unwrap().count(),
             1,

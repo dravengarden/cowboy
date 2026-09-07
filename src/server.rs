@@ -10265,6 +10265,19 @@ struct MachineDeploymentHealthResponse {
     connected: bool,
     status: String,
     active_acp_generation: Option<String>,
+    workspace_revision: Option<String>,
+    workspace_ids_sha256: Option<String>,
+}
+
+fn machine_workspace_ids_sha256(inventory: &serde_json::Value) -> Option<String> {
+    let mut ids = inventory
+        .get("workspaces")?
+        .as_array()?
+        .iter()
+        .map(|workspace| workspace.get("id")?.as_str())
+        .collect::<Option<Vec<_>>>()?;
+    ids.sort_unstable();
+    Some(crate::admin::hex_sha256(&serde_json::to_vec(&ids).ok()?))
 }
 
 async fn api_machine_deployment_health(
@@ -10313,6 +10326,15 @@ async fn api_machine_deployment_health(
         connected: state.runtime_router.connected(&machine.id),
         status: machine.status,
         active_acp_generation,
+        workspace_revision: machine
+            .inventory
+            .get("workspace_revision")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        // Host activation needs proof that retained Machines accepted the
+        // candidate workspace manifest, without exposing private paths or
+        // project names on the public deployment-health surface.
+        workspace_ids_sha256: machine_workspace_ids_sha256(&machine.inventory),
     })
     .into_response()
 }
@@ -19441,6 +19463,29 @@ mod product_auth_api_tests {
     use std::os::unix::fs::PermissionsExt as _;
     use tokio_tungstenite::tungstenite::Message as TungsteniteMessage;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+
+    #[test]
+    fn deployment_workspace_fingerprint_is_order_independent_and_fail_closed() {
+        let first = serde_json::json!({"workspaces": [
+            {"id": "z", "path": "/private/one"}, {"id": "a", "path": "/private/two"}
+        ]});
+        let second = serde_json::json!({"workspaces": [{"id": "a"}, {"id": "z"}]});
+        let expected = crate::admin::hex_sha256(br#"["a","z"]"#);
+        assert_eq!(machine_workspace_ids_sha256(&first), Some(expected.clone()));
+        assert_eq!(machine_workspace_ids_sha256(&second), Some(expected));
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!({"workspaces": null}),
+            serde_json::json!({"workspaces": [{"id": "a"}, {}]}),
+            serde_json::json!({"workspaces": [{"id": 1}]}),
+        ] {
+            assert_eq!(machine_workspace_ids_sha256(&malformed), None);
+        }
+        assert_eq!(
+            machine_workspace_ids_sha256(&serde_json::json!({"workspaces": []})),
+            Some(crate::admin::hex_sha256(b"[]"))
+        );
+    }
 
     fn auth_state(hub: Hub, store: Option<Store>) -> ProductAuthState {
         let data_dir = std::env::temp_dir().join(format!(
