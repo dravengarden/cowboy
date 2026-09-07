@@ -10,16 +10,15 @@ document; they supersede the earlier missing-source and local-loader-only gates.
 The latest Controller candidate is recorded in **Host-capable successor
 integration and acceptance** below. It incorporates the earlier envelope-reader bridge;
 the full Plugin migration itself is still not deployed.
-The latest publication status is **Signed production publication and verification**
-below: eight exact Plugin versions are signed, published and publicly downloadable.
-The historical signing entrypoints were recovered without changing trust. The
-active bridge still skips these schema-2 releases; authenticated Catalog refresh
-and UI availability have not been accepted. Zed and Codex DeepSeek remain
-unpublished. The latest follow-up is **Reader-only Controller activation and
-postflight** below: the independently accepted `c0911dd0` reader is now active,
-resolving Zed's reader-transition boundary, not its remaining publication gates.
-Codex DeepSeek's historical-generation failure remains. The full Host-capable
-Controller, Web, Machine and storage migration are still not deployed by this task.
+The latest publication status is **Independent Zed publication and postflight**
+below: nine exact Plugin versions are signed, published and publicly downloadable
+(the earlier eight plus Zed 1.2.1). The historical signing identities and every
+previously published byte are preserved. The `c0911dd0` reader remains active:
+it safely skips the eight schema-2 envelopes and Zed's newer Code payload inside
+release schema 1. Authenticated Catalog refresh and UI installation availability
+have not been accepted. Codex DeepSeek remains unpublished because its
+historical-generation coexistence gate fails. The full Host-capable Controller,
+Web, Machine and storage migration are still not deployed by this task.
 
 ## Goal
 
@@ -1762,3 +1761,131 @@ unpublished in this continuation. Safe exclusion by the active reader is not UI
 installation availability. Codex DeepSeek 3.1.13 remains held by the previously
 reproduced distinct-generation failure; neither the full Controller coverage
 gate nor Host/Authentication/storage migration acceptance has been relaxed.
+
+## Independent Zed publication and postflight — 2026-09-07
+
+Zed **1.2.1** is now independently signed and publicly published. This
+continuation used the canonical `release-cowboy-plugin` workflow and existing
+`cowboy-first-party` signing identity. It did not activate a Controller, Web or
+Machine release, install on a registered Machine, alter Host/authentication
+policy, or perform a Service login. Public artifact availability is **not**
+online UI installation availability.
+
+### Exact inputs and acceptance
+
+The earlier Catalog maximum is Zed **1.1.3**, composite digest
+`80de741fa5f1cb38d75f673d6b6580a8567a1203d69358ef51be33a9d539b719`:
+Code payload 1, private adapter 1.1.2, without a complete owned server graph.
+It and Zed 1.1.2 remain byte-identical. The new release is hostless, outer
+release schema **1**, Code payload **2**, component release **2.6.0**, Plugin
+SDK/contract **1.6.0**, Code Intelligence **1.2.0**, Linux **x86_64 only**.
+Service authentication is not part of this Code payload.
+
+Final package/runtime source is clean commit
+`b1aea0d129c7643674de730e7453adaf1b65fc11`. The two runtime builds from its
+parent `4048e2f8` and this commit reproduce the previously accepted exact bytes:
+
+- Package: `3a0bff4b868cc063de2e66efe89410f0bd2438c889a765d69763fbd2d172dbfe`.
+- Composite release: `ff7735efdbd7da0d78858f82d63e2840a667759734e85260cc938e91a05ebe28`.
+- Adapter 1.2.1: `207a5800fe5b29deab93ef621d47740fb1193c3dc7156e495d6d17fad113356b`.
+- Server 1.13.0: `5829fe9d9f0b7a5a27129dc217cc9954c3b4334da5da2426bffe55423e723ae5`.
+- Contract fingerprint: `6b474210fcc3eaaa214868a6dfd6d51df8437f1d4411d9069fbbd6f7e2362fb7`.
+- Final signed envelope: `a477aeb13022225794df0da931d1e3d31fbdbc1542b211a9db9eaada08605877`.
+
+The owned builder checks both ELF files for absence of an interpreter and
+dynamic `NEEDED` entries and probes them in fresh private homes. The private
+adapter still pins Zed proto commit
+`aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45`; its server still comes from the matching
+[official immutable v1.13.0-pre release](https://github.com/zed-industries/zed/releases/tag/v1.13.0-pre),
+published 2026-07-23. The official compressed asset digest matches the Nix pin.
+The read-only upstream audit observed stable v1.18.1 (2026-09-04), but did not
+substitute a newer unaccepted protocol/server pair. A dependency upgrade needs
+its own Plugin version and runtime acceptance. The 12
+[published upstream advisories](https://github.com/zed-industries/zed/security/advisories)
+describe older 0.x affected ranges; none lists this pin as affected. Stable and
+preview tags diverge, so the audit explicitly does **not** claim tag ancestry
+or absence of undisclosed vulnerabilities. The adapter's fresh `cargo deny`
+advisory/license/source checks and unused-dependency check pass.
+
+Fresh owned `just check-compact` initially exposed a pre-existing test race:
+`confirmed_process_exit_reclaims_targets_and_preserves_the_worktree` observed
+target deletion before the asynchronous cleanup task cleared its bookkeeping.
+Commit `b1aea0d1` changes only that test's wait predicate to the actual completion
+state; it keeps the original timeout and all assertions. Product cleanup logic
+is unchanged. The corrected test passed **30 consecutive runs**, and the entire
+`just check-compact` then exited **0**, including PostgreSQL, Web, feature-slice,
+SDK, dependency, lint and release-build gates. The existing core-only yanked
+`spin 0.9.8` warning remains; it is not in Zed's private adapter graph.
+
+`just zed-plugin-conformance` passed again from the final commit using the exact
+portable binaries: temporary signed installation, real worktree/buffer leases,
+uninstall rejection of new leases, active lease drain and retained-generation
+reactivation. No registered Machine was touched. A separate package build from
+only copied manifest/contract files outside the Cowboy checkout, using the
+immutable SDK CLI, also reproduced the exact package digest.
+
+The fresh actual-reader gate passed **17 general checks plus the exact Zed
+publication preflight**. Active/next-transaction floor is still `c0911dd0`.
+The independently built successor is
+`/nix/store/wbf3h31hvwgbbnrr4rk1wjdsgxqw35v4-cowboy-controller-release`, clean
+source `4048e2f8`; its executable SHA-256 is still
+`0bf8da455675447a6f07accfe215b083beaec7c17003e844595cc3d998f51fe5`, matching the
+earlier accepted full successor. The final acceptance commit differs only in
+the test wait described above. This diagnostic candidate was **not activated**.
+The task retains `result-zed-publication-reader`, `result-zed-published-adapter`
+and `result-zed-published-server` roots for the immutable acceptance inputs.
+
+### Publication and observed boundaries
+
+After production-key signing and independent public-key verification, the owned
+publisher first appended Zed to a complete temporary Catalog copy. All **43
+signatures / 230 files** passed; both active-reader cold starts and actual
+Service authority-marker inspection retained exactly **34 supported identities**,
+while the full successor read all **43**. Every original **224 files** remained
+unchanged. Only then did the owned `just plugin-publish zed` write production.
+
+Production publication committed at **03:27:01.826Z** (11:27 Shanghai), using
+publisher fingerprint `SHA256:a/VJzmHD/94vMVQMNZTktSR9P3apkkKnnWzXrtn02hg`.
+It added exactly six files: the three content-addressed artifacts, adjacent
+Catalog package/envelope and immutable receipt. No trust file was replaced.
+The **03:27:06Z** postflight again verified all 43 signatures, preservation of
+the original 224 files and the exact old/new reader inventories. Public HTTPS
+GETs verified all three bodies (**118,116,717 bytes**), content lengths, exact
+`"sha256:..."` ETags and `public, max-age=31536000, immutable` cache policy.
+
+Controller PID **4158242**, Machine PID **3991423**, Zed adapter PID **3991201**,
+ACP generation `worker-a4ad441efe0461691687`, Web root, public/loopback health,
+SPA/asset bodies and cache headers all match the earlier activation postflight.
+No deployment journal appeared. The completed historical rollback receipt does
+not permit downgrading to a pre-`c0911dd0` reader now that Code payload 2 is public.
+
+Credential-free `POST /api/plugins/catalog/refresh` and `GET /api/plugins` both
+returned **401**. No cookie, setup token or Service login was borrowed to bypass
+that boundary. Even an authenticated refresh of the current reader would skip
+Zed 1.2.1; a fully compatible Controller and authorized Catalog/UI acceptance are
+still required before claiming it installable. The separate
+`just provider-release-coverage /var/lib/cowboy/plugin-catalog` still exits **1**
+only for unpublished `codex-deepseek@3.1.13`. Its historical coexistence failure
+has not been waived, and this publication does not authorize full Controller,
+Host, Authentication/storage or Machine activation.
+
+Durable evidence in `dist/catalog-reader-conformance/` (SHA-256):
+
+- `4048e2f8-zed-baseline.json`: `be39d6555e5bdb8cd2b5cb379158d4612badb558b734add74a26a4e131b255c1`.
+- `4048e2f8-zed-upstream-audit.json`: `955a6992cf66ce384cb05b1706c396b9ecb8bd58c8dd89506f21cfa9329c9901`.
+- `b1aea0d1-zed-presigning-floor.json`: `da0d3a3ee8cd09e8416726c6de54b1d1d739216a8bb4fecf5f8fa46c6b1767d2`.
+- `b1aea0d1-zed-publication-readers.json`: `22c970c58d0a373ebd6f1ceaa9729499fc09cf863bf55535f319523d9650e6e8`.
+- `b1aea0d1-zed-staged-catalog.json`: `9ee382d0a3df83100abec44c096ce4da700d4397dc164311039ab93e83e2005a`.
+- `b1aea0d1-zed-published-catalog.json`: `59f1f6f62d00073bc4cdb334c83b23c9807a5aed15787f5432d06026fcd17cfc`.
+- Task-local read-only `zed-publication-audit.mjs`: `9603d50b9c506d6e3cc10b1cbafa11d341047aace065ad4651446e5ed78f54b4`.
+- Task-local `zed-upstream-audit.mjs`: `619239c860cf5ea4025ff5b2a9691ff65c9ed36c75e98170f54967cc17899290`.
+
+The final owned runtime build receipt is `dist/plugins/zed/runtime/build-receipt.json`,
+SHA-256 `4e307fa04f27fc332100a712563b5eaffaed8f013ef94a43794d0813064ad1a4`.
+The immutable production receipt is
+`/var/lib/cowboy/plugin-catalog/receipts/zed-1.2.1-ff7735efdbd7da0d78858f82d63e2840a667759734e85260cc938e91a05ebe28.json`,
+SHA-256 `d3706e6c0c48c007f8a11c8a9c94f2ef868e7589f8aeff25f6c5c4179bfc272b`.
+The full 230-file Catalog snapshot digest is
+`038c0648097b4d1e5f615ad1cad2898fa05e9a50cc9a327d157ada38fc5b57b8`;
+the earlier sorted package/envelope/trust tree recipe now yields
+`81e291a744012d85738bf5e7ee507111750da4a9761a40f120992bedd749aef6`.
