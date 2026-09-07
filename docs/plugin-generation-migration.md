@@ -153,7 +153,7 @@ The create-only aggregate is
 SHA-256 `1314c6811c1278e5e64ebd94023c92092c3051b035361ed2a55aa444463d0035`.
 It binds all eleven exact per-session receipts and their before-evidence.
 
-The final read-only audit `legacy-session-audit-1788806693952.json`
+The pre-cleanup read-only audit `legacy-session-audit-1788806693952.json`
 (SHA-256 `0c187026b4a16eac085feb65d65e52c616f042698f17d289831eff1497bacf56`)
 leaves eight unbound pre-Plugin Codex sessions and the active current turn.
 Seven old sessions fail closed because the previous package cannot be
@@ -161,6 +161,31 @@ identified; one has no usable native resume ID. The current turn must finish
 before **Load installed Provider** can replace its 3.1.8 binding. Do not infer
 permission to destroy native history, remove the restoration fallback, or
 force an active-turn stop from an installed-Plugin upgrade request.
+
+### Explicitly discarded legacy cohort
+
+On 2026-09-08 the user explicitly requested deletion of those eight legacy
+sessions and their history. A fresh Product-visible audit confirmed the exact
+eight were still unbound, idle, and had no queue or drafts. The approved device
+then sent only their `delete_session` commands through the normal Product
+WebSocket path; no Plugin uninstall, database write or shared-home deletion
+was substituted for that lifecycle.
+
+All eight disappeared from Product metadata (404), acquired durable soft-delete
+timestamps and had their worker units collected. The before/after active-ID set
+differs by exactly those eight. The eleven migrated sessions and this current
+session retain their binding, native ID and queue/draft counts; all twelve
+workers remain active. The new audit has no retained unbound Hawk session and
+only the current 3.1.8 turn awaiting its idle-only upgrade.
+
+`legacy-cleanup-accepted-1788817918522.json`, SHA-256
+`091fe55cf18662641d8e594b97e42a9a744cf34dd14e4ddaa06d5b0e4b4d2862`,
+records the accepted cleanup under the same evidence directory. Cowboy records
+remain recoverable during normal three-day retention and become purge-eligible
+at approximately `2026-09-10T21:50:12Z`; the existing six-hour sweeper owns their
+event deletion. Native homes, shared credentials and source files remain
+untouched. This is an explicitly discarded cohort, not a successful native
+migration, immediate physical erasure or an additional compatibility-code release.
 
 ## Proposed transition using the existing lifecycle
 

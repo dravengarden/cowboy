@@ -145,16 +145,44 @@ or presented as acceptance. The canonical iOS skill passed repository checks;
 the generic skill-creator validator's pre-existing unsupported
 `disable-model-invocation` frontmatter was not silently removed.
 
+## User-approved legacy cleanup
+
+The user subsequently explicitly authorized discarding the eight unbound
+pre-Plugin Codex sessions and their Cowboy history. A fresh visible, idle-only
+preflight fenced the exact eight IDs. The same approved Product device issued
+only their normal WebSocket `delete_session` commands. All eight now return
+404, have durable deletion timestamps, and have no remaining worker unit
+(`not-found`, inactive, PID 0). The complete active-ID inventory lost exactly
+those eight; the eleven migrated sessions and current session retain their
+identities/drafts and active workers. Controller health remained 200.
+
+This uses Cowboy's recoverable three-day deletion window. The eight become
+purge-eligible at `2026-09-10T21:50:11.947Z` through
+`2026-09-10T21:50:12.695Z` (2026-09-11 05:50 Asia/Shanghai), and the existing
+six-hour sweeper subsequently removes their Cowboy event rows. No retention
+policy, SQL data or migration checksum was manually changed. Shared native
+homes, authentication, project sources and signed Plugin archives were not
+deleted. This cleanup closes the legacy-cohort decision, not all compatibility
+code or immediate physical-erasure guarantees.
+
+Additional create-only evidence under the same private directory:
+
+| Evidence | SHA-256 |
+| --- | --- |
+| `legacy-cleanup-before-1788817801456.json` | `082ef3d688aaba6a6d5b0617552255dcf744f0f1a443006f231f91fd2c775f86` |
+| `legacy-cleanup-accepted-1788817918522.json` | `091fe55cf18662641d8e594b97e42a9a744cf34dd14e4ddaa06d5b0e4b4d2862` |
+| `legacy-session-audit-1788817823932.json` | `8df2f000bf2c13283cc88dcd1793a2360db63e803edcf412d1b7dd3781c65df2` |
+
+The final audit leaves no retained unbound Hawk session. The scoped cleanup
+helper passed the pinned Deno type check; no product binary or deployment was
+changed for this operation.
+
 ## Remaining boundaries
 
-1. Eight pre-Plugin Codex sessions still lack a trustworthy old package binding;
-   one also has no usable native resume ID. Their histories remain intact.
-   Removing their restoration fallback requires a reviewed migration or explicit
-   user approval to keep them as history without resumability.
-2. Current session `sess-1788279284753` was Busy during the audit. Its 3.1.8
+1. Current session `sess-1788279284753` was Busy during the audit. Its 3.1.8
    binding and drafts are intact; use **Load installed Provider** after the turn
    finishes. No background task or active-turn stop was hidden in this release.
-3. Physical iPhone/iPad installation, Passkey/OIDC login and input acceptance
+2. Physical iPhone/iPad installation, Passkey/OIDC login and input acceptance
    require the user's device. Simulator/IPA publication is not a substitute.
    The known pasted-image caret/IME issue in PITFALLS #69 remains open; no
    composer workaround was shipped or claimed as a fix in this task.

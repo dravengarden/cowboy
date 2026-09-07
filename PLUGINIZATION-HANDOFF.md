@@ -54,12 +54,18 @@ Grok may refresh its first system record; the acceptance record separately
 proves the remaining native conversation bytes are identical. No inference
 prompt was sent; first-prompt ordering is covered by the deterministic gate.
 
-**Still open:** eight pre-Plugin Codex sessions have no verifiable previous
-package (one also lacks a resumable native ID), and this active Codex turn is
-still pinned to 3.1.8. Do not force-stop the current turn or silently turn the
-older sessions into blank new ones. Their restoration fallback cannot yet be
-deleted. A decision to retain those eight only as history would be a separate
-user-approved loss of resumability, not an implementation shortcut. Physical
+**User-approved cleanup:** the user explicitly discarded the eight unbound
+pre-Plugin Codex sessions and their Cowboy history on 2026-09-08. All eight
+were removed through authenticated Product `delete_session`, with durable
+soft-deletion and collected workers verified. Only these eight left the active
+inventory; the eleven migrated sessions and current session remain intact.
+The normal three-day retention and six-hour purge sweeper were not bypassed;
+shared native homes, credentials and project files were not deleted. This
+closes their migration-decision blocker, not a claim of immediate disk erasure
+or removal of all compatibility code. See the completion record's cleanup.
+
+**Still open:** this active Codex turn remains pinned to 3.1.8; use **Load
+installed Provider** after the turn finishes. Do not force-stop it. Physical
 iPhone/iPad login/input acceptance and PITFALLS #69 are not closed.
 
 ## Goal
