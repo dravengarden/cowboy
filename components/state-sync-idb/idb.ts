@@ -38,6 +38,12 @@ const targetOf = (opts: IdbOpts): Target => ({
 // One IDBDatabase connection per (dbName, storeName), shared by every
 // idbPersistence + idbListKeys targeting it.
 const connections = new Map<string, Promise<IDBDatabase>>();
+const connectionKey = ({ dbName, storeName }: Target): string => `${dbName} ${storeName}`;
+
+function forgetConnection(cacheKey: string, expected: Promise<IDBDatabase>): void {
+  if (connections.get(cacheKey) === expected) connections.delete(cacheKey);
+}
+
 function openDb({ dbName, storeName }: Target): Promise<IDBDatabase> {
   const cacheKey = `${dbName} ${storeName}`;
   let conn = connections.get(cacheKey);
@@ -50,15 +56,52 @@ function openDb({ dbName, storeName }: Target): Promise<IDBDatabase> {
         }
       });
       req.addEventListener("success", () => {
-        resolve(req.result);
+        const db = req.result;
+        const forget = (): void => forgetConnection(cacheKey, conn!);
+        // Browsers may retire an IndexedDB connection after a page lifecycle
+        // transition or when another context upgrades the database. Never keep
+        // returning that closed handle to a strict durability barrier.
+        db.addEventListener("close", forget, { once: true });
+        db.addEventListener("versionchange", () => {
+          forget();
+          db.close();
+        }, { once: true });
+        resolve(db);
       });
       req.addEventListener("error", () => {
         reject(req.error ?? new Error("indexedDB open failed"));
       });
     });
     connections.set(cacheKey, conn);
+    // A transient open failure must not poison every later persistence call in
+    // this page. The original promise still rejects for the current caller.
+    void conn.catch(() => forgetConnection(cacheKey, conn!));
   }
   return conn;
+}
+
+function isClosingConnectionError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "name" in error &&
+    (error as { name?: unknown }).name === "InvalidStateError";
+}
+
+async function openTransaction(
+  target: Target,
+  mode: IDBTransactionMode,
+): Promise<IDBTransaction> {
+  const cacheKey = connectionKey(target);
+  const connection = openDb(target);
+  const db = await connection;
+  try {
+    return db.transaction(target.storeName, mode);
+  } catch (error) {
+    // A close-pending connection can reject transaction() before its delayed
+    // `close` event has evicted the cache entry. Reopen once; other IndexedDB
+    // failures retain their original strict/best-effort behaviour.
+    if (!isClosingConnectionError(error)) throw error;
+    forgetConnection(cacheKey, connection);
+    return (await openDb(target)).transaction(target.storeName, mode);
+  }
 }
 
 async function runOn<R>(
@@ -66,9 +109,8 @@ async function runOn<R>(
   mode: IDBTransactionMode,
   make: (store: IDBObjectStore) => IDBRequest<R>,
 ): Promise<R> {
-  const db = await openDb(target);
+  const transaction = await openTransaction(target, mode);
   return new Promise<R>((resolve, reject) => {
-    const transaction = db.transaction(target.storeName, mode);
     const r = make(transaction.objectStore(target.storeName));
     let result: R;
     r.addEventListener("success", () => {

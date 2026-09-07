@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.1.8",
+  "version": "3.1.9",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.8",
+  "sdk_version": "3.1.9",
   "display": {
     "name": "Codex",
     "vendor": "OpenAI",
