@@ -7,10 +7,12 @@ starting-state inventory is retained only to explain what was removed.
 The latest native follow-ups are **Owned full native shell and clean-build
 acceptance** and **Remote logged-out native App acceptance** at the end of this
 document; they supersede the earlier missing-source and local-loader-only gates.
-The latest integrated source, Controller/Web builds and acceptance are recorded
-in **Remote-main rebase and historical-generation failure isolation** below.
-They include the earlier **Host-capable successor integration and acceptance**
-and envelope-reader bridge; the full Plugin migration is still not deployed.
+The latest source, Controller build and protocol acceptance are recorded in
+**Reload migration guards and ACP resume protocol acceptance** below.
+**Remote-main rebase and historical-generation failure isolation** retains the
+rebase, Web build and historical-generation evidence. These include the earlier
+**Host-capable successor integration and acceptance** and envelope-reader bridge;
+the full Plugin migration is still not deployed.
 The latest production publication status is **Independent Zed publication and postflight**
 below: nine exact Plugin versions are signed, published and publicly downloadable
 (the earlier eight plus Zed 1.2.1). The historical signing identities and every
@@ -2158,3 +2160,95 @@ live-session rebind/stop, Catalog retirement and Host/auth/storage cutover are
 separate operations. None was authorized or performed by this rebase and
 diagnostic work. Keep the failing release gate visible and preserve old bytes;
 do not treat these negative-path receipts as release permission.
+
+## Reload migration guards and ACP resume protocol acceptance — 2026-09-07
+
+Source commit `5e0809a582e8b6d0ff9fd054f77648f2eeb2f7ca` continues from the
+rebased source without changing Plugin/SDK contracts, dependency pins or
+component versions. Component release remains **2.7.0**, with six Agent
+**3.1.14** candidates and Zed **1.2.2**, all unsigned and unpublished.
+
+### Reproduced reload defects and fixes
+
+Two new regression tests failed before the production fixes:
+
+- A cross-version reload retained unacknowledged old-release configuration
+  commands. A reconnect could resend removed options or stale values to the
+  replacement. Reset now removes only that session's pending setting commands
+  and their sent markers. Durable preferences remain stored; the replacement's
+  actual option snapshot selects compatible preferences and creates fresh
+  command IDs. Unsupported preferences are not sent. Other sessions and
+  same-release reloads retain their pending settings; late old acknowledgements
+  cannot consume the replacement's commands.
+- `EnsureSession` could be acknowledged by a snapshot with the wrong Plugin
+  version/digest, auth generation or requested native ID. Acknowledgement now
+  requires all of those exact identities, including when an older Cowboy
+  worker generation is allowed to drain a busy session.
+
+Four new remote-runtime tests cover rejection and positive preservation paths.
+The Supervisor reload fixture now records auth generation **7**, distinct from
+the proposed current generation **999**, and proves that the replacement keeps
+the session's original auth/runtime-home identity.
+
+Six additional bounded ACP byte-stream tests run production `run_session` and
+notification handling against a deterministic peer and a real Cowboy Hub:
+prefer native resume; suppress load replay without losing fresh notifications;
+reject failed resume/load without silently creating a new session; reject
+unsupported native resume before allocation; and preserve genuine new-session
+creation. Replay uses callback barriers while the load RPC is pending, not
+timing sleeps. These are Cowboy protocol tests, not acceptance of an upstream
+CLI's actual on-disk native history or a complete Machine migration.
+
+### Clean-source verification
+
+On committed `5e0809a5`, the pinned-shell `just check-compact` completed with
+exit **0**, including Rust formatting/Clippy, feature slices, all-target tests,
+Plugin/runtime/auth/schema checks, six isolated PostgreSQL cases, and release
+builds. The Web suite was also separately confirmed: **1146 passed, 0 failed**.
+The targeted Provider-reload suite passed **11 tests**; all six new ACP tests
+passed separately and in the complete gate. No lint or release-gate waiver was
+added. Applied migrations, Plugin sources, components and locks are unchanged.
+
+The clean Nix Controller build completed with exit **0**:
+
+- Release: `/nix/store/1hqdk8bvb0f0j8k88bl1y6irn0bg1v1c-cowboy-controller-release`.
+- `etc/cowboy-release/source.json` records revision
+  `5e0809a582e8b6d0ff9fd054f77648f2eeb2f7ca` and `dirty: false`.
+- Controller SHA-256:
+  `adb17f860bb0a5ae97b4a3c939d092a5aea04e0be06d3ad167535ad95f9ae93d`.
+- Worker: `/nix/store/99ayr5hj1d3c99hnzzm93n7qgavgaxbl-cowboy-0.1.0/bin/cowboy-acp-worker`;
+  SHA-256 `60c9dbf781b47a2ea055fdd542fb556922c5c48d45ee47f30238b4503cae9fa9`.
+
+The full gate rebuilt local data packages. The owned artifact-URL and runtime
+binding commands restored the same **unsigned** Codex DeepSeek 3.1.14 composite
+`1d443d4c5133b6dcf7f5636c22e12228feb698afbe64d64843d56c7d1bb5fc1a`;
+no package or runtime identity changed. Actual Linux x86_64 execution with the
+new Nix worker recorded successful artifact probes, initialize/session-new,
+sidecar startup and stop/descendant drain in a disposable isolated fixture.
+It used no Service credentials and sent no prompt. Coexistence is explicitly
+`not_checked`, and native resume/history is not covered by this startup test.
+
+The new create-only receipt is
+`dist/provider-runtime-cache/5e0809a5-codex-deepseek-3.1.14-single.json`, mode
+**0600**, SHA-256
+`6a204311797445841d88529206ffa34505eb10820878234866daf855267607e9`.
+No corresponding failure receipt exists. All historical receipts remain intact.
+
+### Production boundary and next acceptance
+
+A read-only Catalog comparison again matched all **43 releases / 230 files**
+against the prior public snapshot, with unchanged tree SHA-256
+`038c0648097b4d1e5f615ad1cad2898fa05e9a50cc9a327d157ada38fc5b57b8`.
+This turn built but did **not** activate a Controller or Machine, publish/sign
+a Plugin, change Service authentication, install a Plugin, rebind a live
+session, stop an active turn or retire a historical generation. Earlier live
+PID/health observations above are historical, not a fresh runtime acceptance.
+The required publication/coexistence gates remain unresolved and unchanged.
+
+The next hermetic acceptance should exercise a complete resumed first turn:
+prove the first queued prompt observes **completed** configuration restoration,
+not merely settings enqueued before the prompt. Actual upstream native-history
+resume, Controller/Machine integration and a reviewed broken-baseline
+release/retirement policy also remain open. None is implied by this turn's
+protocol tests or new-session worker receipt. See
+[`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
