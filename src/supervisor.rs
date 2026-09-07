@@ -1286,20 +1286,31 @@ mod tests {
     async fn provider_reload_redeclares_only_the_target_and_keeps_native_home() {
         let root = TestDir::new();
         let hub = Hub::new();
-        hub.create_local_session(
-            "s".to_owned(),
-            "codex".to_owned(),
-            root.path().display().to_string(),
-            "test".to_owned(),
-            SessionOrigin::Web,
-            false,
-        );
+        hub.create_session(crate::core::SessionRegistration {
+            id: "s".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: "old".to_owned(),
+            provider_generation_digest: "old-digest".to_owned(),
+            provider_auth_generation: Some(7),
+            provider_behavior: Some(provider::legacy_behavior("codex")),
+            machine_id: "local".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: root.path().display().to_string(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
         hub.push("s", crate::core::Event::Update {
             update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": {"text": "keep"}}),
         });
         hub.set_agent_session_id("s", "native-thread".to_owned());
         hub.set_status("s", Status::Running, None);
         let before = hub.session_info("s").unwrap().meta;
+        assert_eq!(before.provider_auth_generation, Some(7));
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
         let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
         let behavior = provider::legacy_behavior("codex");

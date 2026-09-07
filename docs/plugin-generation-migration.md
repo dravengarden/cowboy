@@ -1,7 +1,8 @@
 # Broken Plugin generation migration preparation
 
-Status: investigation and isolated diagnostic plan, not a release-policy waiver
-or authorization to modify a live Catalog, Machine, credential or session.
+Status: migration preparation with Cowboy-side guards and isolated diagnostics,
+not a release-policy waiver or authorization to modify a live Catalog, Machine,
+credential or session.
 The user requested continued work after rebasing onto remote main on 2026-09-07.
 The normative [requirements](requirements.md), especially CR-3, CR-7, CR-8 and
 CR-9, continue to apply.
@@ -49,6 +50,38 @@ after native allocation or cleanup leakage rejects this diagnostic. Its receipt
 has a distinct schema, `release_accepted: false` and coexistence `not_proven`.
 No exception text, logs, credentials, private configuration or model prompts
 enter that receipt. Normal coexistence acceptance remains unchanged.
+
+## Cowboy-side transition checks
+
+Continued review found and reproduced two gaps in the existing reload path:
+unacknowledged old-release setting commands could survive a cross-version reset,
+and a snapshot with the wrong Provider version/digest, authentication generation
+or requested native ID could acknowledge `EnsureSession`.
+
+Cross-version reset now discards only that session's pending setting commands,
+keeps its durable preferences, and rebuilds supported settings from the new
+worker's option snapshot with fresh command IDs. Unsupported preferences stay
+stored but are not sent. Other sessions and same-release reloads retain their
+pending settings. Snapshot acknowledgements require the exact Provider/auth
+identity and any requested native ID, including when a busy worker is allowed
+to drain on an older Cowboy worker generation. The Supervisor test now uses an
+actual recorded auth generation (7), distinct from the proposed current
+generation (999), to verify that reload retains the original runtime-home
+identity.
+
+Six bounded in-memory ACP byte-stream tests drive the production `run_session`
+and notification handlers against a deterministic peer and real Cowboy Hub:
+resume is preferred over load; load replay does not duplicate saved messages;
+fresh post-load messages are accepted; failed resume/load never falls back to
+new; absent resume support fails before session creation; genuine new sessions
+can still allocate an ID. Callback barriers, rather than sleeps, ensure replay
+actually occurs while load is pending.
+
+These tests establish Cowboy protocol behavior, not restoration of a particular
+upstream CLI's on-disk native history, complete Controller/Machine installation,
+or release acceptance. A full resumed-turn fixture must still verify that the
+first queued prompt observes completed configuration restoration, not merely
+that setting commands were queued before it.
 
 ## Proposed transition using the existing lifecycle
 

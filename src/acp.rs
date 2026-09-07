@@ -903,6 +903,10 @@ fn load_session_request(
 }
 
 #[cfg(test)]
+#[path = "acp_session_conformance_tests.rs"]
+mod session_conformance_tests;
+
+#[cfg(test)]
 mod startup_mode_tests {
     use super::{
         ActivePrompt, ConfigChange, GrokPermissionMode, GrokSessionConfig, GrokSessionInfoRequest,

@@ -400,6 +400,12 @@ impl RemoteRuntime {
                 });
         self.shared.resetting.lock().insert(session_id.clone());
         self.shared.config_sync_epochs.lock().remove(&session_id);
+        if !same_provider_release {
+            // A lost acknowledgement can leave old-release values queued for
+            // retry. Keep durable preferences, but rebuild their commands only
+            // after the replacement advertises its own supported options.
+            discard_pending_config(&self.shared, &session_id);
+        }
         self.shared
             .declarations
             .lock()
@@ -823,6 +829,13 @@ fn snapshot_satisfies_ensure(worker: &WorkerSnapshot, session: &StartSession) ->
     };
     if launch.cwd != session.cwd
         || launch.provider != session.provider
+        || launch.provider_version != session.provider_version
+        || launch.provider_generation_digest != session.provider_generation_digest
+        || launch.provider_auth_generation != session.provider_auth_generation
+        || session
+            .agent_session_id
+            .as_ref()
+            .is_some_and(|native_id| worker.agent_session_id.as_ref() != Some(native_id))
         || matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
     {
         return false;
@@ -1262,6 +1275,22 @@ fn queue_config_value(
         },
     );
     let _ = shared.notify.send(());
+}
+
+fn discard_pending_config(shared: &Shared, session_id: &str) {
+    let mut removed = Vec::new();
+    shared.pending.lock().retain(|key, command| {
+        let obsolete = matches!(command, CoreCommand::SetConfigOption { session_id: owner, .. }
+            if owner == session_id);
+        if obsolete {
+            removed.push(key.clone());
+        }
+        !obsolete
+    });
+    let mut sent = shared.sent.lock();
+    for key in removed {
+        sent.remove(&key);
+    }
 }
 
 fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -2218,6 +2247,112 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_reload_discards_old_pending_options_without_losing_preferences() {
+        let hub = hub_with_stale_spark_preferences();
+        let preferences = hub.config_preferences("s");
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+        runtime.set_config_option("s", "model", serde_json::json!("gpt-5.3-codex-spark"));
+        runtime.set_config_option("s", "reasoning_effort", serde_json::json!("max"));
+        runtime.set_config_option("other", "model", serde_json::json!("other-model"));
+        let old_keys: Vec<_> = runtime
+            .shared
+            .pending
+            .lock()
+            .iter()
+            .filter_map(|(key, command)| {
+                matches!(command, CoreCommand::SetConfigOption { session_id, .. } if session_id == "s")
+                    .then_some(key.clone())
+            })
+            .collect();
+        runtime.shared.sent.lock().extend(old_keys.iter().cloned());
+
+        let mut replacement = snapshot("s").launch.unwrap();
+        replacement.provider_generation_digest = "sha256:new-release".to_owned();
+        runtime.reset(replacement);
+
+        assert!(
+            !runtime.pending_for_test().iter().any(|command| {
+                matches!(command, CoreCommand::SetConfigOption { session_id, .. } if session_id == "s")
+            }),
+            "old unacknowledged values must not cross the Provider release boundary"
+        );
+        assert!(
+            old_keys
+                .iter()
+                .all(|key| !runtime.shared.sent.lock().contains(key))
+        );
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::SetConfigOption { session_id, value, .. }
+                if session_id == "other" && value == &serde_json::json!("other-model"))
+        }));
+        assert_eq!(hub.config_preferences("s"), preferences);
+
+        let mut worker = snapshot("s");
+        worker.worker_epoch = "replacement".to_owned();
+        worker.config_options = Some(serde_json::json!([{
+            "id": "model", "currentValue": "supported-model",
+            "options": [{"value": "supported-model"}]
+        }]));
+        sync_config_for_worker(&runtime.shared, &worker);
+        assert!(!runtime.pending_for_test().iter().any(|command| {
+            matches!(command, CoreCommand::SetConfigOption { session_id, .. } if session_id == "s")
+        }));
+        assert_eq!(hub.config_preferences("s"), preferences);
+    }
+
+    #[tokio::test]
+    async fn same_provider_reload_retains_compatible_pending_preferences() {
+        let runtime =
+            RemoteRuntime::for_test(hub_with_stale_spark_preferences(), vec![snapshot("s")]);
+        runtime.set_config_option("s", "model", serde_json::json!("gpt-5.3-codex-spark"));
+        let before = runtime.pending_for_test();
+
+        runtime.reset(snapshot("s").launch.unwrap());
+
+        let after = runtime.pending_for_test();
+        assert!(before.iter().all(|command| after.contains(command)));
+    }
+
+    #[tokio::test]
+    async fn provider_reload_rebuilds_supported_preferences_with_fresh_command_ids() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), vec![snapshot("s")]);
+        runtime.set_config_option("s", "model", serde_json::json!("gpt-5.3-codex-spark"));
+        let original = runtime.pending_for_test();
+        let mut replacement = snapshot("s");
+        replacement.worker_epoch = "new-worker".to_owned();
+        replacement
+            .launch
+            .as_mut()
+            .unwrap()
+            .provider_generation_digest = "new-digest".to_owned();
+        runtime.reset(replacement.launch.clone().unwrap());
+        replacement.config_options = Some(serde_json::json!([{
+            "id": "model", "currentValue": "new-default",
+            "options": [{"value": "new-default"}, {"value": "gpt-5.3-codex-spark"}]
+        }]));
+
+        sync_config_for_worker(&runtime.shared, &replacement);
+
+        let values: Vec<_> = runtime.pending_for_test().into_iter().filter(|command| {
+            matches!(command, CoreCommand::SetConfigOption { session_id, .. } if session_id == "s")
+        }).collect();
+        assert_eq!(values.len(), 1);
+        assert!(
+            matches!(&values[0], CoreCommand::SetConfigOption { config_id, value, .. }
+            if config_id == "model" && value == &serde_json::json!("gpt-5.3-codex-spark"))
+        );
+        assert!(
+            !original.contains(&values[0]),
+            "old acknowledgement must not consume a new command"
+        );
+        assert_eq!(
+            hub.config_preferences("s").unwrap()["reasoning_effort"],
+            "max"
+        );
+    }
+
+    #[tokio::test]
     async fn forced_replay_keeps_valid_values_but_filters_stale_preferences() {
         let runtime = RemoteRuntime::for_test(hub_with_stale_spark_preferences(), Vec::new());
 
@@ -2399,6 +2534,31 @@ mod tests {
         assert!(!runtime.pending_for_test().iter().any(|command| {
             matches!(command, CoreCommand::EnsureSession { session } if session.session_id == "s")
         }));
+    }
+
+    #[test]
+    fn ensure_ack_requires_the_exact_provider_and_native_identity() {
+        let mut worker = snapshot("s");
+        let launch = worker.launch.as_mut().unwrap();
+        launch.provider_version = "1.0.0".to_owned();
+        launch.provider_generation_digest = "sha256:old-release".to_owned();
+        launch.provider_auth_generation = Some(7);
+        let session = worker.launch.clone().unwrap();
+        assert!(super::snapshot_satisfies_ensure(&worker, &session));
+
+        for mismatch in ["version", "digest", "auth", "native"] {
+            let mut expected = session.clone();
+            match mismatch {
+                "version" => expected.provider_version = "2.0.0".to_owned(),
+                "digest" => expected.provider_generation_digest = "sha256:new-release".to_owned(),
+                "auth" => expected.provider_auth_generation = Some(8),
+                _ => expected.agent_session_id = Some("other-native-thread".to_owned()),
+            }
+            assert!(
+                !super::snapshot_satisfies_ensure(&worker, &expected),
+                "{mismatch} mismatch cannot acknowledge an exact EnsureSession, even for a busy owner"
+            );
+        }
     }
 
     #[tokio::test]
