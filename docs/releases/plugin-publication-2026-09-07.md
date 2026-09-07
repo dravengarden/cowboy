@@ -243,8 +243,56 @@ Root-owned component receipts remain under
 ## Remaining acceptance
 
 Registered-Machine Plugin slot upgrades and authenticated Catalog/UI checks
-still require a user-supplied Cowboy Product API token file (mode 0600 on Hawk).
-None was supplied, borrowed or minted. Host/component rollout is not proof that
-every registered Machine Plugin slot is upgraded. Real Passkey/OIDC login,
-upstream native-history resume and first-queued-prompt configuration restoration
-also remain unclaimed.
+still require a user-authorized Cowboy Product credential, either an explicit
+API token file (mode 0600 on Hawk) or completion of the native device approval
+flow. None has been obtained. Catalog refresh separately requires
+`AdminOperator`; a Product credential alone does not grant that authority.
+Host/component rollout is not proof that every registered Machine Plugin slot
+is upgraded. Real Passkey/OIDC login, upstream native-history resume and
+first-queued-prompt configuration restoration also remain unclaimed.
+
+## Device-authorization recovery fix — 2026-09-07
+
+Three subsequent real device-authorization attempts expired without producing
+a credential. The latest was started around 14:30 UTC; the screenshot's request
+was rejected at 14:44:56 UTC with HTTP 410, after the server's five-minute
+deadline. The CLI had timed out, and no matching approval event was found.
+Controller PID 1065303 had not restarted. Repeatedly asking the user to approve
+the same expired link was not a recovery path.
+
+Cowboy `54884f7e5af32d8bd6b9a7a308dcfafad2122437` fixes the Web lifecycle and
+terminal UI: it explains expired/unavailable links, directs the user back to
+the requesting app, shows the absolute remaining time, preserves requests on
+transient inspection failures, and provides a read-only retry. Same-tab new
+links replace old requests; stale responses cannot clear or approve the new
+request. Approval retries recheck the deadline after recent-auth verification.
+The five-minute server lifetime and explicit approval requirement are unchanged.
+
+The Web-only component transaction succeeded at **15:22:05 UTC**:
+
+- Release: `/nix/store/iri5qd3l2ni6kxjjfd5w35dhp8g6rwfa-cowboy-web-release`.
+- `/version`: `38812d58a478fe33fecb3e10c2ffa096`; SW cache **1636**.
+- Receipt: `1788794525385583748-54884f7e5af3` under the machine-owned
+  `/var/lib/hawk-component-deployments/cowboy-web/` directory.
+
+All **1170 Web tests**, the owning TypeScript gate and oxlint passed. A fresh
+isolated Chromium profile exercised the exact immutable production bundle with
+synthetic API fixtures: nine browser scenarios passed, with no uncaught browser
+errors. These covered mobile/desktop recovery layouts, same-tab replacement,
+refresh retention, HTTP 503 retry without automatic approval, countdown expiry,
+explicit approval/denial, and malformed links. Mobile viewport screenshots were
+inspected; this was not a physical iPhone or live login ceremony.
+
+Public `/`, `/auth/device`, `/sw.js`, and the entry module matched the built
+bytes. HTML/SW retained `Cache-Control: no-store`; the entry retained immutable
+caching. `/healthz` passed. Controller, Hawk Machine and Zed PIDs remained
+1065303, 1017375 and 1017122, with zero restarts; both Machines remained online
+on `worker-4718f2ebbba9e4069713`. Authentication Host versions were unchanged,
+and unauthenticated `/api/plugins` remained HTTP 401. No fresh real authorization
+was initiated during this fix. Existing expired links cannot be renewed by
+refreshing; a new client-side sign-in must create a new request.
+
+Ignored evidence is retained under
+`dist/provider-runtime-cache/host-cutover-20260907/`: `device-auth-browser/`
+contains screenshots and the browser receipt, and `device-auth-live.json`
+contains exact public-byte, component-receipt and process/health acceptance.

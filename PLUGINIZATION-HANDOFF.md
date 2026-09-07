@@ -2341,15 +2341,40 @@ preflight before switching. Production backup sets `20260907T115254Z`,
 state. The final archive passed an isolated restore with intact authority,
 import ledger and self-contained SQLite bytes; live storage was not restored.
 
-**Still open:** the user has not supplied a Cowboy Product API token file.
+**Still open:** no user-authorized Cowboy Product credential has been obtained.
 Registered-Machine Plugin slot upgrades, authenticated Catalog/UI checks,
 actual login/native-history resume and first-prompt configuration restoration
 are not proved by component health. Do not borrow cookies or Provider secrets,
 mint bypass tokens, disable auth, delete authority markers or claim every
-installed Plugin is upgraded. Ask for only a mode-0600 token file path on Hawk.
+installed Plugin is upgraded. Use explicit native device approval or a
+user-supplied mode-0600 token file on Hawk; Catalog refresh separately requires
+`AdminOperator` authority.
 
 See [the updated release record](docs/releases/plugin-publication-2026-09-07.md)
 for exact closures, source commits and retained evidence. Detailed ignored
 receipts are under `dist/provider-runtime-cache/host-cutover-20260907/`,
 including `live-release.json`; durable host/component receipts remain in their
 machine-owned `/var/lib/*-deployments/` directories.
+
+## Device-authorization recovery — 2026-09-07
+
+The three real device-approval attempts subsequently expired; none produced a
+credential. The latest link was opened after its five-minute deadline and
+returned HTTP 410, not a Controller outage. Do not reuse those links or claim
+the user's approval succeeded.
+
+Web fix `54884f7e` was activated at **15:22:05 UTC** without restarting
+Controller/Machine/Zed. It adds clear expiry/restart guidance, a countdown,
+read-only network retry, same-tab fresh-link capture and stale-response fencing.
+The server lifetime and explicit approval boundary are unchanged. Active Web
+version is `38812d58a478fe33fecb3e10c2ffa096`, SW cache **1636**; this supersedes
+the earlier Web-only version above. All 1170 Web tests, TypeScript and lint
+passed, as did nine isolated Chromium scenarios against the exact release.
+Public assets, receipt, unchanged PIDs and both Machine health endpoints passed.
+
+No real authorization was initiated during the fix. The next authorization
+attempt must create a new request when the user is ready and keep the requesting
+client running; refreshing an expired page cannot renew it. The registered-
+Machine Plugin upgrades and other remaining acceptance above are still open.
+See the release record's device-authorization section and ignored
+`device-auth-browser/` / `device-auth-live.json` evidence for the exact closure.
