@@ -279,6 +279,13 @@ there is no anonymous loopback product bypass; when the explicit auth-off flag
 is deployed, `/api/auth/status` authoritatively preserves synthetic local-owner
 access.
 
+Browser device-approval requests expire after five minutes. The approval page
+shows the remaining time, stops offering actions after expiry, and directs the
+user back to the requesting app or terminal for a new link; refreshing an old
+link cannot renew it. Transient inspection failures retain the pending request
+for an explicit retry. Opening a fresh link in the same tab replaces the old
+request without allowing an earlier response to clear or approve the new one.
+
 Admin routes are listed in [Admin](14-admin.md). Settings redaction is
 [Server](06-server-api.md) (`settings_for_product_clients`).
 

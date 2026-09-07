@@ -13,60 +13,20 @@ import {
   Fingerprint,
   ShieldOutlined,
 } from "@mui/icons-material";
-import { useEffect, useMemo, useState } from "react";
-import {
-  AuthApiError,
-  authApi,
-  type DeviceAuthorizationInfo,
-  type DeviceAuthorizationRequest,
-} from "./authApi";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { authApi } from "./authApi";
 import { useProductAuth } from "./ProductAuthGate";
 import { retryWithRecentProductAuth } from "./recentAuth";
+import { sessionCountdownLabel } from "./sessionSchedule";
+import {
+  captureDeviceAuthorizationFromLocation,
+  clearDeviceAuthorization,
+  DeviceAuthorizationFlow,
+  sameDeviceAuthorization,
+  storedDeviceAuthorization,
+} from "./deviceAuthorization";
 
-const DEVICE_AUTH_STORAGE_KEY = "cowboy:pending-device-authorization";
-
-function validCapability(value: string | null): value is string {
-  return value !== null && /^[A-Za-z0-9_-]{20,128}$/u.test(value);
-}
-
-export function captureDeviceAuthorizationFromLocation(): boolean {
-  if (globalThis.location.pathname === "/auth/device") {
-    const values = new URLSearchParams(globalThis.location.hash.slice(1));
-    const requestId = values.get("request_id");
-    const approvalToken = values.get("approval_token");
-    if (validCapability(requestId) && validCapability(approvalToken)) {
-      globalThis.sessionStorage.setItem(
-        DEVICE_AUTH_STORAGE_KEY,
-        JSON.stringify({
-          request_id: requestId,
-          approval_token: approvalToken,
-        } satisfies DeviceAuthorizationRequest),
-      );
-      globalThis.history.replaceState(null, "", "/auth/device");
-    }
-  }
-  return globalThis.sessionStorage.getItem(DEVICE_AUTH_STORAGE_KEY) !== null ||
-    globalThis.location.pathname === "/auth/device";
-}
-
-function storedDeviceAuthorization(): DeviceAuthorizationRequest | null {
-  const stored = globalThis.sessionStorage.getItem(DEVICE_AUTH_STORAGE_KEY);
-  if (!stored) return null;
-  try {
-    const value = JSON.parse(stored) as Partial<DeviceAuthorizationRequest>;
-    const requestId = value.request_id ?? null;
-    const approvalToken = value.approval_token ?? null;
-    return validCapability(requestId) && validCapability(approvalToken)
-      ? { request_id: requestId, approval_token: approvalToken }
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearDeviceAuthorization(): void {
-  globalThis.sessionStorage.removeItem(DEVICE_AUTH_STORAGE_KEY);
-}
+export { captureDeviceAuthorizationFromLocation } from "./deviceAuthorization";
 
 export function DeviceAuthorizationRoute({
   active,
@@ -79,73 +39,63 @@ export function DeviceAuthorizationRoute({
 }
 
 export function DeviceAuthorizationPage(): React.JSX.Element {
-  const request = useMemo(storedDeviceAuthorization, []);
+  const [request, setRequest] = useState(() => storedDeviceAuthorization());
   const { reauthenticate } = useProductAuth();
-  const [info, setInfo] = useState<DeviceAuthorizationInfo | null>(null);
-  const [result, setResult] = useState<"approved" | "denied" | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(
-    request ? null : "This authorization link is missing or no longer available.",
+  const flow = useMemo(() =>
+    new DeviceAuthorizationFlow(request, {
+      inspect: authApi.inspectDeviceAuthorization,
+      approve: authApi.approveDeviceAuthorization,
+      deny: authApi.denyDeviceAuthorization,
+      authorize: (operation) =>
+        retryWithRecentProductAuth(operation, reauthenticate),
+      clear: clearDeviceAuthorization,
+    }), [request, reauthenticate]);
+  const { phase, info, remainingMs, busy, error } = useSyncExternalStore(
+    flow.subscribe,
+    flow.getSnapshot,
+    flow.getSnapshot,
   );
+  const needsNewLink = ["expired", "unavailable", "missing"].includes(phase);
 
   useEffect(() => {
-    if (!request) return;
-    void authApi.inspectDeviceAuthorization(request)
-      .then((authorization) => {
-        setInfo(authorization);
-        if (authorization.status === "approved") setResult("approved");
-        if (authorization.status === "denied") setResult("denied");
-      })
-      .catch((reason: unknown) => {
-        clearDeviceAuthorization();
-        setError(
-          reason instanceof AuthApiError
-            ? reason.message
-            : "Could not inspect this authorization request.",
-        );
-      });
-  }, [request]);
+    const capture = (): void => {
+      if (globalThis.location.pathname !== "/auth/device") return;
+      captureDeviceAuthorizationFromLocation();
+      const next = storedDeviceAuthorization();
+      setRequest((previous) =>
+        sameDeviceAuthorization(previous, next) ? previous : next
+      );
+    };
+    // Opening a fresh link in this tab may only change the fragment: neither
+    // React nor the document is remounted by that navigation.
+    globalThis.addEventListener("hashchange", capture);
+    globalThis.addEventListener("popstate", capture);
+    capture();
+    return () => {
+      globalThis.removeEventListener("hashchange", capture);
+      globalThis.removeEventListener("popstate", capture);
+    };
+  }, []);
 
-  const approve = (): void => {
-    if (!request || busy) return;
-    setBusy(true);
-    setError(null);
-    void retryWithRecentProductAuth(
-      () => authApi.approveDeviceAuthorization(request),
-      reauthenticate,
-    )
-      .then(() => {
-        clearDeviceAuthorization();
-        setResult("approved");
-      })
-      .catch((reason: unknown) => {
-        setError(
-          reason instanceof AuthApiError
-            ? reason.message
-            : "Could not approve this device.",
-        );
-      })
-      .finally(() => setBusy(false));
-  };
+  useEffect(() => {
+    void flow.inspect();
+    return flow.stop;
+  }, [flow]);
 
-  const deny = (): void => {
-    if (!request || busy) return;
-    setBusy(true);
-    setError(null);
-    void authApi.denyDeviceAuthorization(request)
-      .then(() => {
-        clearDeviceAuthorization();
-        setResult("denied");
-      })
-      .catch((reason: unknown) => {
-        setError(
-          reason instanceof AuthApiError
-            ? reason.message
-            : "Could not deny this request.",
-        );
-      })
-      .finally(() => setBusy(false));
-  };
+  useEffect(() => {
+    if (phase !== "pending") return;
+    const timer = globalThis.setInterval(flow.tick, 1_000);
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") flow.tick();
+    };
+    globalThis.addEventListener("focus", flow.tick);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      globalThis.clearInterval(timer);
+      globalThis.removeEventListener("focus", flow.tick);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [flow, phase]);
 
   return (
     <Box
@@ -193,13 +143,50 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
           }}
         >
           <Stack spacing={2.25} sx={{ p: { xs: 2.25, sm: 3 } }}>
-            {error && <Alert severity="error">{error}</Alert>}
-            {!info && !error && (
-              <Box sx={{ minHeight: 180, display: "grid", placeItems: "center" }}>
+            {error && (
+              <>
+                <Alert severity="warning">{error}</Alert>
+                <Button
+                  variant="outlined"
+                  size="large"
+                  disabled={busy}
+                  onClick={() => void flow.inspect()}
+                >
+                  Check request again
+                </Button>
+              </>
+            )}
+            {needsNewLink && (
+              <>
+                <Alert severity="warning">
+                  {phase === "expired"
+                    ? "This authorization request has expired."
+                    : phase === "missing"
+                    ? "No valid authorization link was found."
+                    : "This authorization link has expired or is no longer available."}
+                </Alert>
+                <Typography sx={{ fontWeight: 700 }}>
+                  Start again from the requesting app
+                </Typography>
+                <Typography color="text.secondary">
+                  Return to the app or terminal that requested access. If it has
+                  not connected, restart sign-in there and open the new link
+                  within 5 minutes. Refreshing this page cannot renew the old
+                  request.
+                </Typography>
+                <Button component="a" href="/" variant="outlined" size="large">
+                  Back to Cowboy
+                </Button>
+              </>
+            )}
+            {phase === "loading" && !error && (
+              <Box
+                sx={{ minHeight: 180, display: "grid", placeItems: "center" }}
+              >
                 <CircularProgress size={26} color="inherit" />
               </Box>
             )}
-            {info && result === null && (
+            {info && phase === "pending" && (
               <>
                 <Typography color="text.secondary">
                   Approve only if you just started Cowboy on this computer or
@@ -214,7 +201,9 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                       <Typography variant="caption" color="text.secondary">
                         Client
                       </Typography>
-                      <Typography sx={{ fontWeight: 700 }}>{info.name}</Typography>
+                      <Typography sx={{ fontWeight: 700 }}>
+                        {info.name}
+                      </Typography>
                     </Box>
                   </Stack>
                   <Stack direction="row" spacing={1.5} alignItems="center">
@@ -235,17 +224,29 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                   </Stack>
                 </Stack>
                 <Alert severity="info">
-                  This one-time request expires automatically. You can revoke
-                  the device later in Settings → Account.
+                  <Typography
+                    component="span"
+                    role="timer"
+                    aria-live="off"
+                    sx={{ fontWeight: 700 }}
+                  >
+                    Expires in {sessionCountdownLabel(remainingMs)}.
+                  </Typography>{" "}
+                  Keep the requesting app or terminal open until it confirms the
+                  connection. You can revoke the device later in Settings →
+                  Account.
                 </Alert>
-                <Stack direction={{ xs: "column-reverse", sm: "row" }} spacing={1}>
+                <Stack
+                  direction={{ xs: "column-reverse", sm: "row" }}
+                  spacing={1}
+                >
                   <Button
                     variant="outlined"
                     color="inherit"
                     size="large"
                     fullWidth
                     disabled={busy}
-                    onClick={deny}
+                    onClick={() => void flow.deny()}
                   >
                     Deny
                   </Button>
@@ -254,15 +255,19 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                     size="large"
                     fullWidth
                     disabled={busy}
-                    onClick={approve}
+                    onClick={() => void flow.approve()}
                   >
                     {busy ? "Authorizing…" : "Authorize client"}
                   </Button>
                 </Stack>
               </>
             )}
-            {result === "approved" && (
-              <Stack spacing={1.5} alignItems="center" sx={{ py: 3, textAlign: "center" }}>
+            {phase === "approved" && (
+              <Stack
+                spacing={1.5}
+                alignItems="center"
+                sx={{ py: 3, textAlign: "center" }}
+              >
                 <CheckCircleOutline color="success" sx={{ fontSize: 52 }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Client authorized
@@ -272,8 +277,12 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
                 </Typography>
               </Stack>
             )}
-            {result === "denied" && (
-              <Stack spacing={1.5} alignItems="center" sx={{ py: 3, textAlign: "center" }}>
+            {phase === "denied" && (
+              <Stack
+                spacing={1.5}
+                alignItems="center"
+                sx={{ py: 3, textAlign: "center" }}
+              >
                 <ShieldOutlined color="action" sx={{ fontSize: 48 }} />
                 <Typography variant="h6" sx={{ fontWeight: 750 }}>
                   Request denied

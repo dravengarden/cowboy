@@ -436,6 +436,7 @@ Deno.test("legacy token CRUD remains same-origin and never sends the hash", asyn
 
 Deno.test("device authorization keeps the capability off authenticated requests", async () => {
   const calls: FetchArgs[] = [];
+  const inspection = new AbortController();
   const request = {
     request_id: "request_abcdefghijklmnopqrstuvwxyz",
     approval_token: "approval_abcdefghijklmnopqrstuvwxyz",
@@ -470,7 +471,7 @@ Deno.test("device authorization keeps the capability off authenticated requests"
   });
   try {
     assertEquals(
-      (await authApi.inspectDeviceAuthorization(request)).status,
+      (await authApi.inspectDeviceAuthorization(request, inspection.signal)).status,
       "pending",
     );
     assertEquals(await authApi.approveDeviceAuthorization(request), {
@@ -486,6 +487,7 @@ Deno.test("device authorization keeps the capability off authenticated requests"
     );
     assertEquals(calls[0]?.init?.credentials, "omit");
     assertEquals(calls[0]?.init?.referrerPolicy, "no-referrer");
+    assertEquals(calls[0]?.init?.signal, inspection.signal);
     assertEquals(calls[0]?.init?.body, JSON.stringify(request));
     assertEquals(calls[1]?.init?.credentials, "same-origin");
     assertEquals(calls[2]?.init?.credentials, "same-origin");

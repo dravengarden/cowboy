@@ -753,13 +753,17 @@ export const authApi = {
     }),
   deleteToken: (id: string) =>
     readJson<{ ok: boolean }>(`/api/auth/tokens/${id}`, { method: "DELETE" }),
-  inspectDeviceAuthorization: (request: DeviceAuthorizationRequest) =>
+  inspectDeviceAuthorization: (
+    request: DeviceAuthorizationRequest,
+    signal?: AbortSignal,
+  ) =>
     readPublicJson<DeviceAuthorizationInfo>(
       "/api/auth/device/authorizations/inspect",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(request),
+        ...(signal ? { signal } : {}),
       },
     ),
   approveDeviceAuthorization: (request: DeviceAuthorizationRequest) =>
