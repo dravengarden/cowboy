@@ -2431,6 +2431,13 @@ async function qAdd(
     await store.mutateDurably(mutator, { row }, cmid);
   } catch (error) {
     qStatus.delete(cmid);
+    // The sync client rolls back its mutation, but commitQueue deliberately
+    // retains transcript overlays until an echo arrives. No echo can arrive
+    // for a failed local write: retire only this unsent bubble explicitly.
+    setState({
+      ...state,
+      optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid])),
+    });
     commitQueue(sessionId);
     reportClientLog("error", "delivery_persist_failed", error, {
       session_id: sessionId,

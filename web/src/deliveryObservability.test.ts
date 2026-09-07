@@ -15,4 +15,7 @@ Deno.test("local delivery failures are reported before callers can swallow them"
   assert(reporting.includes("mutation_id: cmid"));
   assert(!reporting.includes("row.text"));
   assert(!reporting.includes("attachments"));
+  const rollback = source.slice(persist, failed);
+  assert(rollback.includes("reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid]))"));
+  assert(!rollback.includes("clearDraft"));
 });
