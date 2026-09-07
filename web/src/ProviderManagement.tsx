@@ -1,5 +1,6 @@
 import {
   Alert,
+  AlertTitle,
   Box,
   Button,
   Checkbox,
@@ -14,7 +15,7 @@ import {
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   type EffectCapability,
@@ -38,7 +39,10 @@ import {
   useProviderCatalog,
 } from "./providerCatalog";
 import { groupProviderAuthentications } from "./providerAuthenticationGroups.ts";
-import { providerAuthenticationCompleted } from "./providerAuthenticationFlow.ts";
+import {
+  providerAuthenticationCompleted,
+  providerAuthenticationPromoting,
+} from "./providerAuthenticationFlow.ts";
 import {
   ProviderMark,
   ProviderMarkStack,
@@ -134,18 +138,37 @@ type ProviderManagementProps =
   | {
     scope: "service";
     machine?: never;
-    focusProviderId?: string;
+    focusProviderId?: string | undefined;
+    autoBeginAuthentication?: boolean;
+    authenticationRequestId?: number | undefined;
     embedded?: boolean;
   }
   | {
     scope: "machine";
     machine: ProviderMachine;
-    focusProviderId?: string;
+    focusProviderId?: string | undefined;
+    autoBeginAuthentication?: boolean;
+    authenticationRequestId?: number | undefined;
     embedded?: boolean;
   };
 
-export function ProviderAuthenticationManagement(): React.JSX.Element {
-  return <ProviderManagement scope="service" />;
+export function ProviderAuthenticationManagement({
+  focusProviderId,
+  autoBeginAuthentication = false,
+  authenticationRequestId,
+}: {
+  focusProviderId?: string | undefined;
+  autoBeginAuthentication?: boolean | undefined;
+  authenticationRequestId?: number | undefined;
+} = {}): React.JSX.Element {
+  return (
+    <ProviderManagement
+      scope="service"
+      focusProviderId={focusProviderId}
+      autoBeginAuthentication={autoBeginAuthentication}
+      authenticationRequestId={authenticationRequestId}
+    />
+  );
 }
 
 /** Session-sheet slice of Service authentication. Settings keeps the full
@@ -450,8 +473,14 @@ function ProviderManagementLifecycleSurface({
 }
 
 function ProviderManagement(
-  { scope, machine, focusProviderId, embedded = false }:
-    ProviderManagementProps,
+  {
+    scope,
+    machine,
+    focusProviderId,
+    autoBeginAuthentication = false,
+    authenticationRequestId,
+    embedded = false,
+  }: ProviderManagementProps,
 ): React.JSX.Element {
   const { catalog, error: catalogError, refresh: refreshCatalog } =
     useProviderCatalog();
@@ -468,6 +497,9 @@ function ProviderManagement(
   const [authenticationError, setAuthenticationError] = useState("");
   const [authenticationClipboardNotice, setAuthenticationClipboardNotice] =
     useState("");
+  const consumedAuthenticationRequestId = useRef<number | undefined>(
+    undefined,
+  );
   const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(
     null,
   );
@@ -561,6 +593,53 @@ function ProviderManagement(
         authenticationsByScope.get(entry.authentication_scope),
     [authentications, authenticationsByScope],
   );
+  const beginServiceAuthentication = useCallback((
+    entry: ProviderCatalogEntry,
+  ): void => {
+    const credentialEntries = serviceCredentialGroups.find((group) =>
+      group.authenticationScope === entry.authentication_scope
+    )?.entries ?? [entry];
+    setFlow({
+      provider: entry,
+      sharedProviderNames: credentialEntries.map((candidate) =>
+        candidate.manifest.display.name
+      ),
+      credentialTitle: providerCredentialTitle(credentialEntries),
+      events: [],
+    });
+    setAuthenticationError("");
+    setAuthenticationClipboardNotice("");
+    setAuthenticationPendingMethod("");
+  }, [serviceCredentialGroups]);
+  useEffect(() => {
+    if (
+      scope !== "service" || !autoBeginAuthentication ||
+      authenticationRequestId === undefined || !focusProviderId ||
+      consumedAuthenticationRequestId.current === authenticationRequestId
+    ) return;
+    const entry = serviceEntries.find((candidate) =>
+      candidate.provider_id === focusProviderId
+    ) ?? serviceEntries.find((candidate) =>
+      candidate.authentication_scope === focusProviderId
+    );
+    if (!entry) return;
+    consumedAuthenticationRequestId.current = authenticationRequestId;
+    const authentication = authenticationForEntry(entry);
+    if (
+      !entry.manifest.authentication.required ||
+      authentication?.authentication_state === "ready" ||
+      authentication?.authentication_state === "authenticating"
+    ) return;
+    beginServiceAuthentication(entry);
+  }, [
+    authenticationForEntry,
+    authenticationRequestId,
+    autoBeginAuthentication,
+    beginServiceAuthentication,
+    focusProviderId,
+    scope,
+    serviceEntries,
+  ]);
   useEffect(() => {
     if (!flow?.requestId) return undefined;
     let active = true;
@@ -609,9 +688,6 @@ function ProviderManagement(
           setAuthenticationError("");
           setAuthenticationClipboardNotice("");
           setAuthenticationPendingMethod("");
-          setFlow((current) =>
-            current?.requestId === flow.requestId ? null : current
-          );
           await refreshCatalog();
         }
       } catch {
@@ -689,20 +765,7 @@ function ProviderManagement(
               "Provider authentication is managed at Cowboy Service scope",
             );
           }
-          const credentialEntries = serviceCredentialGroups.find((group) =>
-            group.authenticationScope === entry.authentication_scope
-          )?.entries ?? [entry];
-          setFlow({
-            provider: entry,
-            sharedProviderNames: credentialEntries.map((candidate) =>
-              candidate.manifest.display.name
-            ),
-            credentialTitle: providerCredentialTitle(credentialEntries),
-            events: [],
-          });
-          setAuthenticationError("");
-          setAuthenticationClipboardNotice("");
-          setAuthenticationPendingMethod("");
+          beginServiceAuthentication(entry);
           return;
         case "logout_service_authentication": {
           if (scope !== "service") {
@@ -837,7 +900,10 @@ function ProviderManagement(
 
   const cancelAuthentication = async (): Promise<void> => {
     try {
-      if (flow?.requestId) {
+      if (
+        flow?.requestId &&
+        !providerAuthenticationCompleted(flow.events)
+      ) {
         await fetch(
           `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
             encodeURIComponent(flow.requestId)
@@ -904,6 +970,15 @@ function ProviderManagement(
     event.event === "login_state"
   );
   const loginSucceeded = providerAuthenticationCompleted(flow?.events ?? []);
+  const loginPromoting = providerAuthenticationPromoting(flow?.events ?? []);
+  const flowCopy = flow
+    ? authenticationCopy(
+      resolveProviderAuthenticationPresentation(
+        flow.provider.manifest.authentication,
+      ),
+      flow.sharedProviderNames.length > 1,
+    )
+    : null;
   const copyAuthenticationCode = (): void => {
     if (challenge?.event !== "login_challenge" || !challenge.user_code) return;
     const code = challenge.user_code;
@@ -1415,7 +1490,7 @@ function ProviderManagement(
               color: "text.primary",
             }}
           >
-            {flow?.requestId
+            {flow?.requestId && !loginSucceeded && !loginPromoting
               ? (
                 <IconButton
                   size="small"
@@ -1452,7 +1527,7 @@ function ProviderManagement(
         }
         actions={
           <>
-            {flow?.requestId && !loginSucceeded
+            {flow?.requestId && !loginSucceeded && !loginPromoting
               ? (
                 <Button
                   color="inherit"
@@ -1472,23 +1547,13 @@ function ProviderManagement(
           ? (
             <Stack spacing={1.5} sx={{ pt: 0.5 }}>
               <Alert severity="info">
-                {authenticationCopy(
-                  resolveProviderAuthenticationPresentation(
-                    flow.provider.manifest.authentication,
-                  ),
-                  flow.sharedProviderNames.length > 1,
-                ).serviceDetail}
+                {flowCopy?.serviceDetail}
               </Alert>
               {!flow.requestId
                 ? (
                   <Stack spacing={1}>
                     <Typography variant="body2">
-                      {authenticationCopy(
-                        resolveProviderAuthenticationPresentation(
-                          flow.provider.manifest.authentication,
-                        ),
-                        flow.sharedProviderNames.length > 1,
-                      ).chooseMethod}
+                      {flowCopy?.chooseMethod}
                     </Typography>
                     {flow.provider.manifest.authentication.methods.map((
                       method,
@@ -1511,7 +1576,8 @@ function ProviderManagement(
                   </Stack>
                 )
                 : null}
-              {!loginSucceeded && challenge?.event === "login_challenge"
+              {!loginSucceeded && !loginPromoting &&
+                  challenge?.event === "login_challenge"
                 ? (
                   <Stack spacing={1}>
                     <Button
@@ -1520,11 +1586,7 @@ function ProviderManagement(
                     >
                       {challenge.user_code
                         ? "Copy code & open sign-in"
-                        : authenticationCopy(
-                          resolveProviderAuthenticationPresentation(
-                            flow.provider.manifest.authentication,
-                          ),
-                        ).externalAction}
+                        : flowCopy?.externalAction}
                     </Button>
                     <Typography variant="caption" color="text.secondary">
                       {challenge.user_code
@@ -1563,7 +1625,9 @@ function ProviderManagement(
                           <TextField
                             label={challenge.input_label ??
                               "Authorization value"}
-                            type={challenge.secret_input ? "password" : "text"}
+                            type={challenge.secret_input
+                              ? "password"
+                              : "text"}
                             value={loginInput}
                             autoComplete="off"
                             onChange={(event) =>
@@ -1574,35 +1638,43 @@ function ProviderManagement(
                             disabled={!loginInput.trim()}
                             onClick={() => void submitAuthentication()}
                           >
-                            {authenticationCopy(
-                              resolveProviderAuthenticationPresentation(
-                                flow.provider.manifest.authentication,
-                              ),
-                            ).submit}
+                            {flowCopy?.submit}
                           </Button>
                         </Stack>
                       )
                       : null}
                   </Stack>
                 )
-                : flow.requestId && !loginSucceeded
+                : flow.requestId && !loginSucceeded && !loginPromoting
                 ? (
                   <Typography variant="body2">
-                    {authenticationCopy(
-                      resolveProviderAuthenticationPresentation(
-                        flow.provider.manifest.authentication,
-                      ),
-                    ).waiting}
+                    {flowCopy?.waiting}
                   </Typography>
                 )
                 : null}
-              {loginState?.event === "login_state"
+              {loginSucceeded
+                ? (
+                  <Alert severity="success" aria-live="polite">
+                    <AlertTitle>{flowCopy?.completeTitle}</AlertTitle>
+                    {flowCopy?.completeDetail}
+                  </Alert>
+                )
+                : loginPromoting
                 ? (
                   <Alert
-                    severity={loginSucceeded
-                      ? "success"
-                      : loginState.state === "error" ||
-                          loginState.state === "unsupported"
+                    severity="info"
+                    icon={<CircularProgress size={20} color="inherit" />}
+                    aria-live="polite"
+                  >
+                    <AlertTitle>{flowCopy?.promotingTitle}</AlertTitle>
+                    {flowCopy?.promotingDetail}
+                  </Alert>
+                )
+                : loginState?.event === "login_state"
+                ? (
+                  <Alert
+                    severity={loginState.state === "error" ||
+                        loginState.state === "unsupported"
                       ? "error"
                       : "info"}
                   >
@@ -1784,6 +1856,10 @@ function authenticationCopy(
   submitFailed: string;
   clearFailed: string;
   waiting: string;
+  promotingTitle: string;
+  promotingDetail: string;
+  completeTitle: string;
+  completeDetail: string;
 } {
   switch (presentation) {
     case "account":
@@ -1799,6 +1875,12 @@ function authenticationCopy(
         submitFailed: "Could not submit the authentication value",
         clearFailed: "Provider sign-out failed",
         waiting: "Waiting for the Provider…",
+        promotingTitle: "Securing sign-in…",
+        promotingDetail:
+          "The Provider accepted your sign-in. Cowboy Service is securing the credential now.",
+        completeTitle: "Signed in",
+        completeDetail:
+          "Cowboy Service secured the credential and is synchronizing it to every enrolled Machine.",
       };
     case "api_key": {
       const apiKeyCopy = {
@@ -1813,6 +1895,12 @@ function authenticationCopy(
         submitFailed: "Could not save the API key",
         clearFailed: "Could not clear the API key",
         waiting: "Preparing secure API key entry…",
+        promotingTitle: "Securing API key…",
+        promotingDetail:
+          "Cowboy Service is encrypting and saving the accepted API key now.",
+        completeTitle: "API key saved",
+        completeDetail:
+          "Cowboy Service secured the API key and is synchronizing it to every enrolled Machine.",
       };
       if (!shared) return apiKeyCopy;
       return {
