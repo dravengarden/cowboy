@@ -2421,13 +2421,38 @@ async function qAdd(
       cmid,
     });
   }
+  reportClientLog("info", "delivery_persist_started", "Saving outgoing message locally", {
+    session_id: sessionId,
+    mutation_id: cmid,
+    target,
+    connected: isConnected(),
+  });
   try {
     await store.mutateDurably(mutator, { row }, cmid);
   } catch (error) {
     qStatus.delete(cmid);
+    // The sync client rolls back its mutation, but commitQueue deliberately
+    // retains transcript overlays until an echo arrives. No echo can arrive
+    // for a failed local write: retire only this unsent bubble explicitly.
+    setState({
+      ...state,
+      optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, new Set([cmid])),
+    });
     commitQueue(sessionId);
+    reportClientLog("error", "delivery_persist_failed", error, {
+      session_id: sessionId,
+      mutation_id: cmid,
+      target,
+      error_name: error instanceof Error ? error.name : "unknown",
+    });
+    notify("Message could not be saved on this device. Your text has been kept; please retry.");
     throw error;
   }
+  reportClientLog("info", "delivery_persist_completed", "Outgoing message saved locally", {
+    session_id: sessionId,
+    mutation_id: cmid,
+    target,
+  });
   await waitForState(
     (snapshot) =>
       target === "transcript"

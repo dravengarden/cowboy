@@ -1169,6 +1169,9 @@ impl MachinePluginStore {
         let Some(canonical) = self.canonical_runtime_projection(package)? else {
             return Ok(());
         };
+        // Historical aliases can sort before the credential source. Restore
+        // the source first so a missing file cannot prevent its own repair.
+        restore_projected_bundle(&package.manifest.authentication, &canonical, bundle)?;
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
@@ -1176,9 +1179,7 @@ impl MachinePluginStore {
                     == package.manifest.compatibility.auth_contract_fingerprint,
                 "Provider runtime projection uses a different auth contract"
             );
-            if generation == canonical {
-                restore_projected_bundle(&package.manifest.authentication, &generation, bundle)?;
-            } else {
+            if generation != canonical {
                 restore_projected_environment(
                     &package.manifest.authentication,
                     &generation,
@@ -1204,6 +1205,15 @@ impl MachinePluginStore {
         let Some(canonical) = self.canonical_runtime_projection(package)? else {
             return Ok(());
         };
+        if projected_credential_bundle(
+            &package.manifest.authentication,
+            &canonical,
+            &bundle.method_id,
+        )
+        .is_err()
+        {
+            repair_missing_projected_bundle(&package.manifest.authentication, &canonical, bundle)?;
+        }
         for generation in self.writable_auth_projection_generations(package)? {
             let metadata = read_materialization_metadata(&generation)?;
             ensure!(
@@ -1211,21 +1221,7 @@ impl MachinePluginStore {
                     == package.manifest.compatibility.auth_contract_fingerprint,
                 "Provider runtime projection uses a different auth contract"
             );
-            if generation == canonical {
-                if projected_credential_bundle(
-                    &package.manifest.authentication,
-                    &generation,
-                    &bundle.method_id,
-                )
-                .is_err()
-                {
-                    repair_missing_projected_bundle(
-                        &package.manifest.authentication,
-                        &generation,
-                        bundle,
-                    )?;
-                }
-            } else {
+            if generation != canonical {
                 restore_projected_environment(
                     &package.manifest.authentication,
                     &generation,
@@ -4007,6 +4003,64 @@ mod tests {
                 .is_symlink()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_canonical_credentials_recover_before_older_aliases() {
+        use cowboy_provider_sdk::{StandardProviderSource, build_package};
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        for next_generation in [18, 19] {
+            let root = std::env::temp_dir().join(format!(
+                "cowboy-grok-auth-source-repair-{}-{}",
+                std::process::id(),
+                ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            ));
+            let store =
+                MachinePluginStore::new(&root, Platform::Linux, "x86_64".to_owned()).unwrap();
+            let bundle = PortableCredentialBundle {
+                portable_schema: package.manifest.authentication.portable_schema.clone(),
+                method_id: "xai-account".to_owned(),
+                values: BTreeMap::from([(
+                    "auth_json".to_owned(),
+                    base64::engine::general_purpose::STANDARD.encode(b"service-credential"),
+                )]),
+            };
+            // A retained older session can acquire an alias after the canonical
+            // runtime has already been selected. Numeric order is not dependency order.
+            for generation in [3, 1, 18] {
+                store
+                    .materialize_bundle(&package, generation, &bundle)
+                    .unwrap();
+            }
+            let runtime = root.join("provider-auth/providers/grok/runtime");
+            let canonical = runtime.join("generations/3/home/.grok/auth.json");
+            let state = runtime.join("generations/3/home/.grok/active_sessions.json");
+            fs::write(&state, b"[]").unwrap();
+            fs::remove_file(&canonical).unwrap();
+
+            // Cover both same-generation repair and a newer Service bundle.
+            store
+                .materialize_bundle(&package, next_generation, &bundle)
+                .unwrap();
+            for generation in [1, 3, 18, next_generation] {
+                assert_eq!(
+                    fs::read(
+                        runtime.join(format!("generations/{generation}/home/.grok/auth.json"))
+                    )
+                    .unwrap(),
+                    b"service-credential"
+                );
+            }
+            assert_eq!(fs::read(&state).unwrap(), b"[]");
+            assert_eq!(
+                read_link_name(&runtime.join("current")).as_deref(),
+                Some("3")
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
