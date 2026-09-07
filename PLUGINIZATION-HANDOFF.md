@@ -2076,6 +2076,7 @@ SHA-256 `1998d59477f4ec0d04f0c970abd1d8eec0afdd3466f6b8c9b44c964087ff56bf`.
 
 Commit `bb69829b` adds `just agent-generation-failure-isolation` and
 [`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
+
 It starts a healthy candidate before a historical worker, permits only an
 explicit terminal rejection before any observed native-session allocation,
 requires cleanup of recorded fixture descendants, verifies that the candidate
@@ -2252,3 +2253,42 @@ resume, Controller/Machine integration and a reviewed broken-baseline
 release/retirement policy also remain open. None is implied by this turn's
 protocol tests or new-session worker receipt. See
 [`docs/plugin-generation-migration.md`](docs/plugin-generation-migration.md).
+
+## Full candidate publication — 2026-09-07
+
+The user now explicitly requested publication without historical-version
+coexistence as a prerequisite. This supersedes the preceding publication hold,
+not the historical failure receipts or requirements for current release
+integrity, runtime execution, credentials and data preservation.
+
+**Published:** all six Agent Plugins **3.1.14** and Zed **1.2.2**, signed with the
+existing publisher, at 10:38:29–10:38:37 UTC. The production Catalog now holds
+**50 signed releases**; all **43 old releases / 230 original files** are byte
+identical. All **25 public artifact URLs** passed SHA-256 / immutable cache /
+ETag verification, and six-Provider release coverage is complete.
+
+Fresh main `983de476` was merged with the task, including incoming authentication
+recovery UI and SW cache 1635. The full pinned-shell gate passed. An ancestry
+merge of active Controller `c0911dd0` preserves the full successor's reader and
+Host implementation. Clean, committed, published source **1d0a5064** built all
+three Hawk component outputs, with unchanged accepted Controller/worker binary
+hashes. All six current Agents passed exact Linux real-worker acceptance and
+fresh macOS aarch64 probes; Zed passed signed install/drain conformance. Complete
+staged and production Catalog/signature audits and actual-reader gates passed.
+
+**Not activated:** Controller, Web, Machine, Host policy, authentication, or
+registered-Machine Plugin slots. Existing services and sessions remain intact.
+Actual Hawk configuration fails the full successor's read-only Host preflight
+because it lacks an exact WebAuthn storage Host selection. First Host activation
+requires its separate NixOS policy/storage recovery transition; the existing
+component-only rollback would restore a bridge that refuses post-Host authority.
+Do not deploy through that gap or edit generated authentication JSON in place.
+
+An authorized Product API token was requested for Hawk/Falcon installation but
+not supplied; unauthenticated `/api/plugins` returns 401. Do not scrape cookies,
+borrow Provider credentials, mint bypass tokens, or weaken endpoint auth.
+
+See [the complete publication record](docs/releases/plugin-publication-2026-09-07.md)
+for exact identities, immutable Nix outputs, evidence paths, host-policy findings
+and remaining live-transition boundaries. Historical native-resume / first-turn
+configuration acceptance remains open; new-session startup did not prove it.
