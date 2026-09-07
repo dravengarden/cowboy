@@ -4500,7 +4500,9 @@ mod tests {
         )
         .await;
         for _ in 0..100 {
-            if !target.exists() {
+            // Removing the target precedes the asynchronous bookkeeping update.
+            // Wait for the cleanup task's completion, not that intermediate step.
+            if broker.deleted_session_workspaces.lock().is_empty() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
