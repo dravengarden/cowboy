@@ -16726,10 +16726,15 @@ async fn plugin_release_artifact(
     State(state): State<Arc<AppState>>,
     Path((digest, name)): Path<(String, String)>,
 ) -> Response {
-    let Some(path) = state
-        .provider_catalog
-        .published_artifact_path(&digest, &name)
-    else {
+    plugin_release_artifact_response(&state.plugin_catalog, &digest, &name).await
+}
+
+async fn plugin_release_artifact_response(
+    catalog: &crate::plugin_catalog::PluginCatalog,
+    digest: &str,
+    name: &str,
+) -> Response {
+    let Some(path) = catalog.published_artifact_path(digest, name) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let file = match tokio::fs::File::open(&path).await {
@@ -16749,7 +16754,7 @@ async fn plugin_release_artifact(
     };
     let digest = digest
         .strip_prefix("sha256:")
-        .unwrap_or(&digest)
+        .unwrap_or(digest)
         .to_ascii_lowercase();
     Response::builder()
         .status(StatusCode::OK)
@@ -16933,8 +16938,63 @@ async fn static_handler(
 
 #[cfg(test)]
 mod static_asset_tests {
-    use super::{is_admin_console_path, resolve_static_document, static_content_type};
-    use axum::http::StatusCode;
+    use super::{
+        is_admin_console_path, plugin_release_artifact_response, resolve_static_document,
+        static_content_type,
+    };
+    use axum::http::{StatusCode, header};
+
+    #[tokio::test]
+    async fn published_artifacts_in_legacy_catalog_keep_streaming_and_cache_headers() {
+        let root =
+            std::env::temp_dir().join(format!("cowboy-artifact-http-{}", uuid::Uuid::new_v4()));
+        let bytes = b"immutable published runtime";
+        let digest = crate::admin::hex_sha256(bytes);
+        let directory = root.join("plugin-catalog/artifacts").join(&digest);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("runtime.tar.gz"), bytes).unwrap();
+        let catalog = crate::plugin_catalog::PluginCatalog::open(&root, None).unwrap();
+        let response = plugin_release_artifact_response(&catalog, &digest, "runtime.tar.gz").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_LENGTH],
+            bytes.len().to_string()
+        );
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/octet-stream"
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(
+            response.headers()[header::ETAG],
+            format!("\"sha256:{digest}\"")
+        );
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
+        for (digest, name) in [
+            (digest.as_str(), "missing.tar.gz"),
+            ("invalid", "runtime.tar.gz"),
+            (digest.as_str(), "../secret"),
+        ] {
+            assert_eq!(
+                plugin_release_artifact_response(&catalog, digest, name)
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        assert!(!root.join("plugins/catalog/artifacts").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn admin_console_paths_are_distinct_from_the_session_spa() {

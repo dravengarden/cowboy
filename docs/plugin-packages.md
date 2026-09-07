@@ -1016,7 +1016,13 @@ The Plugin Catalog compiles all seven first-party manifests as typed
 `unbound` entries and loads installable releases only from its trusted external
 Catalog directory. The default is `<controller-data-dir>/plugins/catalog` (the
 legacy `<controller-data-dir>/plugin-catalog` remains a read-only compatibility
-root) and may be overridden with `--plugin-catalog-dir`. `plugin-publish` installs publisher public keys,
+root) and may be overridden with `--plugin-catalog-dir`. Artifact downloads
+search the same ordered roots, so an immutable URL published in the legacy
+directory stays usable after the layout transition. The canonical root wins
+when its requested path exists; only a missing path permits legacy fallback.
+An explicit Catalog override is exclusive and does not search default roots.
+No download copies, migrates, or rewrites published bytes.
+`plugin-publish` installs publisher public keys,
 Catalog package/release pairs, receipts, and immutable bytes below
 `artifacts/<sha256>/<filename>`. The Controller serves only those confined
 content-addressed files at `/plugin-artifacts/<sha256>/<filename>`, with an

@@ -133,10 +133,6 @@ mod service_catalog {
             Ok(catalog)
         }
 
-        pub(crate) fn published_artifact_path(&self, digest: &str, name: &str) -> Option<PathBuf> {
-            self.plugin_catalog.published_artifact_path(digest, name)
-        }
-
         pub(crate) fn catalog_root(&self) -> Option<PathBuf> {
             Some(self.plugin_catalog.catalog_root())
         }
@@ -651,34 +647,6 @@ mod service_catalog {
                 compare_versions("1.0.0", "1.0.0-rc.10"),
                 std::cmp::Ordering::Greater
             );
-        }
-
-        #[test]
-        fn published_artifact_paths_are_content_addressed_and_confined() {
-            let root = std::env::temp_dir().join(format!(
-                "cowboy-provider-artifact-path-test-{}",
-                std::process::id()
-            ));
-            let _ = fs::remove_dir_all(&root);
-            let plugins =
-                Arc::new(crate::plugin_catalog::PluginCatalog::open(&root, None).unwrap());
-            let catalog = ProviderCatalog::open(&root, plugins).unwrap();
-            let digest = "a".repeat(64);
-            assert_eq!(
-                catalog
-                    .published_artifact_path(&format!("sha256:{digest}"), "codex.tar.gz")
-                    .unwrap(),
-                root.join("plugins/catalog/artifacts")
-                    .join(&digest)
-                    .join("codex.tar.gz")
-            );
-            assert!(catalog.published_artifact_path("short", "codex").is_none());
-            assert!(
-                catalog
-                    .published_artifact_path(&digest, "../secret")
-                    .is_none()
-            );
-            let _ = fs::remove_dir_all(root);
         }
     }
 }

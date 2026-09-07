@@ -455,12 +455,21 @@ impl PluginCatalog {
         {
             return None;
         }
-        Some(
-            self.catalog_root()
-                .join("artifacts")
-                .join(digest.to_ascii_lowercase())
-                .join(name),
-        )
+        let relative = Path::new("artifacts")
+            .join(digest.to_ascii_lowercase())
+            .join(name);
+        // Download from the same ordered roots used to read the Catalog. A
+        // default-layout migration must not strand immutable published URLs in
+        // the still-readable legacy root. An explicit root remains exclusive.
+        // Only absence permits fallback: a present but unreadable/non-file
+        // primary candidate must reach the normal HTTP error path instead.
+        self.roots
+            .iter()
+            .map(|root| root.join(&relative))
+            .find(|path| {
+                !matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+            })
+            .or_else(|| Some(self.catalog_root().join(relative)))
     }
 
     pub(crate) fn catalog_root(&self) -> PathBuf {
@@ -892,6 +901,108 @@ mod tests {
         fn drop(&mut self) {
             unlock_tree(&self.0);
             fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn published_artifacts_follow_read_roots_without_migrating_bytes() {
+        let fixture = ReaderFixture::new();
+        let digest = "ab".repeat(32);
+        let legacy = fixture.0.join("plugin-catalog/artifacts").join(&digest);
+        fs::create_dir_all(&legacy).unwrap();
+        for name in ["codex.cowboy-plugin", "codex.tar.gz"] {
+            fs::write(legacy.join(name), b"published bytes").unwrap();
+        }
+        let catalog = PluginCatalog::inspect(&fixture.0, None).unwrap();
+        let canonical = fixture.0.join("plugins/catalog/artifacts").join(&digest);
+        for name in ["codex.cowboy-plugin", "codex.tar.gz"] {
+            assert_eq!(
+                catalog.published_artifact_path(
+                    &format!("sha256:{}", digest.to_ascii_uppercase()),
+                    name
+                ),
+                Some(legacy.join(name))
+            );
+        }
+        assert!(!fixture.0.join("plugins").exists());
+        catalog.initialize().unwrap();
+        assert_eq!(
+            catalog.published_artifact_path(&digest, "codex.tar.gz"),
+            Some(legacy.join("codex.tar.gz"))
+        );
+        assert!(!canonical.exists());
+        assert_eq!(
+            fs::read(legacy.join("codex.tar.gz")).unwrap(),
+            b"published bytes"
+        );
+
+        fs::create_dir_all(&canonical).unwrap();
+        fs::write(canonical.join("codex.tar.gz"), b"published bytes").unwrap();
+        assert_eq!(
+            catalog.published_artifact_path(&digest, "codex.tar.gz"),
+            Some(canonical.join("codex.tar.gz"))
+        );
+        assert_eq!(
+            catalog.published_artifact_path(&digest, "missing.tar.gz"),
+            Some(canonical.join("missing.tar.gz"))
+        );
+        for (digest, name) in [
+            ("short", "codex"),
+            (&digest, "../secret"),
+            (&digest, "a/b"),
+            (&digest, ""),
+        ] {
+            assert!(catalog.published_artifact_path(digest, name).is_none());
+        }
+    }
+
+    #[test]
+    fn published_artifact_explicit_root_does_not_search_default_or_legacy() {
+        let fixture = ReaderFixture::new();
+        let digest = "a".repeat(64);
+        for root in ["plugin-catalog", "plugins/catalog"] {
+            let directory = fixture.0.join(root).join("artifacts").join(&digest);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("codex.tar.gz"), b"not in selected root").unwrap();
+        }
+        let selected = fixture.0.join("selected");
+        let catalog = PluginCatalog::inspect(&fixture.0, Some(selected.clone())).unwrap();
+        let expected = selected
+            .join("artifacts")
+            .join(&digest)
+            .join("codex.tar.gz");
+        assert_eq!(
+            catalog.published_artifact_path(&digest, "codex.tar.gz"),
+            Some(expected.clone())
+        );
+        assert!(!selected.exists());
+        fs::create_dir_all(expected.parent().unwrap()).unwrap();
+        fs::write(&expected, b"selected bytes").unwrap();
+        assert_eq!(
+            catalog.published_artifact_path(&digest, "codex.tar.gz"),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn published_artifact_present_primary_never_falls_through_to_legacy() {
+        let fixture = ReaderFixture::new();
+        let digest = "a".repeat(64);
+        let legacy = fixture.0.join("plugin-catalog/artifacts").join(&digest);
+        let primary = fixture.0.join("plugins/catalog/artifacts").join(&digest);
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&primary).unwrap();
+        for name in ["directory", "dangling"] {
+            fs::write(legacy.join(name), b"must not mask primary failure").unwrap();
+        }
+        fs::create_dir(primary.join("directory")).unwrap();
+        std::os::unix::fs::symlink("missing", primary.join("dangling")).unwrap();
+        let catalog = PluginCatalog::inspect(&fixture.0, None).unwrap();
+        for name in ["directory", "dangling"] {
+            assert_eq!(
+                catalog.published_artifact_path(&digest, name),
+                Some(primary.join(name))
+            );
         }
     }
 
