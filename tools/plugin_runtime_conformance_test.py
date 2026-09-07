@@ -11,13 +11,59 @@ import unittest
 from unittest.mock import Mock, patch
 
 from plugin_runtime_conformance import (
-    closed_environment, digest, extract_archive, fixture_session_id, read_frame,
+    SessionStartupRejected, Worker, cleanup_workers, closed_environment, digest, extract_archive, fixture_session_id, read_frame,
     main, require_worker_isolation, run_conformance, validate_receipt_paths,
     write_frame, write_receipt,
 )
 
 
 class ConformanceHarnessTests(unittest.TestCase):
+    def test_only_terminal_pre_native_events_are_startup_rejections(self):
+        worker = Worker.__new__(Worker)
+        worker.receive = Mock(return_value={"type": "worker_event", "event": {"event": "status", "state": "crashed"}})
+        with self.assertRaises(SessionStartupRejected):
+            worker.wait_ready()
+
+    def test_native_allocation_cannot_be_forgotten_before_failure(self):
+        worker = Worker.__new__(Worker)
+        worker.candidate = SimpleNamespace(release={"artifact_digest": "sha256:fixture"})
+        worker.receive = Mock(side_effect=[
+            {"type": "worker_event", "event": {"event": "agent_session_id", "agent_session_id": "native-retained"}},
+            {"type": "snapshot", "worker": {
+                "launch": {"provider_generation_digest": "sha256:fixture"}, "state": "starting"}},
+            {"type": "worker_event", "event": {"event": "status", "state": "crashed"}},
+        ])
+        with self.assertRaisesRegex(RuntimeError, "after native allocation") as error:
+            worker.wait_ready()
+        self.assertNotIsInstance(error.exception, SessionStartupRejected)
+
+    def test_cleanup_rejects_live_descendants_and_still_closes_fixture_handles(self):
+        worker = Worker.__new__(Worker)
+        worker.process = Mock(pid=123)
+        worker.child_pids = {456}
+        worker.connection, worker.listener, worker.log = Mock(), Mock(), Mock()
+        with patch("plugin_runtime_conformance.descendants", return_value={456}), \
+             patch("plugin_runtime_conformance.is_running", return_value=True), \
+             patch("plugin_runtime_conformance.os.kill") as kill, \
+             patch("plugin_runtime_conformance.stop_group"), \
+             patch("plugin_runtime_conformance.time.monotonic", side_effect=[0, 10]):
+            with self.assertRaisesRegex(RuntimeError, "cleanup left a running descendant"):
+                worker.cleanup()
+            self.assertEqual(kill.call_args.args[0], 456)
+        worker.connection.close.assert_called_once()
+        worker.listener.close.assert_called_once()
+        worker.log.close.assert_called_once()
+
+    def test_cleanup_attempts_every_generation_even_when_one_fails(self):
+        current, previous = Mock(), Mock()
+        failure = RuntimeError("previous cleanup failed")
+        previous.cleanup.side_effect = failure
+        with self.assertRaises(RuntimeError) as error:
+            cleanup_workers([current, previous])
+        self.assertIs(error.exception, failure)
+        previous.cleanup.assert_called_once()
+        current.cleanup.assert_called_once()
+
     def test_receipts_are_complete_private_and_create_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

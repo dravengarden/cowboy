@@ -659,6 +659,19 @@ runtime starts.
 Providers needing additional upstream startup fixtures remain unaccepted until
 those fixtures or separately authorized acceptance are available.
 
+For a broken historical baseline, `just agent-generation-failure-isolation
+<release> <artifact-root> <absolute-worker> --previous <release>
+--previous-artifacts <root> --receipt <new-path>` observes a different property:
+a candidate already running survives the previous worker's explicit rejection
+before native-session allocation and subsequent fixture cleanup. It rejects
+timeouts, handshake failures, post-allocation failures and cleanup leaks; a
+previous generation that becomes ready must use the normal coexistence gate.
+The separate private, create-only diagnostic receipt explicitly denies release
+acceptance and successful coexistence. It neither resumes nor rebinds existing
+sessions and grants no publication, retirement, installation or login authority.
+See [broken-generation migration preparation](plugin-generation-migration.md)
+for the remaining acceptance boundaries.
+
 The private Codex adapter archive supplies a bounded configuration launcher:
 the package's `-c` arguments are passed to its exact Codex CLI, since upstream
 `codex-acp` does not consume or forward those arguments. No Cowboy Controller

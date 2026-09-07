@@ -193,6 +193,15 @@ In addition, require all applicable Provider gates below:
   environment or credentials. This separate diagnostic is not acceptance and
   never changes the failing exit status. Failure before the older worker is
   ready does not prove a new-version regression or successful coexistence.
+  For an explicitly authorized broken-generation migration investigation,
+  `just agent-generation-failure-isolation <release> <artifacts> <worker>
+  --previous <release> --previous-artifacts <root> --receipt <new-path>` is a
+  separate diagnostic: the candidate must remain ready through an old worker's
+  explicit pre-native-session rejection and verified fixture cleanup. Timeout,
+  handshake, artifact, post-native-session and cleanup errors fail the diagnostic.
+  Its distinct receipt says `release_accepted: false` and coexistence
+  `not_proven`; it is not a substitute for the normal gate, existing-session
+  resume/history acceptance, authorized retirement, or production publication.
 - Native ABI changes run `just native-plugin-conformance` on an arm64 Mac
   from committed Git source. This compiles the production bridge into a fresh
   Simulator WKWebView fixture. It does not replace full product-shell builds,

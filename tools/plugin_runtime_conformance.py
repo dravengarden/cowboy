@@ -209,6 +209,14 @@ def fixture_session_id(plugin_id, root):
     return f"conformance-{plugin_id}-{root.parent.name}-{root.name}"
 
 
+class SessionStartupRejected(RuntimeError):
+    """The worker reported a terminal state before allocating a native session."""
+
+
+class WorkerStartupRejected(RuntimeError):
+    """An explicit pre-session rejection whose fixture cleanup has completed."""
+
+
 class Worker:
     def __init__(self, candidate, executable, root):
         self.candidate = candidate
@@ -266,10 +274,16 @@ class Worker:
             self.log.seek(0)
             diagnostic = self.log.read()[-4000:]
             self.cleanup()
+            if isinstance(error, SessionStartupRejected):
+                raise WorkerStartupRejected(f"{candidate.id}@{candidate.version}: {error}\n{diagnostic}") from error
             raise RuntimeError(f"{candidate.id}@{candidate.version}: {error}\n{diagnostic}") from error
 
     def receive(self):
+        # Retain ownership observations before startup can fail and orphan a
+        # descendant. Never infer teardown solely from the worker's exit.
+        self.child_pids.update(descendants(self.process.pid))
         frame = read_frame(self.connection)
+        self.child_pids.update(descendants(self.process.pid))
         if frame["type"] == "worker_event":
             write_frame(self.connection, {"type": "ack", "session_id": self.session,
                         "worker_epoch": frame["worker_epoch"], "runtime_seq": frame["runtime_seq"]})
@@ -278,6 +292,7 @@ class Worker:
     def wait_ready(self):
         deadline = time.monotonic() + 90
         native_session = None
+        native_allocated = False
         running = False
         while time.monotonic() < deadline:
             frame = self.receive()
@@ -295,10 +310,14 @@ class Worker:
                 native_session = event.get("agent_session_id")
             if event.get("event") == "status" and event.get("state") == "running":
                 running = True
+            native_allocated = native_allocated or bool(native_session)
             if native_session and running:
                 self.ready = True
                 return
-            require(event.get("state") not in ("crashed", "exited"), f"session failed: {event}")
+            if event.get("state") in ("crashed", "exited"):
+                if not native_allocated:
+                    raise SessionStartupRejected(f"session failed before native allocation: {event}")
+                raise RuntimeError(f"session failed after native allocation: {event}")
         raise TimeoutError("ACP initialize/session-new timed out")
 
     def capture_sidecars(self):
@@ -343,20 +362,27 @@ class Worker:
         require(not any(is_running(pid) for pid in self.child_pids), "worker left a running descendant")
 
     def cleanup(self):
-        if self.process:
-            self.child_pids.update(descendants(self.process.pid))
-            # ACP owns another process group. Kill only recorded fixture descendants.
-            for pid in self.child_pids:
-                if is_running(pid):
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-            stop_group(self.process)
-        if self.connection:
-            self.connection.close()
-        self.listener.close()
-        self.log.close()
+        try:
+            if self.process:
+                self.child_pids.update(descendants(self.process.pid))
+                # ACP owns another process group. Kill only recorded fixture descendants.
+                for pid in self.child_pids:
+                    if is_running(pid):
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                stop_group(self.process)
+                deadline = time.monotonic() + 5
+                while any(is_running(pid) for pid in self.child_pids) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                require(not any(is_running(pid) for pid in self.child_pids),
+                        "fixture cleanup left a running descendant")
+        finally:
+            if self.connection:
+                self.connection.close()
+            self.listener.close()
+            self.log.close()
 
 
 def require_worker_isolation():
@@ -393,6 +419,17 @@ def write_receipt(path, receipt):
 def evidence_identity(candidate):
     return {"plugin_id": candidate.id, "plugin_version": candidate.version,
             "artifact_digest": candidate.release["artifact_digest"]}
+
+
+def cleanup_workers(workers):
+    failures = []
+    for worker in reversed(workers):
+        try:
+            worker.cleanup()
+        except Exception as error:
+            failures.append(error)
+    if failures:
+        raise failures[0]
 
 
 def run_conformance(args, progress):
@@ -444,12 +481,11 @@ def run_conformance(args, progress):
                                      "stop_and_descendant_drain": "passed", "sidecar_count": len(ports),
                                      "distinct_generation_coexistence": "passed" if len(workers) == 2 else "not_checked"}
         finally:
-            for worker in reversed(workers):
-                try:
-                    worker.cleanup()
-                except Exception:
-                    progress["phase"] = "fixture_cleanup"
-                    raise
+            try:
+                cleanup_workers(workers)
+            except Exception:
+                progress["phase"] = "fixture_cleanup"
+                raise
         return receipt
 
 

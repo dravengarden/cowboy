@@ -243,6 +243,10 @@ plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
 agent-worker-conformance RELEASE ARTIFACTS WORKER *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_runtime_conformance.py "$@"' conformance "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
 
+# Diagnostic only: does not satisfy release coexistence or authorize migration.
+agent-generation-failure-isolation RELEASE ARTIFACTS WORKER *ARGS:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/plugin_generation_failure_isolation.py "$@"' diagnostic "{{RELEASE}}" "{{ARTIFACTS}}" --worker "{{WORKER}}" {{ARGS}}
+
 # Actual immutable readers, public old bytes and a temporary signed future
 # fixture. Add --publication <bound-release.json> for each exact candidate,
 # including older outer schemas with newer payloads. Never publishes/activates.
@@ -266,6 +270,7 @@ provider-check: plugin-check
     deno test tools/plugin-publication-receipt_test.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
+    python3 -m unittest discover -s tools -p plugin_generation_failure_isolation_test.py
     python3 -m unittest discover -s tools -p catalog_reader_conformance_test.py
     deno run --allow-read components/provider-runtime/check.ts
     cargo test --locked -p cowboy-provider-sdk --all-targets
