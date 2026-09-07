@@ -8,17 +8,18 @@ The latest native follow-ups are **Owned full native shell and clean-build
 acceptance** and **Remote logged-out native App acceptance** at the end of this
 document; they supersede the earlier missing-source and local-loader-only gates.
 The latest Controller candidate is recorded in **Host-capable successor
-integration and acceptance** below. It incorporates the active reader bridge;
+integration and acceptance** below. It incorporates the earlier envelope-reader bridge;
 the full Plugin migration itself is still not deployed.
 The latest publication status is **Signed production publication and verification**
 below: eight exact Plugin versions are signed, published and publicly downloadable.
 The historical signing entrypoints were recovered without changing trust. The
 active bridge still skips these schema-2 releases; authenticated Catalog refresh
 and UI availability have not been accepted. Zed and Codex DeepSeek remain
-unpublished for their separate reader/coexistence blockers.
-The latest follow-up is **Nested Code reader candidate and coexistence recheck**
-below: a separate immutable reader candidate now passes Zed's exact-format gate,
-but is not activated. Codex DeepSeek's historical-generation failure remains.
+unpublished. The latest follow-up is **Reader-only Controller activation and
+postflight** below: the independently accepted `c0911dd0` reader is now active,
+resolving Zed's reader-transition boundary, not its remaining publication gates.
+Codex DeepSeek's historical-generation failure remains. The full Host-capable
+Controller, Web, Machine and storage migration are still not deployed by this task.
 
 ## Goal
 
@@ -1657,3 +1658,107 @@ New durable local evidence (SHA-256):
 Normal admin refresh, full Controller/Web/Host selection, storage recovery,
 Machine installation, real-login and physical Apple acceptance remain separate
 as recorded above. Nothing in this reader backport accepts those transitions.
+
+## Reader-only Controller activation and postflight — 2026-09-07
+
+The user authorized the previously described **Controller-only reader activation**.
+This continuation used the installed machine-owned activator, not a manual
+profile switch, systemd override, NixOS generation, Host-policy change or Machine
+upgrade. No Plugin was signed/published and no Service login was performed.
+
+The previous unrooted candidate path was no longer present. From the same clean
+bridge worktree and exact committed source `c0911dd012bad4191f2936491c3879346cffbd25`,
+the pinned shell rebuilt `.#cowboy-controller-release` with a retained
+`result-catalog-reader-controller` link. Fresh `origin/main` remained `4741d063`,
+and both that revision and active `1814cb19` are ancestors of the candidate.
+The rebuilt release path and executable bytes match the prior acceptance exactly:
+
+- Release: `/nix/store/3dyzn3nl2djxsi5b2xxarzcrbfkiwsx6-cowboy-controller-release`.
+- Executable SHA-256:
+  `9aabe79b5218de95e0b72d03813cd1e4bd48377b7f89514abe7914dfa5ebf685`.
+- Nix's build/check phase passed **520 library tests, 2 ignored**, plus **3 binary
+  tests** in its configured feature slice. This is separate from the previously
+  accepted full development-library suite (521 passed). The main branch's
+  publication-reader harness was also rerun: **15 passed**.
+
+Before dispatch, the actual old/new immutable readers again read the complete
+production Catalog in closed, loopback-only namespaces. Both new-reader cold
+starts retained the exact same **34 supported identities**. A read-only
+`--check-plugin-catalog` invocation against the real `/var/lib/cowboy` data path
+also proved that no incompatible Host authority marker had appeared; it returned
+before Service identity, database, authentication or listener initialization.
+The independently selected SDK verified all **42 production signatures**, and
+all **224 Catalog files** matched the prior full snapshot byte-for-byte.
+
+Activation used the existing installed entrypoint directly, with no maintenance
+flag, from the clean bridge worktree:
+
+```sh
+nix develop -c env -u COWBOY_PROVIDER_PACKAGE_PATH \
+  /run/current-system/sw/bin/cowboy-release-activate \
+  /nix/store/3dyzn3nl2djxsi5b2xxarzcrbfkiwsx6-cowboy-controller-release
+```
+
+The inspected installed Columbus activator is still `a8722843904e`. It dispatched
+`hawk-cowboy-controller-activate.service`, rechecked fresh ancestry under the
+machine lock, and restarted only `cowboy.service`. The transaction
+**`1788749945463743805-c0911dd012ba`** started at **02:59:05Z** and committed at
+**02:59:32Z** (10:59 Shanghai time). It completed with exit **0**,
+`outcome=succeeded`, `phase=committed`, `maintenance=false`, `recovered=false`.
+The active profile, actual running executable, successful receipt and deployment
+Git pin all name `c0911dd0`; no incomplete journal remains.
+
+Controller PID changed **2472823 → 4158242**, with `active` and `NRestarts=0`.
+The **03:00:53Z** postflight independently reverified:
+
+- Resident Machine PID **3991423**, Zed adapter PID **3991201**, both active with
+  zero restarts. Machine deployment-health reports `online`, `connected=true`,
+  and the unchanged ACP generation **`worker-a4ad441efe0461691687`**; its socket
+  is present. No worker-generation rollout or registered-Machine install ran.
+- Public HTTPS and loopback `/healthz`, `/version`, SPA and its actual module
+  asset return **200**. Web root remains `/nix/store/kf3qkq3n53k8n4yyrmzdgibs4m2f41sn-cowboy-web-0.1.0`;
+  version remains `fa264f43802c4cd374b31e01b160766c`. SPA/asset bodies, ETags and
+  relevant headers match the preflight. The SPA remains `Cache-Control: no-store`,
+  and `/assets/main-6Y_26Z8i.js` remains `public, max-age=31536000, immutable`.
+  No Web release or PWA bundle replacement occurred.
+- All **42 signatures / 224 files** still verify and match. The complete sorted
+  Catalog snapshot digest remains
+  `5aa6c62b94a7e97ff415aba9ecdb8f8316f38a2acf206451da05325a1d23477f`;
+  the earlier package/envelope/trust tree recipe still yields
+  `f1b84802e80d129c7b9dad007398558e5d2c9e3433926ec807870dfd270b8f07`.
+  New-reader cold starts and actual authority-marker inspection still pass.
+
+The completed receipt's `previousRelease` is **1814cb19 / 2d5...**: it was the
+rollback target for **this transaction only**. The next owned transaction captures
+the now-active **c0911dd0 / 3dy...** under its lock. An older completed receipt
+does not authorize a later downgrade. Future manual recovery must retain this
+reader boundary in a clean descendant revert; it is still not a post-Host/storage
+rollback target. The activator's normal retention policy removed only the old
+profile-generation **132 reference**, not Catalog or runtime artifact bytes;
+the active release is rooted by profile generation **152** and the task result link.
+The receipt's `published=false` means “not an ancestor of origin/main” in this
+activator, not “missing from every remote branch”: the exact source was already
+pushed to `cowboy/catalog-reader-bridge-sess-1788279284752`.
+
+Durable evidence (SHA-256):
+
+- Machine receipt `/var/lib/hawk-component-deployments/cowboy-controller/current.json`:
+  `ea46738a64d0ac02f9e184e25eab850926f0e8c09e9cb2e871a32ddcb645ab7c`.
+  Its immutable history entry is
+  `history/1788749945463743805-c0911dd012ba-succeeded.json` under the same directory.
+- `dist/catalog-reader-conformance/c0911dd0-activation-before-20260907.json`:
+  `ec425af984b66fa772a0ca292d7d116e420192961db98a7f34be603e489f68d8`.
+- `dist/catalog-reader-conformance/c0911dd0-activation-after-20260907.json`:
+  `41f51ffbb704fbf6b84a287c8faeb8c8778b1cd49b4b3a9e2d67d3b536063e54`.
+- The one-off read-only `controller-reader-activation-audit.mjs` beside them:
+  `4bd3ffdeaa336c0f73032baaac504a51ee3be4faa86ec894053df250460da9c6`.
+  Its receipts identify main task source `22e6cf6a` and the separately accepted
+  bridge. It neither activates a component nor signs/publishes a Plugin.
+
+**Next boundary:** Zed 1.2.1 may now proceed to its independent final signing,
+complete mixed-Catalog checks and publication workflow, after rechecking the
+active/transaction floor and all remaining canonical gates. It remains
+unpublished in this continuation. Safe exclusion by the active reader is not UI
+installation availability. Codex DeepSeek 3.1.13 remains held by the previously
+reproduced distinct-generation failure; neither the full Controller coverage
+gate nor Host/Authentication/storage migration acceptance has been relaxed.

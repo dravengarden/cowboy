@@ -1,10 +1,26 @@
 # Pre-cutover Catalog reader bridge
 
-This branch is a narrow backport onto deployed Cowboy revision
+The separate bridge branch is a narrow backport onto deployed Cowboy revision
 `c293e0e91d00744cf4d82034c1be789b30c5e44c`. It prepares that legacy Controller to
 coexist with append-only publication of newer Plugin formats; it does not
 upgrade a Provider, SDK, Machine protocol, authentication implementation, host
 runtime, Web bundle or SQL migration.
+
+This document describes the legacy bridge lineage (`1814cb19e152` and its active
+`c0911dd012ba` follow-up), not the full host-capable Controller. The full Plugin
+branch integrates the original bridge's safe
+envelope reader and read-only `--check-plugin-catalog` command while retaining
+schema-2 hosts, atomic Catalog/runtime refresh and exact activation policy.
+Its Catalog inspection does not validate host policy; use the mutually exclusive
+`--check-plugin-hosts` for startup/activation preflight. Only the legacy bridge
+unconditionally refuses post-cutover authority markers. The host-capable
+Controller validates those markers against its selected policy and can restart
+after an accepted cutover.
+
+The activation candidate also incorporates fresh `origin/main` revision
+`4741d063b94084b13d6c3beab97a3a43371f55d3`, which changes only Web source/tests
+and their documentation. Those changes do not alter the Controller backport;
+this task builds and activates only the Controller release, not a Web release.
 
 The reader inspects the release envelope before the package. No envelope means
 an incomplete publication, not a candidate. An envelope with a future schema
@@ -23,9 +39,9 @@ reader still attempts to decode that supported outer envelope and its package.
 Do not infer publication safety from its schema number or from a different
 Plugin's successful schema-2 fixture.
 
-The separate `cowboy/catalog-reader-bridge-sess-1788279284752` branch now prepares
-a follow-up reader candidate for that nested Code boundary. It remains a
-pre-Host backport, not the full Controller or an activated production floor.
+The separate `cowboy/catalog-reader-bridge-sess-1788279284752` branch provides
+a follow-up reader for that nested Code boundary, activated on 2026-09-07.
+It remains a pre-Host backport, not the full Controller or a Host-policy cutover.
 After validating the exact envelope/package digest, it inspects only the
 explicit Code format headers. Outer package schema 1, matching manifest/payload
 Code kinds, and a positive integer Code schema newer than 1 are required for
@@ -49,15 +65,23 @@ The follow-up candidate is now built from clean bridge source
 `/nix/store/3dyzn3nl2djxsi5b2xxarzcrbfkiwsx6-cowboy-controller-release`.
 The actual-reader gate from acceptance-tool source `3b1d9596b3de` passes 17
 generic checks and all nine exact publication preflights, including Zed 1.2.1.
-The live `1814cb19` negative control still fails Zed's nested runtime variant.
+The formerly live `1814cb19` negative control still fails Zed's nested runtime variant.
 Complete production-Catalog inspection verifies all 42 signatures and preserves
 the same 34 supported identities across two new-reader cold starts, without
 changing any of its 224 files. Exact receipts and limits are in
 `PLUGINIZATION-HANDOFF.md`, **Nested Code reader candidate and coexistence recheck**.
-This is a built/tested candidate only: the live profile remains `1814cb19`, and
-Zed remains unpublished pending separately authorized reader activation and the
-remaining release gates. The full Controller's Codex DeepSeek coexistence block
-is independent of this narrow backport.
+The user subsequently authorized its Controller-only activation. On 2026-09-07
+at 02:59:32Z the installed machine-owned activator committed `c0911dd0`, with
+matching live executable/profile, receipt and deployment Git pin. Rebuilding the
+previously absent Nix candidate reproduced the exact accepted binary digest.
+Machine and Zed-adapter PIDs, active worker generation, Web bytes/cache headers,
+and every production Catalog file remained unchanged through before/after checks.
+See **Reader-only Controller activation and postflight** in the handoff for the
+transaction and evidence. The next owned transaction now captures this active
+reader as its predecessor; the completed receipt's old `1814cb19` predecessor is
+not an automatic future downgrade target. Zed remains unpublished pending its
+separate remaining release gates. The full Controller's Codex DeepSeek coexistence
+block is independent of this narrow backport.
 
 Read-only inspection uses the same Catalog reader:
 
