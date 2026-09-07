@@ -30,28 +30,37 @@ exact published digests. The Catalog has 50 signed releases; historical bytes
 and previous Agent generations remain intact.
 
 The Host/storage cutover is deployed with catalog-only authority. Current
-Controller is `6edd2936`, Web `54884f7e` (SW 1636), and both Machines use
-`6edd2936` / `worker-8acc0548415e5404ac08`. Explicit device approval succeeded;
-`/api/auth/me` now returns 200 with `no-store` for the approved device. The
-follow-up cached-login and deployment-health changes still need their own
-Controller activation receipt. Cowboy main includes the implementation, and
-Hawk host `d82d576d` has retired the startup npm bootstrap without restarting
-the Controller during that host activation.
+Controller and both Machines are now `7ba2b192`, with the unchanged exact worker
+generation `worker-8acc0548415e5404ac08`; Web remains `54884f7e` (SW 1636).
+The approved device receives 200 with `no-store` from `/api/auth/me`, including
+after the owned CLI refreshes a stale access grant. Both hosts are Columbus
+`362f6220`: the old Zed units/socket arguments and Hawk startup npm bootstrap
+are retired. Host activation retained the Controller, Machines and independent
+model-gateway PIDs; subsequent explicit Machine maintenance dropped the old
+socket arguments. Legacy state and signed archives remain recoverable.
 See **Device approval and registered-Machine rollout** at the end and
-[the release record](docs/releases/plugin-publication-2026-09-07.md) for exact
+[the publication record](docs/releases/plugin-publication-2026-09-07.md) and
+[completion record](docs/releases/plugin-completion-2026-09-08.md) for exact
 versions, authorization boundaries and receipts.
 
 Earlier sections are chronological evidence, not current pending-state lists.
 Preserve their failed acceptance records: the user waived historical-version
 coexistence for publication, not integrity or credential checks. Real
-Passkey/OIDC login and physical input remain unclaimed. Two explicitly
-in-scope, visible, idle Codex 3.1.8 sessions have now resumed on installed
-3.1.14 with the same native IDs, auth generation 5, native/Cowboy history
-prefixes and all retained state. Their live model/reasoning options confirm
-the saved preferences. No inference prompt was sent; first-prompt ordering is
-covered separately by the deterministic protocol gate. Other sessions retain
-their selected generations; never stop/rebind invisible or busy work, or
-delete historical runtime/home state to make the report look complete.
+Passkey/OIDC login and physical input remain unclaimed. **Eleven** visible,
+idle sessions (eight Codex, three Grok) have resumed on installed 3.1.14 with
+their original native IDs and authentication homes, unchanged conversation
+history and retained state, and confirmed live configuration preferences.
+Grok may refresh its first system record; the acceptance record separately
+proves the remaining native conversation bytes are identical. No inference
+prompt was sent; first-prompt ordering is covered by the deterministic gate.
+
+**Still open:** eight pre-Plugin Codex sessions have no verifiable previous
+package (one also lacks a resumable native ID), and this active Codex turn is
+still pinned to 3.1.8. Do not force-stop the current turn or silently turn the
+older sessions into blank new ones. Their restoration fallback cannot yet be
+deleted. A decision to retain those eight only as history would be a separate
+user-approved loss of resumability, not an implementation shortcut. Physical
+iPhone/iPad login/input acceptance and PITFALLS #69 are not closed.
 
 ## Goal
 

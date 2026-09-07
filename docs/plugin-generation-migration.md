@@ -126,6 +126,42 @@ an inferred live first prompt. Busy sessions and a product-invisible candidate
 were excluded. Unbound legacy sessions still need an authorized, compatible
 native-home transition before their restoration fallback can be retired.
 
+### Completed compatible cohort
+
+After Controller/Machine `7ba2b192` and both Columbus hosts `362f6220` were
+accepted, a read-only, product-visible audit found nine additional compatible
+idle sessions. All nine were migrated through the same digest-fenced endpoint:
+six Codex 1.1.2 sessions and three Grok 1.1.8 sessions. Together with the two
+above, **eight Codex and three Grok sessions** reached Running on 3.1.14 and
+confirmed their retained configuration. Codex kept auth homes 1/5; Grok kept
+3/9. No credentials/history were moved to a different home, no model prompt
+was sent, and no active turn was stopped.
+
+Grok's first real check rejected a four-byte reduction in `chat_history.jsonl`.
+Investigation proved that only its first `system` record changed: reconstructing
+the pre-load bytes in memory from the retained `system_prompt.txt` and current
+conversation tail exactly reproduced the original full SHA-256. No file was
+rewritten by the verifier. Subsequent Grok preflights additionally capture the
+conversation-tail SHA-256, excluding only that typed first system record;
+every user, assistant, reasoning and tool-result byte must still match.
+The receipt distinguishes this system-context refresh from an unchanged native
+file prefix. It must not be generalized into acceptance of arbitrary history
+rewrites or used for another Provider's native format.
+
+The create-only aggregate is
+`native-migrations-accepted-1788806812933.json` under the same evidence directory,
+SHA-256 `1314c6811c1278e5e64ebd94023c92092c3051b035361ed2a55aa444463d0035`.
+It binds all eleven exact per-session receipts and their before-evidence.
+
+The final read-only audit `legacy-session-audit-1788806693952.json`
+(SHA-256 `0c187026b4a16eac085feb65d65e52c616f042698f17d289831eff1497bacf56`)
+leaves eight unbound pre-Plugin Codex sessions and the active current turn.
+Seven old sessions fail closed because the previous package cannot be
+identified; one has no usable native resume ID. The current turn must finish
+before **Load installed Provider** can replace its 3.1.8 binding. Do not infer
+permission to destroy native history, remove the restoration fallback, or
+force an active-turn stop from an installed-Plugin upgrade request.
+
 ## Proposed transition using the existing lifecycle
 
 1. Build and validate a new immutable candidate without changing historical
@@ -154,7 +190,7 @@ native-home transition before their restoration fallback can be retired.
    make a fixture pass. Existing sessions continue on their recorded generation
    until their own authorized transition or natural drain.
 
-The original preparation checklist above is historical. Two real native
+The original preparation checklist above is historical. Eleven real native
 resumptions and their installed Controller/Machine acceptance are now recorded;
 remaining transitions still require per-session ownership, compatibility and
 idle-state checks. Failure isolation alone completes none of those transitions.
