@@ -646,6 +646,16 @@ executables/readiness, stop and descendant drain. Optional `--previous` and
 `--previous-artifacts` inputs must name another exact release; both workers
 must coexist with distinct sidecar ports, and stopping the older worker must
 leave the newer one usable. `--receipt <path>` records successful evidence.
+Use a new path for each attempt: receipt writes are private, atomic and
+create-only, including when another process races the initial path check.
+Optional `--failure-receipt <different-new-path>` records a separate diagnostic
+with the observed exact identities, worker digest, completed checks and failure
+phase. It contains no logs, exception messages, argv, configuration, environment
+or credentials and does not suppress the failure or create an acceptance
+receipt. In particular, `previous_worker_startup` means the candidate worker
+has not started; it cannot be reported as either a new-version regression or
+successful generation coexistence. Existing evidence paths fail before any
+runtime starts.
 Providers needing additional upstream startup fixtures remain unaccepted until
 those fixtures or separately authorized acceptance are available.
 

@@ -186,6 +186,13 @@ In addition, require all applicable Provider gates below:
   worker stop and descendant drain; it never prompts a model. Upstream startup
   that needs an unimplemented network/auth fixture is an unresolved gate, not
   permission to use Service credentials or downgrade the expected result.
+  Receipt paths must be new: successful evidence is private, atomically
+  create-only and never overwritten. Add `--failure-receipt <different-new-path>`
+  to record a failed attempt's exact observed identities, completed checks,
+  worker digest and failure phase without copying logs, exception messages,
+  environment or credentials. This separate diagnostic is not acceptance and
+  never changes the failing exit status. Failure before the older worker is
+  ready does not prove a new-version regression or successful coexistence.
 - Native ABI changes run `just native-plugin-conformance` on an arm64 Mac
   from committed Git source. This compiles the production bridge into a fresh
   Simulator WKWebView fixture. It does not replace full product-shell builds,

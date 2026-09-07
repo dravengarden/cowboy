@@ -1,20 +1,152 @@
 import io
+import json
 import os
 from pathlib import Path
 import socket
 import struct
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from plugin_runtime_conformance import (
     closed_environment, digest, extract_archive, fixture_session_id, read_frame,
-    require_worker_isolation, write_frame,
+    main, require_worker_isolation, run_conformance, validate_receipt_paths,
+    write_frame, write_receipt,
 )
 
 
 class ConformanceHarnessTests(unittest.TestCase):
+    def test_receipts_are_complete_private_and_create_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "receipt.json"
+            value = {"status": "passed", "plugin_id": "fixture"}
+            write_receipt(path, value)
+            self.assertEqual(json.loads(path.read_text()), value)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                write_receipt(path, {"status": "failed"})
+            self.assertEqual(json.loads(path.read_text()), value)
+            self.assertEqual(list(root.iterdir()), [path])
+
+    def test_receipts_reject_collisions_and_dangling_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "receipt.json"
+            validate_receipt_paths(path, root / "failure.json")
+            with self.assertRaisesRegex(RuntimeError, "different paths"):
+                validate_receipt_paths(path, root / "missing/../receipt.json")
+            path.symlink_to(root / "absent.json")
+            with self.assertRaisesRegex(RuntimeError, "already exists"):
+                validate_receipt_paths(path, None)
+            with self.assertRaises(FileExistsError):
+                write_receipt(path, {"status": "failed"})
+            self.assertTrue(path.is_symlink())
+            self.assertFalse((root / "absent.json").exists())
+            self.assertEqual(list(root.iterdir()), [path])
+
+    def test_existing_receipt_stops_before_starting_any_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "accepted.json"
+            write_receipt(path, {"accepted": True})
+            with patch("sys.argv", ["conformance", "release", "artifacts", "--receipt", str(path)]), \
+                 patch("plugin_runtime_conformance.Candidate") as candidate:
+                with self.assertRaisesRegex(RuntimeError, "already exists"):
+                    main()
+                candidate.assert_not_called()
+            self.assertEqual(json.loads(path.read_text()), {"accepted": True})
+
+    def test_failure_receipt_is_separate_redacted_and_does_not_suppress_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            accepted, failed = root / "accepted.json", root / "failed.json"
+            def fail(_args, progress):
+                progress.update(phase="previous_worker_startup", previous={
+                    "plugin_id": "fixture", "plugin_version": "1.0.0", "artifact_digest": "sha256:" + "a" * 64})
+                raise RuntimeError("sensitive exception, argv, or worker log must not be copied")
+            with patch("sys.argv", ["conformance", "release", "artifacts", "--receipt", str(accepted),
+                                    "--failure-receipt", str(failed)]), \
+                 patch("plugin_runtime_conformance.run_conformance", side_effect=fail):
+                with self.assertRaisesRegex(RuntimeError, "sensitive exception"):
+                    main()
+            self.assertFalse(accepted.exists())
+            report = json.loads(failed.read_text())
+            self.assertEqual(report["status"], "failed")
+            self.assertEqual(report["phase"], "previous_worker_startup")
+            self.assertEqual(report["exception_type"], "RuntimeError")
+            self.assertFalse(report["acceptance_receipt_created"])
+            self.assertFalse(report["uses_service_credentials"])
+            self.assertNotIn("sensitive", failed.read_text())
+
+    def test_success_does_not_create_failure_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            accepted, failed = root / "accepted.json", root / "failed.json"
+            expected = {"schema_version": 1, "plugin_id": "fixture", "probes": []}
+            with patch("sys.argv", ["conformance", "release", "artifacts", "--receipt", str(accepted),
+                                    "--failure-receipt", str(failed)]), \
+                 patch("plugin_runtime_conformance.run_conformance", return_value=expected), \
+                 patch("sys.stdout", new_callable=io.StringIO) as stdout:
+                main()
+            self.assertEqual(json.loads(stdout.getvalue()), expected)
+            self.assertEqual(json.loads(accepted.read_text()), expected)
+            self.assertFalse(failed.exists())
+
+    def test_missing_previous_artifacts_is_a_failure_not_runtime_acceptance(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            failed = Path(temporary) / "failed.json"
+            with patch("sys.argv", ["conformance", "release", "artifacts", "--previous", "old",
+                                    "--failure-receipt", str(failed)]), \
+                 patch("plugin_runtime_conformance.run_conformance") as run:
+                with self.assertRaisesRegex(RuntimeError, "previous release needs"):
+                    main()
+                run.assert_not_called()
+            self.assertEqual(json.loads(failed.read_text())["phase"], "input_validation")
+
+    def test_failed_previous_startup_never_starts_the_candidate_worker(self):
+        args = SimpleNamespace(release=Path("new.release.json"), artifacts=Path("new-artifacts"),
+                               previous=Path("old.release.json"), previous_artifacts=Path("old-artifacts"),
+                               worker=Path("/fixture-worker"))
+        def candidate(path, _artifacts, _root):
+            old = path.name.startswith("old")
+            return SimpleNamespace(id="fixture", version="1.0.0" if old else "2.0.0",
+                                   release={"artifact_digest": "sha256:" + ("a" if old else "b") * 64},
+                                   target={"os": "linux", "architecture": "x86_64"}, probes=[])
+        progress = {"phase": "input_validation", "completed": []}
+        with patch("plugin_runtime_conformance.Candidate", side_effect=candidate), \
+             patch("plugin_runtime_conformance.Worker", side_effect=RuntimeError("authentication required")) as worker:
+            with self.assertRaisesRegex(RuntimeError, "authentication required"):
+                run_conformance(args, progress)
+        self.assertEqual(worker.call_count, 1)
+        self.assertEqual(worker.call_args.args[0].version, "1.0.0")
+        self.assertEqual(progress["phase"], "previous_worker_startup")
+        self.assertEqual(progress["candidate"]["plugin_version"], "2.0.0")
+        self.assertEqual(progress["previous"]["plugin_version"], "1.0.0")
+        self.assertEqual(progress["completed"], ["candidate_artifact_probes", "previous_artifact_probes"])
+
+    def test_failed_candidate_startup_cleans_up_the_ready_previous_worker(self):
+        args = SimpleNamespace(release=Path("new.release.json"), artifacts=Path("new-artifacts"),
+                               previous=Path("old.release.json"), previous_artifacts=Path("old-artifacts"),
+                               worker=Path("/fixture-worker"))
+        def candidate(path, _artifacts, _root):
+            old = path.name.startswith("old")
+            return SimpleNamespace(id="fixture", version="1.0.0" if old else "2.0.0",
+                                   release={"artifact_digest": "sha256:" + ("a" if old else "b") * 64},
+                                   target={"os": "linux", "architecture": "x86_64"}, probes=[])
+        previous = Mock()
+        progress = {"phase": "input_validation", "completed": []}
+        with patch("plugin_runtime_conformance.Candidate", side_effect=candidate), \
+             patch("plugin_runtime_conformance.Worker", side_effect=[previous, RuntimeError("candidate failed")]):
+            with self.assertRaisesRegex(RuntimeError, "candidate failed"):
+                run_conformance(args, progress)
+        previous.cleanup.assert_called_once()
+        self.assertEqual(progress["phase"], "candidate_worker_startup")
+        self.assertIn("previous_worker_ready", progress["completed"])
+        self.assertNotIn("candidate_worker_ready", progress["completed"])
+        self.assertNotIn("distinct_generation_coexistence", progress["completed"])
+
     def test_cgroup_identity_is_unique_across_plugins_runs_and_generations(self):
         identities = {fixture_session_id(plugin, Path("/tmp") / run / generation)
                       for plugin in ["codex", "grok"]

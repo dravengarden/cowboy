@@ -365,6 +365,94 @@ def require_worker_isolation():
     require(set(socket.if_nameindex()) == {(1, "lo")}, "worker conformance requires an isolated loopback-only namespace")
 
 
+def validate_receipt_paths(receipt, failure_receipt):
+    paths = [path for path in (receipt, failure_receipt) if path is not None]
+    require(len({path.resolve() for path in paths}) == len(paths),
+            "acceptance and failure receipts must use different paths")
+    for path in paths:
+        require(not os.path.lexists(path), "receipt already exists; use a new evidence path")
+
+
+def write_receipt(path, receipt):
+    """Commit complete private evidence without replacing any existing file/link."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".conformance-", delete=False) as output:
+            temporary = Path(output.name)
+            output.write(json.dumps(receipt, indent=2) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink()
+
+
+def evidence_identity(candidate):
+    return {"plugin_id": candidate.id, "plugin_version": candidate.version,
+            "artifact_digest": candidate.release["artifact_digest"]}
+
+
+def run_conformance(args, progress):
+    with tempfile.TemporaryDirectory(prefix="cw-conformance-", dir="/tmp") as temporary:
+        root = Path(temporary).resolve()
+        progress["phase"] = "candidate_artifacts"
+        candidate = Candidate(args.release.resolve(), args.artifacts.resolve(), root / "candidate")
+        progress["candidate"] = evidence_identity(candidate)
+        progress["completed"].append("candidate_artifact_probes")
+        receipt = {"schema_version": 1, "plugin_id": candidate.id,
+                   "plugin_version": candidate.version, "artifact_digest": candidate.release["artifact_digest"],
+                   "platform": {"os": candidate.target["os"], "architecture": candidate.target["architecture"]},
+                   "probes": candidate.probes, "uses_service_credentials": False, "sends_prompt": False}
+        workers = []
+        try:
+            if args.previous:
+                progress["phase"] = "previous_artifacts"
+                previous = Candidate(args.previous.resolve(), args.previous_artifacts.resolve(), root / "previous")
+                progress["previous"] = evidence_identity(previous)
+                progress["completed"].append("previous_artifact_probes")
+                progress["phase"] = "previous_identity"
+                require(previous.id == candidate.id and previous.release["artifact_digest"] != candidate.release["artifact_digest"],
+                        "coexistence must use two distinct exact releases of one Plugin")
+                progress["phase"] = "previous_worker_startup"
+                workers.append(Worker(previous, args.worker, root / "old"))
+                progress["completed"].append("previous_worker_ready")
+                receipt["previous"] = {"plugin_version": previous.version,
+                                       "artifact_digest": previous.release["artifact_digest"]}
+            if args.worker:
+                progress["phase"] = "candidate_worker_startup"
+                workers.append(Worker(candidate, args.worker, root / "new"))
+                progress["completed"].append("candidate_worker_ready")
+                progress["phase"] = "generation_coexistence"
+                ports = [url for worker in workers for _, url in worker.sidecars]
+                require(len(ports) == len(set(ports)), "generations shared a sidecar port")
+                for worker in workers:
+                    worker.assert_alive()
+                if len(workers) == 2:
+                    progress["phase"] = "previous_worker_drain"
+                    workers[0].stop()
+                    progress["completed"].append("previous_worker_drained")
+                    progress["phase"] = "candidate_survives_previous_drain"
+                    workers[1].assert_alive()
+                    progress["completed"].append("distinct_generation_coexistence")
+                progress["phase"] = "candidate_worker_drain"
+                workers[-1].stop()
+                progress["completed"].append("candidate_worker_drained")
+                receipt["worker"] = {"executable_digest": digest(args.worker), "initialize_and_session_new": "passed",
+                                     "stop_and_descendant_drain": "passed", "sidecar_count": len(ports),
+                                     "distinct_generation_coexistence": "passed" if len(workers) == 2 else "not_checked"}
+        finally:
+            for worker in reversed(workers):
+                try:
+                    worker.cleanup()
+                except Exception:
+                    progress["phase"] = "fixture_cleanup"
+                    raise
+        return receipt
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("release", type=Path)
@@ -373,49 +461,38 @@ def main():
     parser.add_argument("--previous", type=Path)
     parser.add_argument("--previous-artifacts", type=Path)
     parser.add_argument("--receipt", type=Path)
+    parser.add_argument("--failure-receipt", type=Path,
+                        help="write separate non-acceptance evidence on failure; never changes the exit status")
     args = parser.parse_args()
-    if args.worker:
-        require_worker_isolation()
-        require(args.worker.is_absolute() and args.worker.is_file(), "worker must be an exact absolute build result")
-    require(bool(args.previous) == bool(args.previous_artifacts), "previous release needs its artifact root")
-    with tempfile.TemporaryDirectory(prefix="cw-conformance-", dir="/tmp") as temporary:
-        root = Path(temporary).resolve()
-        candidate = Candidate(args.release.resolve(), args.artifacts.resolve(), root / "candidate")
-        receipt = {"schema_version": 1, "plugin_id": candidate.id,
-                   "plugin_version": candidate.version, "artifact_digest": candidate.release["artifact_digest"],
-                   "platform": {"os": candidate.target["os"], "architecture": candidate.target["architecture"]},
-                   "probes": candidate.probes, "uses_service_credentials": False, "sends_prompt": False}
-        workers = []
-        try:
-            if args.previous:
-                require(args.worker is not None, "previous generation needs worker conformance")
-                previous = Candidate(args.previous.resolve(), args.previous_artifacts.resolve(), root / "previous")
-                require(previous.id == candidate.id and previous.release["artifact_digest"] != candidate.release["artifact_digest"],
-                        "coexistence must use two distinct exact releases of one Plugin")
-                workers.append(Worker(previous, args.worker, root / "old"))
-                receipt["previous"] = {"plugin_version": previous.version,
-                                       "artifact_digest": previous.release["artifact_digest"]}
-            if args.worker:
-                workers.append(Worker(candidate, args.worker, root / "new"))
-                ports = [url for worker in workers for _, url in worker.sidecars]
-                require(len(ports) == len(set(ports)), "generations shared a sidecar port")
-                for worker in workers:
-                    worker.assert_alive()
-                if len(workers) == 2:
-                    workers[0].stop()
-                    workers[1].assert_alive()
-                workers[-1].stop()
-                receipt["worker"] = {"executable_digest": digest(args.worker), "initialize_and_session_new": "passed",
-                                     "stop_and_descendant_drain": "passed", "sidecar_count": len(ports),
-                                     "distinct_generation_coexistence": "passed" if len(workers) == 2 else "not_checked"}
-        finally:
-            for worker in reversed(workers):
-                worker.cleanup()
-        output = json.dumps(receipt, indent=2) + "\n"
+    # Refuse stale/colliding evidence paths before any runtime is extracted or
+    # started. Atomic create-only publication repeats that check at commit time.
+    validate_receipt_paths(args.receipt, args.failure_receipt)
+    progress = {"phase": "input_validation", "completed": []}
+    try:
+        if args.worker:
+            require_worker_isolation()
+            require(args.worker.is_absolute() and args.worker.is_file(), "worker must be an exact absolute build result")
+            progress["worker_executable_digest"] = digest(args.worker)
+        require(bool(args.previous) == bool(args.previous_artifacts), "previous release needs its artifact root")
+        require(args.previous is None or args.worker is not None,
+                "previous generation needs worker conformance")
+        receipt = run_conformance(args, progress)
+        progress["phase"] = "acceptance_receipt"
         if args.receipt:
-            args.receipt.parent.mkdir(parents=True, exist_ok=True)
-            args.receipt.write_text(output)
-        print(output, end="")
+            write_receipt(args.receipt, receipt)
+    except Exception as error:
+        if args.failure_receipt:
+            # Do not copy exception messages, stdout, logs, argv, configuration,
+            # environment or credentials into durable diagnostic evidence.
+            write_receipt(args.failure_receipt, {
+                "schema": "dravengarden.cowboy.plugin-runtime-failure/v1",
+                "status": "failed", **progress, "exception_type": type(error).__name__,
+                "acceptance_receipt_created": False,
+                "uses_service_credentials": False, "sends_prompt": False,
+                "signature_verification": "separate_required_gate",
+            })
+        raise
+    print(json.dumps(receipt, indent=2))
 
 
 if __name__ == "__main__":
