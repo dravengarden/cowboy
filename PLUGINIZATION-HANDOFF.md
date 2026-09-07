@@ -17,7 +17,10 @@ previously published byte are preserved. The `c0911dd0` reader remains active:
 it safely skips the eight schema-2 envelopes and Zed's newer Code payload inside
 release schema 1. Authenticated Catalog refresh and UI installation availability
 have not been accepted. Codex DeepSeek remains unpublished because its
-historical-generation coexistence gate fails. The full Host-capable Controller,
+historical-generation coexistence gate fails. **Codex DeepSeek historical
+baseline audit and immutable failure evidence** below confirms all five
+published predecessors fail isolated startup; 3.1.13 passes alone, not coexistence.
+The full Host-capable Controller,
 Web, Machine and storage migration are still not deployed by this task.
 
 ## Goal
@@ -1889,3 +1892,108 @@ The full 230-file Catalog snapshot digest is
 `038c0648097b4d1e5f615ad1cad2898fa05e9a50cc9a327d157ada38fc5b57b8`;
 the earlier sorted package/envelope/trust tree recipe now yields
 `81e291a744012d85738bf5e7ee507111750da4a9761a40f120992bedd749aef6`.
+
+## Codex DeepSeek historical baseline audit and immutable failure evidence — 2026-09-07
+
+Implementation/acceptance source is clean commit
+`f0e6184fd662e9ad382f04cdc9a1faa4fd235e24`. The canonical release skill now
+requires new evidence paths. The runtime harness writes private, atomic,
+create-only acceptance receipts and offers a separate `--failure-receipt`.
+Failures record observed exact identities, worker digest, completed checks and
+failure phase without logs, exception text, argv, configuration or credentials.
+They remain nonzero failures, never acceptance. Existing files and dangling
+symlinks are rejected before runtime startup; a racing write cannot replace
+evidence. The successful receipt schema and coexistence/drain assertions are
+unchanged. No Plugin, component, runtime pin or production Core behavior changed.
+
+The full pinned-shell `just check-compact` exited **0** from that commit,
+including **14 runtime-harness tests**, **15 Catalog-harness tests**, **1,144 Web
+tests**, the six isolated PostgreSQL tests, Rust/SDK/native-source checks,
+lint, dependency gates and release builds. The existing core-only yanked
+`spin 0.9.8` warning remains. This is not physical/native signing acceptance.
+
+### Actual historical matrix
+
+All five production signatures were independently verified with the immutable
+SDK and trusted public key. Each exact package and Linux x86_64 runtime was
+then tested in its own loopback-only network namespace, private homes and
+session-owned worker/cgroup identity. No inference prompt or Service credential
+was used. All artifact probes passed, but all five predecessors failed ACP
+session startup with `Authentication required`:
+
+| Published Plugin version | Private adapter | Codex CLI | Isolated startup |
+| --- | --- | --- | --- |
+| 3.1.2 | 1.1.7 | 0.147.0 | Failed |
+| 3.1.3 | 1.6.2 | 0.150.1 | Failed |
+| 3.1.6 | 1.1.7 | 0.147.0 | Failed |
+| 3.1.7 | 1.1.7 | 0.147.0 | Failed |
+| 3.1.8 | 1.10.0 | 0.153.4 | Failed |
+| 3.1.13 (unpublished candidate) | 1.10.0 with owned argv forwarding | 0.153.4 | Passed, including sidecar readiness and stop/drain |
+
+The exact archived adapters for the three historical dependency combinations
+all spawn `codexPath` with only `["app-server"]`, dropping the signed `-c`
+routing/configuration arguments. The packages declare only DeepSeek's API-key
+projection and **no credential files**; adding an undeclared TOML fixture or
+OpenAI login would conceal that defect. Package-less legacy home setup does
+not repair the signed exact-package launch path. These results characterize
+the hermetic exact-package baseline, not the state of existing live sessions.
+
+The **3.1.8 → 3.1.13** attempt separately exits **1** at
+`previous_worker_startup`. Both artifact sets passed their probes, but the
+older worker never became ready and the candidate worker was not started in
+that attempt. Its acceptance path does not exist. The new-only run exits **0**
+and explicitly records `distinct_generation_coexistence: "not_checked"`.
+Choosing another published predecessor cannot solve the baseline: all five
+were tested, including the otherwise identical runtime generations.
+
+The immutable worker for all seven attempts is
+`/nix/store/mrh2cigcrqrihxjclyq9m05vcb4viyrj-cowboy-0.1.0/bin/cowboy-acp-worker`,
+SHA-256 `f461c1a5c0d0d15d3e0a32d1ef602523201c19ec87109334230fbeac8508cc64`.
+Candidate composite identity remains
+`5eadb6e1263d03d17d27f79d0aaac90f5f263c9c8c5569b374a84b303e13505e`, package
+`b0310ff1a6aa4d94049c47563b39f865712f339caf53470d9754ff070ac953fc`.
+The dependency registry audit at **03:37:29Z** found the two npm pins still at
+their latest versions with matching integrity; the manually reviewed gateway
+pin is unchanged. After the full gate rebuilt local packages, only the owned
+URL/runtime binding commands restored this unsigned candidate. Nothing was
+signed or published.
+
+Seven private evidence files under `dist/provider-runtime-cache/` use prefix
+`f0e6184f-codex-deepseek-`; suffix and SHA-256:
+
+| Suffix | SHA-256 |
+| --- | --- |
+| `3.1.2-single-failure.json` | `7cafa21182678a1094afa3a2e2376f0ccd21f063a6eca0e501970207d55e1b90` |
+| `3.1.3-single-failure.json` | `803d959b77073cb5893ef6ac5fbe6cd2ae0acfe6500297074de50c50434b8e0e` |
+| `3.1.6-single-failure.json` | `53813cfa300445784c68637c08c84869dea9b26d75ae6e7521b66f67c979ac9b` |
+| `3.1.7-single-failure.json` | `3ab3d8cdd04012b6c3261440b63a094c68c7f32501ff2e61f2471453b6c80ff0` |
+| `3.1.8-single-failure.json` | `c93080a331bd117484990ecbec0574c28b809da5dd61b10fccbc55e12bd9f778` |
+| `3.1.13-single.json` | `aeabed06419c69d8cfa0faccd5f9c9e8fc02b520d19e851a6c951b8e8268983e` |
+| `3.1.8-to-3.1.13-failure.json` | `e656b400e14739d892ab6300a45a0158b1221652f6d22ffc2f4aacfadee69fda` |
+
+All files are mode **0600**. Each failed attempt has no acceptance file; the
+passed single-generation run has no failure file. The deterministic new-only
+receipt matches the earlier accepted bytes; the new failure records preserve
+their separate status and exact baseline rather than overwriting that evidence.
+
+### Remaining decision, not a release waiver
+
+Do not repeat an identical 3.1.8 coexistence attempt, patch historical signed
+bytes, borrow login credentials, or report the new-only result as coexistence.
+The next release decision requires an explicitly authorized migration/retirement
+plan for these defective historical generations, with its own acceptance and
+existing-session preservation/drain boundary. This turn does not authorize
+retirement, rebinding or stopping existing sessions, nor does it relax the
+current release gate. Until that boundary is resolved, keep 3.1.13 unsigned
+and unpublished. Full Controller/Host/authentication/storage and UI acceptance
+remain separate outstanding work.
+
+Read-only postflight compared every production Catalog path and digest against
+the Zed publication receipt: all **43 releases / 230 files** are unchanged,
+tree digest `038c0648097b4d1e5f615ad1cad2898fa05e9a50cc9a327d157ada38fc5b57b8`.
+The exact signed-release coverage check still exits **1** only for
+`codex-deepseek@3.1.13`. Controller **4158242**, Machine **3991423**, Zed adapter
+**3991201**, their zero restart counts, the `c0911dd0` Controller profile,
+its completed deployment receipt, Web root and ACP generation
+`worker-a4ad441efe0461691687` are unchanged. Loopback health is `ok`, Machine
+is online/connected, and no deployment transaction is in progress.
