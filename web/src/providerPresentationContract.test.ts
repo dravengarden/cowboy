@@ -198,9 +198,7 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
     true,
   );
   assertEquals(
-    managementSource.includes(
-      '!loginSucceeded && challenge?.event === "login_challenge"',
-    ),
+    managementSource.includes("!loginSucceeded && !loginPromoting"),
     true,
   );
   assertEquals(
@@ -212,10 +210,18 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
     true,
   );
   assertEquals(
+    managementSource.includes("providerAuthenticationPromoting"),
+    true,
+  );
+  assertEquals(
+    managementSource.includes("<AlertTitle>{flowCopy?.completeTitle}</AlertTitle>"),
+    true,
+  );
+  assertEquals(
     managementSource.includes(
       "current?.requestId === flow.requestId ? null : current",
     ),
-    true,
+    false,
   );
 });
 
@@ -225,6 +231,8 @@ Deno.test("session settings embed one focused Service authentication card", () =
     true,
   );
   assertEquals(managementSource.includes("focusProviderId"), true);
+  assertEquals(managementSource.includes("autoBeginAuthentication"), true);
+  assertEquals(managementSource.includes("authenticationRequestId"), true);
   assertEquals(managementSource.includes("embedded"), true);
 });
 

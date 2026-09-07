@@ -101,6 +101,7 @@ import {
     joinProviderInstallations,
     useProviderCatalog,
 } from "./providerCatalog";
+import { sessionProviderAuthShortcut } from "./providerAuthShortcut";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     type ConfigOption,
@@ -1904,7 +1905,20 @@ type ControlCenterViewTransitionDocument = Document & {
 };
 
 type SettingsControllerHandle = {
-    open: (tab: SettingsTab, section?: SettingsProductFocus) => void;
+    open: (
+        tab: SettingsTab,
+        section?: SettingsProductFocus,
+        providerTarget?: ProviderSettingsTarget,
+    ) => void;
+};
+
+type ProviderSettingsTarget = {
+    providerId: string;
+    autoBeginAuthentication: boolean;
+};
+
+type ProviderSettingsIntent = ProviderSettingsTarget & {
+    requestId: number;
 };
 
 export function App({
@@ -1920,7 +1934,7 @@ export function App({
 }): React.JSX.Element {
     // Load the signed Provider catalog once at the app boundary so every
     // presentation helper reads the same dynamic identity registry.
-    useProviderCatalog();
+    const { catalog: providerCatalog } = useProviderCatalog();
     const desktopWorkspace = useOptionalDesktopWorkspace();
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
@@ -1930,6 +1944,10 @@ export function App({
     // `seq` we've shown means we don't re-open after the user dismisses.
     const [shownErrorSeq, setShownErrorSeq] = useState(0);
     const errorOpen = !!lastError && lastError.seq > shownErrorSeq;
+    const providerAuthShortcut = useMemo(
+        () => sessionProviderAuthShortcut(lastError, sessions, providerCatalog),
+        [lastError, providerCatalog, sessions],
+    );
     useEffect(() => {
         // No-op on mount; effect exists so future enhancements (e.g. coalescing
         // duplicate messages) have a hook. Keeps the reactive trace explicit.
@@ -2130,8 +2148,9 @@ export function App({
     const openSettings = useCallback((
         tab: SettingsTab,
         section?: SettingsProductFocus,
+        providerTarget?: ProviderSettingsTarget,
     ): void => {
-        settingsControllerRef.current?.open(tab, section);
+        settingsControllerRef.current?.open(tab, section, providerTarget);
     }, []);
     const openCodeTap = useReliableTouchTap<HTMLButtonElement>((): void => {
         releaseMobileComposerFocus();
@@ -3788,7 +3807,7 @@ export function App({
             />
             <Snackbar
                 open={errorOpen}
-                autoHideDuration={5000}
+                autoHideDuration={providerAuthShortcut ? 8000 : 5000}
                 onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
                 anchorOrigin={{
                     vertical: "bottom",
@@ -3806,10 +3825,27 @@ export function App({
                 <Alert
                     severity={lastError?.severity ?? "error"}
                     variant="filled"
+                    action={providerAuthShortcut
+                        ? (
+                            <Button
+                                color="inherit"
+                                size="small"
+                                onClick={(): void => {
+                                    setShownErrorSeq(lastError?.seq ?? 0);
+                                    openSettings("providers", undefined, {
+                                        providerId: providerAuthShortcut.providerId,
+                                        autoBeginAuthentication: true,
+                                    });
+                                }}
+                            >
+                                {providerAuthShortcut.actionLabel}
+                            </Button>
+                        )
+                        : undefined}
                     onClose={(): void => setShownErrorSeq(lastError?.seq ?? 0)}
                     sx={{ maxWidth: 480 }}
                 >
-                    {lastError?.message ?? ""}
+                    {providerAuthShortcut?.message ?? lastError?.message ?? ""}
                 </Alert>
             </Snackbar>
         </Box>
@@ -4322,7 +4358,13 @@ function MachineNpmUpdateButton({
     );
 }
 
-function ProvidersContent({ embedded = false }: { embedded?: boolean } = {}): React.JSX.Element {
+function ProvidersContent({
+    embedded = false,
+    providerIntent,
+}: {
+    embedded?: boolean;
+    providerIntent?: ProviderSettingsIntent | undefined;
+} = {}): React.JSX.Element {
     return (
         <Stack spacing={2}>
             {!embedded && <Box>
@@ -4331,7 +4373,11 @@ function ProvidersContent({ embedded = false }: { embedded?: boolean } = {}): Re
                     Sign in and manage provider accounts
                 </Typography>
             </Box>}
-            <ProviderAuthenticationManagement />
+            <ProviderAuthenticationManagement
+                focusProviderId={providerIntent?.providerId}
+                autoBeginAuthentication={providerIntent?.autoBeginAuthentication}
+                authenticationRequestId={providerIntent?.requestId}
+            />
         </Stack>
     );
 }
@@ -4847,9 +4893,14 @@ const SettingsController = memo(forwardRef<
     const [initialSection, setInitialSection] = useState<SettingsProductFocus>(
         "agent",
     );
+    const providerRequestSequence = useRef(0);
+    const [initialProviderIntent, setInitialProviderIntent] = useState<
+        ProviderSettingsIntent | undefined
+    >(undefined);
     const openSettings = useCallback((
         tab: SettingsTab,
         section: SettingsProductFocus = "agent",
+        providerTarget?: ProviderSettingsTarget,
     ): void => {
         // A full-cover Mobile sheet ends the current Composer focus session.
         // This stays inside the isolated controller so the focus boundary does
@@ -4857,6 +4908,15 @@ const SettingsController = memo(forwardRef<
         if (mobile) releaseMobileComposerFocus();
         setInitialTab(tab);
         setInitialSection(section);
+        if (providerTarget) {
+            providerRequestSequence.current += 1;
+            setInitialProviderIntent({
+                ...providerTarget,
+                requestId: providerRequestSequence.current,
+            });
+        } else {
+            setInitialProviderIntent(undefined);
+        }
         setOpen(true);
     }, [mobile]);
     useEffect(() => {
@@ -4876,6 +4936,7 @@ const SettingsController = memo(forwardRef<
             onClose={(): void => setOpen(false)}
             initialTab={initialTab}
             initialSection={initialSection}
+            initialProviderIntent={initialProviderIntent}
             themeMode={themeMode}
             onSetThemeMode={onSetThemeMode}
         />
@@ -4887,6 +4948,7 @@ function SettingsShell({
     onClose,
     initialTab,
     initialSection,
+    initialProviderIntent,
     themeMode,
     onSetThemeMode,
 }: {
@@ -4894,6 +4956,7 @@ function SettingsShell({
     onClose: () => void;
     initialTab: SettingsTab;
     initialSection: SettingsProductFocus;
+    initialProviderIntent?: ProviderSettingsIntent | undefined;
     themeMode: ThemeMode;
     onSetThemeMode: (m: ThemeMode) => void;
 }): React.JSX.Element {
@@ -5507,12 +5570,12 @@ function SettingsShell({
                                     )}
                                 <DesktopAccountSettingsBlock />
                             </Stack>
-                        ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                        ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent providerIntent={initialProviderIntent} /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
                 </Box>
-            ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
+            ) : !tabPanelVisible ? null : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent providerIntent={initialProviderIntent} /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? <InfoContent /> : renderedTab === "logs" ? <UsageLogs /> : (
             <Stack
                 key={mobileSettingsSection ?? "index"}
                 ref={settingsListRef}
@@ -5843,7 +5906,10 @@ function SettingsShell({
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
-                    <ProvidersContent embedded />
+                    <ProvidersContent
+                        embedded
+                        providerIntent={initialProviderIntent}
+                    />
                 </MobileSettingsRoute>
                 <MobileSettingsRoute
                     id="machines"

@@ -252,6 +252,7 @@ import {
   retryQueued,
   scheduleDraft,
   send,
+  setSessionConfigOptions,
   setPaused,
   setQueueEditing,
   submitPrompt,
@@ -275,6 +276,7 @@ import {
   NetworkIconButton,
   useNetworkActionState,
 } from "./NetworkActionFeedback";
+import type { ConfigOptionChange } from "./configOptionMutation";
 import { originLabel } from "./protocol";
 import {
   providerConfigOptionDisabled,
@@ -6659,6 +6661,8 @@ export function SessionControls({
           onSessionAction={runSessionAction}
           projection={projection}
           onProjectionChange={onProjectionChange}
+          onApplyPreset={(changes): Promise<void> =>
+            setSessionConfigOptions(sessionId, changes)}
           onSelectOption={(configId, value): boolean =>
             send({
               type: "set_config_option",
@@ -6678,12 +6682,14 @@ function RecommendedRunConfigPresetButton({
   selected,
   disabled,
   pending,
+  progress,
   onActivate,
 }: {
   preset: RunConfigPreset;
   selected: boolean;
   disabled: boolean;
   pending: boolean;
+  progress: boolean;
   onActivate: () => void;
 }): React.JSX.Element {
   const activateTap = useReliableTouchTap<HTMLButtonElement>(onActivate);
@@ -6748,7 +6754,7 @@ function RecommendedRunConfigPresetButton({
           flexShrink: 0,
         }}
       >
-        {pending && (
+        {progress && (
           <CircularProgress size={14} thickness={4.5} color="inherit" />
         )}
       </Box>
@@ -6776,6 +6782,7 @@ function ComposerSheet({
   onSessionAction,
   projection,
   onProjectionChange,
+  onApplyPreset,
   onSelectOption,
 }: {
   open: boolean;
@@ -6792,6 +6799,7 @@ function ComposerSheet({
   onSessionAction: (action: SessionAction) => Promise<void>;
   projection?: TranscriptProjection | undefined;
   onProjectionChange?: ((projection: TranscriptProjection) => void) | undefined;
+  onApplyPreset: (changes: readonly ConfigOptionChange[]) => Promise<void>;
   onSelectOption: (configId: string, value: string | boolean) => boolean;
 }): React.JSX.Element {
   // Phones and portrait touch tablets keep the bottom sheet. Pointer-driven
@@ -6823,6 +6831,7 @@ function ComposerSheet({
     options,
   );
   const [pendingPresetId, setPendingPresetId] = useState<string | null>(null);
+  const presetAction = useNetworkActionState();
   const pendingPreset = pendingPresetId === null
     ? undefined
     : recommendedPresets.find((preset) => preset.id === pendingPresetId);
@@ -6852,16 +6861,6 @@ function ComposerSheet({
     });
     return () => globalThis.cancelAnimationFrame(frame);
   }, [focus, open, session?.id]);
-  useEffect(() => {
-    if (pendingPresetId === null) return;
-    if (!pendingPreset) {
-      setPendingPresetId(null);
-      return;
-    }
-    if (runConfigPresetChanges(pendingPreset, options).length === 0) {
-      setPendingPresetId(null);
-    }
-  }, [options, pendingPreset, pendingPresetId]);
   const showAgentDetails = recommendedPresets.length === 0 || customizeAgent;
   const displayTitle = session?.title.startsWith(`${session.provider} · `)
     ? session.title.slice(session.provider.length + 3)
@@ -7048,8 +7047,10 @@ function ComposerSheet({
                             key={preset.id}
                             preset={preset}
                             selected={activePreset?.id === preset.id}
-                            disabled={dead}
+                            disabled={dead || presetAction.pending}
                             pending={pendingPresetId === preset.id}
+                            progress={pendingPresetId === preset.id &&
+                              presetAction.progress}
                             onActivate={(): void => {
                               const changes = runConfigPresetChanges(
                                 preset,
@@ -7062,15 +7063,12 @@ function ComposerSheet({
                               }
                               setPendingPresetId(preset.id);
                               haptic();
-                              for (const change of changes) {
-                                if (
-                                  !onSelectOption(change.configId, change.value)
-                                ) {
-                                  setPendingPresetId(null);
-                                  return;
-                                }
-                              }
-                              setCustomizeAgent(false);
+                              void presetAction.run(() =>
+                                onApplyPreset(changes)
+                              ).then((succeeded) => {
+                                setPendingPresetId(null);
+                                if (succeeded) setCustomizeAgent(false);
+                              });
                             }}
                           />
                         ))}

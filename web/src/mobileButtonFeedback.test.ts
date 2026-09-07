@@ -52,6 +52,12 @@ Deno.test("touch icon buttons release synthetic hover and focus paint", () => {
     true,
   );
   assertEquals(themeSource.includes("MuiButtonBase:"), true);
+  assertEquals(
+    themeSource.includes(
+      "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible",
+    ),
+    true,
+  );
   assertEquals(themeSource.includes("disableRipple: prefersCoarsePointer()"), true);
   assertEquals(themeSource.includes("disableTouchRipple: prefersCoarsePointer()"), true);
   assertEquals(themeSource.includes("WebkitTapHighlightColor: \"transparent\""), true);

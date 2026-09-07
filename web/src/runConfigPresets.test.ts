@@ -111,6 +111,9 @@ const desktopSource = await Deno.readTextFile(
 const composerSource = await Deno.readTextFile(
   new URL("./Composer.tsx", import.meta.url),
 );
+const storeSource = await Deno.readTextFile(
+  new URL("./store.ts", import.meta.url),
+);
 
 Deno.test("desktop and mobile expose presets with surface-native interactions", () => {
   assertEquals(desktopSource.includes("data-config-preset={index}"), true);
@@ -118,4 +121,16 @@ Deno.test("desktop and mobile expose presets with surface-native interactions", 
   assertEquals(composerSource.includes("minHeight: 58"), true);
   assertEquals(composerSource.includes("in={showAgentDetails}"), true);
   assertEquals(composerSource.includes("setCustomizeAgent(false)"), true);
+});
+
+Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => {
+  assertEquals(composerSource.includes("presetAction.run"), true);
+  assertEquals(composerSource.includes("presetAction.progress"), true);
+  assertEquals(composerSource.includes("setSessionConfigOptions"), true);
+  assertEquals(
+    composerSource.includes("runConfigPresetChanges(pendingPreset, options)"),
+    false,
+  );
+  assertEquals(storeSource.includes("configOptionsMatchChanges("), true);
+  assertEquals(storeSource.includes('"Update agent preset"'), true);
 });

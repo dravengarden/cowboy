@@ -176,9 +176,10 @@ export function useThemeMode(): ThemeControls {
               "#root": { WebkitTapHighlightColor: "transparent" },
             },
           },
-          // Session-sheet dismiss is a ButtonBase, not an IconButton. Cover the
-          // whole family so a leftover hover/focus/ripple cannot latch on the
-          // close island after the Tune button opens the sheet.
+          // Session-sheet dismiss is a ButtonBase, not an IconButton. Clear a
+          // leftover hover/focus latch on unfilled controls, but retain the
+          // semantic fill of contained actions: iOS keeps :hover after a tap,
+          // and transparent + contrastText paints those buttons as blank bars.
           MuiButtonBase: {
             defaultProps: {
               disableRipple: prefersCoarsePointer(),
@@ -188,12 +189,12 @@ export function useThemeMode(): ThemeControls {
               root: {
                 WebkitTapHighlightColor: "transparent",
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
-                  "&:hover, &.Mui-focusVisible": {
+                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible": {
                     backgroundColor: "transparent",
                   },
                 },
                 "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
-                  "&:hover, &.Mui-focusVisible": {
+                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible": {
                     backgroundColor: "transparent",
                   },
                 },

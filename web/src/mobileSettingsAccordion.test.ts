@@ -50,7 +50,7 @@ Deno.test("mobile Settings uses an index and one lightweight detail route", () =
   assertEquals(appSource.includes("<Accordion"), false);
   assertEquals(appSource.includes("MOBILE_SETTINGS_ANCHOR"), false);
   assert(appSource.includes("<NotificationSettingsContent embedded"));
-  assert(appSource.includes("<ProvidersContent embedded"));
+  assert(/<ProvidersContent\s+embedded/u.test(appSource));
   assert(appSource.includes("<MachinesContent embedded"));
   assert(appSource.includes("<UsageLogs dense"));
   assert(appSource.includes("ProductDevicesPanel"));

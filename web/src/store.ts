@@ -47,6 +47,10 @@ import {
   settledTransitionIds,
 } from "./queueMutators.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
+import {
+  type ConfigOptionChange,
+  configOptionsMatchChanges,
+} from "./configOptionMutation";
 import { refreshProviderCatalog } from "./providerCatalogRegistry";
 import { pruneDrafts } from "./draftStore";
 import {
@@ -620,6 +624,37 @@ function sendWithAck(
     return Promise.reject(new Error(`${label} is unavailable while reconnecting`));
   }
   return waitForState(predicate, label);
+}
+
+/** Apply one atomic UI intent that may span several ACP options. The Controller
+ * serializes the individual mutations; the UI resolves only when its projected
+ * session snapshot contains every requested value. The shared acknowledgement
+ * deadline restores the control if that projection is lost or normalized. */
+export function setSessionConfigOptions(
+  sessionId: string,
+  changes: readonly ConfigOptionChange[],
+): Promise<void> {
+  if (changes.length === 0) return Promise.resolve();
+  for (const change of changes) {
+    if (!send({
+      type: "set_config_option",
+      session_id: sessionId,
+      config_id: change.configId,
+      value: change.value,
+    })) {
+      return Promise.reject(
+        new Error("Update agent preset is unavailable while reconnecting"),
+      );
+    }
+  }
+  return waitForState(
+    (snapshot) =>
+      configOptionsMatchChanges(
+        snapshot.configOptions.get(sessionId) ?? [],
+        changes,
+      ),
+    "Update agent preset",
+  );
 }
 
 // --- Server-synced queue + drafts -------------------------------------------
