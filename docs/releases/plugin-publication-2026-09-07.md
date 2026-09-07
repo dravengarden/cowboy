@@ -9,6 +9,11 @@ candidates at **2026-09-07 10:38:29–10:38:37 UTC**. This is a completed
 immutable Catalog publication. The initial publication did **not** activate
 components; the subsequent user-confirmed maintenance is recorded below.
 
+The subsequent rollout completed at **2026-09-07 16:09:26 UTC** (September 8
+in Asia/Shanghai): both registered Machines have all seven exact current
+Plugins active. See the final section for device approval, the separate
+Controller download fix, per-Machine installation and remaining acceptance.
+
 The Catalog `/var/lib/cowboy/plugin-catalog` now contains **50 signed
 releases**. All **230 original files / 43 historical releases** retained their
 exact bytes. Historical failure receipts remain unchanged; no failed coexistence
@@ -240,12 +245,12 @@ Root-owned component receipts remain under
 `/var/lib/<machine>-component-deployments/`; NixOS receipts remain under
 `/var/lib/hawk-deployments/`.
 
-## Remaining acceptance
+## Acceptance boundary before device approval — superseded below
 
-Registered-Machine Plugin slot upgrades and authenticated Catalog/UI checks
-still require a user-authorized Cowboy Product credential, either an explicit
+At this point, registered-Machine Plugin slot upgrades and authenticated
+Catalog/UI checks required a user-authorized Cowboy Product credential, either an explicit
 API token file (mode 0600 on Hawk) or completion of the native device approval
-flow. None has been obtained. Catalog refresh separately requires
+flow. None had been obtained. Catalog refresh separately requires
 `AdminOperator`; a Product credential alone does not grant that authority.
 Host/component rollout is not proof that every registered Machine Plugin slot
 is upgraded. Real Passkey/OIDC login, upstream native-history resume and
@@ -296,3 +301,121 @@ Ignored evidence is retained under
 `dist/provider-runtime-cache/host-cutover-20260907/`: `device-auth-browser/`
 contains screenshots and the browser receipt, and `device-auth-live.json`
 contains exact public-byte, component-receipt and process/health acceptance.
+
+## Device approval, download recovery and installed rollout — 2026-09-08
+
+The user approved the newly requested device at **2026-09-07 15:40:59.407990
+UTC**. `cowboy login` completed successfully for
+`Hawk plugin rollout 2026-09-07`, fingerprint
+`SHA256:Mw1kvWIUIj3HyKvdAXOW_f_DhfeAh61P_7OJymI7gfc`. The normal CLI refreshed
+this same approved credential after the Controller restart; no further browser
+approval, borrowed cookie, Provider credential or manually minted token was
+needed. The task credential remained private; no secret was logged or committed.
+
+Signed Product-device requests returned HTTP 200 for `/api/plugins`,
+`/api/machines` and both Machine Plugin inventories. All seven exact published
+releases were `ready`, with matching platform and contract inventories. No
+AdminOperator Catalog refresh was necessary: the Controller's cold read already
+advertised all 50 signed releases. `/api/auth/me` is a legacy-principal endpoint;
+its HTTP 401 must not be confused with failed device authentication on the
+Plugin APIs.
+
+### Controller download recovery
+
+The first two Claude Code upgrade attempts returned HTTP 409 because the
+runtime download returned 404. Both failed before switching the active slot.
+The files and signatures were intact: Catalog inspection read the legacy
+`/var/lib/cowboy/plugin-catalog`, while artifact downloads searched only the
+empty canonical `/var/lib/cowboy/plugins/catalog` directory.
+
+Core fix `313b3feec474a0a077a7e35b8d0f9cba60e0be77` searches the same ordered
+roots for downloads. Only a missing primary path permits fallback; a present
+but unreadable/non-file primary path does not. An explicit Catalog override
+remains exclusive. The generic Plugin Catalog now owns the HTTP lookup rather
+than its Agent projection. No Catalog byte, Plugin version, signature, Host
+policy or database migration changed.
+
+Four focused regression tests cover legacy-root downloads before/after
+initialization, primary precedence, explicit-root isolation, fail-closed
+shadowing, path validation, streaming bytes and immutable headers. The complete
+`nix develop -c just check-compact` gate passed, including 692 Rust library tests,
+Web, isolated database tests, lint and release builds. Its existing yanked
+`spin 0.9.8` and large Web chunk warnings were non-failing and were not hidden.
+Both the exact candidate and deployed predecessor passed read-only preflight
+with the actual catalog-only Service configuration; release coverage passed
+all six Agent 3.1.14 versions.
+
+The clean committed `.#cowboy-controller-release` was activated through the
+Columbus-owned Controller transaction, succeeding at **16:02:48 UTC**:
+
+- Release: `/nix/store/cji6b7hn061dbsd83bs803k1x3w7di1x-cowboy-controller-release`.
+- Compatible predecessor: `/nix/store/y90siyv9qzl3i1a2ih9g3gmdir0rnmab-cowboy-controller-release`.
+- Transaction: `1788796939196573410-313b3feec474`; durable receipt under
+  `/var/lib/hawk-component-deployments/cowboy-controller/`.
+- Controller PID 1372876, active, `NRestarts=0`; no incomplete transaction.
+- Web remains `54884f7e`, version `38812d58a478fe33fecb3e10c2ffa096`, SW 1636.
+  Public HTML/SW match the active immutable release and retain `no-store`.
+- Hawk Machine PID 1017375 and legacy Zed PID 1017122 remain unchanged; both
+  Machines are online on `worker-4718f2ebbba9e4069713`.
+- Password 1.0.0, Passkey 1.0.0 and Cardea 1.2.0 remain active. The catalog-only
+  marker remains present; unauthenticated Plugin access still returns 401.
+
+All **25 public package/runtime URLs** returned 200 and passed SHA-256, byte
+length, immutable cache and ETag verification after activation. The initial
+verification helper incorrectly required Content-Length after fetch's automatic
+decompression; bytes and digests already matched. Requesting `Accept-Encoding:
+identity` made wire length testable without weakening the check. Its failed
+diagnostic and the two pre-fix installation failures remain separate from the
+successful acceptance receipts.
+
+### Registered-Machine installation
+
+All **14** user-authorized lifecycle calls returned HTTP 204 between
+**16:05:26 and 16:08:54 UTC**. Final authenticated verification at **16:09:26
+UTC** required each installed composite digest to equal the immutable digest
+in the publication table above, with state `active` on both Linux x86_64
+Machines:
+
+| Plugin | Hawk previous | Falcon previous | Active on both |
+| --- | --- | --- | --- |
+| Claude Code | 1.1.2 | 1.1.2 | 3.1.14 |
+| Claude DeepSeek | 1.1.2 | 1.1.2 | 3.1.14 |
+| Codex | 3.1.8 | 1.1.2 | 3.1.14 |
+| Codex DeepSeek | 1.1.2 | 1.1.2 | 3.1.14 |
+| Gemini | 1.1.1 | 1.1.1 | 3.1.14 |
+| Grok | 1.1.8 | 1.1.8 | 3.1.14 |
+| Zed | Legacy daemon; no Plugin slot | Legacy daemon; no Plugin slot | 1.2.2 |
+
+Each Agent's rollback digest equals its pre-upgrade active digest. The four
+Service authentications remain ready/current with unchanged contract
+fingerprints and generations: Claude DeepSeek **1**, Codex **5**, Codex
+DeepSeek **1**, Grok **19**. Both Machines materialized those same generations
+and report current replicas. Claude Code and Gemini remain signed out; their
+authentication `not_installed` state does not mean the Plugin installation
+failed. No Provider login or inference smoke prompt was performed.
+
+Zed installation used the normal signed installer, exact portable adapter/server
+and bounded readiness probe. It selects the owned runtime for newly routed
+worktrees; existing routes retain their leases. The old daemon was not stopped,
+no live session was rebound, and no historical runtime or authentication state
+was deleted. The earlier user waiver of old/new coexistence is not relabeled
+as a passing coexistence test.
+
+Remaining acceptance is limited to what these checks do not prove: a real
+Passkey/OIDC login ceremony, upstream native-history resume and live first-
+queued-prompt configuration restoration. The actual Product-device approval
+is now proved; installation and account-replica convergence are complete.
+
+### Retained evidence
+
+The following create-only private receipts are under the ignored task directory
+`dist/provider-runtime-cache/host-cutover-20260907/`. Individual lifecycle
+intents/results retain all 14 exact before/after identities; failed receipts
+are not acceptance. These are machine-local evidence, not portable release URLs.
+
+| Receipt | SHA-256 |
+| --- | --- |
+| `artifact-controller-preflight-1788796915933.json` | `2c8598a091d36f3e867c489d8188d2ba4200a277ec4534f143e1e88f2affc5b4` |
+| `public-artifacts-accepted-1788797088571.json` | `5922cb77ece2aee8a9c0d6543cc86f10360e1fdb5e3e1286d7462fbdac9fa771` |
+| `artifact-controller-live-1788797366411.json` | `15522d5a20d54c3708a8d6774fbdab266139d96d4d7b3d7d3d85a58d87df2e6c` |
+| `device-plugin-accepted-1788797366463.json` | `9a81b7e387ac931edbf9fcf42df51c36d2df4fe08885264fff4d629eca735955` |

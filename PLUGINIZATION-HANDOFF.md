@@ -1,35 +1,30 @@
 Cowboy pluginization started from commit `69defc1d` on branch
 `cowboy/sess-1788279284752`. This candidate contains the completed
 core-extraction implementation and the subsequent design-review corrections.
-Preserve the task history and continue from
-**Completion record** and **Design review addendum** below. The earlier
-starting-state inventory is retained only to explain what was removed.
-The latest native follow-ups are **Owned full native shell and clean-build
-acceptance** and **Remote logged-out native App acceptance** at the end of this
-document; they supersede the earlier missing-source and local-loader-only gates.
-The latest source, Controller build and protocol acceptance are recorded in
-**Reload migration guards and ACP resume protocol acceptance** below.
-**Remote-main rebase and historical-generation failure isolation** retains the
-rebase, Web build and historical-generation evidence. These include the earlier
-**Host-capable successor integration and acceptance** and envelope-reader bridge;
-the full Plugin migration is still not deployed.
-The latest production publication status is **Independent Zed publication and postflight**
-below: nine exact Plugin versions are signed, published and publicly downloadable
-(the earlier eight plus Zed 1.2.1). The historical signing identities and every
-previously published byte are preserved. The `c0911dd0` reader remains active:
-it safely skips the eight schema-2 envelopes and Zed's newer Code payload inside
-release schema 1. Authenticated Catalog refresh and UI installation availability
-have not been accepted. Codex DeepSeek remains unpublished because its
-historical-generation coexistence gate fails. **Codex DeepSeek historical
-baseline audit and immutable failure evidence** below confirms all five
-published predecessors fail isolated startup; 3.1.13 passes alone, not coexistence.
-After rebase, component release **2.7.0** has six new Agent **3.1.14** candidates
-and Zed **1.2.2**, all unsigned and unpublished. The new Codex DeepSeek candidate
-passes alone and survives all five predecessors' startup failures in separate
-diagnostics; healthy coexistence and existing-session migration remain unproven.
-The current Controller publication-coverage gate therefore fails for all six
-3.1.14 versions, not only Codex DeepSeek. The full Host-capable Controller,
-Web, Machine and storage migration are still not deployed by this task.
+
+**Current production state — 2026-09-08 Asia/Shanghai:** all seven current
+Plugins are signed, published and installed on **both Hawk and Falcon**: six
+Agent Plugins **3.1.14**, Zed **1.2.2**, component release **2.7.0**. Final
+authenticated verification accepted all **14 installation slots** with their
+exact published digests. The Catalog has 50 signed releases; historical bytes
+and previous Agent generations remain intact.
+
+The Host/storage cutover is deployed with catalog-only authority. Current
+Controller is `313b3fee`, Web `54884f7e` (SW 1636), and both Machines use
+`1d0a5064` / `worker-4718f2ebbba9e4069713`. Explicit device approval succeeded;
+the latest continuation fixed an artifact-download root mismatch and completed
+installation without another Machine restart or rebinding existing sessions.
+See **Device approval and registered-Machine rollout** at the end and
+[the release record](docs/releases/plugin-publication-2026-09-07.md) for exact
+versions, authorization boundaries and receipts.
+
+Earlier sections are chronological evidence, not current pending-state lists.
+Preserve their failed acceptance records: the user waived historical-version
+coexistence for publication, not integrity or credential checks. Real
+Passkey/OIDC login, upstream native-history resume and live first-prompt
+configuration restoration remain unclaimed. Existing sessions retain their
+selected generations; do not stop/rebind them or delete old runtime state to
+make an installation report look complete.
 
 ## Goal
 
@@ -2378,3 +2373,46 @@ client running; refreshing an expired page cannot renew it. The registered-
 Machine Plugin upgrades and other remaining acceptance above are still open.
 See the release record's device-authorization section and ignored
 `device-auth-browser/` / `device-auth-live.json` evidence for the exact closure.
+
+## Device approval and registered-Machine rollout — 2026-09-08
+
+The user's next approval **succeeded at 2026-09-07 15:40:59 UTC**, and the
+requesting CLI exited successfully. The approved task device is
+`Hawk plugin rollout 2026-09-07`, public-key fingerprint
+`SHA256:Mw1kvWIUIj3HyKvdAXOW_f_DhfeAh61P_7OJymI7gfc`. Its task-private
+credential is mode 0600 in a mode-0700 directory; normal `cowboy login`
+refresh succeeded after Controller replacement without another browser flow.
+Do not reuse the older expired approval links or claim no credential exists.
+`/api/plugins` and both Machine Plugin inventories accepted signed device
+proofs. `/api/auth/me` uses the legacy principal resolver and its 401 is not
+evidence that this Product-device credential is invalid. Catalog refresh still
+requires separate AdminOperator authority; no refresh or auth bypass was used.
+
+Initial Claude Code upgrade attempts failed before activation on both Machines:
+the Controller loaded published releases from `/var/lib/cowboy/plugin-catalog`
+but served downloads only from the empty canonical `plugins/catalog` root.
+Core fix `313b3fee` makes downloads follow the same ordered Catalog roots,
+preserves primary-root priority and explicit-root isolation, and writes no
+published bytes. Four regression tests and the complete pinned-shell
+`just check-compact` gate passed. Both candidate and predecessor passed the
+actual catalog-only configuration preflight and all six release-coverage checks.
+
+The owned Controller-only transaction succeeded at **16:02:48 UTC**. All 25
+public artifact URLs then passed exact SHA-256/cache/ETag verification. The
+existing Web release, Machine generation, Hawk Machine PID 1017375 and legacy
+Zed PID 1017122 were unchanged; both Machines stayed healthy and online.
+
+Between **16:05:26 and 16:08:54 UTC**, all 12 Agent upgrades and both Zed
+installations returned HTTP 204. Final authenticated acceptance at
+**16:09:26 UTC** verified all 14 active exact releases and retained Agent
+rollback generations. Service auth generations stayed Claude DeepSeek 1,
+Codex 5, Codex DeepSeek 1 and Grok 19, with current replicas/materializations
+on both Machines. Claude Code and Gemini remain signed out. Zed's owned
+adapter/server were staged and readiness-probed by the normal installer;
+existing worktree routes and the legacy daemon were not retired.
+
+No Provider login, model smoke prompt, session rebind, old-generation deletion,
+new signing identity, NixOS switch or Machine restart was performed by this
+continuation. The real-login/native-history/live-first-prompt boundaries above
+remain explicit; installation does not prove them. Exact release paths,
+transaction identity and create-only evidence hashes are in the release record.
