@@ -196,6 +196,7 @@ pub(crate) struct MachinePluginStore {
     architecture: String,
     encryption: MachineEncryptionIdentity,
     lifecycle: tokio::sync::Mutex<()>,
+    telemetry_export: tokio::sync::Mutex<()>,
     code_runtimes: CodeRuntimeHost,
 }
 
@@ -217,6 +218,7 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
             package.manifest.kind,
             cowboy_plugin_sdk::PluginKind::AgentProvider
                 | cowboy_plugin_sdk::PluginKind::CodeIntelligence
+                | cowboy_plugin_sdk::PluginKind::TelemetryBackend
         ),
         "Machine installer received a Controller-only Plugin kind"
     );
@@ -251,6 +253,7 @@ impl MachinePluginStore {
             architecture,
             encryption,
             lifecycle: tokio::sync::Mutex::new(()),
+            telemetry_export: tokio::sync::Mutex::new(()),
             code_runtimes: CodeRuntimeHost::default(),
         })
     }
@@ -260,8 +263,7 @@ impl MachinePluginStore {
         self.encryption.public_key()
     }
 
-    pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
-        let _lifecycle = self.lifecycle.lock().await;
+    fn checked_install_package(&self, desired: &DesiredPlugin) -> Result<PluginPackage> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&desired.package_base64)
             .context("decoding Plugin package")?;
@@ -271,6 +273,18 @@ impl MachinePluginStore {
         );
         let plugin_package = desired.release.validate_bytes(&bytes)?;
         ensure_machine_installable_kind(&plugin_package)?;
+        if let Some(active) = self.inventory_one(&plugin_package.manifest.id)? {
+            ensure!(
+                active.plugin_kind == plugin_package.manifest.kind,
+                "installed Plugin identity cannot change capability kind"
+            );
+        }
+        Ok(plugin_package)
+    }
+
+    pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let plugin_package = self.checked_install_package(desired)?;
         let (host_bundle, host_bundle_bytes) =
             desired_plugin_host_bundle(desired, &plugin_package)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
@@ -284,9 +298,12 @@ impl MachinePluginStore {
             &plugin_package.manifest.publisher,
             &desired.publisher_public_key,
         )?;
-        if matches!(plugin_package.payload, PluginPayload::CodeIntelligence(_)) {
+        if matches!(
+            plugin_package.payload,
+            PluginPayload::CodeIntelligence(_) | PluginPayload::TelemetryBackend(_)
+        ) {
             return self
-                .install_code_intelligence_plugin(
+                .install_non_agent_plugin(
                     &plugin_package,
                     desired,
                     host_bundle.as_ref(),
@@ -364,7 +381,7 @@ impl MachinePluginStore {
             .context("activated Provider is missing from inventory")
     }
 
-    async fn install_code_intelligence_plugin(
+    async fn install_non_agent_plugin(
         &self,
         package: &PluginPackage,
         desired: &DesiredPlugin,
@@ -376,12 +393,14 @@ impl MachinePluginStore {
             &self.platform,
             &self.architecture,
         )?;
-        ensure!(
-            artifacts.components.iter().any(|component| {
-                component.kind == PluginComponentKind::CodeIntelligenceAdapter
-            }),
-            "code-intelligence Plugin has no adapter component"
-        );
+        if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
+            ensure!(
+                artifacts.components.iter().any(|component| {
+                    component.kind == PluginComponentKind::CodeIntelligenceAdapter
+                }),
+                "code-intelligence Plugin has no adapter component"
+            );
+        }
         let runtime_artifacts = provider_staging_projection(artifacts);
         let plugin_root = self.plugin_root(&package.manifest.id);
         let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
@@ -407,8 +426,9 @@ impl MachinePluginStore {
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
         stage_provider_runtime(&content, &runtime_artifacts).await?;
-        if let Some(plan) =
-            self.code_launch_plan(package, &desired.release.artifact_digest, &content)?
+        if matches!(package.payload, PluginPayload::CodeIntelligence(_))
+            && let Some(plan) =
+                self.code_launch_plan(package, &desired.release.artifact_digest, &content)?
         {
             probe_code_runtime(&plan).await?;
         }
@@ -431,9 +451,13 @@ impl MachinePluginStore {
             &serde_json::to_vec(&inventory)?,
             0o600,
         )?;
-        self.activate_code_generation(package, &generation_name)?;
+        if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
+            self.activate_code_generation(package, &generation_name)?;
+        } else {
+            Self::activate(&plugin_root, &generation_name)?;
+        }
         self.inventory_one(&package.manifest.id)?
-            .context("activated code-intelligence Plugin is missing from inventory")
+            .context("activated Plugin is missing from inventory")
     }
 
     /// Re-activate one already verified, retained generation. The Controller
@@ -449,6 +473,12 @@ impl MachinePluginStore {
         let generation_name = digest_generation_name(generation_digest)?;
         let (plugin_package, _, content) =
             self.verified_plugin_generation(provider_id, generation_digest)?;
+        if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend {
+            Self::activate(&self.plugin_root(provider_id), &generation_name)?;
+            return self
+                .inventory_one(provider_id)?
+                .context("reactivated telemetry Plugin is missing from inventory");
+        }
         if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::CodeIntelligence {
             if let Some(plan) =
                 self.code_launch_plan(&plugin_package, generation_digest, &content)?
@@ -511,6 +541,9 @@ impl MachinePluginStore {
         if active_link.exists() || active_link.symlink_metadata().is_ok() {
             fs::remove_file(&active_link)
                 .with_context(|| format!("removing {}", active_link.display()))?;
+        }
+        if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
+            return Ok(());
         }
         let materialized = self.auth_provider_root(provider_id).join("materialized");
         if materialized.exists() {
@@ -641,6 +674,64 @@ impl MachinePluginStore {
             .await
     }
 
+    async fn export_telemetry(
+        &self,
+        plugin_id: &str,
+        plugin_version: &str,
+        generation_digest: &str,
+        auth_generation: Option<u64>,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let _export = self
+            .telemetry_export
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("telemetry exporter is busy"))?;
+        // No Provider home, auth generation, executable or usage sidecar.
+        // Verification uses the lifecycle lock; bounded network I/O does
+        // not hold it or block installation/agent operations.
+        let (contract, config, payload) = {
+            let _lifecycle = self.lifecycle.lock().await;
+            (|| -> Result<_> {
+                ensure!(
+                    auth_generation.is_none(),
+                    "telemetry cannot use Provider credentials"
+                );
+                let active = self
+                    .inventory_one(plugin_id)?
+                    .context("telemetry Plugin is not installed")?;
+                ensure!(
+                    active.state == PluginInstallationState::Active
+                        && active.plugin_version == plugin_version
+                        && active.generation_digest == generation_digest
+                        && active.plugin_kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend,
+                    "active telemetry Plugin generation mismatch"
+                );
+                let (package, _, _) =
+                    self.verified_plugin_generation(plugin_id, generation_digest)?;
+                let PluginPayload::TelemetryBackend(contract) = package.payload else {
+                    anyhow::bail!("Plugin is not a telemetry backend");
+                };
+                let selection = crate::telemetry_plugin::PluginSelection {
+                    plugin_id: plugin_id.to_owned(),
+                    plugin_version: plugin_version.to_owned(),
+                    generation_digest: generation_digest.to_owned(),
+                };
+                let (config, payload) = crate::telemetry_plugin::prepare(
+                    &self
+                        .root
+                        .parent()
+                        .context("Machine state directory is missing")?
+                        .join("telemetry.json"),
+                    &selection,
+                    payload,
+                )?;
+                Ok((contract, config, payload))
+            })()?
+        };
+        serde_json::to_value(crate::telemetry_plugin::export(&contract, config, payload).await)
+            .map_err(anyhow::Error::from)
+    }
+
     pub async fn invoke_host(
         &self,
         plugin_id: &str,
@@ -650,6 +741,18 @@ impl MachinePluginStore {
         operation: PluginHostOperation,
         mut payload: serde_json::Value,
     ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        if operation == PluginHostOperation::ExportTelemetry {
+            return self
+                .export_telemetry(
+                    plugin_id,
+                    plugin_version,
+                    generation_digest,
+                    auth_generation,
+                    payload,
+                )
+                .await
+                .map_err(PluginHostInvocationFailure::from);
+        }
         let _lifecycle = self.lifecycle.lock().await;
         let resolved = self
             .resolve_host_invocation(
@@ -766,6 +869,9 @@ impl MachinePluginStore {
             PluginHostOperation::CollectUsage => (&usage.collector_argv, "collect"),
             PluginHostOperation::ResetUsage => (&usage.reset_argv, "consume_reset"),
             PluginHostOperation::DecorateActivity => (&usage.collector_argv, "decorate_activity"),
+            PluginHostOperation::ExportTelemetry => {
+                bail!("telemetry cannot use executable Plugin hosts")
+            }
         };
         ensure!(!command.is_empty(), "Plugin host operation has no command");
         payload
@@ -3956,6 +4062,298 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "full")]
+    fn telemetry_release(
+        publisher: &crate::machine_auth::MachineIdentity,
+        version: &str,
+    ) -> DesiredPlugin {
+        let mut manifest: cowboy_plugin_sdk::PluginManifest =
+            serde_json::from_str(include_str!("../examples/telemetry/victoria/plugin.json"))
+                .unwrap();
+        let mut contract: cowboy_plugin_sdk::TelemetryBackendContract = serde_json::from_str(
+            include_str!("../examples/telemetry/victoria/telemetry.json"),
+        )
+        .unwrap();
+        manifest.version = version.to_owned();
+        contract.version = version.to_owned();
+        let platforms = contract.supported_platforms.clone();
+        let package = PluginPackage::new(
+            manifest.clone(),
+            manifest.component_release.clone(),
+            PluginPayload::TelemetryBackend(contract),
+        )
+        .unwrap();
+        let bytes = package.canonical_bytes().unwrap();
+        let mut release = cowboy_plugin_sdk::PluginRelease {
+            release_schema: 1,
+            plugin_id: manifest.id,
+            plugin_version: manifest.version,
+            plugin_kind: manifest.kind,
+            package_digest: PluginPackage::artifact_digest(&bytes),
+            artifact_digest: String::new(),
+            artifact_url: format!(
+                "https://plugins.example.test/victoria/{version}/victoria.cowboy-plugin"
+            ),
+            publisher: manifest.publisher,
+            contract_fingerprint: package.contract_fingerprint,
+            component_release: manifest.component_release,
+            host_bundle_digest: None,
+            signature: String::new(),
+            runtime_artifacts: platforms
+                .iter()
+                .map(|platform| PluginRuntimeArtifacts {
+                    os: platform.os.clone(),
+                    architecture: platform.architecture.clone(),
+                    components: Vec::new(),
+                })
+                .collect(),
+            supported_platforms: platforms,
+        };
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = publisher
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        DesiredPlugin {
+            release,
+            package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            publisher_public_key: publisher.public_key().to_owned(),
+            host_bundle_base64: None,
+        }
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "full")]
+    #[allow(clippy::too_many_lines)] // One signed lifecycle fixture covers policy, HTTP, rollback and tamper boundaries.
+    async fn telemetry_signed_install_export_upgrade_uninstall_and_retained_integrity() {
+        use std::sync::Arc;
+        let root = std::env::temp_dir().join(format!(
+            "cowboy-telemetry-lifecycle-test-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.join("publisher")).unwrap();
+        let desired = telemetry_release(&publisher, "1.0.0");
+        let machine_root = root.join("machine");
+        let store =
+            MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap();
+        let installed = store.install(&desired).await.unwrap();
+        assert_eq!(
+            installed.plugin_kind,
+            cowboy_plugin_sdk::PluginKind::TelemetryBackend
+        );
+        assert_eq!(installed.auth_generation, None);
+        assert!(!store.auth_provider_root("victoria").exists());
+        let payload = || serde_json::json!({"logs": "{\"timestamp\":\"2026-09-08T00:00:00Z\",\"message\":\"fixture\",\"component\":\"cowboy-client\",\"platform\":\"web\"}\n", "metrics": "cowboy_client_fixture{platform=\"web\"} 1 1788825600000\n"});
+        // Installation alone never authorizes network egress.
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        );
+        let received = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&received);
+        let app = axum::Router::new().fallback(
+            move |uri: axum::extract::OriginalUri, headers: axum::http::HeaderMap, body: String| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    let mut requests = captured.lock();
+                    let logs = uri.path().ends_with("jsonline");
+                    let previous_logs = requests
+                        .iter()
+                        .filter(|(path, _, _): &&(String, axum::http::HeaderMap, String)| {
+                            path.contains("jsonline")
+                        })
+                        .count();
+                    requests.push((uri.0.to_string(), headers, body));
+                    if !logs {
+                        axum::http::StatusCode::BAD_REQUEST
+                    } else if previous_logs == 0 {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::NO_CONTENT
+                    }
+                }
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let config = serde_json::json!({
+            "plugin": {"plugin_id": "victoria", "plugin_version": "1.0.0", "generation_digest": installed.generation_digest},
+            "logs": {"base_url": endpoint, "bearer_token": "fixture-only-not-a-real-token"},
+            "metrics": {"base_url": endpoint},
+        });
+        atomic_write(
+            &machine_root.join("telemetry.json"),
+            &serde_json::to_vec(&config).unwrap(),
+            0o600,
+        )
+        .unwrap();
+        let receipt = store
+            .invoke_host(
+                "victoria",
+                "1.0.0",
+                &installed.generation_digest,
+                None,
+                PluginHostOperation::ExportTelemetry,
+                payload(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt,
+            serde_json::json!({"logs_delivered": true, "metrics_delivered": false})
+        );
+        {
+            let requests = received.lock();
+            assert_eq!(requests.len(), 3); // Transient 503 retried; permanent 400 not retried.
+            let logs: Vec<_> = requests
+                .iter()
+                .filter(|(path, _, _)| path.contains("jsonline"))
+                .collect();
+            assert_eq!(logs.len(), 2);
+            assert_eq!(logs[0].2, logs[1].2);
+            assert_eq!(logs[0].1["content-type"], "application/stream+json");
+            assert_eq!(
+                logs[0].1["authorization"],
+                "Bearer fixture-only-not-a-real-token"
+            );
+            assert!(logs[0].0.contains("_time_field=timestamp"));
+            assert!(logs[0].0.contains("_stream_fields=component%2Cplatform"));
+            let metrics = requests
+                .iter()
+                .find(|(path, _, _)| path.ends_with("/api/v1/import/prometheus"))
+                .unwrap();
+            assert_eq!(metrics.1["content-type"], "text/plain; version=0.0.4");
+            assert!(metrics.2.ends_with("1788825600000\n"));
+        }
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.0",
+                    &installed.generation_digest,
+                    Some(1),
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::CollectUsage,
+                    serde_json::json!({})
+                )
+                .await
+                .is_err()
+        );
+        let next = telemetry_release(&publisher, "1.0.1");
+        let upgraded = store.install(&next).await.unwrap();
+        assert_eq!(
+            upgraded.rollback_generation_digest,
+            Some(installed.generation_digest.clone())
+        );
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.1",
+                    &upgraded.generation_digest,
+                    None,
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        ); // Private policy still selects the old release.
+        store
+            .uninstall("victoria", &upgraded.generation_digest)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.1",
+                    &upgraded.generation_digest,
+                    None,
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        );
+        store
+            .reactivate("victoria", &installed.generation_digest)
+            .await
+            .unwrap();
+        store
+            .invoke_host(
+                "victoria",
+                "1.0.0",
+                &installed.generation_digest,
+                None,
+                PluginHostOperation::ExportTelemetry,
+                payload(),
+            )
+            .await
+            .unwrap();
+        let count = received.lock().len();
+        let content = store
+            .verified_plugin_generation("victoria", &installed.generation_digest)
+            .unwrap()
+            .2;
+        atomic_write(&content.join("package.cowboy-plugin"), b"{}\n", 0o600).unwrap();
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.0.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::ExportTelemetry,
+                    payload()
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(received.lock().len(), count);
+        server.abort();
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn seal_auth_for_test(
         store: &MachinePluginStore,

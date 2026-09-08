@@ -9,12 +9,14 @@ mod authentication_host;
 mod cli_auth;
 mod code_intelligence;
 pub mod host;
+mod telemetry;
 
 pub use cli_auth::{
     CliAuthCondition, CliAuthOutcome, CliAuthProbeState, CliAuthRule, CliAuthRuleSet, CliAuthSource,
 };
 pub use code_intelligence::*;
 pub use host::*;
+pub use telemetry::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -63,6 +65,7 @@ pub enum PluginKind {
     AgentProvider,
     AuthenticationProvider,
     CodeIntelligence,
+    TelemetryBackend,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,11 +107,17 @@ struct LegacyReleaseFingerprint<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "contract", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    content = "contract",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum PluginPayload {
     AgentProvider(Box<ProviderPackage>),
     AuthenticationProvider(AuthenticationProviderContract),
     CodeIntelligence(CodeIntelligenceContract),
+    TelemetryBackend(TelemetryBackendContract),
 }
 
 /// Declarative identity-provider package consumed by Cowboy's built-in
@@ -391,6 +400,7 @@ impl PluginCompatibilityRequirements {
             PluginPayload::AgentProvider(provider) => provider.package_schema,
             PluginPayload::AuthenticationProvider(contract) => contract.schema_version,
             PluginPayload::CodeIntelligence(contract) => contract.schema_version,
+            PluginPayload::TelemetryBackend(contract) => contract.schema_version,
         };
         let requirements = Self {
             plugin_sdk_version,
@@ -605,6 +615,16 @@ impl PluginContractInventory {
                 self.max_code_intelligence_schema,
                 "code-intelligence payload schema",
             ),
+            // SDK version is already attested by challenge proof v3. Derive
+            // schema-one support from it without changing historical proofs.
+            PluginKind::TelemetryBackend => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version)
+                        .is_ok_and(|version| version >= Version::new(1, 7, 0)),
+                ),
+                "telemetry payload schema (Plugin SDK 1.7)",
+            ),
         };
         for (value, minimum, maximum, code, label) in [
             (
@@ -814,7 +834,9 @@ impl PluginPackage {
     pub fn agent_provider(&self) -> Option<&ProviderPackage> {
         match &self.payload {
             PluginPayload::AgentProvider(provider) => Some(provider),
-            PluginPayload::AuthenticationProvider(_) | PluginPayload::CodeIntelligence(_) => None,
+            PluginPayload::AuthenticationProvider(_)
+            | PluginPayload::CodeIntelligence(_)
+            | PluginPayload::TelemetryBackend(_) => None,
         }
     }
 
@@ -822,7 +844,9 @@ impl PluginPackage {
     pub fn authentication_provider(&self) -> Option<&AuthenticationProviderContract> {
         match &self.payload {
             PluginPayload::AuthenticationProvider(provider) => Some(provider),
-            PluginPayload::AgentProvider(_) | PluginPayload::CodeIntelligence(_) => None,
+            PluginPayload::AgentProvider(_)
+            | PluginPayload::CodeIntelligence(_)
+            | PluginPayload::TelemetryBackend(_) => None,
         }
     }
 
@@ -832,6 +856,12 @@ impl PluginPackage {
     /// Rejects missing required hosts, executable Authentication hosts, and
     /// renderer/capability claims inconsistent with the selected protocol.
     pub fn validate_host_contract(&self, files: Option<&BTreeMap<String, String>>) -> Result<()> {
+        if matches!(self.payload, PluginPayload::TelemetryBackend(_)) {
+            ensure!(
+                files.is_none(),
+                "telemetry backends cannot declare executable host bundles"
+            );
+        }
         let host = files
             .map(|files| {
                 let source = files
@@ -862,6 +892,9 @@ impl PluginPackage {
                 .collect(),
             PluginPayload::AuthenticationProvider(_) => BTreeSet::new(),
             PluginPayload::CodeIntelligence(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::TelemetryBackend(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
         }
@@ -1008,6 +1041,9 @@ impl PluginRelease {
                 self.runtime_artifacts.is_empty(),
                 "Authentication Plugin cannot declare Machine runtime artifacts"
             ),
+            PluginPayload::TelemetryBackend(contract) => {
+                telemetry::validate_release(contract, self)?;
+            }
         }
         Ok(())
     }
@@ -1131,6 +1167,22 @@ impl ReleasedPluginComponent {
 
 fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
+        (PluginKind::TelemetryBackend, PluginPayload::TelemetryBackend(contract)) => {
+            ensure!(
+                contract.id == manifest.id && contract.version == manifest.version,
+                "telemetry payload identity mismatch"
+            );
+            contract.validate()?;
+            ensure!(
+                manifest
+                    .components
+                    .iter()
+                    .any(|component| component.id == "cowboy.plugin-sdk"
+                        && Version::parse(&component.version)
+                            .is_ok_and(|version| version >= Version::new(1, 7, 0))),
+                "telemetry backends require Plugin SDK 1.7 or newer"
+            );
+        }
         (PluginKind::AgentProvider, PluginPayload::AgentProvider(provider)) => {
             ensure!(
                 provider.manifest.id == manifest.id,

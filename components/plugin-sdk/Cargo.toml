@@ -1,6 +1,6 @@
 [package]
 name = "cowboy-plugin-sdk"
-version = "1.6.0"
+version = "1.7.0"
 edition = "2024"
 license = "MIT"
 description = "Generic package and release contracts for independently shipped Cowboy plugins"

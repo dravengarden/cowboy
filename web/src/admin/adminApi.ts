@@ -1,3 +1,5 @@
+import type { MachinePluginInventory, PluginCompatibilityRequirements, PluginContractInventory } from "@cowboy/provider-ui";
+
 export type AdminRole = "owner" | "operator" | "viewer";
 export type RegistrationMode = "disabled" | "token" | "open";
 
@@ -99,12 +101,34 @@ export interface PluginRelease {
   plugin_kind:
     | "agent_provider"
     | "authentication_provider"
-    | "code_intelligence";
+    | "code_intelligence"
+    | "telemetry_backend";
   package_digest: string;
   artifact_digest: string | null;
   release_state: string;
   release_detail?: string;
   publisher: string;
+  supported_platforms: Array<{ os: "linux" | "macos"; architecture: "x86_64" | "aarch64" }>;
+  compatibility_requirements?: PluginCompatibilityRequirements;
+}
+
+export interface PluginMachine {
+  id: string;
+  display_name: string;
+  status: string;
+  platform: "linux" | "macos";
+  architecture: "x86_64" | "aarch64";
+  plugin_contracts?: PluginContractInventory;
+  plugins: MachinePluginInventory[];
+}
+
+export interface PluginRemovalPlan {
+  plan_id: string;
+  machine_id: string;
+  plugin_id: string;
+  generation_digest: string;
+  affected_sessions: unknown[];
+  warning: string;
 }
 
 async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
@@ -120,6 +144,14 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const adminApi = {
+  pluginMachines: () => readJson<PluginMachine[]>("/api/machines"),
+  installPlugin: (machine: string, plugin: PluginRelease) => readJson(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin.plugin_id)}/install`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: plugin.plugin_version, digest: plugin.artifact_digest }),
+  }),
+  planPluginRemoval: (machine: string, plugin: string) => readJson<PluginRemovalPlan>(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin)}/uninstall-plan`, { method: "POST" }),
+  removePlugin: (plan: PluginRemovalPlan) => readJson(`/api/machines/${encodeURIComponent(plan.machine_id)}/plugins/${encodeURIComponent(plan.plugin_id)}/uninstall`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan_id: plan.plan_id, confirm_active_sessions: false }),
+  }),
   auth: () => readJson<AdminAuthStatus>("/api/admin/auth"),
   setup: (token: string) =>
     readJson<AdminAuthStatus>("/api/admin/auth/setup", {

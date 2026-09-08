@@ -21,6 +21,17 @@ The seven first-party Plugins live under `plugins/<id>/`. Six Agent Plugins use
 source builds independently even though this repository owns their common SDK
 and release tooling.
 
+Telemetry backends are data-only `telemetry_backend` Plugins. The Victoria
+example is `examples/telemetry/victoria`; build it with
+`just example-telemetry-bundle victoria`, then use the same generic artifact
+URL, sign, verify and publish commands. Never add Provider auth or runtime
+artifacts. Require Plugin SDK 1.7+, Machine protocol 8+, closed route validation,
+signed temporary install/upgrade/rollback/uninstall and HTTP failure tests.
+Installing is distinct from enabling export: exact Controller selection and
+Machine-private `telemetry.json` policy are both required. Do not read or
+publish the private endpoint/token policy as release evidence; check bounded
+delivery receipts instead. See `docs/telemetry-plugins.md`.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

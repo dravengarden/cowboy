@@ -29,7 +29,11 @@ interface PluginManifest {
   version: string;
   component_release: string;
   publisher: string;
-  kind: "agent_provider" | "authentication_provider" | "code_intelligence";
+  kind:
+    | "agent_provider"
+    | "authentication_provider"
+    | "code_intelligence"
+    | "telemetry_backend";
   entrypoint: string;
   components: Array<{ id: string; version: string }>;
 }

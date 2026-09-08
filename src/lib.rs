@@ -143,6 +143,10 @@ mod store;
 #[cfg(feature = "full")]
 mod supervisor;
 #[cfg(feature = "full")]
+mod telemetry_file;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod telemetry_plugin;
+#[cfg(feature = "full")]
 mod usage;
 #[cfg(feature = "full")]
 pub mod worker;

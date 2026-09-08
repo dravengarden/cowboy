@@ -60,6 +60,7 @@
       # build.rs and the Controller tests. Keep package payloads in the filtered
       # source so the hermetic check phase exercises the same Catalog cutover.
       plugin-host-files = [
+        (pkgs.lib.fileset.fileFilter (file: file.hasExt "json") ./examples/telemetry)
         (pkgs.lib.fileset.fileFilter (file:
           file.name == "host.json" || file.name == "plugin.json" ||
           file.name == "authentication.json"
@@ -115,6 +116,7 @@
           ./src/machine_install.rs
           ./src/machine_protocol.rs
           ./src/machine_plugins.rs
+          ./src/telemetry_plugin.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
@@ -213,7 +215,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-VhQKM3L77yD62ERiHAJDoJgyekwBlxRAQld1niWX7bE=";
+        hash = "sha256-F3EkeMk6L7PrtrggwtST9pSmxplY7BHSio0LzOSd/Ts=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then

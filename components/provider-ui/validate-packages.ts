@@ -1,6 +1,7 @@
 import {
   PROVIDER_PACKAGE_SCHEMA_VERSION,
   validateProviderManifest,
+  validateTelemetryBackendContract,
 } from "./src/index.ts";
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -19,9 +20,26 @@ for (const path of Deno.args) {
     throw new Error(`${path}: unsupported Plugin package envelope`);
   }
   const payload = record(plugin.payload);
+  if (payload?.kind === "telemetry_backend") {
+    const contract = validateTelemetryBackendContract(payload.contract);
+    const manifest = record(plugin.manifest);
+    if (
+      manifest?.kind !== "telemetry_backend" || manifest.id !== contract.id ||
+      manifest.version !== contract.version ||
+      Object.keys(payload).some((key) => !["kind", "contract"].includes(key))
+    ) {
+      throw new Error(`${path}: telemetry payload binding mismatch`);
+    }
+    console.log(
+      `${contract.id}\t${contract.version}\tTypeScript telemetry contract verified`,
+    );
+    continue;
+  }
   if (payload?.kind !== "agent_provider") continue;
   const envelope = record(payload.contract);
-  if (!envelope || envelope.package_schema !== PROVIDER_PACKAGE_SCHEMA_VERSION) {
+  if (
+    !envelope || envelope.package_schema !== PROVIDER_PACKAGE_SCHEMA_VERSION
+  ) {
     throw new Error(`${path}: unsupported Agent Provider payload`);
   }
   if (
@@ -32,5 +50,7 @@ for (const path of Deno.args) {
   }
   validateProviderManifest(envelope.manifest);
   const manifest = envelope.manifest as { id: string; version: string };
-  console.log(`${manifest.id}\t${manifest.version}\tTypeScript contract verified`);
+  console.log(
+    `${manifest.id}\t${manifest.version}\tTypeScript contract verified`,
+  );
 }

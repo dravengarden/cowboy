@@ -1,4 +1,5 @@
 import { newUuid } from "./uuid";
+import { cleanTelemetryAttributes, cleanTelemetryMessage, retryTelemetryStatus, TelemetryQueue } from "./telemetryQueue.ts";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type Scalar = string | number | boolean | null;
@@ -29,11 +30,10 @@ interface PendingIncident {
 
 export const CRASH_INCIDENT_SEVERITY = "critical" as const;
 
-const logs: PendingLog[] = [];
-const metrics: PendingMetric[] = [];
-const incidents: PendingIncident[] = [];
+const queue = new TelemetryQueue();
 let installed = false;
 let flushing = false;
+let activeRequest: AbortController | null = null;
 let context: { session_id?: string; machine_id?: string; trace_id?: string } = {};
 const RELOAD_INTENT_KEY = "cowboy:observability-reload-intent";
 
@@ -45,7 +45,7 @@ function stableClientId(): string {
   const key = "cowboy:observability-client-id";
   try {
     const existing = globalThis.localStorage.getItem(key);
-    if (existing) return existing;
+    if (existing && /^[a-zA-Z0-9_.:-]{1,128}$/.test(existing)) return existing;
     const created = newId();
     globalThis.localStorage.setItem(key, created);
     return created;
@@ -57,29 +57,16 @@ function stableClientId(): string {
 const clientId = stableClientId();
 
 function buildIdentity(): string {
-  return globalThis.document.querySelector<HTMLScriptElement>('script[type="module"][src]')
+  return globalThis.document?.querySelector<HTMLScriptElement>('script[type="module"][src]')
     ?.src.split("/").pop()?.slice(0, 128) ?? "development";
 }
 
 function cleanMessage(value: unknown): string {
-  const text = value instanceof Error ? value.message : String(value ?? "Unknown error");
-  return text
-    .replace(/(authorization|token|secret|password|cookie)=?[^\s,;]*/gi, "$1=[redacted]")
-    .slice(0, 4096);
-}
-
-function trimPending(): void {
-  while (logs.length + metrics.length + incidents.length > 200) {
-    const debug = logs.findIndex((entry) => entry.level === "debug");
-    if (debug >= 0) logs.splice(debug, 1);
-    else if (metrics.length > 0) metrics.shift();
-    else if (logs.length > 0) logs.shift();
-    else break;
-  }
+  return cleanTelemetryMessage(value);
 }
 
 export function setObservabilityContext(next: typeof context): void {
-  context = { ...next };
+  context = Object.fromEntries(Object.entries(next).filter(([key, value]) => ["session_id", "machine_id", "trace_id"].includes(key) && typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,128}$/.test(value)));
 }
 
 export function markClientReloadIntent(reason: string, targetBuild?: string): void {
@@ -106,15 +93,15 @@ export function reportClientLog(
   message: unknown,
   attributes: Record<string, Scalar> = {},
 ): void {
-  logs.push({
+  if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(eventName)) return;
+  queue.capture("logs", {
     occurred_at_ms: Date.now(),
     level,
     event_name: eventName,
     message: cleanMessage(message),
-    attributes,
-  });
-  trimPending();
-  if (level === "error" || logs.length + metrics.length + incidents.length >= 50) {
+    attributes: cleanTelemetryAttributes(attributes),
+  } satisfies PendingLog, context);
+  if (level === "error" || queue.size >= 50) {
     void flushObservability();
   }
 }
@@ -124,9 +111,11 @@ export function reportClientMetric(
   value: number,
   dimensions: Record<string, string> = {},
 ): void {
-  if (!Number.isFinite(value)) return;
-  metrics.push({ occurred_at_ms: Date.now(), name, value, dimensions });
-  trimPending();
+  if (!Number.isFinite(value) || !/^[a-zA-Z0-9_]{1,64}$/.test(name)) return;
+  const labels = Object.fromEntries(Object.entries(dimensions).filter(([key, value]) =>
+    ["connection", "transport", "reason"].includes(key) && /^[a-zA-Z0-9_-]{1,64}$/.test(value)
+  ));
+  queue.capture("metrics", { occurred_at_ms: Date.now(), name, value, dimensions: labels } satisfies PendingMetric, context);
 }
 
 export function reportClientIncident(
@@ -135,41 +124,26 @@ export function reportClientIncident(
   summary: unknown,
   detail: Record<string, Scalar> = {},
 ): void {
-  incidents.push({
+  if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(classification)) return;
+  queue.capture("incidents", {
     id: newId(),
     occurred_at_ms: Date.now(),
     classification,
     severity,
     summary: cleanMessage(summary),
-    detail,
-  });
-  trimPending();
+    detail: cleanTelemetryAttributes(detail),
+  } satisfies PendingIncident, context);
   void flushObservability();
 }
 
-function takeBatch(): Record<string, unknown> | null {
-  if (logs.length === 0 && metrics.length === 0 && incidents.length === 0) return null;
-  const ua = globalThis.navigator.userAgent;
-  return {
-    batch_id: newId(),
-    client: {
+function takeBatch() {
+  const ua = globalThis.navigator?.userAgent ?? "";
+  return queue.take({
       id: clientId,
       platform: /iPad|iPhone|iPod/.test(ua) ? "ios" : /Macintosh/.test(ua) ? "macos" : "web",
       app_version: buildIdentity(),
-      surface: globalThis.matchMedia("(pointer: coarse)").matches ? "mobile" : "desktop",
-    },
-    context,
-    logs: logs.splice(0),
-    metrics: metrics.splice(0),
-    incidents: incidents.splice(0),
-  };
-}
-
-function restoreBatch(batch: Record<string, unknown>): void {
-  logs.unshift(...(batch.logs as PendingLog[]));
-  metrics.unshift(...(batch.metrics as PendingMetric[]));
-  incidents.unshift(...(batch.incidents as PendingIncident[]));
-  trimPending();
+      surface: globalThis.matchMedia?.("(pointer: coarse)").matches ? "mobile" : "desktop",
+  }, newId);
 }
 
 export async function flushObservability(): Promise<void> {
@@ -177,29 +151,39 @@ export async function flushObservability(): Promise<void> {
   const batch = takeBatch();
   if (!batch) return;
   flushing = true;
+  const controller = new AbortController();
+  activeRequest = controller;
+  const timeout = globalThis.setTimeout(() => controller.abort(), 8000);
   try {
     const response = await globalThis.fetch("/api/observability/batches", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(batch),
-      keepalive: true,
+      body: batch.body,
+      signal: controller.signal,
     });
-    if (!response.ok) restoreBatch(batch);
+    queue.settle(batch, !response.ok && retryTelemetryStatus(response.status));
   } catch {
-    restoreBatch(batch);
+    queue.settle(batch, true);
   } finally {
     flushing = false;
+    activeRequest = null;
+    globalThis.clearTimeout(timeout);
   }
 }
 
 function beaconFlush(): void {
+  if (flushing) return;
   const batch = takeBatch();
   if (!batch) return;
-  const accepted = globalThis.navigator.sendBeacon(
-    "/api/observability/batches",
-    new Blob([JSON.stringify(batch)], { type: "application/json" }),
-  );
-  if (!accepted) restoreBatch(batch);
+  try {
+    const accepted = globalThis.navigator.sendBeacon(
+      "/api/observability/batches",
+      new Blob([batch.body], { type: "application/json" }),
+    );
+    queue.settle(batch, !accepted);
+  } catch {
+    queue.settle(batch, true);
+  }
 }
 
 function installPerformanceObservers(): void {
@@ -232,7 +216,7 @@ function reportReloadCompletion(): void {
       reload_duration_ms: Math.max(0, Date.now() - markedAt),
     });
   } catch {
-    globalThis.sessionStorage.removeItem(RELOAD_INTENT_KEY);
+    // Storage can itself throw; diagnostics must never break startup.
   }
 }
 
@@ -253,8 +237,8 @@ async function reportRuntimeIdentity(): Promise<void> {
   };
   try {
     const [versionResponse, workerResponse] = await Promise.all([
-      globalThis.fetch("/version", { cache: "no-store" }),
-      globalThis.fetch("/sw.js", { cache: "no-store" }),
+      globalThis.fetch("/version", { cache: "no-store", signal: AbortSignal.timeout(8000) }),
+      globalThis.fetch("/sw.js", { cache: "no-store", signal: AbortSignal.timeout(8000) }),
     ]);
     if (versionResponse.ok) {
       const value = await versionResponse.json() as { version?: unknown };
@@ -273,6 +257,11 @@ async function reportRuntimeIdentity(): Promise<void> {
 export function installObservability(): void {
   if (installed) return;
   installed = true;
+  globalThis.addEventListener("cowboy:product-sign-out", () => {
+    activeRequest?.abort();
+    queue.clear();
+    context = {};
+  });
   reportReloadCompletion();
   void reportRuntimeIdentity();
   globalThis.addEventListener("error", (event) => {

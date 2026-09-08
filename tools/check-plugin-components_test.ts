@@ -51,9 +51,13 @@ Deno.test("a plugin can release independently above its component baseline", () 
   );
 });
 
-Deno.test("published authentication schemas are independently resolvable", async () => {
+Deno.test("published capability schemas are independently resolvable", async () => {
   for (
-    const name of ["authentication-provider", "authentication-provider-v2"]
+    const name of [
+      "authentication-provider",
+      "authentication-provider-v2",
+      "telemetry-backend",
+    ]
   ) {
     const schema = JSON.parse(
       await Deno.readTextFile(

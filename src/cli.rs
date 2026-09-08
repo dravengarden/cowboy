@@ -296,21 +296,21 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_POSTGRES_URL", hide = true)]
     pub postgres_url: Option<String>,
 
-    /// `VictoriaLogs` base URL used by the bounded client observability relay.
-    #[arg(
-        long,
-        env = "COWBOY_VICTORIA_LOGS_URL",
-        default_value = "http://127.0.0.1:6302"
-    )]
-    pub victoria_logs_url: String,
+    /// Private rotating JSONL directory (default: instance-specific /tmp child).
+    #[arg(long, env = "COWBOY_TELEMETRY_DIR")]
+    pub telemetry_dir: Option<PathBuf>,
 
-    /// `VictoriaMetrics` base URL used by the bounded client observability relay.
-    #[arg(
-        long,
-        env = "COWBOY_VICTORIA_METRICS_URL",
-        default_value = "http://127.0.0.1:6301"
-    )]
-    pub victoria_metrics_url: String,
+    /// Maximum bytes per diagnostic segment; incident/accounting ledgers stay in DB.
+    #[arg(long, env = "COWBOY_TELEMETRY_SEGMENT_BYTES", default_value_t = crate::telemetry_file::DEFAULT_SEGMENT_BYTES)]
+    pub telemetry_segment_bytes: u64,
+
+    /// Total retained diagnostic segments, including the current file.
+    #[arg(long, env = "COWBOY_TELEMETRY_RETAINED_FILES", default_value_t = crate::telemetry_file::DEFAULT_RETAINED_FILES)]
+    pub telemetry_retained_files: usize,
+
+    /// Optional exact Machine/Plugin/release selection. No remote export by default.
+    #[arg(long, env = "COWBOY_TELEMETRY_PLUGIN_CONFIG")]
+    pub telemetry_plugin_config: Option<PathBuf>,
 }
 
 impl Cli {

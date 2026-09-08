@@ -1008,7 +1008,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&machine_control),
     );
     let runtime_router = RuntimeRouter::new();
-    let machine_control = Arc::new(MachineControl::default());
     let machine_snapshots = MachineSnapshots::new(
         store.clone(),
         hub.clone(),
@@ -1253,9 +1252,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     ));
     let observability = Observability::start(
         store.clone(),
-        args.victoria_logs_url,
-        args.victoria_metrics_url,
+        crate::telemetry_file::TelemetryFile::open(
+            args.telemetry_dir
+                .unwrap_or_else(|| crate::telemetry_file::default_directory(&args.data_dir)),
+            args.telemetry_segment_bytes,
+            args.telemetry_retained_files,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .context("opening local telemetry")?,
+        crate::telemetry_plugin::controller_exporter(
+            args.telemetry_plugin_config.as_deref(),
+            Arc::clone(&machine_control),
+        )?,
     );
+    let telemetry_shutdown = observability.clone();
 
     // Background dispatcher: the Hub owns each session's send-queue but can't
     // call the Supervisor (which holds the Hub) — that cycle is why the queue
@@ -1421,6 +1431,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     if let Some(task) = machine_presence_task {
         task.abort();
     }
+    telemetry_shutdown.drain().await;
     let _ = store_shutdown_tx.send(true);
     if let Some(task) = writer_task {
         match tokio::time::timeout(std::time::Duration::from_secs(10), task).await {
@@ -9143,6 +9154,11 @@ struct Metrics {
     code_cache_misses: u64,
     code_cache_evictions: u64,
     observability_pending: usize,
+    observability_pending_bytes: usize,
+    observability_duplicate_batches: u64,
+    observability_failed_file_batches: u64,
+    observability_failed_incident_batches: u64,
+    observability_dropped_export_batches: u64,
     observability_accepted_batches: u64,
     observability_dropped_batches: u64,
     observability_failed_log_batches: u64,
@@ -9249,6 +9265,14 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         code_cache_misses: code_cache.misses,
         code_cache_evictions: code_cache.evictions,
         observability_pending: state.observability.health().pending(),
+        observability_pending_bytes: state.observability.health().pending_bytes(),
+        observability_duplicate_batches: state.observability.health().duplicate_batches(),
+        observability_failed_file_batches: state.observability.health().failed_file_batches(),
+        observability_failed_incident_batches: state
+            .observability
+            .health()
+            .failed_incident_batches(),
+        observability_dropped_export_batches: state.observability.health().dropped_export_batches(),
         observability_accepted_batches: state.observability.health().accepted_batches(),
         observability_dropped_batches: state.observability.health().dropped_batches(),
         observability_failed_log_batches: state.observability.health().failed_log_batches(),
@@ -9262,11 +9286,35 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
 
 async fn api_observability_batch(
     State(state): State<Arc<AppState>>,
-    Json(batch): Json<TelemetryBatch>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Json(mut batch): Json<TelemetryBatch>,
 ) -> Response {
-    match state.observability.submit(batch) {
+    if batch
+        .context
+        .session_id
+        .as_deref()
+        .is_some_and(|session| !session_is_visible(&state.hub, &authenticated.principal, session))
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    // The browser cannot forge a different Machine association for a session.
+    batch.context.machine_id = batch
+        .context
+        .session_id
+        .as_deref()
+        .and_then(|session| state.hub.session_info(session))
+        .map(|session| session.meta.machine_id);
+    match state
+        .observability
+        .submit(&authenticated.principal.user_id, batch)
+    {
         Ok(()) => (StatusCode::ACCEPTED, Json(SubmitReceipt { accepted: true })).into_response(),
-        Err(message) if message == "observability queue full" => {
+        Err(message)
+            if matches!(
+                message,
+                "observability queue full" | "observability unavailable"
+            ) =>
+        {
             (StatusCode::SERVICE_UNAVAILABLE, message).into_response()
         }
         Err(message) => (StatusCode::BAD_REQUEST, message).into_response(),
@@ -10134,6 +10182,7 @@ async fn prometheus_metrics(
         state.observability.health().failed_log_batches(),
         state.observability.health().failed_metric_batches(),
     );
+    let body = body + &state.observability.health().prometheus();
     (
         [(
             header::CONTENT_TYPE,
@@ -11265,7 +11314,11 @@ async fn api_machine_plugin_uninstall_plan(
         .hub
         .session_list()
         .into_iter()
-        .filter(|session| session.machine_id == machine_id && session.provider == provider_id)
+        .filter(|session| {
+            installed.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+                && session.machine_id == machine_id
+                && session.provider == provider_id
+        })
         .collect();
     affected.sort_by(|left, right| left.id.cmp(&right.id));
     let session_ids: Vec<_> = affected.iter().map(|session| session.id.clone()).collect();
@@ -11309,7 +11362,7 @@ async fn api_machine_plugin_uninstall_plan(
         "active_session_ids": active_session_ids,
         "purge_after_ms": purge_after_ms,
         "expires_at_ms": expires_at_ms,
-        "warning": "Uninstalling this Provider removes it from this Machine and soft-deletes every affected session. Session data remains recoverable only until the stated purge deadline.",
+        "warning": if installed.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider { "Uninstalling this Provider removes it from this Machine and soft-deletes every affected session. Session data remains recoverable only until the stated purge deadline." } else { "Uninstalling this Plugin disables its capability on this Machine. Retained generations and private activation policy are not deleted; in-flight bounded operations may finish." },
     }))
     .into_response()
 }

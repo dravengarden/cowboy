@@ -148,6 +148,17 @@ example-auth-build-all:
       just example-auth-bundle "${source_dir##*/}"
     done
 
+# Data-only backend packages use the exact same pack/sign/publish lifecycle.
+example-telemetry-bundle PLUGIN:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
+    test -f "examples/telemetry/{{PLUGIN}}/plugin.json"
+    mkdir -p "dist/plugins/{{PLUGIN}}"
+    cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
+      "examples/telemetry/{{PLUGIN}}" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" \
+      "cowboy-plugin://{{PLUGIN}}"
+
 plugin-build-all:
     for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
 
@@ -277,6 +288,7 @@ provider-check: plugin-check
     cargo test --locked -p cowboy-plugin-sdk --all-targets
     just plugin-build-all
     just example-auth-build-all
+    just example-telemetry-bundle victoria
     just plugin-isolation-check codex
     cd web && deno task typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin

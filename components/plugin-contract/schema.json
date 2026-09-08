@@ -27,7 +27,7 @@
     },
     "publisher": { "type": "string", "minLength": 1, "maxLength": 128 },
     "kind": {
-      "enum": ["agent_provider", "authentication_provider", "code_intelligence"]
+      "enum": ["agent_provider", "authentication_provider", "code_intelligence", "telemetry_backend"]
     },
     "entrypoint": {
       "type": "string",

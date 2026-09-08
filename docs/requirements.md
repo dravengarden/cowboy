@@ -46,6 +46,23 @@ Product-login integrations use the data-only `authentication_provider` kind
 and execute only through Controller-owned protocol drivers. Zed uses the
 `code_intelligence` kind and retains its isolated process and license boundary.
 
+Telemetry integrations use the data-only `telemetry_backend` kind (payload
+schema 1, Plugin SDK 1.7+, Machine protocol 8+). Its signed contract declares
+bounded JSON-lines/Prometheus ingestion routes and platform support, never
+executable artifacts, service URLs, credentials, or Agent authentication.
+It uses the same signed Catalog and Machine install/upgrade/rollback/uninstall
+lifecycle. Installation alone grants no egress: Controller policy selects an
+exact Machine/Plugin/version/digest and Machine-private policy independently
+binds that release to endpoints. Private policy is not published package data.
+
+Client diagnostic telemetry defaults to private rotating JSONL under `/tmp`,
+without a network dependency. Files remain enabled alongside an optional
+backend. Remote queues, requests and retries are bounded independently from
+local evidence and durable incident persistence. Conversation history,
+accounting, authentication, and incident lifecycle state remain durable and
+are never rotated with diagnostic files. See `docs/telemetry-plugins.md` for
+configuration, delivery limits, operational failure counters and rollout.
+
 Authentication payload schema 1 selects OIDC. Schema 2 also selects the closed
 `local_password` and `webauthn` drivers, with an empty public configuration;
 password algorithms, credentials, relying-party policy, users, and sessions
@@ -234,6 +251,8 @@ Each Machine advertises two strict capability envelopes in its signed hello.
 package/release, payload-kind, host-bundle, and host-contract schema intervals.
 `ProviderContractInventory` independently covers the narrower Agent Provider
 SDK, package/runtime-binding/UI/host schemas, and Machine Provider contract.
+Telemetry schema-one support is derived from the already-signed Plugin SDK
+version (>=1.7); the historical challenge-proof-v3 envelope is unchanged.
 The Controller repeats both applicable predicates immediately before an install
 or upgrade, and Web may offer only the newest ready release accepted by both.
 An absent, malformed, or insufficient inventory fails closed with a typed

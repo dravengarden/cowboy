@@ -17,6 +17,7 @@ import {
   ListItemButton,
   ListItemIcon,
   ListItemText,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -39,9 +40,12 @@ import {
   type PermissionPolicy,
   type ProductUser,
   type PluginRelease,
+  type PluginMachine,
+  type PluginRemovalPlan,
   type SessionLimits,
 } from "./adminApi";
 import { AdminPasskeyLock, AdminPasskeysCard } from "./AdminPasskeys";
+import { genericPluginCompatibilityProblem } from "@cowboy/provider-ui";
 
 export type AdminRoute =
   | "/admin"
@@ -364,22 +368,43 @@ function ReleasesPage(): React.JSX.Element {
   const [root, setRoot] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [machines, setMachines] = useState<PluginMachine[]>([]);
+  const [machineId, setMachineId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [removal, setRemoval] = useState<PluginRemovalPlan | null>(null);
   const reload = useCallback(async () => {
     const data = await adminApi.plugins();
     setPlugins(data.plugins);
     setRoot(data.catalog_root);
+    try {
+      setMachines(await adminApi.pluginMachines());
+    } catch {
+      setMachines([]);
+      setMessage("Machine inventory is unavailable; Catalog inspection still works. Installation requires product access to a compatible Machine.");
+    }
   }, []);
   useEffect(() => {
     void reload().catch((err: Error) => setError(err.message));
   }, [reload]);
-  if (error) return <Alert severity="error">{error}</Alert>;
   return (
     <Stack spacing={2}>
       <Typography variant="h4">Plugin releases</Typography>
+      {error && <Alert severity="error" onClose={() => setError(null)}>{error}</Alert>}
       <Typography color="text.secondary">
         Signed Plugin Catalog versions are installable. Unbound entries need `just plugin-sign` then `just plugin-publish` into the catalog directory, then refresh.
       </Typography>
       {root && <Alert severity="info">Catalog: {root}</Alert>}
+      <TextField select label="Telemetry Plugin target Machine" value={machineId} onChange={(event) => { setMachineId(event.target.value); setRemoval(null); }} disabled={busy}>
+        <MenuItem value="">Select a Machine</MenuItem>
+        {machines.map((machine) => <MenuItem key={machine.id} value={machine.id}>{machine.display_name} · {machine.status}</MenuItem>)}
+      </TextField>
+      <Typography color="text.secondary">
+        Installing a telemetry backend does not enable export. Select its exact release in Controller and Machine-private telemetry configuration. Local rotating files stay enabled; older releases can be installed here for rollback.
+      </Typography>
+      {removal && <Alert severity="warning" action={<Button disabled={busy} onClick={() => {
+        setBusy(true);
+        void adminApi.removePlugin(removal).then(() => { setRemoval(null); setMessage("Telemetry Plugin uninstalled. Local telemetry remains enabled."); return reload(); }).catch((err: Error) => setError(err.message)).finally(() => setBusy(false));
+      }}>Confirm uninstall</Button>}>{removal.warning}</Alert>}
       <Button
         variant="contained"
         onClick={() => {
@@ -401,6 +426,7 @@ function ReleasesPage(): React.JSX.Element {
               <TableCell>Version</TableCell>
               <TableCell>State</TableCell>
               <TableCell>Publisher</TableCell>
+              <TableCell>Telemetry lifecycle</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -411,6 +437,25 @@ function ReleasesPage(): React.JSX.Element {
                 <TableCell>{plugin.plugin_version}</TableCell>
                 <TableCell>{plugin.release_state}</TableCell>
                 <TableCell>{plugin.publisher}</TableCell>
+                <TableCell>{plugin.plugin_kind === "telemetry_backend" && (() => {
+                  const machine = machines.find((item) => item.id === machineId);
+                  const problem = machine ? genericPluginCompatibilityProblem(plugin, machine) : undefined;
+                  const installed = machine?.plugins.find((item) => item.plugin_id === plugin.plugin_id && item.generation_digest === plugin.artifact_digest && item.state === "active");
+                  return <Stack spacing={1}>
+                    {problem && <Typography variant="caption" color="text.secondary">{problem.detail}</Typography>}
+                    <Button disabled={busy || !machine || machine.status !== "online" || Boolean(problem) || plugin.release_state !== "ready" || !plugin.artifact_digest || Boolean(installed)} onClick={() => {
+                      setBusy(true);
+                      void adminApi.installPlugin(machineId, plugin).then(() => { setMessage("Telemetry Plugin installed; export still requires exact private activation configuration."); return reload(); }).catch((err: Error) => setError(err.message)).finally(() => setBusy(false));
+                    }}>{installed ? "Installed" : "Install exact release"}</Button>
+                    {installed && <Button color="warning" disabled={busy || machine?.status !== "online"} onClick={() => {
+                      setBusy(true);
+                      void adminApi.planPluginRemoval(machineId, plugin.plugin_id).then((plan) => {
+                        if (plan.affected_sessions.length !== 0) throw new Error("Unexpected session impact; refusing telemetry removal.");
+                        setRemoval(plan);
+                      }).catch((err: Error) => setError(err.message)).finally(() => setBusy(false));
+                    }}>Uninstall…</Button>}
+                  </Stack>;
+                })()}</TableCell>
               </TableRow>
             ))}
           </TableBody>

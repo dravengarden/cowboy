@@ -14,6 +14,10 @@ export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
 export const PROVIDER_SDK_VERSION = "3.1.10" as const;
+export {
+  type TelemetryBackendContract,
+  validateTelemetryBackendContract,
+} from "./telemetry.ts";
 
 export type SurfaceSlot =
   | "card"
@@ -491,7 +495,8 @@ export interface PluginCompatibilityRequirements {
   plugin_kind:
     | "agent_provider"
     | "authentication_provider"
-    | "code_intelligence";
+    | "code_intelligence"
+    | "telemetry_backend";
   payload_schema: number;
   host_bundle_schema?: number;
   host_schema?: number;
@@ -648,7 +653,7 @@ export interface MachineProviderInventory {
 export interface MachinePluginInventory {
   plugin_id: string;
   plugin_version: string;
-  plugin_kind: "agent_provider" | "code_intelligence";
+  plugin_kind: "agent_provider" | "code_intelligence" | "telemetry_backend";
   generation_digest: string;
   contract_fingerprint: string;
   state: MachineProviderInventory["state"];
@@ -999,7 +1004,7 @@ export function validateMachinePluginInventory(
       !isIdentifier(raw.plugin_id) ||
       typeof raw.plugin_version !== "string" ||
       !parseSemanticVersion(raw.plugin_version) ||
-      !["agent_provider", "code_intelligence"].includes(
+      !["agent_provider", "code_intelligence", "telemetry_backend"].includes(
         String(raw.plugin_kind),
       ) ||
       typeof raw.generation_digest !== "string" ||
@@ -2519,7 +2524,12 @@ export function validatePluginCompatibilityRequirements(
     (input.plugin_sdk_version !== undefined &&
       (typeof input.plugin_sdk_version !== "string" ||
         !parseSemanticVersion(input.plugin_sdk_version))) ||
-    !["agent_provider", "authentication_provider", "code_intelligence"]
+    ![
+      "agent_provider",
+      "authentication_provider",
+      "code_intelligence",
+      "telemetry_backend",
+    ]
       .includes(String(input.plugin_kind)) ||
     ![
       input.manifest_schema,
@@ -2602,6 +2612,26 @@ function pluginCompatibilityProblem(
   entry: ProviderCatalogEntry,
   target: ProviderCompatibilityTarget,
 ): ProviderCompatibilityProblem | undefined {
+  return genericPluginCompatibilityProblem({
+    ...entry,
+    plugin_id: entry.provider_id,
+    plugin_version: entry.provider_version,
+  }, target);
+}
+
+export function genericPluginCompatibilityProblem(
+  entry: {
+    plugin_id: string;
+    plugin_version: string;
+    release_state: string;
+    supported_platforms: ProviderCatalogEntry["supported_platforms"];
+    compatibility_requirements?: PluginCompatibilityRequirements;
+  },
+  target: Pick<
+    ProviderCompatibilityTarget,
+    "platform" | "architecture" | "plugin_contracts"
+  >,
+): ProviderCompatibilityProblem | undefined {
   if (entry.compatibility_requirements === undefined) {
     return entry.release_state === "ready"
       ? {
@@ -2640,7 +2670,7 @@ function pluginCompatibilityProblem(
     };
   }
   const update = (requirement: string): string =>
-    `Plugin ${entry.provider_id} ${entry.provider_version} requires ${requirement}. Update Cowboy Machine before installing or upgrading this Plugin.`;
+    `Plugin ${entry.plugin_id} ${entry.plugin_version} requires ${requirement}. Update Cowboy Machine before installing or upgrading this Plugin.`;
   const unsupported = (
     value: number,
     minimum: number,
@@ -2702,6 +2732,14 @@ function pluginCompatibilityProblem(
       inventory.max_authentication_provider_schema,
       "Authentication Provider payload schema",
     ] as const
+    : requirements.plugin_kind === "telemetry_backend"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.7.0") >= 0
+        ? 1
+        : 0,
+      "telemetry payload schema (Plugin SDK 1.7)",
+    ] as const
     : [
       inventory.min_code_intelligence_schema,
       inventory.max_code_intelligence_schema,
@@ -2744,7 +2782,7 @@ function pluginCompatibilityProblem(
     return {
       code: "plugin_platform_unsupported",
       detail:
-        `Plugin ${entry.provider_id} ${entry.provider_version} is not published for this Cowboy Machine platform.`,
+        `Plugin ${entry.plugin_id} ${entry.plugin_version} is not published for this Cowboy Machine platform.`,
     };
   }
   return undefined;

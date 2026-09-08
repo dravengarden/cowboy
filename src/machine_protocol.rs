@@ -8,9 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 7;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 8;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
+pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -527,6 +528,7 @@ pub enum PluginHostOperation {
     CollectUsage,
     ResetUsage,
     DecorateActivity,
+    ExportTelemetry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -722,6 +724,10 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::InvokePluginHost {
+                operation: PluginHostOperation::ExportTelemetry,
+                ..
+            } => TELEMETRY_PLUGIN_PROTOCOL_VERSION,
             // Uninstall is destructive and its Controller saga relies on
             // exact-generation reactivation for compensation. Never let a
             // protocol-three Machine begin removal that it cannot undo.
@@ -1043,8 +1049,8 @@ mod tests {
     }
 
     #[test]
-    fn provider_refresh_candidate_survives_the_protocol_seven_addition() {
-        assert_eq!(MACHINE_PROTOCOL_VERSION, 7);
+    fn provider_refresh_candidate_survives_the_protocol_eight_addition() {
+        assert_eq!(MACHINE_PROTOCOL_VERSION, 8);
         let event = MachineEvent::ProviderAuthRefreshCandidate {
             request_id: "refresh-1".to_owned(),
             provider_id: "grok".to_owned(),
@@ -1088,6 +1094,13 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<MachineCommand>(encoded).unwrap(),
             command
+        );
+        let mut telemetry = serde_json::to_value(&command).unwrap();
+        telemetry["operation"] = "export_telemetry".into();
+        let telemetry: MachineCommand = serde_json::from_value(telemetry).unwrap();
+        assert_eq!(
+            telemetry.minimum_protocol(),
+            TELEMETRY_PLUGIN_PROTOCOL_VERSION
         );
 
         let install = MachineCommand::InstallPlugin {

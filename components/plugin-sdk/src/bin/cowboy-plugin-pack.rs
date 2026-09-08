@@ -76,6 +76,9 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         PluginKind::CodeIntelligence => {
             PluginPayload::CodeIntelligence(read_json(&root.join(&manifest.entrypoint))?)
         }
+        PluginKind::TelemetryBackend => {
+            PluginPayload::TelemetryBackend(read_json(&root.join(&manifest.entrypoint))?)
+        }
     };
     let component_release = manifest.component_release.clone();
     let package = PluginPackage::new(manifest, component_release, payload)?;
@@ -94,6 +97,7 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
             .collect(),
         PluginPayload::AuthenticationProvider(_) => Vec::new(),
         PluginPayload::CodeIntelligence(contract) => contract.supported_platforms.clone(),
+        PluginPayload::TelemetryBackend(contract) => contract.supported_platforms.clone(),
     };
     let mut release = PluginRelease {
         release_schema: RELEASE_SCHEMA_MIN_VERSION,
@@ -131,7 +135,21 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         );
         None
     };
-    if package.authentication_provider().is_some() || host_bundle_bytes.is_some() {
+    if matches!(package.payload, PluginPayload::TelemetryBackend(_)) {
+        release.runtime_artifacts = release
+            .supported_platforms
+            .iter()
+            .map(|platform| cowboy_plugin_sdk::PluginRuntimeArtifacts {
+                os: platform.os.clone(),
+                architecture: platform.architecture.clone(),
+                components: Vec::new(),
+            })
+            .collect();
+    }
+    if package.authentication_provider().is_some()
+        || host_bundle_bytes.is_some()
+        || matches!(package.payload, PluginPayload::TelemetryBackend(_))
+    {
         release.artifact_digest = release.computed_artifact_digest()?;
     }
     let release_path = output.with_extension("release.json");

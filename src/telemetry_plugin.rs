@@ -1,0 +1,420 @@
+//! Optional, exact-generation telemetry Plugin activation. Public packages
+//! carry no credentials; only Machine-private configuration selects egress.
+
+use std::fs::OpenOptions;
+use std::io::Read as _;
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::path::Path;
+
+use anyhow::{Context as _, Result, ensure};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PluginSelection {
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub generation_digest: String,
+}
+
+fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .context("opening private telemetry configuration")?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.mode() & 0o077 == 0
+            && metadata.nlink() == 1
+            && metadata.uid() == rustix::process::geteuid().as_raw(),
+        "telemetry configuration must be an owned private regular file"
+    );
+    let mut bytes = Vec::new();
+    file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() <= 64 * 1024,
+        "telemetry configuration too large"
+    );
+    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid telemetry configuration"))
+}
+
+impl PluginSelection {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.plugin_id.is_empty()
+                && self.plugin_id.len() <= 128
+                && self
+                    .plugin_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+            "invalid telemetry plugin id"
+        );
+        ensure!(
+            semver::Version::parse(&self.plugin_version).is_ok(),
+            "invalid telemetry plugin version"
+        );
+        let digest = self
+            .generation_digest
+            .strip_prefix("sha256:")
+            .unwrap_or_default();
+        ensure!(
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+            "invalid telemetry generation digest"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExportResult {
+    pub logs_delivered: bool,
+    pub metrics_delivered: bool,
+}
+
+#[cfg(feature = "full")]
+pub(crate) fn controller_exporter(
+    path: Option<&Path>,
+    control: std::sync::Arc<crate::machine_control::MachineControl>,
+) -> Result<Option<crate::observability::TelemetryExporter>> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Configuration {
+        machine_id: String,
+        plugin: PluginSelection,
+    }
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let config: Configuration = read_private(path)?;
+    config.plugin.validate()?;
+    ensure!(
+        !config.machine_id.is_empty() && config.machine_id.len() <= 128,
+        "invalid telemetry Machine selection"
+    );
+    Ok(Some(std::sync::Arc::new(move |batch| {
+        let selection = config.plugin.clone();
+        let machine_id = config.machine_id.clone();
+        let control = std::sync::Arc::clone(&control);
+        Box::pin(async move {
+            let selected = control
+                .connected_plugin_inventory()
+                .into_iter()
+                .find(|entry| {
+                    entry.machine_id == machine_id
+                        && entry.plugin.plugin_kind
+                            == cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                        && entry.plugin.plugin_id == selection.plugin_id
+                        && entry.plugin.plugin_version == selection.plugin_version
+                        && entry.plugin.generation_digest == selection.generation_digest
+                        && entry.plugin.state
+                            == crate::machine_protocol::PluginInstallationState::Active
+                });
+            let Some(selected) = selected else {
+                return crate::observability::ExportReceipt::default();
+            };
+            let result = control
+                .plugin_host_request(
+                    &machine_id,
+                    &selected.plugin,
+                    crate::machine_protocol::PluginHostOperation::ExportTelemetry,
+                    serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
+                )
+                .await;
+            // Never log the command or private endpoint errors. Only bounded
+            // lane receipts reach the Controller's event history.
+            let receipt = result
+                .ok()
+                .and_then(|value| serde_json::from_value::<ExportResult>(value).ok())
+                .unwrap_or_default();
+            crate::observability::ExportReceipt {
+                logs_delivered: receipt.logs_delivered,
+                metrics_delivered: receipt.metrics_delivered,
+            }
+        })
+    })))
+}
+
+#[cfg(feature = "machine-host")]
+mod machine {
+    use super::*;
+    use cowboy_plugin_sdk::{TelemetryBackendContract, TelemetryEncoding, TelemetryRoute};
+    use std::time::Duration;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Configuration {
+        pub plugin: PluginSelection,
+        logs: Option<Endpoint>,
+        metrics: Option<Endpoint>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Endpoint {
+        base_url: String,
+        #[serde(default)]
+        bearer_token: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub(crate) struct Payload {
+        logs: String,
+        metrics: String,
+    }
+
+    pub(crate) fn prepare(
+        path: &Path,
+        selection: &PluginSelection,
+        value: serde_json::Value,
+    ) -> Result<(Configuration, Payload)> {
+        let config: Configuration = read_private(path)?;
+        config.plugin.validate()?;
+        ensure!(
+            config.plugin.plugin_id == selection.plugin_id
+                && config.plugin.plugin_version == selection.plugin_version
+                && config.plugin.generation_digest == selection.generation_digest,
+            "telemetry release is not enabled by Machine policy"
+        );
+        let payload: Payload = serde_json::from_value(value)
+            .map_err(|_| anyhow::anyhow!("invalid telemetry export payload"))?;
+        ensure!(
+            payload.logs.len().saturating_add(payload.metrics.len()) <= 512 * 1024,
+            "telemetry export payload too large"
+        );
+        for endpoint in [&config.logs, &config.metrics].into_iter().flatten() {
+            endpoint.validate()?;
+        }
+        Ok((config, payload))
+    }
+
+    impl Endpoint {
+        fn validate(&self) -> Result<()> {
+            let url = url::Url::parse(&self.base_url)
+                .map_err(|_| anyhow::anyhow!("invalid telemetry endpoint URL"))?;
+            let loopback = url.host_str().is_some_and(|host| {
+                host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+            });
+            ensure!(
+                url.scheme() == "https" || (url.scheme() == "http" && loopback),
+                "telemetry endpoints require HTTPS (HTTP allowed only for literal loopback)"
+            );
+            ensure!(
+                url.has_host()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url.query().is_none()
+                    && url.fragment().is_none()
+                    && self.base_url.len() <= 2048,
+                "telemetry endpoint must not embed credentials, query or fragment"
+            );
+            if let Some(token) = &self.bearer_token {
+                ensure!(
+                    !token.is_empty()
+                        && token.len() <= 4096
+                        && token.bytes().all(|byte| byte.is_ascii_graphic()),
+                    "invalid telemetry authorization value"
+                );
+            }
+            Ok(())
+        }
+    }
+
+    pub(crate) async fn export(
+        contract: &TelemetryBackendContract,
+        config: Configuration,
+        payload: Payload,
+    ) -> ExportResult {
+        let Ok(client) = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(1))
+            .timeout(Duration::from_secs(3))
+            .build()
+        else {
+            return ExportResult::default();
+        };
+        let (logs_delivered, metrics_delivered) = tokio::join!(
+            post(
+                &client,
+                contract.logs.as_ref(),
+                config.logs.as_ref(),
+                payload.logs
+            ),
+            post(
+                &client,
+                contract.metrics.as_ref(),
+                config.metrics.as_ref(),
+                payload.metrics
+            ),
+        );
+        ExportResult {
+            logs_delivered,
+            metrics_delivered,
+        }
+    }
+
+    async fn post(
+        client: &reqwest::Client,
+        route: Option<&TelemetryRoute>,
+        endpoint: Option<&Endpoint>,
+        body: String,
+    ) -> bool {
+        if body.is_empty() {
+            return true;
+        }
+        let (Some(route), Some(endpoint)) = (route, endpoint) else {
+            return false;
+        };
+        let Ok(mut url) = url::Url::parse(&endpoint.base_url) else {
+            return false;
+        };
+        url.set_path(&format!(
+            "{}{}",
+            url.path().trim_end_matches('/'),
+            route.path
+        ));
+        if !route.query.is_empty() {
+            url.query_pairs_mut().extend_pairs(&route.query);
+        }
+        for attempt in 0..2 {
+            let mut request = client
+                .post(url.clone())
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    match route.encoding {
+                        TelemetryEncoding::JsonLines => "application/stream+json",
+                        TelemetryEncoding::PrometheusText => "text/plain; version=0.0.4",
+                    },
+                )
+                .body(body.clone());
+            if let Some(token) = &endpoint.bearer_token {
+                request = request.bearer_auth(token);
+            }
+            let retry = match request.send().await {
+                Ok(response) if response.status().is_success() => return true,
+                Ok(response) => {
+                    response.status().is_server_error()
+                        || matches!(response.status().as_u16(), 408 | 429)
+                }
+                Err(_) => true,
+            };
+            if !retry || attempt == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        false
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn endpoint_policy_rejects_secret_urls_and_non_loopback_plaintext() {
+            for url in [
+                "http://example.test",
+                "http://localhost:8428",
+                "https://user:pass@example.test",
+                "https://example.test?token=secret",
+                "https://example.test#secret",
+                "file:///tmp/export",
+            ] {
+                assert!(
+                    Endpoint {
+                        base_url: url.into(),
+                        bearer_token: None
+                    }
+                    .validate()
+                    .is_err()
+                );
+            }
+            for url in [
+                "http://127.0.0.1:8428",
+                "http://[::1]:8428",
+                "https://example.test/tenant",
+            ] {
+                Endpoint {
+                    base_url: url.into(),
+                    bearer_token: None,
+                }
+                .validate()
+                .unwrap();
+            }
+            assert!(
+                Endpoint {
+                    base_url: "https://example.test".into(),
+                    bearer_token: Some("secret\r\nX-Header: injected".into())
+                }
+                .validate()
+                .is_err()
+            );
+        }
+
+        #[tokio::test]
+        #[cfg(feature = "full")]
+        async fn redirects_do_not_forward_credentials_and_slow_destinations_are_bounded() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let count = Arc::new(AtomicUsize::new(0));
+            let requests = Arc::clone(&count);
+            let app = axum::Router::new().fallback(move |uri: axum::extract::OriginalUri| {
+                let requests = Arc::clone(&requests);
+                async move {
+                    requests.fetch_add(1, Ordering::Relaxed);
+                    if uri.path() == "/slow" {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    (
+                        axum::http::StatusCode::TEMPORARY_REDIRECT,
+                        [("location", "/credential-trap")],
+                    )
+                }
+            });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = Endpoint {
+                base_url: format!("http://{}", listener.local_addr().unwrap()),
+                bearer_token: Some("fixture-not-real".into()),
+            };
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_millis(40))
+                .build()
+                .unwrap();
+            let mut route = TelemetryRoute {
+                encoding: TelemetryEncoding::JsonLines,
+                path: "/redirect".into(),
+                query: Default::default(),
+            };
+            assert!(!post(&client, Some(&route), Some(&endpoint), "{}\n".into()).await);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            route.path = "/slow".into();
+            assert!(
+                !tokio::time::timeout(
+                    Duration::from_secs(1),
+                    post(&client, Some(&route), Some(&endpoint), "{}\n".into())
+                )
+                .await
+                .unwrap()
+            );
+            assert_eq!(count.load(Ordering::Relaxed), 3);
+            server.abort();
+        }
+    }
+}
+
+#[cfg(feature = "machine-host")]
+pub(crate) use machine::{export, prepare};
