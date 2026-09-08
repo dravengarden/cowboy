@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.1.14",
+  "version": "3.1.15",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -42,6 +42,13 @@
       "detail": "GPT-5.6-Sol · Medium reasoning",
       "is_default": true,
       "values": { "model": "gpt-5.6-sol", "reasoning_effort": "medium" }
+    },
+    {
+      "id": "astra-medium",
+      "name": "Astra · Medium",
+      "detail": "GPT-6-Astra · Medium reasoning",
+      "is_default": false,
+      "values": { "model": "gpt-6-astra", "reasoning_effort": "medium" }
     },
     {
       "id": "astra-max",

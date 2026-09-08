@@ -16,6 +16,10 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   wrapper is an environment failure, not a product-code failure.
 
 ## Deploy (read before deploying)
+- User preference: completed product fixes include verification, integration into
+  remote `main`, and production activation by default. Do not stop at local
+  edits or ask again for routine merge/deploy approval. Preserve the component
+  and active-session boundaries below and report actual release receipts.
 - Cowboy application releases use project-owned Nix artifacts rather than a
   full NixOS generation. From a clean committed task worktree, build the
   narrowest affected output: `.#cowboy-web-release`,

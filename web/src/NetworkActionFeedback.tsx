@@ -1,5 +1,4 @@
 import {
-  type MouseEvent,
   type ReactNode,
   useCallback,
   useEffect,
@@ -20,6 +19,7 @@ import {
   NETWORK_PROGRESS_DELAY_MS,
   NETWORK_PROGRESS_MIN_MS,
 } from "./networkActionPolicy";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 export interface NetworkActionState {
   pending: boolean;
@@ -51,43 +51,56 @@ export function useNetworkActionState(): NetworkActionState {
     };
   }, []);
 
-  const run = useCallback(async (action: () => Promise<void> | void): Promise<boolean> => {
-    if (running.current) return false;
-    running.current = true;
-    setPending(true);
-    setProgress(false);
+  const run = useCallback(
+    async (action: () => Promise<void> | void): Promise<boolean> => {
+      if (running.current) return false;
+      running.current = true;
+      setPending(true);
+      setProgress(false);
 
-    let progressAt = 0;
-    const timer = globalThis.setTimeout(() => {
-      progressAt = performance.now();
-      if (mounted.current) setProgress(true);
-    }, NETWORK_PROGRESS_DELAY_MS);
+      let progressAt = 0;
+      const timer = globalThis.setTimeout(() => {
+        progressAt = performance.now();
+        if (mounted.current) setProgress(true);
+      }, NETWORK_PROGRESS_DELAY_MS);
 
-    let succeeded = false;
-    try {
-      await Promise.all([Promise.resolve().then(action), wait(NETWORK_PRESS_MIN_MS)]);
-      succeeded = true;
-    } catch (error) {
-      notify(error instanceof Error ? error.message : "The action could not be completed");
-    } finally {
-      globalThis.clearTimeout(timer);
-      if (progressAt > 0) {
-        const remaining = NETWORK_PROGRESS_MIN_MS - (performance.now() - progressAt);
-        if (remaining > 0) await wait(remaining);
+      let succeeded = false;
+      try {
+        await Promise.all([
+          Promise.resolve().then(action),
+          wait(NETWORK_PRESS_MIN_MS),
+        ]);
+        succeeded = true;
+      } catch (error) {
+        notify(
+          error instanceof Error
+            ? error.message
+            : "The action could not be completed",
+        );
+      } finally {
+        globalThis.clearTimeout(timer);
+        if (progressAt > 0) {
+          const remaining = NETWORK_PROGRESS_MIN_MS -
+            (performance.now() - progressAt);
+          if (remaining > 0) await wait(remaining);
+        }
+        running.current = false;
+        if (mounted.current) {
+          setProgress(false);
+          setPending(false);
+        }
       }
-      running.current = false;
-      if (mounted.current) {
-        setProgress(false);
-        setPending(false);
-      }
-    }
-    return succeeded;
-  }, []);
+      return succeeded;
+    },
+    [],
+  );
 
   return { pending, progress, run };
 }
 
-function ProgressOverlay({ visible, size }: { visible: boolean; size: number }): React.JSX.Element {
+function ProgressOverlay(
+  { visible, size }: { visible: boolean; size: number },
+): React.JSX.Element {
   return (
     <CircularProgress
       aria-hidden
@@ -112,7 +125,14 @@ function ProgressOverlay({ visible, size }: { visible: boolean; size: number }):
 export function DelayedNetworkProgress(
   { size = 18, color = "inherit" }: {
     size?: number;
-    color?: "inherit" | "primary" | "secondary" | "error" | "info" | "success" | "warning";
+    color?:
+      | "inherit"
+      | "primary"
+      | "secondary"
+      | "error"
+      | "info"
+      | "success"
+      | "warning";
   },
 ): React.JSX.Element {
   return (
@@ -121,7 +141,9 @@ export function DelayedNetworkProgress(
       color={color}
       sx={{
         opacity: 0,
-        animation: `cowboy-network-progress-in 160ms ease ${String(NETWORK_PROGRESS_DELAY_MS)}ms forwards`,
+        animation: `cowboy-network-progress-in 160ms ease ${
+          String(NETWORK_PROGRESS_DELAY_MS)
+        }ms forwards`,
         "@keyframes cowboy-network-progress-in": {
           from: { opacity: 0, transform: "scale(0.82)" },
           to: { opacity: 1, transform: "scale(1)" },
@@ -131,12 +153,15 @@ export function DelayedNetworkProgress(
   );
 }
 
-export interface NetworkButtonProps extends Omit<ButtonProps, "onClick" | "action"> {
+export interface NetworkButtonProps
+  extends Omit<ButtonProps, "onClick" | "action"> {
   networkAction: () => Promise<void> | void;
   children: ReactNode;
 }
 
-export function NetworkButton({ networkAction, children, disabled, sx, ...props }: NetworkButtonProps): React.JSX.Element {
+export function NetworkButton(
+  { networkAction, children, disabled, sx, ...props }: NetworkButtonProps,
+): React.JSX.Element {
   const state = useNetworkActionState();
   return (
     <Button
@@ -148,13 +173,21 @@ export function NetworkButton({ networkAction, children, disabled, sx, ...props 
       }}
       sx={{
         position: "relative",
-        transition: "opacity 120ms ease, background-color 120ms ease, color 120ms ease",
+        transition:
+          "opacity 120ms ease, background-color 120ms ease, color 120ms ease",
         ...(state.pending && { opacity: 0.58 }),
         ...(state.progress && { "& .MuiButton-startIcon": { opacity: 0 } }),
         ...sx,
       }}
     >
-      <Box component="span" sx={{ display: "inline-flex", alignItems: "center", opacity: state.progress ? 0 : 1 }}>
+      <Box
+        component="span"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          opacity: state.progress ? 0 : 1,
+        }}
+      >
         {children}
       </Box>
       <ProgressOverlay visible={state.progress} size={18} />
@@ -162,28 +195,51 @@ export function NetworkButton({ networkAction, children, disabled, sx, ...props 
   );
 }
 
-export interface NetworkIconButtonProps extends Omit<IconButtonProps, "onClick" | "action"> {
+export interface NetworkIconButtonProps
+  extends Omit<IconButtonProps, "onClick" | "action"> {
   networkAction: () => Promise<void> | void;
+  /** Commit stationary touch on pointerup when iOS drops the compatibility
+   * click after scroll momentum. Mouse, keyboard, and assistive clicks retain
+   * the native click path. */
+  reliableTouch?: boolean;
 }
 
-export function NetworkIconButton({ networkAction, children, disabled, sx, ...props }: NetworkIconButtonProps): React.JSX.Element {
+export function NetworkIconButton({
+  networkAction,
+  reliableTouch = false,
+  children,
+  disabled,
+  sx,
+  ...props
+}: NetworkIconButtonProps): React.JSX.Element {
   const state = useNetworkActionState();
+  const run = (): void => {
+    if (disabled || state.pending) return;
+    void state.run(networkAction);
+  };
+  const reliableTap = useReliableTouchTap<HTMLButtonElement>(run);
   return (
     <IconButton
       {...props}
       aria-busy={state.pending || undefined}
       disabled={disabled || state.pending}
-      onClick={(_event: MouseEvent<HTMLButtonElement>): void => {
-        void state.run(networkAction);
-      }}
+      onPointerDown={reliableTouch ? reliableTap.onPointerDown : props.onPointerDown}
+      onPointerMove={reliableTouch ? reliableTap.onPointerMove : props.onPointerMove}
+      onPointerUp={reliableTouch ? reliableTap.onPointerUp : props.onPointerUp}
+      onPointerCancel={reliableTouch ? reliableTap.onPointerCancel : props.onPointerCancel}
+      onClick={reliableTouch ? reliableTap.onClick : run}
       sx={{
         position: "relative",
-        transition: "opacity 120ms ease, background-color 120ms ease, color 120ms ease",
+        transition:
+          "opacity 120ms ease, background-color 120ms ease, color 120ms ease",
         ...(state.pending && { opacity: 0.52 }),
         ...sx,
       }}
     >
-      <Box component="span" sx={{ display: "inline-flex", opacity: state.progress ? 0 : 1 }}>
+      <Box
+        component="span"
+        sx={{ display: "inline-flex", opacity: state.progress ? 0 : 1 }}
+      >
         {children}
       </Box>
       <ProgressOverlay visible={state.progress} size={18} />

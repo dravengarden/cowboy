@@ -2344,3 +2344,32 @@ Desktop Vim + IME checks:
     or automatically sending against the cancellation intent.
     This is a delivery-state repair shared by Desktop and Mobile;
     native editor, touch, focus, selection, and IME ownership remain unchanged.
+
+102. **A Mobile Queue/Draft card's primary delivery arrow needs the same
+    stationary-touch fallback as the main Composer Send action.** These cards
+    sit inside a momentum scrollport. iOS WebKit can deliver `pointerup` and omit
+    the following compatibility `click`, leaving an enabled Send-now arrow with
+    no network action or progress feedback. Opt the two pending-row delivery
+    arrows into `NetworkIconButton`'s `useReliableTouchTap` path on Mobile: a
+    stationary touch commits on `pointerup`, its paired click is consumed, and
+    movement remains native scrolling. Keep Desktop mouse, keyboard, and
+    assistive activation on the ordinary click path. Do not add a timeout or
+    enable this behavior for unrelated network controls without checking their
+    focus and layout ownership.
+
+103. **Queue creation acknowledgements are not Send-now acknowledgements.** A
+    queued send has a new operation id but retains the original message cmid.
+    Repeated queue snapshots confirm that original cmid while the source still
+    exists. Do not clear the new send's status or reconcile its transcript bubble
+    from those creation confirmations. Keep the pending transition (including a
+    timeout failure) until delivery settles or the user explicitly returns it.
+    Otherwise the bubble becomes `pending` with no effective failure timer and
+    appears to wait forever even on a healthy LAN.
+
+104. **Agent settings must expose custom acknowledged configuration.** Keep a
+    current-value summary above recommendations and under the folded Customize
+    control. Read labels from live Provider options, preserving unknown values.
+    A pending preset gets an Applying status, not an optimistic selection; only
+    acknowledged options determine the selected recommendation. Default preset
+    describes the recommendation, not the current session. This changes settings
+    presentation only; editor focus, IME, and caret behavior stay untouched.

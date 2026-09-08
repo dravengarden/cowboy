@@ -200,6 +200,20 @@ export const QUEUE_TRANSITION_MUTATORS = new Set([
   "returnQueuedToDraft",
 ]);
 
+/** A queue snapshot acknowledges creation, not a later send of that row.
+ * Keep the send's presentation and timeout until its own transition settles. */
+export function deliveryConfirmations(
+  confirmed: readonly string[],
+  pending: readonly { name: string; args: unknown }[],
+): string[] {
+  const sending = new Set(pending.flatMap((mutation) => {
+    if (mutation.name !== "sendQueued" && mutation.name !== "forceQueued") return [];
+    const cmid = (mutation.args as { row?: QueueItem }).row?.cmid;
+    return cmid === undefined ? [] : [cmid];
+  }));
+  return confirmed.filter((cmid) => !sending.has(cmid));
+}
+
 export function settledTransitionIds<R extends QueueItem>(
   pending: readonly { id: string; name: string; args: unknown }[],
   next: QueueValue<R>,

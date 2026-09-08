@@ -12,6 +12,17 @@ export interface RunConfigPreset {
 
 type DeclaredPreset = ProviderUiManifest["configuration"]["presets"][number];
 
+/** Describe acknowledged values, including custom values outside the presets. */
+export function runConfigSummary(options: readonly ConfigOption[]): string {
+  return options.map((option) => {
+    const value = String(option.currentValue);
+    const label = option.options.find((choice) =>
+      String(choice.value) === value
+    )?.name ?? value;
+    return `${option.name}: ${label}`;
+  }).join(" · ");
+}
+
 function supportsPreset(
   preset: Pick<RunConfigPreset, "values">,
   optionById: ReadonlyMap<string, ConfigOption>,
