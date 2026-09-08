@@ -3,7 +3,7 @@
   "id": "victoria",
   "version": "1.1.0",
   "component_release": "2.9.0",
-  "publisher": "cowboy",
+  "publisher": "cowboy-first-party",
   "kind": "telemetry_backend",
   "entrypoint": "telemetry.json",
   "components": [

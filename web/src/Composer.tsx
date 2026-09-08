@@ -290,6 +290,7 @@ import {
   type RunConfigPreset,
   runConfigPresetChanges,
   runConfigPresets,
+  runConfigSummary,
 } from "./runConfigPresets";
 import {
   usageCacheIntervalLabel,
@@ -5947,6 +5948,7 @@ function PendingRow({
           size="small"
           color="primary"
           aria-label="send draft"
+          reliableTouch={!desktop}
           networkAction={() => activateDraft(sessionId, message.id)}
         >
           <Send fontSize="small" />
@@ -5961,6 +5963,7 @@ function PendingRow({
           size="small"
           color="primary"
           aria-label="send now"
+          reliableTouch={!desktop}
           networkAction={() => requestSendQueued(sessionId, message.id)}
         >
           <Send fontSize="small" />
@@ -6729,7 +6732,7 @@ function RecommendedRunConfigPresetButton({
           </Typography>
           {preset.isDefault && (
             <Chip
-              label="Default"
+              label="Default preset"
               size="small"
               color="primary"
               variant="outlined"
@@ -6755,9 +6758,9 @@ function RecommendedRunConfigPresetButton({
           flexShrink: 0,
         }}
       >
-        {progress && (
+        {progress ? (
           <CircularProgress size={14} thickness={4.5} color="inherit" />
-        )}
+        ) : selected ? <Check sx={{ fontSize: 18 }} /> : null}
       </Box>
     </ButtonBase>
   );
@@ -6836,7 +6839,7 @@ function ComposerSheet({
   const pendingPreset = pendingPresetId === null
     ? undefined
     : recommendedPresets.find((preset) => preset.id === pendingPresetId);
-  const activePreset = pendingPreset ?? authoritativeActivePreset;
+  const currentConfigSummary = runConfigSummary(options);
   const [customizeAgent, setCustomizeAgent] = useState(false);
   const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
   const [workspaceOptionsExpanded, setWorkspaceOptionsExpanded] = useState(
@@ -7024,6 +7027,27 @@ function ComposerSheet({
                 // closes its own menu on pick. The user dismisses the sheet by
                 // tapping outside once they're done.
                 <Stack spacing={1.25} sx={{ mt: 1.25 }}>
+                  <Box
+                    role="status"
+                    sx={{
+                      p: 1.5,
+                      border: 1,
+                      borderColor: "divider",
+                      borderRadius: 1,
+                    }}
+                  >
+                    <Typography variant="caption" color="text.secondary">
+                      Current · {authoritativeActivePreset?.name ?? "Custom"}
+                    </Typography>
+                    <Typography variant="body2" sx={{ mt: 0.5 }}>
+                      {currentConfigSummary}
+                    </Typography>
+                    {pendingPreset && (
+                      <Typography variant="caption" color="text.secondary">
+                        Applying {pendingPreset.name}…
+                      </Typography>
+                    )}
+                  </Box>
                   {recommendedPresets.length > 0 && (
                     <>
                       <Typography
@@ -7047,7 +7071,8 @@ function ComposerSheet({
                           <RecommendedRunConfigPresetButton
                             key={preset.id}
                             preset={preset}
-                            selected={activePreset?.id === preset.id}
+                            selected={authoritativeActivePreset?.id ===
+                              preset.id}
                             disabled={dead || presetAction.pending}
                             pending={pendingPresetId === preset.id}
                             progress={pendingPresetId === preset.id &&
@@ -7088,9 +7113,19 @@ function ComposerSheet({
                           color: "text.secondary",
                         }}
                       >
-                        <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                          Customize
-                        </Typography>
+                        <Box sx={{ minWidth: 0, textAlign: "left", py: 0.75 }}>
+                          <Typography variant="body2" sx={{ fontWeight: 650 }}>
+                            Customize
+                          </Typography>
+                          {!showAgentDetails && (
+                            <Typography
+                              variant="caption"
+                              sx={{ display: "block" }}
+                            >
+                              {currentConfigSummary}
+                            </Typography>
+                          )}
+                        </Box>
                         <ExpandMore
                           fontSize="small"
                           sx={{

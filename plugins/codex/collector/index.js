@@ -1,5 +1,18 @@
 /* Signed Codex account-usage collector. Executes outside Cowboy core. */
 
+export async function* readLines(stream) {
+  let pending = "";
+  for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
+    pending += chunk;
+    let newline;
+    while ((newline = pending.indexOf("\n")) !== -1) {
+      yield pending.slice(0, newline).replace(/\r$/, "");
+      pending = pending.slice(newline + 1);
+    }
+  }
+  if (pending) yield pending;
+}
+
 async function input() {
   const text = await new Response(Deno.stdin.readable).text();
   return text.trim() === "" ? { operation: "collect" } : JSON.parse(text);
@@ -21,9 +34,7 @@ class JsonRpcLines {
   constructor(child) {
     this.child = child;
     this.writer = child.stdin.getWriter();
-    this.lines = child.stdout
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(new TextLineStream())[Symbol.asyncIterator]();
+    this.lines = readLines(child.stdout);
     this.nextId = 1;
   }
 

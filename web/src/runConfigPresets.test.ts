@@ -4,6 +4,7 @@ import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
   runConfigPresetChanges,
+  runConfigSummary,
   supportedRunConfigPresets,
 } from "./runConfigPresets";
 
@@ -40,6 +41,39 @@ const declared: DeclaredPreset[] = [{
   is_default: false,
   values: { model: "model-b", effort: "medium" },
 }];
+
+Deno.test("custom configuration remains visible without a matching preset", () => {
+  const custom = [
+    {
+      ...options[0],
+      name: "Model",
+      options: [{ value: "model-a", name: "Model A" }],
+    },
+    { ...options[1], name: "Reasoning", currentValue: "high" },
+  ];
+  assertEquals(
+    activeRunConfigPreset(supportedRunConfigPresets(declared, options), custom),
+    undefined,
+  );
+  assertEquals(runConfigSummary(custom), "Model: Model A · Reasoning: high");
+});
+
+Deno.test("Codex recommends Astra Medium without changing the default", async () => {
+  const provider = JSON.parse(
+    await Deno.readTextFile(
+      new URL("../../plugins/codex/provider.json", import.meta.url),
+    ),
+  );
+  const presets = provider.configuration_presets as DeclaredPreset[];
+  assertEquals(presets.find((preset) => preset.id === "astra-medium")?.values, {
+    model: "gpt-6-astra",
+    reasoning_effort: "medium",
+  });
+  assertEquals(
+    presets.filter((preset) => preset.is_default).map((preset) => preset.id),
+    ["sol-medium"],
+  );
+});
 
 Deno.test("signed Provider presets project without Provider identity branches", () => {
   const presets = supportedRunConfigPresets(declared, options);

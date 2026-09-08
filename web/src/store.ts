@@ -40,6 +40,7 @@ import {
 import {
   type DraftActivation,
   draftActivationSourceId,
+  deliveryConfirmations,
   emptyQueueValue,
   QUEUE_TRANSITION_MUTATORS,
   queueMutators,
@@ -2234,6 +2235,9 @@ function needsDraftSource(sessionId: string): boolean {
 }
 
 function dispatchQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): void {
+  // Reconnect replay must not restart a timed-out delivery behind the user's
+  // failed bubble. Explicit Retry releases this hold below.
+  if (qStatus.get(m.id) === "failed") return;
   if (m.name !== "activateDraft" || commandForQueueMutation(sessionId, m) === null) {
     transmitQueueMutation(sessionId, m);
     return;
@@ -2533,6 +2537,7 @@ export function retryQueued(sessionId: string, cmid: string): void {
   if (pending !== undefined) {
     c.bump(cmid);
     if (pending.name === "activateDraft") {
+      qStatus.set(cmid, "pending");
       dispatchQueueMutation(sessionId, pending);
       return;
     }
@@ -2699,7 +2704,8 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       finishOrphanedPendingEdit(record, false);
     });
   }
-  for (const cmid of confirmed) {
+  const delivered = deliveryConfirmations(confirmed, store.pending());
+  for (const cmid of delivered) {
     if (qStatus.has(cmid)) {
       clearOptTimers(cmid);
       qStatus.delete(cmid);
@@ -2717,8 +2723,8 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       commandForQueueMutation(sessionId, mutation) !== null
     ) dispatchQueueMutation(sessionId, mutation);
   }
-  if (confirmed.length > 0) {
-    const set = new Set<string | undefined>(confirmed);
+  if (delivered.length > 0) {
+    const set = new Set<string | undefined>(delivered);
     setState({ ...state, optimisticMessages: reconcileOptimistic(state.optimisticMessages, sessionId, set) });
   }
   commitQueue(sessionId);

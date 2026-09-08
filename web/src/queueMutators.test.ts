@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   appendUnique,
+  deliveryConfirmations,
   draftActivationSourceId,
   emptyQueueValue,
   queueMutators,
@@ -11,6 +12,21 @@ import {
 const draft = { id: "d1", text: "parked", cmid: "c-draft" };
 const queued = { id: "q1", text: "next", cmid: "c-queue" };
 const presented = { id: "opt-c-act", text: "parked", cmid: "c-act", origin: "draft" as const };
+
+Deno.test("creation acknowledgements cannot retire an outstanding queued send", () => {
+  for (const name of ["sendQueued", "forceQueued"]) {
+    const pending = [{ id: "send-op", name, args: { id: queued.id, row: queued } }];
+    const base = { ...emptyQueueValue(), queue: [queued] };
+    assertEquals(settledTransitionIds(pending, base), []);
+    assertEquals(deliveryConfirmations([queued.cmid, "other"], pending), ["other"]);
+    // The failed send stays in the transcript while the source remains hidden.
+    const failed = { ...queued, status: "failed" as const };
+    const view = queueMutators.sendQueued(base, { id: queued.id, row: failed });
+    assertEquals(view.queue, []);
+    assertEquals(view.inFlight, [failed]);
+    assertEquals(deliveryConfirmations([queued.cmid], []), [queued.cmid]);
+  }
+});
 
 Deno.test("queue mutators never duplicate a row that is already present", () => {
   const once = appendUnique([draft], draft);

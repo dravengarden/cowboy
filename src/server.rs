@@ -1008,6 +1008,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&machine_control),
     );
     let runtime_router = RuntimeRouter::new();
+    // Usage collectors and authenticated Machine connections must share this
+    // registry; a second instance leaves collectors permanently without routes.
     let machine_snapshots = MachineSnapshots::new(
         store.clone(),
         hub.clone(),
