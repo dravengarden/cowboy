@@ -1,10 +1,14 @@
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
-import { nearestCredit as nearestCodexCredit } from "./codex/collector/index.js";
+import {
+  nearestCredit as nearestCodexCredit,
+  readLines as codexLines,
+} from "./codex/collector/index.js";
 import {
   activePlan,
   credentialFromJson,
   encodeStringField,
   nearestCredit as nearestGrokCredit,
+  readLines as grokLines,
 } from "./grok/collector/index.js";
 
 function equal(actual, expected, message) {
@@ -13,6 +17,29 @@ function equal(actual, expected, message) {
   if (left !== right) {
     throw new Error(`${message}: got ${left}, expected ${right}`);
   }
+}
+
+for (
+  const [provider, readLines] of [["Codex", codexLines], ["Grok", grokLines]]
+) {
+  Deno.test(`${provider} collector reads fragmented UTF-8 JSON RPC without nonstandard stream globals`, async () => {
+    const bytes = new TextEncoder().encode(
+      '{"id":1,"result":"中文"}\r\n{"id":2}\n{"id":3}',
+    );
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+        controller.close();
+      },
+    });
+    const messages = [];
+    for await (const line of readLines(stream)) messages.push(JSON.parse(line));
+    equal(
+      messages,
+      [{ id: 1, result: "中文" }, { id: 2 }, { id: 3 }],
+      "RPC messages",
+    );
+  });
 }
 
 Deno.test("Codex reset selection is deterministic and ignores unavailable credits", () => {
