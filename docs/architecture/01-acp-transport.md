@@ -45,8 +45,8 @@ inside `agent_main()`:
 4. **Run** the connection loop (`run_session`) and **race it against
    `child.wait()`** — if the agent *process exits* before yielding control
    (→ `Crashed`), that's caught here. A still-*alive* agent that simply stops
-   responding mid-turn is caught separately by the turn watchdog (see *Turn
-   liveness* below).
+   responding mid-turn is caught separately by the idle prompt watchdog (see
+   *Turn liveness* below).
 
 ## Capabilities advertised
 
@@ -107,7 +107,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 
 | Command | ACP action |
 |---|---|
-| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; Grok additionally queues a local `_x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered manually (see *Turn liveness*). |
+| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; Grok additionally queues a local `_x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered by the idle prompt watchdog after 15 minutes of no turn progress (see *Turn liveness*). |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
 | `SetConfigOption { config_id, value }` | Gemini's synthesized `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `_x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |
@@ -142,38 +142,42 @@ retired `__cont__` prefix is `cowboy` / `auto-resume`. The UI renders it as a
 resumed-turn note rather than a user bubble; Cowboy no longer creates these
 prompts.
 
-## Turn liveness: manual recovery, no auto-kill
+## Turn liveness: activity-based idle recovery
 
 An agent can stay **alive** yet never return a turn's prompt response — e.g. it
 spawned a shell command that never exits (an unbounded `until …; do sleep; done`
-poll loop) and the CLI blocks at turn-end waiting for that child, or it's just
-slow (a huge context can take minutes to first token, with no streamed output).
+poll loop) and the CLI blocks at turn-end waiting for that child, or a model
+request hangs after the last thought with no further `session/update`.
 `child.wait()` doesn't fire (the process lives), so `prompt().await` keeps
 waiting and the session sits `Busy`.
 
-**cowboy does NOT try to auto-detect this.** On a live agent there is no reliable
-way to tell a slow-but-working turn from a wedged one: idle time and content are
-both guesses, and an earlier idle-timeout watchdog proved the hazard — it
-force-ended a real, actively-generating turn (the cancel yielded in ~11ms, a live
-query) and the cancel-then-drop crashed the connection. Zed, the protocol's
-author, reaches the same conclusion ([zed#52151](https://github.com/zed-industries/zed/issues/52151),
-[#56734](https://github.com/zed-industries/zed/issues/56734)) and also does not
-auto-kill. So the human stays the judge:
+A wall-clock timeout from turn *start* is the hazard: an earlier 5-minute
+watchdog force-ended a real, actively-generating turn (the cancel yielded in
+~11ms) because first token on a huge context can be silent that long, and
+dropping the prompt future crashed the connection. The clock that is safe to
+trust is **last agent-streamed turn progress**:
 
-- **Dead subprocess → automatic.** The one unambiguous signal: `agent_main` races
-  the connection against `child.wait()` (`d6ee0ca`). If the agent *process* exits,
-  that's caught → `Crashed` (queue holds; a resend/open revives). Zero false-pos.
-- **Live-but-silent → manual.** The UI surfaces the silence: after 5 minutes of no
-  timeline activity on a `Busy` turn, a count-up `⏱ 已等待 Nm` badge appears
-  (`web/src/Transcript.tsx`). The user recovers with **Stop** → `AgentCommand::Cancel`
-  → `session/cancel`; the agent yields and the prompt resolves as a clean `Running`
-  (no crash — the future is never dropped out from under a late response).
+- **Dead subprocess → automatic.** `agent_main` races the connection against
+  `child.wait()`. Process exit → `Crashed` (queue holds; a resend/open revives).
+- **Live progress resets the clock.** Every `session/update` except usage /
+  session-info snapshots counts, including Codex `terminal_output_delta` (live
+  broadcast, omitted from the canonical transcript so an unbounded `tail -f`
+  cannot evict history). An in-flight `pending`/`in_progress` tool, or a pending
+  permission, is not a wedge.
+- **15 minutes of true silence → Cancel, then recycle.** The prompt watchdog
+  (`src/acp.rs`) sends `session/cancel` and **keeps awaiting** the prompt future
+  for 60s (agent-acp's cancel floor is ~30s). If the agent still will not yield,
+  it SIGKILLs the session cgroup. The UI also surfaces silence after 5 minutes
+  (`⏱ 已等待 Nm无响应` in `web/src/Transcript.tsx`) so the human can Stop
+  earlier. The badge must not appear while a tool is open or terminal output is
+  still arriving — last-item size alone would lie, because those deltas never
+  become a render row.
 - **Subtree containment stays.** Each agent still runs in its own cgroup
   (`Delegate=yes`, fail-open); teardown `cgroup.kill`s the whole subtree so a
   leaked, `setsid`-detached poll loop can't outlive the agent.
 
-The real upstream fix lives in the agent: don't write unbounded poll loops (use a
-bounded `timeout` / max-iterations) so turns close on their own.
+The real upstream fix still lives in the agent: don't write unbounded poll loops
+(use a bounded `timeout` / max-iterations) so turns close on their own.
 
 ## Scheduled wakeups (`ScheduleWakeup`)
 

@@ -70,7 +70,12 @@ import { providerPresentation } from "./providerPresentation";
 import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { ProviderThoughtSteps } from "./ProviderTranscript";
-import { waitingActivityLabel } from "./turnWaiting";
+import {
+  hasOpenTool,
+  quietMinutes,
+  shouldShowQuietBadge,
+  waitingActivityLabel,
+} from "./turnWaiting";
 import {
   conversationClearEnterMs,
   conversationClearExitMs,
@@ -121,6 +126,7 @@ import {
   retrySessionHydration,
   returnFailedMessage,
   send,
+  sessionTurnActivityAt,
   useConnected,
   useStoreSelector,
 } from "./store";
@@ -3155,12 +3161,11 @@ function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
   el.scrollTop += delta;
 }
 
-/** After a Busy turn has been quiet (no timeline growth) this many minutes, show
- *  a count-up "still waiting" badge. cowboy deliberately does NOT auto-kill a
- *  silent turn — idle time can't distinguish a slow turn from a wedged one (Zed,
- *  the ACP author, reaches the same conclusion), so the human stays the judge:
- *  the badge makes the silence visible and the user recovers manually via Stop. */
-const QUIET_BADGE_MIN = 5;
+/** After a Busy turn has been quiet (no timeline growth, no live terminal
+ *  output, no open tool) this many minutes, show a count-up "still waiting"
+ *  badge. A live exec that only streams Codex `terminal_output_delta` is still
+ *  working — those frames never become a render item, so last-item size alone
+ *  would lie. cowboy still does not auto-kill a silent turn from the UI. */
 
 /** Activity signature without serializing tool payloads. A screenshot-bearing
  * tool result can be tens of megabytes; JSON.stringify here used to block the
@@ -3194,23 +3199,38 @@ function itemProgressSignature(
   }
 }
 
-/** Whole minutes since `signature` (last-item size + count) last changed — i.e.
- *  since the last streamed activity. Refs are updated during render (derived from
- *  the prop) so there's no frame lag; a coarse 30s tick re-reads the clock. This
- *  is a human-facing minute counter, not precise timing, and never touches state. */
-function useQuietMinutes(signature: string): number {
+/** Whole minutes of silence on the current Busy turn. Last-item growth, live
+ *  terminal deltas (even when dropped from the transcript), and a newly
+ *  started turn all reset the clock. An in-flight tool is not silence. */
+function useQuietMinutes(
+  sessionId: string,
+  signature: string,
+  working: boolean,
+  openTool: boolean,
+): number {
   const changedAt = useRef(Date.now());
   const prevSig = useRef(signature);
+  const prevWorking = useRef(working);
   const [, tick] = useState(0);
+  if (working && !prevWorking.current) {
+    changedAt.current = Date.now();
+    prevSig.current = signature;
+  }
+  prevWorking.current = working;
   if (signature !== prevSig.current) {
     prevSig.current = signature;
     changedAt.current = Date.now();
+  }
+  const liveAt = sessionTurnActivityAt(sessionId);
+  if (liveAt !== undefined && liveAt > changedAt.current) {
+    changedAt.current = liveAt;
   }
   useEffect(() => {
     const id = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, []);
-  return Math.max(0, Math.floor((Date.now() - changedAt.current) / 60_000));
+  if (!working || openTool) return 0;
+  return quietMinutes(Date.now(), changedAt.current);
 }
 
 export function Transcript({
@@ -3494,7 +3514,8 @@ export function Transcript({
   // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
   // only the last item.
   const lastSig = itemProgressSignature(lastItem, items.length);
-  const quietMin = useQuietMinutes(lastSig);
+  const inFlightTool = hasOpenTool(items);
+  const quietMin = useQuietMinutes(sessionId, lastSig, working, inFlightTool);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
@@ -5347,12 +5368,11 @@ export function Transcript({
                 </Box>
               )}
               {
-                /* Still-waiting row: after QUIET_BADGE_MIN of no timeline activity on a
-                working turn, surface the silence (count-up) + a REAL red Stop button.
-                cowboy no longer auto-kills a silent turn (see acp.rs) — the human
-                decides, so the recovery action is a first-class control here. */
+                /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
+                (timeline growth, live terminal output, or an open tool) on a
+                working turn, surface the silence + a REAL red Stop button. */
               }
-              {working && quietMin >= QUIET_BADGE_MIN && (
+              {shouldShowQuietBadge(working, quietMin, inFlightTool) && (
                 <Box
                   sx={{
                     py: 0.625,

@@ -67,6 +67,7 @@ import { optimisticQuestionKey } from "./explore/optimisticPages";
 import { notifyHaptic } from "./haptic";
 import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
 import { ClientOperations } from "./otelOperations.ts";
+import { isTurnActivityUpdate } from "./turnWaiting.ts";
 
 const telemetryOperations = new ClientOperations(startClientSpan, reportClientDuration);
 globalThis.addEventListener?.("cowboy:product-sign-out", () => telemetryOperations.clear());
@@ -265,6 +266,19 @@ const configOptionsRevisions = new Map<string, number>();
 // results and inline images can be megabytes). Keep only a small MRU working
 // set; session metadata, queues, drafts, and persisted history remain intact.
 let transcriptSessionCache: string[] = [];
+// Live turn liveness, including frames that are dropped from the canonical
+// transcript (Codex `terminal_output_delta`). Module-level so a flood of
+// exec output does not become extra React state; Transcript's quiet ticker
+// reads it on its existing 30s tick and on each store notify.
+const sessionTurnActivityAtMs = new Map<string, number>();
+
+export function sessionTurnActivityAt(sessionId: string): number | undefined {
+  return sessionTurnActivityAtMs.get(sessionId);
+}
+
+function markSessionTurnActivity(sessionId: string, at = Date.now()): void {
+  sessionTurnActivityAtMs.set(sessionId, at);
+}
 
 function transcriptIsCached(sessionId: string): boolean {
   return transcriptSessionCache.includes(sessionId);
@@ -1201,6 +1215,11 @@ function handle(msg: Outbound): void {
       if (env.kind === "update") {
         if (env.update.sessionUpdate === "user_message_chunk") telemetryOperations.userEcho(env.session_id, env.cmid);
         if (env.update.sessionUpdate === "agent_message_chunk") telemetryOperations.firstOutput(env.session_id);
+        if (isTurnActivityUpdate(env.update.sessionUpdate)) {
+          markSessionTurnActivity(env.session_id);
+        }
+      } else if (env.kind === "permission_request") {
+        markSessionTurnActivity(env.session_id);
       }
       const clearsContext = env.kind === "update" &&
         env.update.sessionUpdate === "context_cleared";

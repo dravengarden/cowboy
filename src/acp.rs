@@ -20,13 +20,13 @@
 #![warn(clippy::pedantic)]
 
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // ACP's stable wire schema lives under `schema::v1::`; SDK major versions do
 // not change that protocol version. `ProtocolVersion` stays at the
@@ -71,6 +71,17 @@ const GROK_SESSION_MODE_CONFIG_ID: &str = "session_mode";
 const GROK_PERMISSION_CONFIG_ID: &str = "permission_mode";
 const GROK_PERMISSION_NOTIFICATION: &str = "_x.ai/yolo_mode_changed";
 const GROK_SESSION_INFO_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the prompt watchdog re-checks a `Busy` turn for a wedge.
+const WATCHDOG_TICK: Duration = Duration::from_secs(15);
+/// No agent-streamed turn progress for this long, with no open tool and no
+/// pending permission, is a wedge. 15 minutes is three times the old 5-minute
+/// first-token window that false-ended a live query; live Codex exec output
+/// and in-flight tools reset the clock, so a generating turn is not charged.
+const WATCHDOG_IDLE: Duration = Duration::from_mins(15);
+/// After sending Cancel, keep awaiting the prompt future this long before
+/// SIGKILL-ing the agent cgroup. Must exceed agent-acp's own cancel floor
+/// (~30s). Dropping the future earlier crashed the connection.
+const WATCHDOG_CANCEL_GRACE: Duration = Duration::from_mins(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GrokPermissionMode {
@@ -980,10 +991,11 @@ mod startup_mode_tests {
         GrokSessionInfoResponse, ResumeMethod, StartupPhase, StartupTimeout,
         codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
-        is_empty_stream_message_update, load_session_request, new_session_request,
-        permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
-        resume_session_request, run_serial_config_queue, select_resume_method,
-        session_config_value, startup_full_access_mode,
+        is_empty_stream_message_update, is_turn_progress_update, load_session_request,
+        new_session_request, note_tool_liveness, permission_auto_approve_enabled,
+        preferred_allow_option, projected_auth_error, resume_session_request,
+        run_serial_config_queue, select_resume_method, session_config_value,
+        startup_full_access_mode,
     };
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
@@ -1586,6 +1598,70 @@ mod startup_mode_tests {
     }
 
     #[test]
+    fn usage_snapshots_are_not_turn_progress() {
+        assert!(!is_turn_progress_update(&serde_json::json!({
+            "sessionUpdate": "usage_update",
+            "used": 12,
+            "size": 200_000
+        })));
+        assert!(!is_turn_progress_update(&serde_json::json!({
+            "sessionUpdate": "session_info_update"
+        })));
+        assert!(is_turn_progress_update(&serde_json::json!({
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "Checking release docs"}
+        })));
+        assert!(is_turn_progress_update(&serde_json::json!({
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "exec-1",
+            "_meta": {
+                "terminal_output_delta": {
+                    "terminal_id": "exec-1",
+                    "data": "compiling...\n"
+                }
+            }
+        })));
+    }
+
+    #[test]
+    fn open_tools_ignore_completed_calls_and_keep_in_flight_exec() {
+        let mut open = std::collections::HashSet::new();
+        note_tool_liveness(
+            &mut open,
+            &serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "exec-1",
+                "status": "in_progress",
+                "title": "just check"
+            }),
+        );
+        assert!(open.contains("exec-1"));
+        note_tool_liveness(
+            &mut open,
+            &serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "exec-1",
+                "_meta": {
+                    "terminal_output_delta": {
+                        "terminal_id": "exec-1",
+                        "data": "running\n"
+                    }
+                }
+            }),
+        );
+        assert!(open.contains("exec-1"));
+        note_tool_liveness(
+            &mut open,
+            &serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "exec-1",
+                "status": "completed"
+            }),
+        );
+        assert!(open.is_empty());
+    }
+
+    #[test]
     fn prompt_retry_observation_is_isolated_per_turn() {
         let first = ActivePrompt::new(true);
         let second = ActivePrompt::new(true);
@@ -1848,6 +1924,16 @@ struct ClientState {
     /// any agent that ACP-accepts a prompt by emitting `user_message_chunk`)
     /// would otherwise persist a second identical user bubble.
     last_echoed_user_contents: Mutex<Vec<serde_json::Value>>,
+    /// Wall-clock of the last agent-streamed turn progress (not usage
+    /// snapshots). The prompt watchdog uses this, plus [`Self::open_tools`],
+    /// to tell a slow first token from a wedged `session/prompt`.
+    last_progress: Mutex<Instant>,
+    /// Tool ids from the current prompt that are still `pending`/`in_progress`.
+    /// A long silent build is not a wedge while one of these is open.
+    open_tools: Mutex<HashSet<String>>,
+    /// This agent's containment cgroup, or None when the host can't contain
+    /// it. A watchdog hard-recycle SIGKILLs the whole subtree.
+    cgroup: Option<PathBuf>,
 }
 
 /// Retry and completion state belongs to one serialized prompt. Keeping it
@@ -2106,6 +2192,9 @@ async fn agent_main(
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
         suppress_updates: AtomicBool::new(false),
         last_echoed_user_contents: Mutex::new(Vec::new()),
+        last_progress: Mutex::new(Instant::now()),
+        open_tools: Mutex::new(HashSet::new()),
+        cgroup: agent_cgroup.clone(),
     });
 
     let notif_state = state.clone();
@@ -2297,6 +2386,134 @@ async fn agent_main(
 /// Usage is kept as ephemeral session metadata. Every remaining variant is
 /// passed through as serialized JSON (design §5), so the UI renders message /
 /// thought chunks, tool calls, plans, and modes without per-variant re-modelling.
+fn is_turn_progress_update(update: &serde_json::Value) -> bool {
+    match update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("usage_update" | "session_info_update") => false,
+        Some(_) | None => true,
+    }
+}
+
+fn tool_call_id(update: &serde_json::Value) -> Option<&str> {
+    update
+        .get("toolCallId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+}
+
+fn tool_status(update: &serde_json::Value) -> &str {
+    update
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("in_progress")
+}
+
+fn note_tool_liveness(open_tools: &mut HashSet<String>, update: &serde_json::Value) {
+    let Some(kind) = update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return;
+    };
+    if !matches!(kind, "tool_call" | "tool_call_update") {
+        return;
+    }
+    let Some(id) = tool_call_id(update) else {
+        return;
+    };
+    if matches!(tool_status(update), "pending" | "in_progress") {
+        open_tools.insert(id.to_owned());
+    } else {
+        open_tools.remove(id);
+    }
+}
+
+fn note_turn_progress(state: &ClientState, update: &serde_json::Value) {
+    if !is_turn_progress_update(update) {
+        return;
+    }
+    *state.last_progress.lock() = Instant::now();
+    note_tool_liveness(&mut state.open_tools.lock(), update);
+}
+
+struct PromptWait<R> {
+    response: R,
+    cancelled: bool,
+    recycled: bool,
+}
+
+fn turn_appears_stuck(state: &ClientState) -> bool {
+    state.pending.lock().is_empty()
+        && state.open_tools.lock().is_empty()
+        && state.last_progress.lock().elapsed() >= WATCHDOG_IDLE
+}
+
+async fn await_prompt_with_idle_watchdog<R>(
+    prompt: impl Future<Output = R>,
+    cx: &ConnectionTo<Agent>,
+    acp_id: &SessionId,
+    state: &ClientState,
+    cancellation: &mut watch::Receiver<u64>,
+    cancellation_generation: u64,
+) -> PromptWait<R> {
+    tokio::pin!(prompt);
+    let mut cancel_deadline: Option<Instant> = None;
+    let mut cancelled = *cancellation.borrow_and_update() != cancellation_generation;
+    let mut recycled = false;
+    if cancelled {
+        let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+    }
+    loop {
+        let wait = match cancel_deadline {
+            Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+            None => WATCHDOG_TICK,
+        };
+        tokio::select! {
+            biased;
+            response = &mut prompt => {
+                return PromptWait { response, cancelled, recycled };
+            }
+            changed = cancellation.changed() => {
+                if changed.is_ok()
+                    && *cancellation.borrow_and_update() != cancellation_generation
+                {
+                    cancelled = true;
+                    let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+                }
+            }
+            () = tokio::time::sleep(wait) => {
+                if cancel_deadline.is_some() {
+                    if let Some(dir) = &state.cgroup {
+                        tracing::warn!(
+                            session = %state.session_id,
+                            "prompt watchdog: agent will not yield to cancel — recycling"
+                        );
+                        cgroup::kill_and_remove(dir);
+                    } else {
+                        tracing::warn!(
+                            session = %state.session_id,
+                            "prompt watchdog: agent wedged and uncontained — waiting for prompt to fail"
+                        );
+                    }
+                    recycled = true;
+                    cancel_deadline = None;
+                } else if !cancelled && turn_appears_stuck(state) {
+                    tracing::warn!(
+                        session = %state.session_id,
+                        idle_seconds = WATCHDOG_IDLE.as_secs(),
+                        "prompt watchdog: idle turn — cancelling, awaiting grace"
+                    );
+                    cancelled = true;
+                    let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+                    cancel_deadline = Some(Instant::now() + WATCHDOG_CANCEL_GRACE);
+                }
+            }
+        }
+    }
+}
+
 fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
     // During a `session/load` resume the agent replays prior turns; drop them
     // — cowboy already has this history persisted (see field docs).
@@ -2372,6 +2589,7 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     ) {
         return;
     }
+    note_turn_progress(state, &update);
     state.sink.push(&state.session_id, Event::Update { update });
 }
 
@@ -2865,6 +3083,9 @@ async fn run_session(
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
                     let mut retries = 0;
                     let mut cancelled_during_retry = false;
+                    let mut recycled_by_watchdog = false;
+                    *state.last_progress.lock() = Instant::now();
+                    state.open_tools.lock().clear();
                     sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
                         let request =
@@ -2879,9 +3100,19 @@ async fn run_session(
                             let _ = request.cancel();
                             let _ = cx.send_notification(CancelNotification::new(acp.clone()));
                         }
-                        let response = request.block_task().await;
-                        if *cancellation.borrow_and_update() != cancellation_generation {
-                            cancelled_during_retry = true;
+                        let waited = await_prompt_with_idle_watchdog(
+                            request.block_task(),
+                            &cx,
+                            &acp,
+                            &state,
+                            &mut cancellation,
+                            cancellation_generation,
+                        )
+                        .await;
+                        let response = waited.response;
+                        cancelled_during_retry |= waited.cancelled;
+                        recycled_by_watchdog |= waited.recycled;
+                        if recycled_by_watchdog || cancelled_during_retry {
                             break response;
                         }
                         let Err(error) = &response else {
@@ -2927,7 +3158,7 @@ async fn run_session(
                         }
                     };
                     state.clear_prompt(&prompt);
-                    if cancelled_during_retry {
+                    if cancelled_during_retry && !recycled_by_watchdog {
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {
@@ -2940,6 +3171,32 @@ async fn run_session(
                             },
                         );
                         sink.set_status(&sid, Status::Running, None);
+                        return Ok(());
+                    }
+                    if recycled_by_watchdog {
+                        let detail = match response {
+                            Ok(r) => format!("watchdog recycled after {:?}", r.stop_reason),
+                            Err(e) => projected_auth_error(
+                                &provider,
+                                service_auth_projected,
+                                false,
+                                e,
+                            )
+                            .to_string(),
+                        };
+                        prompt.pending_empty_stream_update.lock().take();
+                        if let Some(tx) = completion {
+                            prompt.capture.lock().take();
+                            let _ = tx.send(Err(detail.clone()));
+                        }
+                        sink.prompt_completed(&sid, cmid.as_deref(), "Error");
+                        sink.push(
+                            &sid,
+                            Event::TurnEnd {
+                                stop_reason: format!("error: {detail}"),
+                            },
+                        );
+                        sink.set_status(&sid, Status::Crashed, Some(detail));
                         return Ok(());
                     }
                     match response {
@@ -3007,14 +3264,13 @@ async fn run_session(
                             }
                             // Every other prompt failure can include an agent/connection
                             // failure, including the subprocess dying mid-turn (surfaced by
-                            // agent_main's child.wait() race). Mark those Crashed so a
-                            // resend/open replaces the dead worker.
-                            //
-                            // We deliberately do NOT auto-detect a live-but-silent wedge: idle
-                            // time can't tell a slow turn from a stuck one (Zed, the ACP author,
-                            // reaches the same conclusion). The UI surfaces silence as a
-                            // "waiting Xm" indicator and the user recovers MANUALLY via Stop
-                            // (→ Cancel → the agent yields here as an Ok). No auto-kill.
+                            // agent_main's child.wait() race) and a watchdog recycle of a
+                            // live-but-silent wedge. Mark those Crashed so a resend/open
+                            // replaces the dead worker. The idle watchdog only fires after
+                            // 15 minutes with no turn progress, no open tool, and no
+                            // pending permission — and it Cancels first, keeping the
+                            // prompt future alive so a late response cannot crash the
+                            // connection.
                             sink.prompt_completed(&sid, cmid.as_deref(), "Error");
                             sink.push(
                                 &sid,
