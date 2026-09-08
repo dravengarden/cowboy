@@ -3,10 +3,11 @@
 Implementation commit `9467ee354e89e49708e28f86761485b0e4c24ae6` is published on
 remote main. It integrates the latest Agent settings/usage fixes without
 rewriting already published Plugin identities. This record is a documentation
-descendant; all immutable application artifacts below use that implementation
-commit, with `dirty: false` source receipts.
+descendant; the initial immutable application artifacts below use that
+implementation commit, with `dirty: false` source receipts. The later
+Controller-only Catalog reload is recorded separately below.
 
-## Production components
+## Initial production components
 
 | Hawk component | Immutable release                                                       | Successful transaction             |
 | -------------- | ----------------------------------------------------------------------- | ---------------------------------- |
@@ -61,14 +62,36 @@ exact signed package then passed the same three-reader check and was published.
 All 26 distinct package/runtime URLs passed actual download, SHA-256,
 immutable-cache, ETag and byte-length checks.
 
-**Remaining publication acceptance:** the authenticated Catalog refresh and
-primary `/api/plugins` projection have not been verified. No existing Admin
-session is available to this task, and the release workflow forbids creating or
-refreshing Service login merely for acceptance. The user was asked to use their
-existing session at `/admin/releases` and click **Refresh catalog**. In
-particular, Victoria was published after Controller startup and needs this
-refresh before claiming live Catalog availability. Filesystem publication and
-public download verification are not substituted for that gate.
+**Catalog reload completed:** the user requested a Controller update instead of
+a manual Admin action. Startup reloads the signed Catalog through the same
+reader used by the read-only preflight. No Admin login, credential creation or
+authorization bypass is needed for this machine-owned deployment workflow.
+
+The clean documentation descendant `1d46db8affa1f8c6d55c0f51d29b3a65969fb6f3`
+built `/nix/store/z5zs85n13irchglxsr4mmvq4gc1ny7cf-cowboy-controller-release`.
+It resolves to the exact same application binary as the initial release:
+`/nix/store/dcfpcrkssrdw2ry79alc682hq20bnhrm-cowboy-0.1.0/bin/cowboy`. The owned
+Controller-only transaction `1788864676531607367-1d46db8affa1` succeeded at
+`2026-09-08T10:51:44.265039534Z`, after Victoria's publication. Its rollback
+predecessor is the initial telemetry Controller, not the pre-telemetry reader.
+
+Before activation, both actual readers accepted all eight exact published
+identities and the production Host/auth policy. Victoria 1.1.0 was selected as
+its Catalog default. All 148 public Catalog input/key files had identical hashes
+before and after activation. The new Controller PID is 3463437; Machine PID
+3336063, current worker PID 3346091 and the Web symlink stayed unchanged. Public
+health, all three Machine connections, the Web version and exact SPA/SW bytes
+passed again. There is no remaining manual Admin action for this requested
+update.
+
+This is restart-based acceptance, not a claimed authenticated HTTP refresh or
+primary `/api/plugins` request. No Plugin was installed or upgraded and Victoria
+export remains disabled. Evidence is retained under
+`dist/provider-runtime-cache/catalog-reload-20260908/` in `live-readers.json`,
+`before.json`, `after.json` and `verified.json`. The unsuccessful unpublished-
+candidate fixture invocation is retained separately: it inserted duplicate
+copies of already published packages into its temporary Catalog; no live Catalog
+duplication or mutation occurred.
 
 ## Telemetry behavior and evidence
 
