@@ -325,6 +325,15 @@ impl Supervisor {
     /// If the session is unknown to the Hub, its provider is no longer
     /// registered, or the agent thread cannot be spawned.
     pub fn send(&self, session_id: &str, command: AgentCommand) -> Result<(), String> {
+        self.send_traced(session_id, command, None)
+    }
+
+    pub(crate) fn send_traced(
+        &self,
+        session_id: &str,
+        command: AgentCommand,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
+    ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
@@ -342,7 +351,7 @@ impl Supervisor {
                     .map(|block| serde_json::to_value(block).unwrap_or(serde_json::Value::Null))
                     .collect();
                 runtime.ensure(self.start_session(session_id)?);
-                runtime.prompt(session_id, content, cmid);
+                runtime.prompt_traced(session_id, content, cmid, trace);
             }
             AgentCommand::Cancel => runtime.cancel(session_id),
             AgentCommand::Permission {

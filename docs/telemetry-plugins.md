@@ -18,6 +18,14 @@ Existing process `tracing` output remains on stderr/journald and
 the Controller's Prometheus `/metrics` scrape remains available. Neither raw
 agent stdout, prompts, nor conversation content is automatically exported.
 
+Sampled client command traces now continue across owned Controller, Machine
+and worker boundaries. The Controller converts bounded, authenticated runtime
+diagnostics to standard OTLP spans through the same local-file/optional-Plugin
+pipeline. No direct worker export, Collector service, Provider instrumentation
+or additional Plugin capability is introduced. The exact timing, privacy,
+replay and capacity contract is in
+[owned runtime trace boundaries](client-opentelemetry.md#owned-runtime-trace-boundaries).
+
 The default backend is a private, bounded, rotating JSON-lines file directory
 under `/tmp`. Rotation must cap both segment size and retained segment count,
 reject symlinks and competing writers, and preserve complete UTF-8 records.

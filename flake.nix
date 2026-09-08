@@ -125,6 +125,7 @@
           ./src/provider_usage_spool.rs
           ./src/provider_catalog.rs
           ./src/runtime_wire.rs
+          ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
           ./src/workspace_roots.rs
@@ -173,7 +174,9 @@
         ./src/provider_behavior.rs
         ./src/provider_catalog.rs
         ./src/runtime_wire.rs
+        ./src/runtime_trace.rs
         ./src/worker.rs
+        ./src/worker_telemetry.rs
         ./src/bin/cowboy-acp-worker.rs
       ] ++ plugin-contract-files ++ [
         (pkgs.lib.fileset.fileFilter (file: file.name == "host.json") ./plugins)

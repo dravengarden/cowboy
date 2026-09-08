@@ -98,6 +98,7 @@ struct Shared {
     desired_generation: String,
     desired_worker_command: Option<String>,
     provider_auth: Option<Arc<crate::provider_service::ProviderAuthService>>,
+    telemetry: Mutex<Option<(String, crate::observability::Observability)>>,
 }
 
 pub struct RemoteRuntime {
@@ -201,6 +202,7 @@ impl RemoteRuntime {
                 desired_generation,
                 desired_worker_command,
                 provider_auth,
+                telemetry: Mutex::new(None),
             }),
             notify_rx: Mutex::new(Some(notify_rx)),
         })
@@ -233,6 +235,13 @@ impl RemoteRuntime {
     #[cfg(test)]
     pub(crate) fn connect_for_test(&self) {
         self.shared.connected.store(true, Ordering::Release);
+    }
+
+    #[cfg(all(test, feature = "machine-host"))]
+    pub(crate) async fn project_trace_fixture(&self, frame: Frame) {
+        handle_frame(&self.shared, frame, &mut tokio::io::sink())
+            .await
+            .unwrap();
     }
 
     /// Start the reconnecting I/O pump after Hub restore and all side-effect
@@ -330,11 +339,30 @@ impl RemoteRuntime {
         queue_persisted_config_for_session(&self.shared, &session_id, false);
     }
 
+    #[cfg(test)]
     pub fn prompt(
         &self,
         session_id: &str,
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
+    ) -> String {
+        self.prompt_traced(session_id, content, cmid, None)
+    }
+
+    pub(crate) fn attach_telemetry(
+        &self,
+        machine: String,
+        telemetry: crate::observability::Observability,
+    ) {
+        *self.shared.telemetry.lock() = Some((machine, telemetry));
+    }
+
+    pub(crate) fn prompt_traced(
+        &self,
+        session_id: &str,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> String {
         let command_id = self.next_id("cmd");
         let turn_id = self.next_turn_id();
@@ -346,6 +374,7 @@ impl RemoteRuntime {
                 turn_id,
                 content,
                 cmid,
+                trace,
             },
         );
         command_id
@@ -945,6 +974,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
             worker_epoch,
             runtime_seq,
             event,
+            diagnostics,
         } => {
             let key = (session_id.clone(), worker_epoch.clone());
             let previous = shared.highwaters.lock().get(&key).copied();
@@ -978,6 +1008,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
                         "ignoring stale idle status while a newer turn is active"
                     );
                 } else if !resetting {
+                    if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
+                        telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
+                    }
                     let auto_permission = codex_full_access_permission(shared, &session_id, &event);
                     let is_config_options = matches!(&event, RuntimeEvent::ConfigOptions { .. });
                     update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
@@ -1035,6 +1068,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin>(
         } => {
             let command = shared.pending.lock().remove(&command_id);
             shared.sent.lock().remove(&command_id);
+            if let Some(CoreCommand::Prompt {
+                trace: Some(trace), ..
+            }) = &command
+                && let Some((_, telemetry)) = shared.telemetry.lock().as_ref()
+            {
+                telemetry.finish_delivery_trace(trace, accepted);
+            }
             let reset_stop = matches!(
                 &command,
                 Some(CoreCommand::StopSession { command_id, .. })
@@ -2209,6 +2249,7 @@ mod tests {
             command_id: "reset-1".to_owned(),
         };
         let prompt = CoreCommand::Prompt {
+            trace: None,
             session_id: "s".to_owned(),
             command_id: "prompt-1".to_owned(),
             turn_id: "turn-1".to_owned(),
@@ -2882,6 +2923,7 @@ mod tests {
             "s",
             Some(CoreCommand::Prompt {
                 session_id: "s".to_owned(),
+                trace: None,
                 command_id: "c".to_owned(),
                 turn_id: "t".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "keep me"})],
@@ -2930,6 +2972,7 @@ mod tests {
             Frame::WorkerEvent {
                 session_id: "s".to_owned(),
                 worker_epoch: "old-worker".to_owned(),
+                diagnostics: Vec::new(),
                 runtime_seq: 1,
                 event: RuntimeEvent::Status {
                     state: WorkerState::Busy,
@@ -3061,6 +3104,7 @@ mod tests {
             CoreCommand::Prompt {
                 session_id: "s".to_owned(),
                 command_id: "prompt-in-transit".to_owned(),
+                trace: None,
                 turn_id: "turn-in-transit".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "first"})],
                 cmid: None,
@@ -3164,6 +3208,7 @@ mod tests {
             Frame::WorkerEvent {
                 session_id: "s".to_owned(),
                 worker_epoch: "epoch-1".to_owned(),
+                diagnostics: Vec::new(),
                 runtime_seq: 1,
                 event: RuntimeEvent::Ready {
                     agent_session_id: Some("agent-1".to_owned()),
@@ -3323,6 +3368,7 @@ mod tests {
                     worker_epoch: epoch.clone(),
                     runtime_seq,
                     event,
+                    diagnostics: Vec::new(),
                 },
                 &mut tokio::io::sink(),
             )
@@ -3363,6 +3409,7 @@ mod tests {
                     worker_epoch: epoch.clone(),
                     runtime_seq,
                     event,
+                    diagnostics: Vec::new(),
                 },
                 &mut tokio::io::sink(),
             )

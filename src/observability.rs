@@ -228,6 +228,7 @@ pub struct Observability {
     tx: mpsc::Sender<PendingBatch>,
     health: Arc<ObservabilityHealth>,
     admission: Arc<Mutex<Admission>>,
+    runtime: Arc<Mutex<crate::runtime_telemetry::RuntimeTelemetry>>,
     shutdown: watch::Sender<bool>,
     jobs: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
@@ -272,6 +273,7 @@ impl Observability {
             tx,
             health,
             admission: Arc::default(),
+            runtime: Arc::default(),
             shutdown,
             jobs: Arc::new(Mutex::new(jobs)),
         }
@@ -361,7 +363,7 @@ impl Observability {
         self.admit_otlp(principal, signal, batch_id, body, request)
     }
 
-    pub(crate) fn record_command_trace(&self, principal: &str, text: &str, start: u64) {
+    pub(crate) fn begin_command_trace(text: &str) -> Option<crate::runtime_trace::SpanTimer> {
         // Deserialize only propagation metadata, never copy a prompt/content
         // object into the telemetry representation.
         #[derive(Deserialize)]
@@ -369,22 +371,100 @@ impl Observability {
             traceparent: Option<String>,
         }
         if !text.contains("\"traceparent\"") {
-            return;
+            return None;
         }
-        let Some(parent) = serde_json::from_str::<Carrier>(text)
+        let parent = serde_json::from_str::<Carrier>(text)
             .ok()
-            .and_then(|v| v.traceparent)
-        else {
-            return;
-        };
-        let Some(request) = crate::otlp::command_span(principal, &parent, start) else {
-            return;
-        };
+            .and_then(|v| v.traceparent)?;
+        let context = crate::runtime_trace::TraceContext::from_browser(&parent)?;
+        crate::runtime_trace::SpanTimer::start(
+            &context,
+            crate::runtime_trace::Stage::ControllerDispatch,
+        )
+    }
+
+    pub(crate) fn finish_command_trace(
+        &self,
+        principal: &str,
+        span: crate::runtime_trace::SpanTimer,
+        accepted: bool,
+    ) {
+        if let Some(record) = span.finish(if accepted {
+            crate::runtime_trace::Outcome::Ok
+        } else {
+            crate::runtime_trace::Outcome::Error
+        }) {
+            self.record_span(&crate::runtime_telemetry::owner_hash(principal), &record);
+        }
+    }
+
+    pub(crate) fn bind_runtime_trace(
+        &self,
+        principal: &str,
+        machine: &str,
+        session: &str,
+        cmid: &str,
+        span: &crate::runtime_trace::SpanTimer,
+    ) {
+        self.runtime
+            .lock()
+            .bind(principal, machine, session, cmid, &span.record.context);
+    }
+
+    pub(crate) fn dispatch_trace(
+        &self,
+        session: &str,
+        cmid: Option<&str>,
+    ) -> Option<crate::runtime_trace::TraceCarrier> {
+        let (owner, queue, carrier) = self.runtime.lock().dispatch(session, cmid?)?;
+        if let Some(record) = queue {
+            self.record_span(&owner, &record);
+        }
+        Some(carrier)
+    }
+
+    pub(crate) fn finish_delivery_trace(
+        &self,
+        carrier: &crate::runtime_trace::TraceCarrier,
+        accepted: bool,
+    ) {
+        let result = self.runtime.lock().delivery(
+            &carrier.context,
+            if accepted {
+                crate::runtime_trace::Outcome::Ok
+            } else {
+                crate::runtime_trace::Outcome::Error
+            },
+        );
+        if let Some((owner, record)) = result {
+            self.record_span(&owner, &record);
+        }
+    }
+
+    pub(crate) fn record_runtime_spans(
+        &self,
+        machine: &str,
+        session: &str,
+        records: &[crate::runtime_trace::SpanRecord],
+    ) {
+        for record in records
+            .iter()
+            .take(crate::runtime_trace::MAX_SPANS_PER_FRAME)
+        {
+            let owner = self.runtime.lock().accept(machine, session, record);
+            if let Some(owner) = owner {
+                self.record_span(&owner, record);
+            }
+        }
+    }
+
+    fn record_span(&self, owner: &str, record: &crate::runtime_trace::SpanRecord) {
+        let request = crate::otlp::runtime_span(owner, record);
         let export = request.export();
         let _ = self.admit_otlp(
-            principal,
+            owner,
             crate::otlp::Signal::Traces,
-            &uuid::Uuid::new_v4().to_string(),
+            record.context.span_id(),
             export.protobuf.as_bytes(),
             request,
         );

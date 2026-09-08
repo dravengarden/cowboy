@@ -15,9 +15,19 @@ const CWD: &str = "/fixture/workspace";
 struct HubSink {
     hub: Hub,
     allocations: AtomicUsize,
+    prompt_starts: Mutex<Vec<Option<String>>>,
+    prompt_completions: Mutex<Vec<(Option<String>, String)>>,
 }
 
 impl AgentSink for HubSink {
+    fn prompt_started(&self, _: &str, cmid: Option<&str>) {
+        self.prompt_starts.lock().push(cmid.map(str::to_owned));
+    }
+    fn prompt_completed(&self, _: &str, cmid: Option<&str>, outcome: &str) {
+        self.prompt_completions
+            .lock()
+            .push((cmid.map(str::to_owned), outcome.to_owned()));
+    }
     fn set_status(&self, id: &str, status: Status, detail: Option<String>) {
         self.hub.set_status(id, status, detail);
     }
@@ -80,6 +90,8 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
     let sink = Arc::new(HubSink {
         hub,
         allocations: AtomicUsize::new(0),
+        prompt_starts: Mutex::default(),
+        prompt_completions: Mutex::default(),
     });
     let (prompt_cancellation, _) = watch::channel(0);
     let state = Arc::new(ClientState {
@@ -405,6 +417,10 @@ async fn exercise_configured_resume(reject: bool, cancel: bool) {
             // Hold the authoritative reply. Neither the next mutation nor the
             // first prompt may appear on the wire during this window.
             assert!(
+                sink.prompt_starts.lock().is_empty(),
+                "telemetry must not count configuration wait as ACP execution"
+            );
+            assert!(
                 tokio::time::timeout(Duration::from_millis(50), lines.next_line())
                     .await
                     .is_err()
@@ -442,6 +458,12 @@ async fn exercise_configured_resume(reject: bool, cancel: bool) {
             assert_eq!(request["method"], "session/prompt");
             assert_eq!(request["params"]["sessionId"], NATIVE);
             assert_eq!(
+                *sink.prompt_starts.lock(),
+                vec![Some("restored-first-prompt".to_owned())]
+            );
+            assert!(request["params"].get("traceparent").is_none());
+            assert!(request["params"].get("trace").is_none());
+            assert_eq!(
                 sink.hub.persisted_config_options(SESSION),
                 Some(fixture_options("saved-model", "high"))
             );
@@ -469,6 +491,24 @@ async fn exercise_configured_resume(reject: bool, cancel: bool) {
     };
     observation.assert_retained_identity();
     assert_eq!(&observation.texts()[..2], ["saved user", "saved answer"]);
+    assert_eq!(
+        observation.sink.prompt_starts.lock().len(),
+        usize::from(!reject && !cancel)
+    );
+    assert_eq!(
+        *observation.sink.prompt_completions.lock(),
+        vec![(
+            Some("restored-first-prompt".to_owned()),
+            if cancel {
+                "Cancelled"
+            } else if reject {
+                "Error"
+            } else {
+                "EndTurn"
+            }
+            .to_owned()
+        )]
+    );
 }
 
 #[tokio::test]

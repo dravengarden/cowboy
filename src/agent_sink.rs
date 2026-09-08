@@ -6,6 +6,10 @@
 use crate::agent_model::{Event, SessionUsage, Status};
 
 pub trait AgentSink: Send + Sync + 'static {
+    /// Explicit execution hooks carry only local correlation, never prompt
+    /// content or a Provider credential/environment binding.
+    fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}
+    fn prompt_completed(&self, _session_id: &str, _cmid: Option<&str>, _outcome: &str) {}
     fn set_status(&self, session_id: &str, status: Status, detail: Option<String>);
     fn push(&self, session_id: &str, event: Event);
     fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>);

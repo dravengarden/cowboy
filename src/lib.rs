@@ -130,6 +130,10 @@ mod remote_runtime;
 mod runtime;
 #[cfg(feature = "full")]
 mod runtime_router;
+#[cfg(feature = "full")]
+mod runtime_telemetry;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod runtime_trace;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod runtime_wire;
 #[cfg(feature = "full")]
@@ -152,6 +156,8 @@ mod telemetry_plugin;
 mod usage;
 #[cfg(feature = "full")]
 pub mod worker;
+#[cfg(feature = "full")]
+mod worker_telemetry;
 #[cfg(feature = "full")]
 mod workspace;
 #[cfg(any(feature = "full", feature = "machine-host", feature = "code-adapter"))]

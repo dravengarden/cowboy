@@ -2829,6 +2829,7 @@ async fn run_session(
                         if let Some(tx) = completion {
                             let _ = tx.send(Err("prompt cancelled before it started".to_owned()));
                         }
+                        sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         sink.push(
                             &sid,
                             Event::TurnEnd {
@@ -2850,6 +2851,7 @@ async fn run_session(
                         if !cancelled {
                             sink.broadcast_error(Some(sid.clone()), format!("prompt blocked: {detail}"));
                         }
+                        sink.prompt_completed(&sid, cmid.as_deref(), if cancelled { "Cancelled" } else { "Error" });
                         sink.push(&sid, Event::TurnEnd {
                             stop_reason: if cancelled { "Cancelled" } else { "Error" }.to_owned(),
                         });
@@ -2863,6 +2865,7 @@ async fn run_session(
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
                     let mut retries = 0;
                     let mut cancelled_during_retry = false;
+                    sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
                         let request =
                             cx.send_request(PromptRequest::new(acp.clone(), blocks.clone()));
@@ -2925,6 +2928,7 @@ async fn run_session(
                     };
                     state.clear_prompt(&prompt);
                     if cancelled_during_retry {
+                        sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {
                             let _ = tx.send(Err("prompt cancelled".to_owned()));
@@ -2956,6 +2960,7 @@ async fn run_session(
                             // Turn completed — including a `Cancelled` from the user's manual
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
+                            sink.prompt_completed(&sid, cmid.as_deref(), &format!("{:?}", r.stop_reason));
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {
@@ -3010,6 +3015,7 @@ async fn run_session(
                             // reaches the same conclusion). The UI surfaces silence as a
                             // "waiting Xm" indicator and the user recovers MANUALLY via Stop
                             // (→ Cancel → the agent yields here as an Ok). No auto-kill.
+                            sink.prompt_completed(&sid, cmid.as_deref(), "Error");
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {

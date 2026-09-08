@@ -147,6 +147,12 @@ pub enum CoreCommand {
         content: Vec<serde_json::Value>,
         #[serde(default)]
         cmid: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::runtime_trace::deserialize_carrier"
+        )]
+        trace: Option<crate::runtime_trace::TraceCarrier>,
     },
     Cancel {
         session_id: String,
@@ -212,6 +218,12 @@ pub enum WorkerCommand {
         content: Vec<serde_json::Value>,
         #[serde(default)]
         cmid: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "crate::runtime_trace::deserialize_carrier"
+        )]
+        trace: Option<crate::runtime_trace::TraceCarrier>,
     },
     Cancel {
         command_id: String,
@@ -342,6 +354,12 @@ pub enum Frame {
         worker_epoch: String,
         runtime_seq: u64,
         event: RuntimeEvent,
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "crate::runtime_trace::deserialize_spans"
+        )]
+        diagnostics: Vec<crate::runtime_trace::SpanRecord>,
     },
     Ack {
         session_id: String,
@@ -517,6 +535,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn telemetry_metadata_is_optional_bounded_and_cannot_reject_a_valid_command() {
+        #[derive(Deserialize)]
+        struct LegacyEvent {
+            event: RuntimeEvent,
+        }
+        let legacy = serde_json::json!({"command":"prompt","session_id":"s","command_id":"c","turn_id":"t","content":[],"cmid":"m"});
+        let decoded: CoreCommand = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+        for malformed in [
+            serde_json::json!(null),
+            serde_json::json!("private value"),
+            serde_json::json!({"context":{"traceparent":"bad"}}),
+        ] {
+            let mut value = legacy.clone();
+            value["trace"] = malformed;
+            let decoded: CoreCommand = serde_json::from_value(value).unwrap();
+            assert!(matches!(decoded, CoreCommand::Prompt { trace: None, .. }));
+        }
+        let context = crate::runtime_trace::TraceContext {
+            traceparent: "00-11111111111111111111111111111111-2222222222222222-01".into(),
+            correlation_id: "33333333333333333333333333333333".into(),
+        };
+        let record = crate::runtime_trace::SpanTimer::start(
+            &context,
+            crate::runtime_trace::Stage::WorkerPrompt,
+        )
+        .unwrap()
+        .finish(crate::runtime_trace::Outcome::Ok)
+        .unwrap();
+        let mut event = serde_json::json!({"type":"worker_event","session_id":"s","worker_epoch":"e","runtime_seq":1,"event":{"event":"turn_ended","turn_id":"t","stop_reason":"end_turn"}});
+        for malformed in [
+            serde_json::json!(["private value"]),
+            serde_json::json!(vec![record.clone(); 5]),
+            serde_json::json!({"arbitrary":"object"}),
+        ] {
+            event["diagnostics"] = malformed;
+            let decoded: Frame = serde_json::from_value(event.clone()).unwrap();
+            assert!(
+                matches!(decoded, Frame::WorkerEvent { diagnostics, .. } if diagnostics.is_empty())
+            );
+        }
+        event["diagnostics"] = serde_json::json!([record]);
+        let decoded: Frame = serde_json::from_value(event.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), event);
+        assert!(event["event"].get("diagnostics").is_none());
+        // A v1 consumer of the same event shape ignores additive diagnostics.
+        assert!(matches!(
+            serde_json::from_value::<LegacyEvent>(event).unwrap().event,
+            RuntimeEvent::TurnEnded { .. }
+        ));
+    }
+
+    #[test]
     fn protocol_negotiation_requires_overlap_and_selects_newest() {
         assert_eq!(negotiate(1, 2, 2, 3), Some(2));
         assert_eq!(negotiate(1, 1, 2, 2), None);
@@ -527,6 +598,7 @@ mod tests {
     async fn framed_json_round_trips_fragment_safe() {
         let (mut left, mut right) = tokio::io::duplex(128);
         let frame = Frame::WorkerEvent {
+            diagnostics: Vec::new(),
             session_id: "sess-1".to_owned(),
             worker_epoch: "epoch-1".to_owned(),
             runtime_seq: 9,

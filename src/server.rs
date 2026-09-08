@@ -1281,6 +1281,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let dispatcher_hub = hub.clone();
     let dispatcher_supervisor = Arc::clone(&supervisor);
     let dispatcher_plugin_fences = Arc::clone(&plugin_lifecycle_fences);
+    let dispatcher_telemetry = observability.clone();
     let dispatcher_shutdown = shutdown_rx.clone();
     let dispatcher_exit_state = dispatcher_shutdown.clone();
     let mut dispatcher_task = tokio::spawn(async move {
@@ -1288,6 +1289,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             dispatcher_hub,
             dispatcher_supervisor,
             dispatcher_plugin_fences,
+            dispatcher_telemetry,
             dispatch_rx,
             dispatcher_shutdown,
         )
@@ -2291,6 +2293,7 @@ async fn run_dispatcher(
     hub: Hub,
     supervisor: Arc<Supervisor>,
     plugin_lifecycle_fences: PluginLifecycleFences,
+    observability: Observability,
     mut rx: mpsc::Receiver<DispatchReq>,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -2324,9 +2327,11 @@ async fn run_dispatcher(
             continue;
         };
         let title = first_prompt_title(&text, &content);
-        match supervisor.send(
+        let trace = observability.dispatch_trace(&session_id, cmid.as_deref());
+        match supervisor.send_traced(
             &session_id,
             AgentCommand::Prompt(blocks, cmid.clone(), None),
+            trace.clone(),
         ) {
             Ok(()) => {
                 if let Some(t) = title {
@@ -2334,6 +2339,9 @@ async fn run_dispatcher(
                 }
             }
             Err(e) => {
+                if let Some(trace) = &trace {
+                    observability.finish_delivery_trace(trace, false);
+                }
                 tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
                 retain_failed_dispatch(&hub, session_id, text, content, cmid, &e.to_string());
             }
@@ -13219,6 +13227,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let hub = state.hub.clone();
         let provider_auth = Arc::clone(&state.provider_auth);
         let machine_snapshots = state.machine_snapshots.clone();
+        let runtime_telemetry = state.observability.clone();
         let machine_id = hello.machine_id.clone();
         let generation = hello
             .components
@@ -13245,6 +13254,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         None,
                         provider_auth,
                     );
+                    runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
                     router.install(machine_id, Arc::clone(&runtime));
                     runtime.start(bootstrap);
                     machine_snapshots.publish().await;
@@ -18126,14 +18136,17 @@ async fn handle_ws(
                             }
                             continue;
                         }
-                        let trace_start = crate::otlp::now_nanos();
-                        handle_command(
+                        let command_trace = Observability::begin_command_trace(&text);
+                        let accepted = handle_command(
                             &state,
                             &principal,
                             &text,
                             &mut held,
+                            command_trace.as_ref(),
                         );
-                        state.observability.record_command_trace(&principal.user_id, &text, trace_start);
+                        if let Some(trace) = command_trace {
+                            state.observability.finish_command_trace(&principal.user_id, trace, accepted);
+                        }
                     }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
@@ -18202,7 +18215,8 @@ fn handle_command(
     principal: &ProductPrincipal,
     text: &str,
     held: &mut HashMap<String, (String, u64)>,
-) {
+    command_trace: Option<&crate::runtime_trace::SpanTimer>,
+) -> bool {
     let cmd: Inbound = match serde_json::from_str(text) {
         Ok(c) => c,
         Err(e) => {
@@ -18210,7 +18224,7 @@ fn handle_command(
             state
                 .hub
                 .broadcast_error(None, format!("bad inbound command: {e}"));
-            return;
+            return false;
         }
     };
     // Capture session_id ahead of the match for error attribution. Most
@@ -18267,7 +18281,7 @@ fn handle_command(
                 Some(sid.clone()),
                 "not allowed to mutate this session".to_owned(),
             );
-            return;
+            return false;
         }
     }
     // A view-only system session rejects user-driven turns; only the backend
@@ -18280,7 +18294,7 @@ fn handle_command(
             Some(sid.clone()),
             "view-only system session: input is disabled".to_owned(),
         );
-        return;
+        return false;
     }
     // Serialize prompt admission against Provider lifecycle changes. Holding
     // this read guard through the command match closes the check-then-dispatch
@@ -18302,7 +18316,7 @@ fn handle_command(
             session_id_for_err,
             "the session Provider is uninstalling from its Machine".to_owned(),
         );
-        return;
+        return false;
     }
     let result = match cmd {
         Inbound::AuthActivity => Ok(()),
@@ -18327,7 +18341,7 @@ fn handle_command(
                         Some(session_id),
                         "empty prompt: no text or content blocks".to_owned(),
                     );
-                    return;
+                    return false;
                 }
                 vec![ContentBlock::from(text)]
             } else {
@@ -18541,6 +18555,13 @@ fn handle_command(
             force,
             front,
         } => {
+            // Only an authorized, exact session can create runtime correlation
+            // authority. The ephemeral key never enters durable queue rows.
+            if let (Some(trace), Some(cmid), Some(info)) = (
+                command_trace, cmid.as_deref(), state.hub.session_info(&session_id),
+            ) {
+                state.observability.bind_runtime_trace(&principal.user_id, &info.meta.machine_id, &session_id, cmid, trace);
+            }
             if force {
                 // Long-press send: jump to the front of the queue and interrupt the
                 // running turn so it runs next (same end-state as a queued row's
@@ -18716,7 +18737,9 @@ fn handle_command(
         state
             .hub
             .broadcast_error(session_id_for_err, format!("command failed: {e}"));
+        return false;
     }
+    true
 }
 
 fn apply_inbound_sync(

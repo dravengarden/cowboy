@@ -242,6 +242,7 @@ struct Broker {
     controller: Mutex<Option<Controller>>,
     workers: Mutex<HashMap<String, WorkerPeer>>,
     pending_commands: Mutex<HashMap<String, VecDeque<WorkerCommand>>>,
+    trace_spans: Mutex<crate::runtime_trace::MachineSpans>,
     sessions: Mutex<HashMap<String, StartSession>>,
     session_states: Mutex<HashMap<String, WorkerState>>,
     /// Last startup detail emitted by a worker before readiness. Generation
@@ -345,6 +346,7 @@ impl Broker {
             controller: Mutex::new(None),
             workers: Mutex::new(HashMap::new()),
             pending_commands: Mutex::new(HashMap::new()),
+            trace_spans: Mutex::default(),
             sessions: Mutex::new(HashMap::new()),
             session_states: Mutex::new(HashMap::new()),
             startup_failures: Mutex::new(HashMap::new()),
@@ -563,7 +565,7 @@ impl Broker {
             Some(tx) => {
                 let _ = tx.send(Frame::WorkerCommand {
                     session_id: session_id.to_owned(),
-                    command,
+                    command: self.trace_worker_dispatch(session_id, command),
                 });
             }
             _ => {
@@ -605,6 +607,14 @@ impl Broker {
     /// permission replies still route to the old worker because they are part
     /// of the in-flight turn that must reach its safe boundary.
     fn route_prompt(&self, session_id: &str, command: WorkerCommand) {
+        if let WorkerCommand::Prompt {
+            command_id,
+            trace: Some(trace),
+            ..
+        } = &command
+        {
+            self.trace_spans.lock().start(session_id, command_id, trace);
+        }
         let draining = self
             .workers
             .lock()
@@ -629,6 +639,20 @@ impl Broker {
             return;
         }
         queue.push_back(command);
+    }
+
+    fn trace_worker_dispatch(&self, session_id: &str, mut command: WorkerCommand) -> WorkerCommand {
+        if let WorkerCommand::Prompt {
+            command_id,
+            trace: Some(trace),
+            ..
+        } = &mut command
+        {
+            self.trace_spans
+                .lock()
+                .dispatch(session_id, command_id, trace);
+        }
+        command
     }
 
     fn worker_matches(&self, session_id: &str, connection_id: u64, epoch: &str) -> bool {
@@ -862,7 +886,7 @@ impl Broker {
                 }
                 let _ = tx.send(Frame::WorkerCommand {
                     session_id: session_id.to_owned(),
-                    command,
+                    command: self.trace_worker_dispatch(session_id, command),
                 });
             }
             if !held_prompts.is_empty() {
@@ -2556,6 +2580,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             turn_id,
             content,
             cmid,
+            trace,
         } => broker.route_prompt(
             &session_id,
             WorkerCommand::Prompt {
@@ -2563,6 +2588,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 turn_id,
                 content,
                 cmid,
+                trace,
             },
         ),
         CoreCommand::Cancel {
@@ -2744,6 +2770,7 @@ async fn handle_worker(
                 worker_epoch,
                 runtime_seq,
                 event,
+                diagnostics,
             } if event_session == session_id && worker_epoch == epoch => {
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
@@ -2767,6 +2794,7 @@ async fn handle_worker(
                     worker_epoch,
                     runtime_seq,
                     event,
+                    diagnostics,
                 });
                 broker.maybe_cutover(session_id);
                 drop(cancelled);
@@ -2784,9 +2812,52 @@ async fn handle_worker(
     Ok(())
 }
 
+#[cfg(all(test, feature = "full"))]
+pub(crate) use tests::dispatch_trace_fixture;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "full")]
+    pub(crate) async fn dispatch_trace_fixture(command: CoreCommand) -> WorkerCommand {
+        let root = tempfile::tempdir().unwrap();
+        let session = command.session_id().unwrap().to_owned();
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: root.path().join("broker.sock"),
+            worker_command: PathBuf::from("false"),
+            desired_generation: String::new(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: root.path().join("worktrees"),
+            worker_ready_timeout: Duration::from_secs(1),
+        }));
+        // Replay while no worker exists must retain one original context.
+        handle_core_command(&broker, command.clone()).await;
+        handle_core_command(&broker, command).await;
+        assert_eq!(broker.pending_commands.lock()[&session].len(), 1);
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: session.clone(),
+                epoch: "fixture-epoch".into(),
+                generation: "fixture-generation".into(),
+                executable: None,
+                fallback_for: None,
+                connection_id: 1,
+                tx,
+            })
+            .unwrap();
+        broker.flush_pending(&session);
+        let frame = rx.try_recv().unwrap();
+        assert!(rx.try_recv().is_err());
+        let frame: Frame = serde_json::from_slice(&serde_json::to_vec(&frame).unwrap()).unwrap();
+        let Frame::WorkerCommand { command, .. } = frame else {
+            panic!("worker command");
+        };
+        command
+    }
 
     fn test_provider_store() -> Arc<crate::machine_plugins::MachinePluginStore> {
         static STORE: std::sync::OnceLock<Arc<crate::machine_plugins::MachinePluginStore>> =
@@ -3134,6 +3205,7 @@ mod tests {
             })
         ));
         let prompt = WorkerCommand::Prompt {
+            trace: None,
             command_id: "prompt-during-drain".to_owned(),
             turn_id: "turn-2".to_owned(),
             content: vec![serde_json::json!({"type": "text", "text": "next"})],
@@ -3660,6 +3732,7 @@ mod tests {
             "sess-1",
             WorkerCommand::Prompt {
                 command_id: "cmd-1".to_owned(),
+                trace: None,
                 turn_id: "turn-1".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "next"})],
                 cmid: None,
@@ -4222,6 +4295,7 @@ mod tests {
             &mut worker_stream,
             &Frame::WorkerEvent {
                 session_id: "sess-deleted-final-event".to_owned(),
+                diagnostics: Vec::new(),
                 worker_epoch: "epoch-deleted-final-event".to_owned(),
                 runtime_seq: 7,
                 event: RuntimeEvent::Status {
@@ -4745,6 +4819,7 @@ mod tests {
             Some(Frame::Snapshot { .. })
         ));
         let event = Frame::WorkerEvent {
+            diagnostics: Vec::new(),
             session_id: "sess-1".to_owned(),
             worker_epoch: "epoch-1".to_owned(),
             runtime_seq: 1,

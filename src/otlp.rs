@@ -154,77 +154,6 @@ mod controller {
             .unwrap_or(0)
     }
 
-    /// Conservative W3C v00 ingress: ignore unsampled, invalid or future
-    /// contexts. Correlation never grants visibility or imports baggage.
-    pub(crate) fn command_span(principal: &str, parent: &str, start: u64) -> Option<Request> {
-        use opentelemetry_proto::tonic::trace::v1::{ResourceSpans, ScopeSpans, Span};
-        if parent.len() != 55
-            || !parent.starts_with("00-")
-            || parent.as_bytes()[35] != b'-'
-            || parent.as_bytes()[52] != b'-'
-        {
-            return None;
-        }
-        let hex = |s: &str| -> Option<Vec<u8>> {
-            if !s
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            {
-                return None;
-            }
-            s.as_bytes()
-                .chunks_exact(2)
-                .map(|b| u8::from_str_radix(std::str::from_utf8(b).ok()?, 16).ok())
-                .collect()
-        };
-        // Check ASCII before slicing an untrusted UTF-8 carrier.
-        if !parent.is_ascii() {
-            return None;
-        }
-        let trace_id = hex(&parent[3..35])?;
-        let parent_span_id = hex(&parent[36..52])?;
-        let flags = *hex(&parent[53..55])?.first()?;
-        if flags & 1 == 0 || ids(&trace_id, &parent_span_id, true).is_err() {
-            return None;
-        }
-        Some(Request::Traces(ExportTraceServiceRequest {
-            resource_spans: vec![ResourceSpans {
-                resource: Some(Resource {
-                    attributes: vec![text("service.name", "cowboy-controller")],
-                    ..Default::default()
-                }),
-                scope_spans: vec![ScopeSpans {
-                    scope: Some(InstrumentationScope {
-                        name: "cowboy.controller".into(),
-                        version: "1".into(),
-                        ..Default::default()
-                    }),
-                    spans: vec![Span {
-                        trace_id,
-                        parent_span_id,
-                        span_id: uuid::Uuid::new_v4().as_bytes()[..8].to_vec(),
-                        name: "cowboy.controller.dispatch".into(),
-                        kind: 2,
-                        flags: 1,
-                        start_time_unix_nano: start,
-                        end_time_unix_nano: now_nanos().max(start),
-                        attributes: vec![
-                            text(
-                                "cowboy.owner",
-                                &format!("{:x}", Sha256::digest(principal.as_bytes())),
-                            ),
-                            text("cowboy.parent_trust", "client"),
-                            text("cowboy.stage", "websocket_dispatch"),
-                        ],
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-        }))
-    }
-
     pub(crate) fn text(key: &str, value: &str) -> KeyValue {
         KeyValue {
             key: key.into(),
@@ -880,7 +809,77 @@ mod controller {
 }
 
 #[cfg(feature = "full")]
-pub(crate) use controller::{Aggregator, command_span, now_nanos};
+pub(crate) use controller::Aggregator;
+
+#[cfg(feature = "full")]
+pub(crate) fn runtime_span(owner: &str, record: &crate::runtime_trace::SpanRecord) -> Request {
+    use opentelemetry_proto::tonic::{
+        common::v1::{AnyValue, InstrumentationScope, KeyValue, any_value},
+        resource::v1::Resource,
+        trace::v1::{ResourceSpans, ScopeSpans, Span, Status},
+    };
+    let decode = |hex: &str| {
+        hex.as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect()
+    };
+    let text = |key: &str, value: &str| KeyValue {
+        key: key.into(),
+        value: Some(AnyValue {
+            value: Some(any_value::Value::StringValue(value.into())),
+        }),
+        ..Default::default()
+    };
+    Request::Traces(ExportTraceServiceRequest {
+        resource_spans: vec![ResourceSpans {
+            resource: Some(Resource {
+                attributes: vec![text("service.name", record.stage.service())],
+                ..Default::default()
+            }),
+            scope_spans: vec![ScopeSpans {
+                scope: Some(InstrumentationScope {
+                    name: "cowboy.runtime".into(),
+                    version: "1".into(),
+                    ..Default::default()
+                }),
+                spans: vec![Span {
+                    trace_id: decode(record.context.trace_id()),
+                    span_id: decode(record.context.span_id()),
+                    parent_span_id: decode(&record.parent_span_id),
+                    name: record.stage.name().into(),
+                    kind: 1,
+                    flags: 1,
+                    start_time_unix_nano: record.started_ns,
+                    end_time_unix_nano: record.started_ns + record.duration_ns,
+                    attributes: vec![
+                        text("cowboy.owner", owner),
+                        text("cowboy.trust", "runtime"),
+                        text(
+                            "cowboy.outcome",
+                            match record.outcome {
+                                crate::runtime_trace::Outcome::Ok => "ok",
+                                crate::runtime_trace::Outcome::Error => "error",
+                                crate::runtime_trace::Outcome::Cancelled => "cancelled",
+                            },
+                        ),
+                    ],
+                    status: Some(Status {
+                        code: if record.outcome == crate::runtime_trace::Outcome::Ok {
+                            1
+                        } else {
+                            2
+                        },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    })
+}
 
 #[cfg(all(test, feature = "full"))]
 pub(crate) fn client_fixtures() -> Vec<(Signal, Vec<u8>)> {
@@ -1038,8 +1037,19 @@ mod tests {
 
     #[test]
     fn w3c_parent_creates_a_controller_child_without_trusting_browser_resources() {
+        use crate::observability::Observability;
+        use crate::runtime_trace::Outcome;
+
         let parent = "00-11111111111111111111111111111111-2222222222222222-01";
-        let Request::Traces(r) = command_span("principal", parent, now_nanos()).unwrap() else {
+        let carrier = serde_json::json!({"traceparent": parent, "cowboy.owner": "forged"});
+        let record = Observability::begin_command_trace(&carrier.to_string())
+            .unwrap()
+            .finish(Outcome::Ok)
+            .unwrap();
+        let request = runtime_span(&crate::runtime_telemetry::owner_hash("principal"), &record);
+        assert!(!request.records().contains("forged"));
+        assert!(!request.records().contains("principal"));
+        let Request::Traces(r) = request else {
             panic!("trace")
         };
         let span = &r.resource_spans[0].scope_spans[0].spans[0];
@@ -1054,7 +1064,8 @@ mod tests {
             "ff-11111111111111111111111111111111-2222222222222222-01",
             "00-11111111111111111111111111111111-2222222222222222-zz",
         ] {
-            assert!(command_span("principal", invalid, now_nanos()).is_none());
+            let carrier = serde_json::json!({"traceparent": invalid});
+            assert!(Observability::begin_command_trace(&carrier.to_string()).is_none());
         }
         assert!(Request::decode(Signal::Logs, &[255]).is_err());
         assert!(Request::decode(Signal::Logs, &vec![0; MAX_BYTES + 1]).is_err());

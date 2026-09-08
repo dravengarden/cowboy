@@ -56,6 +56,8 @@ struct Shared {
     next_seq: AtomicU64,
     snapshot: Mutex<WorkerSnapshot>,
     outbox: Mutex<BTreeMap<u64, RuntimeEvent>>,
+    trace_outbox: Mutex<BTreeMap<u64, Vec<crate::runtime_trace::SpanRecord>>>,
+    telemetry: Mutex<crate::worker_telemetry::WorkerTelemetry>,
     notify: mpsc::UnboundedSender<()>,
     seen_commands: Mutex<HashSet<String>>,
     workspace_path: PathBuf,
@@ -83,9 +85,20 @@ impl Shared {
     }
 
     fn emit(&self, event: RuntimeEvent) -> u64 {
+        // Keep sequence assignment and event/metadata admission ordered even
+        // when the ACP thread and broker command loop emit concurrently.
+        let mut outbox = self.outbox.lock();
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
         self.apply_snapshot_event(seq, &event);
-        self.outbox.lock().insert(seq, event);
+        let diagnostics = self.telemetry.lock().event(&event);
+        if !diagnostics.is_empty() {
+            let mut traces = self.trace_outbox.lock();
+            if traces.len() < 128 {
+                traces.insert(seq, diagnostics);
+            }
+        }
+        outbox.insert(seq, event);
+        drop(outbox);
         let _ = self.notify.send(());
         seq
     }
@@ -154,6 +167,9 @@ impl Shared {
 
     fn ack(&self, seq: u64) {
         self.outbox.lock().retain(|candidate, _| *candidate > seq);
+        self.trace_outbox
+            .lock()
+            .retain(|candidate, _| *candidate > seq);
     }
 
     fn mark_command(&self, command_id: &str) -> bool {
@@ -223,6 +239,14 @@ impl RemoteSink {
 }
 
 impl AgentSink for RemoteSink {
+    fn prompt_started(&self, _session_id: &str, cmid: Option<&str>) {
+        self.shared.telemetry.lock().started(cmid);
+    }
+
+    fn prompt_completed(&self, _session_id: &str, cmid: Option<&str>, outcome: &str) {
+        self.shared.telemetry.lock().completed(cmid, outcome);
+    }
+
     fn set_status(&self, _session_id: &str, status: Status, detail: Option<String>) {
         let mut state = Self::status_state(status);
         if state == WorkerState::Running && self.shared.snapshot.lock().drain_requested {
@@ -390,6 +414,8 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             drain_requested: false,
         }),
         outbox: Mutex::new(BTreeMap::new()),
+        trace_outbox: Mutex::default(),
+        telemetry: Mutex::default(),
         notify: notify_tx,
         seen_commands: Mutex::new(HashSet::new()),
         workspace_path: args.cwd.clone(),
@@ -617,6 +643,12 @@ async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
         .map(|(seq, event)| (*seq, event.clone()))
         .collect();
     for (seq, event) in pending {
+        let diagnostics = shared
+            .trace_outbox
+            .lock()
+            .get(&seq)
+            .cloned()
+            .unwrap_or_default();
         write_frame(
             writer,
             &Frame::WorkerEvent {
@@ -624,6 +656,7 @@ async fn send_outbox<W: tokio::io::AsyncWrite + Unpin>(
                 worker_epoch: shared.worker_epoch.clone(),
                 runtime_seq: seq,
                 event,
+                diagnostics,
             },
         )
         .await?;
@@ -644,6 +677,7 @@ fn handle_command(
                 turn_id,
                 content,
                 cmid,
+                trace,
             } => {
                 if !shared.workspace_is_current() {
                     let message = format!(
@@ -671,6 +705,7 @@ fn handle_command(
                         Some("prompt has no valid content blocks".to_owned()),
                     );
                 }
+                shared.telemetry.lock().admit(cmid.as_deref(), trace);
                 (
                     command_id,
                     Some(AgentCommand::Prompt(blocks, cmid, None)),
@@ -791,6 +826,196 @@ mod tests {
     use super::*;
     use tokio::net::UnixListener;
 
+    #[test]
+    fn trace_outbox_is_bounded_without_blocking_events_and_ack_releases_capacity() {
+        use crate::runtime_trace::{TraceCarrier, TraceContext};
+
+        let (shared, _notify) = shared();
+        let turn = |id: &str| {
+            let trace = TraceCarrier::new(
+                TraceContext::from_browser(
+                    "00-11111111111111111111111111111111-2222222222222222-01",
+                )
+                .unwrap(),
+            );
+            {
+                let mut telemetry = shared.telemetry.lock();
+                telemetry.admit(Some(id), Some(trace));
+                telemetry.started(Some(id));
+                telemetry.completed(Some(id), "EndTurn");
+            }
+            shared.emit(RuntimeEvent::TurnEnded {
+                turn_id: id.into(),
+                stop_reason: "EndTurn".into(),
+            })
+        };
+        for i in 0..256 {
+            turn(&i.to_string());
+        }
+        assert_eq!(shared.trace_outbox.lock().len(), 128);
+        assert!(
+            shared
+                .trace_outbox
+                .lock()
+                .values()
+                .all(|spans| spans.len() <= 4)
+        );
+        assert_eq!(
+            shared.outbox.lock().len(),
+            256,
+            "business events survive diagnostic saturation"
+        );
+        let last_traced = *shared.trace_outbox.lock().last_key_value().unwrap().0;
+        shared.ack(last_traced);
+        assert!(shared.trace_outbox.lock().is_empty());
+        assert_eq!(shared.outbox.lock().len(), 128);
+        let seq = turn("fresh");
+        assert_eq!(shared.trace_outbox.lock().len(), 1);
+        shared.ack(seq);
+        assert!(shared.outbox.lock().is_empty());
+        assert!(shared.trace_outbox.lock().is_empty());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "machine-host")]
+    async fn runtime_trace_crosses_real_dispatch_and_framing_without_history_or_replay_duplication()
+    {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("telemetry");
+        let file = crate::telemetry_file::TelemetryFile::open(
+            directory.clone(),
+            65536,
+            2,
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .unwrap();
+        let telemetry = crate::observability::Observability::start(None, file, None);
+        let dispatch = crate::observability::Observability::begin_command_trace(
+            r#"{"traceparent":"00-11111111111111111111111111111111-2222222222222222-01"}"#,
+        )
+        .unwrap();
+        telemetry.bind_runtime_trace(
+            "fixture-owner",
+            "fixture-machine",
+            "sess-1",
+            "fixture-cmid",
+            &dispatch,
+        );
+        telemetry.finish_command_trace("fixture-owner", dispatch, true);
+        let trace = telemetry
+            .dispatch_trace("sess-1", Some("fixture-cmid"))
+            .unwrap();
+        let correlation = trace.context.correlation_id.clone();
+
+        let (shared, _notify) = shared();
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "sess-1".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "fixture".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        let runtime = crate::remote_runtime::RemoteRuntime::for_test(hub, vec![shared.snapshot()]);
+        runtime.attach_telemetry("fixture-machine".into(), telemetry.clone());
+        runtime.prompt_traced(
+            "sess-1",
+            vec![serde_json::json!({"type":"text","text":"fixture-private-prompt"})],
+            Some("fixture-cmid".into()),
+            Some(trace),
+        );
+        let pending = runtime.pending_for_test().pop().unwrap();
+        let command = crate::machine_broker::dispatch_trace_fixture(pending).await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tx = Some(tx);
+        let ack = handle_command(&shared, &mut tx, command.clone());
+        let sequence = shared.snapshot().last_runtime_seq;
+        assert!(matches!(
+            handle_command(&shared, &mut tx, command),
+            Frame::CommandAck { accepted: true, .. }
+        ));
+        assert_eq!(shared.snapshot().last_runtime_seq, sequence);
+        let AgentCommand::Prompt(blocks, _, _) = rx.try_recv().unwrap() else {
+            panic!("ACP prompt");
+        };
+        let content = serde_json::to_string(&blocks).unwrap();
+        assert!(content.contains("fixture-private-prompt"));
+        assert!(!content.contains("traceparent"));
+        assert!(!content.contains(&correlation));
+        assert!(rx.try_recv().is_err());
+
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        sink.prompt_started("sess-1", Some("fixture-cmid"));
+        sink.push("sess-1", Event::Update { update: serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"fixture-private-answer"}}) });
+        sink.prompt_completed("sess-1", Some("fixture-cmid"), "EndTurn");
+        sink.push(
+            "sess-1",
+            Event::TurnEnd {
+                stop_reason: "EndTurn".into(),
+            },
+        );
+
+        let (mut wire, mut reader) = tokio::io::duplex(65536);
+        send_outbox(&shared, &mut wire, &mut 0).await.unwrap();
+        drop(wire);
+        let mut frames = Vec::new();
+        while let Some(frame) = read_frame(&mut reader).await.unwrap() {
+            if let Frame::WorkerEvent { event, .. } = &frame {
+                assert!(!serde_json::to_string(event).unwrap().contains(&correlation));
+            }
+            runtime.project_trace_fixture(frame.clone()).await;
+            frames.push(frame);
+        }
+        runtime.project_trace_fixture(ack).await;
+        for frame in frames {
+            runtime.project_trace_fixture(frame).await;
+        }
+        shared.ack(shared.snapshot().last_runtime_seq);
+        assert!(shared.trace_outbox.lock().is_empty());
+        telemetry.drain().await;
+
+        let local = std::fs::read_to_string(directory.join("telemetry.jsonl")).unwrap();
+        assert!(!local.contains("fixture-private"));
+        assert!(!local.contains("fixture-owner"));
+        assert!(!local.contains("fixture-cmid"));
+        assert!(!local.contains(&correlation));
+        let spans: BTreeMap<String, opentelemetry_proto::tonic::trace::v1::Span> = local
+            .lines()
+            .map(|line| {
+                let row: serde_json::Value = serde_json::from_str(line).unwrap();
+                let span: opentelemetry_proto::tonic::trace::v1::Span =
+                    serde_json::from_value(row["span"].clone()).unwrap();
+                (span.name.clone(), span)
+            })
+            .collect();
+        assert_eq!(
+            local.lines().count(),
+            7,
+            "one local record per stage despite command/event replay"
+        );
+        assert_eq!(spans.len(), 7);
+        let chain = [
+            "cowboy.controller.dispatch",
+            "cowboy.controller.queue",
+            "cowboy.controller.delivery",
+            "cowboy.machine.dispatch",
+            "cowboy.worker.queue",
+            "cowboy.worker.prompt",
+            "cowboy.worker.first_output",
+        ];
+        let mut parent = vec![0x22; 8];
+        for name in chain {
+            let span = &spans[name];
+            assert_eq!(span.trace_id, vec![0x11; 16]);
+            assert_eq!(span.parent_span_id, parent, "{name}");
+            assert!(span.end_time_unix_nano >= span.start_time_unix_nano);
+            parent.clone_from(&span.span_id);
+        }
+    }
+
     fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let workspace_path = std::env::current_dir().expect("current dir");
@@ -822,6 +1047,8 @@ mod tests {
                     drain_requested: false,
                 }),
                 outbox: Mutex::new(BTreeMap::new()),
+                trace_outbox: Mutex::default(),
+                telemetry: Mutex::default(),
                 notify: tx,
                 seen_commands: Mutex::new(HashSet::new()),
                 workspace_path,
@@ -944,6 +1171,7 @@ mod tests {
                                 state: WorkerState::Exited,
                                 ..
                             },
+                        ..
                     } => {
                         saw_final_event = true;
                         write_frame(
@@ -1047,6 +1275,7 @@ mod tests {
             &mut tx,
             WorkerCommand::Prompt {
                 command_id: "cmd-1".to_owned(),
+                trace: None,
                 turn_id: "turn-1".to_owned(),
                 content: vec![serde_json::json!({"type": "text", "text": "hello"})],
                 cmid: None,

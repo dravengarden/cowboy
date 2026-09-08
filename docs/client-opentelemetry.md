@@ -33,7 +33,7 @@ This is not a publication, activation, or physical-device acceptance receipt.
   Sign-out clears account-associated diagnostic work. Only one layer owns
   network retries. OTLP does not promise exactly-once or page-exit delivery.
 
-## Automated verification (2026-09-08)
+## Client baseline verification (d0ff0f56, 2026-09-08)
 
 `nix develop -c just check-compact` passed after the final audit fixes: 716 Rust
 library tests (8 environment-dependent tests ignored), 1186 frontend tests,
@@ -67,9 +67,91 @@ at the first agent message chunk. Foreign echoes, disconnects, sign-out and
 five-minute expiry cancel attribution. No snapshot/history replay produces a
 measurement. Up to 32 operations are retained. A W3C `traceparent` on submit
 creates a Controller child for synchronous WebSocket parsing/authorization/
-dispatch. That span **does not measure** asynchronous Machine routing, worker
-execution, or the agent/model internals. Those are a separate instrumentation
-step; this is not a claim of complete distributed tracing.
+dispatch. Authorized submits also propagate context through Controller queueing,
+Machine routing and the worker's owned ACP execution boundary, as described
+below. This does not instrument the agent/model internals.
+
+## Owned runtime trace boundaries
+
+The runtime extends a sampled client command with this parent chain. Every
+duration uses the measuring process's monotonic clock; the wall clock supplies
+only its start timestamp. No subtraction of clocks on different Machines is
+used to infer latency. Asynchronous children may finish after their parent.
+
+| Span suffix (under `cowboy.`) | Actual measured interval |
+| --- | --- |
+| `controller.dispatch` | WebSocket command parsing, authorization and synchronous admission |
+| `controller.queue` | Authorized submit binding to dispatcher handoff |
+| `controller.delivery` | Runtime enqueue through the worker command acknowledgement |
+| `machine.dispatch` | Broker prompt receipt through worker-channel handoff, including drain/start wait |
+| `worker.queue` | Worker admission through the ACP prompt lock and configuration fence |
+| `worker.prompt` | Actual ACP prompt RPC through completion, including bounded upstream retries |
+| `worker.first_output` | Actual ACP prompt RPC through the first live `agent_message_chunk` |
+
+Configuration rejection and cancellation before the RPC end only the queue
+span; they never invent execution or first-output measurements. A turn with no
+agent message emits no first-output span. Cancellation/error/normal completion
+use a closed outcome enum; error details, prompts, replies, tools and Provider
+configuration are not attributes. Untagged live output follows the serialized
+active ACP turn; explicitly foreign turn tags and pre-start/history output
+cannot complete its first-output timer.
+
+The Controller binds a new private correlation nonce to the authenticated owner,
+exact session, client command ID and Machine after existing mutation fences.
+Client-supplied session/user/Machine claims cannot replace this authority.
+Runtime records are checked against it, then converted to official OTLP
+protobuf with fixed component resources and a server-derived owner hash. Trace
+IDs remain untrusted correlation hints, not visibility proofs. The private
+nonce and command/session identifiers are not exported as attributes.
+
+Context lives only in optional runtime-v1 command metadata. Completed records
+return in the existing sequenced WorkerEvent envelope, **outside** its business
+event. ACP requests, Provider environments, durable queue rows, transcripts and
+worker snapshots do not gain trace metadata. The v1 wire contract already
+permits additive optional fields: missing, malformed or unsupported diagnostics
+are ignored without rejecting valid business commands. Plugin SDK versions,
+telemetry payload schema and Machine control protocol are unchanged by this
+runtime-only extension; there is no new SDK, Collector or outbound transport.
+
+The Controller retains at most 512 correlations for at most 24 hours, with at
+most 32 unique remote span IDs each. Under capacity pressure, the oldest
+completed correlation with an acknowledged delivery yields to new work; active
+entries are not evicted. Machine timers are capped at 512 and 24 hours. Each
+worker has 32 queued timers, one active turn, four pending completion records
+and at most 128 annotated outbox events (four records per frame). ACK releases
+outbox capacity. Telemetry saturation drops diagnostics, not business events;
+admitted records still use the existing independently bounded file/export
+queues and their health counters.
+
+Command/event replay keeps original context and does not emit duplicate spans.
+Epoch/reset/high-water fences precede admission; the Controller separately
+rejects wrong-Machine/session/nonce/trace records, duplicate span IDs and
+implausible clocks. Restart or expiry discards correlation authority rather
+than reconstructing it from conversation history. Delivery and dedup are
+best-effort within these bounds, not a durable exactly-once guarantee.
+
+Regression coverage uses real Controller pending commands, broker routing and
+dedup, worker command handling, framed IPC and Controller projection, followed
+by OTLP admission into the rotating file. It verifies all seven linked runtime
+spans, command/event replay, no conversation content in telemetry and no trace
+metadata in ACP or business events. The real ACP conformance peer additionally
+checks configuration-before-prompt ordering, pre-RPC rejection/cancellation and
+completion hooks. These fixtures do not constitute production or device
+acceptance and do not invoke a real model.
+
+## Runtime extension verification (2026-09-08)
+
+`nix develop -c just check-compact` passed with 725 Rust library tests (8
+environment-dependent tests ignored), 1186 frontend tests, 6 separately run
+isolated PostgreSQL tests and the complete formatting/lint/dependency,
+SDK/Plugin, native-shell/site, feature-slice and production-build gates.
+The nine additional Rust tests cover the runtime boundaries above, including
+bounded outbox recovery, forged/mismatched correlations and completion-aware
+capacity reclamation. Existing ACP conformance tests now assert actual timing
+hook placement as well. Clean-commit Nix release receipts are verified
+separately; this is not authorization to publish or activate either component.
+
+## Signal and export bounds
 
 Two monotonic counters (`websocket.reconnects`, `long_tasks`) use `{event}`;
 six histograms (`websocket.connect`, `websocket.reconnect`, `long_task`,
