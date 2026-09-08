@@ -88,9 +88,10 @@ component/platform fields. These tighten the previous metric-label contract;
 dash/dot names and reserved labels are rejected rather than endlessly retried.
 
 Local, incident and remote workers are independent of remote delivery; incident
-and remote queues each hold at most 16 batches. The durable ledger is written
-asynchronously before any remote receipt and never rotated; a queue/storage
-failure remains observable in its own counter and local diagnostic evidence.
+and remote queues each hold at most 16 batches. Incident writes are queued
+before local/remote work, run independently of remote receipts, and never
+rotate the durable ledger; a queue/storage failure remains observable in its
+own counter and local diagnostic evidence.
 Remote import is best effort and can duplicate an ambiguously acknowledged
 request. Each lane has a 1-second connect / 3-second request timeout, at most
 two attempts (only transport failure, 408, 429 or 5xx), no redirects or ambient
