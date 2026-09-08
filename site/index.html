@@ -518,6 +518,19 @@
           <div class="plugin-grid">
             {{PLUGIN_CARDS}}
           </div>
+
+          <aside class="telemetry-guide reveal" id="telemetry" aria-labelledby="telemetry-title">
+            <h3 id="telemetry-title" data-i18n="telemetry.title">Local first. Three signals, one optional connector.</h3>
+            <p data-i18n="telemetry.default">Without a backend Plugin, diagnostic logs, metrics, and traces stay in private JSONL files under /tmp: 8 MiB per file, up to 8 files, rotating by size or UTC day. These temporary files are not the conversation or accounting database.</p>
+            <dl class="telemetry-signals">
+              <div><dt>VictoriaLogs</dt><dd data-i18n="telemetry.logs">Diagnostic events and errors</dd></div>
+              <div><dt>VictoriaMetrics</dt><dd data-i18n="telemetry.metrics">Counters and latency histograms</dd></div>
+              <div><dt>VictoriaTraces</dt><dd data-i18n="telemetry.traces">Sampled client → Controller → Machine → worker spans</dd></div>
+            </dl>
+            <p data-i18n="telemetry.enable">Install the signed Victoria Plugin on a compatible Machine, select that exact version and digest in the Controller, and configure each destination in the Machine's private telemetry.json. Installation alone sends nothing. The connector uses standard OTLP/HTTP protobuf; it does not install the three database services or require an OpenTelemetry Collector.</p>
+            <p data-i18n="telemetry.safety">Export keeps local recording enabled. Each signal can be disabled independently; remote failures do not block sessions. Raw prompts and agent output are not automatically exported, and older local files are not replayed.</p>
+            <a class="text-link" href="https://github.com/dravengarden/cowboy/blob/main/examples/telemetry/victoria/README.md" data-i18n="telemetry.guide">Installation, exact configuration, and delivery checks →</a>
+          </aside>
         </div>
       </section>
 

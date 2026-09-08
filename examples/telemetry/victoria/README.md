@@ -23,9 +23,13 @@ components. Publication still requires the canonical
 
 After publishing and refreshing the Catalog, `/admin/releases` offers the
 exact version on compatible Machines. The same generic API is
-`POST /api/machines/{machine_id}/plugins/victoria/install` with
+`POST /api/machines/{machine_id}/plugins/victoria` with
 `{"version":"1.1.0","digest":"sha256:<composite artifact_digest>"}`.
 Use the **artifact digest**, not the package digest. Never use a moving alias.
+The normal authenticated Product API can install it directly; an Admin login
+is not required. Successful installation returns HTTP 204. Then read
+`GET /api/machines/{machine_id}/plugins` and require the selected version and
+generation digest to be `active` before enabling export.
 
 Installing alone sends nothing. Copy and edit the example policies outside the
 repository, replace both zero digests with the installed generation digest,
@@ -60,3 +64,25 @@ See [Victoria OTLP support](https://docs.victoriametrics.com/opentelemetry/)
 and [VictoriaTraces ingestion](https://docs.victoriametrics.com/victoriatraces/data-ingestion/opentelemetry/).
 
 See [full configuration, limits and diagnostics](../../../docs/telemetry-plugins.md).
+
+## Verify actual delivery
+
+Server health, Catalog availability, Machine installation, Controller admission
+and backend delivery are different checks. After activation, submit one bounded
+synthetic log, a supported counter/histogram and a sampled span through the
+authenticated `/api/telemetry/v1/{logs,metrics,traces}` endpoints. Use standard
+OTLP/HTTP protobuf and the normal client authentication; do not send real prompts
+or credentials as test content.
+
+Query back the exact synthetic log/trace identities and metric sample from the
+three independently operated services. Check Cowboy's local-file failures,
+remote per-signal failures, rejected items and export-queue drops. HTTP 200
+admission by Cowboy alone does not prove backend delivery, and OTLP partial
+success is not full acceptance.
+
+Local recording remains enabled throughout; it defaults to 8 MiB per file,
+eight retained files and size/UTC-day rotation under a private `/tmp` directory.
+Older files are not uploaded on activation. Each remote signal is independently
+optional; omitting its Machine policy lane keeps that signal local. Prometheus
+scraping and journald shipping are separate from client OTLP export. See
+[the client instrumentation and privacy boundaries](../../../docs/client-opentelemetry.md).

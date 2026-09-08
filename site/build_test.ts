@@ -149,6 +149,61 @@ Deno.test("website telemetry has its own category and canonical source link", as
   }
 });
 
+Deno.test("website explains telemetry activation, routing, and privacy", async () => {
+  const html = await Deno.readTextFile(`${ROOT}/site/index.html`);
+  const start = html.indexOf('<aside class="telemetry-guide');
+  assert(start >= 0, "telemetry has a discoverable explanation");
+  const guide = html.slice(start, html.indexOf("</aside>", start));
+  for (
+    const phrase of [
+      'id="telemetry"',
+      "private JSONL files under /tmp",
+      "8 MiB per file, up to 8 files",
+      "VictoriaLogs",
+      "VictoriaMetrics",
+      "VictoriaTraces",
+      "exact version and digest",
+      "private telemetry.json",
+      "Installation alone sends nothing",
+      "standard OTLP/HTTP protobuf",
+      "does not install the three database services",
+      "Each signal can be disabled independently",
+      "older local files are not replayed",
+      "examples/telemetry/victoria/README.md",
+    ]
+  ) {
+    assert(
+      guide.includes(phrase),
+      `telemetry explanation must include ${phrase}`,
+    );
+  }
+});
+
+Deno.test("linked Victoria guide uses the real generic installation route", async () => {
+  const guide = await Deno.readTextFile(
+    `${ROOT}/examples/telemetry/victoria/README.md`,
+  );
+  const server = await Deno.readTextFile(`${ROOT}/src/server.rs`);
+  assert(
+    guide.includes("POST /api/machines/{machine_id}/plugins/victoria`"),
+    "document the implemented installation route",
+  );
+  assert(
+    !guide.includes("plugins/victoria/install"),
+    "do not send an installation request to the SPA fallback",
+  );
+  assert(
+    server.includes(
+      '"/api/machines/{id}/plugins/{provider_id}",\n            post(api_machine_plugin_install)',
+    ),
+    "documentation must follow the actual Product API",
+  );
+  assert(
+    guide.includes("returns HTTP 204"),
+    "HTML fallback is not installation acceptance",
+  );
+});
+
 for (const failure of ["duplicate", "unknown kind"] as const) {
   Deno.test(`website catalog rejects ${failure} across source roots`, async () => {
     const temporary = await Deno.makeTempDir({

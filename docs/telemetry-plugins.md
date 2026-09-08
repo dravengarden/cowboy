@@ -57,7 +57,8 @@ retries identifiable. Failures and queue drops need separate counters.
 No Victoria URL is attempted by default. The old
 `COWBOY_VICTORIA_LOGS_URL`/`COWBOY_VICTORIA_METRICS_URL` settings no longer enable
 export. Migrate explicitly to the signed backend before retiring old service
-configuration; this task does not modify NixOS or running services.
+configuration. Host service activation is operator-owned, separate from Plugin
+publication; the implementation gates below are not production receipts.
 
 | Setting | Default | Bounds |
 | --- | --- | --- |

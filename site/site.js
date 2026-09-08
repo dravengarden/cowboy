@@ -180,6 +180,17 @@ const zhMessages = {
     "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
   "plugins.summary.victoria":
     "可选通过 OTLP 导出至 VictoriaLogs、VictoriaMetrics 和 VictoriaTraces。诊断数据默认保存在自动轮转的本地文件中。",
+  "telemetry.title": "默认本地记录，三种信号，一个可选插件。",
+  "telemetry.default":
+    "未启用后端插件时，诊断日志、指标和链路保存在 /tmp 下的私有 JSONL 文件中：每个文件 8 MiB，最多 8 个，按大小或 UTC 日期自动轮转。这些临时文件不是会话或用量账本数据库。",
+  "telemetry.logs": "诊断事件与错误日志",
+  "telemetry.metrics": "计数器与延迟直方图",
+  "telemetry.traces": "采样的客户端 → Controller → Machine → worker 链路",
+  "telemetry.enable":
+    "在兼容的 Machine 上安装已签名的 Victoria 插件，在 Controller 中选择确切版本和摘要，再在 Machine 私有的 telemetry.json 中配置各信号的目的地。仅安装不会发送数据。插件使用标准 OTLP/HTTP protobuf，不会安装三个数据库服务，也不需要 OpenTelemetry Collector。",
+  "telemetry.safety":
+    "开启导出后仍保留本地记录。每种信号可独立关闭，远端故障不会阻塞会话。不自动导出原始 Prompt 或 Agent 输出，也不回放此前的本地文件。",
+  "telemetry.guide": "安装、精确配置与送达验证 →",
   "lifecycle.eyebrow": "已签名、已固定、故障关闭",
   "lifecycle.title": "统一生命周期，没有移动目标。",
   "lifecycle.intro":

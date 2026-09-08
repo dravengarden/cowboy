@@ -2035,6 +2035,48 @@ html[data-theme="dark"] .control-machine {
   margin-top: 20px;
 }
 
+.telemetry-guide {
+  margin-top: 28px;
+  padding: clamp(20px, 4vw, 32px);
+  border: 1px solid rgba(231, 224, 255, 0.16);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.035);
+  scroll-margin-top: 100px;
+}
+
+.telemetry-guide h3 {
+  color: #f1ecff;
+  font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+}
+
+.telemetry-guide p,
+.telemetry-signals dd {
+  color: #c5bfd4;
+  font-size: 0.88rem;
+  line-height: 1.7;
+}
+
+.telemetry-guide p {
+  margin: 16px 0;
+  max-width: 92ch;
+}
+
+.telemetry-signals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 18px;
+  margin: 24px 0;
+}
+
+.telemetry-signals dt {
+  color: #b7e5d9;
+  font-weight: 650;
+}
+
+.telemetry-signals dd {
+  margin: 4px 0 0;
+}
+
 .plugin-card {
   --plugin-accent: var(--plugin-accent-dark);
   display: flex;
