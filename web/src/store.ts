@@ -92,7 +92,7 @@ import {
   type SessionMeta,
   type WireQueued,
 } from "./protocol";
-import { mergeCanonicalTimeline } from "./canonicalTimeline";
+import { mergeCanonicalTimeline, snapshotJoinGap } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import {
@@ -876,6 +876,83 @@ function mergeEvents(
 // reloads of the SAME build stay cache hits. (`conn.version()` is the id the tab
 // loaded against; until the first /version probe lands it's a harmless "0".)
 const HISTORY_FETCH_TIMEOUT_MS = 6_000;
+const SNAPSHOT_GAP_FILL_PAGES = 32;
+
+type HistoryPage = {
+  events: Envelope[];
+  next_before_seq: number | null;
+  reached_start: boolean;
+};
+
+function historyPageUrl(sessionId: string, beforeSeq: number): string {
+  return `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`;
+}
+
+async function fetchHistoryPage(
+  sessionId: string,
+  beforeSeq: number,
+  signal?: AbortSignal,
+): Promise<HistoryPage | null> {
+  try {
+    const res = await fetch(
+      historyPageUrl(sessionId, beforeSeq),
+      signal === undefined ? undefined : { signal },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as HistoryPage;
+  } catch {
+    return null;
+  }
+}
+
+const snapshotGapFills = new Map<string, number>();
+
+/** Backfill the middle of a reconnect join: cached prefix + snapshot tail
+ *  with no overlap. Scrollback only prepends older than the window, so a user
+ *  prompt between those runs would otherwise stay missing. */
+async function fillSnapshotJoinGap(
+  sessionId: string,
+  beforeSeq: number,
+  untilSeq: number,
+): Promise<void> {
+  const epoch = transcriptEpoch.get(sessionId) ?? 0;
+  const fillId = snapshotGapFills.get(sessionId) ?? 0;
+  snapshotGapFills.set(sessionId, fillId + 1);
+  const thisFill = fillId + 1;
+  let cursor = beforeSeq;
+  for (let page = 0; page < SNAPSHOT_GAP_FILL_PAGES; page += 1) {
+    if (
+      (transcriptEpoch.get(sessionId) ?? 0) !== epoch ||
+      snapshotGapFills.get(sessionId) !== thisFill
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(
+      () => controller.abort("history request timed out"),
+      HISTORY_FETCH_TIMEOUT_MS,
+    );
+    const data = await fetchHistoryPage(sessionId, cursor, controller.signal);
+    globalThis.clearTimeout(timeout);
+    if (
+      (transcriptEpoch.get(sessionId) ?? 0) !== epoch ||
+      snapshotGapFills.get(sessionId) !== thisFill
+    ) {
+      return;
+    }
+    if (!data || data.events.length === 0) return;
+    setState({
+      ...state,
+      timelines: mergeEvents(state.timelines, sessionId, data.events),
+    });
+    if (data.events.some((event) => event.seq <= untilSeq) || data.reached_start) {
+      return;
+    }
+    const next = data.next_before_seq;
+    if (next === null || next >= cursor) return;
+    cursor = next;
+  }
+}
 
 export async function loadOlder(sessionId: string): Promise<boolean> {
   const pg = state.pagination.get(sessionId);
@@ -889,19 +966,11 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
   );
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
-    const res = await fetch(
-      `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`,
-      { signal: controller.signal },
-    );
-    if (!res.ok) {
+    const data = await fetchHistoryPage(sessionId, beforeSeq, controller.signal);
+    if (!data) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
       return false;
     }
-    const data = (await res.json()) as {
-      events: Envelope[];
-      next_before_seq: number | null;
-      reached_start: boolean;
-    };
     if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
@@ -1139,6 +1208,8 @@ function handle(msg: Outbound): void {
       // starts a fresh bootstrap; retaining this stale response would defeat the
       // cache bound and can overwrite a newer transcript epoch.
       if (!transcriptIsCached(msg.session_id)) break;
+      const existingTimeline = state.timelines.get(msg.session_id) ?? [];
+      const joinGap = snapshotJoinGap(existingTimeline, msg.events);
       const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
       // "history loaded" signal. Reconnects re-send snapshots but the flag stays
@@ -1176,6 +1247,13 @@ function handle(msg: Outbound): void {
         pagination,
         optimisticMessages,
       });
+      if (joinGap) {
+        void fillSnapshotJoinGap(
+          msg.session_id,
+          joinGap.beforeSeq,
+          joinGap.untilSeq,
+        );
+      }
       // A reload may hydrate the durable outbox before this bootstrap arrives.
       // If the daemon had already accepted the prompt, the snapshot's user echo
       // is the acknowledgement: retire the persisted mutation so reconnect

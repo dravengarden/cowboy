@@ -114,6 +114,11 @@ JS-virtualize this scroller. It must handle three chat-log realities: variable
 row heights (dynamic measurement), stick-to-bottom during live streaming
 (releasing when the user scrolls up), and scroll anchoring on prepend so
 loading older history (via `GET /api/history/:id?before_seq=…`) never jumps the view.
+A reconnect snapshot is only the recent tail. If the tab still holds an older
+prefix that does not overlap that tail, `snapshotJoinGap` pages the missing
+middle through the same history route — otherwise a user prompt between the
+kept answer and the new tools stays as a blank hole (`loadOlder` cannot fill
+it, because it only prepends older than the window).
 
 **Jank-free horizontal swipe is a core Mobile requirement.** Sessions and
 Review drawers, and the Agent↔Review pager, must track the finger on the
