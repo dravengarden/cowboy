@@ -7,6 +7,8 @@ on:
       - ".github/workflows/website.yml"
       - "plugins/*/plugin.json"
       - "plugins/*/provider.json"
+      - "examples/telemetry/*/plugin.json"
+      - "examples/telemetry/*/telemetry.json"
       - "site/**"
   workflow_dispatch:
 

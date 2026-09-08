@@ -30,14 +30,18 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
     kind: SitePlugin["kind"];
   }> = [];
 
-  for await (const entry of Deno.readDir(`${ROOT}/plugins`)) {
-    if (!entry.isDirectory) continue;
-    try {
-      manifests.push(JSON.parse(
-        await Deno.readTextFile(`${ROOT}/plugins/${entry.name}/plugin.json`),
-      ));
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
+  for (const source of ["plugins", "examples/telemetry"]) {
+    for await (const entry of Deno.readDir(`${ROOT}/${source}`)) {
+      if (!entry.isDirectory) continue;
+      try {
+        manifests.push(JSON.parse(
+          await Deno.readTextFile(
+            `${ROOT}/${source}/${entry.name}/plugin.json`,
+          ),
+        ));
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
     }
   }
 
@@ -57,6 +61,12 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
       .length,
     "code-intelligence Plugin count",
   );
+  assertEquals(
+    plugins.filter((plugin) => plugin.kind === "telemetry_backend").length,
+    manifests.filter((manifest) => manifest.kind === "telemetry_backend")
+      .length,
+    "telemetry Plugin count",
+  );
 
   const currentFirstParty = [
     "codex",
@@ -66,6 +76,7 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
     "codex-deepseek",
     "claude-deepseek",
     "zed",
+    "victoria",
   ];
   for (const id of currentFirstParty) {
     assert(
@@ -97,6 +108,111 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
   }
 });
 
+Deno.test("website telemetry has its own category and canonical source link", async () => {
+  const plugin = (await loadSitePlugins(ROOT)).find((plugin) =>
+    plugin.id === "victoria"
+  );
+  assert(plugin, "Victoria must appear in the public catalog");
+  assertEquals(plugin.kind, "telemetry_backend", "Victoria capability");
+  assertEquals(plugin.kindLabel, "Telemetry", "Victoria category label");
+  assertEquals(
+    plugin.sourcePath,
+    "examples/telemetry/victoria",
+    "canonical example source",
+  );
+  const html = renderPluginCards([plugin]);
+  assert(
+    html.includes('data-kind="telemetry_backend"'),
+    "telemetry filter identity",
+  );
+  assert(
+    html.includes('data-i18n="plugins.kind.telemetry"'),
+    "telemetry translation key",
+  );
+  assert(
+    !html.includes('data-i18n="plugins.kind.code"'),
+    "telemetry is not code intelligence",
+  );
+  assert(
+    html.includes(
+      'href="https://github.com/dravengarden/cowboy/tree/main/examples/telemetry/victoria"',
+    ),
+    "card links directly to its actual source",
+  );
+  assert(
+    html.includes("Opt-in OTLP export") &&
+      html.includes("rotating files by default"),
+    "external export stays opt-in and diagnostics default to local files",
+  );
+  for (const backend of ["VictoriaLogs", "VictoriaMetrics", "VictoriaTraces"]) {
+    assert(html.includes(backend), `${backend} should be explained`);
+  }
+});
+
+for (const failure of ["duplicate", "unknown kind"] as const) {
+  Deno.test(`website catalog rejects ${failure} across source roots`, async () => {
+    const temporary = await Deno.makeTempDir({
+      prefix: "cowboy-site-catalog-",
+    });
+    try {
+      await Deno.mkdir(`${temporary}/plugins/zed`, { recursive: true });
+      await Deno.mkdir(`${temporary}/examples/telemetry/victoria`, {
+        recursive: true,
+      });
+      const zed = JSON.parse(
+        await Deno.readTextFile(`${ROOT}/plugins/zed/plugin.json`),
+      );
+      const victoria = JSON.parse(
+        await Deno.readTextFile(
+          `${ROOT}/examples/telemetry/victoria/plugin.json`,
+        ),
+      );
+      if (failure === "duplicate") victoria.id = zed.id;
+      else victoria.kind = "future_kind";
+      await Deno.writeTextFile(
+        `${temporary}/plugins/zed/plugin.json`,
+        JSON.stringify(zed),
+      );
+      await Deno.writeTextFile(
+        `${temporary}/examples/telemetry/victoria/plugin.json`,
+        JSON.stringify(victoria),
+      );
+      let rejected = false;
+      try {
+        await loadSitePlugins(temporary);
+      } catch (error) {
+        rejected = error instanceof Error && error.message.includes(
+          failure === "duplicate"
+            ? "duplicate website Plugin identity"
+            : "unsupported website Plugin kind",
+        );
+      }
+      assert(rejected, `${failure} must not produce a misleading catalog`);
+    } finally {
+      await Deno.remove(temporary, { recursive: true });
+    }
+  });
+}
+
+Deno.test("website deployment watches telemetry Plugin updates", async () => {
+  const workflow = await Deno.readTextFile(
+    `${ROOT}/.github/workflows/website.yml`,
+  );
+  for (
+    const source of [
+      "plugins/*/plugin.json",
+      "plugins/*/provider.json",
+      "examples/telemetry/*/plugin.json",
+      "examples/telemetry/*/telemetry.json",
+    ]
+  ) {
+    assert(
+      workflow.includes(`- "${source}"`),
+      `Pages must rebuild when ${source} changes`,
+    );
+  }
+});
+
 Deno.test("website Plugin cards escape manifest presentation text", () => {
   const plugin: SitePlugin = {
     id: "sample",
@@ -105,6 +221,7 @@ Deno.test("website Plugin cards escape manifest presentation text", () => {
     publisher: "test",
     kind: "agent_provider",
     kindLabel: "Agent Provider",
+    sourcePath: "plugins/sample",
     name: "Sample <script>",
     vendor: "Test & Co.",
     summary: 'Safe "summary"',
@@ -270,7 +387,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     const notFound = await Deno.readTextFile(`${output}/404.html`);
     const catalog = JSON.parse(
       await Deno.readTextFile(`${output}/plugins.json`),
-    ) as Array<{ id: string }>;
+    ) as Array<{ id: string; kind: string; source_url: string }>;
     const styles = await Deno.readTextFile(`${output}/styles.css`);
     const script = await Deno.readTextFile(`${output}/site.js`);
 
@@ -279,7 +396,25 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       html,
       "404 fallback should keep the single-page site usable",
     );
-    assertEquals(catalog.length, 7, "published Plugin catalog count");
+    assertEquals(
+      catalog.length,
+      (await loadSitePlugins(ROOT)).length,
+      "published Plugin catalog count",
+    );
+    assert(
+      catalog.some((plugin) =>
+        plugin.id === "victoria" && plugin.kind === "telemetry_backend"
+      ),
+      "published JSON must include Victoria as telemetry",
+    );
+    assert(
+      html.includes(`All ${catalog.length}</button>`),
+      "all-filter count includes telemetry",
+    );
+    assert(
+      html.includes('data-filter="telemetry_backend"'),
+      "telemetry must have a selectable filter",
+    );
     assert(
       !/\{\{[A-Z_]+\}\}/u.test(html),
       "all template placeholders should resolve",
@@ -579,6 +714,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       assert(
         html.includes(`data-plugin="${plugin.id}"`),
         `${plugin.id} card should be rendered`,
+      );
+      assert(
+        html.includes(`href="${plugin.source_url}"`),
+        `${plugin.id} source link matches the public catalog`,
       );
     }
 

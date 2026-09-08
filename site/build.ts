@@ -6,7 +6,7 @@ interface PluginManifest {
   version: string;
   component_release: string;
   publisher: string;
-  kind: "agent_provider" | "code_intelligence";
+  kind: "agent_provider" | "code_intelligence" | "telemetry_backend";
   entrypoint: string;
 }
 
@@ -46,6 +46,7 @@ export interface SitePlugin {
   publisher: string;
   kind: PluginManifest["kind"];
   kindLabel: string;
+  sourcePath: string;
   name: string;
   vendor: string;
   summary: string;
@@ -67,7 +68,19 @@ const PLUGIN_ORDER = [
   "codex-deepseek",
   "claude-deepseek",
   "zed",
+  "victoria",
 ];
+
+const PLUGIN_SOURCE_ROOTS = ["plugins", "examples/telemetry"];
+
+const PLUGIN_KINDS = {
+  agent_provider: { label: "Agent Provider", translation: "agent" },
+  code_intelligence: { label: "Code Intelligence", translation: "code" },
+  telemetry_backend: { label: "Telemetry", translation: "telemetry" },
+} satisfies Record<
+  PluginManifest["kind"],
+  { label: string; translation: string }
+>;
 
 const WEBSITE_PROVIDER_ACCENTS: Partial<
   Record<string, { light: string; dark: string }>
@@ -76,7 +89,7 @@ const WEBSITE_PROVIDER_ACCENTS: Partial<
   grok: { light: "#44403C", dark: "#E8E4DC" },
 };
 
-const CODE_INTELLIGENCE_PRESENTATION: Record<
+const NON_AGENT_PRESENTATION: Record<
   string,
   Omit<
     SitePlugin,
@@ -86,6 +99,7 @@ const CODE_INTELLIGENCE_PRESENTATION: Record<
     | "publisher"
     | "kind"
     | "kindLabel"
+    | "sourcePath"
   >
 > = {
   zed: {
@@ -98,6 +112,18 @@ const CODE_INTELLIGENCE_PRESENTATION: Record<
     secondaryAccent: "#168B78",
     markViewBox: "0 0 24 24",
     markPath: "M8 6 2.75 12 8 18M16 6l5.25 6L16 18M14 3l-4 18",
+    markMode: "stroke",
+  },
+  victoria: {
+    name: "Victoria",
+    vendor: "VictoriaMetrics",
+    summary:
+      "Opt-in OTLP export to VictoriaLogs, VictoriaMetrics, and VictoriaTraces. Diagnostics stay local in rotating files by default.",
+    accentLight: "#168B78",
+    accentDark: "#5ED5B8",
+    secondaryAccent: "#6E56CF",
+    markViewBox: "0 0 24 24",
+    markPath: "M3 17h3l3-10 4 13 3-9 2 6h3M3 3v18h18",
     markMode: "stroke",
   },
 };
@@ -208,81 +234,99 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
-  const pluginRoot = joinPath(root, "plugins");
-  const manifests: PluginManifest[] = [];
+  const manifests: Array<{ manifest: PluginManifest; sourcePath: string }> = [];
+  const identities = new Set<string>();
 
-  for await (const entry of Deno.readDir(pluginRoot)) {
-    if (!entry.isDirectory) continue;
-    const path = joinPath(pluginRoot, entry.name, "plugin.json");
-    try {
-      manifests.push(await readJson<PluginManifest>(path));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) continue;
-      throw error;
+  for (const sourceRoot of PLUGIN_SOURCE_ROOTS) {
+    for await (const entry of Deno.readDir(joinPath(root, sourceRoot))) {
+      if (!entry.isDirectory) continue;
+      const sourcePath = joinPath(sourceRoot, entry.name);
+      let manifest: PluginManifest;
+      try {
+        manifest = await readJson<PluginManifest>(
+          joinPath(root, sourcePath, "plugin.json"),
+        );
+      } catch (error) {
+        if (error instanceof Deno.errors.NotFound) continue;
+        throw error;
+      }
+      if (identities.has(manifest.id)) {
+        throw new Error(`${manifest.id}: duplicate website Plugin identity`);
+      }
+      identities.add(manifest.id);
+      manifests.push({ manifest, sourcePath });
     }
   }
 
-  const plugins = await Promise.all(manifests.map(async (manifest) => {
-    if (manifest.schema_version !== 1) {
-      throw new Error(
-        `${manifest.id}: unsupported Plugin schema ${
-          String(manifest.schema_version)
-        }`,
-      );
-    }
-
-    const shared = {
-      id: manifest.id,
-      version: manifest.version,
-      componentRelease: manifest.component_release,
-      publisher: manifest.publisher,
-      kind: manifest.kind,
-      kindLabel: manifest.kind === "agent_provider"
-        ? "Agent Provider"
-        : "Code Intelligence",
-    } as const;
-
-    if (manifest.kind === "code_intelligence") {
-      const presentation = CODE_INTELLIGENCE_PRESENTATION[manifest.id];
-      if (!presentation) {
+  const plugins = await Promise.all(
+    manifests.map(async ({ manifest, sourcePath }) => {
+      if (manifest.schema_version !== 1) {
         throw new Error(
-          `${manifest.id}: missing website presentation metadata`,
+          `${manifest.id}: unsupported Plugin schema ${
+            String(manifest.schema_version)
+          }`,
         );
       }
-      return { ...shared, ...presentation };
-    }
+      if (!Object.hasOwn(PLUGIN_KINDS, manifest.kind)) {
+        throw new Error(`${manifest.id}: unsupported website Plugin kind`);
+      }
 
-    const provider = await readJson<ProviderManifest>(
-      joinPath(pluginRoot, manifest.id, manifest.entrypoint),
-    );
-    if (provider.id !== manifest.id || provider.version !== manifest.version) {
-      throw new Error(`${manifest.id}: Plugin and Provider identities diverge`);
-    }
+      const shared = {
+        id: manifest.id,
+        version: manifest.version,
+        componentRelease: manifest.component_release,
+        publisher: manifest.publisher,
+        kind: manifest.kind,
+        kindLabel: PLUGIN_KINDS[manifest.kind].label,
+        sourcePath,
+      } as const;
 
-    const display = provider.display;
-    const accent = assertHexColor(display.accent, `${manifest.id} accent`);
-    const websiteAccent = WEBSITE_PROVIDER_ACCENTS[manifest.id];
-    const accentLight = websiteAccent?.light ?? accent;
-    const accentDark = websiteAccent?.dark ?? accent;
+      if (manifest.kind !== "agent_provider") {
+        const presentation = NON_AGENT_PRESENTATION[manifest.id];
+        if (!presentation) {
+          throw new Error(
+            `${manifest.id}: missing website presentation metadata`,
+          );
+        }
+        return { ...shared, ...presentation };
+      }
 
-    return {
-      ...shared,
-      name: display.name,
-      vendor: display.vendor,
-      summary: display.summary,
-      accentLight,
-      accentDark,
-      secondaryAccent: assertHexColor(
-        display.secondary_accent,
-        `${manifest.id} secondary accent`,
-      ),
-      markViewBox: display.mark_view_box,
-      markPath: display.mark_path,
-      markMode: "fill" as const,
-      markFill: display.mark_fill,
-      markGradient: display.mark_gradient,
-    };
-  }));
+      const provider = await readJson<ProviderManifest>(
+        joinPath(root, sourcePath, manifest.entrypoint),
+      );
+      if (
+        provider.id !== manifest.id || provider.version !== manifest.version
+      ) {
+        throw new Error(
+          `${manifest.id}: Plugin and Provider identities diverge`,
+        );
+      }
+
+      const display = provider.display;
+      const accent = assertHexColor(display.accent, `${manifest.id} accent`);
+      const websiteAccent = WEBSITE_PROVIDER_ACCENTS[manifest.id];
+      const accentLight = websiteAccent?.light ?? accent;
+      const accentDark = websiteAccent?.dark ?? accent;
+
+      return {
+        ...shared,
+        name: display.name,
+        vendor: display.vendor,
+        summary: display.summary,
+        accentLight,
+        accentDark,
+        secondaryAccent: assertHexColor(
+          display.secondary_accent,
+          `${manifest.id} secondary accent`,
+        ),
+        markViewBox: display.mark_view_box,
+        markPath: display.mark_path,
+        markMode: "fill" as const,
+        markFill: display.mark_fill,
+        markGradient: display.mark_gradient,
+      };
+    }),
+  );
 
   const order = new Map(PLUGIN_ORDER.map((id, index) => [id, index]));
   plugins.sort((left, right) =>
@@ -329,6 +373,12 @@ function pluginMark(plugin: SitePlugin): string {
   } mark">${definitions}${path}</svg>`;
 }
 
+function pluginSourceUrl(plugin: SitePlugin): string {
+  return `https://github.com/dravengarden/cowboy/tree/main/${
+    plugin.sourcePath.split("/").map(encodeURIComponent).join("/")
+  }`;
+}
+
 export function renderPluginCards(plugins: SitePlugin[]): string {
   return plugins.map((plugin, index) => `
             <article
@@ -345,7 +395,7 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
             >
               <div class="plugin-card-topline">
                 <span data-i18n="plugins.kind.${
-    plugin.kind === "agent_provider" ? "agent" : "code"
+    PLUGIN_KINDS[plugin.kind].translation
   }">${escapeHtml(plugin.kindLabel)}</span>
                 <span class="plugin-version">v${
     escapeHtml(plugin.version)
@@ -362,7 +412,9 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
     escapeHtml(plugin.summary)
   }</p>
               <div class="plugin-card-footer">
-                <code>${escapeHtml(plugin.id)}</code>
+                <a href="${escapeHtml(pluginSourceUrl(plugin))}"><code>${
+    escapeHtml(plugin.id)
+  }</code></a>
                 <span><span data-i18n="plugins.component">component</span> ${
     escapeHtml(plugin.componentRelease)
   }</span>
@@ -381,6 +433,7 @@ export function renderPluginCatalog(plugins: SitePlugin[]): string {
       version: plugin.version,
       component_release: plugin.componentRelease,
       publisher: plugin.publisher,
+      source_url: pluginSourceUrl(plugin),
       accent: plugin.accentLight,
       secondary_accent: plugin.secondaryAccent,
     })),

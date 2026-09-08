@@ -162,9 +162,11 @@ const zhMessages = {
     `全部 ${String(document.querySelectorAll(".plugin-card").length)}`,
   "plugins.filter.agent": "Agent 提供方",
   "plugins.filter.code": "代码智能",
+  "plugins.filter.telemetry": "遥测",
   "plugins.browse": "查看源码",
   "plugins.kind.agent": "Agent 提供方",
   "plugins.kind.code": "代码智能",
+  "plugins.kind.telemetry": "遥测",
   "plugins.component": "组件",
   "plugins.summary.codex": "采用标准 OpenAI 账户与配置的 Codex",
   "plugins.summary.claude-code": "采用标准 Anthropic 账户与配置的 Claude Code",
@@ -176,6 +178,8 @@ const zhMessages = {
     "运行于隔离 DeepSeek runtime、提供百万 token 通道的 Claude Code",
   "plugins.summary.zed":
     "为每个已连接 worktree 提供进程隔离的符号、悬停、定义与引用。",
+  "plugins.summary.victoria":
+    "可选通过 OTLP 导出至 VictoriaLogs、VictoriaMetrics 和 VictoriaTraces。诊断数据默认保存在自动轮转的本地文件中。",
   "lifecycle.eyebrow": "已签名、已固定、故障关闭",
   "lifecycle.title": "统一生命周期，没有移动目标。",
   "lifecycle.intro":
