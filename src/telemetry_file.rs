@@ -28,12 +28,24 @@ pub(crate) fn default_directory(data_dir: &Path) -> PathBuf {
 
 pub(crate) struct TelemetryFile {
     directory: PathBuf,
-    lock: File,
+    lock: WriterLock,
     file: File,
     bytes: u64,
     day: i64,
     segment_bytes: u64,
     retained_files: usize,
+}
+
+// flock belongs to an open-file description, including descriptors briefly
+// inherited by a concurrent fork before CLOEXEC runs. Closing this process's
+// descriptor alone can therefore leave the lock held after owner teardown.
+// Explicitly unlock on every acquired-lock exit, including failed startup.
+struct WriterLock(File);
+
+impl Drop for WriterLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
 }
 
 fn private_metadata(path: &Path, directory: bool) -> Result<Option<fs::Metadata>> {
@@ -106,6 +118,7 @@ impl TelemetryFile {
         let lock = open_private(&directory.join(".writer.lock"))?;
         fs2::FileExt::try_lock_exclusive(&lock)
             .context("telemetry directory already has a writer")?;
+        let lock = WriterLock(lock);
         for entry in fs::read_dir(&directory)? {
             let entry = entry?;
             let name = entry.file_name();
@@ -172,7 +185,7 @@ impl TelemetryFile {
         // Do not silently claim success while writing invisible evidence.
         private_metadata(&self.directory, true)?.context("telemetry directory disappeared")?;
         for (path, file) in [
-            (self.directory.join(".writer.lock"), &self.lock),
+            (self.directory.join(".writer.lock"), &self.lock.0),
             (segment_path(&self.directory, 0), &self.file),
         ] {
             let expected =
@@ -309,6 +322,21 @@ mod tests {
             "{\"ok\":true}\n{\"next\":true}\n"
         );
         drop(writer);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn owner_teardown_unlocks_even_while_an_inherited_descriptor_remains_open() {
+        let path = directory();
+        let writer = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1).unwrap();
+        let inherited = writer.lock.0.try_clone().unwrap();
+        assert!(TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1).is_err());
+        drop(writer);
+        let next = TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1).unwrap();
+        drop(inherited);
+        // Closing an old duplicate must not release the new owner's lock.
+        assert!(TelemetryFile::open(path.clone(), MIN_SEGMENT_BYTES, 3, 1).is_err());
+        drop(next);
         fs::remove_dir_all(path).unwrap();
     }
 

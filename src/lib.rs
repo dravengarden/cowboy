@@ -78,6 +78,8 @@ mod memory_observability;
 mod observability;
 #[cfg(feature = "full")]
 mod oidc;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod otlp;
 #[cfg(feature = "full")]
 mod passkey;
 #[cfg(feature = "full")]

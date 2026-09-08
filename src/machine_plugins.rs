@@ -680,6 +680,7 @@ impl MachinePluginStore {
         plugin_version: &str,
         generation_digest: &str,
         auth_generation: Option<u64>,
+        operation: PluginHostOperation,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value> {
         let _export = self
@@ -724,6 +725,7 @@ impl MachinePluginStore {
                         .join("telemetry.json"),
                     &selection,
                     payload,
+                    operation == PluginHostOperation::ExportOtlp,
                 )?;
                 Ok((contract, config, payload))
             })()?
@@ -741,13 +743,17 @@ impl MachinePluginStore {
         operation: PluginHostOperation,
         mut payload: serde_json::Value,
     ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
-        if operation == PluginHostOperation::ExportTelemetry {
+        if matches!(
+            operation,
+            PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp
+        ) {
             return self
                 .export_telemetry(
                     plugin_id,
                     plugin_version,
                     generation_digest,
                     auth_generation,
+                    operation,
                     payload,
                 )
                 .await
@@ -869,7 +875,7 @@ impl MachinePluginStore {
             PluginHostOperation::CollectUsage => (&usage.collector_argv, "collect"),
             PluginHostOperation::ResetUsage => (&usage.reset_argv, "consume_reset"),
             PluginHostOperation::DecorateActivity => (&usage.collector_argv, "decorate_activity"),
-            PluginHostOperation::ExportTelemetry => {
+            PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp => {
                 bail!("telemetry cannot use executable Plugin hosts")
             }
         };
@@ -4075,6 +4081,20 @@ mod tests {
             include_str!("../examples/telemetry/victoria/telemetry.json"),
         )
         .unwrap();
+        if version.starts_with("1.0.") {
+            // Retained schema-one bytes remain an independent compatibility
+            // fixture when the installable example advances to OTLP schema 2.
+            contract = serde_json::from_value(serde_json::json!({
+                "schema_version":1,"id":"victoria","version":version,"display_name":"VictoriaLogs + VictoriaMetrics",
+                "supported_platforms":[{"os":"linux","architecture":"x86_64"}],
+                "logs":{"encoding":"json_lines","path":"/insert/jsonline","query":{"_stream_fields":"component,platform","_time_field":"timestamp","_msg_field":"message"}},
+                "metrics":{"encoding":"prometheus_text","path":"/api/v1/import/prometheus","query":{}}
+            })).unwrap();
+            manifest.component_release = "2.8.0".into();
+            for component in &mut manifest.components {
+                component.version = "1.7.0".into();
+            }
+        }
         manifest.version = version.to_owned();
         contract.version = version.to_owned();
         let platforms = contract.supported_platforms.clone();
@@ -4353,6 +4373,171 @@ mod tests {
         server.abort();
         drop(store);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "full")]
+    #[allow(clippy::too_many_lines)] // One fixture proves signed install, egress policy, partial success and rollback together.
+    async fn otlp_signed_plugin_exports_three_signals_and_honors_partial_success() {
+        use axum::{
+            body::Bytes,
+            http::{HeaderMap, StatusCode},
+            response::IntoResponse as _,
+        };
+        use std::sync::Arc;
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let root = tempfile::tempdir().unwrap();
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
+                .unwrap();
+        let machine_root = root.path().join("machine");
+        let store =
+            MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap();
+        let desired = telemetry_release(&publisher, "1.1.0");
+        let installed = store.install(&desired).await.unwrap();
+        let received = Arc::new(parking_lot::Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+        let capture = Arc::clone(&received);
+        let app = axum::Router::new().fallback(
+            move |uri: axum::extract::OriginalUri, headers: HeaderMap, body: Bytes| {
+                let capture = Arc::clone(&capture);
+                async move {
+                    assert_eq!(headers["content-type"], "application/x-protobuf");
+                    let mut requests = capture.lock();
+                    let path = uri.path().to_owned();
+                    let first_log = path.ends_with("/logs")
+                        && !requests.iter().any(|(p, _)| p.ends_with("/logs"));
+                    requests.push((path.clone(), body.to_vec()));
+                    if first_log {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    if path.ends_with("/traces") {
+                        // Victoria's HTTP handlers may acknowledge with an
+                        // empty protobuf response and no Content-Type header.
+                        return StatusCode::OK.into_response();
+                    }
+                    let response = if path.ends_with("/metrics") {
+                        vec![10, 2, 8, 1]
+                    } else {
+                        Vec::new()
+                    };
+                    (
+                        StatusCode::OK,
+                        [("content-type", "application/x-protobuf")],
+                        response,
+                    )
+                        .into_response()
+                }
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let fixtures = crate::otlp::client_fixtures();
+        let payload = |signal, bytes: &[u8]| serde_json::json!({"signal":signal,"protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)});
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.1.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::ExportOtlp,
+                    payload(fixtures[0].0, &fixtures[0].1)
+                )
+                .await
+                .is_err()
+        );
+        atomic_write(&machine_root.join("telemetry.json"), &serde_json::to_vec(&serde_json::json!({
+            "plugin":{"plugin_id":"victoria","plugin_version":"1.1.0","generation_digest":installed.generation_digest},
+            "logs":{"base_url":endpoint},"metrics":{"base_url":endpoint},"traces":{"base_url":endpoint}
+        })).unwrap(), 0o600).unwrap();
+        for (signal, bytes) in &fixtures {
+            let receipt = store
+                .invoke_host(
+                    "victoria",
+                    "1.1.0",
+                    &installed.generation_digest,
+                    None,
+                    PluginHostOperation::ExportOtlp,
+                    payload(*signal, bytes),
+                )
+                .await
+                .unwrap();
+            assert_eq!(receipt["otlp"]["enabled"], true);
+            assert_eq!(
+                receipt["otlp"]["delivered"],
+                *signal != crate::otlp::Signal::Metrics
+            );
+            assert_eq!(
+                receipt["otlp"]["rejected_items"],
+                u64::from(*signal == crate::otlp::Signal::Metrics)
+            );
+        }
+        {
+            let requests = received.lock();
+            assert_eq!(requests.len(), 5); // only the first logs 503 retries
+            assert!(
+                requests
+                    .iter()
+                    .any(|(p, _)| p == "/insert/opentelemetry/v1/traces")
+            );
+            let logs: Vec<_> = requests
+                .iter()
+                .filter(|(p, _)| p.ends_with("/logs"))
+                .collect();
+            assert_eq!(logs[0].1, logs[1].1);
+        }
+        assert!(!store.auth_provider_root("victoria").exists());
+        let next = store
+            .install(&telemetry_release(&publisher, "1.1.1"))
+            .await
+            .unwrap();
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.1.1",
+                    &next.generation_digest,
+                    None,
+                    PluginHostOperation::ExportOtlp,
+                    payload(fixtures[0].0, &fixtures[0].1)
+                )
+                .await
+                .is_err()
+        );
+        store
+            .uninstall("victoria", &next.generation_digest)
+            .await
+            .unwrap();
+        assert!(
+            store
+                .invoke_host(
+                    "victoria",
+                    "1.1.1",
+                    &next.generation_digest,
+                    None,
+                    PluginHostOperation::ExportOtlp,
+                    payload(fixtures[0].0, &fixtures[0].1)
+                )
+                .await
+                .is_err()
+        );
+        store.install(&desired).await.unwrap();
+        let receipt = store
+            .invoke_host(
+                "victoria",
+                "1.1.0",
+                &installed.generation_digest,
+                None,
+                PluginHostOperation::ExportOtlp,
+                payload(fixtures[0].0, &fixtures[0].1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt["otlp"]["delivered"], true);
+        server.abort();
     }
 
     fn seal_auth_for_test(

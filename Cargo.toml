@@ -60,6 +60,8 @@ axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["compression-br", "compression-gzip", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+opentelemetry-proto = { version = "=0.32.0", default-features = false, features = ["gen-tonic-messages", "with-serde", "trace", "metrics", "logs"] }
+prost = "0.14"
 anyhow = "1"
 base64 = "0.22"
 sha2 = "0.10"
@@ -92,7 +94,7 @@ ring = "0.17"
 rand = "0.8"
 rpassword = "=7.5.4"
 cowboy-provider-sdk = { version = "=3.1.10", path = "components/provider-sdk" }
-cowboy-plugin-sdk = { version = "=1.7.0", path = "components/plugin-sdk" }
+cowboy-plugin-sdk = { version = "=1.8.0", path = "components/plugin-sdk" }
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = "2"
@@ -113,6 +115,7 @@ tikv-jemallocator = "0.7"
 
 [dev-dependencies]
 syn = { version = "2", features = ["full"] }
+tempfile = "3"
 
 [lints.rust]
 warnings = "deny"

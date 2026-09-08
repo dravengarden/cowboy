@@ -25,8 +25,12 @@ Telemetry backends are data-only `telemetry_backend` Plugins. The Victoria
 example is `examples/telemetry/victoria`; build it with
 `just example-telemetry-bundle victoria`, then use the same generic artifact
 URL, sign, verify and publish commands. Never add Provider auth or runtime
-artifacts. Require Plugin SDK 1.7+, Machine protocol 8+, closed route validation,
+artifacts. OTLP schema 2 requires Plugin SDK 1.8+/Machine protocol 9+; retained
+schema 1 uses SDK 1.7+/protocol 8+. Require closed route validation,
 signed temporary install/upgrade/rollback/uninstall and HTTP failure tests.
+OTLP tests must decode official client SDK protobuf fixtures, check cumulative
+metric aggregation/dedup, and verify partial success is not retried. Never
+claim Machine/Worker/agent-internal spans from a Controller dispatch span.
 Installing is distinct from enabling export: exact Controller selection and
 Machine-private `telemetry.json` policy are both required. Do not read or
 publish the private endpoint/token policy as release evidence; check bounded

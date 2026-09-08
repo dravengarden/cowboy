@@ -252,7 +252,7 @@ impl UsageService {
             .iter()
             .filter(|host| {
                 host.usage.as_ref().is_some_and(|usage| match operation {
-                    PluginHostOperation::ExportTelemetry => false,
+                    PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp => false,
                     PluginHostOperation::CollectUsage => !usage.collector_argv.is_empty(),
                     PluginHostOperation::ResetUsage => !usage.reset_argv.is_empty(),
                     PluginHostOperation::DecorateActivity => {

@@ -4067,6 +4067,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
             | "/api/providers"
             | "/api/machines"
             | "/api/observability/batches"
+            | "/api/telemetry/v1/logs"
+            | "/api/telemetry/v1/metrics"
+            | "/api/telemetry/v1/traces"
     ) {
         return RouteAuth::Product;
     }
@@ -8777,6 +8780,10 @@ async fn serve_axum(
             "/api/observability/incidents",
             get(api_observability_incidents),
         )
+        .route(
+            "/api/telemetry/v1/{signal}",
+            post(api_otlp).layer(DefaultBodyLimit::max(crate::otlp::MAX_BYTES)),
+        )
         .route("/api/logs", get(api_diagnostic_logs))
         .route("/api/logs/{id}", get(api_diagnostic_log_detail))
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
@@ -9163,6 +9170,8 @@ struct Metrics {
     observability_dropped_batches: u64,
     observability_failed_log_batches: u64,
     observability_failed_metric_batches: u64,
+    observability_failed_trace_batches: u64,
+    observability_rejected_export_items: u64,
     hub_session_count: usize,
     hub_hot_log_bytes: usize,
     hub_broadcast_last_bytes: usize,
@@ -9277,6 +9286,8 @@ async fn api_metrics(State(state): State<Arc<AppState>>) -> Response {
         observability_dropped_batches: state.observability.health().dropped_batches(),
         observability_failed_log_batches: state.observability.health().failed_log_batches(),
         observability_failed_metric_batches: state.observability.health().failed_metric_batches(),
+        observability_failed_trace_batches: state.observability.health().failed_trace_batches(),
+        observability_rejected_export_items: state.observability.health().rejected_export_items(),
         hub_session_count: hub_memory.session_count,
         hub_hot_log_bytes: hub_memory.hot_log_bytes,
         hub_broadcast_last_bytes: hub_memory.broadcast_last_bytes,
@@ -9332,6 +9343,49 @@ async fn api_observability_incidents(State(state): State<Arc<AppState>>) -> Resp
     match store.runtime_incidents(200).await {
         Ok(incidents) => Json(incidents).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct OtlpQuery {
+    batch_id: String,
+}
+
+async fn api_otlp(
+    State(state): State<Arc<AppState>>,
+    Extension(authenticated): Extension<AuthenticatedProductRequest>,
+    Path(signal): Path<crate::otlp::Signal>,
+    Query(query): Query<OtlpQuery>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if headers
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        != Some("application/x-protobuf")
+        || headers.contains_key(axum::http::header::CONTENT_ENCODING)
+    {
+        return StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response();
+    }
+    match state.observability.submit_otlp(
+        &authenticated.principal.user_id,
+        signal,
+        &query.batch_id,
+        &body,
+    ) {
+        // All three standard Export*ServiceResponse messages encode a complete
+        // success as empty protobuf. Acknowledgement means bounded admission,
+        // not guaranteed persistence or delivery by the optional exporter.
+        Ok(()) => (
+            StatusCode::OK,
+            [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],
+            Vec::<u8>::new(),
+        )
+            .into_response(),
+        Err("observability queue full" | "observability unavailable") => {
+            StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+        Err(_) => StatusCode::BAD_REQUEST.into_response(),
     }
 }
 
@@ -18072,12 +18126,14 @@ async fn handle_ws(
                             }
                             continue;
                         }
+                        let trace_start = crate::otlp::now_nanos();
                         handle_command(
                             &state,
                             &principal,
                             &text,
                             &mut held,
                         );
+                        state.observability.record_command_trace(&principal.user_id, &text, trace_start);
                     }
                     // Other frame types (ping/pong/binary) are ignored.
                     Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Binary(_))) => {}
@@ -20500,6 +20556,13 @@ mod product_auth_api_tests {
             "/api/auth/device/refresh",
         ] {
             assert_eq!(classify_route(&Method::POST, path), RouteAuth::Public);
+        }
+        for path in [
+            "/api/telemetry/v1/logs",
+            "/api/telemetry/v1/metrics",
+            "/api/telemetry/v1/traces",
+        ] {
+            assert_eq!(classify_route(&Method::POST, path), RouteAuth::Product);
         }
         assert_eq!(
             classify_route(&Method::GET, "/api/auth/device/authorizations/events"),

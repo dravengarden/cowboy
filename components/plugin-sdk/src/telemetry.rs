@@ -7,7 +7,7 @@ use anyhow::{Result, ensure};
 use cowboy_provider_sdk::PlatformTarget;
 use serde::{Deserialize, Serialize};
 
-pub const TELEMETRY_BACKEND_SCHEMA_VERSION: u16 = 1;
+pub const TELEMETRY_BACKEND_SCHEMA_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +29,12 @@ pub struct TelemetryBackendContract {
         skip_serializing_if = "Option::is_none"
     )]
     pub metrics: Option<TelemetryRoute>,
+    #[serde(
+        default,
+        deserialize_with = "present_route",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub traces: Option<TelemetryRoute>,
 }
 
 fn present_route<'de, D: serde::Deserializer<'de>>(
@@ -52,6 +58,7 @@ pub struct TelemetryRoute {
 pub enum TelemetryEncoding {
     JsonLines,
     PrometheusText,
+    OtlpHttpProtobuf,
 }
 
 impl TelemetryBackendContract {
@@ -61,7 +68,7 @@ impl TelemetryBackendContract {
     /// Rejects unsupported encodings, platforms, routes or private URL policy.
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == TELEMETRY_BACKEND_SCHEMA_VERSION,
+            (1..=TELEMETRY_BACKEND_SCHEMA_VERSION).contains(&self.schema_version),
             "unsupported telemetry schema"
         );
         ensure!(
@@ -82,18 +89,28 @@ impl TelemetryBackendContract {
             "invalid telemetry platform matrix"
         );
         ensure!(
-            self.logs.is_some() || self.metrics.is_some(),
+            self.logs.is_some() || self.metrics.is_some() || self.traces.is_some(),
             "telemetry backend has no lanes"
+        );
+        ensure!(
+            self.schema_version >= 2 || self.traces.is_none(),
+            "traces require telemetry schema 2"
         );
         for (route, expected) in [
             (&self.logs, TelemetryEncoding::JsonLines),
             (&self.metrics, TelemetryEncoding::PrometheusText),
+            (&self.traces, TelemetryEncoding::OtlpHttpProtobuf),
         ] {
             let Some(route) = route else {
                 continue;
             };
             ensure!(
-                route.encoding == expected,
+                route.encoding
+                    == if self.schema_version == 2 {
+                        TelemetryEncoding::OtlpHttpProtobuf
+                    } else {
+                        expected
+                    },
                 "telemetry lane encoding mismatch"
             );
             ensure!(
@@ -110,7 +127,7 @@ impl TelemetryBackendContract {
             // fragments. New query semantics need a versioned SDK change.
             ensure!(route.query.len() <= 3, "too many telemetry query fields");
             for (key, value) in &route.query {
-                ensure!(expected == TelemetryEncoding::JsonLines && matches!(key.as_str(), "_stream_fields" | "_time_field" | "_msg_field") && !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b',')), "invalid telemetry query mapping");
+                ensure!(route.encoding == TelemetryEncoding::JsonLines && matches!(key.as_str(), "_stream_fields" | "_time_field" | "_msg_field") && !value.is_empty() && value.len() <= 128 && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b',')), "invalid telemetry query mapping");
             }
         }
         Ok(())
@@ -196,6 +213,50 @@ mod tests {
         let mut value = valid;
         value["command"] = "curl".into();
         assert!(serde_json::from_value::<TelemetryBackendContract>(value).is_err());
+    }
+
+    #[test]
+    fn otlp_three_lanes_require_schema_two_and_sdk_one_eight() {
+        let mut value = contract();
+        value["schema_version"] = 2.into();
+        value["logs"] = serde_json::json!({"encoding":"otlp_http_protobuf","path":"/v1/logs"});
+        value["metrics"] =
+            serde_json::json!({"encoding":"otlp_http_protobuf","path":"/v1/metrics"});
+        value["traces"] = serde_json::json!({"encoding":"otlp_http_protobuf","path":"/v1/traces"});
+        let payload: TelemetryBackendContract = serde_json::from_value(value.clone()).unwrap();
+        payload.validate().unwrap();
+        for (field, invalid) in [
+            ("schema_version", serde_json::json!(1)),
+            ("schema_version", serde_json::json!(3)),
+            ("traces", serde_json::Value::Null),
+        ] {
+            let mut bad = value.clone();
+            bad[field] = invalid;
+            assert!(
+                serde_json::from_value::<TelemetryBackendContract>(bad)
+                    .and_then(|c| c.validate().map_err(serde::de::Error::custom))
+                    .is_err()
+            );
+        }
+        let mut manifest: crate::PluginManifest = serde_json::from_value(serde_json::json!({
+            "schema_version":1,"id":"victoria","version":"1.0.0","component_release":"2.9.0","publisher":"fixture","kind":"telemetry_backend","entrypoint":"telemetry.json",
+            "components":[{"id":"cowboy.plugin-contract","version":"1.8.0"},{"id":"cowboy.plugin-sdk","version":"1.7.0"}]
+        })).unwrap();
+        assert!(
+            crate::PluginPackage::new(
+                manifest.clone(),
+                manifest.component_release.clone(),
+                crate::PluginPayload::TelemetryBackend(payload.clone())
+            )
+            .is_err()
+        );
+        manifest.components[1].version = "1.8.0".into();
+        crate::PluginPackage::new(
+            manifest.clone(),
+            manifest.component_release.clone(),
+            crate::PluginPayload::TelemetryBackend(payload),
+        )
+        .unwrap();
     }
 
     #[test]

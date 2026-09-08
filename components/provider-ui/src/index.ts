@@ -2735,10 +2735,12 @@ export function genericPluginCompatibilityProblem(
     : requirements.plugin_kind === "telemetry_backend"
     ? [
       1,
-      compareProviderVersions(inventory.plugin_sdk_version, "1.7.0") >= 0
+      compareProviderVersions(inventory.plugin_sdk_version, "1.8.0") >= 0
+        ? 2
+        : compareProviderVersions(inventory.plugin_sdk_version, "1.7.0") >= 0
         ? 1
         : 0,
-      "telemetry payload schema (Plugin SDK 1.7)",
+      "telemetry payload schema (Plugin SDK 1.7/1.8)",
     ] as const
     : [
       inventory.min_code_intelligence_schema,

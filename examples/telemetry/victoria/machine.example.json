@@ -1,9 +1,10 @@
 {
   "plugin": {
     "plugin_id": "victoria",
-    "plugin_version": "1.0.0",
+    "plugin_version": "1.1.0",
     "generation_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "logs": { "base_url": "http://127.0.0.1:6302" },
-  "metrics": { "base_url": "http://127.0.0.1:6301" }
+  "metrics": { "base_url": "http://127.0.0.1:6301" },
+  "traces": { "base_url": "http://127.0.0.1:10428" }
 }

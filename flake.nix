@@ -84,6 +84,7 @@
           ./src
           ./migrations
           ./web/src/protocol.ts
+          ./tests/fixtures/otel-client.json
         ] ++ plugin-contract-files ++ plugin-host-files);
       };
 
@@ -117,6 +118,7 @@
           ./src/machine_protocol.rs
           ./src/machine_plugins.rs
           ./src/telemetry_plugin.rs
+          ./src/otlp.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs
           ./src/provider_behavior.rs
@@ -202,7 +204,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-ydIQFNTWfAkJAsvIsfeNrEibf/RiSIC7/HJ0rntlorY=";
+        depsHash = "sha256-1xbSEbYtpAoE00h+1bKgnLXI5FFVVSL+ek4yJlTNdes=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
@@ -215,7 +217,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-F3EkeMk6L7PrtrggwtST9pSmxplY7BHSio0LzOSd/Ts=";
+        hash = "sha256-pzTrctQxuogyxYqgfmLCZi0Aw5msCk6WrgTTYwLrFHo=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then

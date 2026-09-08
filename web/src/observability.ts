@@ -1,23 +1,10 @@
 import { newUuid } from "./uuid";
 import { cleanTelemetryAttributes, cleanTelemetryMessage, retryTelemetryStatus, TelemetryQueue } from "./telemetryQueue.ts";
+import { type ClientSpan, createClientOtel } from "./otel.ts";
+import { OtlpTransport } from "./otelTransport.ts";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 type Scalar = string | number | boolean | null;
-
-interface PendingLog {
-  occurred_at_ms: number;
-  level: LogLevel;
-  event_name: string;
-  message: string;
-  attributes: Record<string, Scalar>;
-}
-
-interface PendingMetric {
-  occurred_at_ms: number;
-  name: string;
-  value: number;
-  dimensions: Record<string, string>;
-}
 
 interface PendingIncident {
   id: string;
@@ -32,6 +19,8 @@ export const CRASH_INCIDENT_SEVERITY = "critical" as const;
 
 const queue = new TelemetryQueue();
 let installed = false;
+let signedOut = false;
+let otel: ReturnType<typeof createClientOtel> | undefined;
 let flushing = false;
 let activeRequest: AbortController | null = null;
 let context: { session_id?: string; machine_id?: string; trace_id?: string } = {};
@@ -55,6 +44,25 @@ function stableClientId(): string {
 }
 
 const clientId = stableClientId();
+
+function telemetry() {
+  if (signedOut || typeof globalThis.document === "undefined") return;
+  const ua = globalThis.navigator?.userAgent ?? "";
+  try {
+    return otel ??= createClientOtel(new OtlpTransport(), {
+      platform: /iPad|iPhone|iPod/.test(ua) ? "ios" : /Macintosh/.test(ua) ? "macos" : "web",
+      surface: globalThis.matchMedia?.("(pointer: coarse)").matches ? "mobile" : "desktop",
+    });
+  } catch { return undefined; } // Diagnostics cannot break application startup.
+}
+
+export function startClientSpan(name: "connect" | "command" | "first_output", attributes: Record<string, string> = {}, parent?: ClientSpan): ClientSpan | undefined {
+  return telemetry()?.start(name, attributes, parent);
+}
+
+export function reportClientDuration(name: "command" | "first_output", milliseconds: number, dimensions: Record<string, string> = {}): void {
+  telemetry()?.duration(name, milliseconds, dimensions);
+}
 
 function buildIdentity(): string {
   return globalThis.document?.querySelector<HTMLScriptElement>('script[type="module"][src]')
@@ -92,16 +100,11 @@ export function reportClientLog(
   eventName: string,
   message: unknown,
   attributes: Record<string, Scalar> = {},
+  operation?: ClientSpan,
 ): void {
   if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(eventName)) return;
-  queue.capture("logs", {
-    occurred_at_ms: Date.now(),
-    level,
-    event_name: eventName,
-    message: cleanMessage(message),
-    attributes: cleanTelemetryAttributes(attributes),
-  } satisfies PendingLog, context);
-  if (level === "error" || queue.size >= 50) {
+  telemetry()?.log(level, eventName, message, { build: buildIdentity(), ...attributes }, operation);
+  if (level === "error") {
     void flushObservability();
   }
 }
@@ -112,10 +115,7 @@ export function reportClientMetric(
   dimensions: Record<string, string> = {},
 ): void {
   if (!Number.isFinite(value) || !/^[a-zA-Z0-9_]{1,64}$/.test(name)) return;
-  const labels = Object.fromEntries(Object.entries(dimensions).filter(([key, value]) =>
-    ["connection", "transport", "reason"].includes(key) && /^[a-zA-Z0-9_-]{1,64}$/.test(value)
-  ));
-  queue.capture("metrics", { occurred_at_ms: Date.now(), name, value, dimensions: labels } satisfies PendingMetric, context);
+  telemetry()?.metric(name, value, dimensions);
 }
 
 export function reportClientIncident(
@@ -125,6 +125,8 @@ export function reportClientIncident(
   detail: Record<string, Scalar> = {},
 ): void {
   if (!/^[a-zA-Z0-9_.:-]{1,64}$/.test(classification)) return;
+  if (signedOut) return;
+  telemetry()?.log(severity === "warning" ? "warn" : "error", "runtime_incident", summary, { ...detail, classification, severity });
   queue.capture("incidents", {
     id: newId(),
     occurred_at_ms: Date.now(),
@@ -147,6 +149,16 @@ function takeBatch() {
 }
 
 export async function flushObservability(): Promise<void> {
+  await Promise.allSettled([flushOtel(), flushIncidents()]);
+}
+
+async function flushOtel(): Promise<void> {
+  if (!otel || signedOut) return;
+  await otel.collect();
+  await otel.transport.flush();
+}
+
+async function flushIncidents(): Promise<void> {
   if (flushing) return;
   const batch = takeBatch();
   if (!batch) return;
@@ -172,6 +184,10 @@ export async function flushObservability(): Promise<void> {
 }
 
 function beaconFlush(): void {
+  otel?.transport.beacon();
+  // visibilitychange normally collects before pagehide. This final async
+  // collection is best effort; WebKit may freeze before it resolves.
+  if (otel && !signedOut) void otel.collect().then(() => otel?.transport.beacon());
   if (flushing) return;
   const batch = takeBatch();
   if (!batch) return;
@@ -193,8 +209,7 @@ function installPerformanceObservers(): void {
       const entries = list.getEntries();
       if (entries.length === 0) return;
       reportClientMetric("long_task_count", entries.length);
-      reportClientMetric("long_task_duration_ms_sum", entries.reduce((sum, item) => sum + item.duration, 0));
-      reportClientMetric("long_task_duration_ms_max", Math.max(...entries.map((item) => item.duration)));
+      for (const item of entries) reportClientMetric("long_task_duration_ms", item.duration);
     });
     observer.observe({ type: "longtask", buffered: true });
   } catch {
@@ -258,6 +273,9 @@ export function installObservability(): void {
   if (installed) return;
   installed = true;
   globalThis.addEventListener("cowboy:product-sign-out", () => {
+    signedOut = true;
+    void otel?.stop();
+    otel = undefined;
     activeRequest?.abort();
     queue.clear();
     context = {};
@@ -290,6 +308,9 @@ export function installObservability(): void {
     reportClientLog("warn", "network_offline", "Browser network became unavailable");
   });
   globalThis.addEventListener("pagehide", beaconFlush);
+  globalThis.document.addEventListener("visibilitychange", () => {
+    if (globalThis.document.visibilityState === "hidden") beaconFlush();
+  });
   globalThis.addEventListener("load", () => {
     const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
     if (navigation) reportClientMetric("navigation_duration_ms", navigation.duration);

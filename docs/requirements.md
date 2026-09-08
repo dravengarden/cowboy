@@ -46,9 +46,11 @@ Product-login integrations use the data-only `authentication_provider` kind
 and execute only through Controller-owned protocol drivers. Zed uses the
 `code_intelligence` kind and retains its isolated process and license boundary.
 
-Telemetry integrations use the data-only `telemetry_backend` kind (payload
-schema 1, Plugin SDK 1.7+, Machine protocol 8+). Its signed contract declares
-bounded JSON-lines/Prometheus ingestion routes and platform support, never
+Telemetry integrations use the data-only `telemetry_backend` kind. Payload
+schema 2 requires Plugin SDK 1.8+ and Machine protocol 9+ for OTLP/HTTP protobuf
+logs, metrics and traces. Retained schema 1 requires SDK 1.7+/protocol 8+ for
+legacy JSON-lines/Prometheus routes. Its signed contract declares
+bounded ingestion routes and platform support, never
 executable artifacts, service URLs, credentials, or Agent authentication.
 It uses the same signed Catalog and Machine install/upgrade/rollback/uninstall
 lifecycle. Installation alone grants no egress: Controller policy selects an

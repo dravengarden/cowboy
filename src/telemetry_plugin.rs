@@ -75,6 +75,16 @@ impl PluginSelection {
 pub(crate) struct ExportResult {
     pub logs_delivered: bool,
     pub metrics_delivered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub otlp: Option<OtlpResult>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OtlpResult {
+    pub enabled: bool,
+    pub delivered: bool,
+    pub rejected_items: u64,
 }
 
 #[cfg(feature = "full")]
@@ -118,13 +128,19 @@ pub(crate) fn controller_exporter(
             let Some(selected) = selected else {
                 return crate::observability::ExportReceipt::default();
             };
-            let result = control
-                .plugin_host_request(
-                    &machine_id,
-                    &selected.plugin,
+            let signal = batch.otlp.as_ref().map(|v| v.signal);
+            let (operation, payload) = match batch.otlp {
+                Some(otlp) => (
+                    crate::machine_protocol::PluginHostOperation::ExportOtlp,
+                    serde_json::to_value(otlp).expect("OTLP envelope"),
+                ),
+                None => (
                     crate::machine_protocol::PluginHostOperation::ExportTelemetry,
                     serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
-                )
+                ),
+            };
+            let result = control
+                .plugin_host_request(&machine_id, &selected.plugin, operation, payload)
                 .await;
             // Never log the command or private endpoint errors. Only bounded
             // lane receipts reach the Controller's event history.
@@ -132,9 +148,22 @@ pub(crate) fn controller_exporter(
                 .ok()
                 .and_then(|value| serde_json::from_value::<ExportResult>(value).ok())
                 .unwrap_or_default();
+            if let Some(signal) = signal {
+                let Some(otlp) = receipt.otlp else {
+                    return crate::observability::ExportReceipt::default();
+                };
+                let success = !otlp.enabled || otlp.delivered;
+                return crate::observability::ExportReceipt {
+                    logs_delivered: signal == crate::otlp::Signal::Logs && success,
+                    metrics_delivered: signal == crate::otlp::Signal::Metrics && success,
+                    traces_delivered: signal == crate::otlp::Signal::Traces && success,
+                    rejected_items: otlp.rejected_items.min(crate::otlp::MAX_ITEMS as u64),
+                };
+            }
             crate::observability::ExportReceipt {
                 logs_delivered: receipt.logs_delivered,
                 metrics_delivered: receipt.metrics_delivered,
+                ..Default::default()
             }
         })
     })))
@@ -152,6 +181,7 @@ mod machine {
         pub plugin: PluginSelection,
         logs: Option<Endpoint>,
         metrics: Option<Endpoint>,
+        traces: Option<Endpoint>,
     }
 
     #[derive(Deserialize)]
@@ -164,15 +194,21 @@ mod machine {
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    pub(crate) struct Payload {
+    pub(crate) struct LegacyPayload {
         logs: String,
         metrics: String,
+    }
+
+    pub(crate) enum Payload {
+        Legacy(LegacyPayload),
+        Otlp(crate::otlp::Export),
     }
 
     pub(crate) fn prepare(
         path: &Path,
         selection: &PluginSelection,
         value: serde_json::Value,
+        otlp: bool,
     ) -> Result<(Configuration, Payload)> {
         let config: Configuration = read_private(path)?;
         config.plugin.validate()?;
@@ -182,13 +218,24 @@ mod machine {
                 && config.plugin.generation_digest == selection.generation_digest,
             "telemetry release is not enabled by Machine policy"
         );
-        let payload: Payload = serde_json::from_value(value)
-            .map_err(|_| anyhow::anyhow!("invalid telemetry export payload"))?;
-        ensure!(
-            payload.logs.len().saturating_add(payload.metrics.len()) <= 512 * 1024,
-            "telemetry export payload too large"
-        );
-        for endpoint in [&config.logs, &config.metrics].into_iter().flatten() {
+        let payload = if otlp {
+            let payload: crate::otlp::Export = serde_json::from_value(value)
+                .map_err(|_| anyhow::anyhow!("invalid OTLP export payload"))?;
+            payload.decode()?;
+            Payload::Otlp(payload)
+        } else {
+            let payload: LegacyPayload = serde_json::from_value(value)
+                .map_err(|_| anyhow::anyhow!("invalid telemetry export payload"))?;
+            ensure!(
+                payload.logs.len().saturating_add(payload.metrics.len()) <= 512 * 1024,
+                "telemetry export payload too large"
+            );
+            Payload::Legacy(payload)
+        };
+        for endpoint in [&config.logs, &config.metrics, &config.traces]
+            .into_iter()
+            .flatten()
+        {
             endpoint.validate()?;
         }
         Ok((config, payload))
@@ -242,6 +289,25 @@ mod machine {
         else {
             return ExportResult::default();
         };
+        let payload = match payload {
+            Payload::Otlp(payload) => {
+                let (route, endpoint) = match payload.signal {
+                    crate::otlp::Signal::Logs => (contract.logs.as_ref(), config.logs.as_ref()),
+                    crate::otlp::Signal::Metrics => {
+                        (contract.metrics.as_ref(), config.metrics.as_ref())
+                    }
+                    crate::otlp::Signal::Traces => {
+                        (contract.traces.as_ref(), config.traces.as_ref())
+                    }
+                };
+                let receipt = post_otlp(&client, route, endpoint, &payload).await;
+                return ExportResult {
+                    otlp: Some(receipt),
+                    ..Default::default()
+                };
+            }
+            Payload::Legacy(payload) => payload,
+        };
         let (logs_delivered, metrics_delivered) = tokio::join!(
             post(
                 &client,
@@ -259,6 +325,7 @@ mod machine {
         ExportResult {
             logs_delivered,
             metrics_delivered,
+            otlp: None,
         }
     }
 
@@ -293,6 +360,7 @@ mod machine {
                     match route.encoding {
                         TelemetryEncoding::JsonLines => "application/stream+json",
                         TelemetryEncoding::PrometheusText => "text/plain; version=0.0.4",
+                        TelemetryEncoding::OtlpHttpProtobuf => return false,
                     },
                 )
                 .body(body.clone());
@@ -313,6 +381,88 @@ mod machine {
             tokio::time::sleep(Duration::from_millis(150)).await;
         }
         false
+    }
+
+    async fn post_otlp(
+        client: &reqwest::Client,
+        route: Option<&TelemetryRoute>,
+        endpoint: Option<&Endpoint>,
+        payload: &crate::otlp::Export,
+    ) -> OtlpResult {
+        // Explicitly disabled lanes stay local. Missing/incompatible routes on
+        // an enabled lane are failures, never a legacy-encoding fallback.
+        let Some(endpoint) = endpoint else {
+            return OtlpResult::default();
+        };
+        let failed = || OtlpResult {
+            enabled: true,
+            ..Default::default()
+        };
+        let Some(route) = route.filter(|r| r.encoding == TelemetryEncoding::OtlpHttpProtobuf)
+        else {
+            return failed();
+        };
+        let Ok((body, count)) = payload.decode() else {
+            return failed();
+        };
+        let Ok(mut url) = url::Url::parse(&endpoint.base_url) else {
+            return failed();
+        };
+        url.set_path(&format!(
+            "{}{}",
+            url.path().trim_end_matches('/'),
+            route.path
+        ));
+        for attempt in 0..2 {
+            let mut request = client
+                .post(url.clone())
+                .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+                .body(body.clone());
+            if let Some(token) = &endpoint.bearer_token {
+                request = request.bearer_auth(token);
+            }
+            let retry = match request.send().await {
+                Ok(mut response) if response.status() == reqwest::StatusCode::OK => {
+                    if response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|v| v != "application/x-protobuf")
+                    {
+                        return failed();
+                    }
+                    let mut bytes = Vec::new();
+                    loop {
+                        match response.chunk().await {
+                            Ok(Some(chunk))
+                                if bytes.len().saturating_add(chunk.len()) <= 64 * 1024 =>
+                            {
+                                bytes.extend_from_slice(&chunk)
+                            }
+                            Ok(None) => break,
+                            _ => return failed(),
+                        }
+                    }
+                    // No retries for partial success (including warning-only),
+                    // invalid response bodies or a successful HTTP receipt.
+                    return match payload.signal.rejected(&bytes, count) {
+                        Ok(rejected_items) => OtlpResult {
+                            enabled: true,
+                            delivered: rejected_items == 0,
+                            rejected_items,
+                        },
+                        Err(_) => failed(),
+                    };
+                }
+                Ok(response) => matches!(response.status().as_u16(), 429 | 502 | 503 | 504),
+                Err(_) => true,
+            };
+            if !retry || attempt == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+        failed()
     }
     #[cfg(test)]
     mod tests {

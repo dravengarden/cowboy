@@ -112,6 +112,8 @@ pub struct ObservabilityHealth {
     dropped_export_batches: AtomicU64,
     failed_log_batches: AtomicU64,
     failed_metric_batches: AtomicU64,
+    failed_trace_batches: AtomicU64,
+    rejected_export_items: AtomicU64,
 }
 
 impl ObservabilityHealth {
@@ -125,6 +127,14 @@ impl ObservabilityHealth {
             ("failed_file_batches", self.failed_file_batches()),
             ("failed_incident_batches", self.failed_incident_batches()),
             ("dropped_export_batches", self.dropped_export_batches()),
+            (
+                "failed_trace_batches",
+                self.failed_trace_batches.load(Ordering::Relaxed),
+            ),
+            (
+                "rejected_export_items",
+                self.rejected_export_items.load(Ordering::Relaxed),
+            ),
         ] {
             let _ = writeln!(
                 output,
@@ -167,31 +177,50 @@ impl ObservabilityHealth {
     pub fn failed_metric_batches(&self) -> u64 {
         self.failed_metric_batches.load(Ordering::Relaxed)
     }
+
+    pub fn failed_trace_batches(&self) -> u64 {
+        self.failed_trace_batches.load(Ordering::Relaxed)
+    }
+    pub fn rejected_export_items(&self) -> u64 {
+        self.rejected_export_items.load(Ordering::Relaxed)
+    }
 }
 
 pub(crate) struct ExportBatch {
     pub logs: String,
     pub metrics: String,
+    pub otlp: Option<crate::otlp::Export>,
 }
 
 #[derive(Default)]
 pub(crate) struct ExportReceipt {
     pub logs_delivered: bool,
     pub metrics_delivered: bool,
+    pub traces_delivered: bool,
+    pub rejected_items: u64,
 }
 
 pub(crate) type TelemetryExporter =
     Arc<dyn Fn(ExportBatch) -> BoxFuture<'static, ExportReceipt> + Send + Sync>;
 
 struct PendingBatch {
-    batch: TelemetryBatch,
+    batch: PendingData,
     bytes: usize,
+}
+
+enum PendingData {
+    Legacy(Box<TelemetryBatch>),
+    Otlp {
+        records: String,
+        export: crate::otlp::Export,
+    },
 }
 
 #[derive(Default)]
 struct Admission {
     seen: BTreeMap<String, String>,
     order: VecDeque<String>,
+    metrics: crate::otlp::Aggregator,
 }
 
 #[derive(Clone)]
@@ -287,7 +316,7 @@ impl Observability {
         if self
             .tx
             .try_send(PendingBatch {
-                batch,
+                batch: PendingData::Legacy(Box::new(batch)),
                 bytes: bytes.len(),
             })
             .is_ok()
@@ -309,6 +338,126 @@ impl Observability {
             self.health.dropped_batches.fetch_add(1, Ordering::Relaxed);
             Err("observability queue full")
         }
+    }
+
+    /// Authentication is supplied by the route, never by an OTLP resource.
+    /// Reserve before aggregation: a rejected/retried request cannot increment
+    /// a counter until its complete sanitized batch has entered the writer.
+    pub(crate) fn submit_otlp(
+        &self,
+        principal: &str,
+        signal: crate::otlp::Signal,
+        batch_id: &str,
+        body: &[u8],
+    ) -> Result<(), &'static str> {
+        if !valid_token(batch_id, 128) {
+            return Err("invalid OTLP batch identity");
+        }
+        let mut request =
+            crate::otlp::Request::decode(signal, body).map_err(|_| "invalid OTLP request")?;
+        request
+            .sanitize(principal)
+            .map_err(|_| "invalid OTLP data")?;
+        self.admit_otlp(principal, signal, batch_id, body, request)
+    }
+
+    pub(crate) fn record_command_trace(&self, principal: &str, text: &str, start: u64) {
+        // Deserialize only propagation metadata, never copy a prompt/content
+        // object into the telemetry representation.
+        #[derive(Deserialize)]
+        struct Carrier {
+            traceparent: Option<String>,
+        }
+        if !text.contains("\"traceparent\"") {
+            return;
+        }
+        let Some(parent) = serde_json::from_str::<Carrier>(text)
+            .ok()
+            .and_then(|v| v.traceparent)
+        else {
+            return;
+        };
+        let Some(request) = crate::otlp::command_span(principal, &parent, start) else {
+            return;
+        };
+        let export = request.export();
+        let _ = self.admit_otlp(
+            principal,
+            crate::otlp::Signal::Traces,
+            &uuid::Uuid::new_v4().to_string(),
+            export.protobuf.as_bytes(),
+            request,
+        );
+    }
+
+    fn admit_otlp(
+        &self,
+        principal: &str,
+        signal: crate::otlp::Signal,
+        batch_id: &str,
+        body: &[u8],
+        mut request: crate::otlp::Request,
+    ) -> Result<(), &'static str> {
+        let key = scoped_identity(principal, &format!("otlp:{signal:?}"), batch_id);
+        let digest = format!("{:x}", Sha256::digest(body));
+        let mut admission = self.admission.lock();
+        if let Some(previous) = admission.seen.get(&key) {
+            if previous != &digest {
+                return Err("batch identity reused with different content");
+            }
+            self.health
+                .duplicate_batches
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(());
+        }
+        if *self.shutdown.borrow() {
+            return Err("observability unavailable");
+        }
+        let permit = self.tx.try_reserve().map_err(|_| {
+            self.health.dropped_batches.fetch_add(1, Ordering::Relaxed);
+            "observability queue full"
+        })?;
+        let candidate = if signal == crate::otlp::Signal::Metrics {
+            let mut candidate = admission.metrics.clone();
+            candidate
+                .aggregate(&mut request)
+                .map_err(|_| "invalid OTLP metric streams")?;
+            Some(candidate)
+        } else {
+            None
+        };
+        let records = request.records();
+        let export = request.export();
+        // Protobuf -> JSON can expand; account for actual retained bytes and
+        // enforce an individual-record ceiling below the smallest file segment.
+        let bytes = records.len().saturating_add(export.protobuf.len());
+        if bytes > 1024 * 1024 || records.lines().any(|line| line.len() > 32 * 1024) {
+            return Err("OTLP records too large");
+        }
+        if self.health.pending_bytes().saturating_add(bytes) > MAX_PENDING_BYTES {
+            self.health.dropped_batches.fetch_add(1, Ordering::Relaxed);
+            return Err("observability queue full");
+        }
+        if let Some(candidate) = candidate {
+            admission.metrics = candidate;
+        }
+        if admission.order.len() == DEDUP_CAPACITY
+            && let Some(oldest) = admission.order.pop_front()
+        {
+            admission.seen.remove(&oldest);
+        }
+        admission.order.push_back(key.clone());
+        admission.seen.insert(key, digest);
+        self.health.pending.fetch_add(1, Ordering::Relaxed);
+        self.health
+            .pending_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+        self.health.accepted_batches.fetch_add(1, Ordering::Relaxed);
+        permit.send(PendingBatch {
+            batch: PendingData::Otlp { records, export },
+            bytes,
+        });
+        Ok(())
     }
 
     pub fn health(&self) -> &ObservabilityHealth {
@@ -459,7 +608,7 @@ fn truncate_utf8(value: &str, maximum: usize) -> &str {
     &value[..end]
 }
 
-fn redact_message(value: &str) -> String {
+pub(crate) fn redact_message(value: &str) -> String {
     static COOKIE: OnceLock<regex::Regex> = OnceLock::new();
     static CREDENTIAL: OnceLock<regex::Regex> = OnceLock::new();
     static BEARER: OnceLock<regex::Regex> = OnceLock::new();
@@ -556,7 +705,7 @@ fn sensitive_key(value: &str) -> bool {
     .any(|needle| value.contains(needle))
 }
 
-fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn sanitize_attributes(value: &serde_json::Value) -> serde_json::Value {
     let Some(input) = value.as_object() else {
         return serde_json::json!({});
     };
@@ -611,16 +760,45 @@ async fn run_writer(
         let Some(PendingBatch { batch, bytes }) = pending else {
             break;
         };
-        if let Some(tx) = incident_tx.as_ref()
-            && !batch.incidents.is_empty()
-            && tx.try_send(batch.clone()).is_err()
-        {
-            health
-                .failed_incident_batches
-                .fetch_add(1, Ordering::Relaxed);
-        }
-        let logs = logs_payload(&batch);
-        let records = local_payload(&batch, &logs);
+        let (records, export) = match batch {
+            PendingData::Otlp { records, export } => (
+                records,
+                ExportBatch {
+                    logs: String::new(),
+                    metrics: String::new(),
+                    otlp: Some(export),
+                },
+            ),
+            PendingData::Legacy(batch) => {
+                let batch = *batch;
+                if let Some(tx) = incident_tx.as_ref()
+                    && !batch.incidents.is_empty()
+                    && tx.try_send(batch.clone()).is_err()
+                {
+                    health
+                        .failed_incident_batches
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                let logs = logs_payload(&batch);
+                let records = local_payload(&batch, &logs);
+                // Incident-only submissions are the durable product ledger,
+                // not a second diagnostic export. The client emits their OTel
+                // log independently, including when traces are unsampled.
+                let logs = if batch.logs.is_empty() && batch.metrics.is_empty() {
+                    String::new()
+                } else {
+                    logs
+                };
+                (
+                    records,
+                    ExportBatch {
+                        logs,
+                        metrics: metrics_payload(&batch),
+                        otlp: None,
+                    },
+                )
+            }
+        };
         let writer = Arc::clone(&file);
         let written = tokio::task::spawn_blocking(move || {
             writer
@@ -630,15 +808,10 @@ async fn run_writer(
         .await;
         if !matches!(written, Ok(Ok(()))) {
             health.failed_file_batches.fetch_add(1, Ordering::Relaxed);
-            tracing::warn!(batch_id = %batch.batch_id, "local telemetry write failed");
+            tracing::warn!("local telemetry write failed");
         }
         if let Some(tx) = export_tx.as_ref()
-            && tx
-                .try_send(ExportBatch {
-                    logs,
-                    metrics: metrics_payload(&batch),
-                })
-                .is_err()
+            && tx.try_send(export).is_err()
         {
             health
                 .dropped_export_batches
@@ -655,8 +828,13 @@ async fn run_exporter(
     health: Arc<ObservabilityHealth>,
 ) {
     while let Some(batch) = rx.recv().await {
-        let has_logs = !batch.logs.is_empty();
-        let has_metrics = !batch.metrics.is_empty();
+        if batch.logs.is_empty() && batch.metrics.is_empty() && batch.otlp.is_none() {
+            continue;
+        }
+        let signal = batch.otlp.as_ref().map(|export| export.signal);
+        let has_logs = !batch.logs.is_empty() || signal == Some(crate::otlp::Signal::Logs);
+        let has_metrics = !batch.metrics.is_empty() || signal == Some(crate::otlp::Signal::Metrics);
+        let has_traces = signal == Some(crate::otlp::Signal::Traces);
         let receipt = tokio::time::timeout(Duration::from_secs(15), exporter(batch))
             .await
             .unwrap_or_default();
@@ -666,6 +844,12 @@ async fn run_exporter(
         if has_metrics && !receipt.metrics_delivered {
             health.failed_metric_batches.fetch_add(1, Ordering::Relaxed);
         }
+        if has_traces && !receipt.traces_delivered {
+            health.failed_trace_batches.fetch_add(1, Ordering::Relaxed);
+        }
+        health
+            .rejected_export_items
+            .fetch_add(receipt.rejected_items, Ordering::Relaxed);
     }
 }
 
@@ -1105,6 +1289,58 @@ mod tests {
         writer.drain().await;
         assert!(writer.health().failed_log_batches() > 0);
         drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn otlp_dedup_precedes_delta_aggregation_and_files_need_no_exporter() {
+        let (path, file) = local_file();
+        let writer = Observability::start(None, file, None);
+        for (index, (signal, bytes)) in crate::otlp::client_fixtures().into_iter().enumerate() {
+            let id = format!("fixture-{index}");
+            writer.submit_otlp("a", signal, &id, &bytes).unwrap();
+            writer.submit_otlp("a", signal, &id, &bytes).unwrap();
+            writer.submit_otlp("b", signal, &id, &bytes).unwrap();
+        }
+        writer.drain().await;
+        assert_eq!(writer.health().accepted_batches(), 8);
+        assert_eq!(writer.health().duplicate_batches(), 4);
+        assert_eq!(writer.health().pending_bytes(), 0);
+        assert_eq!(writer.health().failed_file_batches(), 0);
+        let data = std::fs::read_to_string(path.join("telemetry.jsonl")).unwrap();
+        assert_eq!(data.lines().count(), 8);
+        let points: Vec<serde_json::Value> = data
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|r| r["name"] == "cowboy.client.websocket.reconnects")
+            .collect();
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[1]["point"]["sum"]["asDouble"], 2.0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn otlp_full_queue_does_not_consume_metric_delta_or_dedup_identity() {
+        let (path, file) = local_file();
+        let writer = Observability::start(None, file, None);
+        for i in 0..QUEUE_CAPACITY {
+            let mut b = batch();
+            b.batch_id = format!("fill-{i}");
+            writer.submit("a", b).unwrap();
+        }
+        let (signal, bytes) = crate::otlp::client_fixtures().pop().unwrap();
+        assert_eq!(
+            writer.submit_otlp("a", signal, "retry", &bytes),
+            Err("observability queue full")
+        );
+        while writer.health().pending() > 0 {
+            tokio::task::yield_now().await;
+        }
+        writer.submit_otlp("a", signal, "retry", &bytes).unwrap();
+        writer.drain().await;
+        let data = std::fs::read_to_string(path.join("telemetry.jsonl")).unwrap();
+        let last: serde_json::Value = serde_json::from_str(data.lines().last().unwrap()).unwrap();
+        assert_eq!(last["point"]["sum"]["asDouble"], 1.0);
         std::fs::remove_dir_all(path).unwrap();
     }
 

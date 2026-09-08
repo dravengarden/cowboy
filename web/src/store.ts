@@ -64,7 +64,11 @@ import { beginConversationClear } from "./conversationClearance";
 import { resetExploreAfterContextClear } from "./explore/exploreStore";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import { notifyHaptic } from "./haptic";
-import { reportClientLog, reportClientMetric } from "./observability";
+import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
+import { ClientOperations } from "./otelOperations.ts";
+
+const telemetryOperations = new ClientOperations(startClientSpan, reportClientDuration);
+globalThis.addEventListener?.("cowboy:product-sign-out", () => telemetryOperations.clear());
 import { newUuid } from "./uuid";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
@@ -620,10 +624,16 @@ function sendWithAck(
   predicate: (snapshot: State) => boolean,
   label: string,
 ): Promise<void> {
+  const operation = startClientSpan("command", { operation: command.type, transport: "websocket" });
+  const started = performance.now();
   if (!send(command)) {
+    operation?.end("error");
     return Promise.reject(new Error(`${label} is unavailable while reconnecting`));
   }
-  return waitForState(predicate, label);
+  return waitForState(predicate, label).then(() => {
+    operation?.end();
+    reportClientDuration("command", performance.now() - started, { operation: command.type, transport: "websocket" });
+  }, (error) => { operation?.end("timeout"); throw error; });
 }
 
 /** Apply one atomic UI intent that may span several ACP options. The Controller
@@ -1187,6 +1197,10 @@ function handle(msg: Outbound): void {
     }
     case "event": {
       const env = msg.envelope;
+      if (env.kind === "update") {
+        if (env.update.sessionUpdate === "user_message_chunk") telemetryOperations.userEcho(env.session_id, env.cmid);
+        if (env.update.sessionUpdate === "agent_message_chunk") telemetryOperations.firstOutput(env.session_id);
+      }
       const clearsContext = env.kind === "update" &&
         env.update.sessionUpdate === "context_cleared";
       // Attention alert — a permission request needs a decision. Snapshot/history
@@ -1268,6 +1282,7 @@ function handle(msg: Outbound): void {
       // path; title/order to their registered clients. Unknown → ignored.
       const resync = msg.resync === true;
       if (msg.state.startsWith("queue:")) {
+        telemetryOperations.acknowledge(msg.state.slice("queue:".length), msg.confirmed);
         applyQueuePatch(msg.state.slice("queue:".length), msg.version, msg.value, msg.confirmed, resync);
       } else {
         if (msg.state.startsWith("mobile-review:")) {
@@ -1555,6 +1570,7 @@ function openSocket(): void {
   const connectStartedAt = performance.now();
   const connectReason = nextConnectReason;
   const reconnecting = outageStartedAt !== undefined;
+  const connectionSpan = startClientSpan("connect", { connection: reconnecting ? "reconnect" : "initial", reason: connectReason });
   if (reconnecting) reconnectAttempts += 1;
   reportClientLog("info", "websocket_connect_attempt", "Cowboy WebSocket connection attempt", {
     reason: connectReason,
@@ -1587,12 +1603,14 @@ function openSocket(): void {
         timeout_ms: 8000,
       });
       ws.close();
+      connectionSpan?.end("timeout");
     }
   }, 8000);
   const markSocketReady = (): void => {
     if (ready || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
     ready = true;
     socketReady = true;
+    connectionSpan?.end();
     const readyAt = performance.now();
     const connectDurationMs = readyAt - connectStartedAt;
     const outageDurationMs = outageStartedAt === undefined
@@ -1665,11 +1683,13 @@ function openSocket(): void {
     }
   };
   ws.onclose = (event): void => {
+    connectionSpan?.end("error");
     clearTimeout(connectGuard);
     // A superseded socket may close after its replacement has opened. It no
     // longer owns global connection state and must not raise the red banner or
     // schedule another reconnect.
     if (socket !== ws) return;
+    telemetryOperations.clear();
     socket = undefined;
     socketReady = false;
     stopLiveness();
@@ -1723,7 +1743,8 @@ function openSocket(): void {
  *  mutations remain pending on `false`; ephemeral transcript sends fail. */
 export function send(cmd: Inbound): boolean {
   if (socketReady && socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(cmd));
+    const traceparent = cmd.type === "submit" && cmd.cmid ? telemetryOperations.submit(cmd.session_id, cmd.cmid) : undefined;
+    socket.send(JSON.stringify(traceparent ? { ...cmd, traceparent } : cmd));
     return true;
   }
   return false;

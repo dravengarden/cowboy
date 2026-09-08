@@ -130,4 +130,52 @@ Deno.test("telemetry installation requires attested SDK 1.7 and its declared pla
       },
     }, target),
   );
+  const otlp = {
+    ...entry,
+    compatibility_requirements: {
+      ...entry.compatibility_requirements,
+      plugin_sdk_version: "1.8.0",
+      payload_schema: 2,
+    },
+  };
+  assert(genericPluginCompatibilityProblem(otlp, target));
+  assertEquals(
+    genericPluginCompatibilityProblem(otlp, {
+      ...target,
+      plugin_contracts: { ...inventory, plugin_sdk_version: "1.8.0" },
+    }),
+    undefined,
+  );
+});
+
+Deno.test("OTLP schema two adds traces without accepting URLs, legacy encodings or secrets", () => {
+  const value = JSON.parse(
+    Deno.readTextFileSync(
+      new URL(
+        "../../examples/telemetry/victoria/telemetry.json",
+        import.meta.url,
+      ),
+    ),
+  );
+  assertEquals(validateTelemetryBackendContract(value).schema_version, 2);
+  for (const lane of ["logs", "metrics", "traces"]) {
+    for (
+      const extra of [{ encoding: "json_lines" }, {
+        query: { token: "secret" },
+      }, { path: "https://remote/v1/traces" }]
+    ) {
+      assertThrows(() =>
+        validateTelemetryBackendContract({
+          ...value,
+          [lane]: { ...value[lane], ...extra },
+        })
+      );
+    }
+    assertThrows(() =>
+      validateTelemetryBackendContract({ ...value, [lane]: null })
+    );
+  }
+  assertThrows(() =>
+    validateTelemetryBackendContract({ ...value, schema_version: 1 })
+  );
 });

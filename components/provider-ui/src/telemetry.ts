@@ -1,6 +1,6 @@
 /** Closed telemetry payload decoder shared by SDK consumers and build checks. */
 export interface TelemetryBackendContract {
-  schema_version: 1;
+  schema_version: 1 | 2;
   id: string;
   version: string;
   display_name: string;
@@ -9,10 +9,11 @@ export interface TelemetryBackendContract {
   >;
   logs?: TelemetryRoute;
   metrics?: TelemetryRoute;
+  traces?: TelemetryRoute;
 }
 
 interface TelemetryRoute {
-  encoding: "json_lines" | "prometheus_text";
+  encoding: "json_lines" | "prometheus_text" | "otlp_http_protobuf";
   path: string;
   query?: Record<string, string>;
 }
@@ -63,9 +64,11 @@ export function validateTelemetryBackendContract(
     "supported_platforms",
     "logs",
     "metrics",
+    "traces",
   ]);
   if (
-    input.schema_version !== 1 || typeof input.id !== "string" ||
+    ![1, 2].includes(Number(input.schema_version)) ||
+    typeof input.schema_version !== "number" || typeof input.id !== "string" ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.id) ||
     typeof input.version !== "string" ||
     !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(
@@ -77,7 +80,9 @@ export function validateTelemetryBackendContract(
     !Array.isArray(input.supported_platforms) ||
     input.supported_platforms.length === 0 ||
     input.supported_platforms.length > 4 ||
-    (input.logs === undefined && input.metrics === undefined)
+    (input.logs === undefined && input.metrics === undefined &&
+      input.traces === undefined) ||
+    (input.schema_version === 1 && input.traces !== undefined)
   ) throw new Error("Invalid telemetry backend contract");
   const platforms = new Set<string>();
   for (const value of input.supported_platforms) {
@@ -91,7 +96,18 @@ export function validateTelemetryBackendContract(
   if (platforms.size !== input.supported_platforms.length) {
     throw new Error("Duplicate telemetry platform");
   }
-  if (input.logs !== undefined) route(input.logs, "json_lines");
-  if (input.metrics !== undefined) route(input.metrics, "prometheus_text");
+  if (input.logs !== undefined) {
+    route(
+      input.logs,
+      input.schema_version === 2 ? "otlp_http_protobuf" : "json_lines",
+    );
+  }
+  if (input.metrics !== undefined) {
+    route(
+      input.metrics,
+      input.schema_version === 2 ? "otlp_http_protobuf" : "prometheus_text",
+    );
+  }
+  if (input.traces !== undefined) route(input.traces, "otlp_http_protobuf");
   return input as unknown as TelemetryBackendContract;
 }

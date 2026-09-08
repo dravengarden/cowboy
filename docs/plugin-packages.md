@@ -9,8 +9,10 @@ session generations.
 This design implements the normative ownership rules in
 [Cowboy core requirements](requirements.md).
 
-Telemetry payload schema 1 is the data-only `telemetry_backend` capability
-(Plugin SDK 1.7+, Machine protocol 8+). The Victoria source at
+Telemetry payload schema 2 is the data-only `telemetry_backend` capability
+(Plugin SDK 1.8+, Machine protocol 9+) for OTLP/HTTP protobuf logs, metrics and
+traces. Schema 1 remains readable at SDK 1.7+/protocol 8+ for retained legacy
+packages; schema-2 routes cannot downgrade their encoding. The Victoria source at
 `examples/telemetry/victoria` uses this same lifecycle without executable
 artifacts or Provider auth. Installing the package does not activate outbound
 traffic. See [telemetry configuration and delivery guarantees](telemetry-plugins.md).

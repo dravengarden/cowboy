@@ -619,11 +619,14 @@ impl PluginContractInventory {
             // schema-one support from it without changing historical proofs.
             PluginKind::TelemetryBackend => (
                 1,
-                u16::from(
-                    Version::parse(&self.plugin_sdk_version)
-                        .is_ok_and(|version| version >= Version::new(1, 7, 0)),
-                ),
-                "telemetry payload schema (Plugin SDK 1.7)",
+                Version::parse(&self.plugin_sdk_version).map_or(0, |version| {
+                    if version >= Version::new(1, 8, 0) {
+                        2
+                    } else {
+                        u16::from(version >= Version::new(1, 7, 0))
+                    }
+                }),
+                "telemetry payload schema (Plugin SDK 1.7/1.8)",
             ),
         };
         for (value, minimum, maximum, code, label) in [
@@ -1178,9 +1181,13 @@ fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Resul
                     .components
                     .iter()
                     .any(|component| component.id == "cowboy.plugin-sdk"
-                        && Version::parse(&component.version)
-                            .is_ok_and(|version| version >= Version::new(1, 7, 0))),
-                "telemetry backends require Plugin SDK 1.7 or newer"
+                        && Version::parse(&component.version).is_ok_and(|version| version
+                            >= Version::new(
+                                1,
+                                if contract.schema_version == 2 { 8 } else { 7 },
+                                0
+                            ))),
+                "telemetry backends require Plugin SDK 1.7 (schema 1) or 1.8 (schema 2)"
             );
         }
         (PluginKind::AgentProvider, PluginPayload::AgentProvider(provider)) => {

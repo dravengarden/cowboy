@@ -10,8 +10,11 @@ counters, and the durable Runtime Incident Ledger. Diagnostic telemetry is not
 conversation persistence, an authentication store, or the usage/accounting
 ledger. Those durable records do not move to `/tmp`.
 
-This pipeline receives `/api/observability/batches` (browser logs, metrics,
-incidents). Existing process `tracing` output remains on stderr/journald and
+The client now sends standard protobuf to `/api/telemetry/v1/{logs,metrics,traces}`.
+`/api/observability/batches` remains for durable incidents and legacy clients.
+Incident-only requests are ledger/local evidence; their diagnostic OTel log is
+emitted separately, not exported twice through incompatible encodings.
+Existing process `tracing` output remains on stderr/journald and
 the Controller's Prometheus `/metrics` scrape remains available. Neither raw
 agent stdout, prompts, nor conversation content is automatically exported.
 
@@ -23,7 +26,7 @@ or host cleanup. Local write failures must be observable without blocking the
 application or recursively generating more telemetry.
 
 An optional `telemetry_backend` Plugin connects an existing external telemetry
-service. The first example is Victoria (VictoriaLogs plus VictoriaMetrics),
+service. The first example is Victoria (VictoriaLogs, VictoriaMetrics and optional VictoriaTraces),
 not an installer for the databases themselves. It uses the existing immutable
 Plugin package/signature/Catalog/Machine-install/rollback/uninstall lifecycle.
 It must not pretend to be an Agent Provider or borrow Provider authentication.
@@ -74,18 +77,23 @@ no automatic historical file replay to remote services.
 Admission is bounded to 64 batches / 8 MiB, 200 items / 256 KiB per request.
 In-process dedup retains 2048 scoped batch identities and rejects reused IDs
 with different content; restart/eviction ends that dedup window. IDs are
-namespaced per authenticated user and client; session associations are checked
-against authenticated visibility, and Machine context is derived by the
-Controller. Messages and scalar attributes receive bounded credential/URL
+namespaced per authenticated user and client (OTLP: user, signal and batch ID).
+Legacy incident session associations are checked against authenticated
+visibility, and Machine context is derived by the Controller. OTLP client
+session/Machine/user resource identities are discarded; a server-scoped owner
+hash and explicit W3C trace IDs provide diagnostic correlation without granting
+authority. Messages and scalar attributes receive bounded credential/URL
 redaction. Instrumentation must still never submit raw prompts or credentials;
 regex redaction is defense in depth, not a content-classification guarantee.
 
-Metric names use portable Prometheus syntax. Only finite connection,
-transport and reconnect-reason dimensions are exported, alongside normalized
+Legacy metric names use portable Prometheus syntax. OTLP uses a closed standard
+counter/histogram instrument registry and delta-to-cumulative aggregation; see
+[client OpenTelemetry](client-opentelemetry.md). Only finite connection,
+transport, operation and reconnect-reason dimensions are exported, alongside normalized
 platform/surface. Build/client/session/trace IDs and arbitrary attribute keys
 are not time-series labels. Victoria log streams similarly use normalized
 component/platform fields. These tighten the previous metric-label contract;
-dash/dot names and reserved labels are rejected rather than endlessly retried.
+unknown instruments and reserved labels cannot create new time-series identities.
 
 Local, incident and remote workers are independent of remote delivery; incident
 and remote queues each hold at most 16 batches. Incident writes are queued
@@ -94,14 +102,18 @@ rotate the durable ledger; a queue/storage failure remains observable in its
 own counter and local diagnostic evidence.
 Remote import is best effort and can duplicate an ambiguously acknowledged
 request. Each lane has a 1-second connect / 3-second request timeout, at most
-two attempts (only transport failure, 408, 429 or 5xx), no redirects or ambient
-proxies. Lanes execute concurrently; one Machine export runs at a time.
+two attempts, no redirects or ambient proxies. OTLP retries transport failures
+and HTTP 429/502/503/504 only; legacy routes also retain 408/other-5xx behavior.
+OTLP 200 partial success is parsed from bounded protobuf (64 KiB) and never
+retried as a whole batch. One Machine export runs at a time.
 Controller calls have a 15-second outer deadline. Shutdown drains workers
 for at most 10 seconds before aborting unfinished work.
 
-Frontend pending data is capped at 200 items / 256 KiB, including a retry
-batch. Context is captured at instrumentation time, request bodies are at
-most 24 KiB UTF-8, fetch aborts after 8 seconds, and retries retain exact bytes
+Frontend OTLP pending data is capped at 200 items / 256 KiB, including in-flight
+and retry bodies. SDK queues are separately bounded at 64 logs and 64 spans;
+the incident queue remains independently bounded at 200 items / 256 KiB.
+Context is captured at instrumentation time, request bodies are at
+most 24 KiB (protobuf for OTLP, UTF-8 for incidents), fetch aborts after 8 seconds, and retries retain exact bytes
 with backoff (five attempts / five minutes maximum). Permanent HTTP errors
 are discarded. Beacon delivery has no server receipt, and an in-flight fetch
 is not duplicated on pagehide. Sign-out clears queued/in-flight identity.
@@ -121,7 +133,8 @@ activation authority.
 `observability_accepted_batches`, `observability_duplicate_batches`,
 `observability_dropped_batches`, `observability_failed_file_batches`,
 `observability_failed_incident_batches`, `observability_dropped_export_batches`,
-`observability_failed_log_batches` and `observability_failed_metric_batches`.
+`observability_failed_log_batches`, `observability_failed_metric_batches`,
+`observability_failed_trace_batches` and `observability_rejected_export_items`.
 The loopback-authorized Prometheus endpoint exposes the corresponding
 `cowboy_observability_*` gauges and `_total` counters. Monitor file and ledger
 failures separately from remote lane failures and backpressure. Missing
@@ -152,7 +165,7 @@ previous duplicate initialization gave usage an empty, disconnected inventory.
    full pinned Cowboy gate. Publication and live activation remain separate;
    do not send production telemetry to a new destination during implementation.
 
-## Verification (2026-09-08)
+## Local-first baseline verification (30734017, 2026-09-08)
 
 `nix develop -c just check-compact` passed: component/Plugin/SDK validation,
 native-shell and site contracts, formatting/lint/dependency checks, feature
@@ -171,6 +184,8 @@ These are implementation/build gates, not production acceptance. No running
 Controller/Machine was restarted, no live Catalog was published or refreshed,
 and no production endpoint or credential was used. Victoria server installation,
 production endpoint acceptance and non-Linux platforms are not claimed.
+The subsequent OTLP implementation and its validation are recorded in
+[client OpenTelemetry](client-opentelemetry.md).
 
 ## Initial audit
 
