@@ -45,6 +45,10 @@ fn broker_retry_delay(backoff: &mut Duration, stable_connection: bool) -> Durati
 }
 
 pub struct RemoteBootstrap {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "copied into Shared by the test constructor")
+    )]
     socket: PathBuf,
     reader: FrameReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
@@ -135,22 +139,44 @@ impl RemoteRuntime {
         )
     }
 
-    pub(crate) fn new_with_provider_auth(
+    /// Accept Hub commands while the Machine broker handshake is still
+    /// catching up. Controller restart otherwise has a multi-second window
+    /// where the Machine WebSocket is authenticated but `RuntimeRouter` is
+    /// empty, so a user send fails with "hawk is not connected".
+    pub(crate) fn connecting(
         hub: Hub,
-        bootstrap: &RemoteBootstrap,
+        socket: PathBuf,
         desired_generation: String,
-        desired_worker_command: Option<String>,
         provider_auth: Arc<crate::provider_service::ProviderAuthService>,
     ) -> Arc<Self> {
-        Self::new_inner(
-            hub,
-            bootstrap,
-            desired_generation,
-            desired_worker_command,
-            Some(provider_auth),
-        )
+        let (notify, notify_rx) = mpsc::unbounded_channel();
+        Arc::new(Self {
+            shared: Arc::new(Shared {
+                socket,
+                hub,
+                pending: Mutex::new(HashMap::new()),
+                sent: Mutex::new(HashSet::new()),
+                declarations: Mutex::new(HashMap::new()),
+                workers: Mutex::new(HashMap::new()),
+                config_sync_epochs: Mutex::new(HashMap::new()),
+                config_startups: Mutex::new(HashSet::new()),
+                resetting: Mutex::new(HashSet::new()),
+                highwaters: Mutex::new(HashMap::new()),
+                notify,
+                command_counter: AtomicU64::new(seed_counter()),
+                turn_counter: AtomicU64::new(seed_counter()),
+                connected: AtomicBool::new(false),
+                shutdown: AtomicBool::new(false),
+                desired_generation,
+                desired_worker_command: None,
+                provider_auth: Some(provider_auth),
+                telemetry: Mutex::new(None),
+            }),
+            notify_rx: Mutex::new(Some(notify_rx)),
+        })
     }
 
+    #[cfg(test)]
     fn new_inner(
         hub: Hub,
         bootstrap: &RemoteBootstrap,
@@ -250,6 +276,17 @@ impl RemoteRuntime {
         let Some(notify_rx) = self.notify_rx.lock().take() else {
             return;
         };
+        {
+            let mut declarations = self.shared.declarations.lock();
+            for worker in &bootstrap.workers {
+                if let Some(mut session) = worker.launch.clone() {
+                    session.adopt_only = true;
+                    declarations
+                        .entry(session.session_id.clone())
+                        .or_insert(session);
+                }
+            }
+        }
         let shared = Arc::clone(&self.shared);
         tokio::spawn(async move {
             for worker in &bootstrap.workers {

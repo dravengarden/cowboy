@@ -30,16 +30,12 @@ impl RuntimeRouter {
 
     #[must_use]
     pub fn connected(&self, machine_id: &str) -> bool {
-        self.runtime(machine_id)
-            .is_some_and(|runtime| runtime.connected())
+        self.runtime(machine_id).is_some()
     }
 
     #[must_use]
     pub fn has_connected_runtime(&self) -> bool {
-        self.runtimes
-            .read()
-            .values()
-            .any(|runtime| runtime.connected())
+        !self.runtimes.read().is_empty()
     }
 
     #[must_use]
@@ -107,6 +103,7 @@ mod tests {
         let falcon = RemoteRuntime::for_test(Hub::new(), Vec::new());
         router.install("hawk".to_owned(), Arc::clone(&hawk));
         router.install("falcon".to_owned(), Arc::clone(&falcon));
+        assert!(router.connected("hawk"));
         assert!(Arc::ptr_eq(&router.runtime("hawk").expect("hawk"), &hawk));
         assert!(Arc::ptr_eq(
             &router.runtime("falcon").expect("falcon"),

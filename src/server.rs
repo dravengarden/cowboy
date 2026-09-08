@@ -2345,7 +2345,7 @@ async fn run_dispatcher(
                     observability.finish_delivery_trace(trace, false);
                 }
                 tracing::warn!(session = %session_id, error = %e, "queued dispatch failed");
-                retain_failed_dispatch(&hub, session_id, text, content, cmid, &e.to_string());
+                retain_failed_dispatch(&hub, session_id, text, content, cmid, &e);
             }
         }
     }
@@ -2366,7 +2366,22 @@ fn retain_failed_dispatch(
     error: &str,
 ) {
     hub.requeue_prompt(&session_id, text, content, cmid);
+    // A Controller restart authenticates the Machine WebSocket before the
+    // ACP runtime handshake finishes. The prompt is durable; do not toast a
+    // transient "not connected" as a user-facing send failure.
+    if is_transient_machine_disconnect(error) {
+        tracing::warn!(
+            session = %session_id,
+            error = %error,
+            "queued dispatch deferred until Machine runtime is ready"
+        );
+        return;
+    }
     hub.broadcast_error(Some(session_id), format!("send failed: {error}"));
+}
+
+fn is_transient_machine_disconnect(error: &str) -> bool {
+    error.contains("is not connected") || error.contains("disconnected")
 }
 
 #[cfg(test)]
@@ -2400,6 +2415,19 @@ mod dispatcher_failure_tests {
         };
         assert_eq!(value["queue"][0]["text"], "current status?");
         assert_eq!(value["queue"][0]["cmid"], "client-message-1");
+    }
+
+    #[test]
+    fn controller_restart_disconnect_is_transient() {
+        assert!(is_transient_machine_disconnect(
+            r#"machine "hawk" is not connected"#
+        ));
+        assert!(is_transient_machine_disconnect(
+            r#"machine "hawk" disconnected"#
+        ));
+        assert!(!is_transient_machine_disconnect(
+            "agent subprocess exited mid-session"
+        ));
     }
 }
 
@@ -13242,28 +13270,23 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 || hello.host_build.clone(),
                 |component| component.generation.clone(),
             );
+        let label = PathBuf::from(format!("machine://{machine_id}"));
+        // Install before the broker handshake finishes. Snapshot replay of
+        // restored workers can take seconds; without a runtime in the router
+        // every send/open in that window fails with "hawk is not connected".
+        let runtime = RemoteRuntime::connecting(hub, label.clone(), generation, provider_auth);
+        runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
+        router.install(machine_id.clone(), Arc::clone(&runtime));
         tokio::spawn(async move {
-            let label = PathBuf::from(format!("machine://{machine_id}"));
             match RemoteBootstrap::from_stream(label, runtime_core).await {
                 Ok(bootstrap) => {
-                    // Executable paths are machine-local. The remote broker
-                    // registered this generation from its own active
-                    // content-addressed component before connecting.
-                    let runtime = RemoteRuntime::new_with_provider_auth(
-                        hub,
-                        &bootstrap,
-                        generation,
-                        None,
-                        provider_auth,
-                    );
-                    runtime.attach_telemetry(machine_id.clone(), runtime_telemetry);
-                    router.install(machine_id, Arc::clone(&runtime));
                     runtime.start(bootstrap);
                     machine_snapshots.publish().await;
                     let _ = runtime_tx.send(runtime);
                 }
                 Err(error) => {
                     tracing::warn!(%error, machine = %machine_id, "Machine runtime handshake failed");
+                    router.remove_if_current(&machine_id, &runtime);
                 }
             }
         });

@@ -884,6 +884,51 @@ mod tests {
         Supervisor::new(hub, root, 0, router)
     }
 
+    #[tokio::test]
+    async fn send_queues_while_machine_runtime_handshake_is_still_in_flight() {
+        let root = TestDir::new();
+        let cwd = root.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("workspace");
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "s".to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: cwd.display().to_string(),
+            title: "test".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.set_status("s", Status::Exited, None);
+        let router = RuntimeRouter::new();
+        let supervisor = Supervisor::new(hub.clone(), root.0.clone(), 0, Arc::clone(&router));
+        assert!(
+            supervisor
+                .ensure_alive("s")
+                .unwrap_err()
+                .contains("not connected")
+        );
+
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        router.install("hawk".to_owned(), Arc::clone(&runtime));
+        assert!(supervisor.ensure_alive("s").expect("queued ensure"));
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
+            )
+        }));
+    }
+
     #[test]
     fn session_counter_honors_live_persistent_and_clock_floors() {
         let hub = Hub::new();
