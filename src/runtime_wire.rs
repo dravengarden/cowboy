@@ -89,6 +89,18 @@ impl WorkerSnapshot {
     pub fn has_connected_owner(&self) -> bool {
         !self.worker_epoch.starts_with("broker-")
     }
+
+    /// Whether this live worker still owns the ACP prompt that a controller
+    /// restart may have been trying to adopt. The worker process surviving is
+    /// not enough: `session/prompt` is a Controller↔Machine RPC, so a reconnect
+    /// can report Running with no turn id after the prompt already died.
+    #[must_use]
+    pub fn owns_in_flight_turn(&self) -> bool {
+        self.current_turn_id.is_some()
+            || self.pending_prompt_count > 0
+            || self.state == WorkerState::Busy
+            || !self.pending_permissions.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

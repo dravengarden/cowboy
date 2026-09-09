@@ -1561,7 +1561,7 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     };
     shared
         .hub
-        .set_status(&worker.session_id, status, recoverable_detail);
+        .project_runtime_status(&worker.session_id, status, recoverable_detail);
     reconcile_idle_guard(shared, &worker.session_id, idle_guard);
     true
 }

@@ -2125,17 +2125,27 @@ impl Hub {
     /// with a speculative Starting/Running state.
     pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
         if worker.has_connected_owner() {
-            if self
+            let settling = self
                 .inner
                 .runtime_reconciliation
                 .lock()
-                .remove(&worker.session_id)
-            {
-                tracing::info!(
-                    session = %worker.session_id,
-                    worker_epoch = %worker.worker_epoch,
-                    "detached worker adopted restored in-flight turn"
-                );
+                .remove(&worker.session_id);
+            if settling {
+                if worker.owns_in_flight_turn() {
+                    tracing::info!(
+                        session = %worker.session_id,
+                        worker_epoch = %worker.worker_epoch,
+                        "detached worker adopted restored in-flight turn"
+                    );
+                } else {
+                    tracing::warn!(
+                        session = %worker.session_id,
+                        worker_epoch = %worker.worker_epoch,
+                        state = ?worker.state,
+                        "detached worker reconnected without the restored turn"
+                    );
+                    self.record_restart_interruption(&worker.session_id);
+                }
             }
             true
         } else {
@@ -2145,6 +2155,15 @@ impl Hub {
                 .lock()
                 .contains(&worker.session_id)
         }
+    }
+
+    /// Project a worker lifecycle into the Hub. An idle Running snapshot must
+    /// not hide a restart-interruption that just recorded the lost prompt.
+    pub fn project_runtime_status(&self, session_id: &str, status: Status, detail: Option<String>) {
+        if status == Status::Running && self.status(session_id) == Some(Status::Interrupted) {
+            return;
+        }
+        self.set_status(session_id, status, detail);
     }
 
     /// Finalize persisted Busy sessions whose detached owner did not reconnect
@@ -5459,6 +5478,30 @@ mod runtime_reconciliation_tests {
         assert!(hub.accept_runtime_snapshot(&worker_snapshot("session-2", "worker-epoch-2")));
         assert!(hub.finalize_runtime_reconciliation().is_empty());
         assert_eq!(hub.status("session-2"), Some(Status::Busy));
+    }
+
+    #[test]
+    fn idle_worker_cannot_silently_settle_a_restored_busy_turn() {
+        let hub = Hub::new();
+        hub.restore_reconciling_runtime(vec![restored_busy("session-idle")]);
+        let mut idle = worker_snapshot("session-idle", "worker-epoch-idle");
+        idle.state = WorkerState::Running;
+        idle.current_turn_id = None;
+
+        assert!(hub.accept_runtime_snapshot(&idle));
+        assert_eq!(hub.status("session-idle"), Some(Status::Interrupted));
+        assert!(!hub.session_has_in_flight_prompt("session-idle"));
+        let (log, _) = hub.snapshot("session-idle").expect("snapshot");
+        assert!(log.iter().any(|envelope| matches!(
+            envelope.event,
+            Event::Lifecycle {
+                status: Status::Interrupted,
+                ..
+            }
+        )));
+        hub.project_runtime_status("session-idle", Status::Running, None);
+        assert_eq!(hub.status("session-idle"), Some(Status::Interrupted));
+        assert!(hub.finalize_runtime_reconciliation().is_empty());
     }
 
     #[test]

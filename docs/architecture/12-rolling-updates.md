@@ -122,7 +122,7 @@ before fallback so late frames cannot corrupt the replacement session.
 | Change | What restarts | In-flight result |
 |---|---|---|
 | SPA only | no daemon; web symlink changes | turn and WS remain connected |
-| HTTP/Hub/control plane | `cowboy.service` | worker continues; events replay; clients reconnect |
+| HTTP/Hub/control plane | `cowboy.service` | worker process continues and events replay when it still owns the ACP turn; if `session/prompt` died with the controller, Hub records `Interrupted` instead of silently going `Running` |
 | ACP/worker generation | idle workers roll immediately; busy workers drain | current turn and permission responders finish on old generation |
 | Machine host code | Machine restarts after readiness-gated activation | workers and core reconnect to the new broker |
 | Durable database | independent service/file policy | Cowboy health degrades; no runtime ownership change |
