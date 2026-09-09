@@ -422,12 +422,24 @@ cascades session events; content-addressed event attachments are reference
 scanned and deleted only when no retained event references them and their
 race-avoidance grace period has elapsed.
 
-If an ordinary Machine command or database transaction fails after uninstall
-has begun, Cowboy compensates by re-verifying and reactivating the exact retained
-signed generation and restoring workers that were live before the operation.
-The operation reports both the primary and compensation failure when recovery
-cannot complete; it must never report a successful uninstall with only half of
-the Machine/session state committed.
+Confirmed uninstall records core-owned durable intent before stopping workers or
+sending a remote command. Service session soft-delete and operation completion
+commit in one local transaction. HTTP observer cancellation does not cancel an
+admitted operation. Restart reconstructs unfinished installation-slot fences
+before dispatch, without replaying remote commands or stopping unrelated
+workers.
+
+A correlated ordinary Machine rejection or a definitively uncommitted local
+transaction permits the approved compensation on the original connection:
+re-verify/reactivate the exact retained signed generation and request
+restoration of the workers that were live. Missing ACKs, changed connections,
+expired recovery authority or ambiguous remote outcomes remain fenced, never
+blindly retried. The operation reports both primary and compensation failure; a
+worker reload enqueue is not verified recovery and remains `NeedsAttention`. It
+must never report a successful uninstall with only half of the Machine/session
+state committed. See the
+[Service operation journal](plugin-operation-journal.md) for its reader-floor
+rollout, bounded retention and current recovery limits.
 
 ### CR-11: Release automation belongs to this repository
 

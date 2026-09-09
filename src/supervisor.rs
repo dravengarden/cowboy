@@ -478,6 +478,13 @@ impl Supervisor {
         existed
     }
 
+    /// Snapshot only. A destructive coordinator must record its intent before
+    /// asking the runtime to stop; this does not grant permission to restart it.
+    pub(crate) fn has_live_worker(&self, session_id: &str) -> bool {
+        self.runtime_for_session(session_id)
+            .is_ok_and(|runtime| runtime.has_worker(session_id))
+    }
+
     /// Replace a session's agent with a fresh context without deleting the
     /// Cowboy session. The remote broker needs an explicit reset operation so
     /// its permanent-delete tombstone cannot poison the replacement launch.

@@ -62,6 +62,35 @@ pub(crate) struct PluginHostRequestError {
     pub detail: String,
 }
 
+/// Receipt certainty, not an assumption that a rejected command had no effects.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CommandFailure {
+    NotSent,
+    Rejected,
+    Unknown,
+}
+
+#[derive(Debug)]
+pub(crate) struct CommandRequestError {
+    pub certainty: CommandFailure,
+    pub detail: String,
+}
+
+#[derive(Clone, Copy)]
+enum RequestBinding<'a> {
+    Plugin(&'a PluginHostBinding),
+    Connection(&'a ConnectionToken),
+    Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RetainedPluginTarget<'a> {
+    pub plugin_id: &'a str,
+    pub version: &'a str,
+    pub digest: &'a str,
+    pub fingerprint: &'a str,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectedPluginInventory {
     pub machine_id: String,
@@ -220,6 +249,24 @@ impl LiveState {
                     plugin.state == PluginInstallationState::Active
                         && same_installation(plugin, expected)
                 }) && matches.next().is_none()
+            })
+    }
+
+    fn may_reactivate(&self, machine_id: &str, target: RetainedPluginTarget<'_>) -> bool {
+        self.plugin_inventory
+            .get(machine_id)
+            .is_some_and(|inventory| {
+                let mut slot = inventory
+                    .plugins
+                    .iter()
+                    .filter(|p| p.plugin_id == target.plugin_id);
+                let matches = slot.next().is_none_or(|p| {
+                    p.state == PluginInstallationState::Active
+                        && p.plugin_version == target.version
+                        && p.generation_digest == target.digest
+                        && p.contract_fingerprint == target.fingerprint
+                });
+                matches && slot.next().is_none()
             })
     }
 
@@ -441,7 +488,7 @@ impl MachineControl {
         request_id: &'a str,
         command: MachineCommand,
         kind: ReplyKind,
-        binding: Option<&PluginHostBinding>,
+        binding: Option<RequestBinding<'_>>,
     ) -> Result<(oneshot::Receiver<Reply>, PendingRequestGuard<'a>), String> {
         let mut live = self.live.write();
         let connection = live
@@ -449,7 +496,20 @@ impl MachineControl {
             .get(machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
         Self::check_protocol(connection, &command)?;
-        if let Some(binding) = binding
+        if let Some(RequestBinding::Connection(token) | RequestBinding::Reactivate(token, _)) =
+            binding
+            && !connection.token.same(token)
+        {
+            return Err("Machine operation connection is no longer current".to_owned());
+        }
+        if let Some(RequestBinding::Reactivate(_, target)) = binding
+            && !live.may_reactivate(machine_id, target)
+        {
+            return Err(
+                "Plugin recovery inventory is missing or the installation changed".to_owned(),
+            );
+        }
+        if let Some(RequestBinding::Plugin(binding)) = binding
             && (!connection.token.same(&binding.connection)
                 || !live
                     .plugin_inventory
@@ -548,13 +608,93 @@ impl MachineControl {
         command: MachineCommand,
         timeout: std::time::Duration,
     ) -> Result<(), String> {
-        let (rx, _pending) =
-            self.begin_request(machine_id, &request_id, command, ReplyKind::Command, None)?;
+        self.command_receipt(machine_id, request_id, command, timeout, None)
+            .await
+            .map_err(|error| error.detail)
+    }
+
+    /// Short-lived connection evidence. Never saved in the operation journal or
+    /// reacquired after restart to replay an old destructive command.
+    pub(crate) fn operation_connection(&self, machine_id: &str) -> Result<ConnectionToken, String> {
+        self.live
+            .read()
+            .connections
+            .get(machine_id)
+            .map(|connection| connection.token.clone())
+            .ok_or_else(|| "Machine is not connected".to_owned())
+    }
+
+    pub(crate) async fn command_on_connection(
+        &self,
+        connection: &ConnectionToken,
+        request_id: String,
+        command: MachineCommand,
+    ) -> Result<(), CommandRequestError> {
+        self.command_receipt(
+            &connection.0.machine_id,
+            request_id,
+            command,
+            PROVIDER_COMMAND_TIMEOUT,
+            Some(RequestBinding::Connection(connection)),
+        )
+        .await
+    }
+
+    /// Reject an observed replacement before enqueue. The older Machine
+    /// protocol still has no durable installation-CAS; this is NOT that proof.
+    pub(crate) async fn reactivate_plugin_on_connection(
+        &self,
+        connection: &ConnectionToken,
+        request_id: String,
+        target: RetainedPluginTarget<'_>,
+    ) -> Result<(), CommandRequestError> {
+        let command = MachineCommand::ReactivatePlugin {
+            request_id: request_id.clone(),
+            plugin_id: target.plugin_id.to_owned(),
+            generation_digest: target.digest.to_owned(),
+        };
+        self.command_receipt(
+            &connection.0.machine_id,
+            request_id,
+            command,
+            PROVIDER_COMMAND_TIMEOUT,
+            Some(RequestBinding::Reactivate(connection, target)),
+        )
+        .await
+    }
+
+    async fn command_receipt(
+        &self,
+        machine_id: &str,
+        request_id: String,
+        command: MachineCommand,
+        timeout: std::time::Duration,
+        binding: Option<RequestBinding<'_>>,
+    ) -> Result<(), CommandRequestError> {
+        let (rx, _pending) = self
+            .begin_request(
+                machine_id,
+                &request_id,
+                command,
+                ReplyKind::Command,
+                binding,
+            )
+            .map_err(|detail| CommandRequestError {
+                certainty: CommandFailure::NotSent,
+                detail,
+            })?;
+        let unknown = |detail: &str| CommandRequestError {
+            certainty: CommandFailure::Unknown,
+            detail: detail.to_owned(),
+        };
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Reply::Command(result))) => result,
-            Ok(Ok(_)) => Err("Machine command reply kind mismatch".to_owned()),
-            Ok(Err(_)) => Err("Machine command response channel closed".to_owned()),
-            Err(_) => Err("Machine command timed out".to_owned()),
+            Ok(Ok(Reply::Command(result))) => result.map_err(|detail| CommandRequestError {
+                certainty: CommandFailure::Rejected,
+                detail,
+            }),
+            Ok(Ok(_)) => Err(unknown("Machine command reply kind mismatch")),
+            Ok(Err(_)) => Err(unknown("Machine command response channel closed")),
+            Err(_) => Err(unknown("Machine command timed out")),
         }
     }
 
@@ -617,7 +757,7 @@ impl MachineControl {
                     payload,
                 },
                 ReplyKind::PluginHost,
-                Some(&binding),
+                Some(RequestBinding::Plugin(&binding)),
             )
             .map_err(preflight)?;
         match tokio::time::timeout(PLUGIN_HOST_TIMEOUT, rx).await {
@@ -777,6 +917,101 @@ mod tests {
             request_id: id.to_owned(),
             accepted: true,
             detail: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_receipt_distinguishes_not_sent_rejected_and_unknown() {
+        let control = MachineControl::default();
+        let (old, mut rx) = connect(&control, "hawk");
+        let request = control.command_on_connection(&old, "reject".to_owned(), refresh("reject"));
+        let (result, ()) = tokio::join!(request, async {
+            rx.recv().await.unwrap();
+            control.record_remote(
+                &old,
+                MachineEvent::CommandResult {
+                    request_id: "reject".to_owned(),
+                    accepted: false,
+                    detail: Some("known failure".to_owned()),
+                },
+            );
+        });
+        assert_eq!(result.unwrap_err().certainty, CommandFailure::Rejected);
+        let request = control.command_on_connection(&old, "lost".to_owned(), refresh("lost"));
+        let (result, ()) = tokio::join!(request, async {
+            rx.recv().await.unwrap();
+            control.disconnect("hawk");
+        });
+        assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+        let (_replacement, mut next_rx) = connect(&control, "hawk");
+        let error = control
+            .command_on_connection(&old, "restore".to_owned(), refresh("restore"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.certainty, CommandFailure::NotSent);
+        assert!(
+            next_rx.try_recv().is_err(),
+            "a recovery command cannot migrate to the new connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_timeout_is_unknown_and_does_not_leave_a_waiter() {
+        let control = MachineControl::default();
+        let (connection, _rx) = connect(&control, "hawk");
+        let result = control
+            .command_receipt(
+                "hawk",
+                "timeout".to_owned(),
+                refresh("timeout"),
+                std::time::Duration::from_millis(1),
+                Some(RequestBinding::Connection(&connection)),
+            )
+            .await;
+        assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+        assert!(control.live.read().pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn compensation_rejects_a_replaced_or_ambiguous_installation_slot() {
+        let control = MachineControl::default();
+        let (connection, mut rx) = connect(&control, "hawk");
+        let expected = plugin_inventory("codex");
+        let target = RetainedPluginTarget {
+            plugin_id: &expected.plugin_id,
+            version: &expected.plugin_version,
+            digest: &expected.generation_digest,
+            fingerprint: &expected.contract_fingerprint,
+        };
+        assert!(
+            control
+                .reactivate_plugin_on_connection(&connection, "missing".to_owned(), target)
+                .await
+                .is_err()
+        );
+        let mut replaced = expected.clone();
+        replaced.generation_digest = format!("sha256:{}", "f".repeat(64));
+        for inventory in [vec![replaced], vec![expected.clone(), expected.clone()]] {
+            observe(&control, &connection, inventory);
+            let error = control
+                .reactivate_plugin_on_connection(&connection, "conflict".to_owned(), target)
+                .await
+                .unwrap_err();
+            assert_eq!(error.certainty, CommandFailure::NotSent);
+            assert!(rx.try_recv().is_err());
+        }
+        for inventory in [vec![expected.clone()], Vec::new()] {
+            observe(&control, &connection, inventory);
+            let request =
+                control.reactivate_plugin_on_connection(&connection, "allowed".to_owned(), target);
+            let (result, ()) = tokio::join!(request, async {
+                assert!(matches!(
+                    rx.recv().await,
+                    Some(MachineCommand::ReactivatePlugin { .. })
+                ));
+                control.record_remote(&connection, command_reply("allowed"));
+            });
+            result.unwrap();
         }
     }
 

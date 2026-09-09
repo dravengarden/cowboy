@@ -8,6 +8,8 @@ SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一�
 绑定到认证连接代次，并让现有遥测调用核对签名 Catalog 与当前 Machine 库存。
 第三批 [组件契约](plugin-components.md) 已实现显式 codec、state-store 实例/订阅资源
 释放，以及保留历史的依赖闭包发布检查；不涉及后台任务取消或 durable effect revert。
+第四批 [卸载操作账本](plugin-operation-journal.md) 为现有卸载流程加入 Service 耐久 intent、
+事务内完成记录、重启隔离与明确的不确定结果；Machine 耐久回执和自动恢复仍未实现。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
@@ -696,10 +698,10 @@ Agent 内部工具。
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | [plugin_runtime](../src/plugin_runtime.rs)            | 精确 host 快照与 namespace；不是通用跨端 typed resolver                              |
 | [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；接入局部计划与耐久步骤，不另建 Store                |
-| [server uninstall](../src/server.rs)                  | 请求内补偿与内存计划；补全崩溃后仍可核对的操作身份/账本                              |
+| [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成与重启 fence；仍缺 Machine 耐久回执和恢复授权             |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [plugin-api](../components/plugin-api/types.ts)       | slot/host/native 混合且 context 宽泛；拆出核心 bridge/host 与 typed authoring        |
-| [state-store](../components/state-store/store.ts)     | 默认反序列化使用类型断言，storage listener 缺少释放接口；需要 codec 与 owned factory |
+| [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅与 dispose；仍需其他组件的资源作用域模型                 |
 | [Provider UI](../components/provider-ui/src/index.ts) | 有闭集 IR 与验证；生成更强的字段/消息关联，抽出通用 UI 与领域投影                    |
 
 这些是设计差距，不是对全部现有代码的安全审计，也不是本轮已经修复的事项。
