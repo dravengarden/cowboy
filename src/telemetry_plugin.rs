@@ -1,6 +1,9 @@
 //! Optional, exact-generation telemetry Plugin activation. Public packages
 //! carry no credentials; only Machine-private configuration selects egress.
 
+#[cfg(all(test, feature = "full"))]
+mod controller_tests;
+
 use std::fs::OpenOptions;
 use std::io::Read as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
@@ -91,6 +94,7 @@ pub(crate) struct OtlpResult {
 pub(crate) fn controller_exporter(
     path: Option<&Path>,
     control: std::sync::Arc<crate::machine_control::MachineControl>,
+    catalog: std::sync::Arc<crate::plugin_catalog::PluginCatalog>,
 ) -> Result<Option<crate::observability::TelemetryExporter>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -111,39 +115,41 @@ pub(crate) fn controller_exporter(
         let selection = config.plugin.clone();
         let machine_id = config.machine_id.clone();
         let control = std::sync::Arc::clone(&control);
+        let catalog = std::sync::Arc::clone(&catalog);
         Box::pin(async move {
+            // Policy is the private, exact Service selection captured at
+            // startup. A composition JSON report can never select this port.
+            let Ok(release) = catalog.resolve_telemetry_backend(
+                &selection.plugin_id,
+                &selection.plugin_version,
+                &selection.generation_digest,
+            ) else {
+                return crate::observability::ExportReceipt::default();
+            };
+            let signal = batch.otlp.as_ref().map(|v| v.signal);
+            let Some(operation) = release.operation_for(signal) else {
+                return crate::observability::ExportReceipt::default();
+            };
             let selected = control
                 .connected_plugin_inventory()
                 .into_iter()
                 .find(|entry| {
-                    entry.machine_id == machine_id
-                        && entry.plugin.plugin_kind
-                            == cowboy_plugin_sdk::PluginKind::TelemetryBackend
-                        && entry.plugin.plugin_id == selection.plugin_id
-                        && entry.plugin.plugin_version == selection.plugin_version
-                        && entry.plugin.generation_digest == selection.generation_digest
-                        && entry.plugin.state
-                            == crate::machine_protocol::PluginInstallationState::Active
+                    entry.machine_id == machine_id && release.matches_inventory(&entry.plugin)
                 });
             let Some(selected) = selected else {
                 return crate::observability::ExportReceipt::default();
             };
-            let signal = batch.otlp.as_ref().map(|v| v.signal);
-            let (operation, payload) = match batch.otlp {
-                Some(otlp) => (
-                    crate::machine_protocol::PluginHostOperation::ExportOtlp,
-                    serde_json::to_value(otlp).expect("OTLP envelope"),
-                ),
-                None => (
-                    crate::machine_protocol::PluginHostOperation::ExportTelemetry,
-                    serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
-                ),
+            let Ok(binding) = control.bind_plugin_host(&machine_id, &selected.plugin, operation)
+            else {
+                return crate::observability::ExportReceipt::default();
             };
-            let result = control
-                .plugin_host_request(&machine_id, &selected.plugin, operation, payload)
-                .await;
-            // Never log the command or private endpoint errors. Only bounded
-            // lane receipts reach the Controller's event history.
+            let payload = match batch.otlp {
+                Some(otlp) => serde_json::to_value(otlp).expect("OTLP envelope"),
+                None => serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
+            };
+            let result = control.invoke_plugin_host(binding, payload).await;
+            // Never log commands or private endpoint errors. Only bounded lane
+            // receipts reach observability; no host payload enters history.
             let receipt = result
                 .ok()
                 .and_then(|value| serde_json::from_value::<ExportResult>(value).ok())

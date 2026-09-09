@@ -1265,6 +1265,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         crate::telemetry_plugin::controller_exporter(
             args.telemetry_plugin_config.as_deref(),
             Arc::clone(&machine_control),
+            Arc::clone(&plugin_catalog),
         )?,
     );
     let telemetry_shutdown = observability.clone();
@@ -12500,9 +12501,9 @@ async fn accept_service_auth_candidate(
     {
         warnings.push("shared Provider authentication status is incomplete".to_owned());
     }
-    state.machine_control.record(
+    state.machine_control.record_service_login(
         machine_id,
-        crate::machine_protocol::MachineEvent::LoginState {
+        crate::machine_control::ServiceLoginNotice {
             request_id: request_id.to_owned(),
             provider: provider_id.to_owned(),
             state: crate::machine_protocol::AuthState::SignedIn,
@@ -12537,9 +12538,9 @@ async fn accept_service_auth_candidate(
         .await
     {
         tracing::warn!(%error, %provider_id, %request_id, "cleaning temporary Provider authentication home");
-        state.machine_control.record(
+        state.machine_control.record_service_login(
             machine_id,
-            crate::machine_protocol::MachineEvent::LoginState {
+            crate::machine_control::ServiceLoginNotice {
                 request_id: request_id.to_owned(),
                 provider: provider_id.to_owned(),
                 state: crate::machine_protocol::AuthState::SignedIn,
@@ -13176,15 +13177,15 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
-    state.machine_control.install(
+    let connection = state.machine_control.install(
         hello.machine_id.clone(),
         challenge_id.clone(),
         connection_mode == "local",
         protocol,
         machine_command_tx,
     );
-    state.machine_control.record(
-        &hello.machine_id,
+    state.machine_control.record_remote(
+        &connection,
         crate::machine_protocol::MachineEvent::Inventory {
             components: hello.components.clone(),
             workspaces: Some(hello.workspaces.clone()),
@@ -13193,8 +13194,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         },
     );
     state.machine_snapshots.publish().await;
-    state.machine_control.record(
-        &hello.machine_id,
+    state.machine_control.record_remote(
+        &connection,
         crate::machine_protocol::MachineEvent::PluginInventory {
             plugins: hello.plugins.clone(),
             observed_at_ms: now_ms(),
@@ -13224,6 +13225,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         Ok(pair) => pair,
         Err(error) => {
             tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
+            socket_writer.abort();
+            state.machine_control.remove_if_current(&connection);
             return;
         }
     };
@@ -13416,6 +13419,9 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let Ok(frame) = serde_json::from_str::<crate::machine_protocol::MachineFrame>(&text) else {
             break;
         };
+        if !state.machine_control.is_current(&connection) {
+            break;
+        }
         let result = match frame {
             crate::machine_protocol::MachineFrame::Heartbeat { .. } => {
                 heartbeat_watchdog.observe_at(std::time::Instant::now());
@@ -13439,8 +13445,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     workspaces,
                     workspace_revision,
                 );
-                state.machine_control.record(
-                    &hello.machine_id,
+                state.machine_control.record_remote(
+                    &connection,
                     crate::machine_protocol::MachineEvent::Inventory {
                         components: current_components.clone(),
                         workspaces: Some(current_workspaces.clone()),
@@ -13474,8 +13480,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             } => {
                 current_providers = plugins;
                 let failed_provider_auth = failed_provider_auth_projection_ids(&current_providers);
-                state.machine_control.record(
-                    &hello.machine_id,
+                state.machine_control.record_remote(
+                    &connection,
                     crate::machine_protocol::MachineEvent::PluginInventory {
                         plugins: current_providers.clone(),
                         observed_at_ms,
@@ -13615,9 +13621,9 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         candidate_state
                             .provider_auth
                             .fail_authentication(&provider_id, &request_id);
-                        candidate_state.machine_control.record(
+                        candidate_state.machine_control.record_service_login(
                             &candidate_machine_id,
-                            crate::machine_protocol::MachineEvent::LoginState {
+                            crate::machine_control::ServiceLoginNotice {
                                 request_id,
                                 provider: provider_id,
                                 state: crate::machine_protocol::AuthState::Error,
@@ -13713,7 +13719,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         .provider_auth
                         .fail_authentication(provider, request_id);
                 }
-                state.machine_control.record(&hello.machine_id, event);
+                state.machine_control.record_remote(&connection, event);
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
@@ -13740,9 +13746,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             .runtime_router
             .remove_if_current(&hello.machine_id, runtime);
     }
-    state
-        .machine_control
-        .remove_if_current(&hello.machine_id, &challenge_id);
+    state.machine_control.remove_if_current(&connection);
     if let Err(error) = store
         .machine_disconnected(
             &hello.machine_id,

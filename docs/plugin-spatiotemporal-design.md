@@ -4,7 +4,9 @@
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
 [只读组合检查器](plugin-composition-checker.md)
 已实现类型生成、边界解码、scope/placement
-与图结构校验。授权、跨端激活和恢复仍是后续目标，不能把结构检查通过当成可执行计划。
+与图结构校验。第二批 [运行时绑定](plugin-runtime-bindings.md) 已将 Core RPC
+绑定到认证连接代次，并让现有遥测调用核对签名 Catalog 与当前 Machine 库存。
+通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
