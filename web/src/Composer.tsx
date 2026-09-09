@@ -288,6 +288,7 @@ import {
 import {
   activeRunConfigPreset,
   type RunConfigPreset,
+  runConfigCurrentTitle,
   runConfigPresetChanges,
   runConfigPresets,
   runConfigSummary,
@@ -6840,7 +6841,11 @@ function ComposerSheet({
     ? undefined
     : recommendedPresets.find((preset) => preset.id === pendingPresetId);
   const currentConfigSummary = runConfigSummary(options);
+  const currentConfigTitle = runConfigCurrentTitle(
+    authoritativeActivePreset?.name,
+  );
   const [customizeAgent, setCustomizeAgent] = useState(false);
+  const agentDetailsId = useId();
   const [sessionActionsExpanded, setSessionActionsExpanded] = useState(false);
   const [workspaceOptionsExpanded, setWorkspaceOptionsExpanded] = useState(
     false,
@@ -7027,27 +7032,102 @@ function ComposerSheet({
                 // closes its own menu on pick. The user dismisses the sheet by
                 // tapping outside once they're done.
                 <Stack spacing={1.25} sx={{ mt: 1.25 }}>
-                  <Box
-                    role="status"
-                    sx={{
-                      p: 1.5,
-                      border: 1,
-                      borderColor: "divider",
-                      borderRadius: 1,
-                    }}
-                  >
-                    <Typography variant="caption" color="text.secondary">
-                      Current · {authoritativeActivePreset?.name ?? "Custom"}
-                    </Typography>
-                    <Typography variant="body2" sx={{ mt: 0.5 }}>
-                      {currentConfigSummary}
-                    </Typography>
-                    {pendingPreset && (
-                      <Typography variant="caption" color="text.secondary">
-                        Applying {pendingPreset.name}…
-                      </Typography>
+                  {recommendedPresets.length > 0
+                    ? (
+                      <ButtonBase
+                        aria-label={showAgentDetails
+                          ? "Collapse current agent configuration"
+                          : "Expand current agent configuration"}
+                        aria-expanded={showAgentDetails}
+                        aria-controls={agentDetailsId}
+                        onClick={(): void => {
+                          haptic();
+                          setCustomizeAgent((value) => !value);
+                        }}
+                        sx={{
+                          width: "100%",
+                          minHeight: 44,
+                          px: 0.5,
+                          borderRadius: 1.5,
+                          justifyContent: "space-between",
+                          color: "text.secondary",
+                          textAlign: "left",
+                          "&:active": { bgcolor: "action.hover" },
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0, pr: 1 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{ fontWeight: 650 }}
+                          >
+                            {currentConfigTitle}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{ display: "block", lineHeight: 1.35 }}
+                          >
+                            {pendingPreset
+                              ? `Applying ${pendingPreset.name}…`
+                              : currentConfigSummary}
+                          </Typography>
+                        </Box>
+                        <ExpandMore
+                          fontSize="small"
+                          sx={{
+                            flexShrink: 0,
+                            transform: showAgentDetails
+                              ? "rotate(180deg)"
+                              : "none",
+                            transition: (theme) =>
+                              theme.transitions.create("transform"),
+                          }}
+                        />
+                      </ButtonBase>
+                    )
+                    : (
+                      <Box>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 650 }}
+                        >
+                          {currentConfigTitle}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: "block", lineHeight: 1.35 }}
+                        >
+                          {pendingPreset
+                            ? `Applying ${pendingPreset.name}…`
+                            : currentConfigSummary}
+                        </Typography>
+                      </Box>
                     )}
-                  </Box>
+                  <Collapse
+                    in={showAgentDetails}
+                    id={agentDetailsId}
+                    unmountOnExit={recommendedPresets.length > 0}
+                  >
+                    <Stack
+                      spacing={2}
+                      sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}
+                    >
+                      {options.map((opt) => (
+                        <ConfigSheetDropdown
+                          key={opt.id}
+                          option={opt}
+                          disabled={providerConfigOptionDisabled(
+                            status,
+                            optionPresentations.get(opt.id),
+                          )}
+                          onSelect={(value): void => {
+                            onSelectOption(opt.id, value);
+                          }}
+                        />
+                      ))}
+                    </Stack>
+                  </Collapse>
                   {recommendedPresets.length > 0 && (
                     <>
                       <Typography
@@ -7099,69 +7179,8 @@ function ComposerSheet({
                           />
                         ))}
                       </Box>
-                      <ButtonBase
-                        aria-expanded={showAgentDetails}
-                        onClick={(): void => {
-                          haptic();
-                          setCustomizeAgent((value) => !value);
-                        }}
-                        sx={{
-                          minHeight: 44,
-                          px: 0.5,
-                          borderRadius: 1.5,
-                          justifyContent: "space-between",
-                          color: "text.secondary",
-                        }}
-                      >
-                        <Box sx={{ minWidth: 0, textAlign: "left", py: 0.75 }}>
-                          <Typography variant="body2" sx={{ fontWeight: 650 }}>
-                            Customize
-                          </Typography>
-                          {!showAgentDetails && (
-                            <Typography
-                              variant="caption"
-                              sx={{ display: "block" }}
-                            >
-                              {currentConfigSummary}
-                            </Typography>
-                          )}
-                        </Box>
-                        <ExpandMore
-                          fontSize="small"
-                          sx={{
-                            transform: showAgentDetails
-                              ? "rotate(180deg)"
-                              : "none",
-                            transition: (theme) =>
-                              theme.transitions.create("transform"),
-                          }}
-                        />
-                      </ButtonBase>
                     </>
                   )}
-                  <Collapse
-                    in={showAgentDetails}
-                    unmountOnExit={recommendedPresets.length > 0}
-                  >
-                    <Stack
-                      spacing={2}
-                      sx={{ pt: recommendedPresets.length > 0 ? 0.5 : 0 }}
-                    >
-                      {options.map((opt) => (
-                        <ConfigSheetDropdown
-                          key={opt.id}
-                          option={opt}
-                          disabled={providerConfigOptionDisabled(
-                            status,
-                            optionPresentations.get(opt.id),
-                          )}
-                          onSelect={(value): void => {
-                            onSelectOption(opt.id, value);
-                          }}
-                        />
-                      ))}
-                    </Stack>
-                  </Collapse>
                 </Stack>
               )}
           </Box>

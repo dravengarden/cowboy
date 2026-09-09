@@ -3,6 +3,7 @@ import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
+  runConfigCurrentTitle,
   runConfigPresetChanges,
   runConfigSummary,
   supportedRunConfigPresets,
@@ -56,6 +57,8 @@ Deno.test("custom configuration remains visible without a matching preset", () =
     undefined,
   );
   assertEquals(runConfigSummary(custom), "Model: Model A · Reasoning: high");
+  assertEquals(runConfigCurrentTitle("High · Always approve"), "Current · High · Always approve");
+  assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
 Deno.test("Codex recommends Astra Medium without changing the default", async () => {
@@ -155,6 +158,16 @@ Deno.test("desktop and mobile expose presets with surface-native interactions", 
   assertEquals(composerSource.includes("minHeight: 58"), true);
   assertEquals(composerSource.includes("in={showAgentDetails}"), true);
   assertEquals(composerSource.includes("setCustomizeAgent(false)"), true);
+});
+
+Deno.test("mobile current configuration is a disclosure, not a fake card", () => {
+  assertEquals(composerSource.includes("runConfigCurrentTitle("), true);
+  assertEquals(
+    composerSource.includes("Expand current agent configuration"),
+    true,
+  );
+  assertEquals(composerSource.includes('role="status"'), false);
+  assertEquals(/variant="body2"[^>]*>\s*Customize\s*</.test(composerSource), false);
 });
 
 Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => {

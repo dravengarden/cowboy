@@ -23,6 +23,11 @@ export function runConfigSummary(options: readonly ConfigOption[]): string {
   }).join(" · ");
 }
 
+/** Session-sheet title for the live configuration disclosure. */
+export function runConfigCurrentTitle(presetName: string | undefined): string {
+  return `Current · ${presetName ?? "Custom"}`;
+}
+
 function supportsPreset(
   preset: Pick<RunConfigPreset, "values">,
   optionById: ReadonlyMap<string, ConfigOption>,
