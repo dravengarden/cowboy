@@ -12,6 +12,14 @@ sessions created before an exact Provider generation was recorded.
 
 ## Authority
 
+The [spatiotemporal architecture](plugin-spatiotemporal-design.md), redesigned on
+2026-09-09, fixes communication, installation, core security and native outside
+the Plugin lifecycle. It unifies component composition across Service/Machine
+placements while separating authority, local execution, durable state and
+recovery. Local Authentication/native ownership and component release rules
+change only through its tested migrations. The target APIs and guarantees are
+not implemented; this document remains the contract for existing releases/data.
+
 These requirements govern new Provider-platform work. When a target design
 choice conflicts with a transitional implementation detail, preserve the live
 system until a tested migration exists, then move toward this contract. Do not

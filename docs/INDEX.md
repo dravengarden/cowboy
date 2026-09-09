@@ -17,6 +17,7 @@ primary phone/desktop product path.
 
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Control plane, Machines, workers, storage, and client topology
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract
+- [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Target architecture: fixed core, typed components and Plugin composition across Service/Machine, local execution, state compatibility and recovery; not yet implemented
 
 ## Documents
 
@@ -48,6 +49,7 @@ primary phone/desktop product path.
 
 - [`requirements.md`](requirements.md) — Cowboy core requirements, state ownership, and context-preserving Provider reload
 - [`plugin-components.md`](plugin-components.md) — Plugin manifests, shared component ownership, and coordinated versioning
+- [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
