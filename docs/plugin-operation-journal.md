@@ -2,7 +2,9 @@
 
 Status: fourth spatiotemporal slice, 2026-09-09. This is a finite Controller
 coordinator for the existing uninstall workflow, not a generic composition
-executor or a Machine-side durable receipt protocol.
+executor. The following [Machine receipt slice](machine-plugin-operation-receipts.md)
+adds opt-in protocol-ten execution/query; resident Machines remain separate
+maintenance targets and default to reader-only before its accepted cutover.
 
 ## Authority and admission
 
@@ -47,7 +49,7 @@ or failed recovery retains `NeedsAttention`, the phase where it stopped, and
 closed failure codes. A compensation failure preserves the primary cause too.
 Expiry before any effect can become `Aborted`; expiry after effects cannot.
 
-The existing Machine protocol distinguishes three Controller observations:
+The existing protocol 5–9 path distinguishes three Controller observations:
 
 | Observation                                     | Service action                                                      |
 | ----------------------------------------------- | ------------------------------------------------------------------- |
@@ -139,7 +141,8 @@ phase, bad evidence, connection replacement, lost replies, forced task
 interruption and detached observers. Side-effect fixtures assert persisted phase
 before each mocked remote operation and never use production credentials.
 
-Still missing: Machine-owned durable operation/step IDs, receipts and
+Protocol 10 now implements Machine-owned durable uninstall identity, receipts
+and read-only queries behind a reader-floor admission switch. Still missing:
 installation incarnations; fresh-policy recovery authorization; verified worker
 restoration; operator recovery UI; bounded evidence archival; Victoria binding
 activation; and the generic finite executor. A current inventory match is not

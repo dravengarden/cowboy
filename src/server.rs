@@ -63,7 +63,10 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
 mod plugin_uninstall;
-use plugin_uninstall::{api_machine_plugin_operations, api_machine_plugin_uninstall};
+use plugin_uninstall::{
+    api_machine_plugin_operation_receipt, api_machine_plugin_operations,
+    api_machine_plugin_uninstall,
+};
 
 #[derive(Clone)]
 struct PluginUninstallPlan {
@@ -8941,6 +8944,10 @@ async fn serve_axum(
         .route(
             "/api/machines/{id}/plugins/{provider_id}/operations",
             get(api_machine_plugin_operations),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
+            get(api_machine_plugin_operation_receipt),
         )
         .route("/api/machines/{id}/refresh", post(api_machine_refresh))
         .route(
@@ -20448,6 +20455,7 @@ mod product_auth_api_tests {
             "/api/logs",
             "/api/logs/log-123",
             "/api/observability/incidents",
+            "/api/machines/m-123/plugins/victoria/operations/op-123/machine-receipt",
         ] {
             assert_eq!(
                 classify_route(&Method::GET, path),

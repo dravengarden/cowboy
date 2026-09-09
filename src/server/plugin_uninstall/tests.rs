@@ -2,6 +2,51 @@ use super::*;
 use crate::plugin_operation::fixture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[test]
+fn durable_step_result_never_infers_success_from_missing_or_unknown_evidence() {
+    use crate::machine_protocol::plugin_step::{
+        StepReceipt, StepRejection, StepUnavailable, StepUncertainty,
+    };
+    let step = fixture("receipt-kind").machine_step().unwrap();
+    for outcome in [
+        StepOutcome::Applied {},
+        StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged,
+        },
+        StepOutcome::Unknown {
+            reason: StepUncertainty::Interrupted,
+        },
+    ] {
+        let result = require_applied_step(StepLookup::Found {
+            receipt: Box::new(StepReceipt {
+                step: step.clone(),
+                request_digest: step.request_digest().unwrap(),
+                outcome: outcome.clone(),
+            }),
+        });
+        match outcome {
+            StepOutcome::Applied {} => assert!(result.is_ok()),
+            StepOutcome::Rejected { .. } => {
+                assert_eq!(result.unwrap_err().certainty, CommandFailure::Rejected)
+            }
+            StepOutcome::Unknown { .. } => {
+                assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown)
+            }
+        }
+    }
+    for result in [
+        StepLookup::NotFound {},
+        StepLookup::Unavailable {
+            reason: StepUnavailable::Storage,
+        },
+    ] {
+        assert_eq!(
+            require_applied_step(result).unwrap_err().certainty,
+            CommandFailure::Unknown
+        );
+    }
+}
+
 struct MockEffects {
     store: Store,
     outcome: Option<CommandFailure>,

@@ -7,6 +7,8 @@
 
 #![warn(clippy::pedantic)]
 
+mod operations;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -198,6 +200,7 @@ pub(crate) struct MachinePluginStore {
     lifecycle: tokio::sync::Mutex<()>,
     telemetry_export: tokio::sync::Mutex<()>,
     code_runtimes: CodeRuntimeHost,
+    operations: operations::Journal,
 }
 
 enum PreparedProviderAuth {
@@ -246,6 +249,7 @@ impl MachinePluginStore {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let encryption = MachineEncryptionIdentity::load_or_create(&auth_root.join("identity"))?;
+        let operations = operations::Journal::open(state_dir)?;
         Ok(Self {
             root,
             auth_root,
@@ -255,6 +259,7 @@ impl MachinePluginStore {
             lifecycle: tokio::sync::Mutex::new(()),
             telemetry_export: tokio::sync::Mutex::new(()),
             code_runtimes: CodeRuntimeHost::default(),
+            operations,
         })
     }
 
@@ -285,6 +290,8 @@ impl MachinePluginStore {
     pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
         let _lifecycle = self.lifecycle.lock().await;
         let plugin_package = self.checked_install_package(desired)?;
+        self.operations
+            .ensure_unfenced(&plugin_package.manifest.id)?;
         let (host_bundle, host_bundle_bytes) =
             desired_plugin_host_bundle(desired, &plugin_package)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
@@ -470,6 +477,7 @@ impl MachinePluginStore {
     ) -> Result<PluginInventory> {
         let _lifecycle = self.lifecycle.lock().await;
         validate_plugin_id(provider_id)?;
+        self.operations.ensure_legacy_allowed(provider_id)?;
         let generation_name = digest_generation_name(generation_digest)?;
         let (plugin_package, _, content) =
             self.verified_plugin_generation(provider_id, generation_digest)?;
@@ -528,6 +536,11 @@ impl MachinePluginStore {
 
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
+        self.operations.ensure_legacy_allowed(provider_id)?;
+        self.uninstall_inner(provider_id, expected_digest)
+    }
+
+    fn uninstall_inner(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         validate_plugin_id(provider_id)?;
         let active = self
             .inventory_one(provider_id)?
@@ -652,6 +665,7 @@ impl MachinePluginStore {
         validate_plugin_id(plugin_id)?;
         self.code_runtimes
             .request(plugin_id, payload, || {
+                self.operations.ensure_unfenced(plugin_id)?;
                 let root = self.plugin_root(plugin_id);
                 if let Some(generation) = read_link_name(&root.join("active")) {
                     let digest = format!("sha256:{generation}");
@@ -692,6 +706,7 @@ impl MachinePluginStore {
         // not hold it or block installation/agent operations.
         let (contract, config, payload) = {
             let _lifecycle = self.lifecycle.lock().await;
+            self.operations.ensure_unfenced(plugin_id)?;
             (|| -> Result<_> {
                 ensure!(
                     auth_generation.is_none(),
@@ -848,6 +863,7 @@ impl MachinePluginStore {
         payload: &mut serde_json::Value,
     ) -> Result<ResolvedPluginHostInvocation> {
         validate_plugin_id(plugin_id)?;
+        self.operations.ensure_unfenced(plugin_id)?;
         let active = self
             .inventory_one(plugin_id)?
             .context("Plugin is not active on this Machine")?;
@@ -1003,6 +1019,7 @@ impl MachinePluginStore {
         generation_digest: &str,
         auth_generation: Option<u64>,
     ) -> Result<ProviderLaunchContext> {
+        self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
@@ -4070,7 +4087,7 @@ mod tests {
     use super::*;
 
     #[cfg(feature = "full")]
-    fn telemetry_release(
+    pub(super) fn telemetry_release(
         publisher: &crate::machine_auth::MachineIdentity,
         version: &str,
     ) -> DesiredPlugin {

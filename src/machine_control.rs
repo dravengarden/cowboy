@@ -14,6 +14,7 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
     PluginInstallationState, PluginInventory,
@@ -112,9 +113,11 @@ enum ReplyKind {
     Adapter,
     Command,
     PluginHost,
+    PluginStep,
 }
 
 enum Reply {
+    PluginStep(Box<StepObservation>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -128,6 +131,7 @@ enum Reply {
 impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
+            Self::PluginStep(_) => ReplyKind::PluginStep,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -406,6 +410,12 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::PluginUninstallStep {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::PluginStep(observation));
+            }
             MachineEvent::ProviderAuthRefreshCandidate { .. }
             | MachineEvent::ServiceAuthCandidate { .. } => {}
             MachineEvent::PluginHostResponse {
@@ -622,6 +632,80 @@ impl MachineControl {
             .get(machine_id)
             .map(|connection| connection.token.clone())
             .ok_or_else(|| "Machine is not connected".to_owned())
+    }
+
+    pub(crate) fn durable_plugin_steps(&self, token: &ConnectionToken) -> bool {
+        self.live
+            .read()
+            .connections
+            .get(&token.0.machine_id)
+            .is_some_and(|c| {
+                c.token.same(token)
+                    && c.protocol >= crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION
+            })
+    }
+
+    pub(crate) async fn plugin_uninstall_step(
+        &self,
+        token: &ConnectionToken,
+        step: &UninstallStep,
+        query_only: bool,
+    ) -> Result<StepObservation, CommandRequestError> {
+        let fail = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.to_owned(),
+        };
+        step.validate()
+            .map_err(|_| fail(CommandFailure::NotSent, "invalid Machine step"))?;
+        if step.machine_id != token.0.machine_id {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "Machine step target mismatch",
+            ));
+        }
+        let request_id = self.request_id("plugin-step").map_err(|_| {
+            fail(
+                CommandFailure::NotSent,
+                "Machine request identity unavailable",
+            )
+        })?;
+        let command = if query_only {
+            MachineCommand::QueryPluginUninstallStep {
+                request_id: request_id.clone(),
+                step: Box::new(step.clone()),
+            }
+        } else {
+            MachineCommand::UninstallPluginStep {
+                request_id: request_id.clone(),
+                step: Box::new(step.clone()),
+            }
+        };
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                command,
+                ReplyKind::PluginStep,
+                Some(RequestBinding::Connection(token)),
+            )
+            .map_err(|_| fail(CommandFailure::NotSent, "Machine step channel unavailable"))?;
+        match tokio::time::timeout(PROVIDER_COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(Reply::PluginStep(observation))) => {
+                if let StepLookup::Found { receipt } = &observation.result
+                    && !receipt.matches(step)
+                {
+                    return Err(fail(
+                        CommandFailure::Unknown,
+                        "Machine step receipt identity mismatch",
+                    ));
+                }
+                Ok(*observation)
+            }
+            _ => Err(fail(
+                CommandFailure::Unknown,
+                "Machine step receipt unavailable",
+            )),
+        }
     }
 
     pub(crate) async fn command_on_connection(
@@ -890,6 +974,111 @@ mod tests {
             control.install(id.to_owned(), "same-epoch".to_owned(), false, 9, tx),
             rx,
         )
+    }
+
+    #[tokio::test]
+    async fn durable_step_rejects_old_protocol_before_enqueue() {
+        let control = MachineControl::default();
+        let (connection, mut commands) = connect(&control, "machine-test");
+        let error = control
+            .plugin_uninstall_step(
+                &connection,
+                &crate::machine_protocol::plugin_step::fixture(),
+                true,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.certainty, CommandFailure::NotSent);
+        assert!(commands.try_recv().is_err());
+        assert!(control.live.read().pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn durable_step_query_correlates_exact_evidence_and_drops_late_replies() {
+        use crate::machine_protocol::plugin_step::{StepOutcome, StepReceipt, fixture};
+        let control = MachineControl::default();
+        let (sender, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install("machine-test".into(), "epoch".into(), false, 10, sender);
+        let step = fixture();
+        for changed in [false, true] {
+            let request = control.plugin_uninstall_step(&connection, &step, true);
+            let respond = async {
+                let MachineCommand::QueryPluginUninstallStep {
+                    request_id,
+                    step: received,
+                } = commands.recv().await.unwrap()
+                else {
+                    panic!("query must not mutate");
+                };
+                assert_eq!(*received, step);
+                // Wrong reply union cannot complete the typed waiter.
+                control.record_remote(
+                    &connection,
+                    MachineEvent::CommandResult {
+                        request_id: request_id.clone(),
+                        accepted: true,
+                        detail: None,
+                    },
+                );
+                assert!(control.live.read().pending.contains_key(&request_id));
+                let mut receipt = StepReceipt {
+                    step: step.clone(),
+                    request_digest: step.request_digest().unwrap(),
+                    outcome: StepOutcome::Applied {},
+                };
+                if changed {
+                    receipt.step.plan_digest =
+                        crate::machine_protocol::plugin_step::digest(b"other actor");
+                }
+                control.record_remote(
+                    &connection,
+                    MachineEvent::PluginUninstallStep {
+                        request_id,
+                        observation: Box::new(StepObservation {
+                            admission_enabled: false,
+                            result: StepLookup::Found {
+                                receipt: Box::new(receipt),
+                            },
+                        }),
+                    },
+                );
+            };
+            let (result, ()) = tokio::join!(request, respond);
+            if changed {
+                assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+            } else {
+                assert!(matches!(result.unwrap().result, StepLookup::Found { .. }));
+            }
+        }
+        let request = control.plugin_uninstall_step(&connection, &step, false);
+        let replace = async {
+            let MachineCommand::UninstallPluginStep { request_id, .. } =
+                commands.recv().await.unwrap()
+            else {
+                panic!();
+            };
+            let (sender, _commands) = mpsc::unbounded_channel();
+            control.install("machine-test".into(), "epoch".into(), false, 10, sender);
+            control.record_remote(
+                &connection,
+                MachineEvent::PluginUninstallStep {
+                    request_id,
+                    observation: Box::new(StepObservation {
+                        admission_enabled: true,
+                        result: StepLookup::NotFound {},
+                    }),
+                },
+            );
+        };
+        let (result, ()) = tokio::join!(request, replace);
+        assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+        assert!(control.live.read().pending.is_empty());
+        assert!(
+            !control
+                .events("machine-test")
+                .iter()
+                .any(|e| matches!(e, MachineEvent::PluginUninstallStep { .. }))
+        );
     }
 
     fn observe(

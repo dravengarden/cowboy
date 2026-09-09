@@ -441,6 +441,15 @@ state committed. See the
 [Service operation journal](plugin-operation-journal.md) for its reader-floor
 rollout, bounded retention and current recovery limits.
 
+Protocol 10 adds a closed, Machine-owned durable uninstall step and read-only
+query, bound to the complete Service intent digest. Identical requests return
+saved evidence without re-execution; changed arguments under the same identity
+are rejected. A partial effect or missing final durable receipt remains unknown.
+The Machine defaults to reader-only until its separate reader-floor maintenance
+cutover. This path never compensates through legacy unjournaled reactivation;
+installation CAS and verified recovery authorization remain prerequisites. See
+[Machine operation receipts](machine-plugin-operation-receipts.md).
+
 ### CR-11: Release automation belongs to this repository
 
 The canonical Provider dependency-audit and release procedure is the repository

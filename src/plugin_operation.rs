@@ -48,6 +48,27 @@ fn digest(value: &str) -> bool {
 }
 
 impl UninstallIntent {
+    pub(crate) fn machine_step(
+        &self,
+    ) -> Result<crate::machine_protocol::plugin_step::UninstallStep> {
+        use crate::machine_protocol::plugin_step::{UninstallStep, digest};
+        self.validate()?;
+        let step = UninstallStep {
+            schema: 1,
+            operation_id: self.operation_id.clone(),
+            service_id: self.service_id.clone(),
+            machine_id: self.machine_id.clone(),
+            plan_digest: digest(&serde_json::to_vec(self)?),
+            plugin_id: self.plugin_id.clone(),
+            plugin_version: self.plugin_version.clone(),
+            generation_digest: self.generation_digest.clone(),
+            contract_fingerprint: self.contract_fingerprint.clone(),
+            expires_at_ms: self.expires_at_ms,
+        };
+        step.validate()?;
+        Ok(step)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(self.schema == 1, "unsupported uninstall intent schema");
         ensure!(
@@ -257,5 +278,25 @@ mod tests {
         let mut value = serde_json::to_value(valid).unwrap();
         value["authorization"] = serde_json::json!(true);
         assert!(serde_json::from_value::<UninstallIntent>(value).is_err());
+    }
+    #[test]
+    fn machine_step_binds_actor_impact_and_every_confirmed_input() {
+        let intent = fixture("machine-binding");
+        let expected = intent.machine_step().unwrap();
+        assert_eq!(intent.machine_step().unwrap(), expected);
+        let mut changed = intent.clone();
+        changed.actor = Actor::Admin {
+            account: "different".into(),
+        };
+        assert_ne!(
+            changed.machine_step().unwrap().plan_digest,
+            expected.plan_digest
+        );
+        let mut changed = intent;
+        changed.purge_after_ms += 1;
+        assert_ne!(
+            changed.machine_step().unwrap().plan_digest,
+            expected.plan_digest
+        );
     }
 }

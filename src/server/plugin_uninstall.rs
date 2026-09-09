@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
+use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
 
@@ -213,6 +214,22 @@ trait Effects: Sync {
 struct LiveEffects {
     state: Arc<AppState>,
     connection: ConnectionToken,
+    durable_steps: bool,
+}
+
+fn require_applied_step(result: StepLookup) -> Result<(), CommandRequestError> {
+    let certainty = match result {
+        StepLookup::Found { receipt } => match receipt.outcome {
+            StepOutcome::Applied {} => return Ok(()),
+            StepOutcome::Rejected { .. } => CommandFailure::Rejected,
+            StepOutcome::Unknown { .. } => CommandFailure::Unknown,
+        },
+        StepLookup::NotFound {} | StepLookup::Unavailable { .. } => CommandFailure::Unknown,
+    };
+    Err(CommandRequestError {
+        certainty,
+        detail: "Machine uninstall requires receipt reconciliation".to_owned(),
+    })
 }
 
 impl Effects for LiveEffects {
@@ -223,6 +240,18 @@ impl Effects for LiveEffects {
         self.state.supervisor.reload_session(id, true)
     }
     async fn uninstall(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
+        if self.durable_steps {
+            let step = intent.machine_step().map_err(|_| CommandRequestError {
+                certainty: CommandFailure::NotSent,
+                detail: "invalid Machine step".to_owned(),
+            })?;
+            let observation = self
+                .state
+                .machine_control
+                .plugin_uninstall_step(&self.connection, &step, false)
+                .await?;
+            return require_applied_step(observation.result);
+        }
         let request_id = machine_request_id("plugin-uninstall");
         self.state
             .machine_control
@@ -238,6 +267,15 @@ impl Effects for LiveEffects {
             .await
     }
     async fn reactivate(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
+        if self.durable_steps {
+            // A durable forward receipt does not grant installation-CAS or
+            // authorize an unjournaled inverse. Keep the recovery fence.
+            return Err(CommandRequestError {
+                certainty: CommandFailure::NotSent,
+                detail: "durable compensation requires a separately verified recovery step"
+                    .to_owned(),
+            });
+        }
         let request_id = machine_request_id("plugin-reactivate");
         self.state
             .machine_control
@@ -466,11 +504,18 @@ async fn run_admitted(
         let store = state.store.as_ref().context("Plugin lifecycle requires persistence")?;
         let connection = state.machine_control.operation_connection(&plan.machine_id).map_err(anyhow::Error::msg)?;
         let intent = validate_intent(&state, id.clone(), plan).await?;
+        let durable_steps = state.machine_control.durable_plugin_steps(&connection);
+        if durable_steps {
+            let observation = state.machine_control.plugin_uninstall_step(&connection, &intent.machine_step()?, true)
+                .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;
+            ensure!(observation.admission_enabled && observation.result == StepLookup::NotFound {},
+                "Machine durable uninstall is not admitting a new step; no workers were stopped");
+        }
         // Even an intent COMMIT error can be ambiguous. Keep the memory fence;
         // startup either finds the record or safely forgets a no-effect attempt.
         fence.keep = true;
         store.begin_plugin_uninstall(&intent).await?;
-        let effects = LiveEffects { state: Arc::clone(&state), connection };
+        let effects = LiveEffects { state: Arc::clone(&state), connection, durable_steps };
         let phase = match execute(store, &intent, &effects).await {
             Ok(phase) => phase,
             Err(_) => {
@@ -597,3 +642,55 @@ pub(super) async fn api_machine_plugin_operations(
 
 #[cfg(test)]
 mod tests;
+
+/// Fresh authorized observation only. Never execute, advance the journal,
+/// soft-delete a session, or clear a fence based on a remote query.
+pub(super) async fn api_machine_plugin_operation_receipt(
+    State(state): State<Arc<AppState>>,
+    Path((machine, plugin, operation)): Path<(String, String, String)>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let intent = match store.plugin_uninstall_operation(&operation).await {
+        Ok(Some(op))
+            if op.intent.service_id == state.service_id
+                && op.intent.machine_id == machine
+                && op.intent.plugin_id == plugin =>
+        {
+            op.intent
+        }
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let result = async {
+        let connection = state
+            .machine_control
+            .operation_connection(&machine)
+            .map_err(anyhow::Error::msg)?;
+        ensure!(
+            state.machine_control.durable_plugin_steps(&connection),
+            "Machine lacks durable step queries"
+        );
+        let observation = state
+            .machine_control
+            .plugin_uninstall_step(&connection, &intent.machine_step()?, true)
+            .await
+            .map_err(|_| anyhow::anyhow!("Machine receipt query failed"))?;
+        Ok::<_, anyhow::Error>(observation)
+    }
+    .await;
+    match result {
+        Ok(observation) => Json(serde_json::json!({
+            "operation_id": operation,
+            "machine_observation": observation,
+            "reconciliation_performed": false,
+        }))
+        .into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Machine durable receipt is unavailable; operation remains unchanged",
+        )
+            .into_response(),
+    }
+}

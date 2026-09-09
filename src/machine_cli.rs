@@ -40,6 +40,8 @@ struct LoginIo {
 
 struct ControllerConfig {
     controller_url: String,
+    service_id: Option<String>,
+    plugin_operation_admission: bool,
     machine_id: String,
     display_name: String,
     identity: MachineIdentity,
@@ -151,6 +153,10 @@ pub struct Args {
     /// Stable identity of the Cowboy Service that owns this local namespace.
     #[arg(long, env = "COWBOY_MACHINE_SERVICE_ID")]
     service_id: Option<String>,
+    /// Enable protocol-ten durable uninstall only after a journal-reader
+    /// Machine is the accepted rollback floor. Requires a pinned Service id.
+    #[arg(long, requires = "service_id")]
+    plugin_operation_admission: bool,
     #[arg(long, env = "COWBOY_MACHINE_ID", default_value = "local")]
     machine_id: String,
     #[arg(long, env = "COWBOY_MACHINE_DISPLAY_NAME")]
@@ -354,6 +360,8 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     )?;
     let controller = controller_loop(ControllerConfig {
         controller_url,
+        service_id: args.service_id,
+        plugin_operation_admission: args.plugin_operation_admission,
         machine_id,
         display_name,
         identity,
@@ -998,11 +1006,16 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                     })?;
                                 }
                                 MachineFrame::Command { command } => {
+                                    anyhow::ensure!(command.minimum_protocol() <= protocol,
+                                        "Machine command exceeds negotiated protocol");
                                     if let MachineCommand::ProviderUsageAck { producer_id, sequence } = &command {
                                         config.provider_usage.acknowledge(producer_id, *sequence)?;
                                         continue;
                                     }
                                     handle_machine_command(command, MachineCommandContext {
+                                        service_id: config.service_id.clone(),
+                                        machine_id: config.machine_id.clone(),
+                                        plugin_operation_admission: config.plugin_operation_admission,
                                         events: event_tx.clone(),
                                         components: Arc::clone(&config.components),
                                         providers: Arc::clone(&config.providers),
@@ -1660,6 +1673,9 @@ fn probe_declared_auth(
 }
 
 struct MachineCommandContext {
+    service_id: Option<String>,
+    machine_id: String,
+    plugin_operation_admission: bool,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     components: Arc<ComponentStore>,
     providers: Arc<MachinePluginStore>,
@@ -1682,6 +1698,9 @@ fn provider_auth_roll_target(
 
 fn handle_machine_command(command: MachineCommand, context: MachineCommandContext) {
     let MachineCommandContext {
+        service_id,
+        machine_id,
+        plugin_operation_admission,
         events,
         components,
         providers,
@@ -1692,7 +1711,36 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
         login_sessions,
         runtime_commands,
     } = context;
+    let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::UninstallPluginStep { request_id, step }
+        | MachineCommand::QueryPluginUninstallStep { request_id, step } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .uninstall_step(
+                        &step,
+                        service_id.as_deref(),
+                        &machine_id,
+                        plugin_operation_admission,
+                        query_only,
+                    )
+                    .await;
+                if !query_only {
+                    // An inventory read failure must not advertise an empty
+                    // installation as proof of a completed uninstall.
+                    if let Ok(plugins) = providers.inventory() {
+                        let _ = events.send(MachineEvent::PluginInventory {
+                            plugins,
+                            observed_at_ms: unix_ms(),
+                        });
+                    }
+                }
+                let _ = events.send(MachineEvent::PluginUninstallStep {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
         MachineCommand::RefreshInventory { request_id } => {
             tokio::spawn(async move {
                 let components =

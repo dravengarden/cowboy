@@ -9,7 +9,9 @@ SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一�
 第三批 [组件契约](plugin-components.md) 已实现显式 codec、state-store 实例/订阅资源
 释放，以及保留历史的依赖闭包发布检查；不涉及后台任务取消或 durable effect revert。
 第四批 [卸载操作账本](plugin-operation-journal.md) 为现有卸载流程加入 Service 耐久 intent、
-事务内完成记录、重启隔离与明确的不确定结果；Machine 耐久回执和自动恢复仍未实现。
+事务内完成记录、重启隔离与明确的不确定结果。第五批
+[Machine 回执](machine-plugin-operation-receipts.md) 加入协议 10 的耐久卸载步骤、去重与只读查询；
+Machine 默认 reader-only，实际启用需要独立维护切换。安装 incarnation/CAS 和自动恢复仍未实现。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
@@ -697,8 +699,8 @@ Agent 内部工具。
 | 现有位置                                              | 已有基础 / 需要补足                                                                  |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | [plugin_runtime](../src/plugin_runtime.rs)            | 精确 host 快照与 namespace；不是通用跨端 typed resolver                              |
-| [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；接入局部计划与耐久步骤，不另建 Store                |
-| [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成与重启 fence；仍缺 Machine 耐久回执和恢复授权             |
+| [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；已有受 admission 约束的耐久卸载回执，仍缺 installation CAS |
+| [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [plugin-api](../components/plugin-api/types.ts)       | slot/host/native 混合且 context 宽泛；拆出核心 bridge/host 与 typed authoring        |
 | [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅与 dispose；仍需其他组件的资源作用域模型                 |
