@@ -295,6 +295,17 @@ provider-check: plugin-check
     cd web && deno test --allow-read src/providerSdk.test.ts
 
 # Quality gates.
+composition-generate:
+    deno run --allow-read --allow-write=src/composition,contracts --allow-run tools/generate-composition-contract.ts --write
+
+composition-check:
+    deno fmt --check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts contracts
+    deno check tools/generate-composition-contract.ts
+    deno test --allow-read --allow-write --allow-run tools/generate-composition-contract_test.ts
+    deno run --allow-read --allow-run tools/generate-composition-contract.ts
+    deno test --allow-read contracts/composition.test.ts
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
+
 fmt:
     cargo fmt --check
     cd plugins/zed/adapter && cargo fmt --check
@@ -335,7 +346,7 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
-check: toolchain-check native-shell-check provider-check site-check fmt lint dependencies typecheck feature-check test test-postgres build
+check: toolchain-check native-shell-check provider-check site-check composition-check fmt lint dependencies typecheck feature-check test test-postgres build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.

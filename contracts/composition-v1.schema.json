@@ -1,0 +1,606 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/composition-v1.json",
+  "title": "Cowboy read-only composition proposal (not an authorization or installation format)",
+  "x-json-budget": {
+    "max_bytes": 1048576,
+    "max_depth": 32
+  },
+  "x-profile": "cowboy.closed-contract.v1",
+  "$ref": "#/$defs/Composition",
+  "$defs": {
+    "ServiceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "MachineId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "WorkspaceId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "SessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "OperationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "ScopeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "NodeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "PortId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "PluginId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "PublisherId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "ContractId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "ExactVersion": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 32,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "ArtifactDigest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "ContractFingerprint": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "InstallationGeneration": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "x-max-decimal": "18446744073709551615"
+    },
+    "InstanceIncarnation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "x-max-decimal": "18446744073709551615"
+    },
+    "BindingRevision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "x-max-decimal": "18446744073709551615"
+    },
+    "FormatVersion": {
+      "type": "string",
+      "enum": [
+        "cowboy.composition.v1"
+      ]
+    },
+    "Visibility": {
+      "type": "string",
+      "enum": [
+        "scope",
+        "descendants"
+      ]
+    },
+    "Transport": {
+      "type": "string",
+      "enum": [
+        "local",
+        "remote"
+      ]
+    },
+    "Cardinality": {
+      "type": "string",
+      "enum": [
+        "one",
+        "optional",
+        "many"
+      ]
+    },
+    "Execution": {
+      "type": "string",
+      "enum": [
+        "data",
+        "isolated"
+      ]
+    },
+    "CoreAnchor": {
+      "type": "string",
+      "enum": [
+        "coordination",
+        "telemetry_ingress",
+        "code_client"
+      ]
+    },
+    "Site": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "service_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "service"
+            },
+            "service_id": {
+              "$ref": "#/$defs/ServiceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "service_id",
+            "machine_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "machine"
+            },
+            "service_id": {
+              "$ref": "#/$defs/ServiceId"
+            },
+            "machine_id": {
+              "$ref": "#/$defs/MachineId"
+            }
+          }
+        }
+      ]
+    },
+    "ScopeKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "service_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "service"
+            },
+            "service_id": {
+              "$ref": "#/$defs/ServiceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "parent",
+            "machine_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "machine"
+            },
+            "parent": {
+              "$ref": "#/$defs/ScopeId"
+            },
+            "machine_id": {
+              "$ref": "#/$defs/MachineId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "parent",
+            "workspace_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "workspace"
+            },
+            "parent": {
+              "$ref": "#/$defs/ScopeId"
+            },
+            "workspace_id": {
+              "$ref": "#/$defs/WorkspaceId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "parent",
+            "session_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "session"
+            },
+            "parent": {
+              "$ref": "#/$defs/ScopeId"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "parent",
+            "operation_id"
+          ],
+          "properties": {
+            "kind": {
+              "const": "operation"
+            },
+            "parent": {
+              "$ref": "#/$defs/ScopeId"
+            },
+            "operation_id": {
+              "$ref": "#/$defs/OperationId"
+            }
+          }
+        }
+      ]
+    },
+    "Scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "lifetime"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ScopeId"
+        },
+        "lifetime": {
+          "$ref": "#/$defs/ScopeKind"
+        }
+      }
+    },
+    "ReleaseRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plugin_id",
+        "version",
+        "digest",
+        "publisher"
+      ],
+      "properties": {
+        "plugin_id": {
+          "$ref": "#/$defs/PluginId"
+        },
+        "version": {
+          "$ref": "#/$defs/ExactVersion"
+        },
+        "digest": {
+          "$ref": "#/$defs/ArtifactDigest"
+        },
+        "publisher": {
+          "$ref": "#/$defs/PublisherId"
+        }
+      }
+    },
+    "Identity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "anchor"
+          ],
+          "properties": {
+            "kind": {
+              "const": "core"
+            },
+            "anchor": {
+              "$ref": "#/$defs/CoreAnchor"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "release",
+            "generation",
+            "incarnation",
+            "execution"
+          ],
+          "properties": {
+            "kind": {
+              "const": "plugin"
+            },
+            "release": {
+              "$ref": "#/$defs/ReleaseRef"
+            },
+            "generation": {
+              "$ref": "#/$defs/InstallationGeneration"
+            },
+            "incarnation": {
+              "$ref": "#/$defs/InstanceIncarnation"
+            },
+            "execution": {
+              "$ref": "#/$defs/Execution"
+            }
+          }
+        }
+      ]
+    },
+    "Ownership": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "const": "scope"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "node"
+          ],
+          "properties": {
+            "kind": {
+              "const": "node"
+            },
+            "node": {
+              "$ref": "#/$defs/NodeId"
+            }
+          }
+        }
+      ]
+    },
+    "ContractRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "fingerprint"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ContractId"
+        },
+        "version": {
+          "$ref": "#/$defs/ExactVersion"
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/ContractFingerprint"
+        }
+      }
+    },
+    "ProvidedPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "contract",
+        "visibility",
+        "transport"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/PortId"
+        },
+        "contract": {
+          "$ref": "#/$defs/ContractRef"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility"
+        },
+        "transport": {
+          "$ref": "#/$defs/Transport"
+        }
+      }
+    },
+    "RequiredPort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "contract",
+        "cardinality"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/PortId"
+        },
+        "contract": {
+          "$ref": "#/$defs/ContractRef"
+        },
+        "cardinality": {
+          "$ref": "#/$defs/Cardinality"
+        }
+      }
+    },
+    "Node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope",
+        "site",
+        "identity",
+        "owner",
+        "provides",
+        "requires"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScopeId"
+        },
+        "site": {
+          "$ref": "#/$defs/Site"
+        },
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "owner": {
+          "$ref": "#/$defs/Ownership"
+        },
+        "provides": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProvidedPort"
+          },
+          "minItems": 0,
+          "maxItems": 32
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RequiredPort"
+          },
+          "minItems": 0,
+          "maxItems": 32
+        }
+      }
+    },
+    "Endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "port"
+      ],
+      "properties": {
+        "node": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "port": {
+          "$ref": "#/$defs/PortId"
+        }
+      }
+    },
+    "Binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumer",
+        "provider",
+        "revision"
+      ],
+      "properties": {
+        "consumer": {
+          "$ref": "#/$defs/Endpoint"
+        },
+        "provider": {
+          "$ref": "#/$defs/Endpoint"
+        },
+        "revision": {
+          "$ref": "#/$defs/BindingRevision"
+        }
+      }
+    },
+    "Composition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format",
+        "scopes",
+        "nodes",
+        "bindings"
+      ],
+      "properties": {
+        "format": {
+          "$ref": "#/$defs/FormatVersion"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "minItems": 1,
+          "maxItems": 256
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Binding"
+          },
+          "minItems": 0,
+          "maxItems": 2048
+        }
+      }
+    }
+  }
+}

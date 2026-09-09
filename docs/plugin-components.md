@@ -7,6 +7,14 @@ implementation as components. The machine-readable sources of truth are
 `components/code-intelligence/schema-v2.json`, and
 `components/registry.json`.
 
+The target [spatiotemporal design, section 2.3](plugin-spatiotemporal-design.md)
+places component libraries within one cross-Service/Machine composition model:
+pure utilities, core implementations, authoring contracts, private Plugin
+implementations and templates. Owned units do not acquire an installation
+identity. Section 10 proposes a tested dependency-closure release rule.
+These changes are not implemented; the package formats and coordinated release
+gate below remain in force until a verified migration replaces them.
+
 ## Plugin boundary
 
 A plugin manifest has an exact ID, SemVer version, kind, entry point, and exact
