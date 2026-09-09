@@ -144,7 +144,10 @@ impl Phase {
     }
 
     pub const fn permits(self, next: Self) -> bool {
-        if !self.terminal() && matches!(next, Self::NeedsAttention) {
+        if !self.terminal()
+            && !matches!(self, Self::NeedsAttention)
+            && matches!(next, Self::NeedsAttention)
+        {
             return true;
         }
         matches!(
@@ -229,6 +232,7 @@ mod tests {
                 Phase::Uninstalling,
                 Phase::RestoringMachine,
                 Phase::Completed,
+                Phase::NeedsAttention,
             ] {
                 assert!(!phase.permits(next));
             }

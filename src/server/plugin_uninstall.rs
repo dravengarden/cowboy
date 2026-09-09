@@ -6,9 +6,9 @@ use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToke
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
 
-// Reader-floor bridge: enable only in a descendant after this Controller has
-// been activated as the rollback predecessor. No runtime policy bypass.
-const DURABLE_UNINSTALL_ENABLED: bool = false;
+// Journal-aware reader floor 00e2b69b was activated before this descendant.
+// Its rollback path keeps evidence/fences and pauses new uninstall admission.
+const DURABLE_UNINSTALL_ENABLED: bool = true;
 
 pub(super) fn requires_runtime_fence(command: &Inbound) -> bool {
     matches!(
@@ -475,7 +475,7 @@ async fn run_admitted(
             Ok(phase) => phase,
             Err(_) => {
                 if let Some(op) = store.plugin_uninstall_operation(&id).await? {
-                    if op.phase.terminal() { op.phase } else {
+                    if op.phase.terminal() || op.phase == Phase::NeedsAttention { op.phase } else {
                         attention(store, &intent, op.phase, Problem::StorageFailure).await?
                     }
                 } else { anyhow::bail!("uninstall journal unavailable"); }

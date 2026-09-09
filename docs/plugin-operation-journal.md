@@ -125,6 +125,11 @@ rollout.
 Once operations have been admitted, a pre-journal Controller is not a compatible
 rollback target. Never erase recovery records or authority markers to start one.
 
+The reader bridge `00e2b69b1cc2e8bc873988c1b7948e3de6b9260f` was activated on
+Hawk at `2026-09-09T11:09:42Z` with a successful committed Controller receipt,
+admission disabled and zero unfinished slots. The following enabling release
+uses that bridge as its automatic rollback predecessor.
+
 ## Verification and remaining scope
 
 Tests exercise the real SQLite/PostgreSQL transaction implementations, duplicate
