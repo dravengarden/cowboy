@@ -88,9 +88,16 @@ Deno.test("Code chrome uses Agent instead of a local settings sheet", () => {
     assert(switcher.includes("disableRipple"));
     assert(switcher.includes("dataset.touchActivated"));
     assert(switcher.includes("&[aria-pressed='true']"));
+    assert(switcher.includes("&&[aria-pressed='true']"));
     assert(
       switcher.includes(
         "[data-touch-activated='true'][aria-pressed='false']:hover",
+      ),
+    );
+    assert(switcher.includes("COARSE_POINTER_ROOT_CLASS"));
+    assert(
+      switcher.includes(
+        "&&[aria-pressed='true']:hover",
       ),
     );
     assertEquals(switcher.includes("fontSize: 17"), false);

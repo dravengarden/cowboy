@@ -64,6 +64,7 @@ import {
   useStoreSelector,
 } from "../../store";
 import type { SessionMeta } from "../../protocol";
+import { COARSE_POINTER_ROOT_CLASS } from "../../platform";
 import { useSurfaceProfile } from "../../surface/SurfaceProfile";
 import { newUuid } from "../../uuid";
 import {
@@ -184,6 +185,15 @@ function ReviewModeSwitcher({
       delete event.currentTarget.dataset.touchActivated;
     }
   };
+  const selectedFill = (theme: Theme): string =>
+    alpha(
+      theme.palette.primary.main,
+      theme.palette.mode === "dark" ? 0.24 : 0.13,
+    );
+  const selectedChip = {
+    bgcolor: selectedFill,
+    color: "primary.main",
+  };
   const modeButtonSx: SxProps<Theme> = {
     width: 36,
     height: 32,
@@ -191,30 +201,27 @@ function ReviewModeSwitcher({
     bgcolor: "transparent",
     color: "text.secondary",
     transform: "none",
-    "&[aria-pressed='true']": {
-      bgcolor: (theme) =>
-        alpha(
-          theme.palette.primary.main,
-          theme.palette.mode === "dark" ? 0.24 : 0.13,
-        ),
-      color: "primary.main",
+    // Theme ButtonBase kills hover paint on coarse pointers
+    // (`backgroundColor: transparent`). That rule is more specific than a
+    // plain `[aria-pressed='true']` fill, so iOS sticky hover erased the
+    // selected chip and left a stale circle on the previous mode.
+    "&&[aria-pressed='true']": selectedChip,
+    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true']`]: selectedChip,
+    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true']:hover`]:
+      selectedChip,
+    [`html.${COARSE_POINTER_ROOT_CLASS} &&[aria-pressed='true'].Mui-focusVisible`]:
+      selectedChip,
+    "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
+      "&&[aria-pressed='true'], &&[aria-pressed='true']:hover, &&[aria-pressed='true'].Mui-focusVisible":
+        selectedChip,
     },
-    // iOS can retain ButtonBase's synthetic hover/focus paint after the icon
-    // color has already followed aria-pressed. Reassert the authoritative
-    // selected/unselected material on that same attribute instead of leaving
-    // a stale circle under the previously touched mode.
     "&[data-touch-activated='true'][aria-pressed='false']:hover, &[data-touch-activated='true'][aria-pressed='false'].Mui-focusVisible":
       {
         bgcolor: "transparent",
+        color: "text.secondary",
       },
     "&[data-touch-activated='true'][aria-pressed='true']:hover, &[data-touch-activated='true'][aria-pressed='true'].Mui-focusVisible":
-      {
-        bgcolor: (theme) =>
-          alpha(
-            theme.palette.primary.main,
-            theme.palette.mode === "dark" ? 0.24 : 0.13,
-          ),
-      },
+      selectedChip,
     "&[data-touch-activated='true']:active": {
       bgcolor: "action.selected",
     },
