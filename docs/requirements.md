@@ -19,6 +19,8 @@ placements while separating authority, local execution, durable state and
 recovery. Local Authentication/native ownership and component release rules
 change only through its tested migrations. The target APIs and guarantees are
 not implemented; this document remains the contract for existing releases/data.
+The [read-only composition checker](plugin-composition-checker.md) now exercises
+the first structural slice without changing these live authorities or formats.
 
 These requirements govern new Provider-platform work. When a target design
 choice conflicts with a transitional implementation detail, preserve the live

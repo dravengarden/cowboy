@@ -1,0 +1,791 @@
+{
+  "base": {
+    "format": "cowboy.composition.v1",
+    "scopes": [
+      {
+        "id": "service",
+        "lifetime": {
+          "kind": "service",
+          "service_id": "cowboy"
+        }
+      },
+      {
+        "id": "hawk",
+        "lifetime": {
+          "kind": "machine",
+          "parent": "service",
+          "machine_id": "hawk"
+        }
+      },
+      {
+        "id": "workspace",
+        "lifetime": {
+          "kind": "workspace",
+          "parent": "hawk",
+          "workspace_id": "cowboy"
+        }
+      },
+      {
+        "id": "session-a",
+        "lifetime": {
+          "kind": "session",
+          "parent": "workspace",
+          "session_id": "a"
+        }
+      },
+      {
+        "id": "session-b",
+        "lifetime": {
+          "kind": "session",
+          "parent": "workspace",
+          "session_id": "b"
+        }
+      }
+    ],
+    "nodes": [
+      {
+        "id": "client",
+        "scope": "service",
+        "site": {
+          "kind": "service",
+          "service_id": "cowboy"
+        },
+        "identity": {
+          "kind": "core",
+          "anchor": "telemetry_ingress"
+        },
+        "owner": {
+          "kind": "scope"
+        },
+        "provides": [],
+        "requires": [
+          {
+            "id": "export",
+            "contract": {
+              "id": "cowboy.telemetry.export",
+              "version": "1.0.0",
+              "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "cardinality": "one"
+          }
+        ]
+      },
+      {
+        "id": "victoria",
+        "scope": "service",
+        "site": {
+          "kind": "machine",
+          "service_id": "cowboy",
+          "machine_id": "hawk"
+        },
+        "identity": {
+          "kind": "plugin",
+          "release": {
+            "plugin_id": "victoria",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "publisher": "cowboy"
+          },
+          "generation": "1",
+          "incarnation": "1",
+          "execution": "isolated"
+        },
+        "owner": {
+          "kind": "scope"
+        },
+        "provides": [
+          {
+            "id": "export",
+            "contract": {
+              "id": "cowboy.telemetry.export",
+              "version": "1.0.0",
+              "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "visibility": "descendants",
+            "transport": "remote"
+          }
+        ],
+        "requires": []
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": {
+          "node": "client",
+          "port": "export"
+        },
+        "provider": {
+          "node": "victoria",
+          "port": "export"
+        },
+        "revision": "1"
+      }
+    ]
+  },
+  "vectors": [
+    {
+      "name": "service-scoped implementation on Machine",
+      "edits": [],
+      "decode": true
+    },
+    {
+      "name": "uint64 generation without JS rounding",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": "18446744073709551615"
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "old and new versions on different generations",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": "9007199254740993"
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "local port within the same exact site",
+      "edits": [
+        {
+          "path": "/nodes/0/site",
+          "value": {
+            "kind": "machine",
+            "service_id": "cowboy",
+            "machine_id": "hawk"
+          }
+        },
+        {
+          "path": "/nodes/1/provides/0/transport",
+          "value": "local"
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "service data facet",
+      "edits": [
+        {
+          "path": "/nodes/1/site",
+          "value": {
+            "kind": "service",
+            "service_id": "cowboy"
+          }
+        },
+        {
+          "path": "/nodes/1/identity/execution",
+          "value": "data"
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "explicit optional missing binding",
+      "edits": [
+        {
+          "path": "/nodes/0/requires/0/cardinality",
+          "value": "optional"
+        },
+        {
+          "path": "/bindings",
+          "value": []
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "explicit many empty bindings",
+      "edits": [
+        {
+          "path": "/nodes/0/requires/0/cardinality",
+          "value": "many"
+        },
+        {
+          "path": "/bindings",
+          "value": []
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "cannot deserialize authorization",
+      "edits": [
+        {
+          "path": "/authorized",
+          "value": true
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "closed identity union",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/kind",
+          "value": "native"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "unknown nested field",
+      "edits": [
+        {
+          "path": "/nodes/1/site/token",
+          "value": "synthetic-secret"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "core anchor cannot carry install identity",
+      "edits": [
+        {
+          "path": "/nodes/0/identity/release",
+          "value": {
+            "plugin_id": "victoria",
+            "version": "1.0.0",
+            "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "publisher": "cowboy"
+          }
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "unknown anchor",
+      "edits": [
+        {
+          "path": "/nodes/0/identity/anchor",
+          "value": "installer-plugin"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "numeric generation is forbidden",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": 1
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "noncanonical generation",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": "01"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "generation overflow",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": "18446744073709551616"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "generation sign",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/generation",
+          "value": "-1"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "version range",
+      "edits": [
+        {
+          "path": "/nodes/1/identity/release/version",
+          "value": "^1.0.0"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "non-digest fingerprint",
+      "edits": [
+        {
+          "path": "/nodes/1/provides/0/contract/fingerprint",
+          "value": "latest"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "ASCII identifier refinement",
+      "edits": [
+        {
+          "path": "/nodes/1/id",
+          "value": "victoriá"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "regex final-newline parity",
+      "edits": [
+        {
+          "path": "/nodes/1/id",
+          "value": "victoria\n"
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "null is not absent",
+      "edits": [
+        {
+          "path": "/nodes/1/owner",
+          "value": null
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "missing required owner",
+      "edits": [
+        {
+          "path": "/nodes/1/owner",
+          "remove": true
+        }
+      ],
+      "decode": false,
+      "error": "invalid_contract"
+    },
+    {
+      "name": "duplicate scope id",
+      "edits": [
+        {
+          "path": "/scopes/1/id",
+          "value": "service"
+        }
+      ],
+      "decode": true,
+      "error": "duplicate_scope"
+    },
+    {
+      "name": "duplicate logical scope cannot alias",
+      "edits": [
+        {
+          "path": "/scopes/4/lifetime",
+          "value": {
+            "kind": "session",
+            "parent": "workspace",
+            "session_id": "a"
+          }
+        }
+      ],
+      "decode": true,
+      "error": "duplicate_scope"
+    },
+    {
+      "name": "missing scope",
+      "edits": [
+        {
+          "path": "/nodes/1/scope",
+          "value": "missing"
+        }
+      ],
+      "decode": true,
+      "error": "unknown_scope"
+    },
+    {
+      "name": "scope cycle",
+      "edits": [
+        {
+          "path": "/scopes/1/lifetime/parent",
+          "value": "workspace"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_scope_tree"
+    },
+    {
+      "name": "workspace requires a Machine parent",
+      "edits": [
+        {
+          "path": "/scopes/2/lifetime/parent",
+          "value": "service"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_scope_tree"
+    },
+    {
+      "name": "duplicate nodes",
+      "edits": [
+        {
+          "path": "/nodes/1/id",
+          "value": "client"
+        }
+      ],
+      "decode": true,
+      "error": "duplicate_node"
+    },
+    {
+      "name": "other Service",
+      "edits": [
+        {
+          "path": "/nodes/1/site/service_id",
+          "value": "other"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_placement"
+    },
+    {
+      "name": "Machine scope cannot run on another Machine",
+      "edits": [
+        {
+          "path": "/nodes/1/scope",
+          "value": "hawk"
+        },
+        {
+          "path": "/nodes/1/site/machine_id",
+          "value": "falcon"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_placement"
+    },
+    {
+      "name": "workspace cannot run on Service",
+      "edits": [
+        {
+          "path": "/nodes/0/scope",
+          "value": "workspace"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_placement"
+    },
+    {
+      "name": "no Service plugin executable",
+      "edits": [
+        {
+          "path": "/nodes/1/site",
+          "value": {
+            "kind": "service",
+            "service_id": "cowboy"
+          }
+        }
+      ],
+      "decode": true,
+      "error": "service_executable"
+    },
+    {
+      "name": "no implicit first provider",
+      "edits": [
+        {
+          "path": "/bindings",
+          "value": []
+        }
+      ],
+      "decode": true,
+      "error": "cardinality_mismatch"
+    },
+    {
+      "name": "same edge with new revision is still duplicate",
+      "edits": [
+        {
+          "path": "/bindings",
+          "value": [
+            {
+              "consumer": {
+                "node": "client",
+                "port": "export"
+              },
+              "provider": {
+                "node": "victoria",
+                "port": "export"
+              },
+              "revision": "1"
+            },
+            {
+              "consumer": {
+                "node": "client",
+                "port": "export"
+              },
+              "provider": {
+                "node": "victoria",
+                "port": "export"
+              },
+              "revision": "2"
+            }
+          ]
+        }
+      ],
+      "decode": true,
+      "error": "duplicate_binding"
+    },
+    {
+      "name": "unknown endpoint",
+      "edits": [
+        {
+          "path": "/bindings/0/provider/port",
+          "value": "missing"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_endpoint"
+    },
+    {
+      "name": "unknown node endpoint",
+      "edits": [
+        {
+          "path": "/bindings/0/provider/node",
+          "value": "missing"
+        }
+      ],
+      "decode": true,
+      "error": "invalid_endpoint"
+    },
+    {
+      "name": "exact contract fingerprint",
+      "edits": [
+        {
+          "path": "/nodes/1/provides/0/contract/fingerprint",
+          "value": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "decode": true,
+      "error": "contract_mismatch"
+    },
+    {
+      "name": "exact contract version",
+      "edits": [
+        {
+          "path": "/nodes/1/provides/0/contract/version",
+          "value": "2.0.0"
+        }
+      ],
+      "decode": true,
+      "error": "contract_mismatch"
+    },
+    {
+      "name": "exact contract identity",
+      "edits": [
+        {
+          "path": "/nodes/1/provides/0/contract/id",
+          "value": "cowboy.code.query"
+        }
+      ],
+      "decode": true,
+      "error": "contract_mismatch"
+    },
+    {
+      "name": "local reference cannot cross sites",
+      "edits": [
+        {
+          "path": "/nodes/1/provides/0/transport",
+          "value": "local"
+        }
+      ],
+      "decode": true,
+      "error": "local_port_crosses_site"
+    },
+    {
+      "name": "no cross-site owned node",
+      "edits": [
+        {
+          "path": "/nodes/1/owner",
+          "value": {
+            "kind": "node",
+            "node": "client"
+          }
+        }
+      ],
+      "decode": true,
+      "error": "invalid_owner"
+    },
+    {
+      "name": "duplicate ports",
+      "edits": [
+        {
+          "path": "/nodes/1/provides",
+          "value": [
+            {
+              "id": "export",
+              "contract": {
+                "id": "cowboy.telemetry.export",
+                "version": "1.0.0",
+                "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "visibility": "descendants",
+              "transport": "remote"
+            },
+            {
+              "id": "export",
+              "contract": {
+                "id": "cowboy.telemetry.export",
+                "version": "1.0.0",
+                "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              },
+              "visibility": "descendants",
+              "transport": "remote"
+            }
+          ]
+        }
+      ],
+      "decode": true,
+      "error": "duplicate_port"
+    },
+    {
+      "name": "session affinity not just same ScopeKind",
+      "edits": [
+        {
+          "path": "/nodes/0/scope",
+          "value": "session-a"
+        },
+        {
+          "path": "/nodes/0/site",
+          "value": {
+            "kind": "machine",
+            "service_id": "cowboy",
+            "machine_id": "hawk"
+          }
+        },
+        {
+          "path": "/nodes/1/scope",
+          "value": "session-b"
+        }
+      ],
+      "decode": true,
+      "error": "scope_not_visible"
+    },
+    {
+      "name": "ancestor scoped port must explicitly allow descendants",
+      "edits": [
+        {
+          "path": "/nodes/0/scope",
+          "value": "session-a"
+        },
+        {
+          "path": "/nodes/0/site",
+          "value": {
+            "kind": "machine",
+            "service_id": "cowboy",
+            "machine_id": "hawk"
+          }
+        },
+        {
+          "path": "/nodes/1/provides/0/visibility",
+          "value": "scope"
+        }
+      ],
+      "decode": true,
+      "error": "scope_not_visible"
+    },
+    {
+      "name": "ancestor remote port explicitly visible to session",
+      "edits": [
+        {
+          "path": "/nodes/0/scope",
+          "value": "session-a"
+        },
+        {
+          "path": "/nodes/0/site",
+          "value": {
+            "kind": "machine",
+            "service_id": "cowboy",
+            "machine_id": "hawk"
+          }
+        }
+      ],
+      "decode": true
+    },
+    {
+      "name": "mixed ownership/dependency cycle",
+      "edits": [
+        {
+          "path": "/nodes/0/site",
+          "value": {
+            "kind": "machine",
+            "service_id": "cowboy",
+            "machine_id": "hawk"
+          }
+        },
+        {
+          "path": "/nodes/1/owner",
+          "value": {
+            "kind": "node",
+            "node": "client"
+          }
+        }
+      ],
+      "decode": true,
+      "error": "dependency_cycle"
+    },
+    {
+      "name": "duplicate root JSON key",
+      "raw": "{\"format\":\"cowboy.composition.v1\",\"format\":\"cowboy.composition.v1\",\"scopes\":[{\"id\":\"service\",\"lifetime\":{\"kind\":\"service\",\"service_id\":\"cowboy\"}},{\"id\":\"hawk\",\"lifetime\":{\"kind\":\"machine\",\"parent\":\"service\",\"machine_id\":\"hawk\"}},{\"id\":\"workspace\",\"lifetime\":{\"kind\":\"workspace\",\"parent\":\"hawk\",\"workspace_id\":\"cowboy\"}},{\"id\":\"session-a\",\"lifetime\":{\"kind\":\"session\",\"parent\":\"workspace\",\"session_id\":\"a\"}},{\"id\":\"session-b\",\"lifetime\":{\"kind\":\"session\",\"parent\":\"workspace\",\"session_id\":\"b\"}}],\"nodes\":[{\"id\":\"client\",\"scope\":\"service\",\"site\":{\"kind\":\"service\",\"service_id\":\"cowboy\"},\"identity\":{\"kind\":\"core\",\"anchor\":\"telemetry_ingress\"},\"owner\":{\"kind\":\"scope\"},\"provides\":[],\"requires\":[{\"id\":\"export\",\"contract\":{\"id\":\"cowboy.telemetry.export\",\"version\":\"1.0.0\",\"fingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"cardinality\":\"one\"}]},{\"id\":\"victoria\",\"scope\":\"service\",\"site\":{\"kind\":\"machine\",\"service_id\":\"cowboy\",\"machine_id\":\"hawk\"},\"identity\":{\"kind\":\"plugin\",\"release\":{\"plugin_id\":\"victoria\",\"version\":\"1.0.0\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"publisher\":\"cowboy\"},\"generation\":\"1\",\"incarnation\":\"1\",\"execution\":\"isolated\"},\"owner\":{\"kind\":\"scope\"},\"provides\":[{\"id\":\"export\",\"contract\":{\"id\":\"cowboy.telemetry.export\",\"version\":\"1.0.0\",\"fingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"visibility\":\"descendants\",\"transport\":\"remote\"}],\"requires\":[]}],\"bindings\":[{\"consumer\":{\"node\":\"client\",\"port\":\"export\"},\"provider\":{\"node\":\"victoria\",\"port\":\"export\"},\"revision\":\"1\"}]}",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "duplicate escaped union discriminant",
+      "raw": "{\"format\":\"cowboy.composition.v1\",\"scopes\":[{\"id\":\"service\",\"lifetime\":{\"kind\":\"service\",\"service_id\":\"cowboy\"}},{\"id\":\"hawk\",\"lifetime\":{\"kind\":\"machine\",\"parent\":\"service\",\"machine_id\":\"hawk\"}},{\"id\":\"workspace\",\"lifetime\":{\"kind\":\"workspace\",\"parent\":\"hawk\",\"workspace_id\":\"cowboy\"}},{\"id\":\"session-a\",\"lifetime\":{\"kind\":\"session\",\"parent\":\"workspace\",\"session_id\":\"a\"}},{\"id\":\"session-b\",\"lifetime\":{\"kind\":\"session\",\"parent\":\"workspace\",\"session_id\":\"b\"}}],\"nodes\":[{\"id\":\"client\",\"scope\":\"service\",\"site\":{\"kind\":\"service\",\"service_id\":\"cowboy\"},\"identity\":{\"kind\":\"core\",\"\\u006bind\":\"plugin\",\"anchor\":\"telemetry_ingress\"},\"owner\":{\"kind\":\"scope\"},\"provides\":[],\"requires\":[{\"id\":\"export\",\"contract\":{\"id\":\"cowboy.telemetry.export\",\"version\":\"1.0.0\",\"fingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"cardinality\":\"one\"}]},{\"id\":\"victoria\",\"scope\":\"service\",\"site\":{\"kind\":\"machine\",\"service_id\":\"cowboy\",\"machine_id\":\"hawk\"},\"identity\":{\"kind\":\"plugin\",\"release\":{\"plugin_id\":\"victoria\",\"version\":\"1.0.0\",\"digest\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"publisher\":\"cowboy\"},\"generation\":\"1\",\"incarnation\":\"1\",\"execution\":\"isolated\"},\"owner\":{\"kind\":\"scope\"},\"provides\":[{\"id\":\"export\",\"contract\":{\"id\":\"cowboy.telemetry.export\",\"version\":\"1.0.0\",\"fingerprint\":\"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"visibility\":\"descendants\",\"transport\":\"remote\"}],\"requires\":[]}],\"bindings\":[{\"consumer\":{\"node\":\"client\",\"port\":\"export\"},\"provider\":{\"node\":\"victoria\",\"port\":\"export\"},\"revision\":\"1\"}]}",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "invalid surrogate",
+      "raw": "\"\\ud800\"",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "over-depth",
+      "raw": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "unsafe JSON number",
+      "raw": "9007199254740993",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "trailing JSON",
+      "raw": "{} {}",
+      "decode": false,
+      "error": "invalid_json"
+    },
+    {
+      "name": "trailing comma",
+      "raw": "{\"a\":1,}",
+      "decode": false,
+      "error": "invalid_json"
+    }
+  ]
+}

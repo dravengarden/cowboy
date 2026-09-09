@@ -1,0 +1,123 @@
+{
+  "format": "cowboy.composition.v1",
+  "scopes": [
+    {
+      "id": "service",
+      "lifetime": {
+        "kind": "service",
+        "service_id": "cowboy"
+      }
+    },
+    {
+      "id": "hawk",
+      "lifetime": {
+        "kind": "machine",
+        "parent": "service",
+        "machine_id": "hawk"
+      }
+    },
+    {
+      "id": "workspace",
+      "lifetime": {
+        "kind": "workspace",
+        "parent": "hawk",
+        "workspace_id": "cowboy"
+      }
+    },
+    {
+      "id": "session-a",
+      "lifetime": {
+        "kind": "session",
+        "parent": "workspace",
+        "session_id": "a"
+      }
+    },
+    {
+      "id": "session-b",
+      "lifetime": {
+        "kind": "session",
+        "parent": "workspace",
+        "session_id": "b"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "scope": "service",
+      "site": {
+        "kind": "service",
+        "service_id": "cowboy"
+      },
+      "identity": {
+        "kind": "core",
+        "anchor": "telemetry_ingress"
+      },
+      "owner": {
+        "kind": "scope"
+      },
+      "provides": [],
+      "requires": [
+        {
+          "id": "export",
+          "contract": {
+            "id": "cowboy.telemetry.export",
+            "version": "1.0.0",
+            "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "cardinality": "one"
+        }
+      ]
+    },
+    {
+      "id": "victoria",
+      "scope": "service",
+      "site": {
+        "kind": "machine",
+        "service_id": "cowboy",
+        "machine_id": "hawk"
+      },
+      "identity": {
+        "kind": "plugin",
+        "release": {
+          "plugin_id": "victoria",
+          "version": "1.0.0",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "publisher": "cowboy"
+        },
+        "generation": "1",
+        "incarnation": "1",
+        "execution": "isolated"
+      },
+      "owner": {
+        "kind": "scope"
+      },
+      "provides": [
+        {
+          "id": "export",
+          "contract": {
+            "id": "cowboy.telemetry.export",
+            "version": "1.0.0",
+            "fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          "visibility": "descendants",
+          "transport": "remote"
+        }
+      ],
+      "requires": []
+    }
+  ],
+  "bindings": [
+    {
+      "consumer": {
+        "node": "client",
+        "port": "export"
+      },
+      "provider": {
+        "node": "victoria",
+        "port": "export"
+      },
+      "revision": "1"
+    }
+  ]
+}

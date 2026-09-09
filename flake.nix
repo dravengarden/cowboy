@@ -85,6 +85,7 @@
           ./migrations
           ./web/src/protocol.ts
           ./tests/fixtures/otel-client.json
+          ./tests/fixtures/composition-v1.json
         ] ++ plugin-contract-files ++ plugin-host-files);
       };
 
@@ -100,6 +101,8 @@
           ./src/lib.rs
           ./src/main.rs
           ./src/cli.rs
+          ./src/composition
+          ./tests/fixtures/composition-v1.json
           ./src/claude_shell.rs
           ./src/cgroup.rs
           ./src/first_party_sources.rs

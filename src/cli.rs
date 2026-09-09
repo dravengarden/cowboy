@@ -61,6 +61,43 @@ enum Command {
     Register(RegisterArgs),
     /// Show this computer's Machine fingerprint and private-key path.
     Identity(IdentityArgs),
+    /// Check an untrusted composition proposal without installing or authorizing it.
+    Composition {
+        #[command(subcommand)]
+        command: CompositionCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CompositionCommand {
+    /// Validate scopes, placements and explicit dependencies; print a read-only report.
+    Check { file: PathBuf },
+}
+
+#[cfg(test)]
+mod composition_cli_tests {
+    use super::*;
+
+    #[test]
+    fn composition_is_an_explicit_read_only_command() {
+        let cli = Cli::try_parse_from(["cowboy", "composition", "check", "proposal.json"]).unwrap();
+        assert!(matches!(cli.command, Command::Composition {
+            command: CompositionCommand::Check { file }
+        } if file == Path::new("proposal.json")));
+        assert!(
+            Cli::try_parse_from(["cowboy", "composition", "activate", "proposal.json"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "cowboy",
+                "composition",
+                "check",
+                "--authorize",
+                "proposal.json"
+            ])
+            .is_err()
+        );
+    }
 }
 
 #[cfg(feature = "full")]
@@ -383,6 +420,9 @@ impl Cli {
             #[cfg(feature = "full")]
             Command::StoreCopy(args) => run_store_copy(args).await,
             Command::Register(args) => register_computer(args).await,
+            Command::Composition {
+                command: CompositionCommand::Check { file },
+            } => crate::composition::check_file(&file),
             Command::Identity(args) => {
                 let state_dirs = crate::machine_install::identity_state_dirs(args.state_dir)?;
                 anyhow::ensure!(

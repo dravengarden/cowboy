@@ -1,13 +1,17 @@
 # Cowboy：跨 Service / Machine 的时空可组合架构
 
 状态：整体重设计，2026-09-09；替代本文先前逐项补充的草案。接口、类型和目录拆分均为目标，不是已发布
-SDK。当前实现基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`。
+SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
+[只读组合检查器](plugin-composition-checker.md)
+已实现类型生成、边界解码、scope/placement
+与图结构校验。授权、跨端激活和恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
 [components contract](plugin-components.md)
 仍约束已部署系统；目标与现状冲突必须经过明确迁移，不能通过删包、删 authority
-marker、改历史迁移或重启会话强行切换。本轮不改运行时、版本、Catalog 或生产配置。
+marker、改历史迁移或重启会话强行切换。首批检查器不切换现有运行路径、Plugin
+版本、Catalog 或生产配置。
 
 ## 1. 总体决策：固定平台，用同一组合模型描述扩展
 
