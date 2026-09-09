@@ -112,15 +112,17 @@ plugin-check: component-package-check
     deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
     deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
     deno test --no-check --allow-read components/plugin-api/*.test.ts
-    deno test --allow-read tools/check-plugin-components_test.ts
+    deno test components/state-store/store.test.ts
+    deno test --allow-read tools/check-plugin-components_test.ts tools/plugin-component-closure_test.ts
+    deno test --allow-read --allow-write --allow-run tools/plugin-source-digest_test.ts
     deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
-    deno run --allow-read tools/check-plugin-components.ts
+    deno run --allow-read --allow-run tools/check-plugin-components.ts
 
 plugin-build PLUGIN:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
-    deno run --allow-read tools/check-plugin-components.ts
+    deno run --allow-read --allow-run tools/check-plugin-components.ts
     test -f "plugins/{{PLUGIN}}/plugin.json"
     mkdir -p "dist/plugins/{{PLUGIN}}"
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- build \
@@ -173,14 +175,24 @@ plugin-isolation-check PLUGIN="codex":
     cleanup() { rm -r -- "$isolation_root"; }
     trap cleanup EXIT
     cargo build --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack
+    git ls-files --cached --others --exclude-standard -z -- "plugins/{{PLUGIN}}" | tar --null -T - -cf - | tar -xf - -C "$isolation_root"
+    mv "$isolation_root/plugins/{{PLUGIN}}" "$isolation_root/source"
     cd "$isolation_root"
-    "$repo_root/target/debug/cowboy-plugin-pack" build "$repo_root/plugins/{{PLUGIN}}" "{{PLUGIN}}.cowboy-plugin"
+    "$repo_root/target/debug/cowboy-plugin-pack" build "$isolation_root/source" "{{PLUGIN}}.cowboy-plugin"
     test -s "{{PLUGIN}}.cowboy-plugin"
-    test -s "{{PLUGIN}}.hostbundle.json"
     test -s "{{PLUGIN}}.release.json"
-    host_digest="$(sha256sum "{{PLUGIN}}.hostbundle.json" | cut -d' ' -f1)"
-    test "$(jq -r .release_schema "{{PLUGIN}}.release.json")" = 2
-    test "$(jq -r .host_bundle_digest "{{PLUGIN}}.release.json")" = "sha256:$host_digest"
+    if test -s "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin"; then
+      cmp "{{PLUGIN}}.cowboy-plugin" "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin"
+    fi
+    if test "$(jq -r .kind source/plugin.json)" = agent_provider; then
+      test -s "{{PLUGIN}}.hostbundle.json"
+      host_digest="$(sha256sum "{{PLUGIN}}.hostbundle.json" | cut -d' ' -f1)"
+      test "$(jq -r .release_schema "{{PLUGIN}}.release.json")" = 2
+      test "$(jq -r .host_bundle_digest "{{PLUGIN}}.release.json")" = "sha256:$host_digest"
+      if test -s "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"; then
+        cmp "{{PLUGIN}}.hostbundle.json" "$repo_root/dist/plugins/{{PLUGIN}}/{{PLUGIN}}.hostbundle.json"
+      fi
+    fi
 
 # Agent Plugin payload helper. Its output is the generic runtime manifest
 # consumed by plugin-bind-runtime; it is not an independent release lifecycle.
@@ -289,7 +301,7 @@ provider-check: plugin-check
     just plugin-build-all
     just example-auth-build-all
     just example-telemetry-bundle victoria
-    just plugin-isolation-check codex
+    for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
     cd web && deno task typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
     cd web && deno test --allow-read src/providerSdk.test.ts

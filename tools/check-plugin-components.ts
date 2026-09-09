@@ -1,21 +1,16 @@
-interface ComponentRecord {
-  id: string;
-  version: string;
-  publisher: string;
-  sources: string[];
-  digest: string;
-  package?: {
-    kind: "cargo" | "npm";
-    name: string;
-    manifest: string;
-  };
-}
-
-interface ComponentRelease {
-  version: string;
-  components: ComponentRecord[];
-  plugins: Record<string, string>;
-}
+import {
+  assert,
+  assertSameSet,
+  compareVersion,
+  type ComponentClosure,
+  type ComponentRecord,
+  type ComponentRelease,
+  exactVersion,
+  same,
+  validatePluginComponentClosure,
+  validateReleaseHistory,
+} from "./plugin-component-closure.ts";
+export { validateReleaseHistory } from "./plugin-component-closure.ts";
 
 interface ComponentRegistry {
   schema_version: number;
@@ -38,250 +33,269 @@ interface PluginManifest {
   components: Array<{ id: string; version: string }>;
 }
 
-const semverPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
-const registry = await readJson<ComponentRegistry>("components/registry.json");
-assert(registry.schema_version === 2, "unsupported component registry schema");
-assert(registry.releases.length > 0, "component registry has no releases");
+export async function checkRepository(): Promise<void> {
+  const registry = await readJson<ComponentRegistry>(
+    "components/registry.json",
+  );
+  assert(
+    registry.schema_version === 2 || registry.schema_version === 3,
+    "unsupported component registry schema",
+  );
+  assert(registry.releases.length > 0, "component registry has no releases");
 
-const active = registry.releases.at(-1)!;
-assert(
-  active.version === registry.active_release,
-  "active component release must be the last immutable release",
-);
-
-validateReleaseHistory(registry.releases);
-
-export function validateReleaseHistory(releases: ComponentRelease[]): void {
-  for (let index = 0; index < releases.length; index += 1) {
-    const release = releases[index]!;
-    assert(
-      exactVersion(release.version),
-      `${release.version}: invalid component release version`,
+  const active = registry.releases.at(-1)!;
+  if (Deno.args.includes("--print-closure")) {
+    console.log(
+      JSON.stringify(
+        await repositoryClosure(
+          active.components,
+          [...Deno.readDirSync("plugins")].filter((entry) =>
+            entry.isDirectory && exists(`plugins/${entry.name}/plugin.json`)
+          ).map((entry) => entry.name).sort(),
+        ),
+        null,
+        2,
+      ),
     );
-    assertUnique(
-      release.components.map((component) => component.id),
-      `${release.version}: component`,
-    );
-    for (const [pluginId, version] of Object.entries(release.plugins)) {
-      assert(validId(pluginId), `${pluginId}: invalid plugin id`);
-      assert(
-        exactVersion(version),
-        `${pluginId}: invalid plugin version ${version}`,
-      );
-    }
-    const previous = releases[index - 1];
-    if (!previous) continue;
-    assert(
-      compareVersion(release.version, previous.version) > 0,
-      `${release.version}: component releases must append in SemVer order`,
-    );
-    assertSameSet(
-      Object.keys(release.plugins),
-      Object.keys(previous.plugins),
-      `${release.version}: plugin set changed; add/remove requires a new plugin-contract schema`,
-    );
-    for (const pluginId of Object.keys(release.plugins)) {
-      assert(
-        compareVersion(
-          release.plugins[pluginId]!,
-          previous.plugins[pluginId]!,
-        ) > 0,
-        `${release.version}: ${pluginId} must increase version with the component release`,
-      );
-    }
+    return;
   }
-}
-
-const activeComponents = new Map(
-  active.components.map((component) => [component.id, component]),
-);
-const distributableManifests = [...Deno.readDirSync("components")]
-  .filter((entry) => entry.isDirectory)
-  .flatMap((entry) =>
-    ["package.json", "Cargo.toml"]
-      .map((manifest) => `components/${entry.name}/${manifest}`)
-      .filter(exists)
-  )
-  .sort();
-assertSameSet(
-  active.components.flatMap((component) =>
-    component.package ? [component.package.manifest] : []
-  ),
-  distributableManifests,
-  "active component package registry",
-);
-for (const component of active.components) {
-  assert(
-    validComponentId(component.id),
-    `${component.id}: invalid component id`,
-  );
-  assert(
-    exactVersion(component.version),
-    `${component.id}: invalid component version`,
-  );
-  assert(
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(component.publisher),
-    `${component.id}: invalid component publisher`,
-  );
-  assert(component.sources.length > 0, `${component.id}: no source roots`);
-  assert(
-    component.package !== undefined,
-    `${component.id}: no distributable package`,
-  );
-  await validatePackage(component);
-  const digest = await sourceDigest(component.sources);
   if (Deno.args.includes("--print-digests")) {
-    console.log(`${component.id} ${digest}`);
-  } else {
+    for (const component of active.components) {
+      console.log(`${component.id} ${await sourceDigest(component.sources)}`);
+    }
+    return;
+  }
+  assert(
+    active.version === registry.active_release,
+    "active component release must be the last immutable release",
+  );
+  assert(
+    (registry.schema_version === 3) === (active.closure !== undefined),
+    "registry schema and closure policy disagree",
+  );
+
+  validateReleaseHistory(registry.releases);
+
+  const activeComponents = new Map(
+    active.components.map((component) => [component.id, component]),
+  );
+  const distributableManifests = [...Deno.readDirSync("components")]
+    .filter((entry) => entry.isDirectory)
+    .flatMap((entry) =>
+      ["package.json", "Cargo.toml"]
+        .map((manifest) => `components/${entry.name}/${manifest}`)
+        .filter(exists)
+    )
+    .sort();
+  assertSameSet(
+    active.components.flatMap((component) =>
+      component.package ? [component.package.manifest] : []
+    ),
+    distributableManifests,
+    "active component package registry",
+  );
+  for (const component of active.components) {
+    assert(
+      validComponentId(component.id),
+      `${component.id}: invalid component id`,
+    );
+    assert(
+      exactVersion(component.version),
+      `${component.id}: invalid component version`,
+    );
+    assert(
+      /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(component.publisher),
+      `${component.id}: invalid component publisher`,
+    );
+    assert(component.sources.length > 0, `${component.id}: no source roots`);
+    assert(
+      component.package !== undefined,
+      `${component.id}: no distributable package`,
+    );
+    await validatePackage(component);
+    const digest = await sourceDigest(component.sources);
     assert(
       digest === component.digest,
-      `${component.id}: source digest changed (${digest}); append a component release and bump every plugin version`,
-    );
-  }
-}
-
-const pluginEntries = [...Deno.readDirSync("plugins")]
-  .filter((entry) =>
-    entry.isDirectory && exists(`plugins/${entry.name}/plugin.json`)
-  )
-  .map((entry) => entry.name)
-  .sort();
-assertSameSet(
-  pluginEntries,
-  Object.keys(active.plugins),
-  "active plugin registry",
-);
-
-for (const pluginId of pluginEntries) {
-  const manifest = await readJson<PluginManifest>(
-    `plugins/${pluginId}/plugin.json`,
-  );
-  assert(
-    manifest.schema_version === 1,
-    `${pluginId}: unsupported plugin schema`,
-  );
-  assert(manifest.id === pluginId, `${pluginId}: directory identity mismatch`);
-  assert(manifest.publisher.length > 0, `${pluginId}: publisher is empty`);
-  validateIndependentPluginVersion(
-    pluginId,
-    manifest.version,
-    active.plugins[pluginId]!,
-  );
-  assert(
-    manifest.component_release === active.version,
-    `${pluginId}: component release mismatch`,
-  );
-  assert(
-    exists(`plugins/${pluginId}/${manifest.entrypoint}`),
-    `${pluginId}: missing entrypoint`,
-  );
-  assertUnique(
-    manifest.components.map((component) => component.id),
-    `${pluginId}: component dependency`,
-  );
-
-  const dependencies = new Map(
-    manifest.components.map((component) => [component.id, component.version]),
-  );
-  assert(
-    dependencies.has("cowboy.plugin-contract"),
-    `${pluginId}: missing plugin contract`,
-  );
-  assert(
-    dependencies.has("cowboy.plugin-sdk"),
-    `${pluginId}: missing plugin SDK`,
-  );
-  for (const [componentId, version] of dependencies) {
-    const component = activeComponents.get(componentId);
-    assert(
-      component !== undefined,
-      `${pluginId}: unknown component ${componentId}`,
-    );
-    assert(
-      component.version === version,
-      `${pluginId}: stale ${componentId}@${version}`,
+      `${component.id}: source digest changed (${digest}); append a component release and version its affected closure`,
     );
   }
 
-  if (manifest.kind === "agent_provider") {
-    for (
-      const componentId of [
-        "cowboy.provider-sdk",
-        "cowboy.provider-ui",
-        "cowboy.provider-runtime",
-      ]
-    ) {
+  const pluginEntries = [...Deno.readDirSync("plugins")]
+    .filter((entry) =>
+      entry.isDirectory && exists(`plugins/${entry.name}/plugin.json`)
+    )
+    .map((entry) => entry.name)
+    .sort();
+  assertSameSet(
+    pluginEntries,
+    Object.keys(active.plugins),
+    "active plugin registry",
+  );
+
+  for (const pluginId of pluginEntries) {
+    const manifest = await readJson<PluginManifest>(
+      `plugins/${pluginId}/plugin.json`,
+    );
+    assert(
+      manifest.schema_version === 1,
+      `${pluginId}: unsupported plugin schema`,
+    );
+    assert(
+      manifest.id === pluginId,
+      `${pluginId}: directory identity mismatch`,
+    );
+    assert(manifest.publisher.length > 0, `${pluginId}: publisher is empty`);
+    validateIndependentPluginVersion(
+      pluginId,
+      manifest.version,
+      active.plugins[pluginId]!,
+    );
+    validatePluginComponentClosure(registry.releases, pluginId, manifest);
+    assert(
+      exists(`plugins/${pluginId}/${manifest.entrypoint}`),
+      `${pluginId}: missing entrypoint`,
+    );
+    assertUnique(
+      manifest.components.map((component) => component.id),
+      `${pluginId}: component dependency`,
+    );
+
+    const dependencies = new Map(
+      manifest.components.map((component) => [component.id, component.version]),
+    );
+    assert(
+      dependencies.has("cowboy.plugin-contract"),
+      `${pluginId}: missing plugin contract`,
+    );
+    assert(
+      dependencies.has("cowboy.plugin-sdk"),
+      `${pluginId}: missing plugin SDK`,
+    );
+    for (const [componentId, version] of dependencies) {
+      const component = activeComponents.get(componentId);
       assert(
-        dependencies.has(componentId),
-        `${pluginId}: missing ${componentId}`,
+        component !== undefined,
+        `${pluginId}: unknown component ${componentId}`,
+      );
+      assert(
+        component.version === version,
+        `${pluginId}: stale ${componentId}@${version}`,
       );
     }
-    const provider = await readJson<{ id: string; version: string }>(
-      `plugins/${pluginId}/${manifest.entrypoint}`,
-    );
-    assert(
-      provider.id === pluginId,
-      `${pluginId}: Provider payload identity mismatch`,
-    );
-    assert(
-      provider.version === manifest.version,
-      `${pluginId}: Provider payload version mismatch`,
-    );
-  } else if (manifest.kind === "code_intelligence") {
-    assert(
-      dependencies.has("cowboy.code-intelligence"),
-      `${pluginId}: missing code contract`,
-    );
-    const contract = await readJson<{ id: string; version: string }>(
-      `plugins/${pluginId}/${manifest.entrypoint}`,
-    );
-    assert(contract.id === pluginId, `${pluginId}: contract identity mismatch`);
-    assert(
-      contract.version === manifest.version,
-      `${pluginId}: contract version mismatch`,
-    );
-    // A Rust adapter is an optional private implementation, not a named
-    // Plugin identity or the only language an external engine can use.
-    const cargoPath = `plugins/${pluginId}/adapter/Cargo.toml`;
-    const cargo = await Deno.readTextFile(cargoPath).catch((error) => {
-      if (error instanceof Deno.errors.NotFound) return undefined;
-      throw error;
-    });
-    if (cargo !== undefined) {
-      const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
+
+    if (manifest.kind === "agent_provider") {
+      for (
+        const componentId of [
+          "cowboy.provider-sdk",
+          "cowboy.provider-ui",
+          "cowboy.provider-runtime",
+        ]
+      ) {
+        assert(
+          dependencies.has(componentId),
+          `${pluginId}: missing ${componentId}`,
+        );
+      }
+      const provider = await readJson<{ id: string; version: string }>(
+        `plugins/${pluginId}/${manifest.entrypoint}`,
+      );
       assert(
-        packageBlock.includes(`version = "${manifest.version}"`),
-        `${pluginId}: adapter package version mismatch`,
+        provider.id === pluginId,
+        `${pluginId}: Provider payload identity mismatch`,
+      );
+      assert(
+        provider.version === manifest.version,
+        `${pluginId}: Provider payload version mismatch`,
+      );
+    } else if (manifest.kind === "code_intelligence") {
+      assert(
+        dependencies.has("cowboy.code-intelligence"),
+        `${pluginId}: missing code contract`,
+      );
+      const contract = await readJson<{ id: string; version: string }>(
+        `plugins/${pluginId}/${manifest.entrypoint}`,
+      );
+      assert(
+        contract.id === pluginId,
+        `${pluginId}: contract identity mismatch`,
+      );
+      assert(
+        contract.version === manifest.version,
+        `${pluginId}: contract version mismatch`,
+      );
+      // A Rust adapter is an optional private implementation, not a named
+      // Plugin identity or the only language an external engine can use.
+      const cargoPath = `plugins/${pluginId}/adapter/Cargo.toml`;
+      const cargo = await Deno.readTextFile(cargoPath).catch((error) => {
+        if (error instanceof Deno.errors.NotFound) return undefined;
+        throw error;
+      });
+      if (cargo !== undefined) {
+        const packageBlock = cargo.split("[dependencies]", 1)[0] ?? cargo;
+        assert(
+          packageBlock.includes(`version = "${manifest.version}"`),
+          `${pluginId}: adapter package version mismatch`,
+        );
+      }
+    } else {
+      const contract = await readJson<{ id: string; version: string }>(
+        `plugins/${pluginId}/${manifest.entrypoint}`,
+      );
+      assert(
+        contract.id === pluginId,
+        `${pluginId}: Authentication Provider payload identity mismatch`,
+      );
+      assert(
+        contract.version === manifest.version,
+        `${pluginId}: Authentication Provider payload version mismatch`,
       );
     }
-  } else {
-    const contract = await readJson<{ id: string; version: string }>(
-      `plugins/${pluginId}/${manifest.entrypoint}`,
-    );
-    assert(
-      contract.id === pluginId,
-      `${pluginId}: Authentication Provider payload identity mismatch`,
-    );
-    assert(
-      contract.version === manifest.version,
-      `${pluginId}: Authentication Provider payload version mismatch`,
-    );
   }
-}
 
-if (!Deno.args.includes("--print-digests")) {
+  const closure = await repositoryClosure(active.components, pluginEntries);
+  if (active.closure) {
+    assert(
+      same(
+        closure.component_dependencies,
+        active.closure.component_dependencies,
+      ),
+      "component dependency snapshot changed; append a component release",
+    );
+    for (const id of pluginEntries) {
+      const manifest = await readJson<PluginManifest>(
+        `plugins/${id}/plugin.json`,
+      );
+      if (manifest.version === active.plugins[id]) {
+        assert(
+          same(closure.plugins[id], active.closure.plugins[id]),
+          `${id}: unchanged Plugin version has changed source or binding`,
+        );
+      }
+    }
+  }
+
   console.log(
     `plugin/component graph valid: ${active.components.length} components, ${pluginEntries.length} plugins, release ${active.version}`,
   );
 }
 
-async function sourceDigest(sources: string[]): Promise<string> {
+if (import.meta.main) await checkRepository();
+
+export async function sourceDigest(sources: string[]): Promise<string> {
   const files: string[] = [];
   for (const source of sources) await collectFiles(source, files);
-  files.sort();
+  return filesDigest(files);
+}
+
+export async function filesDigest(sourceFiles: string[]): Promise<string> {
+  const files = [...sourceFiles].sort();
   const chunks: Uint8Array[] = [];
   let length = 0;
   for (const file of files) {
+    assert(
+      (await Deno.lstat(file)).isFile,
+      `${file}: release input must be a regular file`,
+    );
     const path = new TextEncoder().encode(`${file}\0`);
     const body = await Deno.readFile(file);
     const end = new Uint8Array([0]);
@@ -298,6 +312,39 @@ async function sourceDigest(sources: string[]): Promise<string> {
   return `sha256:${
     [...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("")
   }`;
+}
+
+// Match clean Git/Nix source, not an adapter's ignored target/ tree. Untracked
+// non-ignored source is included so a pre-commit check observes new input too.
+// The isolation gate copies this same list and compares SDK package bytes to
+// the in-tree build, catching ignored files used as package/host inputs.
+export async function repositorySourceFiles(
+  root: string,
+  cwd?: string,
+): Promise<string[]> {
+  const result = await new Deno.Command("git", {
+    args: [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      root,
+    ],
+    ...(cwd === undefined ? {} : { cwd }),
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  assert(result.success, "cannot enumerate Git release sources");
+  const files = new TextDecoder("utf-8", { fatal: true }).decode(result.stdout)
+    .split("\0").filter(Boolean);
+  assert(files.length > 0, `${root}: no release sources`);
+  assertUnique(files, `${root}: release source`);
+  for (const file of files) {
+    assert(confined(root, file), `${root}: source escaped Plugin directory`);
+  }
+  return files.map((file) => cwd === undefined ? file : resolve(cwd, file));
 }
 
 export function validateIndependentPluginVersion(
@@ -317,6 +364,11 @@ export function validateIndependentPluginVersion(
 
 async function validatePackage(component: ComponentRecord): Promise<void> {
   const descriptor = component.package!;
+  assertSameSet(
+    component.sources,
+    [dirname(descriptor.manifest)],
+    `${component.id}: source digest must cover its complete package directory`,
+  );
   assert(
     exists(descriptor.manifest),
     `${component.id}: package manifest is missing`,
@@ -381,14 +433,166 @@ async function validatePackage(component: ComponentRecord): Promise<void> {
   );
 }
 
+// Resolve Cargo's own metadata rather than guessing TOML with a regex. This is
+// offline/no-deps: it neither builds nor downloads nor mutates a lockfile.
+async function cargoPackageDependencies(): Promise<
+  Map<string, Array<{ name: string; req: string; path?: string }>>
+> {
+  const result = await new Deno.Command("cargo", {
+    args: [
+      "metadata",
+      "--offline",
+      "--locked",
+      "--no-deps",
+      "--format-version",
+      "1",
+    ],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  assert(
+    result.success,
+    `Cargo metadata failed: ${new TextDecoder().decode(result.stderr)}`,
+  );
+  const metadata = JSON.parse(new TextDecoder().decode(result.stdout)) as {
+    packages: Array<
+      {
+        name: string;
+        dependencies: Array<{ name: string; req: string; path?: string }>;
+      }
+    >;
+  };
+  return new Map(metadata.packages.map((pkg) => [pkg.name, pkg.dependencies]));
+}
+
+export function resolvePackagePins(
+  owner: string,
+  dependencies: Record<string, string>,
+  components: ComponentRecord[],
+): string[] {
+  const result: string[] = [];
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (!name.startsWith("@cowboy/") && !name.startsWith("cowboy-")) continue;
+    const target = components.find((component) =>
+      component.package?.name === name
+    );
+    assert(
+      target !== undefined,
+      `${owner}: unregistered Cowboy package ${name}`,
+    );
+    assert(
+      exactVersion(version) && version === target.version,
+      `${owner}: stale or non-exact package pin ${name}@${version}`,
+    );
+    result.push(target.id);
+  }
+  return result.sort();
+}
+
+async function repositoryClosure(
+  components: ComponentRecord[],
+  pluginIds: string[],
+): Promise<ComponentClosure> {
+  const cargoPackages = await cargoPackageDependencies();
+  const graph: Record<string, string[]> = {};
+  for (const component of components) {
+    const pkg = component.package!;
+    let dependencies: Record<string, string>;
+    if (pkg.kind === "npm") {
+      const manifest = await readJson<{
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+        optionalDependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      }>(pkg.manifest);
+      const groups = [
+        manifest.dependencies,
+        manifest.peerDependencies,
+        manifest.optionalDependencies,
+        manifest.devDependencies,
+      ];
+      // Validate each group independently: a peer must not mask a stale build pin.
+      for (const group of groups) {
+        resolvePackagePins(component.id, group ?? {}, components);
+      }
+      dependencies = Object.assign({}, ...groups);
+    } else {
+      const declared = cargoPackages.get(pkg.name);
+      assert(
+        declared !== undefined,
+        `${component.id}: Cargo package is outside the metadata graph`,
+      );
+      dependencies = {};
+      for (const dependency of declared) {
+        if (!dependency.name.startsWith("cowboy-") && !dependency.path) {
+          continue;
+        }
+        const target = components.find((candidate) =>
+          candidate.package?.name === dependency.name
+        );
+        assert(
+          target !== undefined,
+          `${component.id}: unregistered local Cargo dependency`,
+        );
+        assert(
+          dependency.req === `=${target.version}`,
+          `${component.id}: Cargo dependency is not exact`,
+        );
+        if (dependency.path) {
+          assert(
+            resolve(dependency.path) ===
+              resolve(dirname(target.package!.manifest)),
+            `${component.id}: Cargo dependency path differs from registered package`,
+          );
+        }
+        dependencies[dependency.name] = target.version;
+      }
+    }
+    graph[component.id] = resolvePackagePins(
+      component.id,
+      dependencies,
+      components,
+    );
+  }
+  const plugins: ComponentClosure["plugins"] = {};
+  for (const id of pluginIds) {
+    const root = `plugins/${id}`;
+    const files = await repositorySourceFiles(root);
+    const manifest = await readJson<PluginManifest>(`${root}/plugin.json`);
+    await validateNpmSourceClosure(
+      {
+        id,
+        version: manifest.version,
+        publisher: manifest.publisher,
+        sources: [root],
+        digest: "",
+      },
+      root,
+      Object.fromEntries(manifest.components.flatMap((pin) => {
+        const pkg = components.find((component) => component.id === pin.id)
+          ?.package;
+        return pkg ? [[pkg.name, pin.version]] : [];
+      })),
+      files,
+    );
+    plugins[id] = {
+      component_release: manifest.component_release,
+      components: manifest.components,
+      source_digest: await filesDigest(files),
+    };
+  }
+  return { component_dependencies: graph, plugins };
+}
+
 async function validateNpmSourceClosure(
   component: ComponentRecord,
   packageRoot: string,
   declaredDependencies: Record<string, string>,
+  ownedFiles?: string[],
 ): Promise<void> {
-  const files: string[] = [];
-  await collectFiles(packageRoot, files);
-  const imports = /(?:from\s*|import\s*\()\s*["']([^"']+)["']/g;
+  const files: string[] = ownedFiles ?? [];
+  if (!ownedFiles) await collectFiles(packageRoot, files);
+  const imports = /(?:from\s*|import\s*(?:\(\s*)?)["']([^"']+)["']/g;
   for (const file of files.filter((path) => /\.[cm]?tsx?$/.test(path))) {
     const source = await Deno.readTextFile(file);
     for (const match of source.matchAll(imports)) {
@@ -399,9 +603,15 @@ async function validateNpmSourceClosure(
           `${component.id}: relative import escapes package: ${file} -> ${specifier}`,
         );
       } else if (specifier.startsWith("@cowboy/")) {
+        const packageName = specifier.split("/").slice(0, 2).join("/");
         assert(
-          exactVersion(declaredDependencies[specifier] ?? ""),
+          exactVersion(declaredDependencies[packageName] ?? ""),
           `${component.id}: Cowboy package dependency is not exact: ${specifier}`,
+        );
+      } else {
+        assert(
+          !specifier.startsWith("npm:@cowboy/"),
+          `${component.id}: Cowboy imports must use declared package names, not inline npm aliases`,
         );
       }
     }
@@ -421,7 +631,8 @@ function confined(root: string, path: string): boolean {
 }
 
 async function collectFiles(path: string, files: string[]): Promise<void> {
-  const stat = await Deno.stat(path);
+  const stat = await Deno.lstat(path);
+  assert(!stat.isSymlink, `${path}: symlink is not a release source`);
   if (stat.isFile) {
     files.push(path);
     return;
@@ -435,29 +646,6 @@ async function collectFiles(path: string, files: string[]): Promise<void> {
   }
 }
 
-function compareVersion(left: string, right: string): number {
-  const a = parseVersion(left);
-  const b = parseVersion(right);
-  for (let index = 0; index < 3; index += 1) {
-    if (a[index]! !== b[index]!) return a[index]! - b[index]!;
-  }
-  return 0;
-}
-
-function parseVersion(value: string): number[] {
-  const match = semverPattern.exec(value);
-  assert(match !== null, `${value}: invalid SemVer`);
-  return match.slice(1).map(Number);
-}
-
-function exactVersion(value: string): boolean {
-  return semverPattern.test(value);
-}
-
-function validId(value: string): boolean {
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
-}
-
 function validComponentId(value: string): boolean {
   return /^cowboy\.[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
 }
@@ -466,15 +654,6 @@ function assertUnique(values: string[], label: string): void {
   assert(
     new Set(values).size === values.length,
     `${label}: duplicate identity`,
-  );
-}
-
-function assertSameSet(left: string[], right: string[], label: string): void {
-  const a = [...left].sort();
-  const b = [...right].sort();
-  assert(
-    JSON.stringify(a) === JSON.stringify(b),
-    `${label}: identity set mismatch`,
   );
 }
 
@@ -491,7 +670,4 @@ async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await Deno.readTextFile(path)) as T;
 }
 
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
 import { dirname, relative, resolve } from "node:path";

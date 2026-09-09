@@ -175,7 +175,7 @@ impl PluginCatalog {
                     ),
                     publisher: manifest.publisher.clone(),
                     contract_fingerprint: None,
-                    component_release: crate::plugin::active_component_release().to_owned(),
+                    component_release: manifest.component_release.clone(),
                     supported_platforms: Vec::new(),
                     manifest: manifest.clone(),
                     has_host_bundle: false,
@@ -1168,6 +1168,9 @@ mod tests {
         assert!(catalog.entries().iter().any(|entry| {
             entry.plugin_id == "zed" && entry.plugin_kind == PluginKind::CodeIntelligence
         }));
+        for entry in catalog.entries() {
+            assert_eq!(entry.component_release, entry.manifest.component_release);
+        }
         let _ = fs::remove_dir_all(root);
     }
 

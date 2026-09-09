@@ -6,6 +6,8 @@ SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一�
 已实现类型生成、边界解码、scope/placement
 与图结构校验。第二批 [运行时绑定](plugin-runtime-bindings.md) 已将 Core RPC
 绑定到认证连接代次，并让现有遥测调用核对签名 Catalog 与当前 Machine 库存。
+第三批 [组件契约](plugin-components.md) 已实现显式 codec、state-store 实例/订阅资源
+释放，以及保留历史的依赖闭包发布检查；不涉及后台任务取消或 durable effect revert。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
@@ -622,6 +624,12 @@ iPhone caret/IME 问题不属于本设计已解决的内容。
 `components/registry.json` 保留不可变历史。新设计把整组 release
 作为可验证测试索引，逐步转向真实依赖闭包；必须先证明独立构建、完整依赖、影响集与读者兼容，再替换
 all-plugins-bump gate，不能提前删检查或重写旧版本。
+
+当前首批迁移：registry schema 3 先追加不改组件的 3.0.0 基线，再在 3.1.0 仅更新
+state-store/state-sync/state-sync-idb。保存全部内部 package 边及 Plugin 源码/绑定摘要，
+验证直接/间接影响、精确 pins、独立源码副本构建和双 schema Controller 读取。
+旧协调规则仍校验历史条目。所有声明的 package/contract 边暂按会导致发布处理；
+接口行为兼容豁免、通用运行 DAG 和 durable recovery 尚未实现。
 
 发布继续采用同一个 generic Plugin package/composite signature/平台矩阵。Service
 数据与 Machine runtime 绑定到同一

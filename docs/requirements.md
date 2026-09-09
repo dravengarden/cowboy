@@ -1,7 +1,7 @@
 # Cowboy core requirements
 
 Status: normative plugin and Provider platform contract. Plugin manifest schema
-1, component registry schema 2, Plugin package schema 1, Plugin release schemas
+1, component registry schema 3 (with immutable schema-2 history), Plugin package schema 1, Plugin release schemas
 1-2, Provider
 payload schema 2, Agent runtime-binding schema 2, UI schemas 1-2, host
 integration schemas 1-2, Provider SDK 3.0, Machine protocol 7,
@@ -88,9 +88,14 @@ An old OIDC release without a host remains valid but grants no host behavior.
 Reusable implementation belongs to an owned component, not a plugin copy or an
 external source-tree link. Component releases bind exact versions, source
 paths, and source digests. A component source change requires a new component
-release and a strictly higher version for every plugin in the preceding
-release, even when a plugin does not directly consume that component. This
-coordinated bump is enforced mechanically by `just plugin-check`.
+release and higher versions throughout its actual package dependency closure.
+Schema-2 history retains the coordinated all-Plugins-bump rule. Schema 3 starts
+with an unchanged baseline and records complete internal package edges and
+Plugin source/binding snapshots. Only affected Plugins must increase version;
+an unchanged Plugin may keep its historical component-release label only when
+every exact transitive input still matches the active matrix. Changed Plugin
+source or bindings require a new Plugin version. `just plugin-check` enforces
+this [release policy](plugin-components.md), including package pins and digests.
 
 The generic Plugin layer exclusively owns signing, publication, Catalog
 selection, Machine generations, activation, rollback, and uninstall. Narrower
