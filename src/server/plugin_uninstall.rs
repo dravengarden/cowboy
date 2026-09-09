@@ -10,6 +10,8 @@ use anyhow::{Result, ensure};
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
 // Its rollback path keeps evidence/fences and pauses new uninstall admission.
 const DURABLE_UNINSTALL_ENABLED: bool = true;
+// Schema-two intent reader bridge; do not write before reader-floor acceptance.
+const INSTALLATION_CAS_ENABLED: bool = false;
 
 pub(super) fn requires_runtime_fence(command: &Inbound) -> bool {
     matches!(
@@ -132,6 +134,10 @@ async fn validate_intent(
     plan: PluginUninstallPlan,
 ) -> Result<UninstallIntent> {
     ensure!(now_ms() <= plan.expires_at_ms, "uninstall preview expired");
+    ensure!(
+        INSTALLATION_CAS_ENABLED || plan.installation_revision.is_none(),
+        "installation CAS is reader-only"
+    );
     let current = current_machine_plugin(state, &plan.machine_id, &plan.plugin_id)
         .await
         .map_err(anyhow::Error::msg)?;
@@ -140,6 +146,10 @@ async fn validate_intent(
             && current.plugin_version == plan.plugin_version
             && current.contract_fingerprint == plan.contract_fingerprint,
         "Plugin release changed; refresh the uninstall plan"
+    );
+    ensure!(
+        current.installation_revision == plan.installation_revision,
+        "Plugin installation changed; refresh the uninstall plan"
     );
     let trusted = state.plugin_catalog.resolve(
         &plan.plugin_id,
@@ -177,7 +187,11 @@ async fn validate_intent(
         .cloned()
         .collect();
     let intent = UninstallIntent {
-        schema: 1,
+        schema: if plan.installation_revision.is_some() {
+            2
+        } else {
+            1
+        },
         operation_id: id,
         service_id: state.service_id.clone(),
         actor: plan.actor,
@@ -185,6 +199,7 @@ async fn validate_intent(
         plugin_id: plan.plugin_id,
         plugin_version: plan.plugin_version,
         generation_digest: plan.generation_digest,
+        installation_revision: plan.installation_revision,
         contract_fingerprint: plan.contract_fingerprint,
         session_ids: ids,
         active_session_ids: active,

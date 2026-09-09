@@ -129,8 +129,9 @@ Service/Machine, reader-only rejection, exact reply validation, bounded
 retention, single writer, corruption and symlink rejection. They do not
 uninstall a live Plugin or use production credentials.
 
-Still missing: durable installation incarnation/CAS (including same-release
-ABA), fresh recovery policy/auth epochs and monotonic cross-restart lease rules,
+The following [installation-incarnation slice](plugin-installation-incarnations.md)
+adds schema-two CAS (including same-release ABA) behind a new reader-first
+cutover. Still missing: fresh recovery policy/auth epochs and monotonic cross-restart lease rules,
 verified worker restoration, journaled compensation, evidence archival, operator
 recovery UI, Victoria binding activation/revocation and the generic finite
 executor. This is at-most-once **attempt with possible Unknown**, not

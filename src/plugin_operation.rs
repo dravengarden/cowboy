@@ -26,6 +26,9 @@ pub(crate) struct UninstallIntent {
     pub plugin_id: String,
     pub plugin_version: String,
     pub generation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_revision:
+        Option<crate::machine_protocol::installation_revision::InstallationRevision>,
     pub contract_fingerprint: String,
     pub session_ids: Vec<String>,
     pub active_session_ids: Vec<String>,
@@ -54,7 +57,11 @@ impl UninstallIntent {
         use crate::machine_protocol::plugin_step::{UninstallStep, digest};
         self.validate()?;
         let step = UninstallStep {
-            schema: 1,
+            schema: if self.installation_revision.is_some() {
+                2
+            } else {
+                1
+            },
             operation_id: self.operation_id.clone(),
             service_id: self.service_id.clone(),
             machine_id: self.machine_id.clone(),
@@ -62,6 +69,7 @@ impl UninstallIntent {
             plugin_id: self.plugin_id.clone(),
             plugin_version: self.plugin_version.clone(),
             generation_digest: self.generation_digest.clone(),
+            installation_revision: self.installation_revision.clone(),
             contract_fingerprint: self.contract_fingerprint.clone(),
             expires_at_ms: self.expires_at_ms,
         };
@@ -70,7 +78,13 @@ impl UninstallIntent {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema == 1, "unsupported uninstall intent schema");
+        ensure!(
+            matches!(
+                (self.schema, &self.installation_revision),
+                (1, None) | (2, Some(_))
+            ),
+            "unsupported uninstall intent schema or installation revision"
+        );
         ensure!(
             (16..=128).contains(&self.operation_id.len())
                 && self
@@ -226,6 +240,7 @@ pub(crate) fn fixture(id: &str) -> UninstallIntent {
         plugin_id: "victoria".to_owned(),
         plugin_version: "1.1.0".to_owned(),
         generation_digest: format!("sha256:{}", "a".repeat(64)),
+        installation_revision: None,
         contract_fingerprint: format!("sha256:{}", "b".repeat(64)),
         session_ids: Vec::new(),
         active_session_ids: Vec::new(),
@@ -238,6 +253,39 @@ pub(crate) fn fixture(id: &str) -> UninstallIntent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installation_revision_is_part_of_the_entire_approved_plan() {
+        let mut intent = fixture("cas");
+        let old = serde_json::to_vec(&intent).unwrap();
+        assert!(
+            !String::from_utf8(old.clone())
+                .unwrap()
+                .contains("installation_revision")
+        );
+        intent.schema = 2;
+        assert!(intent.validate().is_err());
+        intent.installation_revision = Some(
+            format!("installation-{}", "a".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        let first = intent.machine_step().unwrap();
+        assert_eq!(first.schema, 2);
+        intent.installation_revision = Some(
+            format!("installation-{}", "b".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        assert_ne!(
+            first.plan_digest,
+            intent.machine_step().unwrap().plan_digest
+        );
+        intent.schema = 1;
+        assert!(intent.validate().is_err());
+        intent.installation_revision = None;
+        assert_eq!(serde_json::to_vec(&intent).unwrap(), old);
+    }
 
     #[test]
     fn evidence_cannot_resurrect_a_terminal_or_uncertain_operation() {

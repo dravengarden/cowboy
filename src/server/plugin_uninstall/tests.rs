@@ -412,6 +412,7 @@ fn foreign_or_incomplete_confirmation_does_not_consume_the_owner_preview() {
         plugin_id: intent.plugin_id.clone(),
         plugin_version: intent.plugin_version,
         generation_digest: intent.generation_digest,
+        installation_revision: intent.installation_revision,
         contract_fingerprint: intent.contract_fingerprint,
         session_ids: vec!["sess-1".to_owned()],
         active_session_ids: vec!["sess-1".to_owned()],

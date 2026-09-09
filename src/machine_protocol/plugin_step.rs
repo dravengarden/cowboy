@@ -1,6 +1,7 @@
 //! Closed protocol-ten uninstall evidence. These values are not grants and
 //! cannot restore authority by deserialization. No credentials or raw errors.
 
+use super::installation_revision::InstallationRevision;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -17,6 +18,8 @@ pub struct UninstallStep {
     pub plugin_id: String,
     pub plugin_version: String,
     pub generation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_revision: Option<InstallationRevision>,
     pub contract_fingerprint: String,
     pub expires_at_ms: i64,
 }
@@ -35,7 +38,13 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
 
 impl UninstallStep {
     pub(crate) fn validate(&self) -> Result<()> {
-        ensure!(self.schema == 1, "unsupported Machine step schema");
+        ensure!(
+            matches!(
+                (self.schema, &self.installation_revision),
+                (1, None) | (2, Some(_))
+            ),
+            "unsupported Machine step schema or installation revision"
+        );
         ensure!(
             id(&self.operation_id)
                 && self.operation_id.len() >= 16
@@ -171,6 +180,7 @@ pub(crate) fn fixture() -> UninstallStep {
         plugin_id: "victoria".into(),
         plugin_version: "1.0.0".into(),
         generation_digest: digest(b"release"),
+        installation_revision: None,
         contract_fingerprint: digest(b"contract"),
         expires_at_ms: 1_800_000_000_000,
     }
@@ -180,6 +190,44 @@ pub(crate) fn fixture() -> UninstallStep {
 mod tests {
     use super::*;
     use crate::machine_protocol::{MachineCommand, MachineEvent, PLUGIN_STEP_PROTOCOL_VERSION};
+
+    #[test]
+    fn installation_schema_requires_revision_and_protocol_eleven_without_changing_v1_bytes() {
+        let mut step = fixture();
+        let old_bytes = serde_json::to_vec(&step).unwrap();
+        assert!(
+            !String::from_utf8(old_bytes.clone())
+                .unwrap()
+                .contains("installation_revision")
+        );
+        step.schema = 2;
+        assert!(step.validate().is_err());
+        step.installation_revision = Some(
+            format!("installation-{}", "a".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        step.validate().unwrap();
+        let original_digest = step.request_digest().unwrap();
+        let command = MachineCommand::UninstallPluginStep {
+            request_id: "apply".into(),
+            step: Box::new(step.clone()),
+        };
+        assert_eq!(
+            command.minimum_protocol(),
+            crate::machine_protocol::PLUGIN_INSTALLATION_PROTOCOL_VERSION
+        );
+        step.installation_revision = Some(
+            format!("installation-{}", "b".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        assert_ne!(step.request_digest().unwrap(), original_digest);
+        step.schema = 1;
+        assert!(step.validate().is_err());
+        step.installation_revision = None;
+        assert_eq!(serde_json::to_vec(&step).unwrap(), old_bytes);
+    }
 
     #[test]
     fn wire_is_closed_typed_and_requires_protocol_ten() {

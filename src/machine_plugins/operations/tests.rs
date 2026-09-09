@@ -11,6 +11,7 @@ fn step() -> UninstallStep {
         plugin_id: "victoria".into(),
         plugin_version: "1.0.0".into(),
         generation_digest: digest(b"release"),
+        installation_revision: None,
         contract_fingerprint: digest(b"contract"),
         expires_at_ms: chrono::Utc::now().timestamp_millis() + 60_000,
     }
@@ -65,6 +66,23 @@ fn durable_duplicate_and_reopen_never_repeat_the_effect() {
     let journal = Journal::open(root.path()).unwrap();
     assert_eq!(journal.query(&request), first);
     assert_eq!(journal.execute(&request, || panic!(), || panic!()), first);
+}
+
+#[test]
+#[allow(clippy::used_underscore_binding)] // Inspect the private RAII guard, not production state.
+fn graceful_owner_release_does_not_wait_for_an_inherited_file_description() {
+    let root = tempfile::tempdir().unwrap();
+    let journal = Journal::open(root.path()).unwrap();
+    // dup has the same open-file-description/flock lifetime as fork inheritance.
+    let inherited = journal._owner.0.try_clone().unwrap();
+    assert!(Journal::open(root.path()).is_err());
+    drop(journal);
+    let reopened = Journal::open(root.path()).unwrap();
+    assert!(Journal::open(root.path()).is_err());
+    drop(inherited);
+    assert!(Journal::open(root.path()).is_err());
+    drop(reopened);
+    assert!(Journal::open(root.path()).is_ok());
 }
 
 #[test]
@@ -399,4 +417,155 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
         .await;
     assert_eq!(observed.result, applied.result);
     assert_eq!(store.inventory().unwrap().len(), 1);
+}
+
+#[tokio::test]
+#[cfg(feature = "full")]
+#[allow(clippy::too_many_lines)] // One signed ABA, tombstone and rollback-reader lifecycle.
+async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let publisher =
+        crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
+            .unwrap();
+    let desired = super::super::tests::telemetry_release(&publisher, "1.0.0");
+    let path = root.path().join("machine");
+    let store = MachinePluginStore::new(&path, Platform::Linux, "x86_64".into()).unwrap();
+    store.install(&desired).await.unwrap();
+    assert!(
+        store.inventory().unwrap()[0]
+            .installation_revision
+            .is_none()
+    );
+    assert!(!path.join("plugin-operations/installations-v1").exists());
+    store.enable_installation_tracking().await.unwrap();
+    let first = store.inventory().unwrap().remove(0);
+    assert!(first.installation_revision.is_some());
+    let mut request = step();
+    request.schema = 2;
+    request.generation_digest = first.generation_digest.clone();
+    request.contract_fingerprint = first.contract_fingerprint.clone();
+    request.installation_revision = first.installation_revision.clone();
+    // An old Controller's new digest-only request is never admitted after cutover.
+    let mut legacy = request.clone();
+    legacy.schema = 1;
+    legacy.installation_revision = None;
+    let preflight = store
+        .uninstall_step(&legacy, Some("service-a"), "machine-a", true, true)
+        .await;
+    assert!(!preflight.admission_enabled);
+    assert_eq!(
+        store
+            .uninstall_step(&legacy, Some("service-a"), "machine-a", true, false)
+            .await
+            .result,
+        unavailable(StepUnavailable::InvalidRequest)
+    );
+    let second = store.install(&desired).await.unwrap();
+    assert_eq!(first.generation_digest, second.generation_digest);
+    assert_ne!(first.installation_revision, second.installation_revision);
+    assert_eq!(
+        store
+            .uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+            .await
+            .result,
+        unavailable(StepUnavailable::InvalidRequest)
+    );
+    let rejected = store
+        .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .await;
+    assert_eq!(
+        receipt(rejected.result).outcome,
+        StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged
+        }
+    );
+    assert_eq!(
+        store.inventory().unwrap()[0].installation_revision,
+        second.installation_revision
+    );
+    // Reusing the rejected identity with a fresh incarnation is a different request.
+    request.installation_revision = second.installation_revision.clone();
+    assert_eq!(
+        store
+            .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+            .await
+            .result,
+        unavailable(StepUnavailable::IdentityConflict)
+    );
+    request.operation_id.push('2');
+    let applied = store
+        .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .await;
+    assert_eq!(
+        receipt(applied.result.clone()).outcome,
+        StepOutcome::Applied {}
+    );
+    assert!(store.inventory().unwrap().is_empty());
+    let tombstone =
+        fs::read(path.join("plugin-operations/installations-v1/victoria.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&tombstone).unwrap();
+    assert!(value["transition"]["generation_digest"].is_null());
+    assert_eq!(
+        value["transition"]["operation_digest"],
+        request.request_digest().unwrap()
+    );
+    assert_eq!(
+        value["transition"]["previous_revision"],
+        serde_json::to_value(second.installation_revision).unwrap()
+    );
+    drop(store);
+    // Real reader-only reopen: both schemas remain readable, with no adoption,
+    // replay, legacy fallback, normal install or accidental authority deletion.
+    let reader = MachinePluginStore::new(&path, Platform::Linux, "x86_64".into()).unwrap();
+    let observed = reader
+        .uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+        .await;
+    assert!(!observed.admission_enabled);
+    assert_eq!(observed.result, applied.result);
+    assert!(reader.install(&desired).await.is_err());
+    assert!(
+        reader
+            .reactivate("victoria", &first.generation_digest)
+            .await
+            .is_err()
+    );
+    assert!(
+        reader
+            .uninstall("victoria", &first.generation_digest)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(path.join("plugin-operations/installations-v1/victoria.json")).unwrap(),
+        tombstone
+    );
+    reader.enable_installation_tracking().await.unwrap();
+    let third = reader.install(&desired).await.unwrap();
+    assert_ne!(third.installation_revision, first.installation_revision);
+    assert_ne!(third.installation_revision, request.installation_revision);
+    assert_eq!(
+        reader
+            .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+            .await
+            .result,
+        applied.result
+    );
+    assert_eq!(
+        reader.inventory().unwrap()[0].installation_revision,
+        third.installation_revision
+    );
+    let mut interrupted = request.clone();
+    interrupted.operation_id.push('3');
+    interrupted.installation_revision = third.installation_revision;
+    reader
+        .operations
+        .execute(&interrupted, || true, || bail!("fixture partial effect"));
+    interrupted.operation_id.push('4');
+    assert_eq!(
+        reader
+            .uninstall_step(&interrupted, Some("service-a"), "machine-a", true, true)
+            .await
+            .result,
+        unavailable(StepUnavailable::SlotFenced)
+    );
 }

@@ -279,6 +279,16 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
+    // Reader bridge first. A descendant may enable adoption only after both
+    // Controller and Machine readers are accepted as the rollback floor.
+    const INSTALLATION_TRACKING_ENABLED: bool = false;
+    if INSTALLATION_TRACKING_ENABLED && args.plugin_operation_admission {
+        providers.enable_installation_tracking().await?;
+    }
+    tracing::info!(
+        writer_enabled = INSTALLATION_TRACKING_ENABLED && args.plugin_operation_admission,
+        "Plugin installation incarnation journal ready"
+    );
     let active_acp = components
         .active()?
         .into_iter()

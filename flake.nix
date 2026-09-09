@@ -475,7 +475,9 @@
         test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/src/machine_plugins.rs
         test -e ${machine-src}/src/machine_plugins/operations.rs
+        test -e ${machine-src}/src/machine_plugins/operations/installations.rs
         test -e ${machine-src}/src/machine_protocol/plugin_step.rs
+        test -e ${machine-src}/src/machine_protocol/installation_revision.rs
         test -e ${machine-src}/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs

@@ -8,6 +8,8 @@ use crate::machine_protocol::plugin_step::{
     StepUncertainty, UninstallStep, digest,
 };
 
+pub(super) mod installations;
+
 const MAX_RECORDS: usize = 4096;
 const MAX_RECORD_BYTES: u64 = 8192;
 
@@ -26,8 +28,20 @@ struct JournalState {
 
 pub(super) struct Journal {
     root: PathBuf,
-    _owner: fs::File,
+    _owner: OwnerLock,
     state: parking_lot::Mutex<JournalState>,
+    pub(super) installations: installations::Installations,
+}
+
+struct OwnerLock(fs::File);
+
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        // fork/dup temporarily shares an open-file description even with
+        // CLOEXEC. Close alone can leave its flock held by an unrelated child.
+        // A live store keeps this guard; graceful release explicitly unlocks.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
 }
 
 impl Journal {
@@ -49,13 +63,17 @@ impl Journal {
             .custom_flags(libc::O_NOFOLLOW)
             .open(root.join("owner.lock"))?;
         fs2::FileExt::try_lock_exclusive(&owner).context("Machine Plugin journal already owned")?;
+        let owner = OwnerLock(owner);
         let mut receipts = BTreeMap::new();
         let mut slots = BTreeSet::new();
         for entry in fs::read_dir(&root)? {
             let entry = entry?;
             let name = entry.file_name();
             let name = name.to_str().context("invalid Machine journal entry")?;
-            if name == "owner.lock" || (name.starts_with('.') && name.ends_with(".partial")) {
+            if name == "owner.lock"
+                || name == installations::DIRECTORY
+                || (name.starts_with('.') && name.ends_with(".partial"))
+            {
                 continue;
             }
             ensure!(
@@ -99,6 +117,7 @@ impl Journal {
             );
         }
         Ok(Self {
+            installations: installations::Installations::open(root.join(installations::DIRECTORY))?,
             root,
             _owner: owner,
             state: parking_lot::Mutex::new(JournalState {
@@ -147,6 +166,7 @@ impl Journal {
     }
 
     pub(super) fn ensure_unfenced(&self, plugin: &str) -> Result<()> {
+        self.installations.ensure_unfenced(plugin)?;
         let state = self.state.lock();
         ensure!(
             !state.poisoned
@@ -160,6 +180,10 @@ impl Journal {
     }
 
     pub(super) fn ensure_legacy_allowed(&self, plugin: &str) -> Result<()> {
+        ensure!(
+            !self.installations.requires_cas(),
+            "Plugin lifecycle requires installation CAS"
+        );
         let state = self.state.lock();
         // Once a slot has durable operation authority, an older Controller
         // cannot bypass its receipts through an unjournaled mutation.
@@ -255,14 +279,56 @@ impl MachinePluginStore {
         } else if service != Some(step.service_id.as_str()) || machine != step.machine_id {
             unavailable(StepUnavailable::WrongOwner)
         } else if query_only {
-            self.operations.query(step)
+            let found = self.operations.query(step);
+            if found == (StepLookup::NotFound {})
+                && self.operations.ensure_unfenced(&step.plugin_id).is_err()
+            {
+                unavailable(StepUnavailable::SlotFenced)
+            } else if found == (StepLookup::NotFound {})
+                && step.installation_revision.is_some()
+                && !self.step_target_matches(step).unwrap_or(false)
+            {
+                // Read-only preflight can reject a stale preview before the
+                // Service stops workers; execution still repeats the CAS.
+                unavailable(StepUnavailable::InvalidRequest)
+            } else {
+                found
+            }
         } else if !admission_enabled {
             unavailable(StepUnavailable::ReaderOnly)
+        } else if self.operations.installations.requires_cas()
+            && step.installation_revision.is_none()
+        {
+            // Old receipts remain queryable, but a fresh digest-only command
+            // cannot remove an incarnation-tracked installation.
+            match self.operations.query(step) {
+                StepLookup::NotFound {} => unavailable(StepUnavailable::InvalidRequest),
+                found => found,
+            }
+        } else if !self.operations.installations.admits(step) {
+            unavailable(StepUnavailable::ReaderOnly)
+        } else if self
+            .operations
+            .installations
+            .ensure_unfenced(&step.plugin_id)
+            .is_err()
+        {
+            match self.operations.query(step) {
+                StepLookup::NotFound {} => unavailable(StepUnavailable::SlotFenced),
+                found => found,
+            }
         } else {
             self.operations.execute(
                 step,
                 || self.step_target_matches(step).unwrap_or(false),
                 || {
+                    let pending = self.operations.installations.begin(
+                        &step.plugin_id,
+                        Some(&step.generation_digest),
+                        None,
+                        installations::Effect::Uninstall,
+                        Some(step.request_digest()?),
+                    )?;
                     self.uninstall_inner(&step.plugin_id, &step.generation_digest)?;
                     // Flush every removed directory entry before acknowledging.
                     fs::File::open(self.plugin_root(&step.plugin_id))?.sync_all()?;
@@ -270,12 +336,15 @@ impl MachinePluginStore {
                     if auth.exists() {
                         fs::File::open(auth)?.sync_all()?;
                     }
+                    self.operations.installations.finish(pending)?;
                     Ok(())
                 },
             )
         };
         StepObservation {
-            admission_enabled: admission_enabled && service.is_some(),
+            admission_enabled: admission_enabled
+                && service.is_some()
+                && self.operations.installations.admits(step),
             result,
         }
     }
@@ -288,6 +357,7 @@ impl MachinePluginStore {
             || active.plugin_version != step.plugin_version
             || active.generation_digest != step.generation_digest
             || active.contract_fingerprint != step.contract_fingerprint
+            || active.installation_revision != step.installation_revision
         {
             return Ok(false);
         }

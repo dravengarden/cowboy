@@ -143,6 +143,7 @@ impl Fixture {
             plugin_version: self.release.plugin_version.clone(),
             plugin_kind: self.release.plugin_kind,
             generation_digest: self.release.artifact_digest.clone(),
+            installation_revision: None,
             contract_fingerprint: self.release.contract_fingerprint.clone(),
             state: PluginInstallationState::Active,
             rollback_generation_digest: None,

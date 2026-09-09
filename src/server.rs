@@ -75,6 +75,8 @@ struct PluginUninstallPlan {
     plugin_id: String,
     plugin_version: String,
     generation_digest: String,
+    installation_revision:
+        Option<crate::machine_protocol::installation_revision::InstallationRevision>,
     contract_fingerprint: String,
     session_ids: Vec<String>,
     active_session_ids: Vec<String>,
@@ -11490,6 +11492,7 @@ async fn api_machine_plugin_uninstall_plan(
             plugin_id: provider_id.clone(),
             plugin_version: installed.plugin_version.clone(),
             generation_digest: installed.generation_digest.clone(),
+            installation_revision: installed.installation_revision.clone(),
             contract_fingerprint: installed.contract_fingerprint.clone(),
             session_ids,
             active_session_ids: active_session_ids.clone(),
@@ -12774,6 +12777,7 @@ mod provider_usage_source_tests {
             plugin_version: "1.0.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: "sha256:generation".to_owned(),
+            installation_revision: None,
             contract_fingerprint: "sha256:contract".to_owned(),
             state,
             rollback_generation_digest: None,
@@ -13671,6 +13675,7 @@ async fn session_reload_target(
     let auth = state.provider_auth.status(&meta.provider);
     let generation = resolve_provider_generation(
         &state.provider_catalog,
+        &state.plugin_catalog,
         &[installed],
         &meta.provider,
         auth.as_ref(),
@@ -14012,8 +14017,19 @@ fn resolve_scheduling_auth_generation(
     Ok(Some(installed_generation))
 }
 
+fn provider_inventory_contract_matches(
+    installed: &crate::machine_protocol::PluginInventory,
+    provider_fingerprint: &str,
+    plugin_fingerprint: Option<&str>,
+) -> bool {
+    plugin_fingerprint == Some(installed.contract_fingerprint.as_str())
+        || ((installed.installation_revision.is_none() || plugin_fingerprint.is_none())
+            && provider_fingerprint == installed.contract_fingerprint)
+}
+
 fn resolve_provider_generation(
     catalog: &crate::provider_catalog::ProviderCatalog,
+    plugins: &crate::plugin_catalog::PluginCatalog,
     inventory: &[crate::machine_protocol::PluginInventory],
     provider_id: &str,
     service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
@@ -14037,7 +14053,25 @@ fn resolve_provider_generation(
                 installed.generation_digest
             )
         })?;
-    if package.contract_fingerprint != installed.contract_fingerprint {
+    // Generic Plugin inventory uses the outer, signed Plugin fingerprint. Old
+    // Machines still project the inner Provider fingerprint; accept that only
+    // for untracked inventories while the reader bridge is rolling out. An
+    // exact signed legacy-only Provider Catalog generation has no outer Plugin
+    // contract at all; adopting its slot must not break its existing scheduler.
+    let exact_plugin = plugins
+        .resolve(
+            provider_id,
+            Some(&installed.plugin_version),
+            Some(&installed.generation_digest),
+        )
+        .ok();
+    if !provider_inventory_contract_matches(
+        installed,
+        &package.contract_fingerprint,
+        exact_plugin
+            .as_ref()
+            .map(|trusted| trusted.release.contract_fingerprint.as_str()),
+    ) {
         return Err(
             "installed Provider contract fingerprint does not match the Catalog".to_owned(),
         );
@@ -14220,6 +14254,7 @@ async fn api_new_session(
         let provider_auth = state.provider_auth.status(&req.provider);
         let provider_generation = match resolve_provider_generation(
             &state.provider_catalog,
+            &state.plugin_catalog,
             &providers,
             &req.provider,
             provider_auth.as_ref(),
@@ -14443,9 +14478,9 @@ fn resolve_machine_workspace<'a>(
 mod machine_provider_tests {
     use super::{
         ProviderAuthExecutor, apply_workspace_inventory, failed_provider_auth_projection_ids,
-        provider_auth_recovery_generations, recoverable_provider_auth_failure,
-        resolve_machine_workspace, resolve_scheduling_auth_generation,
-        web_session_is_missing_machine,
+        provider_auth_recovery_generations, provider_inventory_contract_matches,
+        recoverable_provider_auth_failure, resolve_machine_workspace,
+        resolve_scheduling_auth_generation, web_session_is_missing_machine,
     };
     use crate::core::{Hub, SessionOrigin, Status};
     use std::collections::BTreeMap;
@@ -14507,6 +14542,7 @@ mod machine_provider_tests {
             plugin_version: "1.0.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: format!("sha256:{}", "1".repeat(64)),
+            installation_revision: None,
             contract_fingerprint: format!("sha256:{}", "2".repeat(64)),
             state: crate::machine_protocol::PluginInstallationState::Active,
             rollback_generation_digest: None,
@@ -14516,6 +14552,53 @@ mod machine_provider_tests {
             materialization_state: crate::machine_protocol::ProviderMaterializationState::Current,
             detail: None,
         }
+    }
+
+    #[test]
+    fn agent_inventory_reader_distinguishes_plugin_and_provider_contracts() {
+        let mut installed = installed_auth(1);
+        let inner = installed.contract_fingerprint.clone();
+        let outer = format!("sha256:{}", "a".repeat(64));
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        installed.contract_fingerprint = outer.clone();
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        installed.installation_revision = Some(
+            format!("installation-{}", "b".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        assert!(!provider_inventory_contract_matches(
+            &installed, &inner, None
+        ));
+        installed.contract_fingerprint = inner.clone();
+        assert!(!provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        assert!(provider_inventory_contract_matches(
+            &installed, &inner, None
+        ));
+        installed.installation_revision = None;
+        installed.contract_fingerprint = "untrusted".into();
+        assert!(!provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
     }
 
     #[test]
@@ -19180,6 +19263,7 @@ mod provider_install_tests {
             plugin_version: "1.1.1".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: "sha256:old-provider".to_owned(),
+            installation_revision: None,
             contract_fingerprint: "sha256:old-contract".to_owned(),
             state: PluginInstallationState::Active,
             rollback_generation_digest: None,

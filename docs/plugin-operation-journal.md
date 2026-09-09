@@ -62,8 +62,8 @@ incarnation. Even an equal epoch string cannot move recovery to a replacement
 connection. This is a short-lived connection fence, **not** a durable Machine
 installation incarnation or an idempotency receipt.
 Compensation also rejects a missing/ambiguous inventory or an observed different
-active release before enqueue. Until the Machine protocol gains an installation
-CAS, this is not a guarantee against out-of-band Machine-local changes racing
+active release before enqueue. This legacy path has no installation
+CAS and cannot guarantee against out-of-band Machine-local changes racing
 after enqueue; this recovery is `Compensate`, never `RestoreIfUnchanged`.
 
 Once Machine uninstall is acknowledged, the Service's exact session soft-delete
@@ -142,8 +142,10 @@ interruption and detached observers. Side-effect fixtures assert persisted phase
 before each mocked remote operation and never use production credentials.
 
 Protocol 10 now implements Machine-owned durable uninstall identity, receipts
-and read-only queries behind a reader-floor admission switch. Still missing:
-installation incarnations; fresh-policy recovery authorization; verified worker
+and read-only queries behind a reader-floor admission switch. Protocol 11's
+[installation-incarnation slice](plugin-installation-incarnations.md) adds
+schema-two intents and uninstall CAS through a new reader-first cutover.
+Still missing: fresh-policy recovery authorization; verified worker
 restoration; operator recovery UI; bounded evidence archival; Victoria binding
 activation; and the generic finite executor. A current inventory match is not
 proof that an old remote effect completed or was undone. This slice does not

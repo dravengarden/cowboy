@@ -193,6 +193,7 @@ fn same_installation(left: &PluginInventory, right: &PluginInventory) -> bool {
         && left.plugin_kind == right.plugin_kind
         && left.plugin_version == right.plugin_version
         && left.generation_digest == right.generation_digest
+        && left.installation_revision == right.installation_revision
         && left.contract_fingerprint == right.contract_fingerprint
         && left.state == right.state
         && left.auth_generation == right.auth_generation
@@ -940,6 +941,7 @@ mod tests {
             plugin_version: "1.2.3".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: format!("sha256:{}", "ab".repeat(32)),
+            installation_revision: None,
             contract_fingerprint: format!("sha256:{}", "cd".repeat(32)),
             state: PluginInstallationState::Active,
             rollback_generation_digest: None,
@@ -974,6 +976,26 @@ mod tests {
             control.install(id.to_owned(), "same-epoch".to_owned(), false, 9, tx),
             rx,
         )
+    }
+
+    #[tokio::test]
+    async fn installation_cas_rejects_protocol_ten_without_enqueuing() {
+        let control = MachineControl::default();
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install("machine-test".into(), "epoch".into(), false, 10, tx);
+        let mut step = crate::machine_protocol::plugin_step::fixture();
+        step.schema = 2;
+        step.installation_revision = Some(
+            format!("installation-{}", "a".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        let error = control
+            .plugin_uninstall_step(&connection, &step, true)
+            .await
+            .unwrap_err();
+        assert_eq!(error.certainty, CommandFailure::NotSent);
+        assert!(commands.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -1409,7 +1431,7 @@ mod tests {
         let bind =
             || control.bind_plugin_host("hawk", &expected, PluginHostOperation::CollectUsage);
         assert!(!bind().unwrap_err().started);
-        for field in 0..7 {
+        for field in 0..8 {
             let mut changed = expected.clone();
             match field {
                 0 => changed.plugin_id = "other".to_owned(),
@@ -1418,6 +1440,13 @@ mod tests {
                 3 => changed.contract_fingerprint = format!("sha256:{}", "ef".repeat(32)),
                 4 => changed.auth_generation = Some(5),
                 5 => changed.plugin_kind = cowboy_plugin_sdk::PluginKind::TelemetryBackend,
+                6 => {
+                    changed.installation_revision = Some(
+                        format!("installation-{}", "a".repeat(64))
+                            .try_into()
+                            .unwrap(),
+                    );
+                }
                 _ => changed.state = PluginInstallationState::Uninstalling,
             }
             observe(&control, &connection, vec![changed]);

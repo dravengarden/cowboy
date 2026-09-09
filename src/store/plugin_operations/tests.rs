@@ -17,6 +17,36 @@ async fn advance_to_machine_commit(store: &Store, intent: &UninstallIntent) {
 #[allow(clippy::too_many_lines)] // One atomicity, compensation-CAS and retained-reference story on both backends.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();
+    // Reader bridge accepts both retained schema-one and exact-incarnation
+    // schema-two evidence on PostgreSQL and SQLite. No migration rewrite.
+    let mut cas = fixture("installation-cas");
+    cas.schema = 2;
+    cas.installation_revision = Some(
+        format!("installation-{}", "a".repeat(64))
+            .try_into()
+            .unwrap(),
+    );
+    store.begin_plugin_uninstall(&cas).await.unwrap();
+    assert_eq!(
+        store
+            .plugin_uninstall_operation(&cas.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .intent,
+        cas
+    );
+    let mut changed = cas.clone();
+    changed.installation_revision = Some(
+        format!("installation-{}", "b".repeat(64))
+            .try_into()
+            .unwrap(),
+    );
+    assert!(store.begin_plugin_uninstall(&changed).await.is_err());
+    store
+        .advance_plugin_uninstall(&cas.operation_id, Phase::Prepared, Phase::Aborted, None)
+        .await
+        .unwrap();
     let mut intent = fixture("atomic");
     intent.plugin_id = "codex".to_owned();
     intent.session_ids = vec!["sess-701".to_owned(), "sess-702".to_owned()];
