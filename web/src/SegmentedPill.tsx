@@ -11,20 +11,29 @@ export function SegmentedPill<T extends string>({
   value,
   options,
   onChange,
+  disabled = false,
+  fullWidth = false,
+  "aria-label": ariaLabel,
   sx,
 }: {
   value: T;
   options: readonly { value: T; label: ReactNode }[];
   onChange: (v: T) => void;
+  disabled?: boolean;
+  fullWidth?: boolean;
+  "aria-label"?: string;
   sx?: SxProps<Theme>;
 }): React.JSX.Element {
   const n = options.length;
   const idx = Math.max(0, options.findIndex((o) => o.value === value));
   return (
     <Box
+      role="group"
+      aria-label={ariaLabel}
       sx={{
         position: "relative",
-        display: "inline-flex",
+        display: fullWidth ? "flex" : "inline-flex",
+        width: fullWidth ? "100%" : undefined,
         p: 0.5,
         borderRadius: 999,
         // Translucent track on the frosted sheet — carries its own light blur so
@@ -77,14 +86,18 @@ export function SegmentedPill<T extends string>({
         return (
           <ButtonBase
             key={o.value}
+            disabled={disabled}
+            aria-pressed={active}
             onClick={(): void => onChange(o.value)}
             onPointerDown={(e): void => e.stopPropagation()}
             sx={{
               position: "relative",
               zIndex: 1,
-              minWidth: 76,
+              flex: fullWidth ? 1 : undefined,
+              minWidth: fullWidth ? 0 : 76,
               px: 1.75,
-              py: 0.5,
+              py: 0.75,
+              minHeight: 36,
               borderRadius: 999,
               fontSize: 13.5,
               fontWeight: 600,

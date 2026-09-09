@@ -3,8 +3,6 @@ import {
   Box,
   Button,
   Stack,
-  Tab,
-  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
@@ -23,6 +21,7 @@ import {
 import { PluginSlot } from "@cowboy/plugin-api";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { loginMethodLabel } from "./productReauthMethods";
+import { SegmentedPill } from "../SegmentedPill";
 
 type OidcLoginContext = {
   kind: "oidc";
@@ -258,29 +257,52 @@ export function ProductLoginPage({
         submit();
       }}
       sx={{
-        minHeight: "100%",
+        minHeight: "100dvh",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        justifyContent: "flex-start",
         px: 3,
-        py: 6,
+        pt: {
+          xs: "max(2.75rem, env(safe-area-inset-top, 0px))",
+          sm: 10,
+        },
+        pb: "max(2rem, env(safe-area-inset-bottom, 0px))",
         bgcolor: "background.default",
         color: "text.primary",
       }}
     >
-      <Stack spacing={3} sx={{ width: "100%", maxWidth: 360 }}>
+      <Stack spacing={2.5} sx={{ width: "100%", maxWidth: 400, pt: { xs: 4, sm: 2 } }}>
         <Box>
+          <Box
+            component="img"
+            src="/cowboy-app-icon-192-v4.png"
+            alt=""
+            width={48}
+            height={48}
+            sx={{
+              width: 48,
+              height: 48,
+              borderRadius: 1.5,
+              display: "block",
+              mb: 2,
+            }}
+          />
           <Typography
             component="p"
-            sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
+            sx={{
+              fontSize: "0.8125rem",
+              fontWeight: 650,
+              letterSpacing: "0.04em",
+              color: "text.secondary",
+            }}
           >
-            cowboy
+            Cowboy
           </Typography>
           <Typography
             component="h1"
-            variant="h5"
-            sx={{ fontWeight: 700, mt: 1, letterSpacing: -0.4 }}
+            variant="h4"
+            sx={{ fontWeight: 750, mt: 0.75, letterSpacing: -0.6, fontSize: { xs: "1.75rem", sm: "2rem" } }}
           >
             {needsCode
               ? "Enter setup code"
@@ -288,7 +310,7 @@ export function ProductLoginPage({
               ? "Create account"
               : "Sign in"}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75 }}>
+          <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.45 }}>
             {needsCode
               ? "This instance has no user yet. Enter the setup code from the host journal or data directory."
               : creating
@@ -318,22 +340,17 @@ export function ProductLoginPage({
         )}
         {error && <Alert severity="error">{error}</Alert>}
         {!setupRequired && loginMethods.length > 1 && (
-          <Tabs
+          <SegmentedPill
             value={method}
-            onChange={(_event, value: string) => setMethod(value)}
-            variant="scrollable"
-            scrollButtons="auto"
+            options={loginMethods.map((loginMethod) => ({
+              value: loginMethod.id,
+              label: loginMethod.label,
+            }))}
+            onChange={setMethod}
+            disabled={busy}
+            fullWidth
             aria-label="Sign-in method"
-          >
-            {loginMethods.map((loginMethod) => (
-              <Tab
-                key={loginMethod.id}
-                value={loginMethod.id}
-                label={loginMethod.label}
-                disabled={busy}
-              />
-            ))}
-          </Tabs>
+          />
         )}
         <PluginSlot
           pluginId={loginPluginId}
@@ -354,7 +371,7 @@ export function LoginMethodFallback(
 ): React.JSX.Element {
   if (context.kind === "oidc") {
     return (
-      <>
+      <Stack spacing={1.25}>
         <Button
           type="button"
           href={context.native ? undefined : context.startUrl}
@@ -363,21 +380,27 @@ export function LoginMethodFallback(
           size="large"
           fullWidth
           disabled={context.native && context.busy}
+          sx={loginActionSx}
         >
           {context.native && context.busy
             ? "Waiting for approval…"
             : context.buttonLabel}
         </Button>
         {context.native && context.busy && (
-          <Button type="button" variant="text" onClick={context.onCancel}>
+          <Button
+            type="button"
+            variant="text"
+            onClick={context.onCancel}
+            sx={{ textTransform: "none", fontWeight: 650 }}
+          >
             Cancel
           </Button>
         )}
-      </>
+      </Stack>
     );
   }
   return (
-    <>
+    <Stack spacing={1.5}>
       {context.mode === "setup"
         ? (
           <TextField
@@ -432,10 +455,21 @@ export function LoginMethodFallback(
         type="submit"
         variant="contained"
         size="large"
+        fullWidth
         disabled={context.busy || !context.canSubmit}
+        sx={loginActionSx}
       >
         {context.submitLabel}
       </Button>
-    </>
+    </Stack>
   );
 }
+
+const loginActionSx = {
+  textTransform: "none" as const,
+  fontWeight: 650,
+  letterSpacing: 0,
+  minHeight: 48,
+  borderRadius: 2.5,
+  fontSize: "0.95rem",
+};

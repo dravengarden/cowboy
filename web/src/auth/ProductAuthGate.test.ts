@@ -176,7 +176,12 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("deleteProductHistoryCache"));
   assert(login.includes('component="form"'));
   assert(login.includes("setupToken.trim()"));
-  assert(login.includes("<Tabs"));
+  assertEquals(login.includes("<Tabs"), false);
+  assert(login.includes("<SegmentedPill"));
+  assert(login.includes("fullWidth"));
+  assert(login.includes("justifyContent: \"flex-start\""));
+  assert(login.includes("cowboy-app-icon-192-v4.png"));
+  assert(login.includes('textTransform: "none"'));
   assert(login.includes("selectedProvider.button_label"));
   assert(login.includes("nativeOidcFlowSupported"));
   assert(login.includes("runNativeOidc"));
@@ -262,7 +267,7 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1642"'));
+  assert(sw.includes('const VERSION = "cowboy-v1643"'));
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,
