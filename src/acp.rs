@@ -73,10 +73,12 @@ const GROK_PERMISSION_NOTIFICATION: &str = "_x.ai/yolo_mode_changed";
 const GROK_SESSION_INFO_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often the prompt watchdog re-checks a `Busy` turn for a wedge.
 const WATCHDOG_TICK: Duration = Duration::from_secs(15);
-/// No agent-streamed turn progress for this long, with no open tool and no
-/// pending permission, is a wedge. 15 minutes is three times the old 5-minute
-/// first-token window that false-ended a live query; live Codex exec output
-/// and in-flight tools reset the clock, so a generating turn is not charged.
+/// No agent-streamed turn progress for this long, with no pending human
+/// permission, is a wedge. 15 minutes is three times the old 5-minute
+/// first-token window that false-ended a live query. Live Codex exec output
+/// and tool updates reset the clock. A silent `pending` tool is not immunity:
+/// Grok `exit_plan_mode` sits in that state until the host confirms, and
+/// treating it as live work latched sessions Busy for a day.
 const WATCHDOG_IDLE: Duration = Duration::from_mins(15);
 /// After sending Cancel, keep awaiting the prompt future this long before
 /// SIGKILL-ing the agent cgroup. Must exceed agent-acp's own cancel floor
@@ -995,7 +997,7 @@ mod startup_mode_tests {
         new_session_request, note_tool_liveness, permission_auto_approve_enabled,
         preferred_allow_option, projected_auth_error, resume_session_request,
         run_serial_config_queue, select_resume_method, session_config_value,
-        startup_full_access_mode,
+        startup_full_access_mode, turn_is_wedged,
     };
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
@@ -1613,6 +1615,10 @@ mod startup_mode_tests {
         assert!(!is_turn_progress_update(&serde_json::json!({
             "sessionUpdate": "session_info_update"
         })));
+        assert!(!is_turn_progress_update(&serde_json::json!({
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": []
+        })));
         assert!(is_turn_progress_update(&serde_json::json!({
             "sessionUpdate": "agent_thought_chunk",
             "content": {"type": "text", "text": "Checking release docs"}
@@ -1665,6 +1671,13 @@ mod startup_mode_tests {
             }),
         );
         assert!(open.is_empty());
+    }
+
+    #[test]
+    fn silent_open_tools_do_not_postpone_the_idle_watchdog() {
+        assert!(!turn_is_wedged(false, Duration::from_mins(14)));
+        assert!(turn_is_wedged(false, Duration::from_mins(15)));
+        assert!(!turn_is_wedged(true, Duration::from_hours(1)));
     }
 
     #[test]
@@ -1930,12 +1943,14 @@ struct ClientState {
     /// any agent that ACP-accepts a prompt by emitting `user_message_chunk`)
     /// would otherwise persist a second identical user bubble.
     last_echoed_user_contents: Mutex<Vec<serde_json::Value>>,
-    /// Wall-clock of the last agent-streamed turn progress (not usage
-    /// snapshots). The prompt watchdog uses this, plus [`Self::open_tools`],
-    /// to tell a slow first token from a wedged `session/prompt`.
+    /// Wall-clock of the last agent-streamed turn progress (not usage,
+    /// session-info, or available-commands snapshots). The prompt watchdog
+    /// uses this, plus pending human permissions, to tell a slow first token
+    /// from a wedged `session/prompt`.
     last_progress: Mutex<Instant>,
     /// Tool ids from the current prompt that are still `pending`/`in_progress`.
-    /// A long silent build is not a wedge while one of these is open.
+    /// The UI uses this to hide a false "waiting" caret during live exec;
+    /// a silent open tool does not postpone the watchdog.
     open_tools: Mutex<HashSet<String>>,
     /// This agent's containment cgroup, or None when the host can't contain
     /// it. A watchdog hard-recycle SIGKILLs the whole subtree.
@@ -2397,7 +2412,10 @@ fn is_turn_progress_update(update: &serde_json::Value) -> bool {
         .get("sessionUpdate")
         .and_then(serde_json::Value::as_str)
     {
-        Some("usage_update" | "session_info_update") => false,
+        // Capability/heartbeat frames keep the socket alive without proving
+        // the model made progress. Grok re-emits available_commands on
+        // reconnect; counting those as work reset the idle clock for hours.
+        Some("usage_update" | "session_info_update" | "available_commands_update") => false,
         Some(_) | None => true,
     }
 }
@@ -2450,10 +2468,19 @@ struct PromptWait<R> {
     recycled: bool,
 }
 
+fn turn_is_wedged(has_pending_permission: bool, idle: Duration) -> bool {
+    !has_pending_permission && idle >= WATCHDOG_IDLE
+}
+
 fn turn_appears_stuck(state: &ClientState) -> bool {
-    state.pending.lock().is_empty()
-        && state.open_tools.lock().is_empty()
-        && state.last_progress.lock().elapsed() >= WATCHDOG_IDLE
+    // A pending permission is a human decision, not silence. An open tool
+    // that is still working emits updates and resets `last_progress`. A tool
+    // that emits nothing — including Grok `exit_plan_mode` waiting for a host
+    // that never confirms — is a wedge.
+    turn_is_wedged(
+        !state.pending.lock().is_empty(),
+        state.last_progress.lock().elapsed(),
+    )
 }
 
 async fn await_prompt_with_idle_watchdog<R>(
@@ -3273,8 +3300,8 @@ async fn run_session(
                             // agent_main's child.wait() race) and a watchdog recycle of a
                             // live-but-silent wedge. Mark those Crashed so a resend/open
                             // replaces the dead worker. The idle watchdog only fires after
-                            // 15 minutes with no turn progress, no open tool, and no
-                            // pending permission — and it Cancels first, keeping the
+                            // 15 minutes with no turn progress and no pending
+                            // permission — and it Cancels first, keeping the
                             // prompt future alive so a late response cannot crash the
                             // connection.
                             sink.prompt_completed(&sid, cmid.as_deref(), "Error");

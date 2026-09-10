@@ -71,7 +71,7 @@ import { providerVisual } from "./providerVisual";
 import { ProviderRuntimeSurface } from "./ProviderSurface";
 import { ProviderThoughtSteps } from "./ProviderTranscript";
 import {
-  hasOpenTool,
+  hasUnresolvedPermission,
   quietMinutes,
   shouldShowQuietBadge,
   waitingActivityLabel,
@@ -3206,7 +3206,7 @@ function useQuietMinutes(
   sessionId: string,
   signature: string,
   working: boolean,
-  openTool: boolean,
+  waitingOnHuman: boolean,
 ): number {
   const changedAt = useRef(Date.now());
   const prevSig = useRef(signature);
@@ -3229,7 +3229,7 @@ function useQuietMinutes(
     const id = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(id);
   }, []);
-  if (!working || openTool) return 0;
+  if (!working || waitingOnHuman) return 0;
   return quietMinutes(Date.now(), changedAt.current);
 }
 
@@ -3514,8 +3514,8 @@ export function Transcript({
   // new item is appended — drives the caret idle-cap (Layer 5). Cheap: serializes
   // only the last item.
   const lastSig = itemProgressSignature(lastItem, items.length);
-  const inFlightTool = hasOpenTool(items);
-  const quietMin = useQuietMinutes(sessionId, lastSig, working, inFlightTool);
+  const waitingOnHuman = hasUnresolvedPermission(items);
+  const quietMin = useQuietMinutes(sessionId, lastSig, working, waitingOnHuman);
   // The last item is "streaming" if the agent is working AND it's an
   // assistant message or a thought (both grow chunk by chunk). Tool calls
   // have their own in_progress visual.
@@ -5369,10 +5369,11 @@ export function Transcript({
               )}
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
-                (timeline growth, live terminal output, or an open tool) on a
-                working turn, surface the silence + a REAL red Stop button. */
+                (timeline growth or live terminal output) on a working turn,
+                surface the silence + a REAL red Stop button. A silent pending
+                tool is still quiet; an unanswered permission is a human wait. */
               }
-              {shouldShowQuietBadge(working, quietMin, inFlightTool) && (
+              {shouldShowQuietBadge(working, quietMin, waitingOnHuman) && (
                 <Box
                   sx={{
                     py: 0.625,

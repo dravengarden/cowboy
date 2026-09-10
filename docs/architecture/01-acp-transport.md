@@ -159,11 +159,13 @@ trust is **last agent-streamed turn progress**:
 
 - **Dead subprocess → automatic.** `agent_main` races the connection against
   `child.wait()`. Process exit → `Crashed` (queue holds; a resend/open revives).
-- **Live progress resets the clock.** Every `session/update` except usage /
-  session-info snapshots counts, including Codex `terminal_output_delta` (live
-  broadcast, omitted from the canonical transcript so an unbounded `tail -f`
-  cannot evict history). An in-flight `pending`/`in_progress` tool, or a pending
-  permission, is not a wedge.
+- **Live progress resets the clock.** Every `session/update` except usage,
+  session-info, and available-commands snapshots counts, including Codex
+  `terminal_output_delta` (live broadcast, omitted from the canonical
+  transcript so an unbounded `tail -f` cannot evict history). A pending
+  human permission is not a wedge. A silent open tool is: Grok
+  `exit_plan_mode` stays `pending` until the host confirms, and reconnect
+  `available_commands_update` frames must not reset the clock.
 - **15 minutes of true silence → Cancel, then recycle.** The prompt watchdog
   (`src/acp.rs`) sends `session/cancel` and **keeps awaiting** the prompt future
   for 60s (agent-acp's cancel floor is ~30s). If the agent still will not yield,
