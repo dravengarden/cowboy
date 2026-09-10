@@ -119,7 +119,9 @@
           ./src/machine_components.rs
           ./src/machine_install.rs
           ./src/machine_protocol.rs
+          ./src/machine_protocol
           ./src/machine_plugins.rs
+          ./src/machine_plugins
           ./src/telemetry_plugin.rs
           ./src/otlp.rs
           ./src/provider/deepseek_cache.rs
@@ -472,6 +474,10 @@
         test -e ${machine-src}/plugins/grok/host.json
         test -e ${machine-src}/src/provider/deepseek_context.rs
         test -e ${machine-src}/src/machine_plugins.rs
+        test -e ${machine-src}/src/machine_plugins/operations.rs
+        test -e ${machine-src}/src/machine_plugins/operations/installations.rs
+        test -e ${machine-src}/src/machine_protocol/plugin_step.rs
+        test -e ${machine-src}/src/machine_protocol/installation_revision.rs
         test -e ${machine-src}/src/provider_behavior.rs
         test -e ${machine-src}/src/provider_catalog.rs
         test -e ${machine-src}/src/provider_usage_spool.rs

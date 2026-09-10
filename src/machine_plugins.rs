@@ -7,6 +7,8 @@
 
 #![warn(clippy::pedantic)]
 
+mod operations;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -198,6 +200,7 @@ pub(crate) struct MachinePluginStore {
     lifecycle: tokio::sync::Mutex<()>,
     telemetry_export: tokio::sync::Mutex<()>,
     code_runtimes: CodeRuntimeHost,
+    operations: operations::Journal,
 }
 
 enum PreparedProviderAuth {
@@ -246,6 +249,7 @@ impl MachinePluginStore {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let encryption = MachineEncryptionIdentity::load_or_create(&auth_root.join("identity"))?;
+        let operations = operations::Journal::open(state_dir)?;
         Ok(Self {
             root,
             auth_root,
@@ -255,12 +259,82 @@ impl MachinePluginStore {
             lifecycle: tokio::sync::Mutex::new(()),
             telemetry_export: tokio::sync::Mutex::new(()),
             code_runtimes: CodeRuntimeHost::default(),
+            operations,
         })
     }
 
     #[must_use]
     pub fn encryption_public_key(&self) -> &str {
         self.encryption.public_key()
+    }
+
+    /// Explicit Machine writer cutover, not an inventory-read side effect.
+    /// It never reconstructs a slot that already has installation authority.
+    pub(crate) async fn enable_installation_tracking(&self) -> Result<()> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let mut existing = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let plugin = entry.file_name().to_string_lossy().into_owned();
+            if self.operations.installations.tracked(&plugin) {
+                continue;
+            }
+            if let Some(active) = self.inventory_one_untracked(&plugin)? {
+                // Agent inventory already verifies its signed generation,
+                // including the retained legacy Provider reader.
+                if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
+                    self.verified_plugin_generation(&plugin, &active.generation_digest)?;
+                }
+                existing.push((plugin, active.generation_digest));
+            }
+        }
+        self.operations.installations.enable(&existing)
+    }
+
+    fn begin_installation(
+        &self,
+        plugin: &str,
+        digest: &str,
+    ) -> Result<Option<operations::installations::PendingInstallation>> {
+        let current = self.inventory_one_untracked(plugin)?;
+        self.operations.installations.begin(
+            plugin,
+            current.as_ref().map(|p| p.generation_digest.as_str()),
+            Some(digest),
+            operations::installations::Effect::Install,
+            None,
+        )
+    }
+
+    fn finish_installation(
+        &self,
+        plugin: &str,
+        pending: Option<operations::installations::PendingInstallation>,
+    ) -> Result<()> {
+        if pending.is_some() {
+            let root = self.plugin_root(plugin);
+            let generation =
+                read_link_name(&root.join("active")).context("missing installation activation")?;
+            let generations = root.join("generations");
+            let active = generations.join(generation);
+            for path in [
+                active.join("content"),
+                active,
+                generations,
+                root,
+                self.root.clone(),
+            ] {
+                fs::File::open(path)?.sync_all()?;
+            }
+            let auth = self.auth_provider_root(plugin);
+            if auth.exists() {
+                fs::File::open(auth)?.sync_all()?;
+            }
+        }
+        self.operations.installations.finish(pending)
     }
 
     fn checked_install_package(&self, desired: &DesiredPlugin) -> Result<PluginPackage> {
@@ -284,7 +358,10 @@ impl MachinePluginStore {
 
     pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
         let _lifecycle = self.lifecycle.lock().await;
+        self.operations.installations.ensure_writable()?;
         let plugin_package = self.checked_install_package(desired)?;
+        self.operations
+            .ensure_unfenced(&plugin_package.manifest.id)?;
         let (host_bundle, host_bundle_bytes) =
             desired_plugin_host_bundle(desired, &plugin_package)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
@@ -362,6 +439,8 @@ impl MachinePluginStore {
         let launch_command = content.join(&launch_command.executable);
         ensure_within(&content, &launch_command)?;
         probe_provider_runtime(&package.manifest.runtime, &launch_command).await?;
+        let pending =
+            self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
         let activation = Self::activate(&plugin_root, &generation_name)?;
         // A sealed Service replica may predate installation. Materialize it as
         // part of activation so installation never asks for another login.
@@ -377,6 +456,7 @@ impl MachinePluginStore {
                 "Provider authentication activation failed; previous generation restored",
             ));
         }
+        self.finish_installation(&package.manifest.id, pending)?;
         self.inventory_one(&package.manifest.id)?
             .context("activated Provider is missing from inventory")
     }
@@ -437,6 +517,7 @@ impl MachinePluginStore {
             plugin_version: package.manifest.version.clone(),
             plugin_kind: package.manifest.kind,
             generation_digest: desired.release.artifact_digest.clone(),
+            installation_revision: None,
             contract_fingerprint: package.contract_fingerprint.clone(),
             state: PluginInstallationState::Active,
             rollback_generation_digest: None,
@@ -451,11 +532,14 @@ impl MachinePluginStore {
             &serde_json::to_vec(&inventory)?,
             0o600,
         )?;
+        let pending =
+            self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
         if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
             self.activate_code_generation(package, &generation_name)?;
         } else {
             Self::activate(&plugin_root, &generation_name)?;
         }
+        self.finish_installation(&package.manifest.id, pending)?;
         self.inventory_one(&package.manifest.id)?
             .context("activated Plugin is missing from inventory")
     }
@@ -470,6 +554,7 @@ impl MachinePluginStore {
     ) -> Result<PluginInventory> {
         let _lifecycle = self.lifecycle.lock().await;
         validate_plugin_id(provider_id)?;
+        self.operations.ensure_legacy_allowed(provider_id)?;
         let generation_name = digest_generation_name(generation_digest)?;
         let (plugin_package, _, content) =
             self.verified_plugin_generation(provider_id, generation_digest)?;
@@ -490,7 +575,7 @@ impl MachinePluginStore {
                 .inventory_one(provider_id)?
                 .context("reactivated Plugin is missing from inventory");
         }
-        let (package, release, package_path) =
+        let (package, release, package_path, _) =
             self.verified_generation(provider_id, generation_digest)?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
         let runtime_artifacts =
@@ -528,6 +613,11 @@ impl MachinePluginStore {
 
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
+        self.operations.ensure_legacy_allowed(provider_id)?;
+        self.uninstall_inner(provider_id, expected_digest)
+    }
+
+    fn uninstall_inner(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         validate_plugin_id(provider_id)?;
         let active = self
             .inventory_one(provider_id)?
@@ -652,6 +742,7 @@ impl MachinePluginStore {
         validate_plugin_id(plugin_id)?;
         self.code_runtimes
             .request(plugin_id, payload, || {
+                self.operations.ensure_unfenced(plugin_id)?;
                 let root = self.plugin_root(plugin_id);
                 if let Some(generation) = read_link_name(&root.join("active")) {
                     let digest = format!("sha256:{generation}");
@@ -692,6 +783,7 @@ impl MachinePluginStore {
         // not hold it or block installation/agent operations.
         let (contract, config, payload) = {
             let _lifecycle = self.lifecycle.lock().await;
+            self.operations.ensure_unfenced(plugin_id)?;
             (|| -> Result<_> {
                 ensure!(
                     auth_generation.is_none(),
@@ -848,6 +940,7 @@ impl MachinePluginStore {
         payload: &mut serde_json::Value,
     ) -> Result<ResolvedPluginHostInvocation> {
         validate_plugin_id(plugin_id)?;
+        self.operations.ensure_unfenced(plugin_id)?;
         let active = self
             .inventory_one(plugin_id)?
             .context("Plugin is not active on this Machine")?;
@@ -1003,6 +1096,7 @@ impl MachinePluginStore {
         generation_digest: &str,
         auth_generation: Option<u64>,
     ) -> Result<ProviderLaunchContext> {
+        self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
@@ -1872,6 +1966,25 @@ impl MachinePluginStore {
     }
 
     fn inventory_one(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
+        let Some(mut inventory) = self.inventory_one_untracked(provider_id)? else {
+            return Ok(None);
+        };
+        // The artifact's cached inventory must never supply installation authority.
+        inventory.installation_revision = None;
+        if let Ok(revision) = self
+            .operations
+            .installations
+            .revision(provider_id, &inventory.generation_digest)
+        {
+            inventory.installation_revision = revision;
+        } else {
+            inventory.state = PluginInstallationState::Failed;
+            inventory.detail = Some("Plugin installation requires reconciliation.".to_owned());
+        }
+        Ok(Some(inventory))
+    }
+
+    fn inventory_one_untracked(&self, provider_id: &str) -> Result<Option<PluginInventory>> {
         let active = self.plugin_root(provider_id).join("active");
         if let Some(generation) = read_link_name(&active) {
             let path = self
@@ -1887,9 +2000,12 @@ impl MachinePluginStore {
                 return Ok(Some(inventory));
             }
         }
-        let Some((package, digest)) = self.active_package(provider_id)? else {
+        let Some(generation) = read_link_name(&active) else {
             return Ok(None);
         };
+        let digest = format!("sha256:{generation}");
+        let (package, _, _, contract_fingerprint) =
+            self.verified_generation(provider_id, &digest)?;
         let rollback = read_link_name(&self.plugin_root(provider_id).join("rollback"))
             .map(|name| format!("sha256:{name}"));
         let replica = self.latest_auth_envelope(provider_id)?;
@@ -1923,7 +2039,8 @@ impl MachinePluginStore {
             plugin_version: package.manifest.version.clone(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: digest,
-            contract_fingerprint: package.contract_fingerprint.clone(),
+            installation_revision: None,
+            contract_fingerprint,
             state: PluginInstallationState::Active,
             rollback_generation_digest: rollback,
             active_session_leases: 0,
@@ -1981,7 +2098,7 @@ impl MachinePluginStore {
         provider_id: &str,
         digest: &str,
     ) -> Result<(ProviderPackage, PathBuf)> {
-        let (package, _, path) = self.verified_generation(provider_id, digest)?;
+        let (package, _, path, _) = self.verified_generation(provider_id, digest)?;
         Ok((package, path))
     }
 
@@ -1993,6 +2110,7 @@ impl MachinePluginStore {
         ProviderPackage,
         cowboy_provider_sdk::AgentRuntimeBinding,
         PathBuf,
+        String,
     )> {
         let generation = digest_generation_name(digest)?;
         let content = self
@@ -2001,7 +2119,10 @@ impl MachinePluginStore {
             .join(generation)
             .join("content");
         if !content.join("package.cowboy-plugin").is_file() {
-            return self.verified_legacy_provider_generation(provider_id, digest, &content);
+            let (package, release, path) =
+                self.verified_legacy_provider_generation(provider_id, digest, &content)?;
+            let fingerprint = package.contract_fingerprint.clone();
+            return Ok((package, release, path, fingerprint));
         }
         let (plugin_package, plugin_release, content) =
             self.verified_plugin_generation(provider_id, digest)?;
@@ -2021,7 +2142,7 @@ impl MachinePluginStore {
             package.manifest.id == provider_id,
             "stored Provider id mismatch"
         );
-        Ok((package, release, path))
+        Ok((package, release, path, plugin_package.contract_fingerprint))
     }
 
     fn verified_legacy_provider_generation(
@@ -4069,8 +4190,39 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    async fn assert_installation_cas(store: &MachinePluginStore, desired: &DesiredPlugin) {
+        use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
+        store.enable_installation_tracking().await.unwrap();
+        let first = store.install(desired).await.unwrap();
+        let second = store.install(desired).await.unwrap();
+        assert_eq!(
+            second.contract_fingerprint,
+            desired.release.contract_fingerprint
+        );
+        assert!(first.installation_revision.is_some());
+        assert_ne!(first.installation_revision, second.installation_revision);
+        assert_eq!(first.auth_generation, second.auth_generation);
+        let mut step = crate::machine_protocol::plugin_step::fixture();
+        step.schema = 2;
+        step.plugin_id = second.plugin_id;
+        step.plugin_version = second.plugin_version;
+        step.generation_digest = second.generation_digest;
+        step.contract_fingerprint = second.contract_fingerprint;
+        step.installation_revision = second.installation_revision;
+        step.expires_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+        let result = store
+            .uninstall_step(&step, Some("service-test"), "machine-test", true, false)
+            .await
+            .result;
+        let StepLookup::Found { receipt } = result else {
+            panic!("missing CAS receipt: {result:?}");
+        };
+        assert_eq!(receipt.outcome, StepOutcome::Applied {});
+        assert!(store.inventory().unwrap().is_empty());
+    }
+
     #[cfg(feature = "full")]
-    fn telemetry_release(
+    pub(super) fn telemetry_release(
         publisher: &crate::machine_auth::MachineIdentity,
         version: &str,
     ) -> DesiredPlugin {
@@ -4967,6 +5119,7 @@ mod tests {
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
+        assert_installation_cas(&store, &desired).await;
         server.await.unwrap();
         fs::remove_dir_all(root).unwrap();
     }
@@ -5068,21 +5221,20 @@ mod tests {
         let store =
             MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".to_owned())
                 .unwrap();
-        let installed = store
-            .install(&DesiredPlugin {
-                release: release.clone(),
-                package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                publisher_public_key: publisher.public_key().to_owned(),
-                host_bundle_base64: None,
-            })
-            .await
-            .unwrap();
+        let desired = DesiredPlugin {
+            release: release.clone(),
+            package_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            publisher_public_key: publisher.public_key().to_owned(),
+            host_bundle_base64: None,
+        };
+        let installed = store.install(&desired).await.unwrap();
         assert_eq!(
             installed.plugin_kind,
             cowboy_plugin_sdk::PluginKind::CodeIntelligence
         );
         assert_eq!(installed.generation_digest, release.artifact_digest);
         assert!(root.join("machine/plugins/zed/active").exists());
+        assert_installation_cas(&store, &desired).await;
         fs::remove_dir_all(root).unwrap();
     }
 

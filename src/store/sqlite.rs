@@ -15,7 +15,7 @@ const SQLITE_MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations/
 
 #[derive(Clone)]
 pub(super) struct SqliteStorage {
-    pool: SqlitePool,
+    pub(super) pool: SqlitePool,
     pub(super) artifacts: crate::artifacts::ArtifactStore,
     database_path: Option<std::path::PathBuf>,
 }
@@ -1610,7 +1610,9 @@ impl SqliteStorage {
             .create_if_missing(true)
             .foreign_keys(true)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
+            // The same database now journals intent before remote mutations.
+            // NORMAL may lose an acknowledged WAL commit on power failure.
+            .synchronous(SqliteSynchronous::Full)
             .busy_timeout(Duration::from_secs(5));
         // A plain in-memory SQLite database belongs to one connection. File
         // databases retain a small read pool while WAL serializes writers.
@@ -5112,45 +5114,14 @@ impl SqliteStorage {
         Ok(())
     }
 
-    pub(super) async fn soft_delete_sessions_until(
-        &self,
-        session_ids: &[String],
-        purge_after_ms: i64,
-    ) -> Result<()> {
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .context("begin Provider uninstall")?;
-        let timestamp = now_ms();
-        for session_id in session_ids {
-            let result = sqlx::query(
-                "UPDATE sessions SET deleted_at_ms = ?2, purge_after_at_ms = ?3 \
-                 WHERE id = ?1 AND deleted_at_ms IS NULL",
-            )
-            .bind(session_id)
-            .bind(timestamp)
-            .bind(purge_after_ms)
-            .execute(&mut *transaction)
-            .await
-            .with_context(|| format!("soft-delete Provider session {session_id}"))?;
-            anyhow::ensure!(
-                result.rows_affected() == 1,
-                "Provider uninstall session set changed; refresh the uninstall plan"
-            );
-        }
-        transaction
-            .commit()
-            .await
-            .context("commit Provider uninstall")?;
-        Ok(())
-    }
-
     pub(super) async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
         let retention_ms = retention_days.saturating_mul(86_400_000);
         let result = sqlx::query(
             "DELETE FROM sessions WHERE deleted_at_ms IS NOT NULL \
-             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2",
+             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2 \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
         )
         .bind(retention_ms)
         .bind(now_ms())

@@ -8,11 +8,16 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 9;
+pub mod installation_revision;
+pub mod plugin_step;
+
+pub const MACHINE_PROTOCOL_VERSION: u16 = 11;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
 pub const OTLP_PLUGIN_PROTOCOL_VERSION: u16 = 9;
+pub const PLUGIN_STEP_PROTOCOL_VERSION: u16 = 10;
+pub const PLUGIN_INSTALLATION_PROTOCOL_VERSION: u16 = 11;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -479,6 +484,8 @@ pub struct PluginInventory {
     #[serde(default = "default_agent_plugin_kind")]
     pub plugin_kind: cowboy_plugin_sdk::PluginKind,
     pub generation_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installation_revision: Option<installation_revision::InstallationRevision>,
     pub contract_fingerprint: String,
     pub state: PluginInstallationState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -675,6 +682,17 @@ pub enum MachineCommand {
         plugin_id: String,
         generation_digest: String,
     },
+    /// An immutable, Machine-journaled step. The RPC correlation ID is not
+    /// the durable operation identity. Duplicate steps never re-execute.
+    UninstallPluginStep {
+        request_id: String,
+        step: Box<plugin_step::UninstallStep>,
+    },
+    /// Read only: a missing receipt never authorizes resending the effect.
+    QueryPluginUninstallStep {
+        request_id: String,
+        step: Box<plugin_step::UninstallStep>,
+    },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
@@ -726,6 +744,14 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::UninstallPluginStep { step, .. }
+            | Self::QueryPluginUninstallStep { step, .. } => {
+                if step.schema == 1 {
+                    PLUGIN_STEP_PROTOCOL_VERSION
+                } else {
+                    PLUGIN_INSTALLATION_PROTOCOL_VERSION
+                }
+            }
             Self::InvokePluginHost {
                 operation: PluginHostOperation::ExportOtlp,
                 ..
@@ -943,6 +969,10 @@ pub enum MachineEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    PluginUninstallStep {
+        request_id: String,
+        observation: Box<plugin_step::StepObservation>,
+    },
     /// Sensitive Plugin output is correlated directly to the requester and
     /// must not enter the ordinary Machine event history.
     PluginHostResponse {
@@ -1056,7 +1086,7 @@ mod tests {
 
     #[test]
     fn provider_refresh_candidate_survives_the_protocol_eight_addition() {
-        assert_eq!(MACHINE_PROTOCOL_VERSION, 9);
+        assert_eq!(MACHINE_PROTOCOL_VERSION, 11);
         let event = MachineEvent::ProviderAuthRefreshCandidate {
             request_id: "refresh-1".to_owned(),
             provider_id: "grok".to_owned(),

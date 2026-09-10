@@ -19,6 +19,7 @@ primary phone/desktop product path.
 - [`requirements.md`](requirements.md) — Normative Provider package, authentication, installation, and ownership contract
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Target architecture: fixed core, typed components and Plugin composition across Service/Machine; first read-only structural slice implemented
 - [`plugin-composition-checker.md`](plugin-composition-checker.md) — Implemented core diagnostic, generated Rust/TS contracts, graph rules and remaining authority/recovery work
+- [`plugin-installation-incarnations.md`](plugin-installation-incarnations.md) — Durable installation revisions, uninstall CAS, tombstones and reader-first rollout
 
 ## Documents
 

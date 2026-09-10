@@ -62,11 +62,22 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod plugin_uninstall;
+use plugin_uninstall::{
+    api_machine_plugin_operation_receipt, api_machine_plugin_operations,
+    api_machine_plugin_uninstall,
+};
+
 #[derive(Clone)]
 struct PluginUninstallPlan {
+    actor: crate::plugin_operation::Actor,
     machine_id: String,
     plugin_id: String,
+    plugin_version: String,
     generation_digest: String,
+    installation_revision:
+        Option<crate::machine_protocol::installation_revision::InstallationRevision>,
+    contract_fingerprint: String,
     session_ids: Vec<String>,
     active_session_ids: Vec<String>,
     purge_after_ms: i64,
@@ -78,6 +89,7 @@ enum PluginFenceState {
     Installing,
     Uninstalling,
     Uninstalled,
+    NeedsReconcile,
 }
 
 type PluginLifecycleFences = Arc<parking_lot::RwLock<HashMap<(String, String), PluginFenceState>>>;
@@ -1265,6 +1277,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         crate::telemetry_plugin::controller_exporter(
             args.telemetry_plugin_config.as_deref(),
             Arc::clone(&machine_control),
+            Arc::clone(&plugin_catalog),
         )?,
     );
     let telemetry_shutdown = observability.clone();
@@ -1276,8 +1289,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    let plugin_lifecycle_fences: PluginLifecycleFences =
-        Arc::new(parking_lot::RwLock::new(HashMap::new()));
+    let plugin_lifecycle_fences = plugin_uninstall::recover_fences(store.as_ref(), &service_id)
+        .await
+        .context("restoring Plugin lifecycle fences")?;
     runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
@@ -2317,8 +2331,12 @@ async fn run_dispatcher(
             content,
             cmid,
         } = req;
-        if plugin_fence_state_for_session(&hub, &plugin_lifecycle_fences, &session_id)
-            .is_some_and(|state| state != PluginFenceState::Installing)
+        let plugin_key = provider_fence_key_for_session(&hub, &session_id);
+        let dispatch_fence = plugin_lifecycle_fences.read();
+        if plugin_key
+            .as_ref()
+            .and_then(|key| dispatch_fence.get(key))
+            .is_some_and(|state| *state != PluginFenceState::Installing)
         {
             hub.requeue_prompt(&session_id, text, content, cmid);
             continue;
@@ -8925,6 +8943,14 @@ async fn serve_axum(
             "/api/machines/{id}/plugins/{provider_id}/uninstall",
             post(api_machine_plugin_uninstall),
         )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations",
+            get(api_machine_plugin_operations),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
+            get(api_machine_plugin_operation_receipt),
+        )
         .route("/api/machines/{id}/refresh", post(api_machine_refresh))
         .route(
             "/api/machines/{id}/components/reconcile",
@@ -11268,7 +11294,11 @@ async fn api_machine_plugin_install(
     let previous_fence = {
         let mut fences = state.plugin_lifecycle_fences.write();
         match fences.get(&fence).copied() {
-            Some(PluginFenceState::Installing | PluginFenceState::Uninstalling) => {
+            Some(
+                PluginFenceState::Installing
+                | PluginFenceState::Uninstalling
+                | PluginFenceState::NeedsReconcile,
+            ) => {
                 return (
                     StatusCode::CONFLICT,
                     "another Provider lifecycle operation is already in progress",
@@ -11397,7 +11427,24 @@ async fn current_machine_plugin(
 async fn api_machine_plugin_uninstall_plan(
     State(state): State<Arc<AppState>>,
     Path((machine_id, provider_id)): Path<(String, String)>,
+    authenticated: Option<Extension<AuthenticatedProductRequest>>,
+    headers: HeaderMap,
 ) -> Response {
+    let actor = match plugin_uninstall::request_actor(&state, authenticated, &headers) {
+        Ok(actor) => actor,
+        Err(status) => return status.into_response(),
+    };
+    if state
+        .plugin_lifecycle_fences
+        .read()
+        .contains_key(&(machine_id.clone(), provider_id.clone()))
+    {
+        return (
+            StatusCode::CONFLICT,
+            "Plugin lifecycle is changing or requires reconciliation",
+        )
+            .into_response();
+    }
     let installed = match current_machine_plugin(&state, &machine_id, &provider_id).await {
         Ok(installed) => installed,
         Err(error) => return (StatusCode::CONFLICT, error).into_response(),
@@ -11428,16 +11475,25 @@ async fn api_machine_plugin_uninstall_plan(
             return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
         }
     };
-    state
-        .plugin_uninstall_plans
-        .lock()
-        .retain(|_, plan| plan.expires_at_ms >= timestamp);
-    state.plugin_uninstall_plans.lock().insert(
+    let mut plans = state.plugin_uninstall_plans.lock();
+    plans.retain(|_, plan| plan.expires_at_ms >= timestamp);
+    if plans.len() >= 256 {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            "uninstall preview budget exceeded",
+        )
+            .into_response();
+    }
+    plans.insert(
         plan_id.clone(),
         PluginUninstallPlan {
+            actor,
             machine_id: machine_id.clone(),
             plugin_id: provider_id.clone(),
+            plugin_version: installed.plugin_version.clone(),
             generation_digest: installed.generation_digest.clone(),
+            installation_revision: installed.installation_revision.clone(),
+            contract_fingerprint: installed.contract_fingerprint.clone(),
             session_ids,
             active_session_ids: active_session_ids.clone(),
             purge_after_ms,
@@ -11464,191 +11520,6 @@ struct PluginUninstallRequest {
     plan_id: String,
     #[serde(default)]
     confirm_active_sessions: bool,
-}
-
-async fn compensate_plugin_uninstall(
-    state: &Arc<AppState>,
-    plan: &PluginUninstallPlan,
-    stopped_live_sessions: &[String],
-    cause: String,
-) -> String {
-    let request_id = machine_request_id("provider-reactivate");
-    let compensation = state
-        .machine_control
-        .command_request(
-            &plan.machine_id,
-            request_id.clone(),
-            crate::machine_protocol::MachineCommand::ReactivatePlugin {
-                request_id,
-                plugin_id: plan.plugin_id.clone(),
-                generation_digest: plan.generation_digest.clone(),
-            },
-        )
-        .await;
-    let Err(compensation_error) = compensation else {
-        let mut reload_errors = Vec::new();
-        for session_id in stopped_live_sessions {
-            if let Err(error) = state.supervisor.reload_session(session_id, true) {
-                reload_errors.push(format!("{session_id}: {error}"));
-            }
-        }
-        return if reload_errors.is_empty() {
-            format!("{cause}; the previous Provider generation was restored")
-        } else {
-            format!(
-                "{cause}; the previous Provider generation was restored, but live session reload failed: {}",
-                reload_errors.join("; ")
-            )
-        };
-    };
-    format!(
-        "{cause}; automatic Provider restoration failed: {compensation_error}. The Machine requires Provider lifecycle reconciliation"
-    )
-}
-
-async fn api_machine_plugin_uninstall(
-    State(state): State<Arc<AppState>>,
-    Path((machine_id, provider_id)): Path<(String, String)>,
-    Json(request): Json<PluginUninstallRequest>,
-) -> Response {
-    let plan = state.plugin_uninstall_plans.lock().remove(&request.plan_id);
-    let Some(plan) = plan else {
-        return (
-            StatusCode::CONFLICT,
-            "uninstall plan is missing or already consumed",
-        )
-            .into_response();
-    };
-    if plan.machine_id != machine_id
-        || plan.plugin_id != provider_id
-        || plan.expires_at_ms < now_ms()
-    {
-        return (
-            StatusCode::CONFLICT,
-            "uninstall plan is stale or does not match this target",
-        )
-            .into_response();
-    }
-    if !plan.active_session_ids.is_empty() && !request.confirm_active_sessions {
-        return (
-            StatusCode::CONFLICT,
-            "active sessions require an explicit second confirmation",
-        )
-            .into_response();
-    }
-    let fence = (machine_id.clone(), provider_id.clone());
-    let acquired = {
-        let mut fences = state.plugin_lifecycle_fences.write();
-        if fences.contains_key(&fence) {
-            false
-        } else {
-            fences.insert(fence.clone(), PluginFenceState::Uninstalling);
-            true
-        }
-    };
-    if !acquired {
-        return (
-            StatusCode::CONFLICT,
-            "another Provider lifecycle operation is already in progress",
-        )
-            .into_response();
-    }
-    let result = async {
-        let current = current_machine_plugin(&state, &machine_id, &provider_id).await?;
-        if current.generation_digest != plan.generation_digest {
-            return Err("Provider generation changed; refresh the uninstall plan".to_owned());
-        }
-        let mut current_sessions: Vec<_> = state
-            .hub
-            .session_list()
-            .into_iter()
-            .filter(|session| session.machine_id == machine_id && session.provider == provider_id)
-            .collect();
-        current_sessions.sort_by(|left, right| left.id.cmp(&right.id));
-        let current_session_ids: Vec<_> = current_sessions
-            .iter()
-            .map(|session| session.id.clone())
-            .collect();
-        if current_session_ids != plan.session_ids {
-            return Err("affected session set changed; refresh the uninstall plan".to_owned());
-        }
-        let current_active_session_ids: Vec<_> = current_sessions
-            .iter()
-            .filter(|session| provider_session_has_active_turn(session.status))
-            .map(|session| session.id.clone())
-            .collect();
-        if current_active_session_ids != plan.active_session_ids {
-            return Err("active turn set changed; refresh the uninstall plan".to_owned());
-        }
-        let stopped_live_sessions: Vec<_> = plan
-            .session_ids
-            .iter()
-            .filter(|session_id| state.supervisor.delete_session(session_id))
-            .cloned()
-            .collect();
-        let request_id = machine_request_id("provider-uninstall");
-        if let Err(error) = state
-            .machine_control
-            .command_request(
-                &machine_id,
-                request_id.clone(),
-                crate::machine_protocol::MachineCommand::UninstallPlugin {
-                    request_id,
-                    plugin_id: provider_id.clone(),
-                    generation_digest: plan.generation_digest.clone(),
-                },
-            )
-            .await
-        {
-            return Err(compensate_plugin_uninstall(
-                &state,
-                &plan,
-                &stopped_live_sessions,
-                format!("Provider uninstall failed: {error}"),
-            )
-            .await);
-        }
-        let store = state
-            .store
-            .as_ref()
-            .ok_or_else(|| "Provider uninstall requires persistence".to_owned())?;
-        if let Err(error) = store
-            .soft_delete_sessions_until(&plan.session_ids, plan.purge_after_ms)
-            .await
-        {
-            return Err(compensate_plugin_uninstall(
-                &state,
-                &plan,
-                &stopped_live_sessions,
-                format!("durable Provider session deletion failed: {error}"),
-            )
-            .await);
-        }
-        for session_id in &plan.session_ids {
-            state.hub.detach_session(session_id);
-        }
-        Ok::<(), String>(())
-    }
-    .await;
-    match result {
-        Ok(()) => {
-            state
-                .plugin_lifecycle_fences
-                .write()
-                .insert(fence, PluginFenceState::Uninstalled);
-            Json(serde_json::json!({
-                "provider_id": provider_id,
-                "machine_id": machine_id,
-                "deleted_session_ids": plan.session_ids,
-                "purge_after_ms": plan.purge_after_ms,
-            }))
-            .into_response()
-        }
-        Err(error) => {
-            state.plugin_lifecycle_fences.write().remove(&fence);
-            (StatusCode::CONFLICT, error).into_response()
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -12500,9 +12371,9 @@ async fn accept_service_auth_candidate(
     {
         warnings.push("shared Provider authentication status is incomplete".to_owned());
     }
-    state.machine_control.record(
+    state.machine_control.record_service_login(
         machine_id,
-        crate::machine_protocol::MachineEvent::LoginState {
+        crate::machine_control::ServiceLoginNotice {
             request_id: request_id.to_owned(),
             provider: provider_id.to_owned(),
             state: crate::machine_protocol::AuthState::SignedIn,
@@ -12537,9 +12408,9 @@ async fn accept_service_auth_candidate(
         .await
     {
         tracing::warn!(%error, %provider_id, %request_id, "cleaning temporary Provider authentication home");
-        state.machine_control.record(
+        state.machine_control.record_service_login(
             machine_id,
-            crate::machine_protocol::MachineEvent::LoginState {
+            crate::machine_control::ServiceLoginNotice {
                 request_id: request_id.to_owned(),
                 provider: provider_id.to_owned(),
                 state: crate::machine_protocol::AuthState::SignedIn,
@@ -12906,6 +12777,7 @@ mod provider_usage_source_tests {
             plugin_version: "1.0.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: "sha256:generation".to_owned(),
+            installation_revision: None,
             contract_fingerprint: "sha256:contract".to_owned(),
             state,
             rollback_generation_digest: None,
@@ -13176,15 +13048,15 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
-    state.machine_control.install(
+    let connection = state.machine_control.install(
         hello.machine_id.clone(),
         challenge_id.clone(),
         connection_mode == "local",
         protocol,
         machine_command_tx,
     );
-    state.machine_control.record(
-        &hello.machine_id,
+    state.machine_control.record_remote(
+        &connection,
         crate::machine_protocol::MachineEvent::Inventory {
             components: hello.components.clone(),
             workspaces: Some(hello.workspaces.clone()),
@@ -13193,8 +13065,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         },
     );
     state.machine_snapshots.publish().await;
-    state.machine_control.record(
-        &hello.machine_id,
+    state.machine_control.record_remote(
+        &connection,
         crate::machine_protocol::MachineEvent::PluginInventory {
             plugins: hello.plugins.clone(),
             observed_at_ms: now_ms(),
@@ -13224,6 +13096,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         Ok(pair) => pair,
         Err(error) => {
             tracing::error!(%error, machine = %hello.machine_id, "creating Machine runtime tunnel");
+            socket_writer.abort();
+            state.machine_control.remove_if_current(&connection);
             return;
         }
     };
@@ -13416,6 +13290,9 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         let Ok(frame) = serde_json::from_str::<crate::machine_protocol::MachineFrame>(&text) else {
             break;
         };
+        if !state.machine_control.is_current(&connection) {
+            break;
+        }
         let result = match frame {
             crate::machine_protocol::MachineFrame::Heartbeat { .. } => {
                 heartbeat_watchdog.observe_at(std::time::Instant::now());
@@ -13439,8 +13316,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     workspaces,
                     workspace_revision,
                 );
-                state.machine_control.record(
-                    &hello.machine_id,
+                state.machine_control.record_remote(
+                    &connection,
                     crate::machine_protocol::MachineEvent::Inventory {
                         components: current_components.clone(),
                         workspaces: Some(current_workspaces.clone()),
@@ -13474,8 +13351,8 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             } => {
                 current_providers = plugins;
                 let failed_provider_auth = failed_provider_auth_projection_ids(&current_providers);
-                state.machine_control.record(
-                    &hello.machine_id,
+                state.machine_control.record_remote(
+                    &connection,
                     crate::machine_protocol::MachineEvent::PluginInventory {
                         plugins: current_providers.clone(),
                         observed_at_ms,
@@ -13615,9 +13492,9 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         candidate_state
                             .provider_auth
                             .fail_authentication(&provider_id, &request_id);
-                        candidate_state.machine_control.record(
+                        candidate_state.machine_control.record_service_login(
                             &candidate_machine_id,
-                            crate::machine_protocol::MachineEvent::LoginState {
+                            crate::machine_control::ServiceLoginNotice {
                                 request_id,
                                 provider: provider_id,
                                 state: crate::machine_protocol::AuthState::Error,
@@ -13713,7 +13590,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         .provider_auth
                         .fail_authentication(provider, request_id);
                 }
-                state.machine_control.record(&hello.machine_id, event);
+                state.machine_control.record_remote(&connection, event);
                 store
                     .machine_seen(&hello.machine_id, &challenge_id, None)
                     .await
@@ -13740,9 +13617,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             .runtime_router
             .remove_if_current(&hello.machine_id, runtime);
     }
-    state
-        .machine_control
-        .remove_if_current(&hello.machine_id, &challenge_id);
+    state.machine_control.remove_if_current(&connection);
     if let Err(error) = store
         .machine_disconnected(
             &hello.machine_id,
@@ -13800,6 +13675,7 @@ async fn session_reload_target(
     let auth = state.provider_auth.status(&meta.provider);
     let generation = resolve_provider_generation(
         &state.provider_catalog,
+        &state.plugin_catalog,
         &[installed],
         &meta.provider,
         auth.as_ref(),
@@ -13905,8 +13781,12 @@ async fn api_session_reload(
             Err(error) => (StatusCode::CONFLICT, error.to_string()).into_response(),
         };
     }
-    if plugin_fence_state_for_session(&state.hub, &state.plugin_lifecycle_fences, &session_id)
-        .is_some_and(|fence| fence != PluginFenceState::Installing)
+    let reload_key = provider_fence_key_for_session(&state.hub, &session_id);
+    let reload_fence = state.plugin_lifecycle_fences.read();
+    if reload_key
+        .as_ref()
+        .and_then(|key| reload_fence.get(key))
+        .is_some_and(|fence| *fence != PluginFenceState::Installing)
     {
         return (
             StatusCode::CONFLICT,
@@ -14137,8 +14017,19 @@ fn resolve_scheduling_auth_generation(
     Ok(Some(installed_generation))
 }
 
+fn provider_inventory_contract_matches(
+    installed: &crate::machine_protocol::PluginInventory,
+    provider_fingerprint: &str,
+    plugin_fingerprint: Option<&str>,
+) -> bool {
+    plugin_fingerprint == Some(installed.contract_fingerprint.as_str())
+        || ((installed.installation_revision.is_none() || plugin_fingerprint.is_none())
+            && provider_fingerprint == installed.contract_fingerprint)
+}
+
 fn resolve_provider_generation(
     catalog: &crate::provider_catalog::ProviderCatalog,
+    plugins: &crate::plugin_catalog::PluginCatalog,
     inventory: &[crate::machine_protocol::PluginInventory],
     provider_id: &str,
     service_auth: Option<&crate::provider_service::ProviderAuthenticationStatus>,
@@ -14162,7 +14053,25 @@ fn resolve_provider_generation(
                 installed.generation_digest
             )
         })?;
-    if package.contract_fingerprint != installed.contract_fingerprint {
+    // Generic Plugin inventory uses the outer, signed Plugin fingerprint. Old
+    // Machines still project the inner Provider fingerprint; accept that only
+    // for untracked inventories while the reader bridge is rolling out. An
+    // exact signed legacy-only Provider Catalog generation has no outer Plugin
+    // contract at all; adopting its slot must not break its existing scheduler.
+    let exact_plugin = plugins
+        .resolve(
+            provider_id,
+            Some(&installed.plugin_version),
+            Some(&installed.generation_digest),
+        )
+        .ok();
+    if !provider_inventory_contract_matches(
+        installed,
+        &package.contract_fingerprint,
+        exact_plugin
+            .as_ref()
+            .map(|trusted| trusted.release.contract_fingerprint.as_str()),
+    ) {
         return Err(
             "installed Provider contract fingerprint does not match the Catalog".to_owned(),
         );
@@ -14345,6 +14254,7 @@ async fn api_new_session(
         let provider_auth = state.provider_auth.status(&req.provider);
         let provider_generation = match resolve_provider_generation(
             &state.provider_catalog,
+            &state.plugin_catalog,
             &providers,
             &req.provider,
             provider_auth.as_ref(),
@@ -14460,7 +14370,9 @@ async fn api_new_session(
                     Some(PluginFenceState::Uninstalling) => {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
-                    Some(PluginFenceState::Uninstalled) => return,
+                    Some(PluginFenceState::Uninstalled | PluginFenceState::NeedsReconcile) => {
+                        return;
+                    }
                     Some(PluginFenceState::Installing) | None => break,
                 }
             }
@@ -14566,9 +14478,9 @@ fn resolve_machine_workspace<'a>(
 mod machine_provider_tests {
     use super::{
         ProviderAuthExecutor, apply_workspace_inventory, failed_provider_auth_projection_ids,
-        provider_auth_recovery_generations, recoverable_provider_auth_failure,
-        resolve_machine_workspace, resolve_scheduling_auth_generation,
-        web_session_is_missing_machine,
+        provider_auth_recovery_generations, provider_inventory_contract_matches,
+        recoverable_provider_auth_failure, resolve_machine_workspace,
+        resolve_scheduling_auth_generation, web_session_is_missing_machine,
     };
     use crate::core::{Hub, SessionOrigin, Status};
     use std::collections::BTreeMap;
@@ -14630,6 +14542,7 @@ mod machine_provider_tests {
             plugin_version: "1.0.0".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: format!("sha256:{}", "1".repeat(64)),
+            installation_revision: None,
             contract_fingerprint: format!("sha256:{}", "2".repeat(64)),
             state: crate::machine_protocol::PluginInstallationState::Active,
             rollback_generation_digest: None,
@@ -14639,6 +14552,53 @@ mod machine_provider_tests {
             materialization_state: crate::machine_protocol::ProviderMaterializationState::Current,
             detail: None,
         }
+    }
+
+    #[test]
+    fn agent_inventory_reader_distinguishes_plugin_and_provider_contracts() {
+        let mut installed = installed_auth(1);
+        let inner = installed.contract_fingerprint.clone();
+        let outer = format!("sha256:{}", "a".repeat(64));
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        installed.contract_fingerprint = outer.clone();
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        installed.installation_revision = Some(
+            format!("installation-{}", "b".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        assert!(provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        assert!(!provider_inventory_contract_matches(
+            &installed, &inner, None
+        ));
+        installed.contract_fingerprint = inner.clone();
+        assert!(!provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
+        assert!(provider_inventory_contract_matches(
+            &installed, &inner, None
+        ));
+        installed.installation_revision = None;
+        installed.contract_fingerprint = "untrusted".into();
+        assert!(!provider_inventory_contract_matches(
+            &installed,
+            &inner,
+            Some(&outer)
+        ));
     }
 
     #[test]
@@ -18321,12 +18281,12 @@ fn handle_command(
         );
         return false;
     }
-    // Serialize prompt admission against Provider lifecycle changes. Holding
+    // Serialize runtime admission against Provider lifecycle changes. Holding
     // this read guard through the command match closes the check-then-dispatch
     // race with uninstall's active-turn snapshot.
     let provider_prompt_key = session_id_for_err
         .as_deref()
-        .filter(|_| matches!(&cmd, Inbound::Prompt { .. } | Inbound::Submit { .. }))
+        .filter(|_| plugin_uninstall::requires_runtime_fence(&cmd))
         .and_then(|sid| provider_fence_key_for_session(&state.hub, sid));
     let plugin_prompt_fence = provider_prompt_key
         .as_ref()
@@ -19303,6 +19263,7 @@ mod provider_install_tests {
             plugin_version: "1.1.1".to_owned(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
             generation_digest: "sha256:old-provider".to_owned(),
+            installation_revision: None,
             contract_fingerprint: "sha256:old-contract".to_owned(),
             state: PluginInstallationState::Active,
             rollback_generation_digest: None,
@@ -20578,6 +20539,7 @@ mod product_auth_api_tests {
             "/api/logs",
             "/api/logs/log-123",
             "/api/observability/incidents",
+            "/api/machines/m-123/plugins/victoria/operations/op-123/machine-receipt",
         ] {
             assert_eq!(
                 classify_route(&Method::GET, path),

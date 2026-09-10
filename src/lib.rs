@@ -101,6 +101,8 @@ mod plugin_host;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod plugin_host_bundle;
 #[cfg(feature = "full")]
+mod plugin_operation;
+#[cfg(feature = "full")]
 mod plugin_passkeys;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod plugin_process;

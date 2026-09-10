@@ -15,6 +15,7 @@ use base64::Engine as _;
 use cowboy_plugin_sdk::{
     AuthenticationProviderContract, PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
     PluginCompatibilityRequirements, PluginKind, PluginManifest, PluginPackage, PluginRelease,
+    TelemetryBackendContract, TelemetryEncoding,
 };
 use cowboy_provider_sdk::PlatformTarget;
 use parking_lot::RwLock;
@@ -85,6 +86,48 @@ pub(crate) struct PluginCatalogInventory {
     pub runtime: Option<Arc<crate::plugin_runtime::PluginRuntime>>,
 }
 
+/// A verified Catalog snapshot projection, not a serialized grant. Only the
+/// signature-checked exact-release lookup below can construct this value.
+/// It proves a contract, not enrollment, policy or a live installation lease.
+pub(crate) struct VerifiedTelemetryRelease {
+    contract: TelemetryBackendContract,
+    generation_digest: String,
+    contract_fingerprint: String,
+}
+
+impl VerifiedTelemetryRelease {
+    pub(crate) fn matches_inventory(
+        &self,
+        plugin: &crate::machine_protocol::PluginInventory,
+    ) -> bool {
+        plugin.plugin_kind == PluginKind::TelemetryBackend
+            && plugin.plugin_id == self.contract.id
+            && plugin.plugin_version == self.contract.version
+            && plugin.generation_digest == self.generation_digest
+            && plugin.contract_fingerprint == self.contract_fingerprint
+            && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+            && plugin.auth_generation.is_none()
+    }
+
+    pub(crate) fn operation_for(
+        &self,
+        signal: Option<crate::otlp::Signal>,
+    ) -> Option<crate::machine_protocol::PluginHostOperation> {
+        use crate::machine_protocol::PluginHostOperation;
+        let Some(signal) = signal else {
+            return (self.contract.schema_version == 1)
+                .then_some(PluginHostOperation::ExportTelemetry);
+        };
+        let route = match signal {
+            crate::otlp::Signal::Logs => self.contract.logs.as_ref(),
+            crate::otlp::Signal::Metrics => self.contract.metrics.as_ref(),
+            crate::otlp::Signal::Traces => self.contract.traces.as_ref(),
+        }?;
+        (self.contract.schema_version == 2 && route.encoding == TelemetryEncoding::OtlpHttpProtobuf)
+            .then_some(PluginHostOperation::ExportOtlp)
+    }
+}
+
 pub(crate) struct PluginCatalog {
     embedded: BTreeMap<(String, String), PluginCatalogEntry>,
     state: RwLock<Arc<CatalogSnapshot>>,
@@ -132,7 +175,7 @@ impl PluginCatalog {
                     ),
                     publisher: manifest.publisher.clone(),
                     contract_fingerprint: None,
-                    component_release: crate::plugin::active_component_release().to_owned(),
+                    component_release: manifest.component_release.clone(),
                     supported_platforms: Vec::new(),
                     manifest: manifest.clone(),
                     has_host_bundle: false,
@@ -441,6 +484,33 @@ impl PluginCatalog {
             .authentication_provider()
             .cloned()
             .context("authentication Plugin payload is unavailable")
+    }
+
+    /// No latest/version fallback and no embedded/source-only contract. Trust
+    /// is the currently accepted Catalog snapshot; refresh failure retains the
+    /// previous snapshot under the existing Catalog policy. An in-flight call
+    /// may finish against its resolved snapshot, not an arbitrary future one.
+    pub(crate) fn resolve_telemetry_backend(
+        &self,
+        plugin_id: &str,
+        version: &str,
+        digest: &str,
+    ) -> Result<VerifiedTelemetryRelease> {
+        let snapshot = self.state.read();
+        let artifact = snapshot
+            .external
+            .get(&(plugin_id.to_owned(), version.to_owned(), digest.to_owned()))
+            .context("telemetry Plugin release is not in the Catalog")?;
+        let cowboy_plugin_sdk::PluginPayload::TelemetryBackend(contract) =
+            &artifact.package.payload
+        else {
+            anyhow::bail!("configured Plugin is not a Telemetry Backend");
+        };
+        Ok(VerifiedTelemetryRelease {
+            contract: contract.clone(),
+            generation_digest: digest.to_owned(),
+            contract_fingerprint: artifact.package.contract_fingerprint.clone(),
+        })
     }
 
     pub(crate) fn published_artifact_path(&self, digest: &str, name: &str) -> Option<PathBuf> {
@@ -1098,6 +1168,9 @@ mod tests {
         assert!(catalog.entries().iter().any(|entry| {
             entry.plugin_id == "zed" && entry.plugin_kind == PluginKind::CodeIntelligence
         }));
+        for entry in catalog.entries() {
+            assert_eq!(entry.component_release, entry.manifest.component_release);
+        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1374,6 +1447,26 @@ mod tests {
                 spec["ui"]["renderers"]["login.method"] = serde_json::json!("login-oidc-v1");
             }
         })
+    }
+
+    #[test]
+    fn a_signed_non_telemetry_release_cannot_construct_a_telemetry_projection() {
+        let fixture = tempfile::Builder::new()
+            .prefix("cowboy-catalog-kind-")
+            .tempdir()
+            .unwrap();
+        let release = publish_local_auth_fixture(fixture.path(), "password", false);
+        let catalog =
+            PluginCatalog::inspect(fixture.path(), Some(fixture.path().join("external"))).unwrap();
+        assert!(
+            catalog
+                .resolve_telemetry_backend(
+                    &release.plugin_id,
+                    &release.plugin_version,
+                    &release.artifact_digest
+                )
+                .is_err()
+        );
     }
 
     fn publish_auth_fixture(

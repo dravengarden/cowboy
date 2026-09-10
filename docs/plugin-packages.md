@@ -60,7 +60,11 @@ added later without changing the Provider installation boundary.
 
 Each Plugin builds independently against the generic Cowboy Plugin SDK and an
 exact versioned component release. Agent Provider Plugins additionally consume
-the Provider capability SDK. The first-party sources are co-located under
+the Provider capability SDK. A Plugin's exact component-release pin need not
+equal the current tested component matrix: the
+[schema-3 closure gate](plugin-components.md) permits a historical pin only
+when every transitive component input remains identical. This never changes a
+signed package or runtime identity. The first-party sources are co-located under
 `plugins/`, and each has its own source, version, artifact, release envelope,
 signature, and install transaction. An Agent Provider payload owns:
 

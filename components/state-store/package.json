@@ -1,13 +1,17 @@
 {
   "name": "@cowboy/state-store",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "type": "module",
   "exports": {
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./core": "./store.ts"
   },
-  "files": ["*.ts"],
+  "files": ["index.ts", "store.ts", "use-store.ts", "README.md"],
   "peerDependencies": {
     "react": "^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
   },
   "publishConfig": {
     "access": "public"

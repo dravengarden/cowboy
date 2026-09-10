@@ -4,7 +4,18 @@
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
 [只读组合检查器](plugin-composition-checker.md)
 已实现类型生成、边界解码、scope/placement
-与图结构校验。授权、跨端激活和恢复仍是后续目标，不能把结构检查通过当成可执行计划。
+与图结构校验。第二批 [运行时绑定](plugin-runtime-bindings.md) 已将 Core RPC
+绑定到认证连接代次，并让现有遥测调用核对签名 Catalog 与当前 Machine 库存。
+第三批 [组件契约](plugin-components.md) 已实现显式 codec、state-store 实例/订阅资源
+释放，以及保留历史的依赖闭包发布检查；不涉及后台任务取消或 durable effect revert。
+第四批 [卸载操作账本](plugin-operation-journal.md) 为现有卸载流程加入 Service 耐久 intent、
+事务内完成记录、重启隔离与明确的不确定结果。第五批
+[Machine 回执](machine-plugin-operation-receipts.md) 加入协议 10 的耐久卸载步骤、去重与只读查询；
+Machine 默认 reader-only，实际启用需要独立维护切换。第六批
+[安装代次与 CAS](plugin-installation-incarnations.md) 加入协议 11 的独立 incarnation、卸载
+前置条件和耐久 tombstone；兼容 reader 与 Hawk 冷启动恢复版本均已验收，写入仅在明确准入的
+Machine 启用。耐久自动补偿仍未实现。
+通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
@@ -621,6 +632,12 @@ iPhone caret/IME 问题不属于本设计已解决的内容。
 作为可验证测试索引，逐步转向真实依赖闭包；必须先证明独立构建、完整依赖、影响集与读者兼容，再替换
 all-plugins-bump gate，不能提前删检查或重写旧版本。
 
+当前首批迁移：registry schema 3 先追加不改组件的 3.0.0 基线，再在 3.1.0 仅更新
+state-store/state-sync/state-sync-idb。保存全部内部 package 边及 Plugin 源码/绑定摘要，
+验证直接/间接影响、精确 pins、独立源码副本构建和双 schema Controller 读取。
+旧协调规则仍校验历史条目。所有声明的 package/contract 边暂按会导致发布处理；
+接口行为兼容豁免、通用运行 DAG 和 durable recovery 尚未实现。
+
 发布继续采用同一个 generic Plugin package/composite signature/平台矩阵。Service
 数据与 Machine runtime 绑定到同一
 release，任何一个缺失不能宣称相应部署目标完整。Catalog
@@ -685,11 +702,11 @@ Agent 内部工具。
 | 现有位置                                              | 已有基础 / 需要补足                                                                  |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | [plugin_runtime](../src/plugin_runtime.rs)            | 精确 host 快照与 namespace；不是通用跨端 typed resolver                              |
-| [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；接入局部计划与耐久步骤，不另建 Store                |
-| [server uninstall](../src/server.rs)                  | 请求内补偿与内存计划；补全崩溃后仍可核对的操作身份/账本                              |
+| [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；耐久卸载回执与独立 installation CAS，写入受 reader-floor 切换约束 |
+| [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [plugin-api](../components/plugin-api/types.ts)       | slot/host/native 混合且 context 宽泛；拆出核心 bridge/host 与 typed authoring        |
-| [state-store](../components/state-store/store.ts)     | 默认反序列化使用类型断言，storage listener 缺少释放接口；需要 codec 与 owned factory |
+| [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅与 dispose；仍需其他组件的资源作用域模型                 |
 | [Provider UI](../components/provider-ui/src/index.ts) | 有闭集 IR 与验证；生成更强的字段/消息关联，抽出通用 UI 与领域投影                    |
 
 这些是设计差距，不是对全部现有代码的安全审计，也不是本轮已经修复的事项。

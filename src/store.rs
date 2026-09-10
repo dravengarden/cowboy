@@ -35,6 +35,7 @@ use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 mod copy;
+mod plugin_operations;
 mod sqlite;
 
 use sqlite::SqliteStorage;
@@ -1652,17 +1653,6 @@ impl Store {
 
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
         dispatch_storage!(self, delete_session(session_id))
-    }
-
-    pub async fn soft_delete_sessions_until(
-        &self,
-        session_ids: &[String],
-        purge_after_ms: i64,
-    ) -> Result<()> {
-        dispatch_storage!(
-            self,
-            soft_delete_sessions_until(session_ids, purge_after_ms)
-        )
     }
 
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
@@ -5938,40 +5928,6 @@ impl PostgresStorage {
         Ok(())
     }
 
-    pub async fn soft_delete_sessions_until(
-        &self,
-        session_ids: &[String],
-        purge_after_ms: i64,
-    ) -> Result<()> {
-        let purge_after = chrono::DateTime::<Utc>::from_timestamp_millis(purge_after_ms)
-            .context("Provider uninstall purge deadline is outside the supported range")?;
-        let mut transaction = self
-            .pool
-            .begin()
-            .await
-            .context("begin Provider uninstall")?;
-        for session_id in session_ids {
-            let result = sqlx::query(
-                "UPDATE sessions SET deleted_at = now(), purge_after_at = $2 \
-                 WHERE id = $1 AND deleted_at IS NULL",
-            )
-            .bind(session_id)
-            .bind(purge_after)
-            .execute(&mut *transaction)
-            .await
-            .with_context(|| format!("soft-delete Provider session {session_id}"))?;
-            anyhow::ensure!(
-                result.rows_affected() == 1,
-                "Provider uninstall session set changed; refresh the uninstall plan"
-            );
-        }
-        transaction
-            .commit()
-            .await
-            .context("commit Provider uninstall")?;
-        Ok(())
-    }
-
     /// Hard-delete sessions soft-deleted more than `retention_days` ago (cascade
     /// → their events). The storage-reclaim half of soft-delete; run on startup
     /// and periodically. Returns the number of sessions purged.
@@ -5984,7 +5940,10 @@ impl PostgresStorage {
              AND COALESCE( \
                purge_after_at, \
                deleted_at + make_interval(days => $1::int) \
-             ) < now()",
+             ) < now() \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
         )
         .bind(i32::try_from(retention_days).unwrap_or(3))
         .execute(&self.pool)
@@ -8644,7 +8603,7 @@ struct EventRow {
 mod storage_contract_tests {
     use super::*;
 
-    fn session(id: &str) -> SessionMeta {
+    pub(super) fn session(id: &str) -> SessionMeta {
         SessionMeta {
             id: id.to_owned(),
             provider: "codex".to_owned(),

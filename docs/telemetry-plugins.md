@@ -138,6 +138,14 @@ uninstalling fails closed for subsequent exports. A bounded in-flight request
 may finish. Changing a Plugin version/digest does not silently inherit old
 activation authority.
 
+Each Controller batch additionally resolves that exact release from the accepted
+signed Catalog snapshot and compares its telemetry kind, contract fingerprint
+and encoding with the active Machine inventory. Its opaque port binding is
+rechecked against the same authenticated connection and observed inventory
+revision at enqueue. Wrong-source, old-connection and wrong-kind RPC replies
+cannot satisfy the waiter. See [runtime binding guarantees and limits](plugin-runtime-bindings.md),
+including Catalog refresh semantics and why disconnect does not undo emission.
+
 `/api/metrics` reports `observability_pending`, `observability_pending_bytes`,
 `observability_accepted_batches`, `observability_duplicate_batches`,
 `observability_dropped_batches`, `observability_failed_file_batches`,

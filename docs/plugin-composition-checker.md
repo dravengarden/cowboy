@@ -95,10 +95,13 @@ verified packages, current enrollment, grants, policy epochs and live leases.
 ## Still to implement
 
 This completes a runnable structural foundation, not the entire P0–P4 design.
-Next are verified runtime inventory resolution and typed operation
-intent/receipt contracts, then component codec/disposal ownership and
-SDK/host/native separation. The current coordinated component/Plugin release
-rule remains in force.
+The subsequent [runtime binding slice](plugin-runtime-bindings.md) fences Core
+RPCs to authenticated connection incarnations and connects the existing telemetry
+exporter to verified Catalog contracts and exact live Machine inventory. It does
+not authorize or execute this checker's input. General verified graph resolution
+and typed operation intent/receipt contracts remain next, alongside component
+codec/disposal ownership and SDK/host/native separation. The current coordinated
+component/Plugin release rule remains in force.
 
 There is no cross-site activation, durable operation journal, recovery executor,
 state reader/writer compatibility enforcement or per-call revocation in this

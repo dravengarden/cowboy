@@ -1,7 +1,7 @@
 # Cowboy core requirements
 
 Status: normative plugin and Provider platform contract. Plugin manifest schema
-1, component registry schema 2, Plugin package schema 1, Plugin release schemas
+1, component registry schema 3 (with immutable schema-2 history), Plugin package schema 1, Plugin release schemas
 1-2, Provider
 payload schema 2, Agent runtime-binding schema 2, UI schemas 1-2, host
 integration schemas 1-2, Provider SDK 3.0, Machine protocol 7,
@@ -88,9 +88,14 @@ An old OIDC release without a host remains valid but grants no host behavior.
 Reusable implementation belongs to an owned component, not a plugin copy or an
 external source-tree link. Component releases bind exact versions, source
 paths, and source digests. A component source change requires a new component
-release and a strictly higher version for every plugin in the preceding
-release, even when a plugin does not directly consume that component. This
-coordinated bump is enforced mechanically by `just plugin-check`.
+release and higher versions throughout its actual package dependency closure.
+Schema-2 history retains the coordinated all-Plugins-bump rule. Schema 3 starts
+with an unchanged baseline and records complete internal package edges and
+Plugin source/binding snapshots. Only affected Plugins must increase version;
+an unchanged Plugin may keep its historical component-release label only when
+every exact transitive input still matches the active matrix. Changed Plugin
+source or bindings require a new Plugin version. `just plugin-check` enforces
+this [release policy](plugin-components.md), including package pins and digests.
 
 The generic Plugin layer exclusively owns signing, publication, Catalog
 selection, Machine generations, activation, rollback, and uninstall. Narrower
@@ -417,12 +422,33 @@ cascades session events; content-addressed event attachments are reference
 scanned and deleted only when no retained event references them and their
 race-avoidance grace period has elapsed.
 
-If an ordinary Machine command or database transaction fails after uninstall
-has begun, Cowboy compensates by re-verifying and reactivating the exact retained
-signed generation and restoring workers that were live before the operation.
-The operation reports both the primary and compensation failure when recovery
-cannot complete; it must never report a successful uninstall with only half of
-the Machine/session state committed.
+Confirmed uninstall records core-owned durable intent before stopping workers or
+sending a remote command. Service session soft-delete and operation completion
+commit in one local transaction. HTTP observer cancellation does not cancel an
+admitted operation. Restart reconstructs unfinished installation-slot fences
+before dispatch, without replaying remote commands or stopping unrelated
+workers.
+
+A correlated ordinary Machine rejection or a definitively uncommitted local
+transaction permits the approved compensation on the original connection:
+re-verify/reactivate the exact retained signed generation and request
+restoration of the workers that were live. Missing ACKs, changed connections,
+expired recovery authority or ambiguous remote outcomes remain fenced, never
+blindly retried. The operation reports both primary and compensation failure; a
+worker reload enqueue is not verified recovery and remains `NeedsAttention`. It
+must never report a successful uninstall with only half of the Machine/session
+state committed. See the
+[Service operation journal](plugin-operation-journal.md) for its reader-floor
+rollout, bounded retention and current recovery limits.
+
+Protocol 10 adds a closed, Machine-owned durable uninstall step and read-only
+query, bound to the complete Service intent digest. Identical requests return
+saved evidence without re-execution; changed arguments under the same identity
+are rejected. A partial effect or missing final durable receipt remains unknown.
+The Machine defaults to reader-only until its separate reader-floor maintenance
+cutover. This path never compensates through legacy unjournaled reactivation;
+installation CAS and verified recovery authorization remain prerequisites. See
+[Machine operation receipts](machine-plugin-operation-receipts.md).
 
 ### CR-11: Release automation belongs to this repository
 
