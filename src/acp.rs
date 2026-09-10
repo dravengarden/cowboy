@@ -1564,6 +1564,12 @@ mod startup_mode_tests {
             resume.to_string(),
             "agent did not complete ACP session/resume within 240s"
         );
+        assert!(crate::provider_behavior::is_native_session_restore_timeout(
+            &resume.to_string()
+        ));
+        assert!(
+            !crate::provider_behavior::is_native_session_restore_timeout(&initialize.to_string())
+        );
     }
 
     #[test]

@@ -37,7 +37,12 @@ const DIRECT_WORKER_KILL_TIMEOUT: Duration = Duration::from_secs(1);
 const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
-    !crate::provider_behavior::is_provider_auth_required_error(&format!("{error:#}"))
+    let detail = format!("{error:#}");
+    // Auth and native-thread restore timeouts are session-local. Retrying a
+    // previous worker generation hydrates the same thread and hides the real
+    // failure behind "fallback after generation launch failed".
+    !crate::provider_behavior::is_provider_auth_required_error(&detail)
+        && !crate::provider_behavior::is_native_session_restore_timeout(&detail)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2905,9 +2910,13 @@ mod tests {
             crate::provider_behavior::PROVIDER_AUTH_REQUIRED_PREFIX
         ));
         let binary = anyhow::anyhow!("worker exited before readiness");
+        let resume = anyhow::anyhow!(
+            "worker sess-1 exited before readiness: agent did not complete ACP session/resume within 240s"
+        );
 
         assert!(!worker_generation_failure_allows_fallback(&auth));
         assert!(worker_generation_failure_allows_fallback(&binary));
+        assert!(!worker_generation_failure_allows_fallback(&resume));
     }
 
     #[test]

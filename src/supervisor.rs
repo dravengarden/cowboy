@@ -378,6 +378,17 @@ impl Supervisor {
     /// If the session is unknown or its Machine runtime is disconnected.
     pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
+        // Native restore timeouts are session-local hydrate failures. Open and
+        // reconnect must not recycle the worker and pay the same unbounded
+        // resume again. An explicit prompt, Retry, or Reload still goes through
+        // prepare_session / send and may retry.
+        if self.should_hold_native_restore_failure(session_id) {
+            tracing::info!(
+                session = session_id,
+                "not auto-reviving session after native ACP restore timeout"
+            );
+            return Ok(false);
+        }
         if self.prepare_session_inner(session_id)? {
             return Ok(true);
         }
@@ -765,6 +776,24 @@ impl Supervisor {
             "retargeting session after workspace migration"
         );
         Ok(true)
+    }
+
+    fn should_hold_native_restore_failure(&self, session_id: &str) -> bool {
+        let Some(meta) = self
+            .hub
+            .session_list()
+            .into_iter()
+            .find(|meta| meta.id == session_id)
+        else {
+            return false;
+        };
+        if meta.status != Status::Crashed {
+            return false;
+        }
+        self.hub
+            .latest_crash_detail(session_id)
+            .as_deref()
+            .is_some_and(crate::provider_behavior::is_native_session_restore_timeout)
     }
 
     fn recycle_session_inner(&self, session_id: &str) -> Result<(), String> {
@@ -1166,6 +1195,47 @@ mod tests {
         assert_eq!(meta.id, "s");
         assert_eq!(meta.agent_session_id.as_deref(), Some("codex-thread-1"));
         assert_eq!(meta.status, Status::Starting);
+    }
+
+    #[tokio::test]
+    async fn opening_a_resume_timeout_crash_does_not_auto_revive() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_agent_session_id("s", "codex-thread-1".to_owned());
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some("agent did not complete ACP session/resume within 240s".to_owned()),
+        );
+        hub.set_status("s", Status::Crashed, None);
+        let runtime = RemoteRuntime::for_test(
+            hub.clone(),
+            vec![worker_snapshot(cwd.to_string_lossy().as_ref())],
+        );
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        assert!(!supervisor.ensure_alive("s").expect("hold crashed restore"));
+        assert!(!runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
+            ) || matches!(command, CoreCommand::StopSession { .. })
+        }));
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert_eq!(
+            hub.latest_crash_detail("s").as_deref(),
+            Some("agent did not complete ACP session/resume within 240s")
+        );
     }
 
     #[tokio::test]

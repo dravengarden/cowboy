@@ -102,6 +102,7 @@ import {
     useProviderCatalog,
 } from "./providerCatalog";
 import { sessionProviderAuthShortcut } from "./providerAuthShortcut";
+import { shouldShowSessionErrorSnackbar } from "./sessionErrorNotice";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import {
     type ConfigOption,
@@ -1943,7 +1944,6 @@ export function App({
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
     const [shownErrorSeq, setShownErrorSeq] = useState(0);
-    const errorOpen = !!lastError && lastError.seq > shownErrorSeq;
     const providerAuthShortcut = useMemo(
         () => sessionProviderAuthShortcut(lastError, sessions, providerCatalog),
         [lastError, providerCatalog, sessions],
@@ -1990,6 +1990,11 @@ export function App({
         navbarAtBottom,
     });
     const activeId = useActiveSessionId();
+    const errorOpen = shouldShowSessionErrorSnackbar(
+        lastError,
+        activeId,
+        shownErrorSeq,
+    );
     const setActiveId = setActiveSessionId;
     const observabilityMachineId = sessions.find((session) => session.id === activeId)?.machine_id;
     useEffect(() => {
