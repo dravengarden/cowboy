@@ -71,6 +71,10 @@ cross-site atomic snapshot.
 
 ## Verification and rollout
 
+The subsequent [execution-lease slice](plugin-execution-leases.md) hardens
+journaled forward effects. This read-only assessment still creates no lease;
+its recovery prerequisites and false execution/reconciliation flags are unchanged.
+
 Hermetic signed fixtures exercise tombstone provenance, same-release ABA,
 reader-only reopen, legacy/untracked state, missing/uncertain receipts, pending
 slots, other outstanding steps, poisoned storage, wrong owner and malformed
@@ -91,3 +95,8 @@ policy/auth checks and bounded leases; verified worker/session restoration;
 operator recovery actions; evidence archival; Victoria binding lifecycle; and
 the generic finite executor. This assessment does not meet the P2/P4 exits or
 claim reversible external Agent effects.
+
+The later [pre-effect resolution](plugin-no-effect-resolution.md) is a distinct
+local action for a Service interruption proven to precede all effects. Its
+independent confirmation does not consume this Machine observation or change
+any of the assessment's four restoration requirements.

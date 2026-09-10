@@ -2,11 +2,17 @@
 //! no automatic replay across Controller/Machine connection incarnations.
 
 use super::*;
-use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
+use crate::machine_control::{
+    CommandFailure, CommandRequestError, ConnectionToken, PluginUninstallTransport,
+};
 use crate::machine_protocol::plugin_recovery::{RecoveryBasis, RecoveryObservation};
 use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
+
+mod authority;
+pub(super) mod resolution;
+use authority::{OperatorApproval, UninstallAuthority};
 
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
 // Its rollback path keeps evidence/fences and pauses new uninstall admission.
@@ -85,6 +91,23 @@ struct OperationFence {
 }
 
 impl OperationFence {
+    fn acquire_resolution(fences: &PluginLifecycleFences, key: (String, String)) -> Result<Self> {
+        let mut active = fences.write();
+        // A live coordinator keeps Uninstalling until its final guard update.
+        // Do not race it or steal an install/reload/other resolution's ownership.
+        ensure!(
+            active.get(&key) == Some(&PluginFenceState::NeedsReconcile),
+            "operation is not available for resolution"
+        );
+        active.insert(key.clone(), PluginFenceState::Uninstalling);
+        Ok(Self {
+            fences: Arc::clone(fences),
+            key,
+            keep: true,
+            finished: false,
+        })
+    }
+
     fn acquire(fences: &PluginLifecycleFences, key: (String, String)) -> Result<Self> {
         let mut active = fences.write();
         ensure!(
@@ -216,6 +239,10 @@ async fn validate_intent(
 /// Closed effects used by this coordinator, injectable for crash-window tests.
 /// No third-party implementation or deserialized intent can construct a port.
 trait Effects: Sync {
+    fn authorized(
+        &self,
+        intent: &UninstallIntent,
+    ) -> impl std::future::Future<Output = bool> + Send;
     fn stop(&self, id: &str) -> bool;
     fn reload(&self, id: &str) -> Result<(), String>;
     fn uninstall(
@@ -231,7 +258,8 @@ trait Effects: Sync {
 struct LiveEffects {
     state: Arc<AppState>,
     connection: ConnectionToken,
-    durable_steps: bool,
+    transport: PluginUninstallTransport,
+    authority: UninstallAuthority,
 }
 
 fn require_applied_step(result: StepLookup) -> Result<(), CommandRequestError> {
@@ -250,6 +278,39 @@ fn require_applied_step(result: StepLookup) -> Result<(), CommandRequestError> {
 }
 
 impl Effects for LiveEffects {
+    async fn authorized(&self, intent: &UninstallIntent) -> bool {
+        let valid = self
+            .authority
+            .check(
+                ProductRequestAuth::from(self.state.as_ref()),
+                &self.state.service_id,
+                intent,
+            )
+            .await
+            && self
+                .state
+                .plugin_catalog
+                .resolve(
+                    &intent.plugin_id,
+                    Some(&intent.plugin_version),
+                    Some(&intent.generation_digest),
+                )
+                .is_ok_and(|trusted| {
+                    trusted.release.contract_fingerprint == intent.contract_fingerprint
+                })
+            && intent.machine_step().is_ok_and(|step| {
+                self.state
+                    .machine_control
+                    .plugin_uninstall_transport(&self.connection, &step)
+                    == Ok(self.transport)
+            })
+            && self.authority.within_budget();
+        if !valid {
+            self.authority.revoke();
+        }
+        valid
+    }
+
     fn stop(&self, id: &str) -> bool {
         self.state.supervisor.delete_session(id)
     }
@@ -257,7 +318,7 @@ impl Effects for LiveEffects {
         self.state.supervisor.reload_session(id, true)
     }
     async fn uninstall(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.durable_steps {
+        if self.transport == PluginUninstallTransport::Leased {
             let step = intent.machine_step().map_err(|_| CommandRequestError {
                 certainty: CommandFailure::NotSent,
                 detail: "invalid Machine step".to_owned(),
@@ -284,7 +345,7 @@ impl Effects for LiveEffects {
             .await
     }
     async fn reactivate(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.durable_steps {
+        if self.transport == PluginUninstallTransport::Leased {
             // A durable forward receipt does not grant installation-CAS or
             // authorize an unjournaled inverse. Keep the recovery fence.
             return Err(CommandRequestError {
@@ -355,7 +416,10 @@ async fn compensate(
         }
         anyhow::bail!("uninstall compensation could not establish its durable precondition");
     }
-    if now_ms() > intent.expires_at_ms || effects.reactivate(intent).await.is_err() {
+    if now_ms() > intent.expires_at_ms
+        || !effects.authorized(intent).await
+        || effects.reactivate(intent).await.is_err()
+    {
         return attention(
             store,
             intent,
@@ -373,7 +437,7 @@ async fn compensate(
         )
         .await?;
     for id in &intent.live_session_ids {
-        if effects.reload(id).is_err() {
+        if !effects.authorized(intent).await || effects.reload(id).is_err() {
             return attention(
                 store,
                 intent,
@@ -406,7 +470,7 @@ async fn compensate(
 }
 
 async fn execute(store: &Store, intent: &UninstallIntent, effects: &impl Effects) -> Result<Phase> {
-    if now_ms() > intent.expires_at_ms {
+    if now_ms() > intent.expires_at_ms || !effects.authorized(intent).await {
         store
             .advance_plugin_uninstall(
                 &intent.operation_id,
@@ -426,6 +490,15 @@ async fn execute(store: &Store, intent: &UninstallIntent, effects: &impl Effects
         )
         .await?;
     for id in &intent.session_ids {
+        if !effects.authorized(intent).await {
+            return attention(
+                store,
+                intent,
+                Phase::StoppingSessions,
+                Problem::PreconditionsChanged,
+            )
+            .await;
+        }
         if effects.stop(id) != intent.live_session_ids.contains(id) {
             return attention(
                 store,
@@ -444,6 +517,15 @@ async fn execute(store: &Store, intent: &UninstallIntent, effects: &impl Effects
             None,
         )
         .await?;
+    if !effects.authorized(intent).await {
+        return attention(
+            store,
+            intent,
+            Phase::Uninstalling,
+            Problem::PreconditionsChanged,
+        )
+        .await;
+    }
     match effects.uninstall(intent).await {
         Ok(()) => {}
         Err(error) => {
@@ -487,7 +569,7 @@ async fn execute(store: &Store, intent: &UninstallIntent, effects: &impl Effects
             None,
         )
         .await?;
-    if now_ms() > intent.expires_at_ms {
+    if now_ms() > intent.expires_at_ms || !effects.authorized(intent).await {
         return attention(
             store,
             intent,
@@ -515,24 +597,28 @@ async fn run_admitted(
     state: Arc<AppState>,
     id: String,
     plan: PluginUninstallPlan,
+    approval: OperatorApproval,
     mut fence: OperationFence,
 ) -> Response {
     let result = async {
         let store = state.store.as_ref().context("Plugin lifecycle requires persistence")?;
         let connection = state.machine_control.operation_connection(&plan.machine_id).map_err(anyhow::Error::msg)?;
         let intent = validate_intent(&state, id.clone(), plan).await?;
-        let durable_steps = state.machine_control.durable_plugin_steps(&connection);
-        if durable_steps {
-            let observation = state.machine_control.plugin_uninstall_step(&connection, &intent.machine_step()?, true)
+        let step = intent.machine_step()?;
+        let transport = state.machine_control.plugin_uninstall_transport(&connection, &step).map_err(anyhow::Error::msg)?;
+        let authority = approval.bind(&intent)?;
+        let effects = LiveEffects { state: Arc::clone(&state), connection, transport, authority };
+        if transport == PluginUninstallTransport::Leased {
+            let observation = state.machine_control.plugin_uninstall_step(&effects.connection, &step, true)
                 .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;
             ensure!(observation.admission_enabled && observation.result == StepLookup::NotFound {},
                 "Machine durable uninstall is not admitting a new step; no workers were stopped");
         }
+        ensure!(effects.authorized(&intent).await, "Plugin confirmation authority is no longer current");
         // Even an intent COMMIT error can be ambiguous. Keep the memory fence;
         // startup either finds the record or safely forgets a no-effect attempt.
         fence.keep = true;
         store.begin_plugin_uninstall(&intent).await?;
-        let effects = LiveEffects { state: Arc::clone(&state), connection, durable_steps };
         let phase = match execute(store, &intent, &effects).await {
             Ok(phase) => phase,
             Err(_) => {
@@ -575,13 +661,18 @@ pub(super) async fn api_machine_plugin_uninstall(
         )
             .into_response();
     }
-    let actor = match request_actor(&state, authenticated, &headers) {
-        Ok(actor) => actor,
+    let approval = match OperatorApproval::capture(
+        ProductRequestAuth::from(state.as_ref()),
+        &state.service_id,
+        authenticated.as_ref().map(|Extension(auth)| auth),
+        &headers,
+    ) {
+        Ok(approval) => approval,
         Err(status) => return status.into_response(),
     };
     let plan = match consume_preview(
         &mut state.plugin_uninstall_plans.lock(),
-        &actor,
+        approval.actor(),
         &machine_id,
         &provider_id,
         &request,
@@ -597,7 +688,7 @@ pub(super) async fn api_machine_plugin_uninstall(
         };
     // The JoinHandle is an observer. Dropping the HTTP future does not cancel
     // the admitted operation; runtime shutdown leaves durable progress fenced.
-    match tokio::spawn(run_admitted(state, request.plan_id, plan, fence)).await {
+    match tokio::spawn(run_admitted(state, request.plan_id, plan, approval, fence)).await {
         Ok(response) => response,
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -646,6 +737,7 @@ pub(super) async fn api_machine_plugin_operations(
             "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
             "operations": operations.into_iter().map(|op| serde_json::json!({
                 "operation_id": op.intent.operation_id, "phase": op.phase, "problem": op.problem,
+                "resolution_candidates": resolution::candidates(&op),
                 "attention_from": op.attention_from,
                 "cause": op.cause,
                 "plugin_version": op.intent.plugin_version, "generation_digest": op.intent.generation_digest,

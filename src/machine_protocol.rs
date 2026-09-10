@@ -12,7 +12,7 @@ pub mod installation_revision;
 pub mod plugin_recovery;
 pub mod plugin_step;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 12;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 13;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -20,6 +20,9 @@ pub const OTLP_PLUGIN_PROTOCOL_VERSION: u16 = 9;
 pub const PLUGIN_STEP_PROTOCOL_VERSION: u16 = 10;
 pub const PLUGIN_INSTALLATION_PROTOCOL_VERSION: u16 = 11;
 pub const PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION: u16 = 12;
+/// Journaled effects have connection-bound, process-monotonic execution leases.
+/// Retained request/receipt codecs and query protocol floors remain unchanged.
+pub const PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION: u16 = 13;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.

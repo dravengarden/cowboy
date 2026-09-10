@@ -4,6 +4,63 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "full")]
 mod recovery;
 
+mod execution_lease;
+
+impl Journal {
+    // Existing durability fixtures still exercise the production lease path.
+    // Lease-specific fixtures below retain and revoke their scope explicitly.
+    fn fixture_execute(
+        &self,
+        step: &UninstallStep,
+        precondition: impl FnOnce() -> bool,
+        effect: impl FnOnce() -> Result<()>,
+    ) -> StepLookup {
+        let scope = lease::PluginExecutionScope::new(Some(&step.service_id), &step.machine_id);
+        let lease = match scope.uninstall(step) {
+            Ok(lease) => lease,
+            Err(reason) => return unavailable(reason),
+        };
+        self.execute(step, &lease, precondition, effect)
+    }
+}
+
+#[cfg(feature = "full")]
+impl MachinePluginStore {
+    async fn fixture_uninstall_step(
+        &self,
+        step: &UninstallStep,
+        service: Option<&str>,
+        machine: &str,
+        admission: bool,
+        query_only: bool,
+    ) -> StepObservation {
+        let scope = lease::PluginExecutionScope::new(service, machine);
+        let lease = if query_only {
+            None
+        } else {
+            match scope.uninstall(step) {
+                Ok(lease) => Some(lease),
+                Err(reason) => {
+                    return StepObservation {
+                        admission_enabled: false,
+                        result: unavailable(reason),
+                    };
+                }
+            }
+        };
+        self.uninstall_step(
+            step,
+            service,
+            machine,
+            admission,
+            lease
+                .as_ref()
+                .map_or(UninstallAccess::Observe, UninstallAccess::Execute),
+        )
+        .await
+    }
+}
+
 fn step() -> UninstallStep {
     UninstallStep {
         schema: 1,
@@ -33,7 +90,7 @@ fn durable_duplicate_and_reopen_never_repeat_the_effect() {
     let request = step();
     let count = AtomicUsize::new(0);
     let journal = Journal::open(root.path()).unwrap();
-    let first = journal.execute(
+    let first = journal.fixture_execute(
         &request,
         || true,
         || {
@@ -57,7 +114,7 @@ fn durable_duplicate_and_reopen_never_repeat_the_effect() {
     );
     assert_eq!(receipt(first.clone()).outcome, StepOutcome::Applied {});
     assert_eq!(
-        journal.execute(
+        journal.fixture_execute(
             &request,
             || panic!("duplicate precondition"),
             || panic!("duplicate effect")
@@ -68,7 +125,10 @@ fn durable_duplicate_and_reopen_never_repeat_the_effect() {
     drop(journal);
     let journal = Journal::open(root.path()).unwrap();
     assert_eq!(journal.query(&request), first);
-    assert_eq!(journal.execute(&request, || panic!(), || panic!()), first);
+    assert_eq!(
+        journal.fixture_execute(&request, || panic!(), || panic!()),
+        first
+    );
 }
 
 #[test]
@@ -93,7 +153,7 @@ fn changed_parameters_cannot_reuse_a_receipt_or_change_its_target() {
     let root = tempfile::tempdir().unwrap();
     let journal = Journal::open(root.path()).unwrap();
     let original = step();
-    let result = journal.execute(&original, || true, || Ok(()));
+    let result = journal.fixture_execute(&original, || true, || Ok(()));
     for field in [
         "plugin_id",
         "machine_id",
@@ -115,7 +175,7 @@ fn changed_parameters_cannot_reuse_a_receipt_or_change_its_target() {
         };
         let changed: UninstallStep = serde_json::from_value(encoded).unwrap();
         assert_eq!(
-            journal.execute(&changed, || panic!(), || panic!()),
+            journal.fixture_execute(&changed, || panic!(), || panic!()),
             unavailable(StepUnavailable::IdentityConflict),
             "{field}"
         );
@@ -129,7 +189,7 @@ fn interrupted_effect_reopens_fenced_and_unknown_without_replay() {
     let request = step();
     let journal = Journal::open(root.path()).unwrap();
     let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        journal.execute(
+        journal.fixture_execute(
             &request,
             || true,
             || panic!("simulated process interruption"),
@@ -145,7 +205,7 @@ fn interrupted_effect_reopens_fenced_and_unknown_without_replay() {
         }
     );
     assert_eq!(
-        journal.execute(&request, || panic!(), || panic!()),
+        journal.fixture_execute(&request, || panic!(), || panic!()),
         journal.query(&request)
     );
     assert!(journal.ensure_unfenced("victoria").is_err());
@@ -153,7 +213,7 @@ fn interrupted_effect_reopens_fenced_and_unknown_without_replay() {
     let mut next = request;
     next.operation_id.push('2');
     assert_eq!(
-        journal.execute(&next, || panic!(), || panic!()),
+        journal.fixture_execute(&next, || panic!(), || panic!()),
         unavailable(StepUnavailable::SlotFenced)
     );
 }
@@ -163,7 +223,7 @@ fn returned_effect_error_is_not_rejection_and_legacy_cannot_bypass_it() {
     let root = tempfile::tempdir().unwrap();
     let journal = Journal::open(root.path()).unwrap();
     let request = step();
-    let result = journal.execute(
+    let result = journal.fixture_execute(
         &request,
         || true,
         || bail!("private error must never be stored"),
@@ -191,7 +251,7 @@ fn expired_and_changed_targets_get_definitive_no_effect_receipts() {
     let mut request = step();
     request.expires_at_ms = 1;
     assert_eq!(
-        receipt(journal.execute(&request, || panic!(), || panic!())).outcome,
+        receipt(journal.fixture_execute(&request, || panic!(), || panic!())).outcome,
         StepOutcome::Rejected {
             reason: StepRejection::Expired
         }
@@ -199,7 +259,7 @@ fn expired_and_changed_targets_get_definitive_no_effect_receipts() {
     request.operation_id.push('2');
     request.expires_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
     assert_eq!(
-        receipt(journal.execute(&request, || false, || panic!())).outcome,
+        receipt(journal.fixture_execute(&request, || false, || panic!())).outcome,
         StepOutcome::Rejected {
             reason: StepRejection::TargetChanged
         }
@@ -213,7 +273,7 @@ fn corruption_unknown_schema_and_oversize_fail_closed_on_open() {
         let root = tempfile::tempdir().unwrap();
         let journal = Journal::open(root.path()).unwrap();
         let request = step();
-        journal.execute(&request, || true, || Ok(()));
+        journal.fixture_execute(&request, || true, || Ok(()));
         let path = journal
             .root
             .join(format!("{}.json", request.key().unwrap()));
@@ -246,7 +306,7 @@ fn storage_failure_runs_no_effect_and_fences_the_process() {
     )
     .unwrap();
     assert_eq!(
-        journal.execute(&request, || panic!(), || panic!()),
+        journal.fixture_execute(&request, || panic!(), || panic!()),
         unavailable(StepUnavailable::Storage)
     );
     assert_eq!(
@@ -278,7 +338,7 @@ fn receipt_flush_failure_never_claims_applied() {
         .root
         .join(format!("{}.json", request.key().unwrap()));
     let saved = root.path().join("saved-intent");
-    let result = journal.execute(
+    let result = journal.fixture_execute(
         &request,
         || true,
         || {
@@ -308,7 +368,7 @@ fn capacity_preserves_duplicate_queries_and_unresolved_evidence() {
     let root = tempfile::tempdir().unwrap();
     let journal = Journal::open(root.path()).unwrap();
     let original = step();
-    let saved = journal.execute(&original, || true, || Ok(()));
+    let saved = journal.fixture_execute(&original, || true, || Ok(()));
     {
         let mut state = journal.state.lock();
         for n in 1..MAX_RECORDS {
@@ -327,10 +387,13 @@ fn capacity_preserves_duplicate_queries_and_unresolved_evidence() {
     let mut next = original.clone();
     next.operation_id.push('2');
     assert_eq!(
-        journal.execute(&next, || panic!(), || panic!()),
+        journal.fixture_execute(&next, || panic!(), || panic!()),
         unavailable(StepUnavailable::Capacity)
     );
-    assert_eq!(journal.execute(&original, || panic!(), || panic!()), saved);
+    assert_eq!(
+        journal.fixture_execute(&original, || panic!(), || panic!()),
+        saved
+    );
 }
 
 #[test]
@@ -361,12 +424,12 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
     request.generation_digest = installed.generation_digest;
     request.contract_fingerprint = installed.contract_fingerprint;
     let query = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", false, true)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", false, true)
         .await;
     assert!(!query.admission_enabled);
     assert_eq!(query.result, StepLookup::NotFound {});
     let denied = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", false, false)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", false, false)
         .await;
     assert_eq!(denied.result, unavailable(StepUnavailable::ReaderOnly));
     for (service, machine) in [
@@ -376,7 +439,7 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
     ] {
         assert_eq!(
             store
-                .uninstall_step(&request, service, machine, true, false)
+                .fixture_uninstall_step(&request, service, machine, true, false)
                 .await
                 .result,
             unavailable(StepUnavailable::WrongOwner)
@@ -384,7 +447,7 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
     }
     assert_eq!(store.inventory().unwrap().len(), 1);
     let applied = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
         .await;
     assert_eq!(
         receipt(applied.result.clone()).outcome,
@@ -396,7 +459,7 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
     store.install(&desired).await.unwrap();
     assert_eq!(
         store
-            .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+            .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
             .await,
         applied
     );
@@ -416,7 +479,7 @@ async fn signed_lifecycle_and_reader_bridge_preserve_receipts_without_reactivati
     drop(store);
     let store = MachinePluginStore::new(&path, Platform::Linux, "x86_64".into()).unwrap();
     let observed = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", false, true)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", false, true)
         .await;
     assert_eq!(observed.result, applied.result);
     assert_eq!(store.inventory().unwrap().len(), 1);
@@ -453,12 +516,12 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     legacy.schema = 1;
     legacy.installation_revision = None;
     let preflight = store
-        .uninstall_step(&legacy, Some("service-a"), "machine-a", true, true)
+        .fixture_uninstall_step(&legacy, Some("service-a"), "machine-a", true, true)
         .await;
     assert!(!preflight.admission_enabled);
     assert_eq!(
         store
-            .uninstall_step(&legacy, Some("service-a"), "machine-a", true, false)
+            .fixture_uninstall_step(&legacy, Some("service-a"), "machine-a", true, false)
             .await
             .result,
         unavailable(StepUnavailable::InvalidRequest)
@@ -468,13 +531,13 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     assert_ne!(first.installation_revision, second.installation_revision);
     assert_eq!(
         store
-            .uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+            .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, true)
             .await
             .result,
         unavailable(StepUnavailable::InvalidRequest)
     );
     let rejected = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
         .await;
     assert_eq!(
         receipt(rejected.result).outcome,
@@ -490,14 +553,14 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     request.installation_revision = second.installation_revision.clone();
     assert_eq!(
         store
-            .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+            .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
             .await
             .result,
         unavailable(StepUnavailable::IdentityConflict)
     );
     request.operation_id.push('2');
     let applied = store
-        .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
         .await;
     assert_eq!(
         receipt(applied.result.clone()).outcome,
@@ -521,7 +584,7 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     // replay, legacy fallback, normal install or accidental authority deletion.
     let reader = MachinePluginStore::new(&path, Platform::Linux, "x86_64".into()).unwrap();
     let observed = reader
-        .uninstall_step(&request, Some("service-a"), "machine-a", true, true)
+        .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, true)
         .await;
     assert!(!observed.admission_enabled);
     assert_eq!(observed.result, applied.result);
@@ -548,7 +611,7 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     assert_ne!(third.installation_revision, request.installation_revision);
     assert_eq!(
         reader
-            .uninstall_step(&request, Some("service-a"), "machine-a", true, false)
+            .fixture_uninstall_step(&request, Some("service-a"), "machine-a", true, false)
             .await
             .result,
         applied.result
@@ -562,11 +625,11 @@ async fn same_release_reinstall_rejects_stale_preview_and_retains_exact_receipt(
     interrupted.installation_revision = third.installation_revision;
     reader
         .operations
-        .execute(&interrupted, || true, || bail!("fixture partial effect"));
+        .fixture_execute(&interrupted, || true, || bail!("fixture partial effect"));
     interrupted.operation_id.push('4');
     assert_eq!(
         reader
-            .uninstall_step(&interrupted, Some("service-a"), "machine-a", true, true)
+            .fixture_uninstall_step(&interrupted, Some("service-a"), "machine-a", true, true)
             .await
             .result,
         unavailable(StepUnavailable::SlotFenced)

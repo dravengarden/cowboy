@@ -429,6 +429,15 @@ admitted operation. Restart reconstructs unfinished installation-slot fences
 before dispatch, without replaying remote commands or stopping unrelated
 workers.
 
+A `NeedsAttention` interruption proven to originate from `Prepared`, before any
+worker/Plugin mutation, has one independently confirmed local resolution:
+`abort_before_effects`. Current Operator authorization, a bounded process-local
+permit and a complete operation-snapshot CAS are required. The new confirming
+actor's audit receipt and parent `Aborted` state commit together; the original
+intent and failure evidence remain intact. This does not mutate sessions or the
+Machine, renew the uninstall grant, restore workers, or authorize clearing a
+later-phase fence. See [pre-effect resolution](plugin-no-effect-resolution.md).
+
 A correlated ordinary Machine rejection or a definitively uncommitted local
 transaction permits the approved compensation on the original connection:
 re-verify/reactivate the exact retained signed generation and request

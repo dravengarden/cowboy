@@ -49,6 +49,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0043_generic_provider_actions.sql",
         "3bd9b415a7383131c7a86270678457c8dba7c17799f46058b588b0b557b60d44",
     ),
+    (
+        "0045_plugin_uninstall_resolutions.sql",
+        "c8a058582dae2421c2997598ba6b49962bbf3214fc4648ecbd47b7dd83852a23",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -94,6 +98,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0017_generic_provider_actions.sql",
         "88f5de5cf290331ba2974ac2051a85a40cb2ffbef644c46f582f4e13a1038226",
+    ),
+    (
+        "0019_plugin_uninstall_resolutions.sql",
+        "2b9901c8d32101fbea07bb21d7830ae2af88dc6c22ab2102dd1ee5635d30424b",
     ),
 ];
 

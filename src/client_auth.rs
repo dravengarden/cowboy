@@ -585,18 +585,26 @@ impl DeviceAccessSessions {
         expected: &DeviceAccessIdentity,
         now_ms: i64,
     ) -> bool {
+        self.token_hash_still_valid(&hex_sha256(token.as_bytes()), expected, now_ms)
+    }
+
+    /// Only for core continuations of an authenticated request. This does not
+    /// verify/consume a new proof nonce or authorize a new HTTP request.
+    pub(crate) fn token_hash_still_valid(
+        &self,
+        token_hash: &str,
+        expected: &DeviceAccessIdentity,
+        now_ms: i64,
+    ) -> bool {
         let mut state = self.state.lock();
         prune_access_state(&mut state, now_ms);
-        state
-            .tokens
-            .get(&hex_sha256(token.as_bytes()))
-            .is_some_and(|session| {
-                session.device_id == expected.device_id
-                    && session.user_id == expected.user_id
-                    && session.principal_class == expected.principal_class
-                    && session.client_kind == expected.client_kind
-                    && session.scopes == expected.scopes
-            })
+        state.tokens.get(token_hash).is_some_and(|session| {
+            session.device_id == expected.device_id
+                && session.user_id == expected.user_id
+                && session.principal_class == expected.principal_class
+                && session.client_kind == expected.client_kind
+                && session.scopes == expected.scopes
+        })
     }
 
     pub fn revoke_device(&self, device_id: &str) {

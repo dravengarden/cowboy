@@ -17,7 +17,8 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::machine_auth::MachineIdentity;
 use crate::machine_broker::{MachineBrokerArgs, SpawnMode};
 use crate::machine_components::ComponentStore;
-use crate::machine_plugins::MachinePluginStore;
+use crate::machine_plugins::{MachinePluginStore, PluginExecutionScope, UninstallAccess};
+use crate::machine_protocol::plugin_step::{StepLookup, StepObservation};
 use crate::machine_protocol::{
     AuthState, CONTROLLER_RECONNECT_MAX_BACKOFF_SECONDS, ComponentId, ComponentInventory,
     ComponentKind, ComponentState, ComponentUpdate, ConnectionMode, MACHINE_PROTOCOL_VERSION,
@@ -911,7 +912,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     else {
         bail!("controller rejected Machine hello");
     };
-    tracing::info!(machine = %config.machine_id, "Machine controller authenticated");
+    tracing::info!(machine = %config.machine_id, protocol, "Machine controller authenticated");
     if !desired_components.is_empty() {
         let active = config.components.active().unwrap_or_default();
         let restart_host = desired_components.iter().any(|component| {
@@ -948,6 +949,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let plugin_execution =
+        PluginExecutionScope::new(config.service_id.as_deref(), &config.machine_id);
     let _provider_auth_watcher = (protocol >= 6)
         .then(|| start_provider_auth_watcher(Arc::clone(&config.providers), event_tx.clone()))
         .transpose()?;
@@ -1035,7 +1038,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
                                         workspaces: Arc::clone(&config.workspaces),
                                         login_sessions: Arc::clone(&login_sessions),
                                         runtime_commands: runtime_write_tx.clone(),
-                                    });
+                                    }, &plugin_execution);
                                 }
                                 _ => {}
                             }
@@ -1069,6 +1072,8 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
             }
         }
     }.await;
+    // Revoke queued Plugin effects before cleaning up this connection's I/O.
+    drop(plugin_execution);
     controller_writer.abort();
     runtime_writer.abort();
     result
@@ -1706,7 +1711,11 @@ fn provider_auth_roll_target(
         .then(|| receipt.provider_id.clone())
 }
 
-fn handle_machine_command(command: MachineCommand, context: MachineCommandContext) {
+fn handle_machine_command(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
     let MachineCommandContext {
         service_id,
         machine_id,
@@ -1736,6 +1745,25 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
         }
         MachineCommand::UninstallPluginStep { request_id, step }
         | MachineCommand::QueryPluginUninstallStep { request_id, step } => {
+            // Capture the deadline on receipt, not after detached scheduling or
+            // lifecycle-lock acquisition. Queries never mint execution leases.
+            let lease = if query_only {
+                None
+            } else {
+                match execution.uninstall(&step) {
+                    Ok(lease) => Some(lease),
+                    Err(reason) => {
+                        let _ = events.send(MachineEvent::PluginUninstallStep {
+                            request_id,
+                            observation: Box::new(StepObservation {
+                                admission_enabled: false,
+                                result: StepLookup::Unavailable { reason },
+                            }),
+                        });
+                        return;
+                    }
+                }
+            };
             tokio::spawn(async move {
                 let observation = providers
                     .uninstall_step(
@@ -1743,7 +1771,9 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
                         service_id.as_deref(),
                         &machine_id,
                         plugin_operation_admission,
-                        query_only,
+                        lease
+                            .as_ref()
+                            .map_or(UninstallAccess::Observe, UninstallAccess::Execute),
                     )
                     .await;
                 if !query_only {

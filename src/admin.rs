@@ -535,7 +535,16 @@ impl AdminIdentities {
 
     #[must_use]
     pub fn principal(&self, token: &str, now_ms: i64) -> Option<AdminPrincipal> {
-        let token_hash = hex_sha256(token.as_bytes());
+        self.principal_by_token_hash(&hex_sha256(token.as_bytes()), now_ms)
+    }
+
+    /// Recheck an already authenticated core operation without retaining its
+    /// bearer secret. The hash is a lookup key, never a public login input.
+    pub(crate) fn principal_by_token_hash(
+        &self,
+        token_hash: &str,
+        now_ms: i64,
+    ) -> Option<AdminPrincipal> {
         let session = self
             .sessions
             .iter()

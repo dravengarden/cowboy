@@ -3,11 +3,47 @@
 //! only transaction durability and existing session timestamp columns differ.
 
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
+use crate::plugin_operation::resolution::{
+    MAX_RESOLUTION_BYTES, ResolutionIntent, ResolutionPermit, ResolutionReceipt,
+};
 use crate::plugin_operation::{
     MAX_INTENT_BYTES, MAX_OPERATIONS, Operation, Phase, Problem, UninstallIntent,
 };
 use anyhow::{Context as _, Result, ensure};
 use sha2::Digest as _;
+
+#[derive(sqlx::FromRow)]
+struct ResolutionRecord {
+    operation_id: String,
+    resolution_id: String,
+    intent: String,
+    intent_sha256: String,
+    resolved_at_ms: i64,
+}
+
+impl ResolutionRecord {
+    fn decode(self) -> Result<ResolutionReceipt> {
+        ensure!(
+            self.intent.len() <= MAX_RESOLUTION_BYTES
+                && self.intent_sha256
+                    == format!("{:x}", sha2::Sha256::digest(self.intent.as_bytes())),
+            "resolution evidence is invalid"
+        );
+        let intent: ResolutionIntent = serde_json::from_str(&self.intent)
+            .map_err(|_| anyhow::anyhow!("invalid resolution intent"))?;
+        intent.validate()?;
+        ensure!(
+            intent.operation_id == self.operation_id
+                && intent.resolution_id == self.resolution_id
+                && self.resolved_at_ms > 0,
+            "resolution identity is invalid"
+        );
+        Ok(ResolutionReceipt {
+            intent,
+            resolved_at_ms: self.resolved_at_ms,
+        })
+    }
+}
 
 #[derive(sqlx::FromRow)]
 struct Record {
@@ -136,11 +172,74 @@ impl Store {
     pub(crate) async fn commit_plugin_uninstall(&self, intent: &UninstallIntent) -> Result<()> {
         dispatch!(self, commit_plugin_uninstall(intent))
     }
+
+    pub(crate) async fn plugin_uninstall_resolution(
+        &self,
+        operation: &str,
+    ) -> Result<Option<ResolutionReceipt>> {
+        dispatch!(self, plugin_uninstall_resolution(operation))
+    }
+
+    /// Only the separately authenticated, finite local resolution can take this
+    /// transition. Ordinary phase advancement still cannot leave `NeedsAttention`.
+    pub(crate) async fn resolve_plugin_uninstall(
+        &self,
+        permit: &ResolutionPermit,
+    ) -> Result<ResolutionReceipt> {
+        permit.intent().validate()?;
+        ensure!(permit.within_budget(), "resolution approval expired");
+        dispatch!(self, resolve_plugin_uninstall(permit))
+    }
 }
 
 macro_rules! implement_journal {
     ($backend:ty, $durability:literal, $lock:literal, $delete:literal) => {
         impl $backend {
+            async fn plugin_uninstall_resolution(&self, operation: &str) -> Result<Option<ResolutionReceipt>> {
+                sqlx::query_as::<_, ResolutionRecord>(
+                    "SELECT * FROM plugin_uninstall_resolutions WHERE operation_id = $1"
+                ).bind(operation).fetch_optional(&self.pool).await?
+                    .map(ResolutionRecord::decode).transpose()
+            }
+
+            async fn resolve_plugin_uninstall(&self, permit: &ResolutionPermit) -> Result<ResolutionReceipt> {
+                let intent = permit.intent();
+                let mut tx = self.pool.begin().await?;
+                sqlx::query($durability).execute(&mut *tx).await?;
+                sqlx::query($lock).execute(&mut *tx).await?;
+                // Acquire the row/write lock BEFORE reading (also on SQLite).
+                // The ordinary executor cannot advance this phase. A late live
+                // Prepared -> StoppingSessions CAS loses to this resolution.
+                let locked = sqlx::query(
+                    "UPDATE plugin_uninstall_operations SET phase = phase \
+                     WHERE operation_id = $1 AND phase = 'needs_attention' AND attention_from = 'prepared'"
+                ).bind(&intent.operation_id).execute(&mut *tx).await?;
+                ensure!(locked.rows_affected() == 1, "resolution phase changed");
+                let before = sqlx::query_as::<_, Record>(
+                    "SELECT * FROM plugin_uninstall_operations WHERE operation_id = $1"
+                ).bind(&intent.operation_id).fetch_one(&mut *tx).await?.decode()?;
+                ensure!(intent.matches(&before)?, "resolution evidence changed");
+                ensure!(permit.within_budget(), "resolution approval expired while waiting");
+                let document = serde_json::to_string(intent)?;
+                ensure!(document.len() <= MAX_RESOLUTION_BYTES, "resolution evidence exceeds budget");
+                let now = chrono::Utc::now().timestamp_millis();
+                sqlx::query(
+                    "INSERT INTO plugin_uninstall_resolutions \
+                     (operation_id, resolution_id, intent, intent_sha256, resolved_at_ms) VALUES ($1, $2, $3, $4, $5)"
+                ).bind(&intent.operation_id).bind(&intent.resolution_id).bind(&document)
+                    .bind(format!("{:x}", sha2::Sha256::digest(document.as_bytes())))
+                    .bind(now).execute(&mut *tx).await?;
+                let changed = sqlx::query(
+                    "UPDATE plugin_uninstall_operations SET phase = 'aborted', updated_at_ms = $2 WHERE operation_id = $1"
+                ).bind(&intent.operation_id).bind(now).execute(&mut *tx).await?;
+                ensure!(changed.rows_affected() == 1, "resolution completion was not persisted");
+                // No session UPDATE, Machine RPC, auth mutation or credential
+                // projection occurs here. Keep the original cause and intent.
+                ensure!(permit.within_budget(), "resolution approval expired before commit");
+                tx.commit().await.context("committing no-effect uninstall resolution")?;
+                Ok(ResolutionReceipt { intent: intent.clone(), resolved_at_ms: now })
+            }
+
             async fn begin_plugin_uninstall(&self, intent: &UninstallIntent, document: &str) -> Result<()> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;

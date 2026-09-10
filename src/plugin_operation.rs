@@ -5,6 +5,8 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod resolution;
+
 pub(crate) const MAX_OPERATIONS: i64 = 4096;
 pub(crate) const MAX_INTENT_BYTES: usize = 256 * 1024;
 

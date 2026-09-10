@@ -21,6 +21,9 @@ primary phone/desktop product path.
 - [`plugin-composition-checker.md`](plugin-composition-checker.md) — Implemented core diagnostic, generated Rust/TS contracts, graph rules and remaining authority/recovery work
 - [`plugin-installation-incarnations.md`](plugin-installation-incarnations.md) — Durable installation revisions, uninstall CAS, tombstones and reader-first rollout
 - [`plugin-recovery-assessment.md`](plugin-recovery-assessment.md) — Read-only recovery assessment across Service evidence, Machine receipts and current installation tombstones
+- [`plugin-execution-leases.md`](plugin-execution-leases.md) — Connection-bound, process-monotonic admission for journaled Plugin effects
+- [`plugin-service-authorization.md`](plugin-service-authorization.md) — Current confirming-credential and Operator checks at Service effect boundaries
+- [`plugin-no-effect-resolution.md`](plugin-no-effect-resolution.md) — Independently confirmed, atomic resolution of proven pre-effect uninstall interruptions
 
 ## Documents
 
