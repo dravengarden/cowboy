@@ -17,14 +17,20 @@ pub(crate) fn is_provider_auth_required_error(detail: &str) -> bool {
 /// ACP `session/resume` / `session/load` timed out while restoring a native
 /// thread. This is a session-local hydrate cost, not a worker-generation
 /// defect: falling back to a previous binary retries the same unbounded
-/// restore. OpenSession must not auto-revive these crashes; an explicit
-/// prompt, Retry, or Reload still may.
+/// restore. Open, send, and Retry must not auto-revive these crashes. Reload
+/// remains the explicit "try again" control.
 #[must_use]
 pub(crate) fn is_native_session_restore_timeout(detail: &str) -> bool {
     let detail = detail.to_ascii_lowercase();
     detail.contains("did not complete acp session/resume")
         || detail.contains("did not complete acp session/load")
 }
+
+/// User-facing refusal when send/Retry would only repeat a failed hydrate.
+/// Controller-only: Machine-host builds detect the timeout but never hold
+/// composer dispatch.
+#[cfg(feature = "full")]
+pub(crate) const NATIVE_RESTORE_TIMEOUT_HOLD: &str = "native session restore previously timed out; sending will not retry automatically. Use Reload to retry — large threads may still fail.";
 
 #[must_use]
 pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {

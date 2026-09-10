@@ -335,6 +335,17 @@ impl Supervisor {
         trace: Option<crate::runtime_trace::TraceCarrier>,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
+        if matches!(
+            command,
+            AgentCommand::Prompt(..) | AgentCommand::SetConfigOption { .. }
+        ) && self.should_hold_native_restore_failure(session_id)
+        {
+            tracing::info!(
+                session = session_id,
+                "refusing prompt until Reload after native ACP restore timeout"
+            );
+            return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
+        }
         self.prepare_session_inner(session_id)?;
         let runtime = self.runtime_for_session(session_id)?;
         match command {
@@ -378,10 +389,9 @@ impl Supervisor {
     /// If the session is unknown or its Machine runtime is disconnected.
     pub fn ensure_alive(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
-        // Native restore timeouts are session-local hydrate failures. Open and
-        // reconnect must not recycle the worker and pay the same unbounded
-        // resume again. An explicit prompt, Retry, or Reload still goes through
-        // prepare_session / send and may retry.
+        // Native restore timeouts are session-local hydrate failures. Open,
+        // reconnect, send, and Retry must not recycle the worker and pay the
+        // same unbounded resume again. Reload remains the explicit retry.
         if self.should_hold_native_restore_failure(session_id) {
             tracing::info!(
                 session = session_id,
@@ -706,6 +716,9 @@ impl Supervisor {
     /// old app-server process holds the deleted directory inode.
     pub fn prepare_session(&self, session_id: &str) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
+        if self.should_hold_native_restore_failure(session_id) {
+            return Err(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD.to_owned());
+        }
         self.prepare_session_inner(session_id)
     }
 
@@ -1243,6 +1256,66 @@ mod tests {
             hub.latest_crash_detail("s").as_deref(),
             Some("agent did not complete ACP session/resume within 240s")
         );
+    }
+
+    #[tokio::test]
+    async fn sending_after_a_resume_timeout_crash_does_not_retry_hydrate() {
+        let root = TestDir::new();
+        let cwd = root.path().join("checkout");
+        std::fs::create_dir_all(&cwd).expect("checkout");
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            cwd.display().to_string(),
+            "test".to_owned(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_agent_session_id("s", "codex-thread-1".to_owned());
+        hub.set_status(
+            "s",
+            Status::Crashed,
+            Some("agent did not complete ACP session/resume within 240s".to_owned()),
+        );
+        let runtime = RemoteRuntime::for_test(
+            hub.clone(),
+            vec![worker_snapshot(cwd.to_string_lossy().as_ref())],
+        );
+        let supervisor = Supervisor::new_remote(hub.clone(), root.0.clone(), 0, runtime.clone());
+
+        let error = supervisor
+            .send(
+                "s",
+                AgentCommand::Prompt(
+                    vec![agent_client_protocol::schema::v1::ContentBlock::from(
+                        "retry me".to_owned(),
+                    )],
+                    None,
+                    None,
+                ),
+            )
+            .expect_err("send must refuse restore-timeout crash");
+        assert!(error.contains("Reload"));
+        assert!(supervisor.prepare_session("s").is_err());
+        assert!(!runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
+            ) || matches!(command, CoreCommand::StopSession { .. })
+        }));
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+
+        supervisor
+            .reload_session("s", false)
+            .expect("Reload remains the explicit hydrate retry");
+        assert!(runtime.pending_for_test().iter().any(|command| {
+            matches!(
+                command,
+                CoreCommand::EnsureSession { session } if session.session_id == "s"
+            )
+        }));
+        assert_eq!(hub.status("s"), Some(Status::Starting));
     }
 
     #[tokio::test]
