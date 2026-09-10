@@ -1,6 +1,8 @@
 use super::*;
 use crate::plugin_operation::fixture;
 
+mod resolution;
+
 async fn advance_to_machine_commit(store: &Store, intent: &UninstallIntent) {
     for (from, to) in [
         (Phase::Prepared, Phase::StoppingSessions),

@@ -11,6 +11,7 @@ use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
 
 mod authority;
+pub(super) mod resolution;
 use authority::{OperatorApproval, UninstallAuthority};
 
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
@@ -90,6 +91,23 @@ struct OperationFence {
 }
 
 impl OperationFence {
+    fn acquire_resolution(fences: &PluginLifecycleFences, key: (String, String)) -> Result<Self> {
+        let mut active = fences.write();
+        // A live coordinator keeps Uninstalling until its final guard update.
+        // Do not race it or steal an install/reload/other resolution's ownership.
+        ensure!(
+            active.get(&key) == Some(&PluginFenceState::NeedsReconcile),
+            "operation is not available for resolution"
+        );
+        active.insert(key.clone(), PluginFenceState::Uninstalling);
+        Ok(Self {
+            fences: Arc::clone(fences),
+            key,
+            keep: true,
+            finished: false,
+        })
+    }
+
     fn acquire(fences: &PluginLifecycleFences, key: (String, String)) -> Result<Self> {
         let mut active = fences.write();
         ensure!(
@@ -719,6 +737,7 @@ pub(super) async fn api_machine_plugin_operations(
             "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
             "operations": operations.into_iter().map(|op| serde_json::json!({
                 "operation_id": op.intent.operation_id, "phase": op.phase, "problem": op.problem,
+                "resolution_candidates": resolution::candidates(&op),
                 "attention_from": op.attention_from,
                 "cause": op.cause,
                 "plugin_version": op.intent.plugin_version, "generation_digest": op.intent.generation_digest,

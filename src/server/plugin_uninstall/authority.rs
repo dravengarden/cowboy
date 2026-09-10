@@ -120,6 +120,32 @@ impl OperatorApproval {
         &self.actor
     }
 
+    /// A fresh confirmation of one CLOSED local recovery action, not renewal of
+    /// the original uninstall or a capability to reactivate anything. Consuming
+    /// self also consumes failures: later login/role repair cannot revive it.
+    pub(super) async fn authorize_resolution(
+        self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        intent: crate::plugin_operation::resolution::ResolutionIntent,
+    ) -> Result<crate::plugin_operation::resolution::ResolutionPermit> {
+        use crate::plugin_operation::resolution::ResolutionPermit;
+        intent.validate()?;
+        let budget =
+            OperationBudget::new(intent.expires_at_ms, Duration::from_mins(1), self.received);
+        ensure!(
+            self.service == service && intent.service_id == service && self.actor == intent.actor,
+            "resolution confirmation owner changed"
+        );
+        ensure!(
+            !budget.expired()
+                && self.current_operator(auth).await.as_ref() == Some(&self.actor)
+                && !budget.expired(),
+            "resolution confirmation is no longer authorized"
+        );
+        Ok(ResolutionPermit::new(intent, budget))
+    }
+
     pub(super) fn bind(self, intent: &UninstallIntent) -> Result<UninstallAuthority> {
         ensure!(
             self.actor == intent.actor && self.service == intent.service_id,

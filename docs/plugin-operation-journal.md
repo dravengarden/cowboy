@@ -112,9 +112,15 @@ existing Plugin-lifecycle authorization. It returns the latest 32 bounded
 receipts, failure codes, exact release, session count, retention date and
 `requires_reconciliation`, without actors, session IDs, private policy or error
 payloads. `admission_enabled` identifies a reader-only bridge. Current recovery
-is deliberately fail-closed: there is no retry/clear-fence endpoint, no
+is deliberately fail-closed: there is no generic retry/clear-fence endpoint, no
 automatic inference from "currently active" inventory, and no supported direct
 SQL surgery to turn an unknown effect into success.
+
+The later [pre-effect resolution](plugin-no-effect-resolution.md) adds a separate
+preview/confirmation API for `NeedsAttention` originating from `Prepared` only.
+Fresh Operator authority and a complete journal-snapshot CAS atomically record
+its audit and `Aborted`; it does not touch sessions or Machine state. Later
+effect phases remain fenced and cannot use this local action.
 
 ## Reader-floor rollout
 
@@ -151,7 +157,7 @@ Protocol 10 now implements Machine-owned durable uninstall identity, receipts
 and read-only queries behind a reader-floor admission switch. Protocol 11's
 [installation-incarnation slice](plugin-installation-incarnations.md) adds
 schema-two intents and uninstall CAS through a new reader-first cutover.
-Still missing: fresh-policy recovery authorization; verified worker
+Still missing: fresh-policy restoration authorization; verified worker
 restoration; operator recovery UI; bounded evidence archival; Victoria binding
 activation; and the generic finite executor. A current inventory match is not
 proof that an old remote effect completed or was undone. This slice does not

@@ -349,7 +349,7 @@ async fn compensation_and_worker_reload_cannot_use_revoked_forward_approval() {
     }
 }
 
-async fn setup(id: &str) -> (tempfile::TempDir, Store, UninstallIntent) {
+pub(super) async fn setup(id: &str) -> (tempfile::TempDir, Store, UninstallIntent) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
         .await

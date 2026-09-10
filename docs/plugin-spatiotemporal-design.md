@@ -21,6 +21,8 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 单调时间预算；排队、核验或写入 intent 后失去执行资格，不再继续开始 Plugin 效果。它不授予恢复权。
 第九批 [Service 持续授权](plugin-service-authorization.md) 绑定确认所用的实际凭据，并在各效果边界
 重新核对当前 Operator、登录时效、精确信任与连接；观察到失效后不再接纳下一效果，仍不开放耐久补偿。
+第十批 [无效果中断处置](plugin-no-effect-resolution.md) 加入独立预览/确认与本地原子审计；
+仅能终止可证明尚未开始效果的 `Prepared` 中断并解除对应 Service fence，不复活原授权、安装或会话。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行

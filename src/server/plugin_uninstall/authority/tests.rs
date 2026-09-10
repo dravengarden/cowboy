@@ -2,6 +2,82 @@ use super::*;
 use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
+#[tokio::test]
+async fn resolution_requires_new_authority_and_does_not_renew_an_expired_uninstall() {
+    use crate::plugin_operation::resolution::{ResolutionIntent, fixture as interrupted};
+    for change in [
+        "none", "logout", "role", "disabled", "owner", "service", "budget",
+    ] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let mut approval =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap();
+        let mut op = interrupted();
+        op.intent.expires_at_ms = 1; // Historical confirmation expired; not resumed.
+        let intent = ResolutionIntent::new(
+            "resolution-fresh-000001".into(),
+            approval.actor().clone(),
+            &op,
+            auth_now_ms() + 120_000,
+        )
+        .unwrap();
+        assert_ne!(
+            op.intent.actor, intent.actor,
+            "another CURRENT Operator may resolve the closed local action"
+        );
+        let mut changed = intent.clone();
+        match change {
+            "logout" => {
+                h.store
+                    .revoke_user_session_for_user(
+                        &h.user.id,
+                        "session-approval",
+                        "logout",
+                        auth_now_ms(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "role" => h.role(AdminRole::Viewer),
+            "disabled" => h
+                .store
+                .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
+                .await
+                .unwrap(),
+            "owner" => changed.actor = op.intent.actor.clone(),
+            "service" => changed.service_id = "different-service".into(),
+            "budget" => {
+                approval.received = TimeSample::for_test(
+                    std::time::Instant::now() - Duration::from_secs(61),
+                    auth_now_ms(),
+                )
+            }
+            _ => {}
+        }
+        let result = approval
+            .authorize_resolution(h.context(), "service-test", changed)
+            .await;
+        if change == "none" {
+            let permit = result.unwrap();
+            assert_eq!(permit.intent(), &intent);
+            assert!(permit.within_budget());
+        } else {
+            assert!(result.is_err(), "{change}");
+        }
+        let mut forward = op.intent;
+        let forward_approval =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap();
+        forward.actor = forward_approval.actor().clone();
+        let authority = forward_approval.bind(&forward).unwrap();
+        assert!(
+            !authority.check(h.context(), "service-test", &forward).await,
+            "a new local resolution never revives expired forward authority"
+        );
+    }
+}
+
 struct Harness {
     _root: tempfile::TempDir,
     store: Store,

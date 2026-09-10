@@ -224,6 +224,7 @@ struct AppState {
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
     plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
+    plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
     plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -1410,6 +1411,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             provider_auth,
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
+            plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
             plugin_lifecycle_fences,
             desired_machine_components,
             web_root: args.web_root,
@@ -8954,6 +8956,18 @@ async fn serve_axum(
         .route(
             "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/recovery-assessment",
             get(api_machine_plugin_recovery_assessment),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution-plan",
+            post(plugin_uninstall::resolution::api_resolution_plan),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolve",
+            post(plugin_uninstall::resolution::api_resolve),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/resolution",
+            get(plugin_uninstall::resolution::api_resolution_receipt),
         )
         .route("/api/machines/{id}/refresh", post(api_machine_refresh))
         .route(

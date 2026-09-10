@@ -90,7 +90,11 @@ all results. Independently build and activate the affected Machine and Controlle
 components; preserve worker generation and installation records. Production
 logout, revocation, uninstall or clock fault injection is not release smoke.
 
-Still missing: independent post-restart recovery approval, Provider-auth/policy
+The next [pre-effect resolution](plugin-no-effect-resolution.md) reuses credential
+checks for a NEW, independently confirmed local action after restart. It can
+only abort a proven pre-effect interruption; it never renews this forward grant.
+
+Still missing: independent post-restart restoration approval, Provider-auth/policy
 epoch checks for recovery, journaled restoration with tombstone CAS, verified
 worker/native-session recovery, operator recovery actions, evidence archival,
 Victoria binding lifecycle and the generic finite executor. Recovery assessment
