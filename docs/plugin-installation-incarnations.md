@@ -3,8 +3,9 @@
 Status: sixth spatiotemporal slice, 2026-09-10. Protocol 11 adds an independent
 installation revision to inventory, the approved uninstall intent and its
 durable Machine step. This is core lifecycle state, not a Plugin or a new
-installer. The initial release is a **reader bridge**: writer cutover must wait
-for accepted Controller and Machine rollback readers.
+installer. The reader bridge is accepted for both components and Hawk's cold
+bootstrap. This descendant enables schema-two Service admission and installation
+adoption on explicitly admitted Machines; it does not enable compensation.
 
 ## Identity and compare-and-swap
 
@@ -76,12 +77,17 @@ digest-only operations or remove the directory to become writable.
 1. Build and accept the reader bridge as both the Controller and Machine
    component, with both new writer constants disabled. Verify the separate
    component receipts, negotiated protocol and worker continuity.
-2. Only after those readers are the accepted rollback floor may a descendant
-   enable installation adoption and schema-two Service intent admission. Machine
-   activation is a separate maintenance boundary, not a Controller side effect.
-3. Reopen retained schema-one and schema-two fixtures with the bridge. Both
+2. Refresh and accept the host's cold-start bootstrap to those compatible
+   readers, without moving existing component profiles or writing installation
+   authority. A lost profile must not initialize a pre-incarnation reader.
+3. Only after those readers and cold recovery are the accepted rollback floor
+   may a descendant enable installation adoption and schema-two Service intent
+   admission. Activate Machine first, then Controller; the intermediate
+   Controller reader pauses new tracked intents. Machine activation is a separate
+   maintenance boundary, not a Controller side effect.
+4. Reopen retained schema-one and schema-two fixtures with the bridge. Both
    remain queryable; schema-two writes and tracked mutations stay paused.
-4. Never roll back to pre-incarnation readers after adoption. Never change
+5. Never roll back to pre-incarnation readers after adoption. Never change
    applied migration checksums, delete journals, lower auth generations or
    mutate production Plugins as a release smoke test.
 
@@ -96,6 +102,24 @@ silently adopt state. Removing admission after adoption keeps the reader and
 fences, not an untracked legacy mutation fallback.
 No SQL migration, Plugin SDK version, Catalog release, native bridge or public
 Plugin package changes in this slice.
+
+### Accepted Hawk recovery floor
+
+Reader commit `6a420ff5888c1d983de12f6af539a2fb7405d8e7` was accepted as Controller
+at `2026-09-09T23:57:15Z` and Machine at `2026-09-09T23:58:59Z`, with the new
+writers disabled. The 15 pre-maintenance worker PIDs and generation
+`worker-69e13060b36e4b6b698c` were retained.
+
+Columbus commit `ed3ce1af918403c37b556f5e17ca09791625bae6` pinned both cold
+bootstrap readers to that same clean Cowboy revision. Its host transaction was
+accepted at `2026-09-10T00:16:33Z`; Controller, Machine, both DeepSeek gateways
+and all 15 worker PIDs remained unchanged. Installation state was still absent
+at acceptance. The host checks validate both immutable reader manifests, not
+just flags an older binary also supports. Falcon's pin and admission are
+unchanged. Subsequent writers use Cowboy component transactions, not another
+host switch. The separate component receipts are the live activation evidence.
+
+## Agent fingerprint correction
 
 The signed Agent lifecycle tests also found an earlier inventory bug: Agent
 inventory advertised its inner Provider fingerprint where generic Plugin

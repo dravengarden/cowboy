@@ -279,9 +279,9 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         current_platform(),
         std::env::consts::ARCH.to_owned(),
     )?);
-    // Reader bridge first. A descendant may enable adoption only after both
-    // Controller and Machine readers are accepted as the rollback floor.
-    const INSTALLATION_TRACKING_ENABLED: bool = false;
+    // Reader floor 6a420ff5 is accepted for both components and Hawk's cold
+    // bootstrap. Unadmitted Machines still open read-only without adoption.
+    const INSTALLATION_TRACKING_ENABLED: bool = true;
     if INSTALLATION_TRACKING_ENABLED && args.plugin_operation_admission {
         providers.enable_installation_tracking().await?;
     }

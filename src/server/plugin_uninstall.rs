@@ -10,8 +10,8 @@ use anyhow::{Result, ensure};
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
 // Its rollback path keeps evidence/fences and pauses new uninstall admission.
 const DURABLE_UNINSTALL_ENABLED: bool = true;
-// Schema-two intent reader bridge; do not write before reader-floor acceptance.
-const INSTALLATION_CAS_ENABLED: bool = false;
+// Schema-two reader floor 6a420ff5 and Hawk's cold bootstrap are accepted.
+const INSTALLATION_CAS_ENABLED: bool = true;
 
 pub(super) fn requires_runtime_fence(command: &Inbound) -> bool {
     matches!(
@@ -67,6 +67,7 @@ pub(super) async fn recover_fences(
     }
     tracing::info!(
         admission_enabled = DURABLE_UNINSTALL_ENABLED,
+        installation_cas_enabled = INSTALLATION_CAS_ENABLED,
         fenced_slots = fences.len(),
         "Plugin uninstall journal recovered"
     );
