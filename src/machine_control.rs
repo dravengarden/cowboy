@@ -118,6 +118,12 @@ enum ReplyKind {
     PluginRecovery,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PluginUninstallTransport {
+    Legacy,
+    Leased,
+}
+
 enum Reply {
     PluginStep(Box<StepObservation>),
     PluginRecovery(Box<RecoveryObservation>),
@@ -645,15 +651,55 @@ impl MachineControl {
             .ok_or_else(|| "Machine is not connected".to_owned())
     }
 
+    pub(crate) fn plugin_uninstall_transport(
+        &self,
+        token: &ConnectionToken,
+        step: &UninstallStep,
+    ) -> Result<PluginUninstallTransport, String> {
+        step.validate()
+            .map_err(|_| "Invalid Plugin uninstall intent".to_owned())?;
+        if step.machine_id != token.0.machine_id {
+            return Err("Plugin uninstall target mismatch".to_owned());
+        }
+        let live = self.live.read();
+        let protocol = live
+            .connections
+            .get(&token.0.machine_id)
+            .filter(|c| c.token.same(token))
+            .map(|c| c.protocol)
+            .ok_or_else(|| "Machine connection changed before Plugin preflight".to_owned())?;
+        if protocol >= crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION {
+            Ok(PluginUninstallTransport::Leased)
+        } else if step.schema == 1
+            && (5..crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION).contains(&protocol)
+        {
+            Ok(PluginUninstallTransport::Legacy)
+        } else {
+            Err(
+                "Update the Machine for bounded Plugin execution; no workers were stopped"
+                    .to_owned(),
+            )
+        }
+    }
+
+    /// Historical receipt queries retain their original protocol floor.
     pub(crate) fn durable_plugin_steps(&self, token: &ConnectionToken) -> bool {
+        self.connection_supports(token, crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION)
+    }
+
+    pub(crate) fn leased_plugin_steps(&self, token: &ConnectionToken) -> bool {
+        self.connection_supports(
+            token,
+            crate::machine_protocol::PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION,
+        )
+    }
+
+    fn connection_supports(&self, token: &ConnectionToken, minimum: u16) -> bool {
         self.live
             .read()
             .connections
             .get(&token.0.machine_id)
-            .is_some_and(|c| {
-                c.token.same(token)
-                    && c.protocol >= crate::machine_protocol::PLUGIN_STEP_PROTOCOL_VERSION
-            })
+            .is_some_and(|c| c.token.same(token) && c.protocol >= minimum)
     }
 
     pub(crate) async fn plugin_uninstall_step(
@@ -672,6 +718,12 @@ impl MachineControl {
             return Err(fail(
                 CommandFailure::NotSent,
                 "Machine step target mismatch",
+            ));
+        }
+        if !query_only && !self.leased_plugin_steps(token) {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "Machine update required for bounded Plugin execution",
             ));
         }
         let request_id = self.request_id("plugin-step").map_err(|_| {
@@ -1212,6 +1264,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn leased_uninstall_requires_current_capable_connection_without_legacy_downgrade() {
+        let control = MachineControl::default();
+        let step = crate::machine_protocol::plugin_step::fixture();
+        let mut tracked = step.clone();
+        tracked.schema = 2;
+        tracked.installation_revision = Some(
+            format!("installation-{}", "a".repeat(64))
+                .try_into()
+                .unwrap(),
+        );
+        for protocol in 1..=13 {
+            let (sender, mut commands) = mpsc::unbounded_channel();
+            let connection = control.install(
+                "machine-test".into(),
+                "epoch".into(),
+                false,
+                protocol,
+                sender,
+            );
+            let selected = control.plugin_uninstall_transport(&connection, &step);
+            match protocol {
+                5..=9 => assert_eq!(selected.unwrap(), PluginUninstallTransport::Legacy),
+                13 => assert_eq!(selected.unwrap(), PluginUninstallTransport::Leased),
+                _ => assert!(selected.is_err()),
+            }
+            assert_eq!(
+                control
+                    .plugin_uninstall_transport(&connection, &tracked)
+                    .is_ok(),
+                protocol == 13
+            );
+            let mut wrong = step.clone();
+            wrong.machine_id = "other-machine".into();
+            assert!(
+                control
+                    .plugin_uninstall_transport(&connection, &wrong)
+                    .is_err()
+            );
+            let mut invalid = step.clone();
+            invalid.schema = 3;
+            assert!(
+                control
+                    .plugin_uninstall_transport(&connection, &invalid)
+                    .is_err()
+            );
+            if protocol < 13 {
+                let result = control
+                    .plugin_uninstall_step(
+                        &connection,
+                        &crate::machine_protocol::plugin_step::fixture(),
+                        false,
+                    )
+                    .await;
+                assert_eq!(result.unwrap_err().certainty, CommandFailure::NotSent);
+                assert!(commands.try_recv().is_err());
+                assert!(control.live.read().pending.is_empty());
+            }
+            control.disconnect("machine-test");
+            assert!(
+                control
+                    .plugin_uninstall_transport(&connection, &step)
+                    .is_err()
+            );
+            assert!(!control.leased_plugin_steps(&connection));
+            let (sender, _rx) = mpsc::unbounded_channel();
+            let replacement =
+                control.install("machine-test".into(), "epoch".into(), false, 13, sender);
+            assert!(
+                control
+                    .plugin_uninstall_transport(&connection, &step)
+                    .is_err()
+            );
+            assert_eq!(
+                control
+                    .plugin_uninstall_transport(&replacement, &step)
+                    .unwrap(),
+                PluginUninstallTransport::Leased
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn durable_step_query_correlates_exact_evidence_and_drops_late_replies() {
         use crate::machine_protocol::plugin_step::{StepOutcome, StepReceipt, fixture};
         let control = MachineControl::default();
@@ -1268,6 +1402,8 @@ mod tests {
                 assert!(matches!(result.unwrap().result, StepLookup::Found { .. }));
             }
         }
+        let (sender, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install("machine-test".into(), "epoch".into(), false, 13, sender);
         let request = control.plugin_uninstall_step(&connection, &step, false);
         let replace = async {
             let MachineCommand::UninstallPluginStep { request_id, .. } =
@@ -1276,7 +1412,7 @@ mod tests {
                 panic!();
             };
             let (sender, _commands) = mpsc::unbounded_channel();
-            control.install("machine-test".into(), "epoch".into(), false, 10, sender);
+            control.install("machine-test".into(), "epoch".into(), false, 13, sender);
             control.record_remote(
                 &connection,
                 MachineEvent::PluginUninstallStep {

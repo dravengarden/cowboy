@@ -9,6 +9,8 @@
 
 mod operations;
 
+pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -614,10 +616,15 @@ impl MachinePluginStore {
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         self.operations.ensure_legacy_allowed(provider_id)?;
-        self.uninstall_inner(provider_id, expected_digest)
+        self.uninstall_inner(provider_id, expected_digest, || Ok(()))
     }
 
-    fn uninstall_inner(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
+    fn uninstall_inner(
+        &self,
+        provider_id: &str,
+        expected_digest: &str,
+        before_mutation: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         validate_plugin_id(provider_id)?;
         let active = self
             .inventory_one(provider_id)?
@@ -628,7 +635,11 @@ impl MachinePluginStore {
         );
         let plugin_root = self.plugin_root(provider_id);
         let active_link = plugin_root.join("active");
-        if active_link.exists() || active_link.symlink_metadata().is_ok() {
+        let remove_active = active_link.exists() || active_link.symlink_metadata().is_ok();
+        // Inventory may re-verify retained bytes/auth materialization. Even this
+        // last validation and filesystem lookup consume the original lease.
+        before_mutation()?;
+        if remove_active {
             fs::remove_file(&active_link)
                 .with_context(|| format!("removing {}", active_link.display()))?;
         }
@@ -4210,8 +4221,17 @@ mod tests {
         step.contract_fingerprint = second.contract_fingerprint;
         step.installation_revision = second.installation_revision;
         step.expires_at_ms = chrono::Utc::now().timestamp_millis() + 60_000;
+        store.assert_final_uninstall_lease_check(&step);
+        let execution = PluginExecutionScope::new(Some("service-test"), "machine-test");
+        let lease = execution.uninstall(&step).unwrap();
         let result = store
-            .uninstall_step(&step, Some("service-test"), "machine-test", true, false)
+            .uninstall_step(
+                &step,
+                Some("service-test"),
+                "machine-test",
+                true,
+                UninstallAccess::Execute(&lease),
+            )
             .await
             .result;
         let StepLookup::Found { receipt } = result else {

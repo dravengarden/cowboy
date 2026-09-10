@@ -2,7 +2,9 @@
 //! no automatic replay across Controller/Machine connection incarnations.
 
 use super::*;
-use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
+use crate::machine_control::{
+    CommandFailure, CommandRequestError, ConnectionToken, PluginUninstallTransport,
+};
 use crate::machine_protocol::plugin_recovery::{RecoveryBasis, RecoveryObservation};
 use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
@@ -231,7 +233,7 @@ trait Effects: Sync {
 struct LiveEffects {
     state: Arc<AppState>,
     connection: ConnectionToken,
-    durable_steps: bool,
+    transport: PluginUninstallTransport,
 }
 
 fn require_applied_step(result: StepLookup) -> Result<(), CommandRequestError> {
@@ -257,7 +259,7 @@ impl Effects for LiveEffects {
         self.state.supervisor.reload_session(id, true)
     }
     async fn uninstall(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.durable_steps {
+        if self.transport == PluginUninstallTransport::Leased {
             let step = intent.machine_step().map_err(|_| CommandRequestError {
                 certainty: CommandFailure::NotSent,
                 detail: "invalid Machine step".to_owned(),
@@ -284,7 +286,7 @@ impl Effects for LiveEffects {
             .await
     }
     async fn reactivate(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
-        if self.durable_steps {
+        if self.transport == PluginUninstallTransport::Leased {
             // A durable forward receipt does not grant installation-CAS or
             // authorize an unjournaled inverse. Keep the recovery fence.
             return Err(CommandRequestError {
@@ -521,9 +523,10 @@ async fn run_admitted(
         let store = state.store.as_ref().context("Plugin lifecycle requires persistence")?;
         let connection = state.machine_control.operation_connection(&plan.machine_id).map_err(anyhow::Error::msg)?;
         let intent = validate_intent(&state, id.clone(), plan).await?;
-        let durable_steps = state.machine_control.durable_plugin_steps(&connection);
-        if durable_steps {
-            let observation = state.machine_control.plugin_uninstall_step(&connection, &intent.machine_step()?, true)
+        let step = intent.machine_step()?;
+        let transport = state.machine_control.plugin_uninstall_transport(&connection, &step).map_err(anyhow::Error::msg)?;
+        if transport == PluginUninstallTransport::Leased {
+            let observation = state.machine_control.plugin_uninstall_step(&connection, &step, true)
                 .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;
             ensure!(observation.admission_enabled && observation.result == StepLookup::NotFound {},
                 "Machine durable uninstall is not admitting a new step; no workers were stopped");
@@ -532,7 +535,7 @@ async fn run_admitted(
         // startup either finds the record or safely forgets a no-effect attempt.
         fence.keep = true;
         store.begin_plugin_uninstall(&intent).await?;
-        let effects = LiveEffects { state: Arc::clone(&state), connection, durable_steps };
+        let effects = LiveEffects { state: Arc::clone(&state), connection, transport };
         let phase = match execute(store, &intent, &effects).await {
             Ok(phase) => phase,
             Err(_) => {

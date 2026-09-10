@@ -71,6 +71,10 @@ cross-site atomic snapshot.
 
 ## Verification and rollout
 
+The subsequent [execution-lease slice](plugin-execution-leases.md) hardens
+journaled forward effects. This read-only assessment still creates no lease;
+its recovery prerequisites and false execution/reconciliation flags are unchanged.
+
 Hermetic signed fixtures exercise tombstone provenance, same-release ABA,
 reader-only reopen, legacy/untracked state, missing/uncertain receipts, pending
 slots, other outstanding steps, poisoned storage, wrong owner and malformed

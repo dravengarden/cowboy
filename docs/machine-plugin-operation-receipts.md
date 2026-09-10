@@ -76,6 +76,11 @@ Service auth revocation remains independently authoritative.
 
 ## Service integration and query
 
+Protocol 13's [execution leases](plugin-execution-leases.md) now bind newly
+executed durable steps to the original connection and a process-monotonic
+budget. The Controller refuses protocol 10–12 mutation before worker stop,
+while retaining their historical queries and all existing durable codecs.
+
 The existing Service intent/SQL schema is unchanged. Successful live durable
 uninstall feeds the existing atomic session-soft-delete/completion transaction.
 Missing, mismatched or non-applied evidence retains the Service recovery fence.

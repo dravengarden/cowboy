@@ -476,6 +476,7 @@
         test -e ${machine-src}/src/machine_plugins.rs
         test -e ${machine-src}/src/machine_plugins/operations.rs
         test -e ${machine-src}/src/machine_plugins/operations/installations.rs
+        test -e ${machine-src}/src/machine_plugins/operations/lease.rs
         test -e ${machine-src}/src/machine_protocol/plugin_step.rs
         test -e ${machine-src}/src/machine_protocol/plugin_recovery.rs
         test -e ${machine-src}/src/machine_protocol/installation_revision.rs

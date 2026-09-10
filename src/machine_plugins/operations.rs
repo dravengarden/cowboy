@@ -9,6 +9,14 @@ use crate::machine_protocol::plugin_step::{
 };
 
 pub(super) mod installations;
+pub(crate) mod lease;
+
+use lease::UninstallExecutionLease;
+
+pub(crate) enum UninstallAccess<'a> {
+    Observe,
+    Execute(&'a UninstallExecutionLease),
+}
 
 const MAX_RECORDS: usize = 4096;
 const MAX_RECORD_BYTES: u64 = 8192;
@@ -194,18 +202,23 @@ impl Journal {
         Ok(())
     }
 
-    // Artifact verification can take time; the two wall-clock reads intentionally differ.
-    #[allow(clippy::same_functions_in_if_condition)]
     fn execute(
         &self,
         step: &UninstallStep,
+        lease: &UninstallExecutionLease,
         precondition: impl FnOnce() -> bool,
         effect: impl FnOnce() -> Result<()>,
     ) -> StepLookup {
+        if !lease.matches(step) {
+            return unavailable(StepUnavailable::InvalidRequest);
+        }
         let mut state = self.state.lock();
         match Self::lookup(&state, step) {
             StepLookup::NotFound {} => {}
             found => return found, // including Unknown: never replay the effect.
+        }
+        if !lease.connected() {
+            return unavailable(StepUnavailable::WrongOwner);
         }
         if state.receipts.len() >= MAX_RECORDS {
             return unavailable(StepUnavailable::Capacity);
@@ -230,24 +243,11 @@ impl Journal {
             state.poisoned = true;
             return unavailable(StepUnavailable::Storage);
         }
-        receipt.outcome = if chrono::Utc::now().timestamp_millis() > step.expires_at_ms {
-            StepOutcome::Rejected {
-                reason: StepRejection::Expired,
-            }
-        } else if !precondition() {
-            StepOutcome::Rejected {
-                reason: StepRejection::TargetChanged,
-            }
-        } else if chrono::Utc::now().timestamp_millis() > step.expires_at_ms {
-            StepOutcome::Rejected {
-                reason: StepRejection::Expired,
-            }
-        } else if effect().is_ok() {
-            StepOutcome::Applied {}
-        } else {
-            StepOutcome::Unknown {
-                reason: StepUncertainty::EffectFailure,
-            }
+        receipt.outcome = match leased_effect_outcome(lease, precondition, effect) {
+            Ok(outcome) => outcome,
+            // Intent is durable, but no effect is authorized. Preserve it as
+            // Unknown; losing an observer cannot invent a completed outcome.
+            Err(reason) => return unavailable(reason),
         };
         if self.persist(&key, &receipt).is_err() {
             state.poisoned = true;
@@ -262,6 +262,43 @@ impl Journal {
 
 fn unavailable(reason: StepUnavailable) -> StepLookup {
     StepLookup::Unavailable { reason }
+}
+
+fn leased_effect_outcome(
+    lease: &UninstallExecutionLease,
+    precondition: impl FnOnce() -> bool,
+    effect: impl FnOnce() -> Result<()>,
+) -> Result<StepOutcome, StepUnavailable> {
+    let expired = StepOutcome::Rejected {
+        reason: StepRejection::Expired,
+    };
+    if !lease.connected() {
+        return Err(StepUnavailable::WrongOwner);
+    }
+    if lease.expired() {
+        return Ok(expired);
+    }
+    let target_matches = precondition();
+    // Validation may take time or race connection loss. Both checkpoints use
+    // the same captured lease; neither renews its deadline.
+    if !lease.connected() {
+        return Err(StepUnavailable::WrongOwner);
+    }
+    if lease.expired() {
+        return Ok(expired);
+    }
+    if !target_matches {
+        return Ok(StepOutcome::Rejected {
+            reason: StepRejection::TargetChanged,
+        });
+    }
+    Ok(if effect().is_ok() {
+        StepOutcome::Applied {}
+    } else {
+        StepOutcome::Unknown {
+            reason: StepUncertainty::EffectFailure,
+        }
+    })
 }
 
 impl MachinePluginStore {
@@ -345,75 +382,20 @@ impl MachinePluginStore {
         service: Option<&str>,
         machine: &str,
         admission_enabled: bool,
-        query_only: bool,
+        access: UninstallAccess<'_>,
     ) -> StepObservation {
         let _lifecycle = self.lifecycle.lock().await;
         let result = if step.validate().is_err() {
             unavailable(StepUnavailable::InvalidRequest)
         } else if service != Some(step.service_id.as_str()) || machine != step.machine_id {
             unavailable(StepUnavailable::WrongOwner)
-        } else if query_only {
-            let found = self.operations.query(step);
-            if found == (StepLookup::NotFound {})
-                && self.operations.ensure_unfenced(&step.plugin_id).is_err()
-            {
-                unavailable(StepUnavailable::SlotFenced)
-            } else if found == (StepLookup::NotFound {})
-                && step.installation_revision.is_some()
-                && !self.step_target_matches(step).unwrap_or(false)
-            {
-                // Read-only preflight can reject a stale preview before the
-                // Service stops workers; execution still repeats the CAS.
-                unavailable(StepUnavailable::InvalidRequest)
-            } else {
-                found
-            }
-        } else if !admission_enabled {
-            unavailable(StepUnavailable::ReaderOnly)
-        } else if self.operations.installations.requires_cas()
-            && step.installation_revision.is_none()
-        {
-            // Old receipts remain queryable, but a fresh digest-only command
-            // cannot remove an incarnation-tracked installation.
-            match self.operations.query(step) {
-                StepLookup::NotFound {} => unavailable(StepUnavailable::InvalidRequest),
-                found => found,
-            }
-        } else if !self.operations.installations.admits(step) {
-            unavailable(StepUnavailable::ReaderOnly)
-        } else if self
-            .operations
-            .installations
-            .ensure_unfenced(&step.plugin_id)
-            .is_err()
-        {
-            match self.operations.query(step) {
-                StepLookup::NotFound {} => unavailable(StepUnavailable::SlotFenced),
-                found => found,
-            }
         } else {
-            self.operations.execute(
-                step,
-                || self.step_target_matches(step).unwrap_or(false),
-                || {
-                    let pending = self.operations.installations.begin(
-                        &step.plugin_id,
-                        Some(&step.generation_digest),
-                        None,
-                        installations::Effect::Uninstall,
-                        Some(step.request_digest()?),
-                    )?;
-                    self.uninstall_inner(&step.plugin_id, &step.generation_digest)?;
-                    // Flush every removed directory entry before acknowledging.
-                    fs::File::open(self.plugin_root(&step.plugin_id))?.sync_all()?;
-                    let auth = self.auth_provider_root(&step.plugin_id);
-                    if auth.exists() {
-                        fs::File::open(auth)?.sync_all()?;
-                    }
-                    self.operations.installations.finish(pending)?;
-                    Ok(())
-                },
-            )
+            match access {
+                UninstallAccess::Observe => self.uninstall_step_preflight(step),
+                UninstallAccess::Execute(lease) => {
+                    self.execute_uninstall_step(step, admission_enabled, lease)
+                }
+            }
         };
         StepObservation {
             admission_enabled: admission_enabled
@@ -421,6 +403,83 @@ impl MachinePluginStore {
                 && self.operations.installations.admits(step),
             result,
         }
+    }
+
+    fn uninstall_step_preflight(&self, step: &UninstallStep) -> StepLookup {
+        let found = self.operations.query(step);
+        if found == (StepLookup::NotFound {})
+            && self.operations.ensure_unfenced(&step.plugin_id).is_err()
+        {
+            unavailable(StepUnavailable::SlotFenced)
+        } else if found == (StepLookup::NotFound {})
+            && step.installation_revision.is_some()
+            && !self.step_target_matches(step).unwrap_or(false)
+        {
+            // Read-only preflight can reject a stale preview before the Service
+            // stops workers; execution still repeats the CAS.
+            unavailable(StepUnavailable::InvalidRequest)
+        } else {
+            found
+        }
+    }
+
+    fn execute_uninstall_step(
+        &self,
+        step: &UninstallStep,
+        admission_enabled: bool,
+        lease: &UninstallExecutionLease,
+    ) -> StepLookup {
+        if !admission_enabled {
+            return unavailable(StepUnavailable::ReaderOnly);
+        }
+        if self.operations.installations.requires_cas() && step.installation_revision.is_none() {
+            // Retained digest-only receipts are readable, never new CAS authority.
+            return match self.operations.query(step) {
+                StepLookup::NotFound {} => unavailable(StepUnavailable::InvalidRequest),
+                found => found,
+            };
+        }
+        if !self.operations.installations.admits(step) {
+            return unavailable(StepUnavailable::ReaderOnly);
+        }
+        if self
+            .operations
+            .installations
+            .ensure_unfenced(&step.plugin_id)
+            .is_err()
+        {
+            return match self.operations.query(step) {
+                StepLookup::NotFound {} => unavailable(StepUnavailable::SlotFenced),
+                found => found,
+            };
+        }
+        self.operations.execute(
+            step,
+            lease,
+            || self.step_target_matches(step).unwrap_or(false),
+            || {
+                let pending = self.operations.installations.begin(
+                    &step.plugin_id,
+                    Some(&step.generation_digest),
+                    None,
+                    installations::Effect::Uninstall,
+                    Some(step.request_digest()?),
+                )?;
+                // A slot-intent fsync may itself outlive the lease. Check again
+                // at the first Plugin mutation, never renew after it.
+                self.uninstall_inner(&step.plugin_id, &step.generation_digest, || {
+                    lease.before_effect()
+                })?;
+                // Flush every removed directory entry before acknowledging.
+                fs::File::open(self.plugin_root(&step.plugin_id))?.sync_all()?;
+                let auth = self.auth_provider_root(&step.plugin_id);
+                if auth.exists() {
+                    fs::File::open(auth)?.sync_all()?;
+                }
+                self.operations.installations.finish(pending)?;
+                Ok(())
+            },
+        )
     }
 
     fn step_target_matches(&self, step: &UninstallStep) -> Result<bool> {

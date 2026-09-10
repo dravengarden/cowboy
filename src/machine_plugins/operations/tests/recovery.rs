@@ -4,7 +4,7 @@ use crate::machine_protocol::plugin_recovery::{
     RecoveryUncertainty,
 };
 
-async fn installed() -> (
+pub(super) async fn installed() -> (
     tempfile::TempDir,
     MachinePluginStore,
     DesiredPlugin,
@@ -32,7 +32,7 @@ async fn installed() -> (
     (root, store, desired, request)
 }
 
-fn journal_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+pub(super) fn journal_bytes(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
@@ -49,7 +49,7 @@ async fn removed(store: &MachinePluginStore, step: &UninstallStep) {
     assert_eq!(
         receipt(
             store
-                .uninstall_step(step, Some("service-a"), "machine-a", true, false)
+                .fixture_uninstall_step(step, Some("service-a"), "machine-a", true, false)
                 .await
                 .result
         )
@@ -167,7 +167,7 @@ async fn recovery_observes_pending_slots_and_other_unknown_steps_without_clearin
     other.operation_id.push('2');
     store
         .operations
-        .execute(&other, || true, || bail!("fixture crash"));
+        .fixture_execute(&other, || true, || bail!("fixture crash"));
     assert_eq!(
         inspect(&store, &request).await.basis(&request),
         RecoveryBasis::SlotFenced {}
