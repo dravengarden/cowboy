@@ -3,9 +3,10 @@
 //! from a durable receipt. This does not grant recovery or Provider credentials.
 
 use crate::machine_protocol::plugin_step::{StepUnavailable, UninstallStep};
+use crate::operation_budget::{OperationBudget, TimeSample};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 const MAX_EXECUTION_TIME: Duration = Duration::from_mins(1);
 
@@ -49,16 +50,10 @@ impl PluginExecutionScope {
         {
             return Err(StepUnavailable::WrongOwner);
         }
-        let remaining = step.expires_at_ms.saturating_sub(received.wall_ms).max(0);
-        let budget = Duration::from_millis(remaining.unsigned_abs()).min(MAX_EXECUTION_TIME);
         Ok(UninstallExecutionLease {
             connected: Arc::clone(&self.connected),
             request_digest,
-            received: received.monotonic,
-            deadline: received.monotonic + budget,
-            expires_at_ms: step.expires_at_ms,
-            wall_high_water: AtomicI64::new(received.wall_ms),
-            expired: AtomicBool::new(received.wall_ms <= 0 || remaining == 0),
+            budget: OperationBudget::new(step.expires_at_ms, MAX_EXECUTION_TIME, received),
         })
     }
 }
@@ -69,32 +64,13 @@ impl Drop for PluginExecutionScope {
     }
 }
 
-#[derive(Clone, Copy)]
-struct TimeSample {
-    monotonic: Instant,
-    wall_ms: i64,
-}
-
-impl TimeSample {
-    fn now() -> Self {
-        Self {
-            monotonic: Instant::now(),
-            wall_ms: chrono::Utc::now().timestamp_millis(),
-        }
-    }
-}
-
 /// No Clone, Serialize or Deserialize: one admitted command, exact request,
 /// original connection and process-local deadline. A saved result is evidence,
 /// not an instance of this type.
 pub(crate) struct UninstallExecutionLease {
     connected: Arc<AtomicBool>,
     request_digest: String,
-    received: Instant,
-    deadline: Instant,
-    expires_at_ms: i64,
-    wall_high_water: AtomicI64,
-    expired: AtomicBool,
+    budget: OperationBudget,
 }
 
 impl UninstallExecutionLease {
@@ -108,7 +84,7 @@ impl UninstallExecutionLease {
     }
 
     pub(super) fn expired(&self) -> bool {
-        self.expired_at(TimeSample::now())
+        self.budget.expired()
     }
 
     pub(super) fn before_effect(&self) -> anyhow::Result<()> {
@@ -121,22 +97,12 @@ impl UninstallExecutionLease {
 
     #[cfg(test)]
     pub(super) fn expire_for_test(&self) {
-        self.expired.store(true, Ordering::Release);
+        self.budget.expire_for_test();
     }
 
+    #[cfg(test)]
     fn expired_at(&self, now: TimeSample) -> bool {
-        let previous_wall = self
-            .wall_high_water
-            .fetch_max(now.wall_ms, Ordering::AcqRel);
-        if now.monotonic < self.received
-            || now.monotonic >= self.deadline
-            || now.wall_ms <= 0
-            || now.wall_ms < previous_wall
-            || now.wall_ms >= self.expires_at_ms
-        {
-            self.expired.store(true, Ordering::Release);
-        }
-        self.expired.load(Ordering::Acquire)
+        self.budget.expired_at(now)
     }
 }
 

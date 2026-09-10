@@ -36,6 +36,12 @@ database replacement or storage that lies about flush completion.
 
 ## Progress and uncertainty
 
+The subsequent [Service continuation authority](plugin-service-authorization.md)
+slice rechecks the original confirming credential, current Operator policy,
+Catalog trust, connection and captured monotonic budget at each effect boundary.
+It does not deserialize a saved actor into authorization or enable an independent
+recovery action. Closing the HTTP observer still does not revoke approval.
+
 ```text
 Prepared → StoppingSessions → Uninstalling → MachineUninstalled → Completed
                                   │                 │

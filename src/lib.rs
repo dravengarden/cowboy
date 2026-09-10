@@ -81,6 +81,8 @@ mod observability;
 #[cfg(feature = "full")]
 mod oidc;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+mod operation_budget;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 mod otlp;
 #[cfg(feature = "full")]
 mod passkey;

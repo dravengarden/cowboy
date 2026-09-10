@@ -87,6 +87,11 @@ a release smoke test.
 
 ## Verification and remaining work
 
+The following [Service authority slice](plugin-service-authorization.md) reuses
+the time checks through core `OperationBudget` and adds current confirming-login
+checks to the coordinator. The Machine lease semantics and protocol stay the
+same; neither type grants independent recovery authority.
+
 Tests cover complete request/owner identity, scope replacement, monotonic and
 absolute deadlines, sticky clock rollback, queued execution, expiry/revocation
 during verification, pending installation retention and completed-result replay.

@@ -1,5 +1,6 @@
 use super::*;
 use crate::machine_protocol::plugin_step::{digest, fixture};
+use std::time::Instant;
 
 fn scope() -> PluginExecutionScope {
     PluginExecutionScope::new(Some("service-test"), "machine-test")
@@ -13,10 +14,7 @@ fn request(ttl_ms: i64) -> UninstallStep {
 }
 
 fn sample(start: Instant, elapsed_ms: u64, wall_ms: i64) -> TimeSample {
-    TimeSample {
-        monotonic: start + Duration::from_millis(elapsed_ms),
-        wall_ms,
-    }
+    TimeSample::for_test(start + Duration::from_millis(elapsed_ms), wall_ms)
 }
 
 #[test]

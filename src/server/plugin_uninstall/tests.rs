@@ -129,6 +129,11 @@ struct MockEffects {
     restoration_fails: bool,
     uninstalls: AtomicUsize,
     restorations: AtomicUsize,
+    stops: AtomicUsize,
+    reloads: AtomicUsize,
+    checks: AtomicUsize,
+    deny_at: Option<Phase>,
+    deny_after_checks: Option<usize>,
     gate: Option<Arc<tokio::sync::Semaphore>>,
 }
 
@@ -140,16 +145,35 @@ impl MockEffects {
             restoration_fails: false,
             uninstalls: AtomicUsize::new(0),
             restorations: AtomicUsize::new(0),
+            stops: AtomicUsize::new(0),
+            reloads: AtomicUsize::new(0),
+            checks: AtomicUsize::new(0),
+            deny_at: None,
+            deny_after_checks: None,
             gate: None,
         }
     }
 }
 
 impl Effects for MockEffects {
+    async fn authorized(&self, intent: &UninstallIntent) -> bool {
+        let count = self.checks.fetch_add(1, Ordering::SeqCst);
+        let phase = self
+            .store
+            .plugin_uninstall_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .phase;
+        self.deny_at != Some(phase) && self.deny_after_checks.is_none_or(|limit| count < limit)
+    }
+
     fn stop(&self, _: &str) -> bool {
+        self.stops.fetch_add(1, Ordering::SeqCst);
         false
     }
     fn reload(&self, _: &str) -> Result<(), String> {
+        self.reloads.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
     async fn uninstall(&self, intent: &UninstallIntent) -> Result<(), CommandRequestError> {
@@ -200,6 +224,128 @@ impl Effects for MockEffects {
         } else {
             Ok(())
         }
+    }
+}
+
+#[tokio::test]
+async fn current_authority_is_required_at_each_durable_effect_boundary() {
+    for denied in [
+        Phase::Prepared,
+        Phase::StoppingSessions,
+        Phase::Uninstalling,
+        Phase::MachineUninstalled,
+    ] {
+        let (_root, store, mut intent) = setup("before-impact").await;
+        store
+            .advance_plugin_uninstall(&intent.operation_id, Phase::Prepared, Phase::Aborted, None)
+            .await
+            .unwrap();
+        intent.operation_id = fixture("with-impact").operation_id;
+        intent.session_ids = vec!["session-a".into(), "session-b".into()];
+        store.begin_plugin_uninstall(&intent).await.unwrap();
+        let mut effects = MockEffects::new(store.clone(), None);
+        effects.deny_at = Some(denied);
+        let phase = execute(&store, &intent, &effects).await.unwrap();
+        assert_eq!(
+            phase,
+            if denied == Phase::Prepared {
+                Phase::Aborted
+            } else {
+                Phase::NeedsAttention
+            }
+        );
+        assert_eq!(
+            effects.uninstalls.load(Ordering::SeqCst),
+            usize::from(denied == Phase::MachineUninstalled)
+        );
+        assert_eq!(effects.restorations.load(Ordering::SeqCst), 0);
+        let saved = store
+            .plugin_uninstall_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.problem, Some(Problem::PreconditionsChanged));
+        if phase == Phase::NeedsAttention {
+            assert_eq!(saved.attention_from, Some(denied));
+        }
+    }
+}
+
+#[tokio::test]
+async fn authority_loss_between_worker_stops_preserves_the_partial_operation() {
+    let (_root, store, mut intent) = setup("before-stop").await;
+    store
+        .advance_plugin_uninstall(&intent.operation_id, Phase::Prepared, Phase::Aborted, None)
+        .await
+        .unwrap();
+    intent.operation_id = fixture("partial-stop").operation_id;
+    intent.session_ids = vec!["session-a".into(), "session-b".into()];
+    store.begin_plugin_uninstall(&intent).await.unwrap();
+    let mut effects = MockEffects::new(store.clone(), None);
+    effects.deny_after_checks = Some(2); // initial admission, then the first stop
+    assert_eq!(
+        execute(&store, &intent, &effects).await.unwrap(),
+        Phase::NeedsAttention
+    );
+    assert_eq!(effects.stops.load(Ordering::SeqCst), 1);
+    assert_eq!(effects.uninstalls.load(Ordering::SeqCst), 0);
+    assert_eq!(effects.restorations.load(Ordering::SeqCst), 0);
+    assert!(
+        !recover_fences(Some(&store), "service-test")
+            .await
+            .unwrap()
+            .read()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn compensation_and_worker_reload_cannot_use_revoked_forward_approval() {
+    for denied in [Phase::RestoringMachine, Phase::RestoringSessions] {
+        let (_root, store, mut intent) = setup("before-recovery").await;
+        store
+            .advance_plugin_uninstall(&intent.operation_id, Phase::Prepared, Phase::Aborted, None)
+            .await
+            .unwrap();
+        intent.operation_id = fixture("recover-workers").operation_id;
+        intent.session_ids = vec!["session-a".into()];
+        intent.live_session_ids = intent.session_ids.clone();
+        store.begin_plugin_uninstall(&intent).await.unwrap();
+        for (from, to) in [
+            (Phase::Prepared, Phase::StoppingSessions),
+            (Phase::StoppingSessions, Phase::Uninstalling),
+        ] {
+            store
+                .advance_plugin_uninstall(&intent.operation_id, from, to, None)
+                .await
+                .unwrap();
+        }
+        let mut effects = MockEffects::new(store.clone(), Some(CommandFailure::Rejected));
+        effects.deny_at = Some(denied);
+        assert_eq!(
+            compensate(
+                &store,
+                &intent,
+                &effects,
+                Phase::Uninstalling,
+                Problem::MachineRejected
+            )
+            .await
+            .unwrap(),
+            Phase::NeedsAttention
+        );
+        assert_eq!(
+            effects.restorations.load(Ordering::SeqCst),
+            usize::from(denied == Phase::RestoringSessions)
+        );
+        assert_eq!(effects.reloads.load(Ordering::SeqCst), 0);
+        let saved = store
+            .plugin_uninstall_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.problem, Some(Problem::CompensationFailed));
+        assert_eq!(saved.cause, Some(Problem::MachineRejected));
     }
 }
 
