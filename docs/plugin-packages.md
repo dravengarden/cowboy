@@ -268,6 +268,14 @@ are not OIDC entries in its `providers` array and cannot install on Machines.
 The Controller's separate host activation configuration selects exact releases;
 publication is not a production cutover.
 
+The [core security client migration](core-security-client-boundary.md) now
+renders local Password/setup/Passkey UI directly from core policy, with core
+labels and no Plugin slot. Existing local renderer IDs remain readable but do
+not mount security UI in the new Web bundle. Controller exact host/storage
+selection and historical local packages are unchanged until their separate
+ownership migration; this Web-only change is not permission to retire pins,
+credentials or native ABI. External OIDC retains its Plugin presentation.
+
 Released usage collectors, resets, and activity transforms run through a typed
 protocol-seven request to an active exact Plugin generation on a Machine. The
 Controller supplies only a closed operation and bounded JSON; the Machine

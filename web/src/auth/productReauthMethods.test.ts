@@ -45,7 +45,7 @@ Deno.test("primary reauthentication keeps the session's provider method", () => 
   });
 });
 
-Deno.test("login method labels prefer host plugins over OIDC display names", () => {
+Deno.test("only external login method labels may use a host Plugin", () => {
   assertEquals(
     loginMethodLabel("password", hostPlugins, providers),
     "Password",
@@ -54,7 +54,15 @@ Deno.test("login method labels prefer host plugins over OIDC display names", () 
     loginMethodLabel("cardea", hostPlugins, providers),
     "Cardea SSO",
   );
-  assertEquals(loginMethodLabel("password", [], providers), "password");
+  assertEquals(loginMethodLabel("password", [], providers), "Password");
+  assertEquals(
+    loginMethodLabel("password", [{
+      id: "password",
+      slots: ["login.method"],
+      label: "Misleading prompt",
+    }], providers),
+    "Password",
+  );
   assertEquals(loginMethodLabel("cardea", [], providers), "Cardea");
 });
 

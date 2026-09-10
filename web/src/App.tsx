@@ -227,7 +227,7 @@ import {
     type ControlCenterTab,
 } from "./desktop/controlCenterTabs";
 import { ProductAccountMenu } from "./auth/ProductAccountMenu";
-import { ProductAccountPluginPanels } from "./auth/ProductAccountPluginPanels";
+import { ProductAccountSecurity } from "./auth/ProductAccountSecurity";
 import { ProductSessionCapacityPanel } from "./auth/ProductSessionCapacityPanel";
 import { ProductDevicesPanel } from "./auth/ProductDevicesPanel";
 import {
@@ -5952,7 +5952,7 @@ function SettingsShell({
                 >
                     <Stack data-mobile-account-sections spacing={2}>
                         <ProductSessionCapacityPanel />
-                        <ProductAccountPluginPanels />
+                        <ProductAccountSecurity />
                         <ProductDevicesPanel hideWhenEmpty />
                         <ProductAccountMenu />
                     </Stack>

@@ -220,6 +220,13 @@ then, a provider service owns provider state and Cowboy owns Cowboy state.
 
 ## Login UI
 
+Local Password, setup and Passkey presentation is now a
+[core client boundary](../core-security-client-boundary.md), not a Plugin slot.
+The explicit Service policy controls visibility and core owns local field copy.
+External OIDC still contributes its signed presentation through the Plugin host.
+The Controller's historical local host/storage prerequisites remain unchanged
+pending the separate ownership migration.
+
 `GET /api/auth/status` returns `password_enabled`, `login_method_order`, the
 Passkey and session server policies, and every enabled provider's stable ID,
 display label, button label, and start URL. When more than one method exists,
@@ -327,6 +334,12 @@ capability or a browser `SecurityError` caused by an unavailable origin-bound
 WebAuthn context may fall back to the external ceremony. A local biometric or
 Secure Enclave key that is not a WebAuthn credential is never accepted as a
 Passkey or as evidence for session extension.
+
+The Web core port accepts exactly the installed native ceremony ABI v1 and
+decodes its registration/assertion results separately. A rejected promise after
+native dispatch is an unknown outcome, not a missing capability; it never
+automatically starts another ceremony. The unchanged native v1 driver's explicit
+`not_configured`/`unsupported_os` refusal retains its existing fallback.
 
 A SideStore-signed iOS shell that cannot obtain the Associated Domains
 entitlement runs the WebAuthn prompt in an `ASWebAuthenticationSession`, not its

@@ -21,6 +21,11 @@ change only through its tested migrations. The target APIs and guarantees are
 not implemented; this document remains the contract for existing releases/data.
 The [read-only composition checker](plugin-composition-checker.md) now exercises
 the first structural slice without changing these live authorities or formats.
+The [core security client slice](core-security-client-boundary.md) moves local
+login/Passkey presentation out of Plugin slots and closes the client native
+Passkey port. It leaves Controller host/storage ownership and native ABI intact;
+retained local Authentication releases are still storage migration inputs, not
+authority to override core client security surfaces.
 
 These requirements govern new Provider-platform work. When a target design
 choice conflicts with a transitional implementation detail, preserve the live
