@@ -26,6 +26,12 @@ login/Passkey presentation out of Plugin slots and closes the client native
 Passkey port. It leaves Controller host/storage ownership and native ABI intact;
 retained local Authentication releases are still storage migration inputs, not
 authority to override core client security surfaces.
+The [core security storage bridge](core-security-storage-bridge.md) now owns
+Passkey SQL through a checked typed port and one shared startup binding. The
+selected legacy host must match core's exact historical storage schema. First
+import is atomic and refuses unreceipted nonempty destinations. Physical
+storage, host selections and durable reader formats remain unchanged until the
+separate ownership cutover.
 
 These requirements govern new Provider-platform work. When a target design
 choice conflicts with a transitional implementation detail, preserve the live

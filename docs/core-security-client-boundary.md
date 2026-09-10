@@ -83,6 +83,11 @@ public authentication protocol.
 
 ## Still required for P1
 
+The subsequent [storage bridge](core-security-storage-bridge.md) now provides a
+typed core persistence port, shared write-once binding and atomic first import
+at the existing namespace. The durable ownership/policy cutover below remains
+separate; this does not yet remove the Controller's Catalog prerequisites.
+
 1. Move local authentication/storage authority into CoreSecurity without copying
    stale credential rows over current Plugin-namespace data. Preserve applied
    SQL bytes, credential IDs/public keys, sessions and monotonic security state.

@@ -276,6 +276,14 @@ selection and historical local packages are unchanged until their separate
 ownership migration; this Web-only change is not permission to retire pins,
 credentials or native ABI. External OIDC retains its Plugin presentation.
 
+The [Controller storage bridge](core-security-storage-bridge.md) puts Passkey SQL
+behind a typed core port while retaining that exact namespace selection. Core
+accepts only the historical `0001` PostgreSQL/SQLite migration fingerprints for
+selected WebAuthn hosts; new credential SQL requires a separate core migration,
+not only a Plugin version/pin. The first legacy import commits all data and its
+receipt atomically, refusing nonempty unreceipted state. Existing applied SQL,
+Catalog packages, host policy and rollback-reader data formats are unchanged.
+
 Released usage collectors, resets, and activity transforms run through a typed
 protocol-seven request to an active exact Plugin generation on a Machine. The
 Controller supplies only a closed operation and bounded JSON; the Machine

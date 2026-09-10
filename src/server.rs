@@ -1005,13 +1005,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     };
     if let Some(store) = store.as_mut() {
         let namespace = plugin_runtime
-            .namespace_for_capability(crate::plugin_passkeys::STORAGE_CAPABILITY)
-            .cloned()
+            .namespace_for_capability(crate::core_passkeys::STORAGE_CAPABILITY)
             .context("WebAuthn plugin storage is unavailable")?;
-        crate::plugin_passkeys::import_from_core(&namespace, store)
+        store
+            .attach_passkey_storage(namespace)
             .await
-            .context("migrating legacy Passkey rows into plugin storage")?;
-        store.attach_passkey_plugin(namespace);
+            .context("binding core Passkey storage at the legacy namespace")?;
     }
     let machine_control = Arc::new(MachineControl::default());
     let usage = UsageService::with_plugin_catalog(

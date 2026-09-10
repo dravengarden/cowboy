@@ -297,6 +297,12 @@ impl HostActivationPolicy {
                 }
             }
         }
+        for release in releases
+            .iter()
+            .filter(|release| release.default_for_id && release.host_bundle.is_some())
+        {
+            crate::core_passkeys::validate_legacy_host(&host_spec(release)?)?;
+        }
         for (id, renderer) in &self.authentication_methods {
             if self.source == HostSourcePolicy::Bootstrap && !self.pins.contains_key(id) {
                 continue;

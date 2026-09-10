@@ -25,6 +25,9 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 仅能终止可证明尚未开始效果的 `Prepared` 中断并解除对应 Service fence，不复活原授权、安装或会话。
 第十一批 [核心安全客户端](core-security-client-boundary.md) 将本地认证 UI 从 Plugin slot 分离，
 并为现有 native Passkey ABI 加入闭集类型、结果校验与不确定效果禁止自动重试；不迁移存储或退役旧 SDK/原生 ABI。
+第十二批 [核心安全存储桥](core-security-storage-bridge.md) 将 Passkey SQL 和共享的一次性绑定收进核心，
+冻结兼容存储格式，原子导入旧数据，并修复并行授权流程的误清理；保留现有存储位置、pin 与 reader，
+尚未执行耐久 ownership/生产配置切换。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
