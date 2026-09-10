@@ -2,6 +2,82 @@ use super::*;
 use crate::plugin_operation::fixture;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[tokio::test]
+async fn recovery_assessment_preserves_service_fences_and_detects_changes_during_query() {
+    use crate::machine_protocol::plugin_recovery::{InstallationEvidence, RecoverySnapshot};
+    use crate::machine_protocol::{MachineCommand, MachineEvent};
+    for race in [false, true] {
+        let (_root, store, intent) = setup("recovery-inspection").await;
+        let before = store
+            .plugin_uninstall_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let control = MachineControl::default();
+        let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
+        let connection = control.install(intent.machine_id.clone(), "epoch".into(), false, 12, tx);
+        let query = inspect_recovery(&store, before.clone(), &control, &connection);
+        let reply = async {
+            let MachineCommand::QueryPluginUninstallRecovery { request_id, step } =
+                commands.recv().await.unwrap()
+            else {
+                panic!("observation may only send the read command")
+            };
+            assert_eq!(*step, intent.machine_step().unwrap());
+            if race {
+                store
+                    .advance_plugin_uninstall(
+                        &intent.operation_id,
+                        Phase::Prepared,
+                        Phase::StoppingSessions,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            control.record_remote(
+                &connection,
+                MachineEvent::PluginUninstallRecovery {
+                    request_id,
+                    observation: Box::new(RecoveryObservation::Observed {
+                        snapshot: Box::new(RecoverySnapshot {
+                            request_digest: step.request_digest().unwrap(),
+                            receipt: None,
+                            installation: InstallationEvidence::Untracked {},
+                            slot_fenced: false,
+                        }),
+                    }),
+                },
+            );
+        };
+        let (assessment, ()) = tokio::join!(query, reply);
+        let after = store
+            .plugin_uninstall_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        if race {
+            assert!(
+                assessment.is_err(),
+                "changed Service evidence invalidates the assessment"
+            );
+            assert_eq!(after.phase, Phase::StoppingSessions);
+        } else {
+            assert_eq!(after, before);
+            let body = serde_json::to_value(assessment.unwrap()).unwrap();
+            assert_eq!(body["recovery_execution_available"], false);
+            assert_eq!(body["reconciliation_performed"], false);
+            assert_eq!(body["not_verified"].as_array().unwrap().len(), 4);
+            assert!(!body.to_string().contains("user-test"));
+            assert!(!body.to_string().contains("session_ids"));
+        }
+        assert!(
+            commands.try_recv().is_err(),
+            "no hidden recovery or worker command"
+        );
+    }
+}
+
 #[test]
 fn durable_step_result_never_infers_success_from_missing_or_unknown_evidence() {
     use crate::machine_protocol::plugin_step::{

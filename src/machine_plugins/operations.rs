@@ -265,6 +265,80 @@ fn unavailable(reason: StepUnavailable) -> StepLookup {
 }
 
 impl MachinePluginStore {
+    pub(crate) async fn uninstall_recovery_observation(
+        &self,
+        step: &UninstallStep,
+        service: Option<&str>,
+        machine: &str,
+    ) -> crate::machine_protocol::plugin_recovery::RecoveryObservation {
+        use crate::machine_protocol::plugin_recovery::{RecoveryObservation, RecoverySnapshot};
+        let _lifecycle = self.lifecycle.lock().await;
+        let Ok(request_digest) = step.request_digest() else {
+            return RecoveryObservation::Unavailable {
+                reason: StepUnavailable::InvalidRequest,
+            };
+        };
+        if service != Some(step.service_id.as_str()) || machine != step.machine_id {
+            return RecoveryObservation::Unavailable {
+                reason: StepUnavailable::WrongOwner,
+            };
+        }
+        let receipt = match self.operations.query(step) {
+            StepLookup::Found { receipt } => Some(receipt),
+            StepLookup::NotFound {} => None,
+            StepLookup::Unavailable { reason } => {
+                return RecoveryObservation::Unavailable { reason };
+            }
+        };
+        let active = self.recovery_active_digest(&step.plugin_id);
+        RecoveryObservation::Observed {
+            snapshot: Box::new(RecoverySnapshot {
+                request_digest,
+                receipt,
+                installation: self
+                    .operations
+                    .installations
+                    .observe(&step.plugin_id, active),
+                slot_fenced: self.operations.ensure_unfenced(&step.plugin_id).is_err(),
+            }),
+        }
+    }
+
+    // Unlike the legacy inventory helper, malformed/dangling links and regular
+    // files must not be mistaken for an absent installation during recovery.
+    fn recovery_active_digest(&self, plugin: &str) -> Result<Option<String>> {
+        let root = self.plugin_root(plugin);
+        match root.symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            metadata => ensure!(metadata?.is_dir(), "invalid Plugin root"),
+        }
+        let active = root.join("active");
+        match active.symlink_metadata() {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            metadata => ensure!(metadata?.file_type().is_symlink(), "invalid active link"),
+        }
+        let target = fs::read_link(active)?;
+        let generation = target
+            .to_str()
+            .and_then(|t| t.strip_prefix("generations/"))
+            .context("invalid active target")?;
+        let digest = format!("sha256:{generation}");
+        ensure!(
+            digest_generation_name(&digest)? == generation,
+            "invalid active generation"
+        );
+        for directory in [
+            root.join("generations"),
+            root.join("generations").join(generation),
+        ] {
+            ensure!(
+                directory.symlink_metadata()?.is_dir(),
+                "invalid active generation directory"
+            );
+        }
+        Ok(Some(digest))
+    }
+
     pub(crate) async fn uninstall_step(
         &self,
         step: &UninstallStep,

@@ -211,6 +211,54 @@ impl Installations {
         self.state.lock().slots.contains_key(plugin)
     }
 
+    /// The caller holds the lifecycle lock and reads the actual active link.
+    /// This reads existing authority only, including in reader-only mode.
+    pub(super) fn observe(
+        &self,
+        plugin: &str,
+        active: Result<Option<String>>,
+    ) -> crate::machine_protocol::plugin_recovery::InstallationEvidence {
+        use crate::machine_protocol::plugin_recovery::{
+            InstallationEvidence as Evidence, InstallationUnavailable,
+        };
+        let state = self.state.lock();
+        if state.poisoned {
+            return Evidence::Unavailable {
+                reason: InstallationUnavailable::Storage,
+            };
+        }
+        let Some(transition) = state.slots.get(plugin) else {
+            return Evidence::Untracked {};
+        };
+        if transition.outcome == (Outcome::Unknown {}) {
+            return Evidence::Pending {
+                revision: transition.revision.clone(),
+            };
+        }
+        if active.is_err() || active.ok().flatten() != transition.generation_digest {
+            return Evidence::Unavailable {
+                reason: InstallationUnavailable::ActiveLinkMismatch,
+            };
+        }
+        match &transition.generation_digest {
+            Some(generation_digest) => Evidence::Installed {
+                revision: transition.revision.clone(),
+                generation_digest: generation_digest.clone(),
+            },
+            None => Evidence::Removed {
+                revision: transition.revision.clone(),
+                previous_revision: transition
+                    .previous_revision
+                    .clone()
+                    .expect("validated removal predecessor"),
+                uninstall_request_digest: transition
+                    .operation_digest
+                    .clone()
+                    .expect("validated removal identity"),
+            },
+        }
+    }
+
     pub(in crate::machine_plugins) fn requires_cas(&self) -> bool {
         self.state.lock().present
     }

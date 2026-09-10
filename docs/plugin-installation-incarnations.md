@@ -133,6 +133,10 @@ contract: their exact Provider contract stays schedulable after slot adoption.
 
 ## Verification and remaining work
 
+The subsequent [recovery assessment](plugin-recovery-assessment.md) exposes a
+coherent read-only Machine receipt/tombstone snapshot to the Service. It does
+not mint a restoration grant or resolve uncertain evidence by observation.
+
 Hermetic tests cover signed same-release reinstall, stale preflight and execution,
 changed-request identity conflicts, tombstone provenance, duplicate receipts
 after reinstall, pending reopen, reader-only rollback, unadopted slots, capacity,

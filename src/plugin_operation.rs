@@ -216,7 +216,7 @@ pub(crate) enum Problem {
     WorkerRecoveryUnverified,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Operation {
     pub intent: UninstallIntent,
     pub phase: Phase,

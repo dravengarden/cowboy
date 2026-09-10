@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
+use crate::machine_protocol::plugin_recovery::{RecoveryBasis, RecoveryObservation};
 use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
@@ -706,6 +707,106 @@ pub(super) async fn api_machine_plugin_operation_receipt(
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Machine durable receipt is unavailable; operation remains unchanged",
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RecoveryRequirement {
+    FreshPolicyAndAuthAuthority,
+    RetainedArtifactsAndProbes,
+    BoundedExecutionLease,
+    ExactSessionAndWorkerRestoration,
+}
+
+#[derive(serde::Serialize)]
+struct RecoveryAssessment {
+    schema: u16,
+    operation_id: String,
+    service_phase: Phase,
+    service_problem: Option<Problem>,
+    service_cause: Option<Problem>,
+    attention_from: Option<Phase>,
+    affected_session_count: usize,
+    machine_observation: RecoveryObservation,
+    basis: RecoveryBasis,
+    recovery_execution_available: bool,
+    reconciliation_performed: bool,
+    not_verified: [RecoveryRequirement; 4],
+}
+
+async fn inspect_recovery(
+    store: &Store,
+    operation: crate::plugin_operation::Operation,
+    control: &MachineControl,
+    connection: &ConnectionToken,
+) -> Result<RecoveryAssessment> {
+    let step = operation.intent.machine_step()?;
+    let observation = control
+        .plugin_uninstall_recovery(connection, &step)
+        .await
+        .map_err(|_| anyhow::anyhow!("Machine recovery observation unavailable"))?;
+    // Service and Machine are separate transaction domains. Detect a local
+    // change while awaiting the snapshot; do not claim cross-site atomicity.
+    ensure!(
+        store
+            .plugin_uninstall_operation(&operation.intent.operation_id)
+            .await?
+            .as_ref()
+            == Some(&operation),
+        "Service operation changed during recovery observation"
+    );
+    Ok(RecoveryAssessment {
+        schema: 1,
+        basis: observation.basis(&step),
+        machine_observation: observation,
+        operation_id: operation.intent.operation_id,
+        service_phase: operation.phase,
+        service_problem: operation.problem,
+        service_cause: operation.cause,
+        attention_from: operation.attention_from,
+        affected_session_count: operation.intent.session_ids.len(),
+        recovery_execution_available: false,
+        reconciliation_performed: false,
+        not_verified: [
+            RecoveryRequirement::FreshPolicyAndAuthAuthority,
+            RecoveryRequirement::RetainedArtifactsAndProbes,
+            RecoveryRequirement::BoundedExecutionLease,
+            RecoveryRequirement::ExactSessionAndWorkerRestoration,
+        ],
+    })
+}
+
+/// Existing Operator middleware authorizes observation only. No supplied intent,
+/// mutation flag, credentials, activation, worker reload or journal transition.
+pub(super) async fn api_machine_plugin_recovery_assessment(
+    State(state): State<Arc<AppState>>,
+    Path((machine, plugin, operation)): Path<(String, String, String)>,
+) -> Response {
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let operation = match store.plugin_uninstall_operation(&operation).await {
+        Ok(Some(op))
+            if op.intent.service_id == state.service_id
+                && op.intent.machine_id == machine
+                && op.intent.plugin_id == plugin =>
+        {
+            op
+        }
+        Ok(_) => return StatusCode::NOT_FOUND.into_response(),
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+    let Ok(connection) = state.machine_control.operation_connection(&machine) else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    match inspect_recovery(store, operation, &state.machine_control, &connection).await {
+        Ok(assessment) => Json(assessment).into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Recovery assessment unavailable; this query made no changes",
         )
             .into_response(),
     }
