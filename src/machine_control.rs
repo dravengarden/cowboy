@@ -14,6 +14,7 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
@@ -114,10 +115,12 @@ enum ReplyKind {
     Command,
     PluginHost,
     PluginStep,
+    PluginRecovery,
 }
 
 enum Reply {
     PluginStep(Box<StepObservation>),
+    PluginRecovery(Box<RecoveryObservation>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -132,6 +135,7 @@ impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
             Self::PluginStep(_) => ReplyKind::PluginStep,
+            Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -411,6 +415,12 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::PluginUninstallRecovery {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::PluginRecovery(observation));
+            }
             MachineEvent::PluginUninstallStep {
                 request_id,
                 observation,
@@ -709,6 +719,57 @@ impl MachineControl {
         }
     }
 
+    pub(crate) async fn plugin_uninstall_recovery(
+        &self,
+        token: &ConnectionToken,
+        step: &UninstallStep,
+    ) -> Result<RecoveryObservation, CommandRequestError> {
+        let fail = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.to_owned(),
+        };
+        step.validate()
+            .map_err(|_| fail(CommandFailure::NotSent, "invalid recovery query"))?;
+        if step.machine_id != token.0.machine_id {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "recovery query target mismatch",
+            ));
+        }
+        let request_id = self.request_id("plugin-recovery").map_err(|_| {
+            fail(
+                CommandFailure::NotSent,
+                "recovery query identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::QueryPluginUninstallRecovery {
+                    request_id: request_id.clone(),
+                    step: Box::new(step.clone()),
+                },
+                ReplyKind::PluginRecovery,
+                Some(RequestBinding::Connection(token)),
+            )
+            .map_err(|_| {
+                fail(
+                    CommandFailure::NotSent,
+                    "recovery query channel unavailable",
+                )
+            })?;
+        match tokio::time::timeout(PROVIDER_COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(Reply::PluginRecovery(observation))) if observation.matches(step) => {
+                Ok(*observation)
+            }
+            _ => Err(fail(
+                CommandFailure::Unknown,
+                "recovery query evidence unavailable",
+            )),
+        }
+    }
+
     pub(crate) async fn command_on_connection(
         &self,
         connection: &ConnectionToken,
@@ -996,6 +1057,141 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.certainty, CommandFailure::NotSent);
         assert!(commands.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn recovery_observation_rejects_older_peer_and_wrong_machine_without_enqueue() {
+        for (protocol, machine) in [(11, "machine-test"), (12, "other-machine")] {
+            let control = MachineControl::default();
+            let (tx, mut commands) = mpsc::unbounded_channel();
+            let connection = control.install(machine.into(), "epoch".into(), false, protocol, tx);
+            let step = crate::machine_protocol::plugin_step::fixture();
+            assert_eq!(
+                control
+                    .plugin_uninstall_recovery(&connection, &step)
+                    .await
+                    .unwrap_err()
+                    .certainty,
+                CommandFailure::NotSent
+            );
+            assert!(commands.try_recv().is_err());
+            assert!(control.live.read().pending.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_observation_validates_missing_receipt_identity_and_reply_kind() {
+        use crate::machine_protocol::plugin_recovery::{InstallationEvidence, RecoverySnapshot};
+        let control = MachineControl::default();
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install("machine-test".into(), "epoch".into(), false, 12, tx);
+        let step = crate::machine_protocol::plugin_step::fixture();
+        for changed in [false, true] {
+            let request = control.plugin_uninstall_recovery(&connection, &step);
+            let respond = async {
+                let MachineCommand::QueryPluginUninstallRecovery {
+                    request_id,
+                    step: received,
+                } = commands.recv().await.unwrap()
+                else {
+                    panic!("read-only command required")
+                };
+                assert_eq!(*received, step);
+                control.record_remote(
+                    &connection,
+                    MachineEvent::PluginUninstallStep {
+                        request_id: request_id.clone(),
+                        observation: Box::new(StepObservation {
+                            admission_enabled: true,
+                            result: StepLookup::NotFound {},
+                        }),
+                    },
+                );
+                assert!(control.live.read().pending.contains_key(&request_id));
+                control.record_remote(
+                    &connection,
+                    MachineEvent::PluginUninstallRecovery {
+                        request_id,
+                        observation: Box::new(RecoveryObservation::Observed {
+                            snapshot: Box::new(RecoverySnapshot {
+                                request_digest: if changed {
+                                    crate::machine_protocol::plugin_step::digest(b"other request")
+                                } else {
+                                    step.request_digest().unwrap()
+                                },
+                                receipt: None,
+                                installation: InstallationEvidence::Untracked {},
+                                slot_fenced: false,
+                            }),
+                        }),
+                    },
+                );
+            };
+            let (result, ()) = tokio::join!(request, respond);
+            if changed {
+                assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+            } else {
+                assert!(result.is_ok());
+            }
+            assert!(control.live.read().pending.is_empty());
+        }
+        assert!(
+            control.events("machine-test").is_empty(),
+            "recovery replies are never event history"
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_observation_drops_old_connection_and_cancelled_observers() {
+        use crate::machine_protocol::plugin_step::StepUnavailable;
+        let control = MachineControl::default();
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let old = control.install("machine-test".into(), "epoch".into(), false, 12, tx);
+        let step = crate::machine_protocol::plugin_step::fixture();
+        let request = control.plugin_uninstall_recovery(&old, &step);
+        let replace = async {
+            let MachineCommand::QueryPluginUninstallRecovery { request_id, .. } =
+                commands.recv().await.unwrap()
+            else {
+                panic!()
+            };
+            let (tx, _rx) = mpsc::unbounded_channel();
+            control.install("machine-test".into(), "epoch".into(), false, 12, tx);
+            control.record_remote(
+                &old,
+                MachineEvent::PluginUninstallRecovery {
+                    request_id,
+                    observation: Box::new(RecoveryObservation::Unavailable {
+                        reason: StepUnavailable::Storage,
+                    }),
+                },
+            );
+        };
+        let (result, ()) = tokio::join!(request, replace);
+        assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let current = control.install("machine-test".into(), "epoch".into(), false, 12, tx);
+        let mut pending = Box::pin(control.plugin_uninstall_recovery(&current, &step));
+        let request_id = tokio::select! {
+            _ = &mut pending => panic!("no response has arrived"),
+            command = commands.recv() => {
+                let Some(MachineCommand::QueryPluginUninstallRecovery { request_id, .. }) = command else { panic!() };
+                request_id
+            }
+        };
+        assert!(control.live.read().pending.contains_key(&request_id));
+        drop(pending);
+        assert!(control.live.read().pending.is_empty());
+        control.record_remote(
+            &current,
+            MachineEvent::PluginUninstallRecovery {
+                request_id,
+                observation: Box::new(RecoveryObservation::Unavailable {
+                    reason: StepUnavailable::Storage,
+                }),
+            },
+        );
+        assert!(control.events("machine-test").is_empty());
     }
 
     #[tokio::test]

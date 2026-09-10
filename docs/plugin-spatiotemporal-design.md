@@ -15,6 +15,8 @@ Machine 默认 reader-only，实际启用需要独立维护切换。第六批
 [安装代次与 CAS](plugin-installation-incarnations.md) 加入协议 11 的独立 incarnation、卸载
 前置条件和耐久 tombstone；兼容 reader 与 Hawk 冷启动恢复版本均已验收，写入仅在明确准入的
 Machine 启用。耐久自动补偿仍未实现。
+第七批 [恢复检查](plugin-recovery-assessment.md) 在同一 Machine 生命周期锁下核对历史回执与当前
+tombstone，Service 再检查自身记录是否变化；只读结果不授予恢复执行权，也不清除 fence。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行

@@ -1,6 +1,9 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[cfg(feature = "full")]
+mod recovery;
+
 fn step() -> UninstallStep {
     UninstallStep {
         schema: 1,

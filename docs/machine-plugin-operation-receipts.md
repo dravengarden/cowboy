@@ -122,6 +122,10 @@ new Service phases, problems or database migrations.
 
 ## Verification and remaining scope
 
+Protocol 12's [recovery assessment](plugin-recovery-assessment.md) separately
+checks this historical receipt against the current installation tombstone under
+one Machine lifecycle lock. It still does not execute or clear recovery fences.
+
 Hermetic tests cover signature-verified install/uninstall/reinstall, duplicate
 and changed-ID requests, lost observers/old-connection replies, reopened intent
 and completed receipts, partial effects, pre/post-effect write failure, wrong

@@ -1723,6 +1723,17 @@ fn handle_machine_command(command: MachineCommand, context: MachineCommandContex
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .uninstall_recovery_observation(&step, service_id.as_deref(), &machine_id)
+                    .await;
+                let _ = events.send(MachineEvent::PluginUninstallRecovery {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
         MachineCommand::UninstallPluginStep { request_id, step }
         | MachineCommand::QueryPluginUninstallStep { request_id, step } => {
             tokio::spawn(async move {

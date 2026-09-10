@@ -9,15 +9,17 @@
 use serde::{Deserialize, Serialize};
 
 pub mod installation_revision;
+pub mod plugin_recovery;
 pub mod plugin_step;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 11;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 12;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
 pub const OTLP_PLUGIN_PROTOCOL_VERSION: u16 = 9;
 pub const PLUGIN_STEP_PROTOCOL_VERSION: u16 = 10;
 pub const PLUGIN_INSTALLATION_PROTOCOL_VERSION: u16 = 11;
+pub const PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION: u16 = 12;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -693,6 +695,12 @@ pub enum MachineCommand {
         request_id: String,
         step: Box<plugin_step::UninstallStep>,
     },
+    /// A coherent local snapshot of historical receipt and current slot.
+    /// Read only; never authorizes replay, restoration or fence removal.
+    QueryPluginUninstallRecovery {
+        request_id: String,
+        step: Box<plugin_step::UninstallStep>,
+    },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
@@ -744,6 +752,9 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::QueryPluginUninstallRecovery { .. } => {
+                PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION
+            }
             Self::UninstallPluginStep { step, .. }
             | Self::QueryPluginUninstallStep { step, .. } => {
                 if step.schema == 1 {
@@ -973,6 +984,10 @@ pub enum MachineEvent {
         request_id: String,
         observation: Box<plugin_step::StepObservation>,
     },
+    PluginUninstallRecovery {
+        request_id: String,
+        observation: Box<plugin_recovery::RecoveryObservation>,
+    },
     /// Sensitive Plugin output is correlated directly to the requester and
     /// must not enter the ordinary Machine event history.
     PluginHostResponse {
@@ -1086,7 +1101,7 @@ mod tests {
 
     #[test]
     fn provider_refresh_candidate_survives_the_protocol_eight_addition() {
-        assert_eq!(MACHINE_PROTOCOL_VERSION, 11);
+        assert_eq!(negotiate(1, MACHINE_PROTOCOL_VERSION, 1, 8), Some(8));
         let event = MachineEvent::ProviderAuthRefreshCandidate {
             request_id: "refresh-1".to_owned(),
             provider_id: "grok".to_owned(),
