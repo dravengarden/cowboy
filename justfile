@@ -38,6 +38,15 @@ dev-web:
 build-web:
     cd web && deno task build
 
+# Optional real IndexedDB gate. Build .#cowboy-idb-test-browser and pass its
+# absolute /bin/firefox; never use an authenticated/system browser profile.
+idb-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
+
+idb-conformance-check:
+    deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
+    deno check tools/idb-browser-conformance.ts
+
 # Build the public Cowboy product website from the first-party Plugin manifests.
 build-site:
     deno run --allow-read --allow-write=site-dist site/build.ts --out site-dist
@@ -358,7 +367,7 @@ test:
 test-postgres:
     bash tools/test-postgres.sh
 
-check: toolchain-check native-shell-check provider-check site-check composition-check fmt lint dependencies typecheck feature-check test test-postgres build
+check: toolchain-check native-shell-check provider-check site-check composition-check idb-conformance-check fmt lint dependencies typecheck feature-check test test-postgres build
 
 # Run the complete quality gate without growing workspace incremental caches.
 # sccache stays opt-in until cross-worktree Rust cache hits are proven locally.
