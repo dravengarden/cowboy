@@ -1404,16 +1404,20 @@ function handle(msg: Outbound): void {
           optimisticMessages.delete(env.session_id);
         }
       }
+      const cached = transcriptIsCached(env.session_id);
       setState({
         ...state,
         // Live fan-out covers every running session. Only the MRU working set
         // owns transcript payloads; inactive evictions rehydrate on demand.
-        timelines: transcriptIsCached(env.session_id)
+        timelines: cached
           ? applyEnvelope(state.timelines, env)
           : state.timelines,
         pagination,
         optimisticMessages,
-        ...(cmid !== undefined && {
+        // Never drop a just-sent bubble unless its echo actually landed in the
+        // cached timeline. A restore snapshot racing the send used to confirm
+        // the cmid while the envelope was discarded, leaving an empty skeleton.
+        ...(cmid !== undefined && cached && {
           optimisticMessages: reconcileOptimistic(state.optimisticMessages, env.session_id, new Set([cmid])),
         }),
       });

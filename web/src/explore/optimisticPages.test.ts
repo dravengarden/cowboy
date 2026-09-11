@@ -248,6 +248,10 @@ Deno.test("page roots and delivery bubbles use one shared optimistic key", async
     true,
   );
   assertEquals(
+    transcript.includes("pendingMessages.length"),
+    true,
+  );
+  assertEquals(
     transcript.includes("data-key={optimisticQuestionKey(om)}"),
     true,
   );
@@ -262,11 +266,16 @@ Deno.test("page roots and delivery bubbles use one shared optimistic key", async
 });
 
 Deno.test("discarding a durable chat send also removes its local page overlay", async () => {
-  const store = await Deno.readTextFile(new URL("../store.ts", import.meta.url));
+  const store = await Deno.readTextFile(
+    new URL("../store.ts", import.meta.url),
+  );
   const start = store.indexOf("export async function discardMessage(");
   const end = store.indexOf("function optimisticMessage(", start);
   const discard = store.slice(start, end);
-  assertEquals(discard.includes("await discardQueued(sessionId, pending.id)"), true);
+  assertEquals(
+    discard.includes("await discardQueued(sessionId, pending.id)"),
+    true,
+  );
   assertEquals(discard.includes('patchMessage(sessionId, cmid, "drop")'), true);
   assertEquals(discard.includes("return;"), false);
 });

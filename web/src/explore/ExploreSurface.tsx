@@ -2052,7 +2052,7 @@ export function ExploreTranscript(
               topInset={props.topInset}
               bottomInset={props.bottomInset}
               onScrollableChange={props.onScrollableChange}
-              visibleItemKeys={visibleItemKeys}
+              visibleItemKeys={current ? visibleItemKeys : undefined}
               pageFooter={current && props.desktop
                 ? (
                   <PageTurnFooter
