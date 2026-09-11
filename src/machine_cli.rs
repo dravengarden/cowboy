@@ -2003,17 +2003,16 @@ fn handle_machine_command(
             operation,
             payload,
         } => {
+            let invocation = execution.host(crate::machine_plugins::PluginHostRequest {
+                plugin_id,
+                plugin_version,
+                generation_digest,
+                auth_generation,
+                operation,
+                payload,
+            });
             tokio::spawn(async move {
-                let result = providers
-                    .invoke_host(
-                        &plugin_id,
-                        &plugin_version,
-                        &generation_digest,
-                        auth_generation,
-                        operation,
-                        payload,
-                    )
-                    .await;
+                let result = providers.invoke_host(invocation).await;
                 let event = match result {
                     Ok(payload) => MachineEvent::PluginHostResponse {
                         request_id,

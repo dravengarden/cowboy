@@ -27,6 +27,15 @@ impl PluginExecutionScope {
         }
     }
 
+    /// Capture before spawn: the request and its original connection/time
+    /// budget travel together and cannot be retargeted by an async caller.
+    pub(crate) fn host(
+        &self,
+        request: crate::machine_plugins::PluginHostRequest,
+    ) -> crate::machine_plugins::PluginHostInvocation {
+        crate::machine_plugins::PluginHostInvocation::new(request, Arc::clone(&self.connected))
+    }
+
     /// Called synchronously on command receipt, BEFORE spawning or waiting for
     /// a lifecycle lock. The wire supplies no duration or reusable capability.
     pub(crate) fn uninstall(

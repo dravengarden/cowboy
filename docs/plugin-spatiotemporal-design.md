@@ -41,6 +41,9 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 退出时先排空全部同步 writer 再关数据库；补齐只读 abort、受阻/超时 open 的晚到清理与旧连接代次隔离。
 组件闭包按 3.3.0 独立换代，数据格式和 Plugin 不变；跨 tab 单 writer 仲裁与存储 codec 不在本批内。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
+第十九批 [遥测执行租约](telemetry-execution-leases.md) 将实际 Machine 遥测命令绑定到原认证连接、
+接收时开始的单调预算与精确请求；每次 HTTP 外发/重试重新核对安装与原私有策略，禁止排队命令和重试
+跨连接/策略换代复活。已接纳外发不撤回；协议和耐久格式不变，P2 的持久绑定与恢复闭环仍未完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

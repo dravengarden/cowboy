@@ -20,7 +20,25 @@ pub(crate) struct PluginSelection {
     pub generation_digest: String,
 }
 
+#[cfg(feature = "full")]
 fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    read_private_snapshot(path).map(|(value, _)| value)
+}
+
+// Local observation fences, not durable policy epochs. Holding the open file
+// pins its inode so atomic replacement cannot recreate the same identity while
+// a request retains this snapshot. No bytes, paths or digests enter a receipt.
+#[cfg_attr(not(feature = "machine-host"), allow(dead_code))] // Controller only consumes the parsed startup selection.
+struct PrivateSnapshot {
+    file: std::fs::File,
+    digest: [u8; 32],
+    changed: (i64, i64),
+}
+
+fn read_private_snapshot<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Result<(T, PrivateSnapshot)> {
+    use sha2::{Digest as _, Sha256};
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -35,12 +53,31 @@ fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         "telemetry configuration must be an owned private regular file"
     );
     let mut bytes = Vec::new();
-    file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+    (&file).take(64 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() <= 64 * 1024,
         "telemetry configuration too large"
     );
-    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid telemetry configuration"))
+    let after = file.metadata()?;
+    ensure!(
+        metadata.ctime() == after.ctime()
+            && metadata.ctime_nsec() == after.ctime_nsec()
+            && metadata.len() == after.len()
+            && metadata.mode() == after.mode()
+            && metadata.nlink() == after.nlink()
+            && metadata.uid() == after.uid(),
+        "telemetry configuration changed during read"
+    );
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("invalid telemetry configuration"))?;
+    Ok((
+        value,
+        PrivateSnapshot {
+            file,
+            digest: Sha256::digest(&bytes).into(),
+            changed: (after.ctime(), after.ctime_nsec()),
+        },
+    ))
 }
 
 impl PluginSelection {
@@ -190,6 +227,29 @@ mod machine {
         traces: Option<Endpoint>,
     }
 
+    pub(crate) struct PreparedPolicy {
+        config: Configuration,
+        snapshot: PrivateSnapshot,
+    }
+
+    impl PreparedPolicy {
+        pub(crate) fn unchanged(&self, path: &Path) -> bool {
+            let Ok((_, current)) = read_private_snapshot::<Configuration>(path) else {
+                return false;
+            };
+            let Ok(original) = self.snapshot.file.metadata() else {
+                return false;
+            };
+            let Ok(observed) = current.file.metadata() else {
+                return false;
+            };
+            original.dev() == observed.dev()
+                && original.ino() == observed.ino()
+                && self.snapshot.digest == current.digest
+                && self.snapshot.changed == current.changed
+        }
+    }
+
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Endpoint {
@@ -215,8 +275,8 @@ mod machine {
         selection: &PluginSelection,
         value: serde_json::Value,
         otlp: bool,
-    ) -> Result<(Configuration, Payload)> {
-        let config: Configuration = read_private(path)?;
+    ) -> Result<(PreparedPolicy, Payload)> {
+        let (config, snapshot): (Configuration, _) = read_private_snapshot(path)?;
         config.plugin.validate()?;
         ensure!(
             config.plugin.plugin_id == selection.plugin_id
@@ -244,7 +304,7 @@ mod machine {
         {
             endpoint.validate()?;
         }
-        Ok((config, payload))
+        Ok((PreparedPolicy { config, snapshot }, payload))
     }
 
     impl Endpoint {
@@ -281,11 +341,17 @@ mod machine {
         }
     }
 
-    pub(crate) async fn export(
+    pub(crate) async fn export<F, Fut>(
         contract: &TelemetryBackendContract,
-        config: Configuration,
+        policy: &PreparedPolicy,
         payload: Payload,
-    ) -> ExportResult {
+        admit: &F,
+    ) -> ExportResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        let config = &policy.config;
         let Ok(client) = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -306,7 +372,7 @@ mod machine {
                         (contract.traces.as_ref(), config.traces.as_ref())
                     }
                 };
-                let receipt = post_otlp(&client, route, endpoint, &payload).await;
+                let receipt = post_otlp(&client, route, endpoint, &payload, admit).await;
                 return ExportResult {
                     otlp: Some(receipt),
                     ..Default::default()
@@ -319,13 +385,15 @@ mod machine {
                 &client,
                 contract.logs.as_ref(),
                 config.logs.as_ref(),
-                payload.logs
+                payload.logs,
+                admit
             ),
             post(
                 &client,
                 contract.metrics.as_ref(),
                 config.metrics.as_ref(),
-                payload.metrics
+                payload.metrics,
+                admit
             ),
         );
         ExportResult {
@@ -335,12 +403,17 @@ mod machine {
         }
     }
 
-    async fn post(
+    async fn post<F, Fut>(
         client: &reqwest::Client,
         route: Option<&TelemetryRoute>,
         endpoint: Option<&Endpoint>,
         body: String,
-    ) -> bool {
+        admit: &F,
+    ) -> bool
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
         if body.is_empty() {
             return true;
         }
@@ -373,6 +446,9 @@ mod machine {
             if let Some(token) = &endpoint.bearer_token {
                 request = request.bearer_auth(token);
             }
+            if !admit().await {
+                return false;
+            }
             let retry = match request.send().await {
                 Ok(response) if response.status().is_success() => return true,
                 Ok(response) => {
@@ -389,12 +465,17 @@ mod machine {
         false
     }
 
-    async fn post_otlp(
+    async fn post_otlp<F, Fut>(
         client: &reqwest::Client,
         route: Option<&TelemetryRoute>,
         endpoint: Option<&Endpoint>,
         payload: &crate::otlp::Export,
-    ) -> OtlpResult {
+        admit: &F,
+    ) -> OtlpResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
         // Explicitly disabled lanes stay local. Missing/incompatible routes on
         // an enabled lane are failures, never a legacy-encoding fallback.
         let Some(endpoint) = endpoint else {
@@ -426,6 +507,9 @@ mod machine {
                 .body(body.clone());
             if let Some(token) = &endpoint.bearer_token {
                 request = request.bearer_auth(token);
+            }
+            if !admit().await {
+                return failed();
             }
             let retry = match request.send().await {
                 Ok(mut response) if response.status() == reqwest::StatusCode::OK => {
@@ -555,13 +639,29 @@ mod machine {
                 path: "/redirect".into(),
                 query: Default::default(),
             };
-            assert!(!post(&client, Some(&route), Some(&endpoint), "{}\n".into()).await);
+            let admit = || async { true };
+            assert!(
+                !post(
+                    &client,
+                    Some(&route),
+                    Some(&endpoint),
+                    "{}\n".into(),
+                    &admit
+                )
+                .await
+            );
             assert_eq!(count.load(Ordering::Relaxed), 1);
             route.path = "/slow".into();
             assert!(
                 !tokio::time::timeout(
                     Duration::from_secs(1),
-                    post(&client, Some(&route), Some(&endpoint), "{}\n".into())
+                    post(
+                        &client,
+                        Some(&route),
+                        Some(&endpoint),
+                        "{}\n".into(),
+                        &admit
+                    )
                 )
                 .await
                 .unwrap()
