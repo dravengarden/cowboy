@@ -180,7 +180,7 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(login.includes("<SegmentedPill"));
   assert(login.includes("fullWidth"));
   assert(login.includes("justifyContent: \"flex-start\""));
-  assert(login.includes("cowboy-app-icon-192-v5.png"));
+  assert(login.includes("cowboy-app-icon-192-v6.png"));
   assert(login.includes('textTransform: "none"'));
   assert(login.includes("selectedProvider.button_label"));
   assert(login.includes("nativeOidcFlowSupported"));

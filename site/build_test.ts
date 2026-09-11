@@ -349,7 +349,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     "repository landing pages should begin with reciprocal language choices and default to English",
   );
   assert(
-    readme.includes("site/assets/cowboy-readme-icon-v5.png") &&
+    readme.includes("site/assets/cowboy-readme-icon-v6.png") &&
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
       readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
@@ -361,7 +361,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   );
   for (
     const asset of [
-      "site/assets/cowboy-readme-icon-v5.png",
+      "site/assets/cowboy-readme-icon-v6.png",
       "site/assets/cowboy-remote-topology-light-v3.webp",
       "site/assets/cowboy-remote-topology-dark-v3.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
@@ -506,8 +506,8 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "wordmarks should show the approved default icon",
     );
     assert(
-      styles.includes("--canvas: #232831") &&
-        styles.includes("--primary: #bdd2ed") &&
+      styles.includes("--canvas: #101014") &&
+        styles.includes("--primary: #51c9ff") &&
         !styles.includes("filter: var(--brand-filter-rest)") &&
         !styles.includes("@keyframes brand-color-breathe"),
       "brand colors remain faithful to the selected icon in light and dark themes",
@@ -705,13 +705,13 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v5-32.png" type="image/png" sizes="32x32"',
+        'href="assets/cowboy-tab-icon-v6-32.png" type="image/png" sizes="32x32"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v5-16.png" type="image/png" sizes="16x16"',
+          'href="assets/cowboy-tab-icon-v6-16.png" type="image/png" sizes="16x16"',
         ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v5.ico" sizes="any"',
+          'href="assets/cowboy-tab-icon-v6.ico" sizes="any"',
         ) &&
         !html.includes('href="assets/cowboy-hat-mark.svg"'),
       "document should expose tab-sized Cowboy favicons",
@@ -745,9 +745,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v5-16.png",
-        "cowboy-tab-icon-v5-32.png",
-        "cowboy-tab-icon-v5.ico",
+        "cowboy-tab-icon-v6-16.png",
+        "cowboy-tab-icon-v6-32.png",
+        "cowboy-tab-icon-v6.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

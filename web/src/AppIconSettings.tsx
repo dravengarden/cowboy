@@ -1,52 +1,110 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   Alert,
   Box,
   Button,
   ButtonBase,
   Chip,
-  MenuItem,
-  Pagination,
-  Select,
   Stack,
-  TextField,
   Typography,
 } from "@mui/material";
 import {
-  APP_ICON_CHANGED,
+  APP_ICON_GROUPS,
   APP_ICONS,
+  appearanceStyle,
   appIcon,
   appIconAsset,
   appIconInstallPath,
   currentAppIcon,
   DEFAULT_APP_ICON,
-  filterAppIcons,
   isNativeIconSurface,
   type NativeAppIconState,
   nativeAppIconState,
   selectAppIcon,
+  subscribeAppIcon,
 } from "./appIcons";
+import { appearancePalette } from "./appearanceThemes";
 
-function subscribe(listener: () => void): () => void {
-  globalThis.addEventListener(APP_ICON_CHANGED, listener);
-  return () => globalThis.removeEventListener(APP_ICON_CHANGED, listener);
+function StylePreview(
+  { id, dark }: { id: string; dark: boolean },
+): React.JSX.Element {
+  const p = appearancePalette(id, dark);
+  return (
+    <Box
+      aria-label={`${dark ? "Dark" : "Light"} theme preview`}
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        p: 1.5,
+        borderRadius: 2,
+        bgcolor: p.background.default,
+        color: p.text.primary,
+        border: "1px solid",
+        borderColor: p.divider,
+      }}
+    >
+      <Stack direction="row" alignItems="center" spacing={1}>
+        <Box
+          component="img"
+          src={appIconAsset(id, 96)}
+          alt=""
+          width={28}
+          height={28}
+          sx={{ borderRadius: 1 }}
+        />
+        <Typography variant="caption" sx={{ color: p.text.primary }}>
+          {dark ? "Dark" : "Light"}
+        </Typography>
+      </Stack>
+      <Box sx={{ mt: 1.5, p: 1, borderRadius: 1, bgcolor: p.background.paper }}>
+        <Box
+          sx={{
+            height: 5,
+            width: "75%",
+            borderRadius: 1,
+            bgcolor: p.text.secondary,
+          }}
+        />
+        <Box
+          sx={{
+            height: 5,
+            width: "50%",
+            mt: 0.75,
+            borderRadius: 1,
+            bgcolor: p.secondary.main,
+          }}
+        />
+      </Box>
+      <Box
+        sx={{
+          mt: 1,
+          px: 1,
+          py: 0.5,
+          textAlign: "center",
+          borderRadius: 1,
+          bgcolor: p.primary.main,
+          color: p.primary.contrastText,
+        }}
+      >
+        <Typography variant="caption" sx={{ color: "inherit" }}>
+          Continue
+        </Typography>
+      </Box>
+    </Box>
+  );
 }
 
 export function AppIconSettings(): React.JSX.Element {
   const selected = useSyncExternalStore(
-    subscribe,
+    subscribeAppIcon,
     currentAppIcon,
     () => DEFAULT_APP_ICON,
   );
-  const [expanded, setExpanded] = useState(false);
-  const [preview, setPreview] = useState(selected);
-  const [query, setQuery] = useState("");
-  const [family, setFamily] = useState("all");
-  const [tone, setTone] = useState("all");
-  const [page, setPage] = useState(1);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false),
+    [preview, setPreview] = useState(selected);
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState<string | null>(null),
+    [message, setMessage] = useState<string | null>(null);
   const [native, setNative] = useState<NativeAppIconState | null>(null);
   const inNative = isNativeIconSurface();
   useEffect(() => {
@@ -57,15 +115,8 @@ export function AppIconSettings(): React.JSX.Element {
       void nativeAppIconState().then(setNative).catch(() => setNative(null));
     }
   }, [expanded]);
-  const results = useMemo(() => filterAppIcons({ query, family, tone }), [
-    query,
-    family,
-    tone,
-  ]);
-  const pages = Math.max(1, Math.ceil(results.length / 24));
-  const activePage = Math.min(page, pages);
-  const shown = results.slice((activePage - 1) * 24, activePage * 24);
-  const icon = appIcon(preview);
+  const unsupported = inNative &&
+    (!native?.supported || !native.available.includes(preview));
   const ios = /iPhone|iPad|iPod/.test(globalThis.navigator?.userAgent ?? "") ||
     (/Mac/.test(globalThis.navigator?.platform ?? "") &&
       globalThis.navigator.maxTouchPoints > 1);
@@ -74,23 +125,26 @@ export function AppIconSettings(): React.JSX.Element {
     setError(null);
     setMessage(null);
     try {
-      await selectAppIcon(id);
+      const themeOnly = inNative &&
+        (!native?.supported || !native.available.includes(id));
+      await selectAppIcon(id, { themeOnly });
       setPreview(id);
       setMessage(
-        inNative
-          ? "Home Screen icon updated."
-          : "Icon preference saved for this browser. See the installation steps below for your Home Screen.",
+        themeOnly
+          ? "Theme applied. Use the download below for your system icon controls."
+          : inNative
+          ? "Theme and Home Screen icon updated."
+          : "Style saved. Follow the steps below to update your Home Screen icon.",
       );
     } catch (cause) {
       setError(
-        cause instanceof Error ? cause.message : "Could not change the icon.",
+        cause instanceof Error ? cause.message : "Could not apply this style.",
       );
     } finally {
       setBusy(false);
     }
   };
-  const unsupported = inNative &&
-    (!native?.supported || !native.available.includes(preview));
+  const icon = appIcon(preview), style = appearanceStyle(preview);
   return (
     <Stack spacing={1.5} data-app-icon-settings>
       <Stack direction="row" spacing={1.5} alignItems="center">
@@ -103,9 +157,9 @@ export function AppIconSettings(): React.JSX.Element {
           sx={{ borderRadius: 2 }}
         />
         <Box sx={{ flex: 1 }}>
-          <Typography variant="body2">App icon</Typography>
+          <Typography variant="body2">Icon &amp; theme</Typography>
           <Typography variant="caption" color="text.secondary">
-            {APP_ICONS.length} colorways · {appIcon(selected).title}
+            {appearanceStyle(selected).name} · {APP_ICONS.length} curated styles
           </Typography>
         </Box>
         <Button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
@@ -113,174 +167,120 @@ export function AppIconSettings(): React.JSX.Element {
         </Button>
       </Stack>
       {expanded && (
-        <Stack spacing={1.5}>
-          <Stack direction="row" spacing={2} alignItems="center">
-            <Box
-              component="img"
-              src={appIconAsset(preview, 180)}
-              alt={`Preview: ${icon.title}`}
-              width={80}
-              height={80}
-              sx={{ borderRadius: 3 }}
-            />
-            <Box>
+        <Stack spacing={2}>
+          <Box>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1}
+              sx={{ mb: 1 }}
+            >
               <Typography variant="subtitle2">
-                {icon.collection === "original" ? "Original " : ""}
-                {icon.number} · {icon.title}
+                {style.name} · {icon.number}
               </Typography>
-              <Stack direction="row" spacing={0.5} sx={{ mt: 0.5 }}>
-                {[icon.crown, icon.brim, icon.background].map((
-                  color,
-                  index,
-                ) => (
-                  <Box
-                    key={index}
-                    title={color}
-                    sx={{
-                      width: 18,
-                      height: 18,
-                      bgcolor: color,
-                      borderRadius: "50%",
-                      border: "1px solid",
-                      borderColor: "divider",
-                    }}
-                  />
-                ))}
-              </Stack>
               {preview === DEFAULT_APP_ICON && (
-                <Chip size="small" label="Default · 54" sx={{ mt: 0.5 }} />
+                <Chip size="small" label="Official default" />
               )}
-            </Box>
-          </Stack>
-          <TextField
-            size="small"
-            label="Search number, name, or hex color"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setPage(1);
-            }}
-          />
-          <Stack direction="row" spacing={1}>
-            <Select
-              size="small"
-              value={family}
-              inputProps={{ "aria-label": "Icon color family" }}
-              onChange={(e) => {
-                setFamily(e.target.value);
-                setPage(1);
-              }}
-              sx={{ flex: 1 }}
-            >
-              {[
-                ["all", "All colors"],
-                ["red", "Red"],
-                ["pink", "Pink"],
-                ["purple", "Purple"],
-                ["blue", "Blue"],
-                ["orange", "Orange / brown"],
-                ["gold", "Gold / yellow"],
-                ["neutral", "Neutral"],
-              ].map(([value, label]) => (
-                <MenuItem key={value} value={value}>{label}</MenuItem>
-              ))}
-            </Select>
-            <Select
-              size="small"
-              value={tone}
-              inputProps={{ "aria-label": "Icon background" }}
-              onChange={(e) => {
-                setTone(e.target.value);
-                setPage(1);
-              }}
-              sx={{ flex: 1 }}
-            >
-              {[["all", "All backgrounds"], ["dark", "Dark"], [
-                "medium",
-                "Color",
-              ], ["light", "Light"]].map(([value, label]) => (
-                <MenuItem key={value} value={value}>{label}</MenuItem>
-              ))}
-            </Select>
-          </Stack>
-          <Typography variant="caption" color="text.secondary" role="status">
-            {results.length} colorways
-          </Typography>
-          <Box
-            role="group"
-            aria-label="Icon colorways"
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(64px, 1fr))",
-              gap: 1,
-            }}
-          >
-            {shown.map((item) => (
-              <ButtonBase
-                key={item.id}
-                disabled={busy}
-                aria-label={`${
-                  item.collection === "original" ? "Original " : ""
-                }${item.number} ${item.title}`}
-                aria-pressed={preview === item.id}
-                onClick={() => {
-                  setPreview(item.id);
-                  setError(null);
-                  setMessage(null);
-                }}
+            </Stack>
+            <Typography variant="caption" color="text.secondary">
+              One style for your icon, buttons, accents and surfaces. Your light
+              / dark preference stays the same.
+            </Typography>
+            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+              <StylePreview id={preview} dark={false} />
+              <StylePreview id={preview} dark />
+            </Stack>
+          </Box>
+          {APP_ICON_GROUPS.map((group) => (
+            <Box key={group.id}>
+              <Typography variant="subtitle2">{group.name}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                {group.description}
+              </Typography>
+              <Box
+                role="group"
+                aria-label={`${group.name} styles`}
                 sx={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 0.5,
-                  p: 0.5,
-                  borderRadius: 2,
-                  border: "2px solid",
-                  borderColor: preview === item.id
-                    ? "primary.main"
-                    : "transparent",
-                  "&.Mui-focusVisible": {
-                    outline: "2px solid",
-                    outlineColor: "primary.main",
-                  },
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gap: 0.75,
+                  mt: 1,
                 }}
               >
-                <Box
-                  component="img"
-                  src={appIconAsset(item.id, 96)}
-                  alt=""
-                  loading="lazy"
-                  width={56}
-                  height={56}
-                  sx={{ borderRadius: 1.5, maxWidth: "100%", height: "auto" }}
-                />
-                <Typography variant="caption">
-                  {item.collection === "original" ? "O" : ""}
-                  {item.number}
-                  {item.id === selected ? " ✓" : ""}
-                </Typography>
-              </ButtonBase>
-            ))}
-          </Box>
-          {pages > 1 && (
-            <Pagination
-              count={pages}
-              page={activePage}
-              onChange={(_, value) => setPage(value)}
-              size="small"
-              siblingCount={0}
-            />
-          )}
+                {group.styles.map((item) => (
+                  <ButtonBase
+                    key={item.id}
+                    disabled={busy}
+                    aria-label={`${item.name}, icon ${appIcon(item.id).number}`}
+                    aria-pressed={preview === item.id}
+                    onClick={() => {
+                      setPreview(item.id);
+                      setError(null);
+                      setMessage(null);
+                    }}
+                    sx={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 0.5,
+                      p: 0.5,
+                      borderRadius: 2,
+                      border: "2px solid",
+                      borderColor: preview === item.id
+                        ? "primary.main"
+                        : "transparent",
+                      "&.Mui-focusVisible": {
+                        outline: "2px solid",
+                        outlineColor: "primary.main",
+                      },
+                    }}
+                  >
+                    <Box
+                      component="img"
+                      src={appIconAsset(item.id, 96)}
+                      alt=""
+                      loading="lazy"
+                      width={56}
+                      height={56}
+                      sx={{
+                        borderRadius: 1.5,
+                        maxWidth: "100%",
+                        height: "auto",
+                      }}
+                    />
+                    <Typography variant="caption" sx={{ fontSize: "0.75rem" }}>
+                      {item.name}
+                      {item.id === selected ? " ✓" : ""}
+                    </Typography>
+                    <Box
+                      aria-hidden
+                      sx={{
+                        height: 3,
+                        width: 24,
+                        borderRadius: 1,
+                        bgcolor: item.themeColor,
+                      }}
+                    />
+                  </ButtonBase>
+                ))}
+              </Box>
+            </Box>
+          ))}
           {error && <Alert severity="error">{error}</Alert>}
           {message && <Alert severity="success">{message}</Alert>}
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Button
               variant="contained"
-              disabled={busy || unsupported || preview === selected}
+              disabled={busy || preview === selected ||
+                !APP_ICONS.some((item) => item.id === preview)}
               onClick={() => {
                 void apply(preview);
               }}
             >
-              {busy ? "Applying…" : "Use this icon"}
+              {busy
+                ? "Applying…"
+                : unsupported
+                ? "Use theme"
+                : "Use this style"}
             </Button>
             <Button
               disabled={busy || selected === DEFAULT_APP_ICON}
@@ -294,13 +294,11 @@ export function AppIconSettings(): React.JSX.Element {
           <Typography variant="caption" color="text.secondary">
             {inNative
               ? (unsupported
-                ? (ios
-                  ? "This icon needs a native iOS build that includes it. Preview and download are available here."
-                  : "Automatic icon changes are unavailable in this native app. Download the icon and use your system's icon controls where supported.")
-                : "The system will apply your selection to the native app. It may show a confirmation.")
+                ? "This shell supports theme changes here. Update the iOS app for Home Screen icon switching, or use your system's icon controls where available."
+                : "The system applies the Home Screen icon after you choose a style and may show a confirmation.")
               : ios
               ? "iPhone / iPad: open the installation page in Safari, then Share → Add to Home Screen. Existing Home Screen icons do not change automatically."
-              : "For an installed Chrome app, look for Review app update in its menu. Other browsers may require adding the app again. Browser controls the Home Screen update."}
+              : "Installed Chrome apps may show Review app update in the app menu. Other browsers may require adding the app again."}
           </Typography>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             {!inNative && (

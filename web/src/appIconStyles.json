@@ -1,0 +1,60 @@
+{
+  "default": "palette-103",
+  "groups": [
+    {
+      "id": "electric",
+      "name": "Electric",
+      "description": "Bright contrasts on ink",
+      "styles": [
+        { "id": "palette-103", "name": "Neon", "themeColor": "#51C9FF" },
+        { "id": "palette-101", "name": "Ember", "themeColor": "#FF982D" },
+        { "id": "palette-108", "name": "Pop", "themeColor": "#FF48AE" },
+        { "id": "palette-111", "name": "Prism", "themeColor": "#E35EFF" }
+      ]
+    },
+    {
+      "id": "soft",
+      "name": "Soft",
+      "description": "Gentle color and pastel accents",
+      "styles": [
+        { "id": "palette-054", "name": "Frost", "themeColor": "#BDD2ED" },
+        { "id": "palette-055", "name": "Peach", "themeColor": "#F3B39A" },
+        { "id": "palette-072", "name": "Blush", "themeColor": "#C78FAD" },
+        { "id": "palette-080", "name": "Cloud", "themeColor": "#AF9AC7" }
+      ]
+    },
+    {
+      "id": "heritage",
+      "name": "Heritage",
+      "description": "Warm paper, denim and earth",
+      "styles": [
+        { "id": "palette-061", "name": "Rodeo", "themeColor": "#AD343B" },
+        { "id": "palette-063", "name": "Denim", "themeColor": "#35618B" },
+        { "id": "palette-069", "name": "Suede", "themeColor": "#715184" },
+        { "id": "palette-090", "name": "Sepia", "themeColor": "#805A42" }
+      ]
+    },
+    {
+      "id": "jewel",
+      "name": "Jewel",
+      "description": "Rich fields of saturated color",
+      "styles": [
+        { "id": "palette-077", "name": "Cobalt", "themeColor": "#4564CD" },
+        { "id": "palette-076", "name": "Mulberry", "themeColor": "#AB4979" },
+        { "id": "palette-129", "name": "Ruby", "themeColor": "#C33456" },
+        { "id": "palette-135", "name": "Amethyst", "themeColor": "#8F4ADA" }
+      ]
+    },
+    {
+      "id": "quiet",
+      "name": "Quiet",
+      "description": "Understated neutrals with a hint of color",
+      "styles": [
+        { "id": "palette-057", "name": "Silver", "themeColor": "#8898BD" },
+        { "id": "palette-081", "name": "Espresso", "themeColor": "#997252" },
+        { "id": "palette-085", "name": "Sand", "themeColor": "#A58A65" },
+        { "id": "palette-088", "name": "Slate", "themeColor": "#65798E" }
+      ]
+    }
+  ]
+}

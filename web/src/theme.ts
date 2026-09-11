@@ -2,14 +2,16 @@
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
 //
-// Palette: charcoal / ice blue / rose, matching the default 54 icon. Light mode is intentionally the product's
+// Palette: each curated style owns its light and dark colors. Light mode is the product's
 // default: a quiet cool-gray canvas, white work surfaces, and a deep blue
 // action colour. The separation matters more than a dramatic tint — the
 // transcript, composer, and tool cards should read as three useful layers.
 // Dark mode remains available as an explicit preference.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";
+import { currentAppIcon, DEFAULT_APP_ICON, subscribeAppIcon } from "./appIcons";
+import { appearancePalette } from "./appearanceThemes";
 
 import {
   type ThemeChoice,
@@ -23,9 +25,6 @@ import {
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 
-const LIGHT_CANVAS = "#f5f6fa";
-const LIGHT_PAPER = "#ffffff";
-
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
 // system/light/dark vocabulary as the shared hook.
 export type Mode = ThemeChoice;
@@ -34,19 +33,24 @@ export type Mode = ThemeChoice;
 // paper and Draft `action.selected` even when their alpha is identical.
 export function desktopFocusBoundary(theme: Theme): string {
   const weight = theme.palette.mode === "dark" ? 58 : 48;
-  return `color-mix(in srgb, ${theme.palette.primary.main} ${String(weight)}%, ${theme.palette.background.default})`;
+  return `color-mix(in srgb, ${theme.palette.primary.main} ${
+    String(weight)
+  }%, ${theme.palette.background.default})`;
 }
 
 // One quiet fill for every Desktop workspace target. The boundary carries the
 // focus information; this tint only groups the active surface, so it stays
 // deliberately subtle even on the full-height Composer canvas.
 export function desktopFocusFill(theme: Theme): string {
-  return alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.075 : 0.045);
+  return alpha(
+    theme.palette.primary.main,
+    theme.palette.mode === "dark" ? 0.075 : 0.045,
+  );
 }
 
 // Keep the iOS standalone status bar in lockstep with the navbar surface. The
-// AppBar is pinned to `background.default` (see App.tsx — `#232831` dark /
-// `#f5f6fa` light), so the theme-color meta uses the SAME values: status bar →
+// AppBar is pinned to the selected style's `background.default`, so the
+// theme-color meta uses the SAME value: status bar →
 // navbar read as one surface (status-bar-style="default" lets iOS tint the bar
 // + auto-contrast its glyphs). Must stay in sync with the palette's
 // background.default below.
@@ -57,13 +61,12 @@ export function desktopFocusFill(theme: Theme): string {
 // left the status bar stuck on the load-time (dark) colour. Removing the node
 // and appending a fresh one forces iOS to re-read it. Harmless elsewhere —
 // every other browser honours either path.
-function applyThemeColor(dark: boolean): void {
+function applyThemeColor(color: string): void {
   const doc = globalThis.document;
   if (!doc) return;
   for (const m of doc.querySelectorAll('meta[name="theme-color"]')) m.remove();
   const meta = doc.createElement("meta");
   meta.setAttribute("name", "theme-color");
-  const color = dark ? "#232831" : LIGHT_CANVAS;
   meta.setAttribute("content", color);
   doc.head.appendChild(meta);
   // iOS paints the unlaid-out strip under a rising keyboard from the
@@ -125,17 +128,23 @@ export function useThemeMode(): ThemeControls {
   seedLightThemeDefault();
   const { choice, resolved, setChoice, cycle } = useSharedThemeMode("cowboy");
   const dark = resolved === "dark";
+  const icon = useSyncExternalStore(
+    subscribeAppIcon,
+    currentAppIcon,
+    () => DEFAULT_APP_ICON,
+  );
+  const palette = useMemo(() => appearancePalette(icon, dark), [icon, dark]);
   useEffect(() => {
     syncCoarsePointerRootClass();
     syncPhoneStandaloneRootClass();
-    applyThemeColor(dark);
+    applyThemeColor(palette.background.default);
     // An iOS standalone PWA latches the status-bar colour and IGNORES later
     // updates across a background→resume: leave the app in dark, switch away,
     // come back, and the bar is stuck on a stale (light) colour over a dark app
     // (the reported "top doesn't match the theme" bug). Re-assert whenever we
     // become visible again and on bfcache restore, so the bar always re-reads
     // the current mode. (Mirrors liveview's useTheme.)
-    const reassert = (): void => applyThemeColor(dark);
+    const reassert = (): void => applyThemeColor(palette.background.default);
     const onVisible = (): void => {
       if (globalThis.document?.visibilityState === "visible") reassert();
     };
@@ -145,7 +154,7 @@ export function useThemeMode(): ThemeControls {
       globalThis.removeEventListener("visibilitychange", onVisible);
       globalThis.removeEventListener("pageshow", reassert);
     };
-  }, [dark]);
+  }, [palette.background.default]);
 
   const theme = useMemo(
     () =>
@@ -189,15 +198,18 @@ export function useThemeMode(): ThemeControls {
               root: {
                 WebkitTapHighlightColor: "transparent",
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
-                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible": {
-                    backgroundColor: "transparent",
-                  },
+                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible":
+                    {
+                      backgroundColor: "transparent",
+                    },
                 },
-                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
-                  "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible": {
-                    backgroundColor: "transparent",
+                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)":
+                  {
+                    "&:not(.MuiButton-contained):hover, &:not(.MuiButton-contained).Mui-focusVisible":
+                      {
+                        backgroundColor: "transparent",
+                      },
                   },
-                },
               },
             },
           },
@@ -232,9 +244,10 @@ export function useThemeMode(): ThemeControls {
                 // with an extra class.
                 [`html.${COARSE_POINTER_ROOT_CLASS} &`]: {
                   "--IconButton-hoverBg": "transparent",
-                  "&.MuiIconButton-root.MuiIconButton-colorPrimary, &.MuiIconButton-root.MuiIconButton-colorSecondary, &.MuiIconButton-root.MuiIconButton-colorError, &.MuiIconButton-root.MuiIconButton-colorInfo, &.MuiIconButton-root.MuiIconButton-colorSuccess, &.MuiIconButton-root.MuiIconButton-colorWarning": {
-                    "--IconButton-hoverBg": "transparent",
-                  },
+                  "&.MuiIconButton-root.MuiIconButton-colorPrimary, &.MuiIconButton-root.MuiIconButton-colorSecondary, &.MuiIconButton-root.MuiIconButton-colorError, &.MuiIconButton-root.MuiIconButton-colorInfo, &.MuiIconButton-root.MuiIconButton-colorSuccess, &.MuiIconButton-root.MuiIconButton-colorWarning":
+                    {
+                      "--IconButton-hoverBg": "transparent",
+                    },
                   "&:hover, &.Mui-focusVisible": {
                     backgroundColor: "transparent",
                   },
@@ -242,15 +255,17 @@ export function useThemeMode(): ThemeControls {
                     backgroundColor: "action.selected",
                   },
                 },
-                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)": {
-                  "--IconButton-hoverBg": "transparent",
-                  "&:not(.Mui-selected):hover, &:not(.Mui-selected).Mui-focusVisible": {
-                    backgroundColor: "transparent",
+                "@media (hover: none), (pointer: coarse), (any-pointer: coarse)":
+                  {
+                    "--IconButton-hoverBg": "transparent",
+                    "&:not(.Mui-selected):hover, &:not(.Mui-selected).Mui-focusVisible":
+                      {
+                        backgroundColor: "transparent",
+                      },
+                    "&:not(.Mui-selected):active": {
+                      backgroundColor: "action.selected",
+                    },
                   },
-                  "&:not(.Mui-selected):active": {
-                    backgroundColor: "action.selected",
-                  },
-                },
               },
             },
           },
@@ -262,19 +277,27 @@ export function useThemeMode(): ThemeControls {
           MuiButton: {
             styleOverrides: {
               root: {
-                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)": {
-                  fontSize: "1.25rem",
-                },
+                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)":
+                  {
+                    fontSize: "1.25rem",
+                  },
               },
               sizeSmall: {
-                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)": {
-                  fontSize: "1.125rem",
-                },
+                "& .MuiButton-startIcon.MuiButton-icon > :nth-of-type(1), & .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)":
+                  {
+                    fontSize: "1.125rem",
+                  },
                 "@media (pointer: coarse)": { minHeight: 40 },
               },
             },
           },
-          MuiToggleButton: { styleOverrides: { sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } } } },
+          MuiToggleButton: {
+            styleOverrides: {
+              sizeSmall: {
+                "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 },
+              },
+            },
+          },
           // Tooltips are a DESKTOP-HOVER affordance only. On a touch screen MUI
           // fires them on tap-focus AND long-press, and they LINGER — tapping any
           // icon button focuses it and pops a bubble that's hard to dismiss (the
@@ -290,63 +313,10 @@ export function useThemeMode(): ThemeControls {
           // a selected item is marked by its ✓ checkmark + MUI's default subtle
           // `action.selected` tint, which is enough.)
         },
-        palette: dark
-          ? {
-              mode: "dark",
-              // Ice-blue brim and rose crown over the charcoal icon background.
-              primary: {
-                main: "#BDD2ED",
-                light: "#D4E3F5",
-                dark: "#4B6486",
-                contrastText: "#232831",
-              },
-              secondary: { main: "#e8bdd0" }, // fuchsia-300 for accents
-              background: {
-                default: "#232831", // charcoal
-                paper: "#2d3440",
-              },
-              divider: "rgba(189, 210, 237, 0.18)",
-              text: {
-                primary: "#eef1f7",
-                secondary: "#bcc7d7",
-              },
-              action: {
-                hover: "rgba(189, 210, 237, 0.10)",
-                selected: "rgba(189, 210, 237, 0.18)",
-              },
-            }
-          : {
-              mode: "light",
-              // Deep blue carries white button text; pale brand colors stay accents.
-              primary: {
-                main: "#4B6486", // the "send" / user-bubble tone
-                light: "#657FA2",
-                dark: "#374E6D",
-                contrastText: "#ffffff",
-              },
-              secondary: { main: "#9C5278" }, // fuchsia accent
-              background: {
-                // A desaturated cool-gray canvas that's calm on the eyes for long
-                // sessions, with white paper surfaces for readable separation.
-                default: LIGHT_CANVAS,
-                // Paper is a clean elevated surface. A real white/paper step
-                // gives the prompt, tool cards, and dialogs a readable edge
-                // without adding a border to every transcript row.
-                paper: LIGHT_PAPER,
-              },
-              divider: "rgba(52, 66, 88, 0.16)",
-              text: {
-                primary: "#232831",
-                secondary: "#5d6676",
-              },
-              action: {
-                hover: "rgba(75, 100, 134, 0.06)",
-                selected: "rgba(75, 100, 134, 0.11)",
-              },
-            },
+        palette,
         shape: { borderRadius: 10 },
       }),
-    [dark],
+    [dark, palette],
   );
 
   return { theme, mode: choice, setMode: setChoice, cycle };

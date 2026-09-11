@@ -3,7 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString *const CowboyDefaultIcon = @"palette-054";
+static NSString *const CowboyDefaultIcon = @"palette-103";
 
 static BOOL cowboyIconTrustedMessage(WKScriptMessage *message) {
     WKSecurityOrigin *origin = message.frameInfo.securityOrigin;
@@ -26,14 +26,14 @@ static NSDictionary *cowboyBundledAlternateIcons(void) {
 
 static NSDictionary *cowboyAppIconState(void) {
     UIApplication *app = UIApplication.sharedApplication;
-    NSMutableArray *available = [NSMutableArray arrayWithObject:CowboyDefaultIcon];
+    NSMutableSet *available = [NSMutableSet setWithObject:CowboyDefaultIcon];
     for (NSString *name in cowboyBundledAlternateIcons()) {
         if ([name hasPrefix:@"Cowboy-"]) [available addObject:[name substringFromIndex:7]];
     }
     NSString *name = app.alternateIconName;
     NSString *current = [name hasPrefix:@"Cowboy-"] ? [name substringFromIndex:7] : CowboyDefaultIcon;
     return @{@"ok":@YES, @"supported":@(app.supportsAlternateIcons),
-             @"current":current, @"available":available};
+             @"current":current, @"available":[[available allObjects] sortedArrayUsingSelector:@selector(compare:)]};
 }
 
 @interface CowboyAppIconHandler : NSObject <WKScriptMessageHandlerWithReply>

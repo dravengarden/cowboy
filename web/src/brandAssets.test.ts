@@ -11,27 +11,27 @@ async function pngSize(path: string): Promise<[number, number]> {
   return [view.getUint32(16), view.getUint32(20)];
 }
 
-Deno.test("default 54 exports cover web, native, Manager and website", async () => {
+Deno.test("default 103 exports cover web, native, Manager and website", async () => {
   for (
     const [path, size] of Object.entries({
       "assets/brand/cowboy-logo.png": 1024,
-      "web/public/cowboy-app-icon-180-v5.png": 180,
-      "web/public/cowboy-app-icon-192-v5.png": 192,
-      "web/public/cowboy-app-icon-512-v5.png": 512,
-      "web/public/cowboy-app-icon-maskable-512-v5.png": 512,
+      "web/public/cowboy-app-icon-180-v6.png": 180,
+      "web/public/cowboy-app-icon-192-v6.png": 192,
+      "web/public/cowboy-app-icon-512-v6.png": 512,
+      "web/public/cowboy-app-icon-maskable-512-v6.png": 512,
       "apps/native-shell/tauri/icons/icon.png": 512,
       "apps/native-shell/apple/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png":
         1024,
-      "site/assets/cowboy-brand-icon-v5.png": 256,
-      "site/assets/cowboy-readme-icon-v5.png": 256,
+      "site/assets/cowboy-brand-icon-v6.png": 256,
+      "site/assets/cowboy-readme-icon-v6.png": 256,
     })
   ) assertEquals(await pngSize(path), [size, size], path);
   const expected = await bytes(
-    "web/public/app-icons/v5/palette-054/icon-512.png",
+    "web/public/app-icons/v5/palette-103/icon-512.png",
   );
   for (
     const path of [
-      "web/public/cowboy-app-icon-512-v5.png",
+      "web/public/cowboy-app-icon-512-v6.png",
     ]
   ) {
     assertEquals(await bytes(path), expected, path);
@@ -45,18 +45,18 @@ Deno.test("default 54 exports cover web, native, Manager and website", async () 
   }
   assertEquals(
     await bytes("web/public/apple-touch-icon.png"),
-    await bytes("web/public/cowboy-app-icon-180-v5.png"),
+    await bytes("web/public/cowboy-app-icon-180-v6.png"),
   );
   assertEquals(
     await bytes("web/public/maskable-512.png"),
-    await bytes("web/public/cowboy-app-icon-maskable-512-v5.png"),
+    await bytes("web/public/cowboy-app-icon-maskable-512-v6.png"),
   );
   assertEquals([
-    ...((await bytes("web/public/cowboy-favicon-v5.ico")).subarray(0, 4)),
+    ...((await bytes("web/public/cowboy-favicon-v6.ico")).subarray(0, 4)),
   ], [0, 0, 1, 0]);
   assertEquals(
     await bytes("web/public/favicon.ico"),
-    await bytes("web/public/cowboy-favicon-v5.ico"),
+    await bytes("web/public/cowboy-favicon-v6.ico"),
   );
   assertEquals(
     new TextDecoder().decode(
@@ -73,28 +73,28 @@ Deno.test("default 54 exports cover web, native, Manager and website", async () 
 Deno.test("entry points use the current icon and the service worker changes generation", async () => {
   for (const path of ["README.md", "README.zh-CN.md"]) {
     assert(
-      (await read(path)).includes("site/assets/cowboy-readme-icon-v5.png"),
+      (await read(path)).includes("site/assets/cowboy-readme-icon-v6.png"),
     );
   }
   for (const path of ["web/index.html", "web/admin.html"]) {
     const text = await read(path);
-    assert(text.includes("/cowboy-favicon-v5.ico"));
-    assert(text.includes("/cowboy-app-icon-512-v5.png"));
+    assert(text.includes("/cowboy-favicon-v6.ico"));
+    assert(text.includes("/cowboy-app-icon-512-v6.png"));
   }
   const index = await read("web/index.html");
-  assert(index.includes("/cowboy-app-icon-180-v5.png"));
+  assert(index.includes("/cowboy-app-icon-180-v6.png"));
   assert(index.includes("/manifest.webmanifest?v=cowboy-v1653"));
   const manifest = JSON.parse(await read("web/public/manifest.webmanifest"));
   assertEquals(manifest.id, "/");
   assertEquals(manifest.start_url, "/");
   assert(
     manifest.icons.every((p: { src: string }) =>
-      p.src.includes("/palette-054/")
+      p.src.includes("/palette-103/")
     ),
   );
   const sw = await read("web/public/sw.js");
   assert(sw.includes('const VERSION = "cowboy-v1653"'));
-  assert(sw.includes('icon: "/cowboy-app-icon-192-v5.png"'));
+  assert(sw.includes('icon: "/cowboy-app-icon-192-v6.png"'));
 });
 
 Deno.test("native alternate icon declarations cover the complete web catalog", async () => {
@@ -102,7 +102,6 @@ Deno.test("native alternate icon declarations cover the complete web catalog", a
     id: string;
   }[];
   for (const icon of rows) {
-    if (icon.id === "palette-054") continue;
     const base = "apps/native-shell/apple/Assets.xcassets/Cowboy-" + icon.id +
       ".appiconset/";
     const content = JSON.parse(await read(base + "Contents.json"));

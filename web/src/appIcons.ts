@@ -1,4 +1,5 @@
 import catalog from "./appIconCatalog.json" with { type: "json" };
+import styles from "./appIconStyles.json" with { type: "json" };
 
 export interface AppIcon {
   id: string;
@@ -12,11 +13,41 @@ export interface AppIcon {
   tone: string;
 }
 
-export const APP_ICONS: readonly AppIcon[] = catalog;
-export const DEFAULT_APP_ICON = "palette-054";
-export const APP_ICON_STORAGE_KEY = "cowboy-app-icon-v1";
+export const APP_ICON_GROUPS = styles.groups;
+export const DEFAULT_APP_ICON = styles.default;
+export const APP_ICON_STORAGE_KEY = "cowboy-app-icon-v2";
 export const APP_ICON_CHANGED = "cowboy:app-icon-changed";
-const byId = new Map(APP_ICONS.map((icon) => [icon.id, icon]));
+const byId = new Map<string, AppIcon>(catalog.map((icon) => [icon.id, icon]));
+export const APP_ICONS: readonly AppIcon[] = styles.groups.flatMap((group) =>
+  group.styles.map((style) => byId.get(style.id)!)
+);
+const curatedIds = new Set(APP_ICONS.map((icon) => icon.id));
+
+export function appearanceStyle(id: string) {
+  const selected = appIcon(id);
+  return styles.groups.flatMap((group) => group.styles).find((style) =>
+    style.id === selected.id
+  ) ?? {
+    id: selected.id,
+    name: selected.title,
+    themeColor: selected.crown,
+  };
+}
+
+export function subscribeAppIcon(listener: () => void): () => void {
+  globalThis.addEventListener(APP_ICON_CHANGED, listener);
+  return () => globalThis.removeEventListener(APP_ICON_CHANGED, listener);
+}
+
+export function resolveIconPreference(
+  stored: string | null,
+  legacy: string | null,
+): string {
+  // Version 1 stored the old primary icon even when no custom choice was made.
+  // Keep other old selections; subsequent defaults use an explicit sentinel.
+  if (stored !== null) return appIcon(stored === "default" ? null : stored).id;
+  return appIcon(legacy === "palette-054" ? null : legacy).id;
+}
 
 export function appIcon(id: string | null | undefined): AppIcon {
   return byId.get(id ?? "") ?? byId.get(DEFAULT_APP_ICON)!;
@@ -132,7 +163,10 @@ export async function nativeAppIconState(): Promise<NativeAppIconState | null> {
 
 function readPreference(): string {
   try {
-    return appIcon(globalThis.localStorage?.getItem(APP_ICON_STORAGE_KEY)).id;
+    return resolveIconPreference(
+      globalThis.localStorage?.getItem(APP_ICON_STORAGE_KEY) ?? null,
+      globalThis.localStorage?.getItem("cowboy-app-icon-v1") ?? null,
+    );
   } catch {
     return DEFAULT_APP_ICON;
   }
@@ -175,15 +209,21 @@ export function applyAppIconDocument(id: string): void {
 function commitPreference(id: string): void {
   current = appIcon(id).id;
   try {
-    globalThis.localStorage?.setItem(APP_ICON_STORAGE_KEY, current);
+    globalThis.localStorage?.setItem(
+      APP_ICON_STORAGE_KEY,
+      current === DEFAULT_APP_ICON ? "default" : current,
+    );
   } catch { /* Window-only preference. */ }
   applyAppIconDocument(current);
   globalThis.dispatchEvent?.(new Event(APP_ICON_CHANGED));
 }
 
-export async function selectAppIcon(id: string): Promise<void> {
-  if (!byId.has(id)) throw new Error("Unknown icon.");
-  if (isNativeIconSurface()) {
+export async function selectAppIcon(
+  id: string,
+  options: { themeOnly?: boolean } = {},
+): Promise<void> {
+  if (!curatedIds.has(id)) throw new Error("Choose one of the curated styles.");
+  if (isNativeIconSurface() && !options.themeOnly) {
     const bridge = (globalThis as IconWindow).__cowboyAppIcon;
     if (typeof bridge !== "function") {
       throw new Error(

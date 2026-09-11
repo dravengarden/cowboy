@@ -18,7 +18,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / 'web/public/app-icons/v5'
 CATALOG = ROOT / 'web/src/appIconCatalog.json'
-DEFAULT = 'palette-054'
+DEFAULT = json.loads((ROOT / 'web/src/appIconStyles.json').read_text())['default']
 
 def write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,30 +82,35 @@ for p in ([] if args.defaults_only else rows):
     write(directory / 'manifest.webmanifest',manifest)
     title = html.escape(p['title'])
     launch = f'/?app-icon={p["id"]}'
-    page = f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="{p['background']}"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Cowboy"><title>Cowboy · {title}</title><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" sizes="180x180" href="icon-180.png"><link rel="icon" href="icon-192.png"><style>body{{margin:0;padding:48px 24px;background:#232831;color:#f3f4f7;font:17px/1.6 system-ui;max-width:520px;margin-inline:auto}}img{{width:144px;border-radius:28px}}a{{color:#bdd2ed}}h1{{font-size:28px}}p{{color:#c7ccd6}}</style><img src="icon-180.png" alt="Selected Cowboy icon"><h1>Cowboy · {title}</h1><p>On iPhone or iPad, open this page in Safari, then Share → Add to Home Screen. The new icon will open Cowboy. An existing Home Screen icon is not replaced automatically.</p><p>iPhone / iPad：在 Safari 打开本页，使用“分享 → 添加到主屏幕”。旧图标不会自动替换。</p><p>On other browsers, use Install app or Add to Home Screen. An installed app may ask you to review an icon update.</p><a href="{launch}">Open Cowboy / 打开 Cowboy</a><script>if(matchMedia('(display-mode: standalone)').matches||navigator.standalone)location.replace({json.dumps(launch)});</script></html>'''
+    page = f'''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="{p['background']}"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Cowboy"><title>Cowboy · {title}</title><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" sizes="180x180" href="icon-180.png"><link rel="icon" href="icon-192.png"><style>body{{margin:0;padding:48px 24px;background:#101014;color:#f3f4f7;font:17px/1.6 system-ui;max-width:520px;margin-inline:auto}}img{{width:144px;border-radius:28px}}a{{color:#51c9ff}}h1{{font-size:28px}}p{{color:#c7ccd6}}</style><img src="icon-180.png" alt="Selected Cowboy icon"><h1>Cowboy · {title}</h1><p>On iPhone or iPad, open this page in Safari, then Share → Add to Home Screen. The new icon will open Cowboy. An existing Home Screen icon is not replaced automatically.</p><p>iPhone / iPad：在 Safari 打开本页，使用“分享 → 添加到主屏幕”。旧图标不会自动替换。</p><p>On other browsers, use Install app or Add to Home Screen. An installed app may ask you to review an icon update.</p><a href="{launch}">Open Cowboy / 打开 Cowboy</a><script>if(matchMedia('(display-mode: standalone)').matches||navigator.standalone)location.replace({json.dumps(launch)});</script></html>'''
     (directory / 'install.html').write_text(page)
     # Xcode compiles only bundled, allowlisted icon sets. A new Web catalog alone
     # never claims support from an older installed native binary.
-    if p['id'] != DEFAULT:
-        asset = ROOT / 'apps/native-shell/apple/Assets.xcassets' / f'Cowboy-{p["id"]}.appiconset'
-        export(source,asset/'icon.png',1024)
-        write(asset/'Contents.json',{'images':[{'filename':'icon.png','idiom':'universal','platform':'ios','size':'1024x1024'}],'info':{'author':'xcode','version':1}})
+    asset = ROOT / 'apps/native-shell/apple/Assets.xcassets' / f'Cowboy-{p["id"]}.appiconset'
+    export(source,asset/'icon.png',1024)
+    write(asset/'Contents.json',{'images':[{'filename':'icon.png','idiom':'universal','platform':'ios','size':'1024x1024'}],'info':{'author':'xcode','version':1}})
+
+# Keep every old alternate identifier valid across primary-icon upgrades.
+for legacy_id in ('palette-054', DEFAULT):
+    asset = ROOT / 'apps/native-shell/apple/Assets.xcassets' / f'Cowboy-{legacy_id}.appiconset'
+    export(PUBLIC / legacy_id / 'icon-512.png', asset/'icon.png', 1024)
+    write(asset/'Contents.json', {'images':[{'filename':'icon.png','idiom':'universal','platform':'ios','size':'1024x1024'}], 'info':{'author':'xcode','version':1}})
 
 source = PUBLIC / DEFAULT / 'icon-512.png'
 encoded = base64.b64encode(source.read_bytes()).decode('ascii')
 (ROOT/'web/public/favicon.svg').write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><image width="512" height="512" href="data:image/png;base64,{encoded}"/></svg>\n')
 export(source,ROOT/'assets/brand/cowboy-logo.png',1024)
 for size in (180,192,512):
-    export(source,ROOT/f'web/public/cowboy-app-icon-{size}-v5.png',size)
-shutil.copyfile(PUBLIC/DEFAULT/'maskable-512.png',ROOT/'web/public/cowboy-app-icon-maskable-512-v5.png')
+    export(source,ROOT/f'web/public/cowboy-app-icon-{size}-v6.png',size)
+shutil.copyfile(PUBLIC/DEFAULT/'maskable-512.png',ROOT/'web/public/cowboy-app-icon-maskable-512-v6.png')
 # Compatibility aliases have real current bytes; fresh HTML uses versioned URLs.
 for file in (ROOT/'web/public').glob('*.png'):
-    if 'v5' in file.name: continue
+    if 'v6' in file.name: continue
     name=file.name
     if name.startswith('cowboy-app-icon-') or name.startswith('apple-touch-icon') or name in ('icon-192.png','icon-512.png','maskable-512.png'):
         size=152 if '152' in name else 167 if '167' in name else 192 if '192' in name else 512 if '512' in name else 180
         export(PUBLIC/DEFAULT/'maskable-512.png' if 'maskable' in name else source,file,size)
-favicon=ROOT/'web/public/cowboy-favicon-v5.ico'
+favicon=ROOT/'web/public/cowboy-favicon-v6.ico'
 magick(source,'-define','icon:auto-resize=48,32,16',favicon)
 for file in (ROOT/'web/public').glob('*.ico'): shutil.copyfile(favicon,file) if file != favicon else None
 manifest=json.loads((PUBLIC/DEFAULT/'manifest.webmanifest').read_text())
@@ -115,7 +120,7 @@ write(ROOT/'web/public/manifest.webmanifest',manifest)
 native=ROOT/'apps/native-shell/tauri/icons'
 (native/'android/values/ic_launcher_background.xml').write_text(
     '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
-    '  <color name="ic_launcher_background">#232831</color>\n</resources>\n')
+    '  <color name="ic_launcher_background">#101014</color>\n</resources>\n')
 for file in native.glob('*.png'):
     size=struct.unpack('>I',file.read_bytes()[16:20])[0]
     export(source,file,size,rgba=True)
@@ -136,9 +141,9 @@ for kind,size in ((b'icp4',16),(b'icp5',32),(b'icp6',64),(b'ic07',128),(b'ic08',
 body=b''.join(chunks)
 (native/'icon.icns').write_bytes(b'icns'+struct.pack('>I',len(body)+8)+body)
 shutil.copyfile(native/'icon.icns',ROOT/'apps/macos-installer/Resources/Cowboy.icns')
-for size in (16,32): export(source,ROOT/f'site/assets/cowboy-tab-icon-v5-{size}.png',size)
-shutil.copyfile(favicon,ROOT/'site/assets/cowboy-tab-icon-v5.ico')
-export(source,ROOT/'site/assets/cowboy-brand-icon-v5.png',256)
-export(source,ROOT/'site/assets/cowboy-readme-icon-v5.png',256)
+for size in (16,32): export(source,ROOT/f'site/assets/cowboy-tab-icon-v6-{size}.png',size)
+shutil.copyfile(favicon,ROOT/'site/assets/cowboy-tab-icon-v6.ico')
+export(source,ROOT/'site/assets/cowboy-brand-icon-v6.png',256)
+export(source,ROOT/'site/assets/cowboy-readme-icon-v6.png',256)
 export(source,ROOT/'apps/native-shell/loader/cowboy-icon.png',180)
 print(json.dumps({'icons':len(rows),'default':DEFAULT,'catalog':str(CATALOG)}))

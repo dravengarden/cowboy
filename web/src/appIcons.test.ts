@@ -5,6 +5,7 @@ import {
   assertThrows,
 } from "jsr:@std/assert";
 import {
+  APP_ICON_GROUPS,
   APP_ICONS,
   appIcon,
   appIconAsset,
@@ -16,17 +17,20 @@ import {
   selectAppIcon,
 } from "./appIcons.ts";
 
-Deno.test("icon catalog preserves default 54 and complete, uniquely addressed collections", () => {
-  assert(APP_ICONS.length >= 200);
+Deno.test("icon catalog preserves default 103 and twenty distinct curated styles", () => {
+  assertEquals(APP_ICONS.length, 20);
+  assertEquals(APP_ICON_GROUPS.length, 5);
+  assert(APP_ICON_GROUPS.every((group) => group.styles.length === 4));
   assertEquals(
     new Set(APP_ICONS.map((icon) => icon.id)).size,
     APP_ICONS.length,
   );
-  assertEquals(appIcon(DEFAULT_APP_ICON).number, 54);
-  assertEquals(appIcon(DEFAULT_APP_ICON).crown, "#E8BDD0");
-  assertEquals(appIcon(DEFAULT_APP_ICON).brim, "#BDD2ED");
-  assertEquals(appIcon(DEFAULT_APP_ICON).background, "#232831");
-  assertEquals(APP_ICONS.filter((p) => p.collection === "original").length, 50);
+  assertEquals(appIcon(DEFAULT_APP_ICON).number, 103);
+  assertEquals(appIcon(DEFAULT_APP_ICON).crown, "#51C9FF");
+  assertEquals(appIcon(DEFAULT_APP_ICON).brim, "#BB83FF");
+  assertEquals(appIcon(DEFAULT_APP_ICON).background, "#101014");
+  assertEquals(appIcon("original-001").id, "original-001");
+  assert(!APP_ICONS.some((p) => p.id === "original-001"));
   for (const icon of APP_ICONS) {
     assert(/^(original|palette)-\d{3}$/.test(icon.id));
   }
@@ -56,7 +60,7 @@ Deno.test("icon paths fail closed for untrusted stored values", () => {
 
 Deno.test("icon filtering considers both pieces, background tone, and hex search", () => {
   assert(
-    filterAppIcons({ family: "pink", tone: "dark" }).some((p) =>
+    filterAppIcons({ family: "purple", tone: "dark" }).some((p) =>
       p.id === DEFAULT_APP_ICON
     ),
   );
@@ -68,14 +72,14 @@ Deno.test("icon filtering considers both pieces, background tone, and hex search
   assert(
     !filterAppIcons({ tone: "light" }).some((p) => p.id === DEFAULT_APP_ICON),
   );
-  assertEquals(filterAppIcons({ query: "palette-054" }).map((p) => p.id), [
+  assertEquals(filterAppIcons({ query: "palette-103" }).map((p) => p.id), [
     DEFAULT_APP_ICON,
   ]);
   assert(
-    filterAppIcons({ query: "#e8bdd0" }).some((p) => p.id === DEFAULT_APP_ICON),
+    filterAppIcons({ query: "#51c9ff" }).some((p) => p.id === DEFAULT_APP_ICON),
   );
   assertEquals(filterAppIcons({ query: "not-a-palette" }), []);
-  assertEquals(filterAppIcons({ query: "54" }).map((p) => p.id), [
+  assertEquals(filterAppIcons({ query: "103" }).map((p) => p.id), [
     DEFAULT_APP_ICON,
   ]);
 });
@@ -111,11 +115,11 @@ Deno.test("native icon selection commits only after the OS reports the selected 
   root.__cowboyNativeShell = true;
   try {
     await assertRejects(() => selectAppIcon("not-an-icon"));
-    await assertRejects(() => selectAppIcon("palette-051"));
+    await assertRejects(() => selectAppIcon("palette-101"));
     assertEquals(currentAppIcon(), previous);
     root.__cowboyAppIcon = () =>
       Promise.resolve({ ok: false, error: "Cancelled" });
-    await assertRejects(() => selectAppIcon("palette-051"));
+    await assertRejects(() => selectAppIcon("palette-101"));
     assertEquals(currentAppIcon(), previous);
     root.__cowboyAppIcon = () =>
       Promise.resolve({
@@ -124,17 +128,17 @@ Deno.test("native icon selection commits only after the OS reports the selected 
         current: previous,
         available: [previous],
       });
-    await assertRejects(() => selectAppIcon("palette-051"));
+    await assertRejects(() => selectAppIcon("palette-101"));
     assertEquals(currentAppIcon(), previous);
     root.__cowboyAppIcon = (request) =>
       Promise.resolve({
         ok: true,
         supported: true,
         current: (request as { id: string }).id,
-        available: ["palette-051", DEFAULT_APP_ICON],
+        available: ["palette-101", DEFAULT_APP_ICON],
       });
-    await selectAppIcon("palette-051");
-    assertEquals(currentAppIcon(), "palette-051");
+    await selectAppIcon("palette-101");
+    assertEquals(currentAppIcon(), "palette-101");
     await selectAppIcon(previous);
   } finally {
     delete root.__cowboyNativeShell;

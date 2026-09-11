@@ -82,8 +82,8 @@ function showSessionNotification(message) {
   const url = message.test === true ? "/" : `/?session=${encodeURIComponent(message.sessionId)}`;
   return self.registration.showNotification(message.title, {
     body: message.body,
-    icon: "/cowboy-app-icon-192-v5.png",
-    badge: "/cowboy-app-icon-192-v5.png",
+    icon: "/cowboy-app-icon-192-v6.png",
+    badge: "/cowboy-app-icon-192-v6.png",
     tag: `cowboy-session-${message.sessionId}`,
     data: { url, sessionId: message.test === true ? null : message.sessionId },
   });

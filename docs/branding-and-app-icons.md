@@ -1,18 +1,30 @@
 # Cowboy brand and app icons
 
-The default is colorway **54**: rose crown `#E8BDD0`, ice-blue brim `#BDD2ED`,
-and charcoal background `#232831`. It uses the approved Boomerang West shape.
+The default is colorway **103**, **Neon**: cyan crown `#51C9FF`, violet brim `#BB83FF`,
+and ink background `#101014`. It uses the approved Boomerang West shape.
 The website and app accents follow these colors; CSS must not recolor the logo
 with hue rotation, a mask, or a rainbow overlay. The light theme uses deeper blue
-and rose accents so text remains readable against pale surfaces.
+and violet accents so text remains readable against pale surfaces.
 
 ## Choosing an icon
 
-Open **Settings → Appearance → App icon → Choose**. The library contains 200
-colorways: the original 50 (prefixed `O`) and subsequent colorways 1–150. Search
-by number, name, or hex color, filter either hat color and background brightness,
-preview, then choose **Use this icon**. The grid loads at most 24 thumbnails per
-page. **Restore default** selects 54. A preview is not a committed selection.
+Open **Settings → Appearance → Icon & theme → Choose**. The selector contains
+**20 curated styles** in five groups of four: Electric, Soft, Heritage, Jewel,
+and Quiet. Each style has a distinct accent, an accompanying secondary color,
+and light/dark surfaces. Preview both modes, then choose **Use this style**.
+The current Light / Dark / System preference is preserved. **Restore default**
+selects Neon (103). Previewing does not change the active style.
+
+`web/src/appIconStyles.json` owns the selection, display names, theme seeds,
+and official default. `appearanceThemes.ts` derives readable light and dark
+palettes; tests cover text and button contrast for all 40 combinations.
+Bright artwork colors are darkened for light-mode text and buttons.
+
+The previous 200 assets remain addressable for existing installations and saved
+choices, but are not offered as an expanded catalog. Old custom choices remain
+usable; a legacy default-54 preference follows the new default on migration.
+New default preferences use a sentinel so future brand changes can follow it.
+Unsupported native shells can apply the theme separately and download the icon.
 
 | Surface | What changes | Completing the Home Screen / app icon change |
 | --- | --- | --- |
@@ -86,5 +98,10 @@ Simulator; physical-device appearance remains a separate acceptance check.
 
 SideStore **0.1.29** is the first release containing all 200 colorways. The Apple
 build verifies that both iPhone and iPad declare the expected 199 alternatives
-plus the primary icon. Publishing makes the update available in SideStore;
+plus the primary icon in that historical build. Publishing makes the update available in SideStore;
 installation and device acceptance remain separate steps.
+
+Primary-icon upgrades retain all existing alternate identifiers, including 103,
+and add 54 as an alternate. This preserves previously installed choices while
+the primary artwork becomes 103. The current native bundle therefore includes
+200 compatibility alternatives; the product selector exposes only 20 styles.

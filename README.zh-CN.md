@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-readme-icon-v5.png" width="128" height="128" alt="Cowboy — 粉色帽冠、冰蓝帽檐与深灰蓝背景">
+    <img src="site/assets/cowboy-readme-icon-v6.png" width="128" height="128" alt="Cowboy — 亮蓝帽冠、紫色帽檐与近黑背景">
   </a>
 </p>
 
@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-4b6486?style=flat-square" alt="Cowboy 官网">
+    <img src="https://img.shields.io/badge/website-live-006e99?style=flat-square" alt="Cowboy 官网">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="官网构建状态">
@@ -75,7 +75,8 @@ Codex、Claude Code、Gemini、Grok、DeepSeek 或你自己的插件。稍后重
 
 ## 快速开始
 
-在 **Settings → Appearance → App icon** 中可以预览、筛选和选择完整配色库。
+官方默认图标为 **Neon（103 号）**。在 **Settings → Appearance → Icon & theme** 中可选择
+20 套精选风格，每套都有对应的明暗界面主题色，并支持应用前预览。
 主屏幕安装与原生切换方式见[图标与平台说明](docs/branding-and-app-icons.md)。
 
 ### 先决条件

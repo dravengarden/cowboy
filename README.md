@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-readme-icon-v5.png" width="128" height="128" alt="Cowboy — pink crown and ice-blue brim on charcoal">
+    <img src="site/assets/cowboy-readme-icon-v6.png" width="128" height="128" alt="Cowboy — cyan crown and violet brim on ink">
   </a>
 </p>
 
@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-4b6486?style=flat-square" alt="Cowboy website">
+    <img src="https://img.shields.io/badge/website-live-006e99?style=flat-square" alt="Cowboy website">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
@@ -77,8 +77,8 @@ process away from the Machine where it started.
 
 ## Quick start
 
-Prefer another colorway? **Settings → Appearance → App icon** includes the full
-color library with previews and filters. See [app icons and platform behavior](docs/branding-and-app-icons.md)
+The official icon is **Neon (103)**. **Settings → Appearance → Icon & theme** offers
+20 curated styles, each with matching light and dark interface colors. See [app icons and platform behavior](docs/branding-and-app-icons.md)
 for Home Screen installation and native switching.
 
 ### Prerequisites
