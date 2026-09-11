@@ -5,7 +5,6 @@
   "//": "Scripts moved to deno.json `tasks` — run `deno task <name>`.",
   "dependencies": {
     "@cowboy/app-shell": "file:../components/app-shell",
-    "@cowboy/plugin-api": "file:../components/plugin-api",
     "@cowboy/provider-ui": "file:../components/provider-ui",
     "@cowboy/state-store": "file:../components/state-store",
     "@cowboy/state-sync": "file:../components/state-sync",

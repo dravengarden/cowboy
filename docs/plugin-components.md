@@ -12,9 +12,12 @@ pure utilities, core implementations, authoring contracts, private Plugin
 implementations and templates. Owned units do not acquire an installation
 identity. The schema-3 dependency-closure release gate and state-store's typed,
 owned persistence implement the first component slice of sections 9–10. The
-general OwnedResourceScope, renderer/native/security ownership migration and
-durable execution/recovery remain pending; this gate grants no runtime
-authority.
+general OwnedResourceScope and durable execution/recovery remain pending;
+this gate grants no runtime authority. The later
+[core Web host slice](core-web-plugin-host.md) removes the application's
+dependency on the mixed Plugin runtime and adds typed slots with owned inventory
+observations. Published SDK/native ABI retirement and production security-policy
+acceptance remain pending.
 
 ## Plugin boundary
 

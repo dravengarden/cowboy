@@ -31,6 +31,9 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 第十三批 [核心安全 ownership](core-security-ownership.md) 实现无本地认证 Plugin 的显式核心启动、
 稳定 namespace 权威与 prepared/ready 中断恢复；核心凭据不搬表，外部 OIDC 精确策略保留。
 生产本批只升级兼容 reader，正式主机策略切换与真实客户端/native 验收仍未完成。
+第十四批 [Web 核心宿主](core-web-plugin-host.md) 移除产品 Web 对旧 Plugin runtime 的依赖，
+将闭集 renderer、slot/context 关联和独立库存作用域收进核心；修复晚到响应、已挂载旧 renderer、
+默认项歧义及观察释放问题。不改签名 Plugin、原生 ABI 或生产认证策略；新公共 authoring SDK 仍待迁移。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
@@ -721,7 +724,7 @@ Agent 内部工具。
 | [Machine Plugins](../src/machine_plugins.rs)          | 签名制品、generation、安装/回收；耐久卸载回执与独立 installation CAS，写入受 reader-floor 切换约束 |
 | [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
-| [plugin-api](../components/plugin-api/types.ts)       | slot/host/native 混合且 context 宽泛；拆出核心 bridge/host 与 typed authoring        |
+| [Web core host](../web/src/pluginHost/inventory.ts) / [旧 plugin-api](../components/plugin-api/types.ts) | 产品 Web 已脱离旧 SDK runtime，闭集 slot/context、owned 观察与 core native port 已落地；旧公开 SDK/原生 ABI 尚未退役，typed authoring 仍需迁移 |
 | [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅与 dispose；仍需其他组件的资源作用域模型                 |
 | [Provider UI](../components/provider-ui/src/index.ts) | 有闭集 IR 与验证；生成更强的字段/消息关联，抽出通用 UI 与领域投影                    |
 

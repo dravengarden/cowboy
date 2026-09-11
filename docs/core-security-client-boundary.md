@@ -95,8 +95,10 @@ cutover or finish supported-client/native acceptance below.
    SQL bytes, credential IDs/public keys, sessions and monotonic security state.
 2. Verify a compatible ownership handoff and cold/rollback reader floor before
    retiring local Authentication packages or their production pins/markers.
-3. Separate the broader typed authoring SDK, trusted host registry and native
-   bridge. The historical `invokeNativePluginCapability`, signed native claims
+3. The [later Web host slice](core-web-plugin-host.md) removes the application's
+   dependency on the mixed Plugin runtime, with closed typed slots and owned
+   observations. Complete the public authoring SDK migration and native artifact
+   retirement separately. The historical `invokeNativePluginCapability`, signed native claims
    and native `__COWBOY_NATIVE_PLUGIN_HOST` remain readable migration inputs;
    this slice does not pretend they have been removed from shipped artifacts.
 4. Before changing/removing native ABI, run the native conformance/product-shell

@@ -87,7 +87,7 @@ import {
   type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
-import { PluginSlot } from "@cowboy/plugin-api";
+import { PluginSlot } from "../pluginHost";
 import {
   formatCompactCurrency,
   usageWidgetHasBalance,

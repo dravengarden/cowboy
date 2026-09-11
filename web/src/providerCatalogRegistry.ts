@@ -8,7 +8,7 @@ import {
   type ProviderCompatibilityTarget,
   validateProviderCatalog,
 } from "@cowboy/provider-ui";
-import { installPluginRuntimeHosts } from "@cowboy/plugin-api/runtime";
+import { webPluginHosts } from "./pluginHost/inventory";
 import { applyOccupancyHostPlugins } from "./occupancyHostMap";
 import { applyVisualHostPlugins } from "./visualHostMap";
 import { applyUsageHostPlugins } from "./usageHostMap";
@@ -24,7 +24,13 @@ export async function loadProviderCatalog(
   // A forced refresh must not race another response back into the cache.
   if (pending) return await pending;
   if (!force && cached) return cached;
-  pending = fetch("/api/plugins", { headers: { accept: "application/json" } })
+  const read = webPluginHosts.beginRead("catalog");
+  const request = fetch("/api/plugins", {
+    headers: { accept: "application/json" },
+    cache: "no-store",
+    credentials: "same-origin",
+    signal: read.signal,
+  })
     .then(async (response) => {
       if (!response.ok) {
         throw new Error(
@@ -34,19 +40,46 @@ export async function loadProviderCatalog(
       const payload = await response.json() as {
         platform?: { hosts?: unknown };
       };
-      const hosts = installPluginRuntimeHosts(payload.platform?.hosts, true);
+      // A rejected Catalog must not change renderers, usage or occupancy.
+      const catalog = validateProviderCatalog(payload);
+      const hosts = webPluginHosts.commitRead(read, payload.platform?.hosts);
+      if (!hosts) throw new Error("Cowboy Catalog observation was superseded");
       applyUsageHostPlugins(hosts);
       applyOccupancyHostPlugins(hosts);
       applyVisualHostPlugins(hosts);
-      const catalog = validateProviderCatalog(payload);
       cached = catalog;
-      for (const listener of listeners) listener();
+      notifyCatalog();
       return catalog;
     })
     .finally(() => {
-      pending = null;
+      webPluginHosts.finishRead(read);
+      if (pending === request) pending = null;
     });
-  return await pending;
+  pending = request;
+  return await request;
+}
+
+function notifyCatalog(): void {
+  // New subscriptions start with the next observation, not half of this one.
+  const observers = [...listeners];
+  for (const listener of observers) {
+    if (!listeners.has(listener)) continue;
+    try {
+      listener();
+    } catch {
+      console.warn("Cowboy Catalog observer failed");
+    }
+  }
+}
+
+/** Core session-boundary cleanup, not Plugin uninstall or operation cancel. */
+export function resetProviderCatalog(): void {
+  cached = null;
+  pending = null;
+  applyUsageHostPlugins([]);
+  applyOccupancyHostPlugins([]);
+  applyVisualHostPlugins([]);
+  notifyCatalog();
 }
 
 /** Revalidate Provider metadata after a live connection or foreground return.
@@ -58,9 +91,10 @@ export function refreshProviderCatalog(): void {
 }
 
 export function subscribeProviderCatalog(listener: () => void): () => void {
-  listeners.add(listener);
+  const owned = () => listener();
+  listeners.add(owned);
   return () => {
-    listeners.delete(listener);
+    listeners.delete(owned);
   };
 }
 

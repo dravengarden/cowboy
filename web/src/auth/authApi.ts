@@ -1,10 +1,10 @@
 import {
-  installPluginRuntimeHosts,
+  isHostSlotId,
   isPluginGeneration,
   isPluginIdentifier,
-  isPluginSlotId,
-  type PluginSlotId,
-} from "@cowboy/plugin-api/runtime";
+  type HostSlotId,
+} from "../pluginHost/identity";
+import { webPluginHosts } from "../pluginHost/inventory";
 import { PASSWORD_LOGIN_METHOD } from "./coreSecurity";
 export { PASSWORD_LOGIN_METHOD } from "./coreSecurity";
 
@@ -52,7 +52,7 @@ export interface AuthLoginFields {
 
 export interface AuthHostPlugin {
   id: string;
-  slots: PluginSlotId[];
+  slots: HostSlotId[];
   label?: string;
   fields?: AuthLoginFields;
 }
@@ -379,16 +379,14 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
           !isPluginIdentifier(id) ||
           !isPluginGeneration(generation) ||
           !Array.isArray(candidate.slots) ||
-          !candidate.slots.every((slot) =>
-            typeof slot === "string" && isPluginSlotId(slot)
-          ) ||
+          !candidate.slots.every(isHostSlotId) ||
           new Set(candidate.slots).size !== candidate.slots.length
         ) {
           return [];
         }
         const plugin: AuthHostPlugin = {
           id,
-          slots: [...candidate.slots] as PluginSlotId[],
+          slots: [...candidate.slots],
         };
         if (typeof candidate.label === "string") {
           const label = candidate.label.trim();
@@ -531,12 +529,24 @@ export type AuthStatusProbe =
   | { kind: "network" };
 
 export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
+  const read = webPluginHosts.beginRead("authentication");
+  try {
+    return await probeAuthStatus(read);
+  } finally {
+    webPluginHosts.finishRead(read);
+  }
+}
+
+async function probeAuthStatus(
+  read: ReturnType<typeof webPluginHosts.beginRead>,
+): Promise<AuthStatusProbe> {
   let response: Response;
   try {
     response = await fetch("/api/auth/status", {
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
+      signal: read.signal,
     });
   } catch {
     return { kind: "network" };
@@ -552,14 +562,20 @@ export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
   }
   try {
     const text = await response.text();
-    const decoded = text ? JSON.parse(text) : {};
-    if (decoded != null && typeof decoded === "object") {
-      const hosts = installPluginRuntimeHosts(
-        (decoded as { host_plugins?: unknown }).host_plugins,
-      );
-      (decoded as { host_plugins?: unknown }).host_plugins = hosts;
+    const decoded: unknown = text ? JSON.parse(text) : {};
+    // Validate the surrounding response before it can replace core observations.
+    if (
+      !authStatusFromJson(decoded) || decoded === null ||
+      typeof decoded !== "object"
+    ) {
+      return { kind: "unsupported", httpStatus: response.status };
     }
-    const body = authStatusFromJson(decoded);
+    const hosts = webPluginHosts.commitRead(
+      read,
+      (decoded as { host_plugins?: unknown }).host_plugins,
+    );
+    if (!hosts) return { kind: "network" };
+    const body = authStatusFromJson({ ...decoded, host_plugins: hosts });
     if (!body) return { kind: "unsupported", httpStatus: response.status };
     return { kind: "ok", httpStatus: 200, body };
   } catch {

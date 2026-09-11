@@ -1,7 +1,7 @@
 import {
   isPluginArtifactDigest,
   isPluginIdentifier,
-} from "@cowboy/plugin-api/runtime";
+} from "./pluginHost/identity";
 
 export type ProviderVisual = {
   primary: string;
