@@ -1,4 +1,4 @@
-import { isPluginIdentifier } from "@cowboy/plugin-api/runtime";
+import { isPluginIdentifier } from "./pluginHost/identity";
 
 export type UsageActivityAgent = {
   id: string;

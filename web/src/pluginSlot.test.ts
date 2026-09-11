@@ -8,7 +8,7 @@ const login = await Deno.readTextFile(
 );
 
 Deno.test("only external login methods mount through an isolated plugin slot", () => {
-  assert(login.includes('from "@cowboy/plugin-api"'));
+  assert(login.includes('from "../pluginHost/PluginSlot"'));
   assert(login.includes('slot="login.method"'));
   assert(login.includes("<PluginSlot"));
   assert(login.includes("pluginId={selectedProvider.id}"));
@@ -41,10 +41,10 @@ const providerManagement = await Deno.readTextFile(
 );
 
 Deno.test("provider lifecycle surfaces mount through plugin slots", () => {
-  assert(providerManagement.includes('from "@cowboy/plugin-api"'));
-  assert(providerManagement.includes("slot={kind}"));
+  assert(providerManagement.includes('from "./pluginHost"'));
+  assert(providerManagement.includes("lifecycleSlotInput(slot"));
   assert(providerManagement.includes("context={{"));
-  assert(providerManagement.includes("kind,"));
+  assert(providerManagement.includes("{...input}"));
   assert(providerManagement.includes("onEffect"));
   assert(providerManagement.includes("providerId={entry.provider_id}"));
   assert(providerManagement.includes('slot="provider.card"'));
@@ -172,15 +172,16 @@ Deno.test("host kit exposes only closed Cowboy-owned renderers", () => {
   assert(pluginHost.includes("ProviderUsage"));
   assert(pluginHost.includes("ProviderSurface"));
   assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
-  assert(pluginHost.includes("RetiredLocalAuthenticationRenderer"));
-  assert(pluginHost.includes("LoginMethodFallback"));
+  assertEquals(pluginHost.includes("RetiredLocalAuthenticationRenderer"), false);
+  assertEquals(pluginHost.includes("LoginMethodFallback"), false);
   assert(pluginHost.includes('from "./pluginUsage"'));
   assertEquals(pluginHost.includes("DeepSeekDetails"), false);
   assertEquals(pluginHost.includes("plugins/claude-deepseek"), false);
+  // The retained SDK remains byte-compatible, but the app no longer imports
+  // its registration/global/native runtime (see pluginHost boundary tests).
   assert(pluginApi.includes("host.ui.renderers[slot]"));
-  assert(pluginApi.includes("installPluginRuntimeHosts"));
   assert(pluginApi.includes("__COWBOY_NATIVE_PLUGIN_HOST"));
-  assert(pluginApi.includes("supportsNativePluginCapability"));
+  assertEquals(pluginHost.includes("supportsNativePluginCapability"), false);
   assertEquals(pluginApi.includes("__COWBOY_PLUGIN_HOST"), false);
   assertEquals(pluginApi.includes("@vite-ignore"), false);
   assertEquals(pluginApi.includes("import("), false);
@@ -212,7 +213,7 @@ Deno.test("activity usage is a closed core renderer selected by host data", () =
       '"provider.usage": "provider-usage-activity-v1"',
     ),
   );
-  assert(pluginHost.includes("ProviderUsageActivityRenderer"));
+  assert(pluginHost.includes('props.renderer === "provider-usage-activity-v1"'));
   assert(pluginHost.includes("ProviderUsageActivity"));
 });
 
@@ -222,11 +223,7 @@ const passkeyHost = await Deno.readTextFile(
 Deno.test("retained passkey packages stay readable without owning core account UI", () => {
   assert(passkeyHost.includes('"account.panel": "account-passkeys-v1"'));
   assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
-  assert(
-    pluginHost.includes(
-      '"account-passkeys-v1": RetiredLocalAuthenticationRenderer',
-    ),
-  );
+  assertEquals(pluginHost.includes('case "account.panel"'), false);
   assertEquals(passkeyHost.includes("ui/index.js"), false);
 });
 

@@ -89,12 +89,8 @@ Deno.test("core account security is not mounted by a Plugin slot or native claim
   const host = await Deno.readTextFile(
     new URL("../pluginHost.ts", import.meta.url),
   );
-  assert(
-    host.includes('"login-password-v1": RetiredLocalAuthenticationRenderer'),
-  );
-  assert(
-    host.includes('"account-passkeys-v1": RetiredLocalAuthenticationRenderer'),
-  );
+  assertEquals(host.includes('"login-password-v1"'), false);
+  assertEquals(host.includes('"account-passkeys-v1"'), false);
   assertEquals(host.includes("ProductPasskeysPanel"), false);
   assertEquals(
     host.includes('contextRecord(context)?.kind !== "password"'),

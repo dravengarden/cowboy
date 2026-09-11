@@ -48,7 +48,9 @@ import {
   ProviderMarkStack,
   ProviderSurface,
 } from "./ProviderSurface";
-import { PluginSlot } from "@cowboy/plugin-api";
+import { PluginSlot } from "./pluginHost";
+import { pluginHostRelease } from "./pluginHost/identity";
+import { lifecycleSlotInput } from "./pluginHost/slotContracts";
 import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
@@ -389,14 +391,6 @@ function providerCredentialTitle(
 
 type ProviderManagementLifecycleSlot = "setup" | "empty" | "settings";
 
-function pluginSlotForLifecycle(
-  slot: ProviderManagementLifecycleSlot,
-): "provider.setup" | "provider.empty" | "provider.settings" {
-  if (slot === "setup") return "provider.setup";
-  if (slot === "empty") return "provider.empty";
-  return "provider.settings";
-}
-
 function ProviderManagementCard({
   pluginId,
   pluginVersion,
@@ -411,8 +405,7 @@ function ProviderManagementCard({
   return (
     <PluginSlot
       pluginId={pluginId}
-      {...(pluginVersion === undefined ? {} : { pluginVersion })}
-      {...(artifactDigest === undefined ? {} : { artifactDigest })}
+      release={pluginHostRelease(pluginVersion, artifactDigest)}
       slot="provider.card"
       context={{ kind: "provider.card", providerId: pluginId }}
     >
@@ -440,24 +433,18 @@ function ProviderManagementLifecycleSurface({
   blockedCapabilities: ReadonlySet<EffectCapability> | undefined;
   onEffect: (effect: EffectSchema) => Promise<void>;
 }): React.JSX.Element {
-  const kind = pluginSlotForLifecycle(slot);
+  const input = lifecycleSlotInput(slot, {
+    providerId,
+    manifest,
+    host,
+    blockedCapabilities,
+    onEffect,
+  });
   return (
     <PluginSlot
       pluginId={providerId}
-      {...(providerVersion === undefined
-        ? {}
-        : { pluginVersion: providerVersion })}
-      {...(artifactDigest === undefined ? {} : { artifactDigest })}
-      slot={kind}
-      context={{
-        kind,
-        providerId,
-        slot,
-        manifest,
-        host,
-        blockedCapabilities,
-        onEffect,
-      }}
+      release={pluginHostRelease(providerVersion, artifactDigest)}
+      {...input}
     >
       <Box sx={{ minWidth: 0 }}>
         <ProviderSurface

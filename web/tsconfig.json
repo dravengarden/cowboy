@@ -8,6 +8,7 @@
       "@cowboy/app-shell": ["../components/app-shell/index.ts"],
       "@cowboy/provider-ui": ["../components/provider-ui/src/index.ts"],
       "@cowboy/state-store": ["../components/state-store/index.ts"],
+      "@cowboy/state-store/scope": ["../components/state-store/owned-scope.ts"],
       "@cowboy/state-sync": ["../components/state-sync/index.ts"],
       "@cowboy/state-sync-idb": ["../components/state-sync-idb/index.ts"],
       "@emotion/*": ["node_modules/@emotion/*"],

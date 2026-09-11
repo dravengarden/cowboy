@@ -1,7 +1,7 @@
 import {
   isPluginArtifactDigest,
   isPluginIdentifier,
-} from "@cowboy/plugin-api/runtime";
+} from "./pluginHost/identity";
 
 function readAdapterSlot(host: object): string | undefined {
   const record = host as { adapter_slot?: unknown };

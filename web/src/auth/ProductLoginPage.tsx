@@ -18,12 +18,12 @@ import {
   resolveProductLoginMethodOrder,
 } from "./authApi";
 import { corePasswordMode, passwordLoginFields } from "./coreSecurity";
-import { PluginSlot } from "@cowboy/plugin-api";
+import { PluginSlot } from "../pluginHost/PluginSlot";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { loginMethodLabel } from "./productReauthMethods";
 import { SegmentedPill } from "../SegmentedPill";
 
-type OidcLoginContext = {
+export type OidcLoginContext = {
   kind: "oidc";
   buttonLabel: string;
   startUrl: string;
@@ -377,6 +377,7 @@ export function ProductLoginPage({
               slot="login.method"
               context={loginContext}
               placeholder={null}
+              render={() => <LoginMethodFallback context={loginContext} />}
             >
               <LoginMethodFallback context={loginContext} />
             </PluginSlot>

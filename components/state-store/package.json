@@ -1,12 +1,19 @@
 {
   "name": "@cowboy/state-store",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "exports": {
     ".": "./index.ts",
-    "./core": "./store.ts"
+    "./core": "./store.ts",
+    "./scope": "./owned-scope.ts"
   },
-  "files": ["index.ts", "store.ts", "use-store.ts", "README.md"],
+  "files": [
+    "index.ts",
+    "store.ts",
+    "use-store.ts",
+    "owned-scope.ts",
+    "README.md"
+  ],
   "peerDependencies": {
     "react": "^19.0.0"
   },

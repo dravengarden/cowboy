@@ -19,7 +19,7 @@ import { ExpandMore, Refresh } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
-import { PluginSlot } from "@cowboy/plugin-api";
+import { PluginSlot } from "./pluginHost";
 import {
   acceptedScheduleTime,
   accountProviderLabel,

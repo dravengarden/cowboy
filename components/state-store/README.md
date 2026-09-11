@@ -50,3 +50,41 @@ cleanup function; callbacks queued before cleanup are ignored afterwards.
 
 This is small synchronous preference state, not a durable effect journal,
 cross-process transaction, or recovery mechanism.
+
+## Process-local resource scopes
+
+The separate `@cowboy/state-store/scope` entry is also React-free. It provides
+`createOwnedResourceScope`, `OwnedResourceScope`, `ScopeSnapshot` and
+`ScopeClosedError`. An instance owns registered finalizers and admitted tasks:
+
+```ts
+import { createOwnedResourceScope } from "@cowboy/state-store/scope";
+
+const scope = createOwnedResourceScope();
+let unsubscribe: (() => void) | undefined;
+scope.defer(() => unsubscribe?.()); // register the holder before acquisition
+unsubscribe = source.subscribe(scope.guard(() => render()));
+await scope.dispose();
+```
+
+`run(() => promise)` admits a bounded task before invoking it. Disposal seals
+entry points synchronously, requests abort through `signal`, drains admitted
+tasks and awaits finalizers in reverse registration order. Register providers
+before consumers. Callbacks/tasks must fence publication after each await; abort
+alone is not proof that they stopped. The scope does not automatically acquire
+or close ambient resources and never interprets a task error as a successful
+compensating action.
+
+`defer` returns an idempotent early release. Repeated `dispose()` returns the
+same promise. Failed finalizers are not retried; other cleanups run, the scope
+reports `needs_reconcile` with nonzero failure/resource counts and the promise
+rejects with `AggregateError`. A stuck task/finalizer remains `draining`. Do not
+await the scope's own disposal from inside its task or finalizer. Acquire
+asynchronously only with a pre-registered holder; a rejected acquisition must
+retain nothing.
+
+This is local ownership, not a grant, distributed executor, verified leak
+detector or durable recovery journal. View owners must not dispose shared
+Operation/Session owners. The first consumers are Cowboy's local state-sync
+clients; arbitrary component/native/IndexedDB connection ownership is not yet
+automatically migrated.

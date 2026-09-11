@@ -23,9 +23,10 @@ import {
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
 import { isBundleRecoveryUrl } from "./moduleRecovery";
-import { installCowboyPluginRenderers } from "./pluginHost";
+import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 
-installCowboyPluginRenderers();
+const releasePluginHostScope = ownPluginHostLifecycle(globalThis);
+import.meta.hot?.dispose(releasePluginHostScope);
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");
