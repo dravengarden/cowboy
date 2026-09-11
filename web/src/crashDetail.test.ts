@@ -21,7 +21,32 @@ Deno.test("usage-limit JSON dumps keep the human sentence", () => {
 });
 
 Deno.test("plain crash details stay as written", () => {
-  assertEquals(prettifyCrashDetail("runtime: broken pipe"), "runtime: broken pipe");
+  assertEquals(
+    prettifyCrashDetail("runtime: broken pipe"),
+    "runtime: broken pipe",
+  );
+});
+
+Deno.test("ACP restore timeouts become a reopen/handoff sentence", () => {
+  assertEquals(
+    prettifyCrashDetail(
+      "agent did not complete ACP session/resume within 240s",
+    ),
+    "Reopening this conversation timed out. Reload to retry, or continue in a new session.",
+  );
+  assertEquals(
+    prettifyCrashDetail(
+      "worker sess-1 exited before readiness: agent did not complete ACP session/load within 60s",
+    ),
+    "Reopening this conversation timed out. Reload to retry, or continue in a new session.",
+  );
+  assertEquals(
+    crashDetailsMatch(
+      "agent did not complete ACP session/resume within 240s",
+      "worker sess-1 exited before readiness: agent did not complete ACP session/resume within 240s",
+    ),
+    true,
+  );
 });
 
 Deno.test("a live crash bar hides the matching trailing lifecycle row", () => {

@@ -1,8 +1,21 @@
 import type { Status } from "./protocol";
 import type { RenderItem } from "./derive";
 
+const SESSION_RESTORE_TIMEOUT_COPY =
+  "Reopening this conversation timed out. Reload to retry, or continue in a new session.";
+
+export function isNativeSessionRestoreTimeout(detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return lower.includes("did not complete acp session/resume") ||
+    lower.includes("did not complete acp session/load") ||
+    lower.includes("reload to retry restore");
+}
+
 /** Pull the human sentence out of Codex-style `Internal error: {JSON}` dumps. */
 export function prettifyCrashDetail(raw: string): string {
+  if (isNativeSessionRestoreTimeout(raw)) {
+    return SESSION_RESTORE_TIMEOUT_COPY;
+  }
   const trimmed = raw.trim();
   const jsonStart = trimmed.indexOf("{");
   if (jsonStart >= 0) {

@@ -1778,6 +1778,9 @@ const fn lifecycle_incident_recovery_outcome(status: Status) -> Option<&'static 
 }
 
 fn classify_crash_detail(detail: Option<&str>) -> &'static str {
+    if detail.is_some_and(crate::provider_behavior::is_session_restore_timeout_error) {
+        return "session_restore_timeout";
+    }
     if detail.is_some_and(is_context_window_rejection) {
         return "provider_context_limit";
     }
@@ -1915,6 +1918,22 @@ mod incident_classification_tests {
             )),
             "worker_startup_failure"
         );
+        assert_eq!(
+            classify_crash_detail(Some(
+                "agent did not complete ACP session/resume within 240s"
+            )),
+            "session_restore_timeout"
+        );
+        assert_eq!(
+            classify_crash_detail(Some(
+                "worker sess-1 exited before readiness: agent did not complete ACP session/resume within 240s"
+            )),
+            "session_restore_timeout"
+        );
+        assert_eq!(
+            classify_crash_detail(Some(crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD)),
+            "session_restore_timeout"
+        );
     }
 
     #[test]
@@ -1955,9 +1974,16 @@ mod incident_classification_tests {
             classify_session_error("worker sess-1 exited before readiness with exit status: 1"),
             "worker_startup_failure"
         );
+        assert_eq!(
+            classify_session_error(
+                "send failed: Kept in the queue. Reload to retry restore — large conversations may still fail."
+            ),
+            "session_restore_timeout"
+        );
         assert_eq!(session_error_severity("worker_startup_failure"), "critical");
         assert_eq!(session_error_severity("process_exit"), "critical");
         assert_eq!(session_error_severity("session_command_error"), "error");
+        assert_eq!(session_error_severity("session_restore_timeout"), "error");
     }
 
     #[test]
@@ -2397,7 +2423,15 @@ fn retain_failed_dispatch(
         );
         return;
     }
-    hub.broadcast_error(Some(session_id), format!("send failed: {error}"));
+    // Restore-timeout holds already explain the queue and the next step.
+    // Prefixing "send failed:" makes a protective refusal look like a
+    // transport crash.
+    let message = if crate::provider_behavior::is_session_restore_timeout_error(error) {
+        error.to_owned()
+    } else {
+        format!("send failed: {error}")
+    };
+    hub.broadcast_error(Some(session_id), message);
 }
 
 fn is_transient_machine_disconnect(error: &str) -> bool {
@@ -2435,6 +2469,30 @@ mod dispatcher_failure_tests {
         };
         assert_eq!(value["queue"][0]["text"], "current status?");
         assert_eq!(value["queue"][0]["cmid"], "client-message-1");
+    }
+
+    #[test]
+    fn restore_timeout_hold_does_not_look_like_a_send_failure() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "restore-session".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "Restore session".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+
+        retain_failed_dispatch(
+            &hub,
+            "restore-session".to_owned(),
+            "再上传 tempfiles 吧".to_owned(),
+            Vec::new(),
+            Some("client-message-hold".to_owned()),
+            crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD,
+        );
+
+        assert_eq!(hub.session_info("restore-session").unwrap().queue_count, 1);
     }
 
     #[test]

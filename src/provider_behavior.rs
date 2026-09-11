@@ -28,9 +28,19 @@ pub(crate) fn is_native_session_restore_timeout(detail: &str) -> bool {
 
 /// User-facing refusal when send/Retry would only repeat a failed hydrate.
 /// Controller-only: Machine-host builds detect the timeout but never hold
-/// composer dispatch.
+/// composer dispatch. Keep this sentence free of ACP jargon; incident
+/// classification matches it as `session_restore_timeout`.
 #[cfg(feature = "full")]
-pub(crate) const NATIVE_RESTORE_TIMEOUT_HOLD: &str = "native session restore previously timed out; sending will not retry automatically. Use Reload to retry — large threads may still fail.";
+pub(crate) const NATIVE_RESTORE_TIMEOUT_HOLD: &str =
+    "Kept in the queue. Reload to retry restore — large conversations may still fail.";
+
+/// Crash, hold, and wrapped worker copy for the same session-local restore
+/// timeout. Used before generic "timed out" / worker-startup classifiers.
+#[cfg(any(feature = "full", test))]
+#[must_use]
+pub(crate) fn is_session_restore_timeout_error(detail: &str) -> bool {
+    is_native_session_restore_timeout(detail) || detail.contains("Reload to retry restore")
+}
 
 #[must_use]
 pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehaviorContract {
@@ -60,7 +70,10 @@ pub(crate) fn legacy_behavior(id: &str) -> cowboy_provider_sdk::ProviderBehavior
 
 #[cfg(test)]
 mod tests {
-    use super::{is_native_session_restore_timeout, is_provider_auth_required_error};
+    use super::{
+        is_native_session_restore_timeout, is_provider_auth_required_error,
+        is_session_restore_timeout_error,
+    };
 
     #[test]
     fn native_restore_timeouts_are_detected_through_worker_wrappers() {
@@ -81,6 +94,12 @@ mod tests {
         ));
         assert!(!is_provider_auth_required_error(
             "agent did not complete ACP session/resume within 240s"
+        ));
+        assert!(is_session_restore_timeout_error(
+            "Kept in the queue. Reload to retry restore — large conversations may still fail."
+        ));
+        assert!(!is_session_restore_timeout_error(
+            "socket connection timed out"
         ));
     }
 }
