@@ -15,7 +15,14 @@ import {
 } from "@mui/material";
 import { ArrowBackRounded } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 import {
   type EffectCapability,
@@ -33,6 +40,7 @@ import {
 import {
   joinProviderInstallations,
   latestProviderEntries,
+  loadProviderCatalog,
   providerAuthenticationExecutorEntry,
   serviceAuthenticationProviderEntries,
   useProviderCatalog,
@@ -55,6 +63,8 @@ import type {
   ProviderUiObservation,
 } from "./providerUiOwner";
 import { copyText } from "./clipboard";
+import { expectProviderResponse as expectSuccess } from "./providerDialogOwner";
+import { useProviderManagementDialogs } from "./useProviderManagementDialogs";
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
@@ -74,61 +84,6 @@ interface ProviderMachine {
   plugins: readonly unknown[];
   provider_contracts?: ProviderContractInventory;
   plugin_contracts?: PluginContractInventory;
-}
-
-interface AffectedSession {
-  id: string;
-  title: string;
-  status: string;
-}
-
-interface UninstallPlan {
-  plan_id: string;
-  machine_id: string;
-  plugin_id: string;
-  plugin_version: string;
-  generation_digest: string;
-  affected_sessions: AffectedSession[];
-  active_session_ids: string[];
-  purge_after_ms: number;
-  expires_at_ms: number;
-  warning: string;
-}
-
-type LoginEvent =
-  | {
-    event: "login_challenge";
-    request_id: string;
-    provider: string;
-    verification_url: string;
-    user_code?: string;
-    input_required?: boolean;
-    input_label?: string;
-    secret_input?: boolean;
-    expires_at_ms: number;
-  }
-  | {
-    event: "login_state";
-    request_id: string;
-    provider: string;
-    state: string;
-    account_label?: string;
-    detail?: string;
-  }
-  | {
-    event: "command_result";
-    request_id: string;
-    accepted: boolean;
-    detail?: string;
-  };
-
-interface AuthenticationFlow {
-  provider: ProviderCatalogEntry;
-  sharedProviderNames: string[];
-  credentialTitle: string;
-  requestId?: string;
-  expiresAtMs?: number;
-  events: LoginEvent[];
 }
 
 const UNPUBLISHED_RELEASE_EFFECTS: ReadonlySet<EffectCapability> = new Set([
@@ -486,20 +441,38 @@ function ProviderManagement(
     [machine?.plugins, scope],
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [flow, setFlow] = useState<AuthenticationFlow | null>(null);
-  const [loginInput, setLoginInput] = useState("");
-  const [authenticationPendingMethod, setAuthenticationPendingMethod] =
-    useState("");
-  const [authenticationError, setAuthenticationError] = useState("");
-  const [authenticationClipboardNotice, setAuthenticationClipboardNotice] =
-    useState("");
-  const consumedAuthenticationRequestId = useRef<number | undefined>(
-    undefined,
-  );
-  const [uninstallPlan, setUninstallPlan] = useState<UninstallPlan | null>(
-    null,
-  );
-  const [confirmActive, setConfirmActive] = useState(false);
+  const catalogRef = useRef(catalog);
+  useLayoutEffect(() => {
+    catalogRef.current = catalog;
+  }, [catalog]);
+  const { owners, authentication, uninstall } = useProviderManagementDialogs({
+    fetch: (url, init) => fetch(url, init),
+    executor: (provider, method) =>
+      catalogRef.current
+        ? providerAuthenticationExecutorEntry(
+          catalogRef.current,
+          provider,
+          method,
+        )
+        : undefined,
+    refresh: () => loadProviderCatalog(true),
+    closeBrowser: () => closeAuthenticationBrowser(),
+    copy: (code) => copyText(code),
+  });
+  const flow = authentication.value?.flow ?? null;
+  const loginInput = authentication.value?.input ?? "";
+  const authenticationPendingMethod = authentication.busy === "start"
+    ? authentication.value?.pendingMethod ?? ""
+    : "";
+  const authenticationError = authentication.error;
+  const authenticationClipboardNotice = authentication.value?.clipboardNotice ??
+    "";
+  const uninstallPlan = uninstall.value?.phase === "ready"
+    ? uninstall.value.plan
+    : null;
+  const confirmActive = uninstall.value?.phase === "ready" &&
+    uninstall.value.confirmActive;
+  const consumedAuthenticationRequestId = useRef<number | undefined>(undefined);
   const [expandedCredentialScopes, setExpandedCredentialScopes] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -595,21 +568,17 @@ function ProviderManagement(
     const credentialEntries = serviceCredentialGroups.find((group) =>
       group.authenticationScope === entry.authentication_scope
     )?.entries ?? [entry];
-    setFlow({
+    owners?.authentication.open({
       provider: entry,
       sharedProviderNames: credentialEntries.map((candidate) =>
         candidate.manifest.display.name
       ),
       credentialTitle: providerCredentialTitle(credentialEntries),
-      events: [],
     });
-    setAuthenticationError("");
-    setAuthenticationClipboardNotice("");
-    setAuthenticationPendingMethod("");
-  }, [serviceCredentialGroups]);
+  }, [owners, serviceCredentialGroups]);
   useEffect(() => {
     if (
-      scope !== "service" || !autoBeginAuthentication ||
+      !owners || scope !== "service" || !autoBeginAuthentication ||
       authenticationRequestId === undefined || !focusProviderId ||
       consumedAuthenticationRequestId.current === authenticationRequestId
     ) return;
@@ -637,75 +606,10 @@ function ProviderManagement(
     autoBeginAuthentication,
     beginServiceAuthentication,
     focusProviderId,
+    owners,
     scope,
     serviceEntries,
   ]);
-  useEffect(() => {
-    if (!flow?.requestId) return undefined;
-    let active = true;
-    let completed = false;
-    const poll = async (): Promise<void> => {
-      if (completed) return;
-      try {
-        const response = await fetch(
-          `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
-            encodeURIComponent(flow.requestId ?? "")
-          }`,
-        );
-        if (!response.ok) {
-          if (!active) return;
-          if (response.status === 404 || response.status === 410) {
-            const detail = (await response.text()).trim();
-            closeAuthenticationBrowser();
-            setAuthenticationError(
-              detail ||
-                "This sign-in request ended. Choose a method to try again.",
-            );
-            setFlow((current) => {
-              if (!current || current.requestId !== flow.requestId) {
-                return current;
-              }
-              const {
-                requestId: _requestId,
-                expiresAtMs: _expiresAtMs,
-                ...rest
-              } = current;
-              return { ...rest, events: [] };
-            });
-          }
-          return;
-        }
-        const body = await response.json() as { events?: LoginEvent[] };
-        if (!active || !Array.isArray(body.events)) return;
-        setFlow((current) => {
-          if (!current || current.requestId !== flow.requestId) return current;
-          return { ...current, events: body.events ?? [] };
-        });
-        if (providerAuthenticationCompleted(body.events)) {
-          completed = true;
-          closeAuthenticationBrowser();
-          setLoginInput("");
-          setAuthenticationError("");
-          setAuthenticationClipboardNotice("");
-          setAuthenticationPendingMethod("");
-          await refreshCatalog();
-        }
-      } catch {
-        // A later poll can recover a transient network failure.
-      }
-    };
-    void poll();
-    const timer = globalThis.setInterval(() => void poll(), 750);
-    return () => {
-      active = false;
-      globalThis.clearInterval(timer);
-    };
-  }, [
-    flow?.provider.provider_id,
-    flow?.requestId,
-    refreshCatalog,
-  ]);
-
   const requestUninstallPlan = async (
     providerId: string,
     observation?: ProviderUiObservation,
@@ -715,17 +619,7 @@ function ProviderManagement(
         "Machine Provider lifecycle is unavailable from Service authentication",
       );
     }
-    const response = await fetch(
-      `/api/machines/${encodeURIComponent(machine.id)}/plugins/${
-        encodeURIComponent(providerId)
-      }/uninstall-plan`,
-      { method: "POST" },
-    );
-    await expectSuccess(response, "Could not prepare Provider uninstall");
-    const plan = await response.json() as UninstallPlan;
-    if (observation?.active === false) return;
-    setConfirmActive(false);
-    setUninstallPlan(plan);
+    await owners?.uninstall.prepare(machine.id, providerId, observation);
   };
 
   const run = async (
@@ -819,157 +713,16 @@ function ProviderManagement(
     }
   };
 
-  const startAuthentication = async (method: string): Promise<void> => {
-    if (!flow || authenticationPendingMethod) return;
-    setAuthenticationError("");
-    setAuthenticationClipboardNotice("");
-    setAuthenticationPendingMethod(method);
-    try {
-      if (!catalog) throw new Error("Provider Catalog is not ready");
-      const executor = providerAuthenticationExecutorEntry(
-        catalog,
-        flow.provider.provider_id,
-        method,
-      );
-      if (!executor?.artifact_digest) {
-        throw new Error(
-          "No online Machine has a compatible installed Provider for this sign-in method. Install or upgrade the Provider on one Machine, then try again.",
-        );
-      }
-      const response = await fetch(
-        `/api/plugins/${
-          encodeURIComponent(flow.provider.provider_id)
-        }/auth/start`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            method,
-            provider_version: executor.provider_version,
-            generation_digest: executor.artifact_digest,
-          }),
-        },
-      );
-      await expectSuccess(response, "Could not start Provider authentication");
-      const body = await response.json() as {
-        request_id: string;
-        expires_at_ms: number;
-      };
-      setFlow((current) =>
-        current
-          ? {
-            ...current,
-            requestId: body.request_id,
-            expiresAtMs: body.expires_at_ms,
-            events: [],
-          }
-          : current
-      );
-      await refreshCatalog();
-    } catch (cause) {
-      setAuthenticationError(
-        cause instanceof Error
-          ? cause.message
-          : "Could not start Provider authentication",
-      );
-    } finally {
-      setAuthenticationPendingMethod("");
-    }
-  };
-
-  const returnToAuthenticationMethods = async (): Promise<void> => {
-    const current = flow;
-    if (!current?.requestId) return;
-    try {
-      await fetch(
-        `/api/plugins/${
-          encodeURIComponent(current.provider.provider_id)
-        }/auth/${encodeURIComponent(current.requestId)}`,
-        { method: "DELETE" },
-      );
-    } finally {
-      closeAuthenticationBrowser();
-      setLoginInput("");
-      setAuthenticationError("");
-      setAuthenticationClipboardNotice("");
-      setAuthenticationPendingMethod("");
-      setFlow((value) => {
-        if (!value) return value;
-        const {
-          requestId: _requestId,
-          expiresAtMs: _expiresAtMs,
-          ...rest
-        } = value;
-        return { ...rest, events: [] };
-      });
-      await refreshCatalog();
-    }
-  };
-
-  const cancelAuthentication = async (): Promise<void> => {
-    try {
-      if (
-        flow?.requestId &&
-        !providerAuthenticationCompleted(flow.events)
-      ) {
-        await fetch(
-          `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
-            encodeURIComponent(flow.requestId)
-          }`,
-          { method: "DELETE" },
-        );
-      }
-    } finally {
-      closeAuthenticationBrowser();
-      setLoginInput("");
-      setAuthenticationError("");
-      setAuthenticationClipboardNotice("");
-      setAuthenticationPendingMethod("");
-      setFlow(null);
-      await refreshCatalog();
-    }
-  };
-
-  const submitAuthentication = async (): Promise<void> => {
-    if (!flow?.requestId || !loginInput.trim()) return;
-    const copy = authenticationCopy(
-      resolveProviderAuthenticationPresentation(
-        flow.provider.manifest.authentication,
-      ),
+  const startAuthentication = (method: string) =>
+    owners?.authentication.start(method);
+  const returnToAuthenticationMethods = () => owners?.authentication.back();
+  const cancelAuthentication = () => owners?.authentication.cancel();
+  const dismissAuthentication = () => owners?.authentication.dismiss();
+  const submitAuthentication = () =>
+    owners?.authentication.submit(
+      flowCopy?.submitFailed ?? "Could not submit Provider authentication",
     );
-    const response = await fetch(
-      `/api/plugins/${encodeURIComponent(flow.provider.provider_id)}/auth/${
-        encodeURIComponent(flow.requestId)
-      }`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: loginInput.trim() }),
-      },
-    );
-    await expectSuccess(response, copy.submitFailed);
-    setLoginInput("");
-  };
-
-  const confirmUninstall = async (): Promise<void> => {
-    if (!uninstallPlan) return;
-    const response = await fetch(
-      `/api/machines/${encodeURIComponent(uninstallPlan.machine_id)}/plugins/${
-        encodeURIComponent(uninstallPlan.plugin_id)
-      }/uninstall`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          plan_id: uninstallPlan.plan_id,
-          confirm_active_sessions: confirmActive,
-        }),
-      },
-    );
-    await expectSuccess(response, "Provider uninstall failed");
-    setUninstallPlan(null);
-    setConfirmActive(false);
-  };
+  const confirmUninstall = () => owners?.uninstall.confirm();
 
   const challenge = flow?.events.findLast((event) =>
     event.event === "login_challenge"
@@ -987,38 +740,28 @@ function ProviderManagement(
       flow.sharedProviderNames.length > 1,
     )
     : null;
-  const copyAuthenticationCode = (): void => {
-    if (challenge?.event !== "login_challenge" || !challenge.user_code) return;
-    const code = challenge.user_code;
-    setAuthenticationClipboardNotice("Copying device code…");
-    void copyText(code).then((copied) => {
-      setAuthenticationClipboardNotice(
-        copied
-          ? `Device code ${code} copied. Paste it on the Provider page if it is not filled automatically.`
-          : `Could not copy the device code automatically. Close the browser, then tap Copy ${code}.`,
-      );
-    });
-  };
+  const copyAuthenticationCode = () => owners?.authentication.copyCode();
   const authenticationPageTap = useReliableTouchTap<HTMLButtonElement>(() => {
-    if (challenge?.event !== "login_challenge") return;
+    const current = owners?.authentication.snapshot();
+    const activeFlow = current?.value?.flow;
+    const challenge = activeFlow?.events.findLast((event) =>
+      event.event === "login_challenge"
+    );
+    if (
+      !activeFlow || current?.busy || !challenge ||
+      providerAuthenticationCompleted(activeFlow.events) ||
+      providerAuthenticationPromoting(activeFlow.events)
+    ) return;
     if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
-      setAuthenticationError(
+      owners?.authentication.error(
         "Update Cowboy in SideStore, reopen the app, then try sign-in again.",
       );
       return;
     }
-    setAuthenticationError("");
+    owners?.authentication.error("");
     copyAuthenticationCode();
     openAuthenticationUrl(challenge.verification_url);
   });
-  useEffect(() => {
-    if (
-      loginState?.event === "login_state" &&
-      (loginState.state === "signed_in" || loginState.state === "ready")
-    ) {
-      closeAuthenticationBrowser();
-    }
-  }, [loginState?.state]);
 
   return (
     <Stack
@@ -1072,6 +815,12 @@ function ProviderManagement(
         </Stack>
       )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
+      {!flow && authenticationError
+        ? <Alert severity="error">{authenticationError}</Alert>
+        : null}
+      {uninstall.value === null && uninstall.error
+        ? <Alert severity="error">{uninstall.error}</Alert>
+        : null}
       {scope === "service" && unpublishedLatestEntries.length > 0
         ? (
           <Alert
@@ -1509,7 +1258,7 @@ function ProviderManagement(
 
       <ConfirmSheet
         open={flow !== null}
-        onClose={() => void cancelAuthentication()}
+        onClose={dismissAuthentication}
         wide
         title={
           <Box
@@ -1527,6 +1276,7 @@ function ProviderManagement(
                 <IconButton
                   size="small"
                   aria-label="Back to sign-in methods"
+                  disabled={Boolean(authentication.busy)}
                   onClick={() => void returnToAuthenticationMethods()}
                   sx={{ ml: -0.5 }}
                 >
@@ -1563,14 +1313,26 @@ function ProviderManagement(
               ? (
                 <Button
                   color="inherit"
+                  disabled={Boolean(authentication.busy)}
                   onClick={() => void returnToAuthenticationMethods()}
                 >
                   Back
                 </Button>
               )
               : null}
-            <Button color="inherit" onClick={() => void cancelAuthentication()}>
-              {loginSucceeded ? "Done" : "Cancel"}
+            {flow?.requestId && !loginSucceeded && !loginPromoting
+              ? (
+                <Button
+                  color="inherit"
+                  disabled={Boolean(authentication.busy)}
+                  onClick={() => void cancelAuthentication()}
+                >
+                  Cancel sign-in
+                </Button>
+              )
+              : null}
+            <Button color="inherit" onClick={dismissAuthentication}>
+              {loginSucceeded ? "Done" : "Close"}
             </Button>
           </>
         }
@@ -1581,6 +1343,17 @@ function ProviderManagement(
               <Alert severity="info">
                 {flowCopy?.serviceDetail}
               </Alert>
+              {authentication.busy || flow.requestId
+                ? (
+                  <Typography variant="caption" color="text.secondary">
+                    Closing this dialog only ends observation; a submitted
+                    sign-in request may continue.
+                  </Typography>
+                )
+                : null}
+              {authenticationError
+                ? <Alert severity="error">{authenticationError}</Alert>
+                : null}
               {!flow.requestId
                 ? (
                   <Stack spacing={1}>
@@ -1593,7 +1366,7 @@ function ProviderManagement(
                       <Button
                         key={method.id}
                         variant="contained"
-                        disabled={Boolean(authenticationPendingMethod)}
+                        disabled={Boolean(authentication.busy)}
                         startIcon={authenticationPendingMethod === method.id
                           ? <CircularProgress size={16} color="inherit" />
                           : undefined}
@@ -1602,9 +1375,6 @@ function ProviderManagement(
                         {method.label}
                       </Button>
                     ))}
-                    {authenticationError
-                      ? <Alert severity="error">{authenticationError}</Alert>
-                      : null}
                   </Stack>
                 )
                 : null}
@@ -1614,6 +1384,7 @@ function ProviderManagement(
                   <Stack spacing={1}>
                     <Button
                       variant="contained"
+                      disabled={Boolean(authentication.busy)}
                       {...authenticationPageTap}
                     >
                       {challenge.user_code
@@ -1638,9 +1409,7 @@ function ProviderManagement(
                         </Alert>
                       )
                       : null}
-                    {authenticationError
-                      ? <Alert severity="warning">{authenticationError}</Alert>
-                      : null}
+
                     {challenge.user_code
                       ? (
                         <Button
@@ -1659,13 +1428,17 @@ function ProviderManagement(
                               "Authorization value"}
                             type={challenge.secret_input ? "password" : "text"}
                             value={loginInput}
+                            disabled={Boolean(authentication.busy)}
                             autoComplete="off"
                             onChange={(event) =>
-                              setLoginInput(event.target.value)}
+                              owners?.authentication.setInput(
+                                event.target.value,
+                              )}
                           />
                           <Button
                             variant="contained"
-                            disabled={!loginInput.trim()}
+                            disabled={Boolean(authentication.busy) ||
+                              !loginInput.trim()}
                             onClick={() => void submitAuthentication()}
                           >
                             {flowCopy?.submit}
@@ -1720,7 +1493,7 @@ function ProviderManagement(
 
       <ConfirmSheet
         open={uninstallPlan !== null}
-        onClose={() => setUninstallPlan(null)}
+        onClose={() => owners?.uninstall.close()}
         wide
         title={`Uninstall ${
           latestEntries.find((entry) =>
@@ -1729,26 +1502,19 @@ function ProviderManagement(
         } from ${machine?.display_name ?? "Machine"}?`}
         actions={
           <>
-            <Button color="inherit" onClick={() => setUninstallPlan(null)}>
-              Cancel
+            <Button color="inherit" onClick={() => owners?.uninstall.close()}>
+              {uninstall.busy === "confirm" ? "Close" : "Cancel"}
             </Button>
             <Button
               color="error"
               variant="contained"
-              disabled={Boolean(uninstallPlan?.active_session_ids.length) &&
-                !confirmActive}
-              onClick={() =>
-                void confirmUninstall().catch((cause: unknown) => {
-                  const detail = cause instanceof Error
-                    ? cause.message
-                    : "Provider uninstall failed";
-                  if (uninstallPlan) {
-                    setErrors((current) => ({
-                      ...current,
-                      [uninstallPlan.plugin_id]: detail,
-                    }));
-                  }
-                })}
+              disabled={Boolean(uninstall.busy) || !uninstallPlan ||
+                (Boolean(uninstallPlan.active_session_ids.length) &&
+                  !confirmActive)}
+              startIcon={uninstall.busy === "confirm"
+                ? <CircularProgress size={16} color="inherit" />
+                : undefined}
+              onClick={() => void confirmUninstall()}
             >
               Uninstall and remove sessions
             </Button>
@@ -1759,6 +1525,17 @@ function ProviderManagement(
           ? (
             <Stack spacing={1.5} sx={{ pt: 0.5 }}>
               <Alert severity="warning">{uninstallPlan.warning}</Alert>
+              {uninstall.error
+                ? <Alert severity="error">{uninstall.error}</Alert>
+                : null}
+              {uninstall.busy === "confirm"
+                ? (
+                  <Typography variant="caption">
+                    Uninstall was submitted. Closing this dialog does not cancel
+                    it.
+                  </Typography>
+                )
+                : null}
               <Typography variant="body2">
                 {uninstallPlan.affected_sessions.length -
                   uninstallPlan.active_session_ids.length} idle and{" "}
@@ -1808,8 +1585,11 @@ function ProviderManagement(
                     control={
                       <Checkbox
                         checked={confirmActive}
+                        disabled={Boolean(uninstall.busy)}
                         onChange={(event) =>
-                          setConfirmActive(event.target.checked)}
+                          owners?.uninstall.setConfirmActive(
+                            event.target.checked,
+                          )}
                       />
                     }
                     label={`Stop and remove ${uninstallPlan.active_session_ids.length} active session${
@@ -2014,25 +1794,6 @@ function providerHost(
       installed !== undefined &&
       installed.generation_digest !== latestCompatibleEntry.artifact_digest,
   };
-}
-
-async function expectSuccess(
-  response: Response,
-  fallback: string,
-): Promise<void> {
-  if (response.ok) return;
-  const body = (await response.text()).trim();
-  let parsed: { detail?: unknown; error?: unknown } | undefined;
-  try {
-    parsed = JSON.parse(body) as { detail?: unknown; error?: unknown };
-  } catch { /* Preserve a non-JSON server response below. */ }
-  if (typeof parsed?.detail === "string" && parsed.detail.trim()) {
-    throw new Error(parsed.detail.trim());
-  }
-  if (typeof parsed?.error === "string" && parsed.error.trim()) {
-    throw new Error(parsed.error.trim());
-  }
-  throw new Error(body || fallback);
 }
 
 function assertUnhandled(value: never): never {

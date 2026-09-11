@@ -91,8 +91,9 @@ shared IDB browser suite remains independently selectable and checked.
 
 This slice does not retire the old public mixed SDK/native ABI, change
 production CoreSecurity policy, alter existing auth/install wire contracts or
-accept a real native/physical device. It does not own the complete
-sign-in/confirmation workflow or supply durable Service/Machine execution,
-remote cancellation or compensation. Those remain separate P1/P2+ acceptance
-boundaries. Web-only activation must preserve Controller, Machine and active
-worker processes.
+accept a real native/physical device. The subsequent
+[management-dialog slice](provider-management-ownership.md) owns the core
+sign-in/confirmation observations and explicit requests. Neither slice supplies
+durable Service/Machine execution, remote cancellation on unmount or distributed
+compensation. Those remain separate P1/P2+ acceptance boundaries. Web-only
+activation must preserve Controller, Machine and active worker processes.

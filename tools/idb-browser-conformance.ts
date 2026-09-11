@@ -4,12 +4,16 @@
 const browser = Deno.args[0];
 // Closed fixture selector; this runner never opens the deployed application.
 const suite = Deno.args[1] ?? "idb";
-if (suite !== "idb" && suite !== "provider-ui") {
+if (
+  suite !== "idb" && suite !== "provider-ui" && suite !== "provider-management"
+) {
   throw new Error("unknown suite");
 }
 const entry = suite === "idb"
   ? "runIdbBrowserConformance"
-  : "runProviderUiBrowserConformance";
+  : suite === "provider-ui"
+  ? "runProviderUiBrowserConformance"
+  : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
     "pass the absolute .#cowboy-idb-test-browser /bin/firefox path",

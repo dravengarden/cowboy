@@ -4,7 +4,9 @@ import { build } from "../web/node_modules/vite/dist/node/index.js";
 
 const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
-if (suite !== "idb" && suite !== "provider-ui") {
+if (
+  suite !== "idb" && suite !== "provider-ui" && suite !== "provider-management"
+) {
   throw new Error("unknown suite");
 }
 if (!outDir?.startsWith("/")) {
@@ -17,7 +19,7 @@ await build({
   publicDir: false,
   define: {
     "process.env.NODE_ENV": JSON.stringify(
-      suite === "provider-ui" ? "development" : "production",
+      suite !== "idb" ? "development" : "production",
     ),
   },
   resolve: {
@@ -42,6 +44,8 @@ await build({
       entry: new URL(
         suite === "provider-ui"
           ? "../web/src/providerUiBrowserConformance.ts"
+          : suite === "provider-management"
+          ? "../web/src/providerManagementBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",
         import.meta.url,
       )

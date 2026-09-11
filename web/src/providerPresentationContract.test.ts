@@ -3,6 +3,9 @@ import { assertEquals } from "jsr:@std/assert";
 const managementSource = await Deno.readTextFile(
   new URL("./ProviderManagement.tsx", import.meta.url),
 );
+const authenticationOwnerSource = await Deno.readTextFile(
+  new URL("./providerAuthenticationOwner.ts", import.meta.url),
+);
 const surfaceSource = await Deno.readTextFile(
   new URL("./ProviderSurface.tsx", import.meta.url),
 );
@@ -71,7 +74,7 @@ Deno.test("Machine compatibility renders once in the Cowboy warning shell", () =
     true,
   );
   assertEquals(
-    managementSource.includes('data-provider-release-warning'),
+    managementSource.includes("data-provider-release-warning"),
     true,
   );
   assertEquals(
@@ -123,8 +126,11 @@ Deno.test("Provider management cards keep geometry in the Cowboy component libra
     managementSource.includes("data-provider-management-footer"),
     true,
   );
-  assertEquals(managementSource.includes("whiteSpace: \"nowrap\""), true);
-  assertEquals(managementSource.includes("data-provider-session-actions"), true);
+  assertEquals(managementSource.includes('whiteSpace: "nowrap"'), true);
+  assertEquals(
+    managementSource.includes("data-provider-session-actions"),
+    true,
+  );
   assertEquals(
     managementSource.includes('width: { xs: "100%", sm: "auto" }'),
     false,
@@ -161,7 +167,9 @@ Deno.test("Service authentication keeps Cowboy alive while Provider sign-in open
     true,
   );
   assertEquals(
-    managementSource.includes("openAuthenticationUrl(challenge.verification_url)"),
+    managementSource.includes(
+      "openAuthenticationUrl(challenge.verification_url)",
+    ),
     true,
   );
   assertEquals(
@@ -187,12 +195,15 @@ Deno.test("device-code sign-in copies before opening and keeps a manual fallback
     managementSource.includes("onClick={copyAuthenticationCode}"),
     true,
   );
-  assertEquals(managementSource.includes("navigator.clipboard.writeText"), false);
+  assertEquals(
+    managementSource.includes("navigator.clipboard.writeText"),
+    false,
+  );
 });
 
 Deno.test("Provider sign-in success and expiry leave no stale browser controls", () => {
   assertEquals(
-    managementSource.includes(
+    authenticationOwnerSource.includes(
       "response.status === 404 || response.status === 410",
     ),
     true,
@@ -206,7 +217,7 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
     true,
   );
   assertEquals(
-    managementSource.includes('{loginSucceeded ? "Done" : "Cancel"}'),
+    managementSource.includes('{loginSucceeded ? "Done" : "Close"}'),
     true,
   );
   assertEquals(
@@ -214,7 +225,9 @@ Deno.test("Provider sign-in success and expiry leave no stale browser controls",
     true,
   );
   assertEquals(
-    managementSource.includes("<AlertTitle>{flowCopy?.completeTitle}</AlertTitle>"),
+    managementSource.includes(
+      "<AlertTitle>{flowCopy?.completeTitle}</AlertTitle>",
+    ),
     true,
   );
   assertEquals(
@@ -261,7 +274,7 @@ Deno.test("Service credential management renders one card per typed authenticati
   );
   assertEquals(managementSource.includes("Used by ${"), false);
   assertEquals(
-    managementSource.includes('labeled'),
+    managementSource.includes("labeled"),
     true,
   );
   assertEquals(
@@ -306,12 +319,15 @@ Deno.test("Provider marks preserve host component classes and compact chip spaci
     true,
   );
   assertEquals(
-    surfaceSource.includes('monochromeColor={monochromeColor}'),
+    surfaceSource.includes("monochromeColor={monochromeColor}"),
     true,
   );
   assertEquals(surfaceSource.includes("data-provider-identity-item"), true);
-  assertEquals(surfaceSource.includes("flexWrap: \"wrap\""), true);
-  assertEquals(surfaceSource.includes("ml: index === 0 ? 0 : `-${pull}`"), false);
+  assertEquals(surfaceSource.includes('flexWrap: "wrap"'), true);
+  assertEquals(
+    surfaceSource.includes("ml: index === 0 ? 0 : `-${pull}`"),
+    false,
+  );
   assertEquals(
     managementSource.includes("data-provider-credential-consumers"),
     true,
@@ -339,7 +355,9 @@ Deno.test("Provider actions stay visually distinct from read-only chips", () => 
     true,
   );
   assertEquals(
-    managementSource.includes('"& .MuiButton-root": {\n          borderRadius: 1,'),
+    managementSource.includes(
+      '"& .MuiButton-root": {\n          borderRadius: 1,',
+    ),
     true,
   );
   assertEquals(
@@ -365,7 +383,7 @@ Deno.test("Provider actions stay visually distinct from read-only chips", () => 
 Deno.test("Provider vector marks preserve edge antialiasing inside compact chips", () => {
   assertEquals(
     surfaceSource.includes(
-      'height: scaledSize,\n          minWidth: scaledSize,',
+      "height: scaledSize,\n          minWidth: scaledSize,",
     ),
     true,
   );
@@ -396,7 +414,10 @@ Deno.test("Provider activity renderer consumes only typed generic strategies", (
 });
 
 Deno.test("terminal activity keeps its Provider-defined prompt geometry", () => {
-  assertEquals(surfaceSource.includes("const ACTIVITY_TERMINAL_SIZE = 17"), true);
+  assertEquals(
+    surfaceSource.includes("const ACTIVITY_TERMINAL_SIZE = 17"),
+    true,
+  );
   assertEquals(surfaceSource.includes("provider-terminal-prompt"), true);
   assertEquals(surfaceSource.includes("provider-terminal-caret"), true);
   assertEquals(surfaceSource.includes("terminalPromptMotion"), true);
@@ -532,7 +553,7 @@ Deno.test("Provider activity keeps motion provider-authored and geometry rendere
   );
   assertEquals(
     transcriptPresentationSource.includes(
-      'pl: signalHeader ? `${geometry.paddingLeft}px` : 0',
+      "pl: signalHeader ? `${geometry.paddingLeft}px` : 0",
     ),
     true,
   );
