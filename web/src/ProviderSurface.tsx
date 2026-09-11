@@ -14,12 +14,18 @@ import {
   useTheme,
 } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
-import { useEffect, useId, useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ReactNode } from "react";
 import {
   assertNever,
   type EffectCapability,
-  type EffectSchema,
   evaluateExpression,
   initialProviderState,
   type ProviderHostContext,
@@ -27,7 +33,6 @@ import {
   type ProviderUiManifest,
   resolveText,
   type SurfaceSlot,
-  transitionProvider,
   type UiAsset,
   type UiNode,
 } from "@cowboy/provider-ui";
@@ -36,6 +41,11 @@ import {
   useProviderCatalog,
 } from "./providerCatalog";
 import { readableProviderAccent } from "./providerVisual";
+import {
+  createProviderUiOwner,
+  type ProviderUiEffectHandler,
+  type ProviderUiOwner,
+} from "./providerUiOwner";
 
 export function ProviderRuntimeSurface({
   provider,
@@ -346,62 +356,40 @@ export function ProviderAssetGraphic({
   );
 }
 
-export function ProviderSurface({
-  manifest,
-  slot,
-  host,
-  onEffect,
-  blockedCapabilities,
-}: {
+interface ProviderSurfaceProps {
   manifest: ProviderUiManifest;
   slot: SurfaceSlot;
   host: ProviderHostContext;
-  onEffect?: (effect: EffectSchema) => Promise<void>;
+  onEffect?: ProviderUiEffectHandler;
   blockedCapabilities?: ReadonlySet<EffectCapability> | undefined;
-}): React.JSX.Element {
-  const [state, setState] = useState<ProviderState>(() =>
-    initialProviderState(manifest)
+  /** Core target + exact execution binding; never a display name. */
+  ownerKey?: string | undefined;
+}
+
+function hasButtons(node: UiNode): boolean {
+  return node.component === "button" ||
+    (node.component === "stack" && node.children.some(hasButtons));
+}
+
+export function ProviderSurface(
+  props: ProviderSurfaceProps,
+): React.JSX.Element {
+  const interactive = useMemo(
+    () => hasButtons(props.manifest.ui.surfaces[props.slot]),
+    [props.manifest, props.slot],
   );
-  const [busyEffect, setBusyEffect] = useState<string | null>(null);
-  useEffect(() => {
-    setState(initialProviderState(manifest));
-    setBusyEffect(null);
-  }, [manifest]);
+  return interactive
+    ? <OwnedProviderSurface {...props} />
+    : <ProviderPresentation {...props} />;
+}
+
+/** Pure card/activity/information views acquire no resource owner or scope. */
+function ProviderPresentation({ manifest, slot, host }: ProviderSurfaceProps) {
+  const state = useMemo(() => initialProviderState(manifest), [manifest]);
   const assets = useMemo(
     () => new Map(manifest.ui.assets.map((asset) => [asset.id, asset])),
-    [manifest.ui.assets],
+    [manifest],
   );
-  const emit = async (
-    node: Extract<UiNode, { component: "button" }>,
-  ): Promise<void> => {
-    const transitioned = transitionProvider(manifest, state, node.emit);
-    setState(transitioned.state);
-    if (!transitioned.effect || !onEffect) return;
-    setBusyEffect(transitioned.effect.id);
-    try {
-      await onEffect(transitioned.effect);
-      setState((current) =>
-        transitionProvider(manifest, current, {
-          message: transitioned.effect?.success_message ??
-            "operation_succeeded",
-          payload: {},
-        }).state
-      );
-    } catch (cause) {
-      const detail = cause instanceof Error
-        ? cause.message
-        : "Provider operation failed";
-      setState((current) =>
-        transitionProvider(manifest, current, {
-          message: transitioned.effect?.failure_message ?? "operation_failed",
-          payload: { detail },
-        }).state
-      );
-      throw cause;
-    } finally {
-      setBusyEffect(null);
-    }
-  };
   if (slot === "loading" && manifest.ui.schema_version === 1) {
     return <LegacyProviderActivity />;
   }
@@ -412,12 +400,91 @@ export function ProviderSurface({
       host={host}
       state={state}
       assets={assets}
-      busyEffect={busyEffect}
-      blockedCapabilities={blockedCapabilities}
-      emit={emit}
+      owner={null}
       path={slot}
     />
   );
+}
+
+function OwnedProviderSurface({
+  manifest,
+  slot,
+  host,
+  onEffect,
+  blockedCapabilities,
+  ownerKey,
+}: ProviderSurfaceProps): React.JSX.Element {
+  // Catalog refreshes may replace an object without changing its signed data.
+  // Do not retire an in-flight owner on such a refresh. This is local identity
+  // stabilization, not a global cache or an authority/fingerprint substitute.
+  const serialized = useMemo(() => JSON.stringify(manifest), [manifest]);
+  const [stable, setStable] = useState({ serialized, manifest });
+  if (stable.serialized !== serialized) setStable({ serialized, manifest });
+  const [mounted, setMounted] = useState<
+    {
+      input: ProviderUiManifest;
+      ownerKey: string | undefined;
+      owner: ProviderUiOwner;
+    } | null
+  >(null);
+  useLayoutEffect(() => {
+    const owner = createProviderUiOwner(stable.manifest, slot);
+    setMounted({ input: stable.manifest, ownerKey, owner });
+    return () => {
+      void owner.dispose();
+    };
+  }, [stable, slot, ownerKey]);
+  const owner = mounted?.input === stable.manifest &&
+      mounted.owner.slot === slot && mounted.ownerKey === ownerKey
+    ? mounted.owner
+    : null;
+  useLayoutEffect(() => {
+    owner?.updateContext({
+      host,
+      blockedCapabilities,
+      // Interactive surfaces must have a core target binding. Read-only
+      // session chrome can omit it and cannot invoke a lifecycle capability.
+      ...(onEffect && ownerKey ? { onEffect } : {}),
+    });
+  }, [owner, host, blockedCapabilities, onEffect, ownerKey]);
+  const snapshot = useSyncExternalStore(
+    owner?.subscribe ?? subscribeToNothing,
+    owner?.snapshot ?? noSnapshot,
+    noSnapshot,
+  );
+  const assets = useMemo(
+    () => new Map(owner?.manifest.ui.assets.map((asset) => [asset.id, asset])),
+    [owner],
+  );
+  if (!owner || !snapshot) return <></>;
+  if (slot === "loading" && manifest.ui.schema_version === 1) {
+    return <LegacyProviderActivity />;
+  }
+  return (
+    <>
+      {snapshot.problem && (
+        <Alert severity="warning">
+          Provider actions require a compatible host.
+        </Alert>
+      )}
+      <ProviderNode
+        node={owner.manifest.ui.surfaces[slot]}
+        manifest={owner.manifest}
+        host={host}
+        state={snapshot.state}
+        assets={assets}
+        owner={owner}
+        path={slot}
+      />
+    </>
+  );
+}
+
+function subscribeToNothing(): () => void {
+  return () => {};
+}
+function noSnapshot(): null {
+  return null;
 }
 
 function ProviderNode({
@@ -426,9 +493,7 @@ function ProviderNode({
   host,
   state,
   assets,
-  busyEffect,
-  blockedCapabilities,
-  emit,
+  owner,
   path,
 }: {
   node: UiNode;
@@ -436,9 +501,7 @@ function ProviderNode({
   host: ProviderHostContext;
   state: ProviderState;
   assets: ReadonlyMap<string, UiAsset>;
-  busyEffect: string | null;
-  blockedCapabilities: ReadonlySet<EffectCapability> | undefined;
-  emit: (node: Extract<UiNode, { component: "button" }>) => Promise<void>;
+  owner: ProviderUiOwner | null;
   path: string;
 }): React.JSX.Element | null {
   switch (node.component) {
@@ -470,9 +533,7 @@ function ProviderNode({
               host={host}
               state={state}
               assets={assets}
-              busyEffect={busyEffect}
-              blockedCapabilities={blockedCapabilities}
-              emit={emit}
+              owner={owner}
               path={`${path}.${index}`}
             />
           ))}
@@ -547,15 +608,8 @@ function ProviderNode({
     case "divider":
       return <Divider flexItem />;
     case "button": {
-      const effectId = manifest.logic.reducers.find((rule) =>
-        rule.message === node.emit.message
-      )?.effect;
-      const effect = manifest.logic.effects.find((candidate) =>
-        candidate.id === effectId
-      );
-      const busy = effectId !== undefined && effectId === busyEffect;
-      const blocked = effect !== undefined &&
-        blockedCapabilities?.has(effect.capability) === true;
+      if (!owner) return null;
+      const { effect, busy, blocked, disabled } = owner.buttonState(node);
       if (blocked) return null;
       const destructive = node.style === "destructive" ||
         effect?.capability === "logout_service_authentication";
@@ -565,9 +619,9 @@ function ProviderNode({
           variant={node.style === "primary" ? "contained" : "outlined"}
           color={destructive ? "error" : "primary"}
           data-provider-destructive-action={destructive ? "true" : undefined}
-          disabled={busy || !evaluateExpression(node.enabled_when, state, host)}
+          disabled={disabled}
           startIcon={busy ? <CircularProgress size={14} /> : undefined}
-          onClick={() => void emit(node).catch(() => undefined)}
+          onClick={() => void owner.emit(node).catch(() => undefined)}
         >
           {resolveText(node.label, state, host)}
         </Button>

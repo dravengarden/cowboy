@@ -30,6 +30,15 @@ struct ComponentRelease {
     components: Vec<ComponentRecord>,
     plugins: BTreeMap<String, String>,
     closure: Option<ComponentClosure>,
+    #[serde(default, deserialize_with = "deserialize_component_additions")]
+    component_additions: Option<Vec<String>>,
+}
+
+fn deserialize_component_additions<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -146,6 +155,7 @@ fn validate_against_registry(
         (registry.schema_version == 3) == release.closure.is_some(),
         "registry schema and closure policy disagree"
     );
+    validate_component_identity_history(registry)?;
     let pinned = registry
         .releases
         .iter()
@@ -245,6 +255,42 @@ fn validate_dependency_graph(release: &ComponentRelease, graph: &ComponentClosur
             &mut BTreeSet::new(),
             &mut checked,
         )?;
+    }
+    Ok(())
+}
+
+/// Build metadata only. The additive migration does not grant Plugin/runtime
+/// authority, rewrite old component identities or bypass exact closure checks.
+fn validate_component_identity_history(registry: &ComponentRegistry) -> Result<()> {
+    for (index, release) in registry.releases.iter().enumerate() {
+        let previous = index.checked_sub(1).map(|index| &registry.releases[index]);
+        if let Some(additions) = &release.component_additions {
+            ensure!(
+                registry.schema_version == 3
+                    && release.closure.is_some()
+                    && previous.is_some_and(|old| old.closure.is_some())
+                    && !additions.is_empty(),
+                "component additions require a nonempty post-baseline migration"
+            );
+        }
+        let Some(previous) =
+            previous.filter(|old| old.closure.is_some() && release.closure.is_some())
+        else {
+            continue;
+        };
+        let mut expected: BTreeSet<&str> =
+            previous.components.iter().map(|c| c.id.as_str()).collect();
+        for id in release.component_additions.as_deref().unwrap_or_default() {
+            ensure!(
+                expected.insert(id.as_str()),
+                "component addition duplicates or reuses an identity"
+            );
+        }
+        let actual: BTreeSet<&str> = release.components.iter().map(|c| c.id.as_str()).collect();
+        ensure!(
+            actual.len() == release.components.len() && actual == expected,
+            "component identity change needs exact additive migration; removal is forbidden"
+        );
     }
     Ok(())
 }
@@ -400,6 +446,99 @@ mod tests {
         for id in registry.releases.last().unwrap().plugins.keys() {
             validate_against_registry(&migration_manifest(id), &registry).unwrap();
         }
+    }
+
+    #[test]
+    fn additive_registry_reader_preserves_all_historical_plugin_bindings() {
+        let registry = component_registry();
+        let addition = registry
+            .releases
+            .iter()
+            .find(|release| release.version == "3.4.0")
+            .unwrap();
+        assert_eq!(
+            addition.component_additions.as_deref(),
+            Some(["cowboy.provider-authoring".to_owned()].as_slice())
+        );
+        for snapshot in addition.closure.as_ref().unwrap().plugins.values() {
+            assert_eq!(snapshot.component_release, "2.9.0");
+        }
+        for manifest in first_party_plugins() {
+            validate_against_registry(manifest, registry).unwrap();
+        }
+    }
+
+    #[test]
+    fn additive_registry_reader_rejects_undeclared_missing_reused_and_removed_identities() {
+        for case in [
+            "undeclared",
+            "missing",
+            "reuse",
+            "duplicate",
+            "remove",
+            "empty",
+            "baseline",
+        ] {
+            let mut registry = component_registry().clone();
+            let active = registry
+                .releases
+                .iter_mut()
+                .find(|release| release.version == "3.4.0")
+                .unwrap();
+            match case {
+                "undeclared" => active.component_additions = None,
+                "missing" => active.component_additions = Some(vec!["cowboy.missing".to_owned()]),
+                "reuse" => active
+                    .component_additions
+                    .as_mut()
+                    .unwrap()
+                    .push("cowboy.state-store".to_owned()),
+                "duplicate" => active
+                    .component_additions
+                    .as_mut()
+                    .unwrap()
+                    .push("cowboy.provider-authoring".to_owned()),
+                "remove" => active.components.retain(|c| c.id != "cowboy.state-store"),
+                "empty" => active.component_additions = Some(vec![]),
+                _ => {
+                    registry
+                        .releases
+                        .iter_mut()
+                        .find(|release| release.version == "3.0.0")
+                        .unwrap()
+                        .component_additions = Some(vec!["cowboy.provider-authoring".to_owned()]);
+                }
+            }
+            assert!(
+                validate_against_registry(&first_party_plugins()[0], &registry).is_err(),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn additive_registry_reader_keeps_closed_decoding() {
+        let source: serde_json::Value = serde_json::from_str(COMPONENT_REGISTRY_SOURCE).unwrap();
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!("cowboy.provider-authoring"),
+            serde_json::json!([1]),
+        ] {
+            let mut input = source.clone();
+            input["releases"]
+                .as_array_mut()
+                .unwrap()
+                .last_mut()
+                .unwrap()["component_additions"] = invalid;
+            assert!(serde_json::from_value::<ComponentRegistry>(input).is_err());
+        }
+        let mut input = source;
+        input["releases"]
+            .as_array_mut()
+            .unwrap()
+            .last_mut()
+            .unwrap()["arbitrary_authority"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ComponentRegistry>(input).is_err());
     }
 
     #[test]

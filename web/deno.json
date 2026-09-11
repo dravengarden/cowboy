@@ -3,6 +3,7 @@
   "lock": "deno.lock",
   "nodeModulesDir": "manual",
   "imports": {
+    "@cowboy/provider-ui": "../components/provider-ui/src/index.ts",
     "@cowboy/state-store/scope": "../components/state-store/owned-scope.ts",
     "@emotion/react": "npm:@emotion/react@^11.13.0",
     "@emotion/styled": "npm:@emotion/styled@^11.13.0",

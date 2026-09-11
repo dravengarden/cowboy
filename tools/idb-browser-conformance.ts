@@ -2,6 +2,14 @@
  * No normal browser profile, auth, environment or product endpoint is used.
  */
 const browser = Deno.args[0];
+// Closed fixture selector; this runner never opens the deployed application.
+const suite = Deno.args[1] ?? "idb";
+if (suite !== "idb" && suite !== "provider-ui") {
+  throw new Error("unknown suite");
+}
+const entry = suite === "idb"
+  ? "runIdbBrowserConformance"
+  : "runProviderUiBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
     "pass the absolute .#cowboy-idb-test-browser /bin/firefox path",
@@ -14,7 +22,7 @@ let deadline: ReturnType<typeof setTimeout> | undefined;
 try {
   const bundle = `${temporary}/fixture.js`;
   const built = await new Deno.Command("node", {
-    args: ["tools/idb-browser-bundle.mjs", temporary],
+    args: ["tools/idb-browser-bundle.mjs", temporary, suite],
     stdout: "null",
     stderr: "inherit",
   }).output();
@@ -46,9 +54,9 @@ try {
       if (request.method === "GET" && url.pathname === `/${token}`) {
         return new Response(
           `<!doctype html><script type="module">
-import { runIdbBrowserConformance } from "/fixture.js";
+import { ${entry} } from "/fixture.js";
 let result;
-try { result = { ok: true, tests: await runIdbBrowserConformance() }; }
+try { result = { ok: true, tests: await ${entry}() }; }
 catch (error) { result = { ok: false, error: String(error) }; }
 await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) });
 </script>`,
@@ -56,7 +64,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
             headers: {
               "Content-Type": "text/html",
               "Content-Security-Policy":
-                "default-src 'self'; script-src 'self' 'unsafe-inline'",
+                "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
             },
           },
         );
@@ -107,7 +115,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     typeof result !== "object" || result === null || !("ok" in result) ||
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
-    result.tests.length !== 8 ||
+    result.tests.length !== (suite === "idb" ? 8 : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);
@@ -115,6 +123,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
   console.log(JSON.stringify(
     {
       ok: true,
+      suite,
       browser: new TextDecoder().decode(version.stdout).trim(),
       executable: browser,
       fixture_sha256: digest,

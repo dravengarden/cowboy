@@ -208,6 +208,7 @@
         src = pkgs.lib.cleanSource ./.;
         localPackages = [
           "components/app-shell"
+          "components/provider-authoring"
           "components/provider-ui"
           "components/state-store"
           "components/state-sync"

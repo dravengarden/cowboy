@@ -43,6 +43,10 @@ build-web:
 idb-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1"' conformance "{{BROWSER}}"
 
+# Same isolated browser runner, real React development StrictMode + MUI.
+provider-ui-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" provider-ui' conformance "{{BROWSER}}"
+
 idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts
@@ -113,7 +117,7 @@ macos-installer-verify APP="apps/macos-installer/dist/Cowboy Manager.app":
 # Generic Cowboy Plugin lifecycle. Agent Provider and code-intelligence are
 # payload kinds; neither owns a separate release or installation format.
 component-package-check:
-    for package in plugin-contract plugin-api app-shell state-store state-sync state-sync-idb provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
+    for package in plugin-contract plugin-api app-shell state-store state-sync state-sync-idb provider-authoring provider-ui provider-runtime code-intelligence; do npm pack --dry-run --json "./components/$package" >/dev/null; done
     cargo package --locked --allow-dirty --list -p cowboy-provider-sdk >/dev/null
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
@@ -313,6 +317,8 @@ provider-check: plugin-check
     for manifest in plugins/*/plugin.json; do plugin="${manifest#plugins/}"; just plugin-isolation-check "${plugin%/plugin.json}"; done
     cd web && deno task typecheck
     deno run --allow-read components/provider-ui/validate-packages.ts dist/plugins/*/*.cowboy-plugin
+    deno fmt --check tools/check-provider-ui-execution.ts
+    deno run --config web/deno.json --sloppy-imports --allow-read tools/check-provider-ui-execution.ts dist/plugins/*/*.cowboy-plugin
     cd web && deno test --allow-read src/providerSdk.test.ts
 
 # Quality gates.

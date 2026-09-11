@@ -42,6 +42,7 @@ export function CowboyPluginRenderer(
       return props.renderer === "provider-surface-v1"
         ? createElement(ProviderSurface, {
           manifest: props.context.manifest,
+          ownerKey: props.context.ownerKey,
           slot: props.context.slot,
           host: props.context.host,
           blockedCapabilities: props.context.blockedCapabilities,

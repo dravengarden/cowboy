@@ -33,6 +33,9 @@ export interface ComponentRelease {
   plugins: Record<string, string>;
   // Absent only in immutable schema-2 history (the coordinated release train).
   closure?: ComponentClosure;
+  // Explicit schema-3 additive migration. Never authorizes removal, identity
+  // reuse, hidden dependencies or relabeling an existing Plugin's closure.
+  component_additions?: string[];
 }
 
 export function assert(condition: unknown, message: string): asserts condition {
@@ -176,6 +179,18 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
       assert(exactVersion(version), `${id}: invalid plugin version ${version}`);
     }
     const previous = releases[index - 1];
+    if (release.component_additions !== undefined) {
+      assert(
+        previous?.closure && release.closure &&
+          Array.isArray(release.component_additions) &&
+          release.component_additions.length > 0 &&
+          release.component_additions.every((id) =>
+            typeof id === "string" &&
+            /^cowboy\.[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)
+          ),
+        "component additions require an explicit nonempty post-baseline migration",
+      );
+    }
     if (previous) {
       assert(
         compareVersion(release.version, previous.version) > 0,
@@ -235,11 +250,15 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
     if (previous?.closure) {
       assertSameSet(
         release.components.map((c) => c.id),
-        previous.components.map((c) => c.id),
+        [
+          ...previous.components.map((c) => c.id),
+          ...(release.component_additions ?? []),
+        ],
         "component identities (addition/removal needs an explicit migration)",
       );
       for (const component of release.components) {
-        const old = previous.components.find((c) => c.id === component.id)!;
+        const old = previous.components.find((c) => c.id === component.id);
+        if (!old) continue; // Exact declared additions were checked above.
         const changed = !same(component, old) ||
           !same(
             graph[component.id],

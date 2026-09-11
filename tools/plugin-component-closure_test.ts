@@ -117,6 +117,99 @@ Deno.test("unrelated Web component changes require their package closure, not Pl
   assertEquals(next.closure!.plugins, releases[1]!.closure!.plugins);
 });
 
+function addAuthoring(next: ComponentRelease): void {
+  next.components.push({
+    id: "cowboy.authoring",
+    version: "1.0.0",
+    publisher: "cowboy",
+    sources: ["components/authoring"],
+    digest: digest("7"),
+    package: {
+      kind: "npm",
+      name: "@cowboy/authoring",
+      manifest: "components/authoring/package.json",
+    },
+  });
+  next.closure!.component_dependencies["cowboy.authoring"] = [
+    "cowboy.provider",
+  ];
+  next.component_additions = ["cowboy.authoring"];
+}
+
+Deno.test("explicit additive component migration preserves every existing Plugin identity", () => {
+  const releases = history();
+  const next = append(releases);
+  addAuthoring(next);
+  validateReleaseHistory(releases);
+  assertEquals(next.closure!.plugins, releases[1]!.closure!.plugins);
+  assertEquals(next.plugins, releases[1]!.plugins);
+});
+
+for (
+  const invalid of [
+    "undeclared",
+    "missing",
+    "duplicate",
+    "reuse",
+    "remove",
+    "empty",
+    "baseline",
+    "legacy",
+  ] as const
+) {
+  Deno.test(`additive component migration rejects ${invalid}`, () => {
+    const releases = history();
+    const next = append(releases);
+    addAuthoring(next);
+    if (invalid === "undeclared") delete next.component_additions;
+    if (invalid === "missing") next.component_additions = ["cowboy.missing"];
+    if (invalid === "duplicate") {
+      next.component_additions!.push("cowboy.authoring");
+    }
+    if (invalid === "reuse") next.component_additions!.push("cowboy.store");
+    if (invalid === "remove") {
+      next.components = next.components.filter((c) => c.id !== "cowboy.store");
+      delete next.closure!.component_dependencies["cowboy.store"];
+      next.closure!.component_dependencies["cowboy.sync"] = [];
+    }
+    if (invalid === "empty") next.component_additions = [];
+    if (invalid === "baseline") {
+      releases[1]!.component_additions = ["cowboy.authoring"];
+    }
+    if (invalid === "legacy") {
+      releases[0]!.component_additions = ["cowboy.authoring"];
+    }
+    assertThrows(() => validateReleaseHistory(releases));
+  });
+}
+
+Deno.test("new component edges still require existing consumers and Plugins to version", () => {
+  const releases = history();
+  const next = append(releases);
+  addAuthoring(next);
+  next.closure!.component_dependencies["cowboy.sdk"]!.push("cowboy.authoring");
+  assertThrows(
+    () => validateReleaseHistory(releases),
+    Error,
+    "changed component must increase version",
+  );
+  bump(next, "sdk");
+  assertThrows(
+    () => validateReleaseHistory(releases),
+    Error,
+    "unknown component cowboy.authoring",
+  );
+  next.closure!.plugins.codex!.component_release = next.version;
+  next.closure!.plugins.codex!.components[0]!.version = "2.0.0";
+  assertThrows(
+    () => validateReleaseHistory(releases),
+    Error,
+    "must increase version",
+  );
+  next.plugins.codex = "1.0.1";
+  validateReleaseHistory(releases);
+});
+
 Deno.test("transitive package consumers must version even without direct source edits", () => {
   const releases = history();
   bump(append(releases), "store");

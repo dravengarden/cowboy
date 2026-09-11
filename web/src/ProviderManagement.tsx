@@ -19,7 +19,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   type EffectCapability,
-  type EffectSchema,
   type MachineProviderInventory,
   type PluginContractInventory,
   projectAgentPluginInventory,
@@ -51,6 +50,10 @@ import {
 import { PluginSlot } from "./pluginHost";
 import { pluginHostRelease } from "./pluginHost/identity";
 import { lifecycleSlotInput } from "./pluginHost/slotContracts";
+import type {
+  ProviderUiEffectHandler,
+  ProviderUiObservation,
+} from "./providerUiOwner";
 import { copyText } from "./clipboard";
 import {
   closeAuthenticationBrowser,
@@ -191,7 +194,9 @@ export function SessionProviderAccess(
 export function MachineProviderManagement(
   { machine }: { machine: ProviderMachine },
 ): React.JSX.Element {
-  return <ProviderManagement scope="machine" machine={machine} />;
+  return (
+    <ProviderManagement key={machine.id} scope="machine" machine={machine} />
+  );
 }
 
 type ProviderManagementStatusTone = "default" | "success" | "warning";
@@ -416,6 +421,7 @@ function ProviderManagementCard({
 
 function ProviderManagementLifecycleSurface({
   providerId,
+  ownerKey,
   providerVersion,
   artifactDigest,
   manifest,
@@ -425,16 +431,18 @@ function ProviderManagementLifecycleSurface({
   onEffect,
 }: {
   providerId: string;
+  ownerKey: string;
   providerVersion?: string;
   artifactDigest?: string;
   manifest: ProviderUiManifest;
   slot: ProviderManagementLifecycleSlot;
   host: ProviderHostContext;
   blockedCapabilities: ReadonlySet<EffectCapability> | undefined;
-  onEffect: (effect: EffectSchema) => Promise<void>;
+  onEffect: ProviderUiEffectHandler;
 }): React.JSX.Element {
   const input = lifecycleSlotInput(slot, {
     providerId,
+    ownerKey,
     manifest,
     host,
     blockedCapabilities,
@@ -449,6 +457,7 @@ function ProviderManagementLifecycleSurface({
       <Box sx={{ minWidth: 0 }}>
         <ProviderSurface
           manifest={manifest}
+          ownerKey={ownerKey}
           slot={slot}
           host={host}
           blockedCapabilities={blockedCapabilities}
@@ -609,14 +618,18 @@ function ProviderManagement(
     ) ?? serviceEntries.find((candidate) =>
       candidate.authentication_scope === focusProviderId
     );
-    if (!entry) return;
+    if (!entry) {
+      return;
+    }
     consumedAuthenticationRequestId.current = authenticationRequestId;
     const authentication = authenticationForEntry(entry);
     if (
       !entry.manifest.authentication.required ||
       authentication?.authentication_state === "ready" ||
       authentication?.authentication_state === "authenticating"
-    ) return;
+    ) {
+      return;
+    }
     beginServiceAuthentication(entry);
   }, [
     authenticationForEntry,
@@ -693,7 +706,10 @@ function ProviderManagement(
     refreshCatalog,
   ]);
 
-  const requestUninstallPlan = async (providerId: string): Promise<void> => {
+  const requestUninstallPlan = async (
+    providerId: string,
+    observation?: ProviderUiObservation,
+  ): Promise<void> => {
     if (scope !== "machine" || !machine) {
       throw new Error(
         "Machine Provider lifecycle is unavailable from Service authentication",
@@ -706,14 +722,17 @@ function ProviderManagement(
       { method: "POST" },
     );
     await expectSuccess(response, "Could not prepare Provider uninstall");
+    const plan = await response.json() as UninstallPlan;
+    if (observation?.active === false) return;
     setConfirmActive(false);
-    setUninstallPlan(await response.json() as UninstallPlan);
+    setUninstallPlan(plan);
   };
 
   const run = async (
     entry: ProviderCatalogEntry,
     installed: MachineProviderInventory | undefined,
     effect: { capability: EffectCapability },
+    observation?: ProviderUiObservation,
   ): Promise<void> => {
     setErrors((current) => ({ ...current, [entry.provider_id]: "" }));
     try {
@@ -779,7 +798,7 @@ function ProviderManagement(
           if (!installed) {
             throw new Error("Provider is not installed on this Machine");
           }
-          await requestUninstallPlan(entry.provider_id);
+          await requestUninstallPlan(entry.provider_id, observation);
           return;
         }
         case "open_external_documentation":
@@ -793,7 +812,9 @@ function ProviderManagement(
       const detail = cause instanceof Error
         ? cause.message
         : "Provider operation failed";
-      setErrors((current) => ({ ...current, [entry.provider_id]: detail }));
+      if (observation?.active !== false) {
+        setErrors((current) => ({ ...current, [entry.provider_id]: detail }));
+      }
       throw cause;
     }
   };
@@ -1270,6 +1291,13 @@ function ProviderManagement(
             ? entry.manifest.authentication.required
               ? (
                 <ProviderManagementLifecycleSurface
+                  ownerKey={JSON.stringify([
+                    scope,
+                    entry.authentication_scope,
+                    operationEntry.provider_id,
+                    operationEntry.provider_version,
+                    operationEntry.artifact_digest,
+                  ])}
                   providerId={entry.provider_id}
                   {...(entry.artifact_digest === null ? {} : {
                     providerVersion: entry.provider_version,
@@ -1279,13 +1307,21 @@ function ProviderManagement(
                   slot="setup"
                   host={host}
                   blockedCapabilities={blockedCapabilities}
-                  onEffect={(effect) => run(operationEntry, undefined, effect)}
+                  onEffect={(effect, observation) =>
+                    run(operationEntry, undefined, effect, observation)}
                 />
               )
               : null
             : !installed
             ? (
               <ProviderManagementLifecycleSurface
+                ownerKey={JSON.stringify([
+                  scope,
+                  machine.id,
+                  operationEntry.provider_id,
+                  operationEntry.provider_version,
+                  operationEntry.artifact_digest,
+                ])}
                 providerId={entry.provider_id}
                 {...(entry.artifact_digest === null ? {} : {
                   providerVersion: entry.provider_version,
@@ -1295,11 +1331,19 @@ function ProviderManagement(
                 slot="empty"
                 host={host}
                 blockedCapabilities={blockedCapabilities}
-                onEffect={(effect) => run(operationEntry, installed, effect)}
+                onEffect={(effect, observation) =>
+                  run(operationEntry, installed, effect, observation)}
               />
             )
             : (
               <ProviderManagementLifecycleSurface
+                ownerKey={JSON.stringify([
+                  scope,
+                  machine.id,
+                  operationEntry.provider_id,
+                  operationEntry.provider_version,
+                  operationEntry.artifact_digest,
+                ])}
                 providerId={entry.provider_id}
                 {...(entry.artifact_digest === null ? {} : {
                   providerVersion: entry.provider_version,
@@ -1309,7 +1353,8 @@ function ProviderManagement(
                 slot="settings"
                 host={host}
                 blockedCapabilities={blockedCapabilities}
-                onEffect={(effect) => run(operationEntry, installed, effect)}
+                onEffect={(effect, observation) =>
+                  run(operationEntry, installed, effect, observation)}
               />
             );
           const identityActions = readyCredential
@@ -1612,9 +1657,7 @@ function ProviderManagement(
                           <TextField
                             label={challenge.input_label ??
                               "Authorization value"}
-                            type={challenge.secret_input
-                              ? "password"
-                              : "text"}
+                            type={challenge.secret_input ? "password" : "text"}
                             value={loginInput}
                             autoComplete="off"
                             onChange={(event) =>

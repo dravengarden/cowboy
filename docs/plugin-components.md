@@ -21,6 +21,11 @@ removes the application's dependency on the mixed Plugin runtime and adds typed
 slots with owned inventory observations. Published SDK/native ABI retirement and
 production security-policy acceptance remain pending.
 
+[Provider UI authoring and ownership](provider-ui-ownership.md) adds the pure
+`@cowboy/provider-authoring` contract and a separate core interactive-view owner.
+Field/message links are checked at compile time; admission, permissions and
+asynchronous lifetime remain core responsibilities, never an installable UI host.
+
 ## Plugin boundary
 
 A plugin manifest has an exact ID, SemVer version, kind, entry point, and exact
@@ -95,6 +100,14 @@ tool, rather than copying the SDK or relying on an ambient compiler.
 still enforce strictly increasing versions for every Plugin between adjacent
 releases. Schema 3 appends a separate, unchanged 3.0.0 migration baseline before
 the first dependency-scoped change in 3.1.0. It never reinterprets old entries.
+
+After that baseline, adding component identities requires an explicit nonempty
+`component_additions` list on the new schema-3 release. It must equal exactly the
+new IDs: undeclared additions, removals, duplicate/reused identities, missing
+nodes and cycles fail. New dependency edges still version every affected
+existing component and Plugin. Release 3.4.0 uses this additive migration for
+`cowboy.provider-authoring` only; historical records and all seven Plugin pins
+remain unchanged. This build-metadata migration is not runtime authority.
 
 Each new release records all internal component-package edges and each Plugin's
 exact source digest, component pins and component-release label. Plugin source

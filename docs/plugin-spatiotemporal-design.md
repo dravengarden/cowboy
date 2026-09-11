@@ -732,7 +732,7 @@ Agent 内部工具。
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [Web core host](../web/src/pluginHost/inventory.ts) / [旧 plugin-api](../components/plugin-api/types.ts) | 产品 Web 已脱离旧 SDK runtime，闭集 slot/context、owned 观察与 core native port 已落地；旧公开 SDK/原生 ABI 尚未退役，typed authoring 仍需迁移 |
 | [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅、进程内资源 scope、state-sync 排空与 IDB owner/事务租约；其他宿主与跨 tab 仲裁仍待迁移 |
-| [Provider UI](../components/provider-ui/src/index.ts) | 有闭集 IR 与验证；生成更强的字段/消息关联，抽出通用 UI 与领域投影                    |
+| [Provider UI](../components/provider-ui/src/index.ts) / [authoring 与 owner](provider-ui-ownership.md) | 纯数据 authoring 已关联字段/消息/赋值/slot；核心 UI owner 同步准入与隔离迟到结果；通用 DAG DSL、其他领域投影与持久恢复仍待推进 |
 
 这些是设计差距，不是对全部现有代码的安全审计，也不是本轮已经修复的事项。
 

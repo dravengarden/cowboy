@@ -7,6 +7,7 @@
     "baseUrl": ".",
     "paths": {
       "@cowboy/app-shell": ["../components/app-shell/index.ts"],
+      "@cowboy/provider-authoring": ["../components/provider-authoring/index.ts"],
       "@cowboy/provider-ui": ["../components/provider-ui/src/index.ts"],
       "@cowboy/state-store": ["../components/state-store/index.ts"],
       "@cowboy/state-store/scope": ["../components/state-store/owned-scope.ts"],

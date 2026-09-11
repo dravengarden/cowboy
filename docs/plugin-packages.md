@@ -384,6 +384,14 @@ inventory must be updated before it can receive a new Plugin generation.
 
 ## Typed linked logic
 
+The additive [Provider authoring component](provider-ui-ownership.md) supplies
+compile-time links over this same IR, without changing signed bytes. Core owns
+the interactive surface's admission and asynchronous lifetime. The current
+executor accepts only empty effect requests, success `{}`, failure
+`{ detail: string }` and effect-free completion reducers; unsupported profiles
+cannot dispatch. These additional execution checks are not new Plugin authority
+or a replacement for the independent SDK/Catalog validators.
+
 Provider UI behavior is a typed state machine rather than embedded application
 code. The DSL declares:
 
