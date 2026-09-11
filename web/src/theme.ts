@@ -2,11 +2,8 @@
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
 //
-// Palette: each curated style owns its light and dark colors. Light mode is the product's
-// default: a quiet cool-gray canvas, white work surfaces, and a deep blue
-// action colour. The separation matters more than a dramatic tint — the
-// transcript, composer, and tool cards should read as three useful layers.
-// Dark mode remains available as an explicit preference.
+// Curated styles change primary and secondary only. Surfaces and semantic
+// error/warning/success/info colors stay shared within each light/dark mode.
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { alpha, createTheme, type Theme } from "@mui/material";

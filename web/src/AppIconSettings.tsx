@@ -1,10 +1,11 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Alert,
   Box,
   Button,
   ButtonBase,
   Chip,
+  createTheme,
   Stack,
   Typography,
 } from "@mui/material";
@@ -28,7 +29,10 @@ import { appearancePalette } from "./appearanceThemes";
 function StylePreview(
   { id, dark }: { id: string; dark: boolean },
 ): React.JSX.Element {
-  const p = appearancePalette(id, dark);
+  const p = useMemo(
+    () => createTheme({ palette: appearancePalette(id, dark) }).palette,
+    [id, dark],
+  );
   return (
     <Box
       aria-label={`${dark ? "Dark" : "Light"} theme preview`}
@@ -90,6 +94,27 @@ function StylePreview(
           Continue
         </Typography>
       </Box>
+      <Stack direction="row" useFlexGap flexWrap="wrap" gap={1} sx={{ mt: 1 }}>
+        {(["success", "warning", "error"] as const).map((status) => (
+          <Stack key={status} direction="row" spacing={0.5} alignItems="center">
+            <Box
+              sx={{
+                width: 7,
+                height: 7,
+                borderRadius: "50%",
+                bgcolor: p[status].main,
+              }}
+            />
+            <Typography variant="caption" sx={{ color: p.text.secondary }}>
+              {status === "success"
+                ? "Success"
+                : status === "warning"
+                ? "Warning"
+                : "Error"}
+            </Typography>
+          </Stack>
+        ))}
+      </Stack>
     </Box>
   );
 }

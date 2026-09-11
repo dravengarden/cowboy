@@ -40,11 +40,9 @@ function rgba(hex: string, alpha: number): string {
 
 export function appearancePalette(id: string, dark: boolean) {
   const icon = appIcon(id), style = appearanceStyle(id);
-  const canvas = dark
-    ? (luminance(icon.background) < 0.045
-      ? icon.background
-      : mixColor("#101014", icon.background, 0.12))
-    : mixColor("#ffffff", style.themeColor, 0.045);
+  // Style selection changes only the two accent families. Shared surfaces and
+  // neutral states keep status colors visually consistent across all styles.
+  const canvas = dark ? "#101014" : "#f7fdff";
   const paper = dark ? mixColor(canvas, "#ffffff", 0.055) : "#ffffff";
   const controlSurface = dark ? paper : canvas;
   const primary = readable(style.themeColor, controlSurface, dark);
@@ -76,10 +74,10 @@ export function appearancePalette(id: string, dark: boolean) {
       primary: dark ? "#f5f5f8" : "#202027",
       secondary: dark ? "#bdbdc9" : "#565660",
     },
-    divider: rgba(primary, dark ? 0.20 : 0.16),
+    divider: rgba(dark ? "#ffffff" : "#000000", 0.12),
     action: {
-      hover: rgba(primary, dark ? 0.10 : 0.06),
-      selected: rgba(primary, dark ? 0.18 : 0.11),
+      hover: rgba(dark ? "#ffffff" : "#000000", dark ? 0.08 : 0.04),
+      selected: rgba(dark ? "#ffffff" : "#000000", dark ? 0.16 : 0.08),
     },
   };
 }

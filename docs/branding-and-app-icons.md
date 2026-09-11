@@ -11,14 +11,17 @@ and violet accents so text remains readable against pale surfaces.
 Open **Settings → Appearance → Icon & theme → Choose**. The selector contains
 **20 curated styles** in five groups of four: Electric, Soft, Heritage, Jewel,
 and Quiet. Each style has a distinct accent, an accompanying secondary color,
-and light/dark surfaces. Preview both modes, then choose **Use this style**.
+and primary/secondary accents. Preview both modes, then choose **Use this style**.
 The current Light / Dark / System preference is preserved. **Restore default**
 selects Neon (103). Previewing does not change the active style.
 
 `web/src/appIconStyles.json` owns the selection, display names, theme seeds,
 and official default. `appearanceThemes.ts` derives readable light and dark
 palettes; tests cover text and button contrast for all 40 combinations.
-Bright artwork colors are darkened for light-mode text and buttons.
+Bright artwork colors are darkened for light-mode text and buttons. Only primary
+and secondary vary by style. Backgrounds, text, dividers, and neutral interaction
+states are shared within each mode; error, warning, success, and info retain the
+existing MUI semantic palette.
 
 The previous 200 assets remain addressable for existing installations and saved
 choices, but are not offered as an expanded catalog. Old custom choices remain

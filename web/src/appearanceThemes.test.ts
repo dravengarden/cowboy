@@ -1,3 +1,4 @@
+import { createTheme } from "@mui/material";
 import { assert, assertEquals } from "jsr:@std/assert";
 import {
   APP_ICONS,
@@ -58,4 +59,23 @@ Deno.test("default migration preserves deliberate and archived custom styles", (
     DEFAULT_APP_ICON,
   );
   assertEquals(resolveIconPreference("../../external", null), DEFAULT_APP_ICON);
+});
+
+Deno.test("style changes preserve surfaces and MUI semantic status colors", () => {
+  for (const dark of [false, true]) {
+    const baseline = createTheme({
+      palette: { mode: dark ? "dark" : "light" },
+    });
+    const { primary: _primary, secondary: _secondary, ...shared } =
+      appearancePalette(DEFAULT_APP_ICON, dark);
+    for (const icon of APP_ICONS) {
+      const palette = appearancePalette(icon.id, dark);
+      const { primary: _p, secondary: _s, ...rest } = palette;
+      assertEquals(rest, shared, `${icon.id}: only accents may vary`);
+      const theme = createTheme({ palette });
+      for (const status of ["error", "warning", "success", "info"] as const) {
+        assertEquals(theme.palette[status], baseline.palette[status]);
+      }
+    }
+  }
 });
