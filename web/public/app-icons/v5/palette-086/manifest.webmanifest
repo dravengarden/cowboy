@@ -1,0 +1,41 @@
+{
+  "name": "Cowboy",
+  "short_name": "Cowboy",
+  "description": "Your coding agents, anywhere.",
+  "id": "/",
+  "scope": "/",
+  "start_url": "/?app-icon=palette-086",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay"
+  ],
+  "orientation": "any",
+  "background_color": "#E9DDC7",
+  "theme_color": "#E9DDC7",
+  "icons": [
+    {
+      "src": "/app-icons/v5/palette-086/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v5/palette-086/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v5/palette-086/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v5/palette-086/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

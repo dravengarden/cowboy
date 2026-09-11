@@ -4,10 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-readme-mark-dark-v2.png">
-      <img src="site/assets/cowboy-readme-mark-light-v2.png" width="180" height="101" alt="Cowboy">
-    </picture>
+    <img src="site/assets/cowboy-readme-icon-v5.png" width="128" height="128" alt="Cowboy — 粉色帽冠、冰蓝帽檐与深灰蓝背景">
   </a>
 </p>
 
@@ -20,13 +17,13 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-6e56cf?style=flat-square" alt="Cowboy 官网">
+    <img src="https://img.shields.io/badge/website-live-4b6486?style=flat-square" alt="Cowboy 官网">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="官网构建状态">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-7c5cbf?style=flat-square" alt="MIT 许可证">
+    <img src="https://img.shields.io/badge/license-MIT-98627d?style=flat-square" alt="MIT 许可证">
   </a>
   <a href="https://agentclientprotocol.com/">
     <img src="https://img.shields.io/badge/protocol-ACP_native-4a90d9?style=flat-square" alt="原生支持 ACP">
@@ -77,6 +74,9 @@ Codex、Claude Code、Gemini、Grok、DeepSeek 或你自己的插件。稍后重
   基础设施上；Cowboy 不提供共享云服务。
 
 ## 快速开始
+
+在 **Settings → Appearance → App icon** 中可以预览、筛选和选择完整配色库。
+主屏幕安装与原生切换方式见[图标与平台说明](docs/branding-and-app-icons.md)。
 
 ### 先决条件
 

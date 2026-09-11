@@ -142,6 +142,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       "apple/Sources/cowboy-app/bindings/bindings.h",
       "apple/Sources/cowboy-app/CowboyNativeTweaks.mm",
       "apple/Sources/cowboy-app/CowboyPasskeyBridge.mm",
+      "apple/Sources/cowboy-app/CowboyAppIconBridge.mm",
       "apple/Sources/cowboy-app/CowboyKeyboardGeometry.h",
       "apple/Sources/cowboy-app/CowboyDevBridge.swift",
       "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",

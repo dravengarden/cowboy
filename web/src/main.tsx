@@ -23,10 +23,13 @@ import {
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
 import { isBundleRecoveryUrl } from "./moduleRecovery";
+import { initializeAppIcons } from "./appIcons";
 import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
 
 const releasePluginHostScope = ownPluginHostLifecycle(globalThis);
 import.meta.hot?.dispose(releasePluginHostScope);
+
+initializeAppIcons();
 
 const DesktopApp = lazy(async () => {
   const module = await import("./desktop/DesktopApp");

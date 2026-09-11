@@ -1,0 +1,238 @@
+import catalog from "./appIconCatalog.json" with { type: "json" };
+
+export interface AppIcon {
+  id: string;
+  number: number;
+  title: string;
+  collection: string;
+  crown: string;
+  brim: string;
+  background: string;
+  family: string;
+  tone: string;
+}
+
+export const APP_ICONS: readonly AppIcon[] = catalog;
+export const DEFAULT_APP_ICON = "palette-054";
+export const APP_ICON_STORAGE_KEY = "cowboy-app-icon-v1";
+export const APP_ICON_CHANGED = "cowboy:app-icon-changed";
+const byId = new Map(APP_ICONS.map((icon) => [icon.id, icon]));
+
+export function appIcon(id: string | null | undefined): AppIcon {
+  return byId.get(id ?? "") ?? byId.get(DEFAULT_APP_ICON)!;
+}
+
+export function appIconAsset(
+  id: string,
+  size: 96 | 180 | 192 | 512 = 192,
+): string {
+  return `/app-icons/v5/${appIcon(id).id}/icon-${size}.png`;
+}
+
+export function appIconInstallPath(id: string): string {
+  return `/app-icons/v5/${appIcon(id).id}/install.html`;
+}
+
+export function iconColorFamily(hex: string): string {
+  const [r = 0, g = 0, b = 0] =
+    hex.slice(1).match(/../g)?.map((v) => parseInt(v, 16) / 255) ?? [];
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
+  if (max === 0 || delta / max < 0.18) return "neutral";
+  let hue = max === r
+    ? (g - b) / delta
+    : max === g
+    ? (b - r) / delta + 2
+    : (r - g) / delta + 4;
+  hue = ((hue * 60) + 360) % 360;
+  if (hue < 20 || hue >= 345) return "red";
+  if (hue < 48) return "orange";
+  if (hue < 75) return "gold";
+  if (hue < 255) return "blue";
+  if (hue < 290) return "purple";
+  return "pink";
+}
+
+export function filterAppIcons(input: {
+  query?: string;
+  family?: string;
+  tone?: string;
+}): AppIcon[] {
+  const query = (input.query ?? "").trim().toLowerCase();
+  return APP_ICONS.filter((icon) =>
+    (!input.family || input.family === "all" ||
+      [iconColorFamily(icon.crown), iconColorFamily(icon.brim)].includes(
+        input.family,
+      )) &&
+    (!input.tone || input.tone === "all" || icon.tone === input.tone) &&
+    (!query || (/^\d+$/.test(query)
+      ? icon.number === Number(query)
+      : `${icon.number} ${icon.title} ${icon.id} ${icon.crown} ${icon.brim} ${icon.background}`
+        .toLowerCase().includes(query)))
+  );
+}
+
+export interface NativeAppIconState {
+  supported: boolean;
+  current: string;
+  available: string[];
+}
+
+type IconWindow = typeof globalThis & {
+  __cowboyNativeShell?: boolean;
+  __TAURI_INTERNALS__?: unknown;
+  __cowboyAppIcon?: (
+    request: { action: "state" | "set"; id?: string },
+  ) => Promise<unknown>;
+};
+
+export function isNativeIconSurface(): boolean {
+  const root = globalThis as IconWindow;
+  return root.__cowboyNativeShell === true || !!root.__TAURI_INTERNALS__;
+}
+
+export function parseNativeAppIconState(raw: unknown): NativeAppIconState {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("Invalid native icon response.");
+  }
+  const value = raw as Record<string, unknown>;
+  if (value.ok !== true) {
+    throw new Error(
+      typeof value.error === "string"
+        ? value.error
+        : "The system could not change the icon.",
+    );
+  }
+  if (
+    typeof value.supported !== "boolean" || typeof value.current !== "string" ||
+    !Array.isArray(value.available) ||
+    !value.available.every((id) => typeof id === "string")
+  ) {
+    throw new Error("Invalid native icon response.");
+  }
+  if (!byId.has(value.current)) {
+    throw new Error(
+      "Refresh Cowboy to recognize the native app's current icon.",
+    );
+  }
+  return {
+    supported: value.supported,
+    current: appIcon(value.current).id,
+    available: value.available.filter((id): id is string =>
+      typeof id === "string" && byId.has(id)
+    ),
+  };
+}
+
+export async function nativeAppIconState(): Promise<NativeAppIconState | null> {
+  const bridge = (globalThis as IconWindow).__cowboyAppIcon;
+  return typeof bridge === "function"
+    ? parseNativeAppIconState(await bridge({ action: "state" }))
+    : null;
+}
+
+function readPreference(): string {
+  try {
+    return appIcon(globalThis.localStorage?.getItem(APP_ICON_STORAGE_KEY)).id;
+  } catch {
+    return DEFAULT_APP_ICON;
+  }
+}
+
+let current = readPreference();
+export function currentAppIcon(): string {
+  return current;
+}
+
+export function applyAppIconDocument(id: string): void {
+  const doc = globalThis.document;
+  if (!doc) return;
+  const selected = appIcon(id);
+  for (
+    const link of doc.querySelectorAll<HTMLLinkElement>(
+      'link[rel="icon"], link[rel="alternate icon"]',
+    )
+  ) {
+    link.remove();
+  }
+  const favicon = doc.createElement("link");
+  favicon.rel = "icon";
+  favicon.type = "image/png";
+  favicon.href = appIconAsset(selected.id, 192);
+  doc.head.appendChild(favicon);
+  for (
+    const link of doc.querySelectorAll<HTMLLinkElement>(
+      'link[rel="apple-touch-icon"], link[rel="apple-touch-icon-precomposed"]',
+    )
+  ) {
+    link.href = appIconAsset(selected.id, 180);
+  }
+  const manifest = doc.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+  if (manifest) {
+    manifest.href = `/app-icons/v5/${selected.id}/manifest.webmanifest`;
+  }
+}
+
+function commitPreference(id: string): void {
+  current = appIcon(id).id;
+  try {
+    globalThis.localStorage?.setItem(APP_ICON_STORAGE_KEY, current);
+  } catch { /* Window-only preference. */ }
+  applyAppIconDocument(current);
+  globalThis.dispatchEvent?.(new Event(APP_ICON_CHANGED));
+}
+
+export async function selectAppIcon(id: string): Promise<void> {
+  if (!byId.has(id)) throw new Error("Unknown icon.");
+  if (isNativeIconSurface()) {
+    const bridge = (globalThis as IconWindow).__cowboyAppIcon;
+    if (typeof bridge !== "function") {
+      throw new Error(
+        "This native app does not support automatic icon changes. Download the icon to use with your system's icon controls, or update the iOS app.",
+      );
+    }
+    const state = parseNativeAppIconState(await bridge({ action: "set", id }));
+    if (!state.supported || state.current !== id) {
+      throw new Error("The system did not apply this icon.");
+    }
+  }
+  commitPreference(id);
+}
+
+export function initializeAppIcons(): void {
+  const url = new URL(globalThis.location.href);
+  const fromLink = url.searchParams.get("app-icon");
+  let consumed: string | null = null;
+  try {
+    consumed =
+      globalThis.localStorage?.getItem("cowboy-icon-install-handoff") ?? null;
+  } catch { /* Optional storage. */ }
+  if (
+    fromLink && byId.has(fromLink) && fromLink !== consumed &&
+    !isNativeIconSurface()
+  ) {
+    commitPreference(fromLink);
+    try {
+      globalThis.localStorage?.setItem("cowboy-icon-install-handoff", fromLink);
+    } catch { /* Optional storage. */ }
+  } else applyAppIconDocument(current);
+  // Consume the installation handoff once. A stale start_url must not undo a
+  // later selection in the same installed browser's local storage.
+  if (fromLink) {
+    url.searchParams.delete("app-icon");
+    globalThis.history.replaceState(globalThis.history.state, "", url);
+  }
+  const syncNative = (): void => {
+    void nativeAppIconState().then((state) => {
+      if (state?.supported) commitPreference(state.current);
+    }).catch(() => undefined);
+  };
+  syncNative();
+  globalThis.addEventListener("cowboy:native-resume", syncNative);
+  globalThis.addEventListener("storage", (event: StorageEvent) => {
+    if (event.key === APP_ICON_STORAGE_KEY || event.key === null) {
+      current = readPreference();
+      applyAppIconDocument(current);
+      globalThis.dispatchEvent(new Event(APP_ICON_CHANGED));
+    }
+  });
+}

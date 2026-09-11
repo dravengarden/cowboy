@@ -2,8 +2,8 @@
 // SDK's useThemeMode — persistence + OS resolution); this file only builds the
 // theme object and the status-bar colour from the resolved mode.
 //
-// Palette: warm paper / violet. Light mode is intentionally the product's
-// default: a quiet lavender canvas, white work surfaces, and a dark violet
+// Palette: charcoal / ice blue / rose, matching the default 54 icon. Light mode is intentionally the product's
+// default: a quiet cool-gray canvas, white work surfaces, and a deep blue
 // action colour. The separation matters more than a dramatic tint — the
 // transcript, composer, and tool cards should read as three useful layers.
 // Dark mode remains available as an explicit preference.
@@ -23,7 +23,7 @@ import {
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 
-const LIGHT_CANVAS = "#f6f4fb";
+const LIGHT_CANVAS = "#f5f6fa";
 const LIGHT_PAPER = "#ffffff";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
@@ -45,8 +45,8 @@ export function desktopFocusFill(theme: Theme): string {
 }
 
 // Keep the iOS standalone status bar in lockstep with the navbar surface. The
-// AppBar is pinned to `background.default` (see App.tsx — `#15111d` dark /
-// `#f6f4fb` light), so the theme-color meta uses the SAME values: status bar →
+// AppBar is pinned to `background.default` (see App.tsx — `#232831` dark /
+// `#f5f6fa` light), so the theme-color meta uses the SAME values: status bar →
 // navbar read as one surface (status-bar-style="default" lets iOS tint the bar
 // + auto-contrast its glyphs). Must stay in sync with the palette's
 // background.default below.
@@ -63,7 +63,7 @@ function applyThemeColor(dark: boolean): void {
   for (const m of doc.querySelectorAll('meta[name="theme-color"]')) m.remove();
   const meta = doc.createElement("meta");
   meta.setAttribute("name", "theme-color");
-  const color = dark ? "#15111d" : LIGHT_CANVAS;
+  const color = dark ? "#232831" : LIGHT_CANVAS;
   meta.setAttribute("content", color);
   doc.head.appendChild(meta);
   // iOS paints the unlaid-out strip under a rising keyboard from the
@@ -293,45 +293,40 @@ export function useThemeMode(): ThemeControls {
         palette: dark
           ? {
               mode: "dark",
-              // Refined Radix-Violet family (less neon than Tailwind violet): a
-              // soft light step for the dark-mode bubble, violet-9 (#6E56CF) the
-              // deep step.
+              // Ice-blue brim and rose crown over the charcoal icon background.
               primary: {
-                main: "#9E8CFC",
-                light: "#C9BCFF",
-                dark: "#6E56CF",
-                contrastText: "#1c1428",
+                main: "#BDD2ED",
+                light: "#D4E3F5",
+                dark: "#4B6486",
+                contrastText: "#232831",
               },
-              secondary: { main: "#f0abfc" }, // fuchsia-300 for accents
+              secondary: { main: "#e8bdd0" }, // fuchsia-300 for accents
               background: {
-                default: "#15111d", // deep purple-black
-                paper: "#1f1a2c",
+                default: "#232831", // charcoal
+                paper: "#2d3440",
               },
-              divider: "rgba(158, 140, 252, 0.18)",
+              divider: "rgba(189, 210, 237, 0.18)",
               text: {
-                primary: "#ede9fe",
-                secondary: "#a899c4",
+                primary: "#eef1f7",
+                secondary: "#bcc7d7",
               },
               action: {
-                hover: "rgba(158, 140, 252, 0.10)",
-                selected: "rgba(158, 140, 252, 0.18)",
+                hover: "rgba(189, 210, 237, 0.10)",
+                selected: "rgba(189, 210, 237, 0.18)",
               },
             }
           : {
               mode: "light",
-              // Radix Violet 9 (#6E56CF): the refined, slightly blue-shifted
-              // accent — softer than Tailwind violet-600's neon while still dark
-              // enough to carry white bubble/button text (Radix pairs violet-9
-              // with white). 10/8 give the pressed + lighter steps.
+              // Deep blue carries white button text; pale brand colors stay accents.
               primary: {
-                main: "#6E56CF", // the "send" / user-bubble tone
-                light: "#8B79E0",
-                dark: "#5B4BC4",
+                main: "#4B6486", // the "send" / user-bubble tone
+                light: "#657FA2",
+                dark: "#374E6D",
                 contrastText: "#ffffff",
               },
-              secondary: { main: "#c026d3" }, // fuchsia accent
+              secondary: { main: "#9C5278" }, // fuchsia accent
               background: {
-                // A desaturated lavender canvas that's calm on the eyes for long
+                // A desaturated cool-gray canvas that's calm on the eyes for long
                 // sessions, with white paper surfaces for readable separation.
                 default: LIGHT_CANVAS,
                 // Paper is a clean elevated surface. A real white/paper step
@@ -339,14 +334,14 @@ export function useThemeMode(): ThemeControls {
                 // without adding a border to every transcript row.
                 paper: LIGHT_PAPER,
               },
-              divider: "rgba(47, 37, 76, 0.16)",
+              divider: "rgba(52, 66, 88, 0.16)",
               text: {
-                primary: "#252131",
-                secondary: "#665f74",
+                primary: "#232831",
+                secondary: "#5d6676",
               },
               action: {
-                hover: "rgba(110, 86, 207, 0.06)",
-                selected: "rgba(110, 86, 207, 0.11)",
+                hover: "rgba(75, 100, 134, 0.06)",
+                selected: "rgba(75, 100, 134, 0.11)",
               },
             },
         shape: { borderRadius: 10 },

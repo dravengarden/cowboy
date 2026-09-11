@@ -84,6 +84,7 @@ import {
     type SettingsProductFocus,
 } from "./appSettings";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
+import { AppIconSettings } from "./AppIconSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { KEYBOARD_INSET_CHANGED_EVENT } from "./keyboardInset";
@@ -4190,6 +4191,7 @@ function DesktopSettingsContent({
             }}
         >
             <DesktopModalBlock label="Appearance">
+                <Box sx={{ p: 1.5 }}><AppIconSettings /></Box>
                 <DesktopSettingsRow shortcut="T" shortcutAvailable={shortcutsAvailable} label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
                         {(["system", "light", "dark"] as const).map((mode) => (
@@ -5619,11 +5621,12 @@ function SettingsShell({
                 <MobileSettingsRoute
                     id="appearance"
                     title="Appearance"
-                    description="Theme and reading font"
+                    description="Theme, app icon, and reading font"
                     activeSection={mobileSettingsSection}
                     onChange={changeMobileSettingsSection}
                 >
                 <Stack spacing={2}>
+                <AppIconSettings />
                 <Stack
                     direction="row"
                     alignItems="center"

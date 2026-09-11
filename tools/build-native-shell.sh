@@ -121,11 +121,19 @@ for state_path in (build / "target").rglob("workspace-state.json"):
         swift_packages[consumer] = pin
 if platform != "macos" and swift_packages != toolchain["swiftPackages"]:
     raise SystemExit("Incomplete Swift dependency receipt")
+alternate_icons = []
+if platform != "macos":
+    expected = {path.stem for path in (build / "apps/native-shell/apple/Assets.xcassets").glob("Cowboy-*.appiconset")}
+    for key in ("CFBundleIcons", "CFBundleIcons~ipad"):
+        actual = set(info.get(key, {}).get("CFBundleAlternateIcons", {}))
+        if actual != expected:
+            raise SystemExit(f"Incomplete compiled alternate icons in {key}: missing {sorted(expected - actual)}, unexpected {sorted(actual - expected)}")
+    alternate_icons = sorted(expected)
 report = dict(source_revision=revision, platform=platform, profile=profile,
     app=str(app), executable_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
     lock_sha256=hashlib.sha256((build / "apps/native-shell/tauri/Cargo.lock").read_bytes()).hexdigest(),
     xcode=subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
-    toolchain=toolchain, swift_packages=swift_packages,
+    toolchain=toolchain, swift_packages=swift_packages, alternate_icons=alternate_icons,
     rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
     signing="ad-hoc" if platform == "macos" else "unsigned",
     installed=False, real_login="not_checked", physical_device="not_checked")
