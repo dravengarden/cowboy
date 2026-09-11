@@ -16,7 +16,9 @@ import {
   type ReplicatedStore,
   snapshotPatch,
 } from "@cowboy/state-sync";
-import { idbListKeys, idbPersistence } from "@cowboy/state-sync-idb";
+import { createIdbPersistenceOwner } from "@cowboy/state-sync-idb";
+import { createSyncShutdown } from "./syncShutdown";
+import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
   isAppleTouchWebView,
@@ -353,7 +355,7 @@ function clearReconnectTimer(): void {
   }
 }
 
-function abandonProductSocket(): void {
+function abandonProductSocket(): Promise<void> {
   productSessionAbandoned = true;
   productSessionPausedForAuth = false;
   clearReconnectTimer();
@@ -364,11 +366,11 @@ function abandonProductSocket(): void {
   // Sign-out ends these local sync writers, not the Machine's sessions. Seal
   // synchronously so late IDB hydration / durable-send continuations cannot
   // publish into an abandoned product session. Existing outboxes are retained.
-  for (const client of [...syncClients.values(), ...qClients.values()]) {
-    void client.dispose().catch(() => console.warn("sync owner cleanup failed"));
-  }
+  const closing = closeProductSync([...syncClients.values(), ...qClients.values()]);
+  void closing.catch(() => console.warn("sync owner cleanup failed"));
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
+  return closing;
 }
 
 function pauseProductSocketForAuth(): void {
@@ -503,7 +505,10 @@ if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", () => reconnectNow("network_online"));
-  globalThis.addEventListener("cowboy:product-sign-out", abandonProductSocket);
+  globalThis.addEventListener("cowboy:product-sign-out", (event) => {
+    const closing = abandonProductSocket();
+    if (event instanceof ProductSessionEndEvent) event.waitUntil(closing);
+  });
   globalThis.addEventListener(
     PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
     resumeProductSocketAfterAuthCookieChange,
@@ -1978,6 +1983,8 @@ interface SyncEntry {
   dispose: () => Promise<void>;
 }
 const syncClients = new Map<string, SyncEntry>();
+const syncDatabase = createIdbPersistenceOwner();
+const closeProductSync = createSyncShutdown(syncDatabase);
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 
 /** Wire one synced state to the generic channel via the shared op-based tier
@@ -1990,6 +1997,7 @@ function registerSync<T, M extends Mutators<T>>(
   initial: T,
   onChange: () => void = commitSessions,
 ): { view: () => T; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
+  if (productSessionAbandoned) throw new Error("product sync owner is closed");
   const store = replicatedStore<T, M>({
     clientId: `${syncBase}:${syncState}`,
     mutators,
@@ -2004,7 +2012,7 @@ function registerSync<T, M extends Mutators<T>>(
     // as a forced resync and overwrites stale base, while any unconfirmed
     // mutation re-sends. The key is NOT tab-namespaced (no syncBase) so every
     // tab shares one cache — they all sync to the same server truth anyway.
-    local: idbPersistence<ClientSnapshot<T>>(`cowboy:sync:${syncState}`),
+    local: syncDatabase.persistence<ClientSnapshot<T>>(`cowboy:sync:${syncState}`),
   });
   syncClients.set(syncState, {
     applyPatch: (version, value, confirmed, resync): void => {
@@ -2473,7 +2481,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // connect()), so a staged/queued message painted instantly survives the
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
-      local: idbPersistence<ClientSnapshot<QValue>>(
+      local: syncDatabase.persistence<ClientSnapshot<QValue>>(
         `cowboy:sync:queue:${sessionId}`,
         { strictWrites: true },
       ),
@@ -2491,7 +2499,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
  *  via onChange; the queue_resync (force) on connect then corrects stale base. */
 async function hydrateCachedQueues(): Promise<void> {
   const prefix = "cowboy:sync:queue:";
-  const keys = await idbListKeys();
+  const keys = await syncDatabase.listKeys();
   if (productSessionAbandoned) return;
   const outcomes = await Promise.allSettled(
     keys.filter((k) => k.startsWith(prefix)).map((k) => qClient(k.slice(prefix.length)).hydrate()),
