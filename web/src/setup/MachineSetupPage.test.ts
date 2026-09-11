@@ -46,7 +46,7 @@ Deno.test("setup settings include theme, typeface, size, passkeys, and sign out"
   assert(source.includes("FONT_SCALE_PRESETS"));
   assert(source.includes("setFontVariant"));
   assert(source.includes("setFontScale"));
-  assert(source.includes("<ProductAccountPluginPanels />"));
+  assert(source.includes("<ProductAccountSecurity />"));
   assertEquals(source.includes('pluginId="passkey"'), false);
   assert(source.includes("ProductAccountMenu"));
   assert(source.includes("Typeface"));

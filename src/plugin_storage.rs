@@ -36,6 +36,7 @@ pub struct PluginStorage {
     kind: PluginStorageKind,
     postgres: Option<PgPool>,
     plugin_dir: PluginDir,
+    core_store: Option<crate::store::Store>,
 }
 
 #[derive(Clone)]
@@ -57,6 +58,7 @@ impl PluginStorage {
             kind: PluginStorageKind::Sqlite,
             postgres: None,
             plugin_dir,
+            core_store: None,
         }
     }
 
@@ -66,6 +68,7 @@ impl PluginStorage {
             kind: PluginStorageKind::Postgres,
             postgres: Some(pool),
             plugin_dir,
+            core_store: None,
         }
     }
 
@@ -79,6 +82,11 @@ impl PluginStorage {
         &self.plugin_dir
     }
 
+    pub(crate) fn with_core_store(mut self, store: crate::store::Store) -> Self {
+        self.core_store = Some(store);
+        self
+    }
+
     /// Apply the plugin's dialect-matching migrations.
     ///
     /// # Errors
@@ -89,6 +97,23 @@ impl PluginStorage {
         storage: &PluginStorageSpec,
     ) -> Result<PluginNamespace> {
         validate_plugin_id(plugin_id)?;
+        if let Some(store) = &self.core_store
+            && let Some((authority, _)) = store.security_authority().await?
+        {
+            ensure!(
+                plugin_id != authority.passkeys.namespace_id.as_str(),
+                "Plugin migration cannot access the core-owned security namespace"
+            );
+        }
+        if let Some(authority) = crate::core_security::Authority::inspect(&self.plugin_dir)? {
+            ensure!(
+                crate::plugin_host::postgres_schema_name(plugin_id)?
+                    != crate::plugin_host::postgres_schema_name(
+                        authority.passkeys.namespace_id.as_str()
+                    )?,
+                "Plugin migration cannot access the core-owned security namespace"
+            );
+        }
         self.plugin_dir.ensure_state_dir(plugin_id)?;
         let namespace = match self.kind {
             PluginStorageKind::Postgres => {

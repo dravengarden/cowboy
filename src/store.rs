@@ -35,6 +35,8 @@ use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 mod copy;
+mod core_security;
+pub(crate) use core_security::HandoffPoint;
 mod plugin_operations;
 mod sqlite;
 
@@ -417,7 +419,7 @@ pub struct LoadedSession {
 #[derive(Clone)]
 pub struct Store {
     backend: StorageBackend,
-    passkey_plugin: Option<crate::plugin_storage::PluginNamespace>,
+    passkey_storage: std::sync::Arc<crate::core_passkeys::PasskeyBinding>,
 }
 
 pub(crate) struct PasskeySnapshot {
@@ -1256,15 +1258,15 @@ impl Store {
         };
         Ok(Self {
             backend,
-            passkey_plugin: None,
+            passkey_storage: std::sync::Arc::default(),
         })
     }
 
-    pub(crate) fn attach_passkey_plugin(
+    pub(crate) async fn attach_passkey_storage(
         &mut self,
-        namespace: crate::plugin_storage::PluginNamespace,
-    ) {
-        self.passkey_plugin = Some(namespace);
+        namespace: &crate::plugin_storage::PluginNamespace,
+    ) -> Result<()> {
+        self.passkey_storage.attach(namespace, self).await
     }
 
     pub(crate) fn artifacts(&self) -> crate::artifacts::ArtifactStore {
@@ -1291,6 +1293,7 @@ impl Store {
                 crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir)
             }
         }
+        .with_core_store(self.clone())
     }
 
     #[cfg(test)]
@@ -2154,24 +2157,24 @@ impl Store {
         &self,
         user_id: &str,
     ) -> Result<Vec<crate::passkey::UserPasskey>> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::list_user(namespace, user_id).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::list_user(namespace, user_id).await;
         }
         dispatch_storage!(self, list_user_passkeys(user_id))
     }
 
     pub async fn insert_user_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::insert_user(namespace, passkey).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::insert_user(namespace, passkey).await;
         }
         dispatch_storage!(self, insert_user_passkey(passkey))
     }
 
     pub async fn delete_user_passkey(&self, user_id: &str, passkey_id: &str) -> Result<u64> {
-        if let Some(namespace) = &self.passkey_plugin {
+        if let Some(namespace) = self.passkey_storage.get() {
             let affected =
-                crate::plugin_passkeys::delete_user(namespace, user_id, passkey_id).await?;
-            if affected == 1 && crate::plugin_passkeys::count_user(namespace, user_id).await? == 0 {
+                crate::core_passkeys::delete_user(namespace, user_id, passkey_id).await?;
+            if affected == 1 && crate::core_passkeys::count_user(namespace, user_id).await? == 0 {
                 dispatch_storage!(self, clear_user_passkey_reauth(user_id))?;
             }
             return Ok(affected);
@@ -2186,8 +2189,8 @@ impl Store {
         passkey_json: &str,
         now_ms: i64,
     ) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::update_user(
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::update_user(
                 namespace,
                 user_id,
                 passkey_id,
@@ -2207,8 +2210,8 @@ impl Store {
         user_id: &str,
     ) -> Result<Option<crate::passkey::PasskeyPolicy>> {
         let mut policy = dispatch_storage!(self, user_passkey_policy(user_id))?;
-        if let (Some(namespace), Some(policy)) = (&self.passkey_plugin, policy.as_mut()) {
-            policy.passkey_count = crate::plugin_passkeys::count_user(namespace, user_id).await?;
+        if let (Some(namespace), Some(policy)) = (self.passkey_storage.get(), policy.as_mut()) {
+            policy.passkey_count = crate::core_passkeys::count_user(namespace, user_id).await?;
         }
         Ok(policy)
     }
@@ -2219,14 +2222,14 @@ impl Store {
         enabled: bool,
         reauth_after_ms: i64,
     ) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
+        if let Some(namespace) = self.passkey_storage.get() {
             anyhow::ensure!(
                 crate::passkey::valid_reauth_interval(reauth_after_ms),
                 "Passkey refresh interval is unsupported"
             );
             if enabled {
                 anyhow::ensure!(
-                    crate::plugin_passkeys::count_user(namespace, user_id).await? > 0,
+                    crate::core_passkeys::count_user(namespace, user_id).await? > 0,
                     "user not found or no Passkey is registered"
                 );
             }
@@ -2245,8 +2248,8 @@ impl Store {
         &self,
         ceremony: &crate::passkey::ExternalPasskeyCeremonyRecord,
     ) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::upsert_ceremony(namespace, ceremony).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::upsert_ceremony(namespace, ceremony).await;
         }
         dispatch_storage!(self, upsert_external_passkey_ceremony(ceremony))
     }
@@ -2256,8 +2259,8 @@ impl Store {
         transaction_hash: &str,
         now_ms: i64,
     ) -> Result<Option<crate::passkey::ExternalPasskeyCeremonyRecord>> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::ceremony(namespace, transaction_hash, now_ms).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::ceremony(namespace, transaction_hash, now_ms).await;
         }
         dispatch_storage!(self, external_passkey_ceremony(transaction_hash, now_ms))
     }
@@ -2274,22 +2277,22 @@ impl Store {
         &self,
         account: &str,
     ) -> Result<Vec<crate::passkey::UserPasskey>> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::list_admin(namespace, account).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::list_admin(namespace, account).await;
         }
         dispatch_storage!(self, list_admin_passkeys(account))
     }
 
     pub async fn insert_admin_passkey(&self, passkey: &crate::passkey::UserPasskey) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::insert_admin(namespace, passkey).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::insert_admin(namespace, passkey).await;
         }
         dispatch_storage!(self, insert_admin_passkey(passkey))
     }
 
     pub async fn delete_admin_passkey(&self, account: &str, passkey_id: &str) -> Result<u64> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::delete_admin(namespace, account, passkey_id).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::delete_admin(namespace, account, passkey_id).await;
         }
         dispatch_storage!(self, delete_admin_passkey(account, passkey_id))
     }
@@ -2301,8 +2304,8 @@ impl Store {
         passkey_json: &str,
         now_ms: i64,
     ) -> Result<()> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::update_admin(
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::update_admin(
                 namespace,
                 account,
                 passkey_id,
@@ -2318,8 +2321,8 @@ impl Store {
     }
 
     pub async fn count_admin_passkeys(&self, account: &str) -> Result<u32> {
-        if let Some(namespace) = &self.passkey_plugin {
-            return crate::plugin_passkeys::count_admin(namespace, account).await;
+        if let Some(namespace) = self.passkey_storage.get() {
+            return crate::core_passkeys::count_admin(namespace, account).await;
         }
         dispatch_storage!(self, count_admin_passkeys(account))
     }

@@ -39,6 +39,10 @@ pub mod code_review;
 mod composition;
 #[cfg(feature = "full")]
 mod core;
+#[cfg(feature = "full")]
+mod core_passkeys;
+#[cfg(feature = "full")]
+mod core_security;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
 mod deepseek_cache;
@@ -104,8 +108,6 @@ mod plugin_host;
 mod plugin_host_bundle;
 #[cfg(feature = "full")]
 mod plugin_operation;
-#[cfg(feature = "full")]
-mod plugin_passkeys;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod plugin_process;
 #[cfg(feature = "full")]

@@ -5,6 +5,8 @@ import {
   isPluginSlotId,
   type PluginSlotId,
 } from "@cowboy/plugin-api/runtime";
+import { PASSWORD_LOGIN_METHOD } from "./coreSecurity";
+export { PASSWORD_LOGIN_METHOD } from "./coreSecurity";
 
 export type ProductRole = "owner" | "operator" | "viewer";
 export type RegistrationMode = "disabled" | "token" | "open";
@@ -53,31 +55,6 @@ export interface AuthHostPlugin {
   slots: PluginSlotId[];
   label?: string;
   fields?: AuthLoginFields;
-}
-
-export const PASSWORD_LOGIN_METHOD = "password";
-
-const DEFAULT_PASSWORD_LOGIN_FIELDS: Required<AuthLoginFields> = {
-  account: "Account",
-  secret: "Password",
-  confirm: "Confirm password",
-  setup: "Setup code",
-};
-
-/** Password login field copy declared by the password host plugin. */
-export function passwordLoginFields(
-  hostPlugins: readonly AuthHostPlugin[] | undefined,
-): Required<AuthLoginFields> {
-  const fields = hostPlugins?.find((plugin) =>
-    plugin.id === PASSWORD_LOGIN_METHOD
-  )
-    ?.fields;
-  return {
-    account: fields?.account ?? DEFAULT_PASSWORD_LOGIN_FIELDS.account,
-    secret: fields?.secret ?? DEFAULT_PASSWORD_LOGIN_FIELDS.secret,
-    confirm: fields?.confirm ?? DEFAULT_PASSWORD_LOGIN_FIELDS.confirm,
-    setup: fields?.setup ?? DEFAULT_PASSWORD_LOGIN_FIELDS.setup,
-  };
 }
 
 export function defaultProductLoginMethodOrder(

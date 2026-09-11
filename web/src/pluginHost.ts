@@ -11,7 +11,6 @@ import {
   type LoginMethodContext,
   LoginMethodFallback,
 } from "./auth/ProductLoginPage";
-import { ProductPasskeysPanel } from "./auth/ProductPasskeysPanel";
 
 function contextRecord(context: unknown): Record<string, unknown> | null {
   return context != null && typeof context === "object"
@@ -19,13 +18,10 @@ function contextRecord(context: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function LoginPasswordRenderer({ context }: PluginSlotProps): unknown {
-  if (contextRecord(context)?.kind !== "password") {
-    throw new TypeError("login-password-v1 requires a password context");
-  }
-  return React.createElement(LoginMethodFallback, {
-    context: context as LoginMethodContext,
-  });
+function RetiredLocalAuthenticationRenderer(): null {
+  // Keep the old closed SDK table readable during the ownership migration,
+  // but never let a Plugin descriptor mount a local security ceremony.
+  return null;
 }
 
 function LoginOidcRenderer({ context }: PluginSlotProps): unknown {
@@ -35,10 +31,6 @@ function LoginOidcRenderer({ context }: PluginSlotProps): unknown {
   return React.createElement(LoginMethodFallback, {
     context: context as LoginMethodContext,
   });
-}
-
-function AccountPasskeysRenderer(): unknown {
-  return React.createElement(ProductPasskeysPanel);
 }
 
 function ProviderSurfaceRenderer({ context }: PluginSlotProps): unknown {
@@ -86,9 +78,9 @@ function ProviderUsageActivityRenderer({ context }: PluginSlotProps): unknown {
 }
 
 const COWBOY_RENDERERS: PluginRendererRegistry = {
-  "login-password-v1": LoginPasswordRenderer,
+  "login-password-v1": RetiredLocalAuthenticationRenderer,
   "login-oidc-v1": LoginOidcRenderer,
-  "account-passkeys-v1": AccountPasskeysRenderer,
+  "account-passkeys-v1": RetiredLocalAuthenticationRenderer,
   "provider-surface-v1": ProviderSurfaceRenderer,
   "provider-usage-v1": ProviderUsageRenderer,
   "provider-usage-activity-v1": ProviderUsageActivityRenderer,

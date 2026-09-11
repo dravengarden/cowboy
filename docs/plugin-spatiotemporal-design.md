@@ -23,6 +23,14 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 重新核对当前 Operator、登录时效、精确信任与连接；观察到失效后不再接纳下一效果，仍不开放耐久补偿。
 第十批 [无效果中断处置](plugin-no-effect-resolution.md) 加入独立预览/确认与本地原子审计；
 仅能终止可证明尚未开始效果的 `Prepared` 中断并解除对应 Service fence，不复活原授权、安装或会话。
+第十一批 [核心安全客户端](core-security-client-boundary.md) 将本地认证 UI 从 Plugin slot 分离，
+并为现有 native Passkey ABI 加入闭集类型、结果校验与不确定效果禁止自动重试；不迁移存储或退役旧 SDK/原生 ABI。
+第十二批 [核心安全存储桥](core-security-storage-bridge.md) 将 Passkey SQL 和共享的一次性绑定收进核心，
+冻结兼容存储格式，原子导入旧数据，并修复并行授权流程的误清理；保留现有存储位置、pin 与 reader，
+尚未执行耐久 ownership/生产配置切换。
+第十三批 [核心安全 ownership](core-security-ownership.md) 实现无本地认证 Plugin 的显式核心启动、
+稳定 namespace 权威与 prepared/ready 中断恢复；核心凭据不搬表，外部 OIDC 精确策略保留。
+生产本批只升级兼容 reader，正式主机策略切换与真实客户端/native 验收仍未完成。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行

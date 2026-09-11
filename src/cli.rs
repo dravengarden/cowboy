@@ -310,6 +310,11 @@ pub struct ServeArgs {
     #[arg(long, env = "COWBOY_PLUGIN_HOST_CONFIG")]
     pub plugin_host_config: Option<PathBuf>,
 
+    /// Private opt-in core local-auth storage policy. Requires durable storage;
+    /// adopting a legacy namespace is a stopped-Controller ownership handoff.
+    #[arg(long, env = "COWBOY_CORE_SECURITY_CONFIG")]
+    pub core_security_config: Option<PathBuf>,
+
     /// Verify host selections against the signed Catalog, print a JSON report,
     /// and exit without starting services or writing state. Uses the same
     /// authentication and database flags as an actual start; never connects to
@@ -588,6 +593,7 @@ impl ServeArgs {
         args.data_dir = data_dir.to_owned();
         args.plugin_catalog_dir = None;
         args.plugin_host_config = None;
+        args.core_security_config = None;
         args.auth_config = None;
         args.cardea_oidc_config = None;
         args.database_url = None;

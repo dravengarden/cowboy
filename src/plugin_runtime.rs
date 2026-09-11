@@ -515,6 +515,10 @@ impl PluginRuntime {
             }
         }
         validate_default_host_claims(&runtime.default_hosts)?;
+        // Check all selected schemas before any one host can migrate storage.
+        for spec in default_specs.values() {
+            crate::core_passkeys::validate_legacy_host(spec)?;
+        }
         for (plugin_id, spec) in default_specs {
             if let Some(storage_spec) = &spec.storage {
                 let namespace = storage

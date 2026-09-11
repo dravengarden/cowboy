@@ -22,12 +22,13 @@ export function providerVerificationMethodId(providerId: string): string {
   return `${PROVIDER_PREFIX}${providerId}`;
 }
 
-/** Tab/reauth label declared by the login plugin, then OIDC display name, then id. */
+/** Only external identities may select their presentation through a Plugin. */
 export function loginMethodLabel(
   id: string,
   hostPlugins: readonly AuthHostPlugin[] | undefined,
   providers: readonly ProductOidcProvider[],
 ): string {
+  if (id === PASSWORD_LOGIN_METHOD) return "Password";
   const hostLabel = hostPlugins?.find((plugin) => plugin.id === id)?.label
     ?.trim();
   if (hostLabel) return hostLabel;

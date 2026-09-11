@@ -11,13 +11,13 @@ import {
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
+import { passwordLoginFields } from "./coreSecurity";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
   authApi,
   AuthApiError,
-  PASSWORD_LOGIN_METHOD,
-  passwordLoginFields,
   type AuthHostPlugin,
+  PASSWORD_LOGIN_METHOD,
   type ProductMe,
   type ProductOidcProvider,
   resolveProductLoginMethodOrder,
@@ -156,7 +156,7 @@ export function ProductRecentAuthSheet({
   const useBrowserProviderFlow = selectedProvider !== undefined &&
     !useNativeProviderFlow && browserOidcFlowSupported();
   const useProviderHandoff = useNativeProviderFlow || useBrowserProviderFlow;
-  const fieldLabels = passwordLoginFields(hostPlugins);
+  const fieldLabels = passwordLoginFields();
 
   useEffect(() => () => {
     providerAbort.current?.abort();
@@ -218,7 +218,9 @@ export function ProductRecentAuthSheet({
       .catch((reason: unknown) => {
         if (requestEpoch.current !== epoch) return;
         if (passkeyFlowCancelled(reason)) {
-          setNotice("Passkey verification was cancelled. Try again when ready.");
+          setNotice(
+            "Passkey verification was cancelled. Try again when ready.",
+          );
           return;
         }
         setError(

@@ -1604,6 +1604,10 @@ fn decode_event_row(row: EventRow, session_id: &str, operation: &str) -> Option<
 }
 
 impl SqliteStorage {
+    pub(super) fn durable_database_path(&self) -> Option<&std::path::Path> {
+        self.database_path.as_deref()
+    }
+
     pub(super) async fn connect(url: &str, artifact_dir: std::path::PathBuf) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(url)
             .with_context(|| format!("parsing SQLite URL {url}"))?

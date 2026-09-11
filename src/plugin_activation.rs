@@ -72,6 +72,7 @@ pub(crate) struct HostActivationPolicy {
     required_bundles: BTreeSet<String>,
     pub authentication_methods: BTreeMap<String, PluginRendererId>,
     pub require_webauthn_storage: bool,
+    pub core_security: Option<crate::core_security::PasskeyConfig>,
 }
 
 /// A read-only check receipt, never an activation or database readiness claim.
@@ -84,6 +85,8 @@ pub(crate) struct HostPreflightReport {
     exact_selections: Vec<HostReleasePin>,
     login_methods: BTreeMap<String, PluginRendererId>,
     webauthn_storage_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    core_security: Option<crate::core_security::PasskeyConfig>,
     catalog_defaults: Vec<HostPreflightDefault>,
     not_checked: [&'static str; 5],
 }
@@ -98,7 +101,25 @@ struct HostPreflightDefault {
 /// identity, cache, database, host generation or authority marker is created.
 pub(crate) fn prepare_controller_hosts(
     args: &crate::cli::ServeArgs,
-) -> Result<(PluginCatalog, crate::auth_plugins::ProductAuthentication)> {
+) -> Result<(
+    PluginCatalog,
+    crate::auth_plugins::ProductAuthentication,
+    Option<crate::core_security::Config>,
+)> {
+    let core_security = crate::core_security::Config::load(args.core_security_config.as_deref())?;
+    let directory = crate::plugin_dir::PluginDir::inspect(&args.data_dir);
+    if let Some(authority) = crate::core_security::Authority::inspect(&directory)? {
+        ensure!(
+            core_security
+                .as_ref()
+                .is_some_and(|config| config.passkeys == authority.passkeys),
+            "CoreSecurity authority requires its matching core configuration; legacy fallback is forbidden"
+        );
+    }
+    ensure!(
+        core_security.is_none() || args.database_url().is_some(),
+        "CoreSecurity requires a durable database"
+    );
     let mut catalog = PluginCatalog::inspect(&args.data_dir, args.plugin_catalog_dir.clone())?;
     let legacy = load_legacy_oidc_provider(
         args.product_auth_enabled,
@@ -116,14 +137,24 @@ pub(crate) fn prepare_controller_hosts(
     };
     let mut policy = HostActivationPolicy::load(args.plugin_host_config.as_deref())
         .context("loading Plugin host activation policy")?;
+    if let Some(config) = &core_security {
+        if args.plugin_host_config.is_none() {
+            policy.source = HostSourcePolicy::CatalogOnly;
+        }
+        ensure!(
+            policy.source == HostSourcePolicy::CatalogOnly,
+            "CoreSecurity requires catalog_only Plugin hosts"
+        );
+        policy.core_security = Some(config.passkeys.clone());
+    }
     authentication.configure_host_policy(&mut policy)?;
     // Durable admin authentication also requires WebAuthn storage even when
     // Product authentication is disabled. Never connect merely to check this.
-    policy.require_webauthn_storage |= args.database_url().is_some();
+    policy.require_webauthn_storage |= core_security.is_none() && args.database_url().is_some();
     catalog
         .configure_hosts(policy)
         .context("checking Plugin host activation readiness")?;
-    Ok((catalog, authentication))
+    Ok((catalog, authentication, core_security))
 }
 
 pub(crate) fn load_legacy_oidc_provider(
@@ -250,6 +281,7 @@ impl HostActivationPolicy {
             exact_selections: self.pins.values().cloned().collect(),
             login_methods: self.authentication_methods.clone(),
             webauthn_storage_required: self.require_webauthn_storage,
+            core_security: self.core_security.clone(),
             catalog_defaults,
             not_checked: [
                 "runtime_artifact_bytes",
@@ -265,6 +297,12 @@ impl HostActivationPolicy {
     /// staging, authority-marker writes, or any storage migration can run.
     pub(crate) fn select(&self, releases: &mut [CatalogHostRelease]) -> Result<()> {
         for pin in self.pins.values() {
+            ensure!(
+                self.core_security
+                    .as_ref()
+                    .is_none_or(|core| pin.plugin_id != core.namespace_id.as_str()),
+                "selected Plugin conflicts with the core-owned security namespace"
+            );
             let release = releases
                 .iter()
                 .find(|release| pin.matches(release))
@@ -295,6 +333,34 @@ impl HostActivationPolicy {
                     // regardless of payload kind or bootstrap/cutover mode.
                     release.default_for_id = false;
                 }
+            }
+        }
+        for release in releases
+            .iter()
+            .filter(|release| release.default_for_id && release.host_bundle.is_some())
+        {
+            let host = host_spec(release)?;
+            if let Some(core) = &self.core_security {
+                ensure!(
+                    release.entry.plugin_id != core.namespace_id.as_str(),
+                    "selected Plugin conflicts with the core-owned security namespace"
+                );
+                ensure!(
+                    !host
+                        .native_capabilities
+                        .iter()
+                        .any(|name| name == "webauthn")
+                        && host.ui.as_ref().is_none_or(|ui| !ui.renderers.values().any(
+                            |renderer| matches!(
+                                renderer,
+                                PluginRendererId::LoginPasswordV1
+                                    | PluginRendererId::AccountPasskeysV1
+                            )
+                        )),
+                    "CoreSecurity cannot select a local Authentication Plugin; remove its pin explicitly"
+                );
+            } else {
+                crate::core_passkeys::validate_legacy_host(&host)?;
             }
         }
         for (id, renderer) in &self.authentication_methods {

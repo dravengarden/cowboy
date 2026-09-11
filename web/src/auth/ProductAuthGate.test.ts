@@ -10,7 +10,7 @@ async function readAuthSources(): Promise<string> {
     "ProductAuthGate.tsx",
     "ProductLoginPage.tsx",
     "ProductPasskeysPanel.tsx",
-    "ProductAccountPluginPanels.tsx",
+    "ProductAccountSecurity.tsx",
     "ProductAccountMenu.tsx",
     "ProductDevicesPanel.tsx",
     "DeviceAuthorizationPage.tsx",

@@ -2,7 +2,7 @@ import { Box } from "@mui/material";
 import { useEffect, useMemo, useState } from "react";
 import { App } from "../App";
 import { useProductAuth } from "../auth/ProductAuthGate";
-import { ProductAccountPluginPanels } from "../auth/ProductAccountPluginPanels";
+import { ProductAccountSecurity } from "../auth/ProductAccountSecurity";
 import { ProductDevicesPanel } from "../auth/ProductDevicesPanel";
 import { ProductSessionCapacityPanel } from "../auth/ProductSessionCapacityPanel";
 import type { Mode as ThemeMode } from "../theme";
@@ -97,7 +97,7 @@ function EnabledDesktopAccountCommands({
         width={520}
       >
         <Box sx={{ px: 2.25, py: 2 }}>
-          <ProductAccountPluginPanels />
+          <ProductAccountSecurity />
         </Box>
       </DesktopModal>
     </>

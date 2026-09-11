@@ -13,11 +13,11 @@ import {
   type AuthHostPlugin,
   type AuthStatus,
   PASSWORD_LOGIN_METHOD,
-  passwordLoginFields,
   type ProductMe,
   type ProductOidcProvider,
   resolveProductLoginMethodOrder,
 } from "./authApi";
+import { corePasswordMode, passwordLoginFields } from "./coreSecurity";
 import { PluginSlot } from "@cowboy/plugin-api";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
 import { loginMethodLabel } from "./productReauthMethods";
@@ -136,14 +136,21 @@ export function ProductLoginPage({
     }
     return [{ id, label }];
   });
-  const selectedProvider = providers.find((provider) => provider.id === method);
+  const passwordMode = corePasswordMode({
+    setupRequired,
+    setupPending,
+    passwordEnabled,
+    selectedMethod: method,
+  });
+  const selectedProvider = !setupRequired && method !== PASSWORD_LOGIN_METHOD
+    ? providers.find((provider) => provider.id === method)
+    : undefined;
   const useNativeProviderFlow = selectedProvider !== undefined &&
     nativeOidcFlowSupported();
-  const loginPluginId = selectedProvider?.id ??
-    (method === PASSWORD_LOGIN_METHOD || setupRequired ? "password" : method);
-
   const submit = (): void => {
-    if (busy) return;
+    // A stale selection during a policy change cannot submit a disabled local
+    // method, nor can Enter on an OIDC surface submit retained password fields.
+    if (busy || passwordMode === null) return;
     setBusy(true);
     setError(null);
     const request = needsCode
@@ -195,7 +202,7 @@ export function ProductLoginPage({
       });
   };
 
-  const loginContext: LoginMethodContext = selectedProvider
+  const loginContext: LoginMethodContext | null = selectedProvider
     ? {
       kind: "oidc" as const,
       buttonLabel: selectedProvider.button_label,
@@ -205,17 +212,14 @@ export function ProductLoginPage({
       onStart: submitProvider,
       onCancel: () => providerAbort.current?.abort(),
     }
-    : {
+    : passwordMode !== null
+    ? {
       kind: "password" as const,
-      mode: needsCode
-        ? "setup" as const
-        : creating
-        ? "register" as const
-        : "login" as const,
+      mode: passwordMode,
       account,
       password,
       confirm,
-      fieldLabels: passwordLoginFields(hostPlugins),
+      fieldLabels: passwordLoginFields(),
       setupToken,
       busy,
       passwordVisible,
@@ -241,7 +245,8 @@ export function ProductLoginPage({
       onConfirm: setConfirm,
       onSetupToken: setSetupToken,
       onTogglePasswordVisible: () => setPasswordVisible((visible) => !visible),
-    };
+    }
+    : null;
 
   return (
     <Box
@@ -272,7 +277,10 @@ export function ProductLoginPage({
         color: "text.primary",
       }}
     >
-      <Stack spacing={2.5} sx={{ width: "100%", maxWidth: 400, pt: { xs: 4, sm: 2 } }}>
+      <Stack
+        spacing={2.5}
+        sx={{ width: "100%", maxWidth: 400, pt: { xs: 4, sm: 2 } }}
+      >
         <Box>
           <Box
             component="img"
@@ -302,7 +310,12 @@ export function ProductLoginPage({
           <Typography
             component="h1"
             variant="h4"
-            sx={{ fontWeight: 750, mt: 0.75, letterSpacing: -0.6, fontSize: { xs: "1.75rem", sm: "2rem" } }}
+            sx={{
+              fontWeight: 750,
+              mt: 0.75,
+              letterSpacing: -0.6,
+              fontSize: { xs: "1.75rem", sm: "2rem" },
+            }}
           >
             {needsCode
               ? "Enter setup code"
@@ -310,7 +323,10 @@ export function ProductLoginPage({
               ? "Create account"
               : "Sign in"}
           </Typography>
-          <Typography color="text.secondary" sx={{ mt: 0.75, lineHeight: 1.45 }}>
+          <Typography
+            color="text.secondary"
+            sx={{ mt: 0.75, lineHeight: 1.45 }}
+          >
             {needsCode
               ? "This instance has no user yet. Enter the setup code from the host journal or data directory."
               : creating
@@ -352,14 +368,24 @@ export function ProductLoginPage({
             aria-label="Sign-in method"
           />
         )}
-        <PluginSlot
-          pluginId={loginPluginId}
-          slot="login.method"
-          context={loginContext}
-          placeholder={null}
-        >
-          <LoginMethodFallback context={loginContext} />
-        </PluginSlot>
+        {loginContext?.kind === "password"
+          ? <LoginMethodFallback context={loginContext} />
+          : loginContext?.kind === "oidc" && selectedProvider
+          ? (
+            <PluginSlot
+              pluginId={selectedProvider.id}
+              slot="login.method"
+              context={loginContext}
+              placeholder={null}
+            >
+              <LoginMethodFallback context={loginContext} />
+            </PluginSlot>
+          )
+          : (
+            <Alert severity="warning">
+              No configured sign-in method is available.
+            </Alert>
+          )}
       </Stack>
     </Box>
   );

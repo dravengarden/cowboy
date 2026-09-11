@@ -15,6 +15,7 @@ use sqlx::{Connection as _, Row as _};
 use super::sqlite::SqliteStorage;
 
 const TABLES: &[&str] = &[
+    "core_security_authority",
     "machines",
     "plugin_uninstall_operations",
     "plugin_uninstall_resolutions",
@@ -274,6 +275,10 @@ pub(crate) async fn postgres_to_sqlite(
             .execute(&mut *source_transaction)
             .await
             .context("configuring source snapshot")?;
+        let core_owned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM core_security_authority")
+            .fetch_one(&mut *source_transaction).await?;
+        anyhow::ensure!(core_owned == 0,
+            "store-copy cannot relocate core-owned security; it requires a separate namespace/authority migration");
         let mut destination_transaction = destination
             .begin()
             .await

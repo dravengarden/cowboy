@@ -21,7 +21,7 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { ProductAccountMenu } from "../auth/ProductAccountMenu";
-import { ProductAccountPluginPanels } from "../auth/ProductAccountPluginPanels";
+import { ProductAccountSecurity } from "../auth/ProductAccountSecurity";
 import { useProductAuth } from "../auth/ProductAuthGate";
 import { FONT_PRESETS } from "../fonts";
 import {
@@ -315,7 +315,7 @@ function SetupSettings({
             >
               Account
             </Typography>
-            <ProductAccountPluginPanels />
+            <ProductAccountSecurity />
             <ProductAccountMenu />
           </Stack>
         </Stack>

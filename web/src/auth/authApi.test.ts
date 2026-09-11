@@ -7,7 +7,6 @@ import {
   externalPasskeyApi,
   fetchAuthStatus,
   isHtmlContentType,
-  passwordLoginFields,
 } from "./authApi.ts";
 import { classifyAuthStatus, isLoginDecision } from "./authStatus.ts";
 
@@ -471,7 +470,8 @@ Deno.test("device authorization keeps the capability off authenticated requests"
   });
   try {
     assertEquals(
-      (await authApi.inspectDeviceAuthorization(request, inspection.signal)).status,
+      (await authApi.inspectDeviceAuthorization(request, inspection.signal))
+        .status,
       "pending",
     );
     assertEquals(await authApi.approveDeviceAuthorization(request), {
@@ -877,28 +877,4 @@ Deno.test("200 HTML or shapeless JSON is activating, not login", async () => {
   } finally {
     restoreText();
   }
-});
-
-Deno.test("password login fields come from the password host plugin", () => {
-  assertEquals(passwordLoginFields(undefined), {
-    account: "Account",
-    secret: "Password",
-    confirm: "Confirm password",
-    setup: "Setup code",
-  });
-  assertEquals(
-    passwordLoginFields([
-      {
-        id: "password",
-        slots: ["login.method"],
-        fields: { account: "Email", secret: "Passphrase" },
-      },
-    ]),
-    {
-      account: "Email",
-      secret: "Passphrase",
-      confirm: "Confirm password",
-      setup: "Setup code",
-    },
-  );
 });

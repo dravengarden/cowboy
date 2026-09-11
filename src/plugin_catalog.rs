@@ -266,7 +266,7 @@ impl PluginCatalog {
     /// has a release authority, missing selection must fail preflight, not get
     /// discovered after the core database has already been migrated.
     fn check_bootstrap_webauthn_storage(&self, releases: &[CatalogHostRelease]) -> Result<()> {
-        let capability = crate::plugin_passkeys::STORAGE_CAPABILITY;
+        let capability = crate::core_passkeys::STORAGE_CAPABILITY;
         let mut claims = Vec::new();
         for release in releases.iter().filter(|release| release.default_for_id) {
             let Some(bundle) = &release.host_bundle else {
@@ -297,6 +297,7 @@ impl PluginCatalog {
                 continue;
             }
             let host = crate::plugin_host::PluginHostSpec::from_json(source.as_bytes())?;
+            crate::core_passkeys::validate_legacy_host(&host)?;
             if host
                 .native_capabilities
                 .iter()
@@ -1449,6 +1450,57 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn core_security_excludes_local_auth_defaults_and_rejects_their_pins() {
+        let root = auth_test_root("core-security-pins");
+        let password = publish_local_auth_fixture(&root, "password", false);
+        let passkey = publish_local_auth_fixture(&root, "passkey", false);
+        let mut catalog = PluginCatalog::open(&root, Some(root.join("external"))).unwrap();
+        let mut policy = HostActivationPolicy::default();
+        policy.source = HostSourcePolicy::CatalogOnly;
+        policy.core_security = Some(
+            serde_json::from_value(serde_json::json!({
+                "namespace_id":"passkey", "source":"adopt_legacy"
+            }))
+            .unwrap(),
+        );
+        let authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
+        authentication.configure_host_policy(&mut policy).unwrap();
+        assert!(authentication.password_enabled);
+        assert!(!policy.require_webauthn_storage);
+        assert!(policy.authentication_methods.is_empty());
+        for release in [&password, &passkey] {
+            let mut pinned = policy.clone();
+            pinned.pin(release_pin(release), true).unwrap();
+            assert!(catalog.configure_hosts(pinned).is_err());
+            assert!(
+                fs::read_dir(catalog.plugin_dir.live_root())
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+        catalog.configure_hosts(policy).unwrap();
+        let storage =
+            crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
+        let runtime = catalog.activate_runtime(&storage).await.unwrap();
+        assert!(runtime.default_hosts().is_empty());
+        assert!(runtime.namespace_for_capability("webauthn").is_none());
+        assert!(authentication.public_host_plugins(&runtime).is_empty());
+        assert!(
+            !catalog
+                .plugin_dir
+                .plugin_live_dir("passkey")
+                .unwrap()
+                .join("state")
+                .exists()
+        );
+        drop(runtime);
+        drop(catalog);
+        unlock_tree(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_signed_non_telemetry_release_cannot_construct_a_telemetry_projection() {
         let fixture = tempfile::Builder::new()
@@ -2080,7 +2132,7 @@ mod tests {
         args.database_url = Some("postgres://fixture-secret@127.0.0.1:1/unreachable".to_owned());
         args.machine_components_manifest = Some(root.join("missing-components.json"));
         let before = state_fingerprint(&root);
-        let (catalog, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
+        let (catalog, _, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
         let report = serde_json::to_value(catalog.host_preflight_report().unwrap()).unwrap();
         assert_eq!(
             report["schema"],
@@ -2171,7 +2223,7 @@ mod tests {
         assert_eq!(before, state_fingerprint(&root));
         let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
         args.plugin_host_config = Some(path);
-        let (catalog, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
+        let (catalog, _, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
         let report = serde_json::to_value(catalog.host_preflight_report().unwrap()).unwrap();
         assert_eq!(report["catalog_only_recorded"], true);
         assert_eq!(before, state_fingerprint(&root));
@@ -2209,17 +2261,9 @@ mod tests {
         let dir = storage.plugin_dir();
         let bootstrap = PluginCatalog::open(&root, Some(catalog_root.clone())).unwrap();
         let old = bootstrap.activate_runtime(&storage).await.unwrap();
-        crate::plugin_passkeys::insert_user(
-            old.namespace_for_capability("webauthn").unwrap(),
-            &crate::passkey::UserPasskey {
-                id: "keep-this-passkey".to_owned(),
-                user_id: "fixture-user".to_owned(),
-                credential_id: "fixture-credential".to_owned(),
-                nickname: "Fixture".to_owned(),
-                passkey_json: "{}".to_owned(),
-                created_at_ms: 1,
-                last_used_at_ms: None,
-            },
+        old.namespace_for_capability("webauthn").unwrap().execute(
+            "INSERT INTO user_passkeys (id, user_id, credential_id, nickname, passkey_json, created_at_ms) \
+             VALUES ('keep-this-passkey', 'fixture-user', 'fixture-credential', 'Fixture', '{}', 1)"
         )
         .await
         .unwrap();
@@ -2254,12 +2298,12 @@ mod tests {
             Some(passkey.artifact_digest.as_str())
         );
         assert_eq!(
-            crate::plugin_passkeys::count_user(
-                active.namespace_for_capability("webauthn").unwrap(),
-                "fixture-user"
-            )
-            .await
-            .unwrap(),
+            active
+                .namespace_for_capability("webauthn")
+                .unwrap()
+                .fetch_i64("SELECT COUNT(*) FROM user_passkeys WHERE user_id = 'fixture-user'")
+                .await
+                .unwrap(),
             1
         );
         assert!(
@@ -2267,7 +2311,7 @@ mod tests {
             "running host policy must be immutable"
         );
 
-        publish_auth_fixture(&root, "passkey", "2.0.0", |host| {
+        let future_passkey = publish_auth_fixture(&root, "passkey", "2.0.0", |host| {
             for dialect in ["postgres", "sqlite"] {
                 host["storage"][dialect]["migrations"].as_array_mut().unwrap().push(serde_json::json!({
                     "version":"0002", "sql":"CREATE TABLE future_release_only (id TEXT PRIMARY KEY);"
@@ -2318,11 +2362,39 @@ mod tests {
             "publishing an unselected release ran its migration"
         );
         assert_eq!(
-            crate::plugin_passkeys::count_user(namespace, "fixture-user")
+            namespace
+                .fetch_i64("SELECT COUNT(*) FROM user_passkeys WHERE user_id = 'fixture-user'")
                 .await
                 .unwrap(),
             1
         );
+
+        // Even a separately selected, validly signed release cannot run new
+        // Passkey SQL. Reject before any namespace/authority filesystem writes.
+        let before_incompatible = state_fingerprint(&root);
+        for source in [HostSourcePolicy::Bootstrap, HostSourcePolicy::CatalogOnly] {
+            let mut incompatible = HostActivationPolicy::default();
+            incompatible.source = source;
+            incompatible.pin(release_pin(&password), true).unwrap();
+            incompatible
+                .pin(release_pin(&future_passkey), true)
+                .unwrap();
+            authentication
+                .configure_host_policy(&mut incompatible)
+                .unwrap();
+            // Pure policy validation also covers Bootstrap even though this
+            // fixture has already recorded its Catalog-only authority.
+            let error = incompatible
+                .select(&mut catalog.host_releases())
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("CoreSecurity Passkey schema is frozen")
+            );
+        }
+        assert_eq!(before_incompatible, state_fingerprint(&root));
+        assert!(Arc::ptr_eq(&refreshed, &catalog.runtime().unwrap()));
 
         let mut restarted = PluginCatalog::open(&root, Some(catalog_root.clone())).unwrap();
         let error = restarted
@@ -2518,6 +2590,22 @@ mod tests {
         policy.source = HostSourcePolicy::CatalogOnly;
         authentication.configure_host_policy(&mut policy).unwrap();
         catalog.configure_hosts(policy.clone()).unwrap();
+        // Core local security leaves the external-only login policy intact:
+        // exact signed OIDC remains required, and no password fallback appears.
+        let mut core_policy = policy.clone();
+        core_policy.core_security = Some(
+            serde_json::from_value(serde_json::json!({
+                "namespace_id":"passkey", "source":"fresh"
+            }))
+            .unwrap(),
+        );
+        authentication
+            .configure_host_policy(&mut core_policy)
+            .unwrap();
+        assert!(!authentication.password_enabled);
+        assert_eq!(core_policy.authentication_methods.len(), 1);
+        assert!(core_policy.authentication_methods.contains_key("google"));
+        catalog.configure_hosts(core_policy).unwrap();
         let storage =
             crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
         let runtime = catalog.activate_runtime(&storage).await.unwrap();
@@ -2595,27 +2683,30 @@ mod tests {
     #[tokio::test]
     async fn failed_catalog_only_migration_does_not_commit_cutover() {
         let root = auth_test_root("failed-cutover");
-        let passkey = publish_auth_fixture(&root, "passkey", "2.0.0", |host| {
-            // Valid bounded migration SQL, but it conflicts with the first
-            // migration at execution time. No real database or key is used.
-            for dialect in ["postgres", "sqlite"] {
-                host["storage"][dialect]["migrations"]
-                    .as_array_mut()
-                    .unwrap()
-                    .push(serde_json::json!({
-                        "version":"0002", "sql":"CREATE TABLE user_passkeys (id TEXT PRIMARY KEY);"
-                    }));
-            }
-        });
+        // Passkey SQL is now rejected in preflight. Keep the actual runtime
+        // migration-failure gate on an ordinary (non-security) storage host.
+        let release = publish_storage_fixture(&root, "migration-failure", "2.0.0", 2);
         let mut catalog = PluginCatalog::open(&root, Some(root.join("external"))).unwrap();
         let mut policy = HostActivationPolicy::default();
         policy.source = HostSourcePolicy::CatalogOnly;
-        policy.require_webauthn_storage = true;
-        policy.pin(release_pin(&passkey), true).unwrap();
+        policy.pin(release_pin(&release), true).unwrap();
         catalog.configure_hosts(policy).unwrap();
         assert!(catalog.strict_host_activation());
         let storage =
             crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
+        let initial = crate::plugin_host::PluginHostSpec::from_json(
+            storage_host_fixture(1).to_string().as_bytes(),
+        )
+        .unwrap();
+        let namespace = storage
+            .migrate_plugin("migration-failure", initial.storage.as_ref().unwrap())
+            .await
+            .unwrap();
+        // A fixture-only conflicting table makes the valid 0002 fail in SQL.
+        namespace
+            .execute("CREATE TABLE upgrade_only (id TEXT PRIMARY KEY)")
+            .await
+            .unwrap();
         let error = catalog.activate_runtime(&storage).await.err().unwrap();
         assert!(format!("{error:#}").contains("already exists"));
         assert!(catalog.runtime().is_none());
@@ -2667,17 +2758,9 @@ mod tests {
                 .is_none()
         );
         let namespace = before.namespace_for_capability("webauthn").unwrap();
-        crate::plugin_passkeys::insert_user(
-            namespace,
-            &crate::passkey::UserPasskey {
-                id: "fixture-passkey".to_owned(),
-                user_id: "fixture-user".to_owned(),
-                credential_id: "fixture-credential".to_owned(),
-                nickname: "Fixture".to_owned(),
-                passkey_json: "{}".to_owned(),
-                created_at_ms: 1,
-                last_used_at_ms: None,
-            },
+        namespace.execute(
+            "INSERT INTO user_passkeys (id, user_id, credential_id, nickname, passkey_json, created_at_ms) \
+             VALUES ('fixture-passkey', 'fixture-user', 'fixture-credential', 'Fixture', '{}', 1)"
         )
         .await
         .unwrap();
@@ -2725,12 +2808,12 @@ mod tests {
             "Controller protocols cannot install on a Machine"
         );
         assert_eq!(
-            crate::plugin_passkeys::count_user(
-                activated.namespace_for_capability("webauthn").unwrap(),
-                "fixture-user"
-            )
-            .await
-            .unwrap(),
+            activated
+                .namespace_for_capability("webauthn")
+                .unwrap()
+                .fetch_i64("SELECT COUNT(*) FROM user_passkeys WHERE user_id = 'fixture-user'")
+                .await
+                .unwrap(),
             1
         );
 

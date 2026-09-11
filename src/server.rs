@@ -834,7 +834,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let (plugin_catalog, product_authentication) =
+    let (plugin_catalog, product_authentication, core_security) =
         crate::plugin_activation::prepare_controller_hosts(&args)?;
     if args.check_plugin_hosts {
         println!(
@@ -844,6 +844,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         return Ok(());
     }
     plugin_catalog.initialize()?;
+    let plugin_dir =
+        crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
+    let _security_owner = crate::core_security::ControllerLock::acquire(&plugin_dir)?;
     let plugin_catalog = Arc::new(plugin_catalog);
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
@@ -913,6 +916,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .await
                 .context("connecting database")?;
             store.migrate().await.context("running migrations")?;
+            store
+                .initialize_core_security(core_security.as_ref(), &plugin_dir)
+                .await
+                .context("initializing core security authority")?;
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -987,8 +994,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             tracing::info!("no --database-url: running in-memory only");
             (Hub::new(), None, None, None, None, 1)
         };
-    let plugin_dir =
-        crate::plugin_dir::PluginDir::open(&args.data_dir).context("opening plugin directory")?;
     let plugin_storage = match store.as_ref() {
         Some(store) => store.plugin_storage(plugin_dir.clone()),
         None => crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir.clone()),
@@ -1003,15 +1008,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_catalog.install_empty_runtime()
         }
     };
-    if let Some(store) = store.as_mut() {
+    if let Some(store) = store.as_mut().filter(|_| core_security.is_none()) {
         let namespace = plugin_runtime
-            .namespace_for_capability(crate::plugin_passkeys::STORAGE_CAPABILITY)
-            .cloned()
+            .namespace_for_capability(crate::core_passkeys::STORAGE_CAPABILITY)
             .context("WebAuthn plugin storage is unavailable")?;
-        crate::plugin_passkeys::import_from_core(&namespace, store)
+        store
+            .attach_passkey_storage(namespace)
             .await
-            .context("migrating legacy Passkey rows into plugin storage")?;
-        store.attach_passkey_plugin(namespace);
+            .context("binding core Passkey storage at the legacy namespace")?;
     }
     let machine_control = Arc::new(MachineControl::default());
     let usage = UsageService::with_plugin_catalog(
@@ -21485,6 +21489,145 @@ mod product_auth_api_tests {
         assert_eq!(allowed.status(), StatusCode::OK);
         server.abort();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn core_security_without_auth_plugins_supports_setup_login_and_session_reopen() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (store, root) = test_store().await;
+        let core_path = root.join("core-security.json");
+        std::fs::write(
+            &core_path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema": "dravengarden.cowboy.core-security/v1",
+                "passkeys": { "namespace_id": "passkey", "source": "fresh" },
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(&core_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut args = crate::cli::ServeArgs::test_plugin_check(&root);
+        args.database_url = Some(format!(
+            "sqlite://{}",
+            root.join("cowboy.sqlite3").display()
+        ));
+        args.core_security_config = Some(core_path);
+        args.product_auth_enabled = true;
+        let (catalog, authentication, config) =
+            crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
+        catalog.initialize().unwrap();
+        let dir = crate::plugin_dir::PluginDir::open(&root).unwrap();
+        let owner = crate::core_security::ControllerLock::acquire(&dir).unwrap();
+        store
+            .initialize_core_security(config.as_ref(), &dir)
+            .await
+            .unwrap();
+        let storage = store.plugin_storage(dir.clone());
+        let runtime = catalog.activate_runtime(&storage).await.unwrap();
+        assert!(runtime.default_hosts().is_empty());
+        assert!(runtime.namespace_for_capability("webauthn").is_none());
+        let mut state = auth_state(Hub::new(), Some(store));
+        state.plugin_catalog = Some(Arc::new(catalog));
+        state.product_authentication = Arc::new(authentication);
+        // A declared HTTPS relying-party origin, with all traffic staying on
+        // the hermetic loopback listener. No live Service/device credential.
+        let origin = "https://cowboy.example";
+        state.public_origins = Arc::new(vec![origin.to_owned()]);
+        let token = setup_token_from(&state);
+        let (base, server) = spawn_auth(state.clone()).await;
+        let client = reqwest::Client::new();
+        let status: serde_json::Value = client
+            .get(format!("{base}/api/auth/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["setup_required"], true);
+        assert_eq!(status["password_enabled"], true);
+        assert_eq!(status["host_plugins"], serde_json::json!([]));
+        let setup_cookie = prove_setup(&base, origin, &token).await;
+        let registered = post_json(
+            &format!("{base}/api/auth/register"),
+            origin,
+            Some(&setup_cookie),
+            serde_json::json!({"account":"owner", "password":"Correct-horse-bat1"}),
+        )
+        .await;
+        assert_eq!(registered.status(), StatusCode::OK);
+        let logged_in = post_json(
+            &format!("{base}/api/auth/login"),
+            origin,
+            None,
+            serde_json::json!({"account":"owner", "password":"Correct-horse-bat1"}),
+        )
+        .await;
+        assert_eq!(logged_in.status(), StatusCode::OK);
+        let cookie = cookie_header(&set_cookie(&logged_in, USER_SESSION_COOKIE).unwrap());
+        let options = post_json(
+            &format!("{base}/api/auth/passkeys/register/options"),
+            origin,
+            Some(&cookie),
+            serde_json::json!({"nickname":"fixture key"}),
+        )
+        .await;
+        assert_eq!(
+            options.status(),
+            StatusCode::OK,
+            "{}",
+            options.text().await.unwrap()
+        );
+        let listed = client
+            .get(format!("{base}/api/auth/passkeys"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(listed.status(), StatusCode::OK);
+        let signing_key = crate::client_auth::new_signing_key().unwrap();
+        let started = client
+            .post(format!("{base}/api/auth/device/authorizations"))
+            .json(&crate::client_auth::StartAuthorizationRequest {
+                name: "core-only fixture".to_owned(),
+                public_key: crate::client_auth::public_key_to_base64(&signing_key),
+                code_challenge: crate::client_auth::code_challenge(
+                    &crate::client_auth::new_code_verifier().unwrap(),
+                )
+                .unwrap(),
+            })
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(started.status(), StatusCode::CREATED);
+        server.abort();
+        let _ = server.await;
+        drop(owner);
+        let _owner = crate::core_security::ControllerLock::acquire(&dir).unwrap();
+        let reopened = Store::connect(args.database_url().unwrap(), root.join("artifacts"))
+            .await
+            .unwrap();
+        reopened.migrate().await.unwrap();
+        reopened
+            .initialize_core_security(config.as_ref(), &dir)
+            .await
+            .unwrap();
+        state.store = Some(reopened);
+        let (base, server) = spawn_auth(state.clone()).await;
+        let me = client
+            .get(format!("{base}/api/auth/me"))
+            .header(header::COOKIE, &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(me.status(), StatusCode::OK);
+        let me: serde_json::Value = me.json().await.unwrap();
+        assert_eq!(me["account"], "owner");
+        server.abort();
+        let _ = server.await;
+        std::fs::remove_dir_all(&state.setup.data_dir).unwrap();
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

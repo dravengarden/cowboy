@@ -268,6 +268,28 @@ are not OIDC entries in its `providers` array and cannot install on Machines.
 The Controller's separate host activation configuration selects exact releases;
 publication is not a production cutover.
 
+The [core security client migration](core-security-client-boundary.md) now
+renders local Password/setup/Passkey UI directly from core policy, with core
+labels and no Plugin slot. Existing local renderer IDs remain readable but do
+not mount security UI in the new Web bundle. Controller exact host/storage
+selection and historical local packages are unchanged until their separate
+ownership migration; this Web-only change is not permission to retire pins,
+credentials or native ABI. External OIDC retains its Plugin presentation.
+
+The [Controller storage bridge](core-security-storage-bridge.md) puts Passkey SQL
+behind a typed core port while retaining that exact namespace selection. Core
+accepts only the historical `0001` PostgreSQL/SQLite migration fingerprints for
+selected WebAuthn hosts; new credential SQL requires a separate core migration,
+not only a Plugin version/pin. The first legacy import commits all data and its
+receipt atomically, refusing nonempty unreceipted state. Existing applied SQL,
+Catalog packages, host policy and rollback-reader data formats are unchanged.
+
+The next [core ownership path](core-security-ownership.md) makes local
+authentication independent of those packages through explicit core policy,
+durable namespace authority and recoverable stopped-Controller handoff. Its
+initial production rollout upgrades the reader only; existing generated pins
+and client/native acceptance remain separate cutover boundaries.
+
 Released usage collectors, resets, and activity transforms run through a typed
 protocol-seven request to an active exact Plugin generation on a Machine. The
 Controller supplies only a closed operation and bounded JSON; the Machine

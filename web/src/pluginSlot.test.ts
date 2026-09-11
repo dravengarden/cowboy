@@ -7,10 +7,12 @@ const login = await Deno.readTextFile(
   new URL("./auth/ProductLoginPage.tsx", import.meta.url),
 );
 
-Deno.test("login methods mount through an isolated plugin slot", () => {
+Deno.test("only external login methods mount through an isolated plugin slot", () => {
   assert(login.includes('from "@cowboy/plugin-api"'));
   assert(login.includes('slot="login.method"'));
   assert(login.includes("<PluginSlot"));
+  assert(login.includes("pluginId={selectedProvider.id}"));
+  assert(login.includes('loginContext?.kind === "password"'));
   assert(login.includes("context={loginContext}"));
   assert(login.includes("placeholder={null}"));
   assert(login.includes("LoginMethodFallback"));
@@ -169,7 +171,8 @@ const appleNativeBridge = await Deno.readTextFile(
 Deno.test("host kit exposes only closed Cowboy-owned renderers", () => {
   assert(pluginHost.includes("ProviderUsage"));
   assert(pluginHost.includes("ProviderSurface"));
-  assert(pluginHost.includes("ProductPasskeysPanel"));
+  assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
+  assert(pluginHost.includes("RetiredLocalAuthenticationRenderer"));
   assert(pluginHost.includes("LoginMethodFallback"));
   assert(pluginHost.includes('from "./pluginUsage"'));
   assertEquals(pluginHost.includes("DeepSeekDetails"), false);
@@ -216,9 +219,14 @@ Deno.test("activity usage is a closed core renderer selected by host data", () =
 const passkeyHost = await Deno.readTextFile(
   new URL("../../examples/authentication/passkey/host.json", import.meta.url),
 );
-Deno.test("passkey account panel selects a Cowboy-owned renderer", () => {
+Deno.test("retained passkey packages stay readable without owning core account UI", () => {
   assert(passkeyHost.includes('"account.panel": "account-passkeys-v1"'));
-  assert(pluginHost.includes("ProductPasskeysPanel"));
+  assertEquals(pluginHost.includes("ProductPasskeysPanel"), false);
+  assert(
+    pluginHost.includes(
+      '"account-passkeys-v1": RetiredLocalAuthenticationRenderer',
+    ),
+  );
   assertEquals(passkeyHost.includes("ui/index.js"), false);
 });
 
