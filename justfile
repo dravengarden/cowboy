@@ -112,7 +112,7 @@ plugin-check: component-package-check
     deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
     deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
     deno test --no-check --allow-read components/plugin-api/*.test.ts
-    deno test components/state-store/store.test.ts
+    deno test components/state-store/*.test.ts
     deno test --allow-read tools/check-plugin-components_test.ts tools/plugin-component-closure_test.ts
     deno test --allow-read --allow-write --allow-run tools/plugin-source-digest_test.ts
     deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js

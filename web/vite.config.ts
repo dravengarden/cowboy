@@ -94,6 +94,10 @@ export default defineConfig({
   // points cannot introduce a second renderer instance.
   resolve: {
     dedupe: [
+      // File-linked state components share the Web owner's exact peer package.
+      // Resolve runtime subpaths from web/node_modules, not a sibling checkout
+      // or a component-local ambient dependency tree.
+      "@cowboy/state-store",
       "react",
       "react-dom",
       "@mui/material",

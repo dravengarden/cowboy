@@ -14,3 +14,9 @@ export type {
   Store,
 } from "./store.ts";
 export { useStore } from "./use-store.ts";
+export { createOwnedResourceScope, ScopeClosedError } from "./owned-scope.ts";
+export type {
+  OwnedResourceScope,
+  ScopePhase,
+  ScopeSnapshot,
+} from "./owned-scope.ts";

@@ -13,6 +13,10 @@
 // from one tier to the other without touching the components.
 
 import type { Store } from "@cowboy/state-store";
+import {
+  createOwnedResourceScope,
+  type ScopeSnapshot,
+} from "@cowboy/state-store/scope";
 import type { LocalPersistence, RemoteBackend } from "./types.ts";
 
 export type SyncStatus = "connecting" | "live" | "offline";
@@ -29,9 +33,15 @@ export interface MirroredStore<T> extends Store<T> {
   connect(): void;
   /** Force any debounced local + remote writes out NOW (call on `pagehide`). */
   flush(): Promise<void>;
-  /** Stop the live remote subscription started by `connect`. */
+  /** Retire the current observation (including late load/subscribe callbacks).
+   * The writable store remains usable; use dispose to end its lifetime. */
   disconnect(): void;
   readonly status: SyncStatus;
+  /** Seal this instance; cancel unsubmitted remote timers, drain admitted work,
+   * and persist the local mirror. Does not delete data or reverse remote saves.
+   * A failed final save/cleanup rejects and stays visible in lifecycle. */
+  dispose(): Promise<void>;
+  readonly lifecycle: ScopeSnapshot;
 }
 
 export interface MirroredOpts<T> {
@@ -57,174 +67,234 @@ export interface MirroredOpts<T> {
 
 export function mirroredStore<T>(opts: MirroredOpts<T>): MirroredStore<T> {
   const { initial, remote, local } = opts;
+  const scope = createOwnedResourceScope();
   const reconcile = opts.reconcile ?? ((_local: T, r: T): T => r);
-  const localDebounceMs = opts.localDebounceMs ?? 250;
-  const onError = opts.onError ?? ((): void => {});
-
-  const listeners = new Set<() => void>();
-  let value: T = initial;
+  const listeners = new Set<{ listener: () => void }>();
+  let value = initial;
+  let revision = 0;
   let status: SyncStatus = "connecting";
-  let unsubscribeRemote: (() => void) | undefined = undefined;
+  let hydration: Promise<void> | undefined;
+  type Connection = { release: () => Promise<void> };
+  let connection: Connection | undefined;
+  let localTimer: ReturnType<typeof setTimeout> | undefined;
+  let remoteTimer: ReturnType<typeof setTimeout> | undefined;
+  let localDirty = false;
+  let remoteDirty = false;
+  let localTail = Promise.resolve();
+  let remoteTail = Promise.resolve();
 
+  const report = (error: unknown): void => {
+    if (!scope.active) return;
+    try {
+      opts.onError?.(error);
+    } catch { /* diagnostics are not authority */ }
+  };
   const emit = (): void => {
-    for (const l of listeners) {
-      l();
+    for (const subscription of [...listeners]) {
+      if (!scope.active || !listeners.has(subscription)) continue;
+      try {
+        subscription.listener();
+      } catch {
+        console.warn("mirror subscriber failed");
+      }
     }
   };
   const setValue = (next: T): void => {
-    if (Object.is(next, value)) {
+    if (!scope.active || Object.is(next, value)) return;
+    value = next;
+    revision++;
+    emit();
+  };
+  const clearTimers = (): void => {
+    if (localTimer !== undefined) clearTimeout(localTimer);
+    if (remoteTimer !== undefined) clearTimeout(remoteTimer);
+    localTimer = remoteTimer = undefined;
+  };
+  // Serialize each backend independently. A slow older save must never finish
+  // after a newer write and become the lasting value.
+  const saveLocal = (): Promise<void> => {
+    if (!local) return Promise.resolve();
+    const next = value;
+    localDirty = false;
+    const write = localTail.then(() => local.save(next));
+    localTail = write.catch((error: unknown) => {
+      localDirty = true;
+      report(error);
+    });
+    return write;
+  };
+  const saveRemote = (): Promise<void> => {
+    const next = value;
+    remoteDirty = false;
+    const write = remoteTail.then(() => remote.save(next));
+    remoteTail = write.catch(report);
+    return write;
+  };
+  const scheduleLocal = (): void => {
+    if (!local || !scope.active) return;
+    localDirty = true;
+    if (localTimer !== undefined) clearTimeout(localTimer);
+    localTimer = setTimeout(() => {
+      localTimer = undefined;
+      if (scope.active) void saveLocal().catch(() => undefined);
+    }, opts.localDebounceMs ?? 250);
+  };
+  const scheduleRemote = (): void => {
+    if (!scope.active) return;
+    remoteDirty = true;
+    const debounce = opts.push?.debounceMs;
+    const throttle = opts.push?.throttleMs;
+    if (debounce === undefined && throttle === undefined) {
+      void saveRemote().catch(() => undefined);
       return;
     }
-    value = next;
+    if (debounce !== undefined && remoteTimer !== undefined) {
+      clearTimeout(remoteTimer);
+    }
+    if (debounce !== undefined || remoteTimer === undefined) {
+      remoteTimer = setTimeout(() => {
+        remoteTimer = undefined;
+        if (scope.active && remoteDirty) {
+          void saveRemote().catch(() => undefined);
+        }
+      }, debounce ?? throttle);
+    }
+  };
+  const disconnect = (): void => {
+    const retired = connection;
+    if (!retired && status === "offline") return;
+    connection = undefined; // revoke BEFORE invoking external unsubscribe
+    status = "offline";
+    if (retired) void retired.release().catch(() => undefined); // scope retains failures
     emit();
   };
 
-  // Fire-and-forget an async save; a rejection only reaches `onError` (the local
-  // mirror keeps the app usable, so a failed remote write must never throw).
-  const fireSave = (save: () => Promise<void>): void => {
-    void (async (): Promise<void> => {
-      try {
-        await save();
-      } catch (error) {
-        onError(error);
-      }
-    })();
-  };
-
-  // --- Remote write pacing (debounce | throttle | immediate) -----------------
-  let remoteTimer: ReturnType<typeof setTimeout> | undefined = undefined;
-  let remoteDirty = false;
-  const fireRemoteTimer = (): void => {
-    remoteTimer = undefined;
-    if (remoteDirty) {
-      remoteDirty = false;
-      fireSave(() => remote.save(value));
-    }
-  };
-  const scheduleRemote = (): void => {
-    remoteDirty = true;
-    const debounceMs = opts.push?.debounceMs;
-    const throttleMs = opts.push?.throttleMs;
-    if (debounceMs !== undefined) {
-      if (remoteTimer !== undefined) {
-        clearTimeout(remoteTimer);
-      }
-      remoteTimer = setTimeout(fireRemoteTimer, debounceMs);
-      return;
-    }
-    if (throttleMs !== undefined) {
-      // Trailing throttle: first write opens a window; the latest value lands when
-      // it closes; writes during the window only re-mark dirty.
-      remoteTimer ??= setTimeout(fireRemoteTimer, throttleMs);
-      return;
-    }
-    remoteDirty = false;
-    fireSave(() => remote.save(value));
-  };
-
-  // --- Local mirror save (debounced) -----------------------------------------
-  let localTimer: ReturnType<typeof setTimeout> | undefined = undefined;
-  let localDirty = false;
-  const scheduleLocal = (): void => {
-    if (local === undefined) {
-      return;
-    }
-    const backend = local;
-    localDirty = true;
-    if (localTimer !== undefined) {
-      clearTimeout(localTimer);
-    }
-    localTimer = setTimeout(() => {
-      localTimer = undefined;
-      localDirty = false;
-      fireSave(() => backend.save(value));
-    }, localDebounceMs);
-  };
+  // The store owns its timers, local mirror and borrowed remote observation.
+  // The backend itself may be shared; never dispose it, delete its data, or
+  // manufacture a compensating remote write here.
+  scope.defer(async () => {
+    clearTimers();
+    await Promise.all([localTail, remoteTail]);
+    if (localDirty) await saveLocal(); // strict final local durability barrier
+  });
 
   return {
     get: (): T => value,
     subscribe: (listener): () => void => {
-      listeners.add(listener);
-      return (): void => {
-        listeners.delete(listener);
+      scope.assertActive();
+      const subscription = { listener };
+      listeners.add(subscription);
+      return () => {
+        listeners.delete(subscription);
       };
     },
     set: (next): void => {
-      const resolved = typeof next === "function" ? (next as (prev: T) => T)(value) : next;
-      if (Object.is(resolved, value)) {
-        return;
-      }
+      scope.assertActive();
+      const resolved = typeof next === "function"
+        ? (next as (prev: T) => T)(value)
+        : next;
+      scope.assertActive();
+      if (Object.is(resolved, value)) return;
       value = resolved;
-      emit();
+      revision++;
+      // Register the pending local value before an observer can dispose us.
       scheduleLocal();
       scheduleRemote();
+      emit();
     },
-
-    async hydrate(): Promise<void> {
-      if (local === undefined) {
-        return;
-      }
-      const cached = await local.load();
-      if (cached !== null) {
-        setValue(cached); // this device's own last value — adopt directly, no merge
-      }
+    hydrate: (): Promise<void> => {
+      scope.assertActive();
+      if (hydration) return hydration;
+      if (!local) return Promise.resolve();
+      const started = revision;
+      let begin!: (task: Promise<void>) => void;
+      // Reserve identity before a synchronous/reentrant backend starts.
+      // oxlint-disable-next-line promise/avoid-new
+      hydration = new Promise<void>((resolve) => {
+        begin = resolve;
+      });
+      begin(scope.run(async () => {
+        if (!scope.active) return;
+        try {
+          const cached = await local.load();
+          if (scope.active && revision === started && cached !== null) {
+            setValue(cached);
+          }
+        } catch (error) {
+          report(error);
+        }
+      }));
+      return hydration;
     },
-
-    connect(): void {
+    connect: (): void => {
+      scope.assertActive();
+      if (connection) return;
+      let stop: (() => void) | undefined;
+      const release = scope.defer(() => {
+        const cleanup = stop;
+        stop = undefined;
+        cleanup?.();
+      });
+      const current: Connection = { release };
+      connection = current;
+      const isCurrent = (): boolean => scope.active && connection === current;
+      revision++; // a remote observation outranks an earlier local cache read
       status = "connecting";
-      void (async (): Promise<void> => {
+      emit();
+      if (!isCurrent()) return;
+      void scope.run(async () => {
         try {
-          const r = await remote.load();
-          if (r !== null) {
-            setValue(reconcile(value, r));
+          const incoming = await remote.load();
+          if (!isCurrent()) return;
+          if (incoming !== null) {
+            const next = reconcile(value, incoming);
+            if (!isCurrent()) return;
+            setValue(next);
           }
-          status = "live";
-          unsubscribeRemote ??= remote.subscribe?.((incoming) => {
-            setValue(reconcile(value, incoming));
+          if (!isCurrent()) return;
+          stop = remote.subscribe?.((incoming) => {
+            if (!isCurrent()) return;
+            const next = reconcile(value, incoming);
+            if (isCurrent()) setValue(next);
           });
+          // subscribe may synchronously call back and disconnect/reconnect.
+          // Its pre-registered holder still releases the returned old handle.
+          if (!isCurrent()) return;
+          status = "live";
+          emit();
         } catch (error) {
-          status = "offline";
-          onError(error);
+          if (!isCurrent()) return;
+          disconnect();
+          report(error);
         }
-      })();
+      }).catch(report);
     },
-
-    disconnect(): void {
-      unsubscribeRemote?.();
-      unsubscribeRemote = undefined;
+    disconnect,
+    flush: (): Promise<void> => {
+      return scope.run(async () => {
+        clearTimers();
+        const writes = [
+          remoteDirty ? saveRemote() : remoteTail,
+          localDirty ? saveLocal() : localTail,
+        ];
+        // Explicit barriers surface failures. Background writes remain usable
+        // offline and report through onError.
+        await Promise.all(writes);
+      });
     },
-
-    async flush(): Promise<void> {
-      if (remoteTimer !== undefined) {
-        clearTimeout(remoteTimer);
-        remoteTimer = undefined;
-      }
-      if (remoteDirty) {
-        remoteDirty = false;
-        try {
-          await remote.save(value);
-        } catch (error) {
-          onError(error);
-        }
-      }
-      if (local !== undefined) {
-        if (localTimer !== undefined) {
-          clearTimeout(localTimer);
-          localTimer = undefined;
-        }
-        if (localDirty) {
-          localDirty = false;
-          try {
-            await local.save(value);
-          } catch (error) {
-            onError(error);
-          }
-        }
-      }
+    dispose: (): Promise<void> => {
+      const done = scope.dispose(); // synchronous callback fence
+      listeners.clear();
+      clearTimers();
+      remoteDirty = false; // no new remote effect in a cleanup
+      disconnect();
+      return done;
     },
-
     get status(): SyncStatus {
       return status;
+    },
+    get lifecycle(): ScopeSnapshot {
+      return scope.snapshot();
     },
   };
 }

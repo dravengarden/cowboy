@@ -356,6 +356,12 @@ function abandonProductSocket(): void {
   const current = socket;
   socket = undefined;
   socketReady = false;
+  // Sign-out ends these local sync writers, not the Machine's sessions. Seal
+  // synchronously so late IDB hydration / durable-send continuations cannot
+  // publish into an abandoned product session. Existing outboxes are retained.
+  for (const client of [...syncClients.values(), ...qClients.values()]) {
+    void client.dispose().catch(() => console.warn("sync owner cleanup failed"));
+  }
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
 }
@@ -1924,6 +1930,7 @@ interface SyncEntry {
   resend: () => void;
   hydrate: () => Promise<void>;
   flush: () => Promise<void>;
+  dispose: () => Promise<void>;
 }
 const syncClients = new Map<string, SyncEntry>();
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
@@ -1963,6 +1970,7 @@ function registerSync<T, M extends Mutators<T>>(
     },
     hydrate: (): Promise<void> => store.hydrate(),
     flush: (): Promise<void> => store.flush(),
+    dispose: (): Promise<void> => store.dispose(),
   });
   return {
     view: (): T => store.get(),
@@ -2401,6 +2409,7 @@ function transmitQueueMutation(sessionId: string, m: { name: string; id: string;
 }
 
 function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
+  if (productSessionAbandoned) throw new Error("product sync owner is closed");
   let c = qClients.get(sessionId);
   if (c === undefined) {
     c = replicatedStore<QValue, typeof qMut>({
@@ -2438,6 +2447,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
 async function hydrateCachedQueues(): Promise<void> {
   const prefix = "cowboy:sync:queue:";
   const keys = await idbListKeys();
+  if (productSessionAbandoned) return;
   const outcomes = await Promise.allSettled(
     keys.filter((k) => k.startsWith(prefix)).map((k) => qClient(k.slice(prefix.length)).hydrate()),
   );
@@ -3556,6 +3566,7 @@ function subscribe(listener: () => void): () => void {
 // time to commit; pagehide remains the final fallback.
 if (typeof globalThis.addEventListener === "function") {
   const flushLocalState = (): void => {
+    if (productSessionAbandoned) return;
     for (const entry of syncClients.values()) {
       void entry.flush().catch(() => undefined);
     }

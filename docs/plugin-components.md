@@ -11,13 +11,14 @@ places component libraries within one cross-Service/Machine composition model:
 pure utilities, core implementations, authoring contracts, private Plugin
 implementations and templates. Owned units do not acquire an installation
 identity. The schema-3 dependency-closure release gate and state-store's typed,
-owned persistence implement the first component slice of sections 9–10. The
-general OwnedResourceScope and durable execution/recovery remain pending;
-this gate grants no runtime authority. The later
-[core Web host slice](core-web-plugin-host.md) removes the application's
-dependency on the mixed Plugin runtime and adds typed slots with owned inventory
-observations. Published SDK/native ABI retirement and production security-policy
-acceptance remain pending.
+owned persistence implement the first component slice of sections 9–10.
+[Owned component scopes](owned-component-scopes.md) now add process-local
+`OwnedResourceScope` and state-sync owner barriers; general host/IDB connection
+migration and durable execution/recovery remain pending. This gate grants no
+runtime authority. The later [core Web host slice](core-web-plugin-host.md)
+removes the application's dependency on the mixed Plugin runtime and adds typed
+slots with owned inventory observations. Published SDK/native ABI retirement and
+production security-policy acceptance remain pending.
 
 ## Plugin boundary
 
@@ -95,13 +96,13 @@ releases. Schema 3 appends a separate, unchanged 3.0.0 migration baseline before
 the first dependency-scoped change in 3.1.0. It never reinterprets old entries.
 
 Each new release records all internal component-package edges and each Plugin's
-exact source digest, component pins and component-release label.
-Plugin source digests use the Git source list (including new non-ignored source
-before commit), excluding local Cargo/Node build caches. Isolated builds use
-that same list and compare package/host bytes with the in-tree SDK build, so an
-ignored input cannot silently affect a published package. npm dependency,
-peer, optional and development pins are checked separately; Cargo edges come
-from offline, locked `cargo metadata`. Every declared internal edge is currently
+exact source digest, component pins and component-release label. Plugin source
+digests use the Git source list (including new non-ignored source before
+commit), excluding local Cargo/Node build caches. Isolated builds use that same
+list and compare package/host bytes with the in-tree SDK build, so an ignored
+input cannot silently affect a published package. npm dependency, peer, optional
+and development pins are checked separately; Cargo edges come from offline,
+locked `cargo metadata`. Every declared internal edge is currently
 conservatively release-causing, including contract/build inputs. Fine-grained
 contract compatibility exemptions are not implemented. The matrix itself is
 tested compatibility metadata, not an implicit dependency on every component.
@@ -123,6 +124,12 @@ registry schemas and projects each Plugin's own release label; the registry is
 embedded build metadata, so an old Controller/rollback binary still reads its
 own matrix and the same signed Catalog. No new Catalog envelope or reader bridge
 is needed.
+
+Scoped release 3.2.0 adds state-store 2.1.0's owned resource scope, state-sync
+1.4.0's lifetime/barrier fixes, and the state-sync-idb 1.4.0 transitive peer
+update. The same seven Plugin releases and exact 2.9.0 pins remain unchanged;
+the [local lifecycle slice](owned-component-scopes.md) requires only a Web
+activation, not a Catalog write or Machine installation.
 
 Run:
 
