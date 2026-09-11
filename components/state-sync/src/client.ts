@@ -6,6 +6,10 @@
 // replayed on top — converging on the arbiter's order with no lost update and
 // no ghost (a confirmed mutation is dropped from pending exactly once).
 
+import {
+  createOwnedResourceScope,
+  type ScopeSnapshot,
+} from "@cowboy/state-store/scope";
 import { hashValue } from "./hash.ts";
 import { applyMutation, type ArgsOf, type Mutators } from "./mutators.ts";
 import type {
@@ -43,13 +47,20 @@ export interface Client<T, M extends Mutators<T>> {
   version(): Version;
   /** Outstanding optimistic mutations not yet confirmed by the arbiter. */
   pending(): readonly Mutation[];
+  /** Transport projection: excludes optimistic rows whose durable admission
+   * barrier is still pending. UI consumers continue to use pending(). */
+  pendingForSend(): readonly Mutation[];
   /** Apply a mutator locally (instant) and return the Mutation to send to the
    *  arbiter. Re-send the SAME object on retry — its id makes the arbiter
    *  idempotent. Pass an explicit `id` when the mutation id must equal an
    *  externally-meaningful key — e.g. an optimistic row's `cmid`, so the same
    *  cmid landing in this state's value confirms (drops) exactly this pending
    *  row with no duplicate. Defaults to the client's `newId`. */
-  mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>>;
+  mutate<K extends keyof M & string>(
+    name: K,
+    args: ArgsOf<T, M, K>,
+    id?: MutationId,
+  ): Mutation<ArgsOf<T, M, K>>;
   /** Apply locally, durably persist the pending mutation, and only then return it
    *  to the transport owner for sending. If persistence fails, the optimistic
    *  mutation is rolled back and the promise rejects. Use this for user-authored
@@ -97,6 +108,13 @@ export interface Client<T, M extends Mutators<T>> {
    *  `pagehide`/`beforeunload` so an in-flight change isn't lost. No-op without
    *  persistence. */
   flush(): Promise<void>;
+  /** Seal this local instance, drain admitted work and flush changed state.
+   * Never deletes a durable outbox or cancels an arbiter operation. A failed
+   * final write rejects and remains visible in lifecycle (no automatic retry).
+   * The owner must await completion before replacing this namespace's writer.
+   */
+  dispose(): Promise<void>;
+  readonly lifecycle: ScopeSnapshot;
 }
 
 export interface ClientOpts<T, M extends Mutators<T>> {
@@ -113,7 +131,9 @@ export interface ClientOpts<T, M extends Mutators<T>> {
    *  value at that version (no pending) — i.e. a divergence/integrity failure
    *  (corrupt wire round-trip, non-deterministic mutator, …). Default:
    *  `console.error`. Throw here to fail loud in tests. */
-  onDiverge?: (detail: { version: Version; expected: string; got: string }) => void;
+  onDiverge?: (
+    detail: { version: Version; expected: string; got: string },
+  ) => void;
   /** Dev-only: deep-freeze the confirmed base so a mutator that mutates its
    *  input throws. O(value) per patch; leave off in production. */
   freezeForDev?: boolean;
@@ -126,21 +146,30 @@ export interface ClientOpts<T, M extends Mutators<T>> {
   saveDebounceMs?: number;
 }
 
-export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): Client<T, M> {
+export function createClient<T, M extends Mutators<T>>(
+  opts: ClientOpts<T, M>,
+): Client<T, M> {
+  const scope = createOwnedResourceScope();
   const { clientId, mutators, onChange, freezeForDev, local } = opts;
   const saveDebounceMs = opts.saveDebounceMs ?? 250;
   const onDiverge = opts.onDiverge ??
     ((d: { version: Version; expected: string; got: string }): void => {
-      console.error(`sync: divergence at v${String(d.version)}: expected ${d.expected}, got ${d.got}`);
+      console.error(
+        `sync: divergence at v${
+          String(d.version)
+        }: expected ${d.expected}, got ${d.got}`,
+      );
     });
   let seq = 0;
-  const newId = opts.newId ?? ((): MutationId => `${clientId}:${String(++seq)}`);
+  const newId = opts.newId ??
+    ((): MutationId => `${clientId}:${String(++seq)}`);
 
   const freeze = (s: SyncState<T>): SyncState<T> =>
     freezeForDev ? { version: s.version, value: deepFreeze(s.value) } : s;
 
   let base: SyncState<T> = freeze(opts.initial);
   let queue: Mutation[] = [];
+  const durableAdmissions = new Map<MutationId, number>();
   let viewValue: T = base.value;
   // `hydrate()` normally completes before a transport connects. Some browsers,
   // however, can leave an IndexedDB open/read pending long enough that the app
@@ -152,17 +181,24 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
   let baseRevision = 0;
   let hasAppliedPatch = false;
   let hydrationComplete = local === undefined;
+  let hydration: Promise<void> | undefined;
   // Mutation ids are globally unique. Remember confirmations for this client
   // lifetime so a cache read that STARTS after the corresponding socket patch
   // cannot resurrect an already-accepted outbox row.
   const confirmedFacts = new Set<MutationId>();
+  const confirming = new Set<Set<MutationId>>();
+  const pendingConfirmations = new Map<MutationId, number>();
   const noteHydrateConfirmations = (ids: readonly MutationId[]): void => {
     if (ids.length === 0) return;
-    for (const id of ids) confirmedFacts.add(id);
+    for (const id of ids) {
+      if (!hydrationComplete) confirmedFacts.add(id);
+      for (const received of confirming) received.add(id);
+    }
   };
 
   // Debounced app-side persistence of {base, pending}. No-op without `local`.
   let saveTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  let dirty = false;
   // IndexedDB transactions are asynchronous and separate save calls may finish
   // out of order. Serialize them so an older base/pending snapshot can never
   // overwrite a newer acknowledgement snapshot.
@@ -179,7 +215,8 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
     return write;
   };
   const scheduleSave = (): void => {
-    if (local === undefined) {
+    dirty = true;
+    if (local === undefined || !scope.active) {
       return;
     }
     if (saveTimer !== undefined) {
@@ -189,9 +226,37 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       saveTimer = undefined;
       // Background cache persistence remains best-effort. Critical callers use
       // `mutateDurably`/`flush`, which observe and surface a strict backend error.
-      void persist(snapshot()).catch(() => undefined);
+      if (scope.active) void persist(snapshot()).catch(() => undefined);
     }, saveDebounceMs);
   };
+
+  const notify = (): void => {
+    if (!scope.active) return;
+    try {
+      onChange?.(viewValue);
+    } catch {
+      // A committed mutation must still reach persistence/transport even when
+      // a render observer fails. Never log user state or exception payloads.
+      console.warn("sync observer failed");
+    }
+  };
+  // Internal barrier for already-admitted operations, also while draining.
+  const flushCurrent = (): Promise<void> => {
+    if (local === undefined) return Promise.resolve();
+    if (saveTimer !== undefined) clearTimeout(saveTimer);
+    saveTimer = undefined;
+    dirty = true;
+    return persist(snapshot());
+  };
+  scope.defer(async () => {
+    if (saveTimer !== undefined) clearTimeout(saveTimer);
+    saveTimer = undefined;
+    await saveTail;
+    // In particular, closing an unhydrated, unchanged instance must NOT write
+    // its empty initial snapshot over a still-unread durable outbox.
+    if (dirty) await persist(snapshot());
+    confirmedFacts.clear();
+  });
 
   const recompute = (): void => {
     let v = base.value;
@@ -206,16 +271,30 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
     baseValue: (): T => base.value,
     version: (): Version => base.version,
     pending: (): readonly Mutation[] => queue,
+    pendingForSend: (): readonly Mutation[] =>
+      queue.filter((m) => !durableAdmissions.has(m.id)),
 
-    mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>> {
-      const m: Mutation<ArgsOf<T, M, K>> = { id: id ?? newId(), client: clientId, name, args };
-      queue.push(m);
+    mutate<K extends keyof M & string>(
+      name: K,
+      args: ArgsOf<T, M, K>,
+      id?: MutationId,
+    ): Mutation<ArgsOf<T, M, K>> {
+      scope.assertActive();
+      const m: Mutation<ArgsOf<T, M, K>> = {
+        id: id ?? newId(),
+        client: clientId,
+        name,
+        args,
+      };
       // Incremental: apply on the current view (== replaying just this one on top
       // of the already-replayed queue), equivalent to a full recompute.
-      viewValue = applyMutation(mutators, viewValue, m);
+      const next = applyMutation(mutators, viewValue, m);
+      scope.assertActive(); // a caller-supplied mutator/id factory can reenter
+      queue = [...queue, m];
+      viewValue = next;
       stateRevision += 1;
-      onChange?.(viewValue);
       scheduleSave();
+      notify();
       return m;
     },
 
@@ -224,19 +303,38 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       args: ArgsOf<T, M, K>,
       id?: MutationId,
     ): Promise<Mutation<ArgsOf<T, M, K>>> {
-      const m = this.mutate(name, args, id);
-      try {
-        await this.flush();
-      } catch (error) {
-        // Nothing has been handed to the transport yet. Remove the optimistic
-        // row so the still-mounted editor remains the single recovery source.
-        this.confirm([m.id]);
-        throw error;
-      }
-      return m;
+      return scope.run(async () => {
+        const mutationId = id ?? newId();
+        durableAdmissions.set(
+          mutationId,
+          (durableAdmissions.get(mutationId) ?? 0) + 1,
+        );
+        try {
+          const m = this.mutate(name, args, mutationId);
+          try {
+            await flushCurrent();
+          } catch (error) {
+            // Nothing has been handed to the transport yet. Remove the optimistic
+            // row so the still-mounted editor remains the single recovery source.
+            queue = queue.filter((pending) => pending.id !== m.id);
+            noteHydrateConfirmations([m.id]);
+            recompute();
+            stateRevision += 1;
+            scheduleSave();
+            notify();
+            throw error;
+          }
+          return m;
+        } finally {
+          const remaining = (durableAdmissions.get(mutationId) ?? 1) - 1;
+          if (remaining) durableAdmissions.set(mutationId, remaining);
+          else durableAdmissions.delete(mutationId);
+        }
+      });
     },
 
     confirm(ids: readonly MutationId[]): void {
+      scope.assertActive();
       noteHydrateConfirmations(ids);
       if (ids.length === 0) {
         return;
@@ -249,52 +347,74 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       queue = next;
       recompute();
       stateRevision += 1;
-      onChange?.(viewValue);
       scheduleSave();
+      notify();
     },
 
     async confirmDurably(ids: readonly MutationId[]): Promise<void> {
-      if (ids.length === 0) {
-        return;
-      }
-      const previous = queue;
-      const set = new Set<MutationId>(ids);
-      const next = queue.filter((m) => !set.has(m.id));
-      if (next.length === queue.length) {
-        return;
-      }
-      queue = next;
-      recompute();
-      stateRevision += 1;
-      onChange?.(viewValue);
-      try {
-        await this.flush();
-      } catch (error) {
-        // A transport patch or another optimistic mutation may have landed while
-        // the storage transaction was pending. Restore only the mutations this
-        // durable confirmation removed; preserve every concurrent queue change.
-        const previousIds = new Set(previous.map((m) => m.id));
-        const currentById = new Map(queue.map((m) => [m.id, m]));
-        const restored: Mutation[] = [];
-        for (const mutation of previous) {
-          const current = currentById.get(mutation.id);
-          if (set.has(mutation.id)) {
-            restored.push(current ?? mutation);
-          } else if (current !== undefined) {
-            restored.push(current);
-          }
+      return scope.run(async () => {
+        if (ids.length === 0) {
+          return;
         }
-        restored.push(...queue.filter((m) => !previousIds.has(m.id)));
-        queue = restored;
+        const previous = queue;
+        const set = new Set<MutationId>(ids);
+        const next = queue.filter((m) => !set.has(m.id));
+        if (next.length === queue.length) {
+          return;
+        }
+        queue = next;
         recompute();
         stateRevision += 1;
-        onChange?.(viewValue);
-        scheduleSave();
-        throw error;
-      }
+        dirty = true;
+        const received = new Set<MutationId>();
+        confirming.add(received);
+        for (const id of set) {
+          pendingConfirmations.set(id, (pendingConfirmations.get(id) ?? 0) + 1);
+        }
+        const write = flushCurrent();
+        notify();
+        // Observe the write before notifying, so a reentrant owner close cannot
+        // prevent an already-admitted acknowledgement from draining.
+        try {
+          await write;
+          noteHydrateConfirmations(ids);
+        } catch (error) {
+          // A transport patch or another optimistic mutation may have landed while
+          // the storage transaction was pending. Restore only the mutations this
+          // durable confirmation removed; preserve every concurrent queue change.
+          const previousIds = new Set(previous.map((m) => m.id));
+          const currentById = new Map(queue.map((m) => [m.id, m]));
+          const restored: Mutation[] = [];
+          for (const mutation of previous) {
+            const current = currentById.get(mutation.id);
+            if (set.has(mutation.id)) {
+              if (!received.has(mutation.id)) {
+                restored.push(current ?? mutation);
+              }
+            } else if (current !== undefined) {
+              restored.push(current);
+            }
+          }
+          restored.push(...queue.filter((m) => !previousIds.has(m.id)));
+          queue = restored;
+          recompute();
+          stateRevision += 1;
+          scheduleSave();
+          notify();
+          throw error;
+        } finally {
+          confirming.delete(received);
+          for (const id of set) {
+            const remaining = (pendingConfirmations.get(id) ?? 1) - 1;
+            if (remaining) pendingConfirmations.set(id, remaining);
+            else pendingConfirmations.delete(id);
+          }
+        }
+      });
     },
 
     bump(id: MutationId): void {
+      scope.assertActive();
       const i = queue.findIndex((m) => m.id === id);
       if (i === -1 || i === queue.length - 1) {
         return; // not pending or already last
@@ -306,11 +426,12 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       queue = [...queue.slice(0, i), ...queue.slice(i + 1), m];
       recompute();
       stateRevision += 1;
-      onChange?.(viewValue);
       scheduleSave();
+      notify();
     },
 
     applyPatch(patch: Patch<T>, applyOpts?: { force?: boolean }): void {
+      scope.assertActive();
       noteHydrateConfirmations(patch.confirmed);
       let changed = false;
       // CONFIRMATIONS ARE MONOTONIC FACTS — process them from EVERY patch, even a
@@ -331,7 +452,10 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       // older/duplicate snapshot's value is ignored (idempotent). (An op-patch
       // would additionally require fromVersion === base.version + gap → resync.)
       if (applyOpts?.force === true || patch.toVersion > base.version) {
-        base = freeze({ version: patch.toVersion, value: patch.apply(base.value) });
+        base = freeze({
+          version: patch.toVersion,
+          value: patch.apply(base.value),
+        });
         baseRevision += 1;
         hasAppliedPatch = true;
         changed = true;
@@ -347,93 +471,118 @@ export function createClient<T, M extends Mutators<T>>(opts: ClientOpts<T, M>): 
       ) {
         const got = hashValue(base.value);
         if (got !== patch.valueHash) {
-          onDiverge({ version: patch.toVersion, expected: patch.valueHash, got });
+          onDiverge({
+            version: patch.toVersion,
+            expected: patch.valueHash,
+            got,
+          });
         }
       }
       if (changed) {
         recompute();
         stateRevision += 1;
-        onChange?.(viewValue);
         scheduleSave();
+        notify();
       }
     },
 
-    async hydrate(): Promise<void> {
+    hydrate(): Promise<void> {
+      scope.assertActive();
+      if (hydration) return hydration;
       if (local === undefined || hydrationComplete) {
-        return;
+        return Promise.resolve();
       }
-      try {
-        const startedStateRevision = stateRevision;
-        const startedBaseRevision = baseRevision;
-        const snap = await local.load();
-        if (snap === null) {
-          return;
-        }
-
-        // Any live patch is newer than the browser cache, including one received
-        // while IndexedDB was still enumerating keys before this hydrate call
-        // started. Keep it. If only local mutations happened, the cached base is
-        // still useful and those mutations are replayed on top below.
-        if (!hasAppliedPatch && baseRevision === startedBaseRevision) {
-          base = freeze(snap.base);
-        }
-
-        // Durable mutations predate anything authored after this hydrate began,
-        // so restore them first, then append current-only mutations. For an id
-        // present in both places the live copy wins. Never resurrect an id that
-        // a socket patch/user echo has already confirmed on this page.
-        const currentById = new Map(queue.map((mutation) => [mutation.id, mutation]));
-        const persistedIds = new Set<MutationId>();
-        const merged: Mutation[] = [];
-        let skippedConfirmed = false;
-        for (const mutation of snap.pending) {
-          persistedIds.add(mutation.id);
-          if (confirmedFacts.has(mutation.id)) {
-            skippedConfirmed = true;
-            continue;
+      // Reserve single-flight identity before invoking the backend, without
+      // delaying the initial read (startup callers may resolve it immediately).
+      let begin!: (task: Promise<void>) => void;
+      // oxlint-disable-next-line promise/avoid-new
+      hydration = new Promise<void>((resolve) => {
+        begin = resolve;
+      });
+      begin(scope.run(async () => {
+        if (!scope.active) return;
+        try {
+          const startedStateRevision = stateRevision;
+          const startedBaseRevision = baseRevision;
+          const snap = await local.load();
+          if (snap === null || !scope.active) {
+            return;
           }
-          merged.push(currentById.get(mutation.id) ?? mutation);
-        }
-        merged.push(
-          ...queue.filter((mutation) =>
-            !persistedIds.has(mutation.id) &&
-            !confirmedFacts.has(mutation.id)
-          ),
-        );
-        queue = merged;
-        recompute();
-        stateRevision += 1;
-        onChange?.(viewValue);
 
-        // A concurrent patch/mutation may already have persisted a snapshot that
-        // did not yet contain the restored outbox. Likewise, a stale record may
-        // still contain an id the server confirmed. Serialize one corrected write
-        // before reporting hydration complete.
-        if (
-          stateRevision !== startedStateRevision + 1 ||
-          skippedConfirmed ||
-          baseRevision !== startedBaseRevision
-        ) {
-          await persist(snapshot());
+          // Any live patch is newer than the browser cache, including one received
+          // while IndexedDB was still enumerating keys before this hydrate call
+          // started. Keep it. If only local mutations happened, the cached base is
+          // still useful and those mutations are replayed on top below.
+          if (!hasAppliedPatch && baseRevision === startedBaseRevision) {
+            base = freeze(snap.base);
+          }
+
+          // Durable mutations predate anything authored after this hydrate began,
+          // so restore them first, then append current-only mutations. For an id
+          // present in both places the live copy wins. Never resurrect an id that
+          // a socket patch/user echo has already confirmed on this page.
+          const currentById = new Map(
+            queue.map((mutation) => [mutation.id, mutation]),
+          );
+          const persistedIds = new Set<MutationId>();
+          const merged: Mutation[] = [];
+          let skippedConfirmed = false;
+          for (const mutation of snap.pending) {
+            persistedIds.add(mutation.id);
+            if (
+              confirmedFacts.has(mutation.id) ||
+              pendingConfirmations.has(mutation.id)
+            ) {
+              skippedConfirmed = true;
+              continue;
+            }
+            merged.push(currentById.get(mutation.id) ?? mutation);
+          }
+          merged.push(
+            ...queue.filter((mutation) =>
+              !persistedIds.has(mutation.id) &&
+              !confirmedFacts.has(mutation.id)
+            ),
+          );
+          queue = merged;
+          recompute();
+          stateRevision += 1;
+          notify();
+
+          // A concurrent patch/mutation may already have persisted a snapshot that
+          // did not yet contain the restored outbox. Likewise, a stale record may
+          // still contain an id the server confirmed. Serialize one corrected write
+          // before reporting hydration complete.
+          if (
+            stateRevision !== startedStateRevision + 1 ||
+            skippedConfirmed ||
+            baseRevision !== startedBaseRevision
+          ) {
+            dirty = true;
+            await persist(snapshot());
+          }
+        } finally {
+          // Hydration is a one-shot startup operation. Stop retaining confirmation
+          // ids afterward so a long-running client does not grow this set forever,
+          // and prevent a later accidental cache read from replacing live state.
+          hydrationComplete = true;
+          confirmedFacts.clear();
         }
-      } finally {
-        // Hydration is a one-shot startup operation. Stop retaining confirmation
-        // ids afterward so a long-running client does not grow this set forever,
-        // and prevent a later accidental cache read from replacing live state.
-        hydrationComplete = true;
-        confirmedFacts.clear();
-      }
+      }));
+      return hydration;
     },
 
     async flush(): Promise<void> {
-      if (local === undefined) {
-        return;
-      }
-      if (saveTimer !== undefined) {
-        clearTimeout(saveTimer);
-        saveTimer = undefined;
-      }
-      await persist(snapshot());
+      scope.assertActive();
+      await flushCurrent();
+    },
+    dispose: (): Promise<void> => {
+      if (saveTimer !== undefined) clearTimeout(saveTimer);
+      saveTimer = undefined;
+      return scope.dispose();
+    },
+    get lifecycle(): ScopeSnapshot {
+      return scope.snapshot();
     },
   };
 }

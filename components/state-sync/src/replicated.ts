@@ -13,17 +13,33 @@
 // callback rather than an owned connection.
 
 import type { ReadableStore } from "@cowboy/state-store";
+import {
+  ScopeClosedError,
+  type ScopeSnapshot,
+} from "@cowboy/state-store/scope";
 import { type Client, type ClientOpts, createClient } from "./client.ts";
 import type { ArgsOf, Mutators } from "./mutators.ts";
-import type { ClientSnapshot, LocalPersistence, Mutation, MutationId, Patch, Version } from "./types.ts";
+import type {
+  ClientSnapshot,
+  LocalPersistence,
+  Mutation,
+  MutationId,
+  Patch,
+  Version,
+} from "./types.ts";
 
-export interface ReplicatedStore<T, M extends Mutators<T>> extends ReadableStore<T> {
+export interface ReplicatedStore<T, M extends Mutators<T>>
+  extends ReadableStore<T> {
   /** Immutable authoritative value before pending mutations are replayed. */
   baseValue(): T;
   /** Apply a mutator locally (instant) and send it upstream. Pass an explicit
    *  `id` to make the mutation id an externally-meaningful key (e.g. an optimistic
    *  row's cmid, for no-duplicate confirmation). */
-  mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>>;
+  mutate<K extends keyof M & string>(
+    name: K,
+    args: ArgsOf<T, M, K>,
+    id?: MutationId,
+  ): Mutation<ArgsOf<T, M, K>>;
   /** Persist a user-authored mutation before exposing it to the transport. */
   mutateDurably<K extends keyof M & string>(
     name: K,
@@ -52,6 +68,10 @@ export interface ReplicatedStore<T, M extends Mutators<T>> extends ReadableStore
   hydrate(): Promise<void>;
   /** Persist the snapshot NOW, bypassing the save debounce (call on `pagehide`). */
   flush(): Promise<void>;
+  /** Owner-only: seal observations/sends, drain the client and flush its local
+   * outbox. Never invoked by a view unsubscribe or a transport reconnect. */
+  dispose(): Promise<void>;
+  readonly lifecycle: ScopeSnapshot;
 }
 
 export interface ReplicatedOpts<T, M extends Mutators<T>> {
@@ -71,16 +91,29 @@ export interface ReplicatedOpts<T, M extends Mutators<T>> {
   newId?: () => MutationId;
   freezeForDev?: boolean;
   saveDebounceMs?: number;
-  onDiverge?: (detail: { version: Version; expected: string; got: string }) => void;
+  onDiverge?: (
+    detail: { version: Version; expected: string; got: string },
+  ) => void;
 }
 
-export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T, M>): ReplicatedStore<T, M> {
-  const listeners = new Set<() => void>();
+export function replicatedStore<T, M extends Mutators<T>>(
+  opts: ReplicatedOpts<T, M>,
+): ReplicatedStore<T, M> {
+  const listeners = new Set<{ listener: () => void }>();
+  let disposed = false;
+  const assertActive = (): void => {
+    if (disposed) throw new ScopeClosedError();
+  };
   const emit = (): void => {
-    for (const l of listeners) {
-      l();
+    for (const subscription of [...listeners]) {
+      if (disposed || !listeners.has(subscription)) continue;
+      try {
+        subscription.listener();
+      } catch {
+        console.warn("sync subscriber failed");
+      }
     }
-    opts.onChange?.();
+    if (!disposed) opts.onChange?.();
   };
 
   // Build ClientOpts conditionally — exactOptionalPropertyTypes forbids passing
@@ -112,13 +145,20 @@ export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T
     get: (): T => client.view(),
     baseValue: (): T => client.baseValue(),
     subscribe: (listener): () => void => {
-      listeners.add(listener);
+      assertActive();
+      const subscription = { listener };
+      listeners.add(subscription);
       return (): void => {
-        listeners.delete(listener);
+        listeners.delete(subscription);
       };
     },
-    mutate<K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>, id?: MutationId): Mutation<ArgsOf<T, M, K>> {
+    mutate<K extends keyof M & string>(
+      name: K,
+      args: ArgsOf<T, M, K>,
+      id?: MutationId,
+    ): Mutation<ArgsOf<T, M, K>> {
       const m = client.mutate(name, args, id);
+      assertActive(); // an observer can synchronously close the owner
       opts.send(m);
       return m;
     },
@@ -128,6 +168,7 @@ export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T
       id?: MutationId,
     ): Promise<Mutation<ArgsOf<T, M, K>>> {
       const m = await client.mutateDurably(name, args, id);
+      assertActive(); // persistence may finish after sign-out; retain the outbox
       opts.send(m);
       return m;
     },
@@ -144,11 +185,21 @@ export function replicatedStore<T, M extends Mutators<T>>(opts: ReplicatedOpts<T
     pending: (): readonly Mutation[] => client.pending(),
     version: (): Version => client.version(),
     resend: (): void => {
-      for (const m of client.pending()) {
+      assertActive();
+      for (const m of client.pendingForSend()) {
+        if (disposed) break;
         opts.send(m);
       }
     },
     hydrate: (): Promise<void> => client.hydrate(),
     flush: (): Promise<void> => client.flush(),
+    dispose: (): Promise<void> => {
+      disposed = true;
+      listeners.clear();
+      return client.dispose();
+    },
+    get lifecycle(): ScopeSnapshot {
+      return client.lifecycle;
+    },
   };
 }

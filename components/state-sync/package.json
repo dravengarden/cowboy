@@ -1,13 +1,13 @@
 {
   "name": "@cowboy/state-sync",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "exports": {
     ".": "./index.ts"
   },
   "files": ["index.ts", "src"],
   "peerDependencies": {
-    "@cowboy/state-store": "2.0.0"
+    "@cowboy/state-store": "2.1.0"
   },
   "publishConfig": {
     "access": "public"

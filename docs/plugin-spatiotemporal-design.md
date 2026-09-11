@@ -34,6 +34,9 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 第十四批 [Web 核心宿主](core-web-plugin-host.md) 移除产品 Web 对旧 Plugin runtime 的依赖，
 将闭集 renderer、slot/context 关联和独立库存作用域收进核心；修复晚到响应、已挂载旧 renderer、
 默认项歧义及观察释放问题。不改签名 Plugin、原生 ABI 或生产认证策略；新公共 authoring SDK 仍待迁移。
+第十五批 [组件资源 scope](owned-component-scopes.md) 加入进程内任务排空、有序异步释放与可见失败状态，
+接入同步组件和 Web 退出登录边界；修复断开后复活订阅、未持久化 outbox 被重发、晚到缓存与确认回滚竞态。
+组件闭包按 3.2.0 独立换代，Plugin 不变；不将本地 cleanup 视为跨端补偿，其他宿主与 IDB 连接仍待迁移。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
@@ -725,7 +728,7 @@ Agent 内部工具。
 | [server uninstall](../src/server/plugin_uninstall.rs) | Service 卸载账本、事务完成、重启 fence 与只读 Machine 核对；仍缺恢复授权与补偿步骤 |
 | [Plugin storage](../src/plugin_storage.rs)            | namespace/迁移执行；补 reader-writer 共存、稳定数据身份与恢复契约                    |
 | [Web core host](../web/src/pluginHost/inventory.ts) / [旧 plugin-api](../components/plugin-api/types.ts) | 产品 Web 已脱离旧 SDK runtime，闭集 slot/context、owned 观察与 core native port 已落地；旧公开 SDK/原生 ABI 尚未退役，typed authoring 仍需迁移 |
-| [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅与 dispose；仍需其他组件的资源作用域模型                 |
+| [state-store](../components/state-store/store.ts)     | 已有强类型 codec、owned 订阅、进程内资源 scope 与 state-sync 排空；其他宿主/IDB 连接仍待迁移 |
 | [Provider UI](../components/provider-ui/src/index.ts) | 有闭集 IR 与验证；生成更强的字段/消息关联，抽出通用 UI 与领域投影                    |
 
 这些是设计差距，不是对全部现有代码的安全审计，也不是本轮已经修复的事项。

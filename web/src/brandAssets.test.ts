@@ -77,7 +77,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
   }
   const index = await read("web/index.html");
   assert(index.includes("/cowboy-app-icon-180-v5.png"));
-  assert(index.includes("/manifest.webmanifest?v=cowboy-v1650"));
+  assert(index.includes("/manifest.webmanifest?v=cowboy-v1651"));
   const manifest = JSON.parse(await read("web/public/manifest.webmanifest"));
   assertEquals(manifest.id, "/");
   assertEquals(manifest.start_url, "/");
@@ -87,7 +87,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
     ),
   );
   const sw = await read("web/public/sw.js");
-  assert(sw.includes('const VERSION = "cowboy-v1650"'));
+  assert(sw.includes('const VERSION = "cowboy-v1651"'));
   assert(sw.includes('icon: "/cowboy-app-icon-192-v5.png"'));
 });
 
