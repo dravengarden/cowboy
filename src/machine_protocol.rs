@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 pub mod installation_revision;
 pub mod plugin_recovery;
 pub mod plugin_step;
+pub mod telemetry_binding;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 13;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 14;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -23,6 +24,8 @@ pub const PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION: u16 = 12;
 /// Journaled effects have connection-bound, process-monotonic execution leases.
 /// Retained request/receipt codecs and query protocol floors remain unchanged.
 pub const PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION: u16 = 13;
+/// Read-only durable telemetry binding evidence; no new effect admission.
+pub const TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION: u16 = 14;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -704,6 +707,10 @@ pub enum MachineCommand {
         request_id: String,
         step: Box<plugin_step::UninstallStep>,
     },
+    QueryTelemetryBinding {
+        request_id: String,
+        step: Box<telemetry_binding::BindingStep>,
+    },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
@@ -755,6 +762,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::QueryTelemetryBinding { .. } => TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION,
             Self::QueryPluginUninstallRecovery { .. } => {
                 PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION
             }
@@ -990,6 +998,10 @@ pub enum MachineEvent {
     PluginUninstallRecovery {
         request_id: String,
         observation: Box<plugin_recovery::RecoveryObservation>,
+    },
+    TelemetryBindingObservation {
+        request_id: String,
+        observation: Box<telemetry_binding::BindingObservation>,
     },
     /// Sensitive Plugin output is correlated directly to the requester and
     /// must not enter the ordinary Machine event history.

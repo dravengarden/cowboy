@@ -1732,6 +1732,17 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::QueryTelemetryBinding { request_id, step } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .telemetry_binding_observation(&step, service_id.as_deref(), &machine_id)
+                    .await;
+                let _ = events.send(MachineEvent::TelemetryBindingObservation {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
         MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
             tokio::spawn(async move {
                 let observation = providers

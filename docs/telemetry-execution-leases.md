@@ -98,3 +98,7 @@ timeouts, local-first delivery and independent incident persistence.
 Still missing: durable exact binding plans on both Sites, monotonic policy
 epochs, lost-binding-ACK queries, separately authorized restart recovery and
 CAS restoration of managed configuration. This slice does not claim P2 complete.
+
+The subsequent [durable binding reader](telemetry-binding-journal.md) adds
+read-only Machine evidence and managed-namespace fencing. It does not enable
+the coordinator or durable writes described above.

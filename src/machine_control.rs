@@ -16,6 +16,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
+use crate::machine_protocol::telemetry_binding::{BindingObservation, BindingStep};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
     PluginInstallationState, PluginInventory,
@@ -116,6 +117,7 @@ enum ReplyKind {
     PluginHost,
     PluginStep,
     PluginRecovery,
+    TelemetryBinding,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +129,7 @@ pub(crate) enum PluginUninstallTransport {
 enum Reply {
     PluginStep(Box<StepObservation>),
     PluginRecovery(Box<RecoveryObservation>),
+    TelemetryBinding(Box<BindingObservation>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -142,6 +145,7 @@ impl Reply {
         match self {
             Self::PluginStep(_) => ReplyKind::PluginStep,
             Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
+            Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -421,6 +425,12 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryBindingObservation {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryBinding(observation));
+            }
             MachineEvent::PluginUninstallRecovery {
                 request_id,
                 observation,
@@ -822,6 +832,60 @@ impl MachineControl {
         }
     }
 
+    // Reader bridge for the forthcoming durable Service coordinator. No live
+    // mutation endpoint can manufacture an operation or invoke this as a grant.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn telemetry_binding_observation(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> Result<BindingObservation, CommandRequestError> {
+        let fail = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.to_owned(),
+        };
+        step.validate()
+            .map_err(|_| fail(CommandFailure::NotSent, "invalid telemetry binding query"))?;
+        if step.machine_id != token.0.machine_id {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "telemetry binding query target mismatch",
+            ));
+        }
+        let request_id = self.request_id("telemetry-binding").map_err(|_| {
+            fail(
+                CommandFailure::NotSent,
+                "telemetry binding query identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::QueryTelemetryBinding {
+                    request_id: request_id.clone(),
+                    step: Box::new(step.clone()),
+                },
+                ReplyKind::TelemetryBinding,
+                Some(RequestBinding::Connection(token)),
+            )
+            .map_err(|_| {
+                fail(
+                    CommandFailure::NotSent,
+                    "telemetry binding query channel unavailable",
+                )
+            })?;
+        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(Reply::TelemetryBinding(observation))) if observation.matches(step) => {
+                Ok(*observation)
+            }
+            _ => Err(fail(
+                CommandFailure::Unknown,
+                "telemetry binding query evidence unavailable",
+            )),
+        }
+    }
+
     pub(crate) async fn command_on_connection(
         &self,
         connection: &ConnectionToken,
@@ -1038,6 +1102,10 @@ impl MachineControl {
             .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+#[path = "machine_control/telemetry_binding_tests.rs"]
+mod telemetry_binding_tests;
 
 #[cfg(test)]
 mod tests {

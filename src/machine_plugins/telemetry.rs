@@ -138,6 +138,7 @@ impl MachinePluginStore {
         };
         let (contract, policy, payload, active, activation) = {
             let _lifecycle = lease.lock(self).await?;
+            self.operations.telemetry_bindings.ensure_legacy_allowed()?;
             self.operations.ensure_unfenced(&plugin_id)?;
             let active = self.telemetry_inventory(&selection)?;
             let activation = ActivationObservation::read(self, &plugin_id)?;
@@ -155,6 +156,7 @@ impl MachinePluginStore {
         let admit = || async {
             let result = async {
                 let _lifecycle = lease.lock(self).await?;
+                self.operations.telemetry_bindings.ensure_legacy_allowed()?;
                 self.operations.ensure_unfenced(&plugin_id)?;
                 let current = self.telemetry_inventory(&selection)?;
                 ensure!(

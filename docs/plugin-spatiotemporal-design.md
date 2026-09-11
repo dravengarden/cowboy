@@ -44,6 +44,10 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 第十九批 [遥测执行租约](telemetry-execution-leases.md) 将实际 Machine 遥测命令绑定到原认证连接、
 接收时开始的单调预算与精确请求；每次 HTTP 外发/重试重新核对安装与原私有策略，禁止排队命令和重试
 跨连接/策略换代复活。已接纳外发不撤回；协议和耐久格式不变，P2 的持久绑定与恢复闭环仍未完成。
+第二十批 [持久化遥测绑定 reader](telemetry-binding-journal.md) 加入协议 14 的只读精确查询、
+Machine 绑定账本校验与旧外发路径隔离。绑定 revision 和 policy epoch 使用独立的精确 64-bit 类型；
+历史回执不能覆盖后来状态。没有生产写入或恢复执行入口；Service 协调账本、策略 epoch 签发和
+双侧授权提交仍待实现，不能把 reader 部署当成 P2 完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
