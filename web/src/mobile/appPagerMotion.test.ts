@@ -73,6 +73,18 @@ Deno.test("product pager paints the touch sample without a frame of lag", () => 
   assert(pagerSource.includes("pagerOffset(gesture.product, deltaX, gesture.width)"));
 });
 
+Deno.test("product pages keep an opaque backing store during the pager transform", () => {
+  const agent = pagerSource.slice(
+    pagerSource.indexOf("ref={agentPageRef}"),
+    pagerSource.indexOf("ref={reviewPageRef}"),
+  );
+  const review = pagerSource.slice(pagerSource.indexOf("ref={reviewPageRef}"));
+  assert(agent.includes('bgcolor: "background.default"'));
+  assert(review.includes('bgcolor: "background.default"'));
+  assert(agent.includes('overflow: "hidden"'));
+  assert(review.includes('overflow: "hidden"'));
+});
+
 Deno.test("vertical transcript pans release horizontal recognizers", () => {
   assertEquals(obsidianDrawerAbandonsToScroll(10, 11), true);
   assertEquals(obsidianDrawerAbandonsToScroll(7, 13), true);

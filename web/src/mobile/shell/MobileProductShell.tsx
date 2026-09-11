@@ -513,6 +513,11 @@ export function MobileProductShell({
             height: "100%",
             minWidth: 0,
             overflow: "hidden",
+            // An opaque backing store is load-bearing. Without it iOS
+            // promotes rounded transcript cards into sibling compositor
+            // tiles, so a mid-pager swipe paints Agent chrome on top of
+            // Review instead of clipping one paper page.
+            bgcolor: "background.default",
             backfaceVisibility: "hidden",
             WebkitBackfaceVisibility: "hidden",
             contain: "layout paint style",
@@ -539,6 +544,7 @@ export function MobileProductShell({
             height: "100%",
             minWidth: 0,
             overflow: "hidden",
+            bgcolor: "background.default",
             backfaceVisibility: "hidden",
             WebkitBackfaceVisibility: "hidden",
             // Paint containment folds CodeMirror into this page tile and
