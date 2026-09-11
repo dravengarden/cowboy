@@ -33,9 +33,15 @@ Deno.test("drawer progress only publishes coarse ownership values", () => {
 
 Deno.test("drawer render stays on a transform-only compositor path", () => {
   assertEquals(drawerSource.includes("drawer.style.opacity"), false);
-  assertEquals(drawerSource.includes('willChange = "transform, opacity"'), false);
+  assertEquals(
+    drawerSource.includes('willChange = "transform, opacity"'),
+    false,
+  );
   assert(drawerSource.includes('layer.style.willChange = "transform"'));
-  assertEquals(drawerSource.includes('drawer.style.willChange = "transform"'), false);
+  assertEquals(
+    drawerSource.includes('drawer.style.willChange = "transform"'),
+    false,
+  );
   assert(drawerSource.includes("drawerProgressAttribute("));
   assertEquals(drawerSource.includes("drawer.style.opacity"), false);
   assert(drawerSource.includes("dim.style.opacity"));
@@ -43,15 +49,15 @@ Deno.test("drawer render stays on a transform-only compositor path", () => {
 
 Deno.test("gesture roots flatten overflow tiles without a universal selector", () => {
   assertEquals(
-    appSource.includes('&[data-mobile-drawer-moving=\'true\'] *'),
+    appSource.includes("&[data-mobile-drawer-moving='true'] *"),
     false,
   );
   assertEquals(
-    productShellSource.includes('&[data-mobile-product-moving=\'true\'] *'),
+    productShellSource.includes("&[data-mobile-product-moving='true'] *"),
     false,
   );
   assertEquals(
-    reviewDrawerSource.includes('&[data-mobile-drawer-moving=\'true\'] *'),
+    reviewDrawerSource.includes("&[data-mobile-drawer-moving='true'] *"),
     false,
   );
   assert(appSource.includes("mobilePresentationMovingRootSx"));
@@ -61,17 +67,35 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(reviewDrawerSource.includes("mobilePresentationMovingRootSx"));
   assertEquals(appSource.includes("mobileCompositorFlattenSx"), false);
   assertEquals(reviewDrawerSource.includes("mobileCompositorFlattenSx"), false);
-  assert(motionSource.includes("WebkitOverflowScrolling: \"auto !important\""));
-  assert(motionSource.includes("overflow: \"hidden !important\""));
-  assert(motionSource.includes("contain: \"paint\""));
-  assert(motionSource.includes("pointerEvents: \"none\""));
-  assert(motionSource.includes("& [data-mobile-drawer-surface] [data-mobile-overflow-layer]"));
-  assertEquals(motionSource.includes("\"& .cm-scroller\""), false);
-  assertEquals(motionSource.includes("[data-mobile-drawer-surface] .cm-scroller"), false);
-  assertEquals(motionSource.includes("[data-mobile-drawer-surface] .cm-gutters"), false);
+  assert(motionSource.includes('WebkitOverflowScrolling: "auto !important"'));
+  assert(motionSource.includes('overflow: "hidden !important"'));
+  assert(motionSource.includes('contain: "paint"'));
+  assert(motionSource.includes('pointerEvents: "none"'));
+  assert(
+    motionSource.includes(
+      "& [data-mobile-drawer-surface] [data-mobile-overflow-layer]",
+    ),
+  );
+  assertEquals(motionSource.includes('"& .cm-scroller"'), false);
+  assertEquals(
+    motionSource.includes("[data-mobile-drawer-surface] .cm-scroller"),
+    false,
+  );
+  assertEquals(
+    motionSource.includes("[data-mobile-drawer-surface] .cm-gutters"),
+    false,
+  );
   assert(motionSource.includes("& [data-mobile-drawer-surface] [data-key]"));
-  assert(motionSource.includes("\"& [data-mobile-overflow-layer]\": mobileOverflowTileFlattenSx"));
-  assert(motionSource.includes("\"& [data-mobile-code-layer]\": mobileCodeRestLayerSx"));
+  assert(
+    motionSource.includes(
+      '"& [data-mobile-overflow-layer]": mobileOverflowTileFlattenSx',
+    ),
+  );
+  assert(
+    motionSource.includes(
+      '"& [data-mobile-code-layer]": mobileCodeRestLayerSx',
+    ),
+  );
   assertEquals(motionSource.includes("mobileCodeSwipeSwapSx"), false);
   assertEquals(motionSource.includes("mobileCodePaintCullSx"), false);
   assert(motionSource.includes("mobilePeekRestLayerSx"));
@@ -80,7 +104,11 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(productShellSource.includes("mobilePeekRestLayerSx"));
   assert(motionSource.includes("mobileFrostStripSx"));
   assert(motionSource.includes('attr === "data-mobile-product-moving"'));
-  assert(motionSource.includes("& [data-mobile-drawer-surface] .MuiCircularProgress-root"));
+  assert(
+    motionSource.includes(
+      "& [data-mobile-drawer-surface] .MuiCircularProgress-root",
+    ),
+  );
   assertEquals(
     motionSource.includes(
       "& .MuiCircularProgress-root, & .MuiSkeleton-root, & [data-mobile-css-animation]",
@@ -96,7 +124,7 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("mobileDrawerRailHitSx"));
   assert(motionSource.includes("[data-mobile-drawer-close='left']"));
   assertEquals(
-    motionSource.includes("transform: \"none !important\""),
+    motionSource.includes('transform: "none !important"'),
     false,
   );
   assert(motionSource.includes("& [data-detent-sheet][data-detent-moving]"));
@@ -107,11 +135,22 @@ Deno.test("gesture roots flatten overflow tiles without a universal selector", (
   assert(motionSource.includes("holdStorePresentation"));
   assert(
     motionSource.includes(
+      'querySelector("[data-detent-sheet][data-detent-moving]")',
+    ),
+  );
+  assertEquals(
+    motionSource.includes(
+      "Freeze store subscribers and flatten the page for the whole time a sheet",
+    ),
+    false,
+  );
+  assert(
+    motionSource.includes(
       '"&:has([data-detent-sheet][data-detent-moving])"',
     ),
   );
   const presented = motionSource.slice(
-    motionSource.indexOf('"&[data-mobile-sheet-presented=\'true\']"'),
+    motionSource.indexOf("\"&[data-mobile-sheet-presented='true']\""),
     motionSource.indexOf('"&:has([data-detent-sheet][data-detent-moving])"'),
   );
   assertEquals(presented.includes("mobileCompositorFlattenSx"), false);
@@ -123,7 +162,9 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
   assert(spatialContract.includes("code pane must not flash"));
   assert(webAgents.includes("a swipe that drops frames is a product bug"));
   assert(spatialContract.includes("no horizontal bar"));
-  assert(spatialContract.includes("Visible-line persistence is post-scroll work"));
+  assert(
+    spatialContract.includes("Visible-line persistence is post-scroll work"),
+  );
   assert(spatialContract.includes("must not synchronously read"));
 });
 
@@ -141,6 +182,9 @@ Deno.test("product pager first tracking frames only write transform", () => {
 
 Deno.test("settled product pages do not keep a permanent will-change layer", () => {
   assertEquals(productShellSource.includes('willChange: "transform"'), false);
-  assertEquals(reviewDrawerSource.includes('willChange: "transform, opacity"'), false);
+  assertEquals(
+    reviewDrawerSource.includes('willChange: "transform, opacity"'),
+    false,
+  );
   assertEquals(reviewDrawerSource.includes('willChange: "transform"'), false);
 });

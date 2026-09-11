@@ -24,10 +24,11 @@ export const mobilePeekRestLayerSx = {
  *  has its own translate3d; toggling its filter at prepare rebuilds that
  *  layer and is the intermittent first-frame hitch. */
 export const mobileFrostStripSx = {
-  "& [data-detent-sheet-chrome], & [data-obsidian-sheet], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]": {
-    backdropFilter: "none",
-    WebkitBackdropFilter: "none",
-  },
+  "& [data-detent-sheet-chrome], & [data-obsidian-sheet], & [data-mobile-backdrop-chrome], & [data-mobile-composer-shell-material], & [data-mobile-focus-composer], & [data-mobile-primary-composer], & [data-mobile-pending-editor]":
+    {
+      backdropFilter: "none",
+      WebkitBackdropFilter: "none",
+    },
 };
 
 /** Shared overflow-tile kill for transcript rows and ordinary overflow
@@ -59,9 +60,10 @@ export const mobileCompositorFlattenSx = {
   "& [data-mobile-drawer-surface] [data-key]": {
     contain: "none",
   },
-  "& [data-mobile-drawer-surface] .MuiCircularProgress-root, & [data-mobile-drawer-surface] .MuiSkeleton-root, & [data-mobile-drawer-surface] [data-mobile-css-animation]": {
-    animationPlayState: "paused",
-  },
+  "& [data-mobile-drawer-surface] .MuiCircularProgress-root, & [data-mobile-drawer-surface] .MuiSkeleton-root, & [data-mobile-drawer-surface] [data-mobile-css-animation]":
+    {
+      animationPlayState: "paused",
+    },
 };
 
 export function mobilePresentationMovingRootSx(
@@ -87,21 +89,25 @@ export function mobilePresentationMovingRootSx(
  *  restretches the gradient and makes the veil jump. A separate close
  *  hit layer covers only the peek. */
 export const mobileDrawerRailHitSx = {
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-surface], &[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-follow]": {
-    pointerEvents: "none",
-  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-surface], &[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-follow]":
+    {
+      pointerEvents: "none",
+    },
   "& [data-mobile-drawer-dim]": {
     pointerEvents: "none",
   },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close]": {
-    pointerEvents: "auto",
-  },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='left']": {
-    left: "var(--mobile-drawer-width, min(84%, 360px))",
-  },
-  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='right']": {
-    right: "var(--mobile-drawer-width, min(84%, 360px))",
-  },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close]":
+    {
+      pointerEvents: "auto",
+    },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='left']":
+    {
+      left: "var(--mobile-drawer-width, min(84%, 360px))",
+    },
+  "&[data-mobile-drawer-open='true']:not([data-mobile-drawer-moving='true']) [data-mobile-drawer-close='right']":
+    {
+      right: "var(--mobile-drawer-width, min(84%, 360px))",
+    },
 };
 
 /** DetentSheet already disables its own blur while `data-detent-moving` is
@@ -126,17 +132,17 @@ export const mobileSheetPresentationSx = {
   },
 };
 
-/** Freeze store subscribers and flatten the page for the whole time a sheet
- *  is registered. DetentSheet only calls `onClose` after the dismiss settle,
- *  so this window covers both the open and close slides. */
+/** Frost the page while a sheet is open, but freeze store subscribers only
+ *  while it is moving. Holding the store for the whole open lifetime made
+ *  preset switches wait out the 10s acknowledgement timeout because
+ *  `waitForState` could not see the optimistic config echo. */
 export function bindMobileSheetPresentationHold(
   root: HTMLElement,
 ): () => void {
   let release: (() => void) | undefined;
   let announced = false;
-  const apply = (open: boolean): void => {
+  const applyOpen = (open: boolean): void => {
     if (open) {
-      release ??= holdStorePresentation();
       root.setAttribute("data-mobile-sheet-presented", "true");
       if (!announced) {
         announced = true;
@@ -144,6 +150,7 @@ export function bindMobileSheetPresentationHold(
           new CustomEvent("cowboy:transcript-direct-manipulation-start"),
         );
       }
+      applyMoving();
       return;
     }
     if (announced) {
@@ -156,10 +163,28 @@ export function bindMobileSheetPresentationHold(
     release = undefined;
     root.removeAttribute("data-mobile-sheet-presented");
   };
-  const unsubscribe = subscribeAnyDetentSheetOpen(apply);
+  const applyMoving = (): void => {
+    const moving =
+      root.querySelector("[data-detent-sheet][data-detent-moving]") !==
+        null;
+    if (moving) {
+      release ??= holdStorePresentation();
+      return;
+    }
+    release?.();
+    release = undefined;
+  };
+  const observer = new MutationObserver(applyMoving);
+  observer.observe(root, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-detent-moving"],
+  });
+  const unsubscribe = subscribeAnyDetentSheetOpen(applyOpen);
+  applyMoving();
   return () => {
     unsubscribe();
-    apply(false);
+    observer.disconnect();
+    applyOpen(false);
   };
 }
-

@@ -57,7 +57,10 @@ Deno.test("custom configuration remains visible without a matching preset", () =
     undefined,
   );
   assertEquals(runConfigSummary(custom), "Model: Model A · Reasoning: high");
-  assertEquals(runConfigCurrentTitle("High · Always approve"), "Current · High · Always approve");
+  assertEquals(
+    runConfigCurrentTitle("High · Always approve"),
+    "Current · High · Always approve",
+  );
   assertEquals(runConfigCurrentTitle(undefined), "Current · Custom");
 });
 
@@ -167,7 +170,10 @@ Deno.test("mobile current configuration is a disclosure, not a fake card", () =>
     true,
   );
   assertEquals(composerSource.includes('role="status"'), false);
-  assertEquals(/variant="body2"[^>]*>\s*Customize\s*</.test(composerSource), false);
+  assertEquals(
+    /variant="body2"[^>]*>\s*Customize\s*</.test(composerSource),
+    false,
+  );
 });
 
 Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => {
@@ -180,4 +186,10 @@ Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => 
   );
   assertEquals(storeSource.includes("configOptionsMatchChanges("), true);
   assertEquals(storeSource.includes('"Update agent preset"'), true);
+  assertEquals(storeSource.includes("canonicalAckListeners"), true);
+  assertEquals(storeSource.includes("notifyCanonicalAcks"), true);
+  assertEquals(
+    /function waitForState[\s\S]*listeners\.add\(check\)/.test(storeSource),
+    false,
+  );
 });

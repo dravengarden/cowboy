@@ -232,6 +232,10 @@ let state: State = {
 // pierce a frozen workspace by calling a selector between notifications.
 let presentedState = state;
 const listeners = new Set<() => void>();
+/** Command acknowledgements must observe canonical state even while a sheet
+ * or swipe holds React subscribers. Freezing those subscribers is a compositor
+ * contract; it must not make `set_config_option` wait out the 10s timeout. */
+const canonicalAckListeners = new Set<() => void>();
 let socket: WebSocket | undefined;
 // OPEN means only that the transport handshake completed. Cowboy becomes
 // command-ready after server-side active-client admission and the deterministic
@@ -593,13 +597,19 @@ function scheduleNotify(): void {
   }
 }
 
+function notifyCanonicalAcks(): void {
+  for (const listener of canonicalAckListeners) listener();
+}
+
 function setState(next: State): void {
   state = next;
+  notifyCanonicalAcks();
   emit();
 }
 
 function setInteractiveState(next: State): void {
   state = next;
+  notifyCanonicalAcks();
   emitInteractive();
 }
 
@@ -617,16 +627,16 @@ function waitForState(
   return new Promise((resolve, reject) => {
     let timeout = 0;
     const done = (): void => {
-      listeners.delete(check);
+      canonicalAckListeners.delete(check);
       globalThis.clearTimeout(timeout);
       resolve();
     };
     const check = (): void => {
       if (predicate(state)) done();
     };
-    listeners.add(check);
+    canonicalAckListeners.add(check);
     timeout = globalThis.setTimeout(() => {
-      listeners.delete(check);
+      canonicalAckListeners.delete(check);
       reject(new Error(`${label} was not acknowledged`));
     }, NETWORK_ACTION_TIMEOUT_MS);
     // Close the tiny send/register race against a synchronous test transport.
