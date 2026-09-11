@@ -4067,16 +4067,23 @@ export function Transcript({
     (snapshot) =>
       snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
   );
+  // Local unconfirmed sends are not page keys yet. Filtering them through the
+  // current Explore window hid a just-submitted prompt behind the restore
+  // skeleton whenever that window was empty or still loading.
   const optimisticMsgs = useMemo(
-    () => visibleItemKeys
-      ? pendingMessages.filter((message) => visibleItemKeys.has(optimisticQuestionKey(message)))
-      : pendingMessages,
-    [pendingMessages, visibleItemKeys],
+    () => {
+      if (!visibleItemKeys || liveTail) return pendingMessages;
+      const matched = pendingMessages.filter((message) =>
+        visibleItemKeys.has(optimisticQuestionKey(message))
+      );
+      return matched.length > 0 ? matched : pendingMessages;
+    },
+    [pendingMessages, visibleItemKeys, liveTail],
   );
   const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
     loading,
     items.length,
-    optimisticMsgs.length,
+    pendingMessages.length,
   );
   // "stick-to-bottom" UX, done properly this time:
   //

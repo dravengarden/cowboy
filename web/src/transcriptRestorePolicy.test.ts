@@ -12,6 +12,25 @@ Deno.test("history restore blocks only when there is nothing useful to show", ()
   assertEquals(shouldShowBlockingTranscriptRestore(false, 0, 0), false);
 });
 
+Deno.test("a just-sent prompt keeps the restore skeleton from covering it", async () => {
+  const transcript = await Deno.readTextFile(
+    new URL("./Transcript.tsx", import.meta.url),
+  );
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  assertEquals(
+    transcript.includes("pendingMessages.length"),
+    true,
+  );
+  assertEquals(
+    transcript.includes("matched.length > 0 ? matched : pendingMessages"),
+    true,
+  );
+  assertEquals(
+    store.includes("cmid !== undefined && cached &&"),
+    true,
+  );
+});
+
 Deno.test("a newly submitted prompt interrupts a saved viewport restore", () => {
   assertEquals(shouldInterruptTranscriptViewportRestore(true, 1), true);
   assertEquals(shouldInterruptTranscriptViewportRestore(true, 0), false);
