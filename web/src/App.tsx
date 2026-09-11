@@ -113,6 +113,7 @@ import {
 } from "./protocol";
 import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
+    deleteSession,
     holdStorePresentation,
     markSessionHydrated,
     notify,
@@ -120,7 +121,6 @@ import {
     renameSession,
     releaseInactiveHistory,
     reorderSessions,
-    send,
     useStoreSelector,
 } from "./store";
 import { useSortable } from "./useSortable";
@@ -573,6 +573,7 @@ function SessionList({
     // the same keys into spatial reorder commands until O/Esc (or opening a
     // session) releases it. This is intentionally local UI state, not synced
     // session metadata.
+    const deletingSessionIds = useStoreSelector((snapshot) => snapshot.deletingSessionIds);
     const [pinned, setPinned] = useState(false);
     // Per-row kebab Menu anchor + target. Standard Material list-row
     // pattern: trailing IconButton with MoreVert opens a Menu containing
@@ -892,6 +893,7 @@ function SessionList({
                 {sortable.order.map((id, index) => {
                     const s = byId.get(id);
                     if (!s) return null;
+                    const deleting = deletingSessionIds.has(s.id);
                     return (
                     <ReliableListItemButton
                         key={s.id}
@@ -900,10 +902,14 @@ function SessionList({
                         data-desktop-session-row={desktop ? "true" : undefined}
                         data-desktop-current={desktop && s.id === activeId ? "true" : undefined}
                         data-desktop-pin-active={desktop && pinned ? "true" : undefined}
+                        data-session-deleting={deleting ? "true" : undefined}
+                        aria-busy={deleting || undefined}
+                        aria-disabled={deleting || undefined}
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
                         onActivate={(): void => {
+                            if (deleting) return;
                             setPinned(false);
                             onPick(s.id);
                         }}
@@ -941,6 +947,10 @@ function SessionList({
                                 pr: 0.5,
                                 py: 0.25,
                             },
+                            ...(deleting && {
+                                pointerEvents: "none",
+                                opacity: 0.55,
+                            }),
                         }}
                     >
                         {/* Leading grip — drag to reorder. A real 44px IconButton
@@ -960,7 +970,8 @@ function SessionList({
                         >
                             <IconButton
                                 className="cowboy-session-grip"
-                                {...sortable.handleProps(s.id)}
+                                {...(deleting ? {} : sortable.handleProps(s.id))}
+                                disabled={deleting}
                                 aria-label="Drag to reorder"
                                 sx={{ width: 44, height: 44, color: "text.disabled" }}
                             >
@@ -1043,16 +1054,20 @@ function SessionList({
                         )}
                         <IconButton
                             className="cowboy-session-actions"
-                            aria-label={`row actions ${s.id}`}
+                            aria-label={deleting ? `Deleting ${s.title}` : `row actions ${s.id}`}
+                            disabled={deleting}
                             onClick={(e): void => {
                                 e.stopPropagation();
+                                if (deleting) return;
                                 setMenuAnchor({ row: s, el: e.currentTarget });
                             }}
                             // Keep the 44px Apple-HIG tap target fixed, but let the
                             // 1.5rem glyph track the global font-size preference.
-                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0 }}
+                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0, position: "relative" }}
                         >
-                            <MoreVert sx={{ fontSize: "1.5rem" }} />
+                            {deleting
+                                ? <DelayedNetworkProgress size={18} />
+                                : <MoreVert sx={{ fontSize: "1.5rem" }} />}
                         </IconButton>
                     </ReliableListItemButton>
                     );
@@ -3776,10 +3791,7 @@ export function App({
                 onClose={(): void => setPendingDelete(null)}
                 onConfirm={(): void => {
                     if (pendingDelete) {
-                        send({
-                            type: "delete_session",
-                            session_id: pendingDelete.id,
-                        });
+                        void deleteSession(pendingDelete.id);
                     }
                     setPendingDelete(null);
                 }}
