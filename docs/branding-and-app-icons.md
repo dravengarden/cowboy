@@ -83,3 +83,8 @@ Web changes bump the service worker generation and use versioned icon URLs.
 Website publication follows the GitHub Pages workflow. Native checks include
 bridge coexistence and rejection of foreign-origin icon requests in an isolated
 Simulator; physical-device appearance remains a separate acceptance check.
+
+SideStore **0.1.29** is the first release containing all 200 colorways. The Apple
+build verifies that both iPhone and iPad declare the expected 199 alternatives
+plus the primary icon. Publishing makes the update available in SideStore;
+installation and device acceptance remain separate steps.

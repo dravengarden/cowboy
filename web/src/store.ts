@@ -205,6 +205,10 @@ export interface State {
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
   mobileReviewStates: Record<string, MobileReviewState>;
+  // Session ids whose Delete command has left this client but has not yet
+  // disappeared from the authoritative list. Rows stay visible, disabled, and
+  // busy until the sessions broadcast drops them or the acknowledgement times out.
+  deletingSessionIds: ReadonlySet<string>;
 }
 
 let errorSeq = 0;
@@ -226,6 +230,7 @@ let state: State = {
   optimisticMessages: new Map(),
   titleOverrides: {},
   mobileReviewStates: {},
+  deletingSessionIds: new Set(),
 };
 // React reads only this published snapshot. `state` above remains canonical and
 // can advance at websocket speed; notification pacing and gesture holds publish
@@ -671,6 +676,42 @@ function sendWithAck(
  * serializes the individual mutations; the UI resolves only when its projected
  * session snapshot contains every requested value. The shared acknowledgement
  * deadline restores the control if that projection is lost or normalized. */
+function markDeletingSession(sessionId: string, deleting: boolean): void {
+  const next = new Set(state.deletingSessionIds);
+  if (deleting) next.add(sessionId);
+  else next.delete(sessionId);
+  setInteractiveState({ ...state, deletingSessionIds: next });
+}
+
+function deleteSessionFailureMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "";
+  if (raw.includes("unavailable while reconnecting")) {
+    return "Could not delete this session while reconnecting.";
+  }
+  if (raw.includes("was not acknowledged")) {
+    return "Could not delete this session. Try again.";
+  }
+  return raw.trim() || "Could not delete this session. Try again.";
+}
+
+/** Soft-delete one Cowboy session. The row stays in the list, disabled and
+ * busy, until the authoritative `sessions` broadcast drops it. A lost
+ * round-trip restores the row and toasts instead of hanging forever. */
+export function deleteSession(sessionId: string): Promise<void> {
+  if (state.deletingSessionIds.has(sessionId)) return Promise.resolve();
+  markDeletingSession(sessionId, true);
+  return sendWithAck(
+    { type: "delete_session", session_id: sessionId },
+    (snapshot) => !snapshot.sessions.some((session) => session.id === sessionId),
+    "Delete session",
+  ).catch((error: unknown) => {
+    notify(deleteSessionFailureMessage(error));
+    throw error;
+  }).finally(() => {
+    markDeletingSession(sessionId, false);
+  });
+}
+
 export function setSessionConfigOptions(
   sessionId: string,
   changes: readonly ConfigOptionChange[],
