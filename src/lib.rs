@@ -41,6 +41,8 @@ mod composition;
 mod core;
 #[cfg(feature = "full")]
 mod core_passkeys;
+#[cfg(feature = "full")]
+mod core_security;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 #[path = "provider/deepseek_cache.rs"]
 mod deepseek_cache;

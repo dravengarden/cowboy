@@ -16,7 +16,9 @@ use crate::store::Store;
 const CORE_IMPORT: &str = "core_passkeys";
 pub(crate) const STORAGE_CAPABILITY: &str = "webauthn";
 
-/// Only the checked legacy handoff can construct this core storage port.
+mod ownership;
+
+/// Only checked core initialization or the legacy bridge constructs this port.
 /// No generic SQL execution or Plugin capability dispatch is exposed.
 #[derive(Clone)]
 pub(crate) struct PasskeyStorage {
@@ -43,7 +45,25 @@ impl PasskeyBinding {
             self.storage.get().is_none(),
             "Passkey storage is already bound"
         );
+        store.require_legacy_security().await?;
         let storage = PasskeyStorage::open_legacy(namespace, store).await?;
+        self.storage
+            .set(storage)
+            .map_err(|_| anyhow::anyhow!("Passkey storage is already bound"))
+    }
+
+    pub(crate) async fn attach_core(
+        &self,
+        store: &Store,
+        config: &crate::core_security::Config,
+        dir: &crate::plugin_dir::PluginDir,
+    ) -> Result<()> {
+        let _initialization = self.initialization.lock().await;
+        ensure!(
+            self.storage.get().is_none(),
+            "Passkey storage is already bound"
+        );
+        let storage = store.open_core_passkeys(config, dir).await?;
         self.storage
             .set(storage)
             .map_err(|_| anyhow::anyhow!("Passkey storage is already bound"))
@@ -91,8 +111,17 @@ impl PasskeyStorage {
     /// Startup-only bridge, before accepting requests. Does not move the tables,
     /// switch host policy, or claim to fence a concurrently running old server.
     async fn open_legacy(namespace: &PluginNamespace, store: &Store) -> Result<Self> {
+        Self::validate_ledger(&namespace.backend).await?;
+        let storage = Self {
+            backend: namespace.backend.clone(),
+        };
+        import_from_core(&storage, store).await?;
+        Ok(storage)
+    }
+
+    async fn validate_ledger(backend: &NamespaceBackend) -> Result<()> {
         let ledger_sql = "SELECT version, checksum FROM _cowboy_plugin_migrations";
-        let (rows, checksum) = match &namespace.backend {
+        let (rows, checksum) = match backend {
             NamespaceBackend::Postgres { pool, schema } => {
                 let mut tx = pool.begin().await?;
                 set_postgres_search_path(&mut tx, schema).await?;
@@ -113,11 +142,7 @@ impl PasskeyStorage {
             rows.len() == 1 && rows[0].0 == "0001" && rows[0].1 == checksum,
             "CoreSecurity refuses an incompatible Passkey migration ledger"
         );
-        let storage = Self {
-            backend: namespace.backend.clone(),
-        };
-        import_from_core(&storage, store).await?;
-        Ok(storage)
+        Ok(())
     }
 }
 

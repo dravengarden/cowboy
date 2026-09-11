@@ -92,9 +92,10 @@ receipt, and a code rollback does not undo user actions performed since deploy.
 
 ## Remaining ownership cutover
 
-Core-only startup without local Authentication packages still requires a durable
-namespace/ownership binding, accepted cold and recovery readers, explicit host
-policy migration, and supported-client authentication acceptance. Retire local
+The next [core ownership slice](core-security-ownership.md) implements opt-in
+core-only startup, durable namespace binding and deterministic cold recovery.
+Production still requires an accepted reader floor, explicit host policy
+migration and supported-client authentication acceptance. Retire local
 Password/Passkey package pins and authority markers only after that handoff.
 Keep the SDK/native ABI migration and any later physical table move separate;
 neither is authorized by this reader-compatible Controller release.

@@ -28,6 +28,9 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 第十二批 [核心安全存储桥](core-security-storage-bridge.md) 将 Passkey SQL 和共享的一次性绑定收进核心，
 冻结兼容存储格式，原子导入旧数据，并修复并行授权流程的误清理；保留现有存储位置、pin 与 reader，
 尚未执行耐久 ownership/生产配置切换。
+第十三批 [核心安全 ownership](core-security-ownership.md) 实现无本地认证 Plugin 的显式核心启动、
+稳定 namespace 权威与 prepared/ready 中断恢复；核心凭据不搬表，外部 OIDC 精确策略保留。
+生产本批只升级兼容 reader，正式主机策略切换与真实客户端/native 验收仍未完成。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行

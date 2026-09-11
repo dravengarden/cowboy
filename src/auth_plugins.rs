@@ -639,6 +639,9 @@ impl ProductAuthentication {
             policy.pin(pin.clone(), catalog_only)?;
         }
         for id in &self.login_method_order {
+            if policy.core_security.is_some() && id == PASSWORD_LOGIN_METHOD {
+                continue;
+            }
             policy.authentication_methods.insert(
                 id.clone(),
                 if id == PASSWORD_LOGIN_METHOD {
@@ -648,7 +651,7 @@ impl ProductAuthentication {
                 },
             );
         }
-        policy.require_webauthn_storage |= self.passkeys.enabled;
+        policy.require_webauthn_storage |= policy.core_security.is_none() && self.passkeys.enabled;
         Ok(())
     }
 

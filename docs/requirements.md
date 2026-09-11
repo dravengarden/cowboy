@@ -32,6 +32,11 @@ selected legacy host must match core's exact historical storage schema. First
 import is atomic and refuses unreceipted nonempty destinations. Physical
 storage, host selections and durable reader formats remain unchanged until the
 separate ownership cutover.
+The opt-in [core ownership path](core-security-ownership.md) now removes local
+Authentication package prerequisites while binding existing security storage to
+durable core authority. Its first production release is reader-only; the actual
+host-policy handoff, accepted recovery configuration and supported-client/native
+acceptance remain distinct requirements.
 
 These requirements govern new Provider-platform work. When a target design
 choice conflicts with a transitional implementation detail, preserve the live
@@ -536,8 +541,8 @@ silently restoring source-bundled behavior.
 Controller host enablement is separate from Catalog publication. The private
 `COWBOY_PLUGIN_HOST_CONFIG` policy exact-pins host release identities and merges
 the OIDC driver's existing exact authentication selection; conflicts fail
-startup. Its opt-in `catalog_only` mode disables every source-bundled host and
-requires the enabled login methods and durable admin/Product WebAuthn storage
+startup. Its opt-in `catalog_only` mode disables every source-bundled host and,
+under legacy local-security policy, requires enabled login methods and durable admin/Product WebAuthn storage
 to have matching selected, release-bound Authentication hosts before core DB
 migration or host staging. Legacy non-Plugin OIDC must migrate before cutover.
 Unselected Authentication releases do not become defaults or run migrations
@@ -557,6 +562,13 @@ visible snapshot; selected-host activation errors abort startup. Successful
 Catalog-only activation durably records a one-way marker, so a later omitted
 policy cannot silently restore bootstrap mode. Default bootstrap remains a
 migration path, not authority over a previously signed Plugin.
+Explicit `COWBOY_CORE_SECURITY_CONFIG` replaces local Password/Passkey host
+requirements with core storage authority; it requires Catalog-only source and
+rejects local-auth pins. External OIDC keeps exact signed selections and the
+configured login policy. Prepared/ready authority and namespace tokens prevent
+legacy fallback, relocation or Plugin migration after handoff. Removing policy
+or storage cannot silently recreate credentials. Existing deployments retain
+their prior mode until an accepted stopped-Controller cutover.
 `cowboy serve --check-plugin-hosts` uses the same configuration and signature
 preflight without creating Service/Catalog state, connecting to a database,
 staging hosts, running migrations or contacting authentication services. Its

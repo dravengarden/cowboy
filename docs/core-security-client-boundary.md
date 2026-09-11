@@ -85,10 +85,12 @@ public authentication protocol.
 
 The subsequent [storage bridge](core-security-storage-bridge.md) now provides a
 typed core persistence port, shared write-once binding and atomic first import
-at the existing namespace. The durable ownership/policy cutover below remains
-separate; this does not yet remove the Controller's Catalog prerequisites.
+at the existing namespace. The next [ownership path](core-security-ownership.md)
+implements core-only startup and durable handoff without local Catalog
+prerequisites. Its production reader rollout does not perform the host-policy
+cutover or finish supported-client/native acceptance below.
 
-1. Move local authentication/storage authority into CoreSecurity without copying
+1. Accept the implemented local authentication/storage handoff into CoreSecurity without copying
    stale credential rows over current Plugin-namespace data. Preserve applied
    SQL bytes, credential IDs/public keys, sessions and monotonic security state.
 2. Verify a compatible ownership handoff and cold/rollback reader floor before

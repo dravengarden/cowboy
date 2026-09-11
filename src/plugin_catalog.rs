@@ -1450,6 +1450,57 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn core_security_excludes_local_auth_defaults_and_rejects_their_pins() {
+        let root = auth_test_root("core-security-pins");
+        let password = publish_local_auth_fixture(&root, "password", false);
+        let passkey = publish_local_auth_fixture(&root, "passkey", false);
+        let mut catalog = PluginCatalog::open(&root, Some(root.join("external"))).unwrap();
+        let mut policy = HostActivationPolicy::default();
+        policy.source = HostSourcePolicy::CatalogOnly;
+        policy.core_security = Some(
+            serde_json::from_value(serde_json::json!({
+                "namespace_id":"passkey", "source":"adopt_legacy"
+            }))
+            .unwrap(),
+        );
+        let authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
+        authentication.configure_host_policy(&mut policy).unwrap();
+        assert!(authentication.password_enabled);
+        assert!(!policy.require_webauthn_storage);
+        assert!(policy.authentication_methods.is_empty());
+        for release in [&password, &passkey] {
+            let mut pinned = policy.clone();
+            pinned.pin(release_pin(release), true).unwrap();
+            assert!(catalog.configure_hosts(pinned).is_err());
+            assert!(
+                fs::read_dir(catalog.plugin_dir.live_root())
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
+        catalog.configure_hosts(policy).unwrap();
+        let storage =
+            crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
+        let runtime = catalog.activate_runtime(&storage).await.unwrap();
+        assert!(runtime.default_hosts().is_empty());
+        assert!(runtime.namespace_for_capability("webauthn").is_none());
+        assert!(authentication.public_host_plugins(&runtime).is_empty());
+        assert!(
+            !catalog
+                .plugin_dir
+                .plugin_live_dir("passkey")
+                .unwrap()
+                .join("state")
+                .exists()
+        );
+        drop(runtime);
+        drop(catalog);
+        unlock_tree(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_signed_non_telemetry_release_cannot_construct_a_telemetry_projection() {
         let fixture = tempfile::Builder::new()
@@ -2081,7 +2132,7 @@ mod tests {
         args.database_url = Some("postgres://fixture-secret@127.0.0.1:1/unreachable".to_owned());
         args.machine_components_manifest = Some(root.join("missing-components.json"));
         let before = state_fingerprint(&root);
-        let (catalog, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
+        let (catalog, _, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
         let report = serde_json::to_value(catalog.host_preflight_report().unwrap()).unwrap();
         assert_eq!(
             report["schema"],
@@ -2172,7 +2223,7 @@ mod tests {
         assert_eq!(before, state_fingerprint(&root));
         let mut args = crate::cli::ServeArgs::test_plugin_check(&data_dir);
         args.plugin_host_config = Some(path);
-        let (catalog, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
+        let (catalog, _, _) = crate::plugin_activation::prepare_controller_hosts(&args).unwrap();
         let report = serde_json::to_value(catalog.host_preflight_report().unwrap()).unwrap();
         assert_eq!(report["catalog_only_recorded"], true);
         assert_eq!(before, state_fingerprint(&root));
@@ -2539,6 +2590,22 @@ mod tests {
         policy.source = HostSourcePolicy::CatalogOnly;
         authentication.configure_host_policy(&mut policy).unwrap();
         catalog.configure_hosts(policy.clone()).unwrap();
+        // Core local security leaves the external-only login policy intact:
+        // exact signed OIDC remains required, and no password fallback appears.
+        let mut core_policy = policy.clone();
+        core_policy.core_security = Some(
+            serde_json::from_value(serde_json::json!({
+                "namespace_id":"passkey", "source":"fresh"
+            }))
+            .unwrap(),
+        );
+        authentication
+            .configure_host_policy(&mut core_policy)
+            .unwrap();
+        assert!(!authentication.password_enabled);
+        assert_eq!(core_policy.authentication_methods.len(), 1);
+        assert!(core_policy.authentication_methods.contains_key("google"));
+        catalog.configure_hosts(core_policy).unwrap();
         let storage =
             crate::plugin_storage::PluginStorage::sqlite_files(catalog.plugin_dir.clone());
         let runtime = catalog.activate_runtime(&storage).await.unwrap();

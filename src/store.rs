@@ -35,6 +35,8 @@ use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 mod copy;
+mod core_security;
+pub(crate) use core_security::HandoffPoint;
 mod plugin_operations;
 mod sqlite;
 
@@ -1291,6 +1293,7 @@ impl Store {
                 crate::plugin_storage::PluginStorage::sqlite_files(plugin_dir)
             }
         }
+        .with_core_store(self.clone())
     }
 
     #[cfg(test)]

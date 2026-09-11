@@ -284,6 +284,12 @@ not only a Plugin version/pin. The first legacy import commits all data and its
 receipt atomically, refusing nonempty unreceipted state. Existing applied SQL,
 Catalog packages, host policy and rollback-reader data formats are unchanged.
 
+The next [core ownership path](core-security-ownership.md) makes local
+authentication independent of those packages through explicit core policy,
+durable namespace authority and recoverable stopped-Controller handoff. Its
+initial production rollout upgrades the reader only; existing generated pins
+and client/native acceptance remain separate cutover boundaries.
+
 Released usage collectors, resets, and activity transforms run through a typed
 protocol-seven request to an active exact Plugin generation on a Machine. The
 Controller supplies only a closed operation and bounded JSON; the Machine
