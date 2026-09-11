@@ -17,6 +17,12 @@ and creation of any new sync client, synchronously seals every existing writer,
 waits for all final writes to settle, then closes the database. Failure of one
 writer does not skip sealing the others or releasing the database. Reentrant
 shutdown uses the same barrier. Late queue enumeration cannot create a writer.
+The typed local sign-out event accepts cleanup barriers synchronously; the auth
+gate awaits them before navigation. This wait has a one-second deadline, after
+which navigation may proceed with the explicit `pending` outcome, not a false
+successful disposal. Failure is distinct from a clean drain. Server logout is
+not delayed by this barrier, and a stuck IDB operation cannot trap logout. Abrupt or
+deadline-driven navigation may still interrupt unfinished local cleanup.
 Pagehide/visibility flush, view unsubscribe, WebSocket reconnect and temporary
 reauthentication do not end this owner. No Machine session or worker is stopped.
 

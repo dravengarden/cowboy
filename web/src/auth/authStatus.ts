@@ -63,7 +63,7 @@ export function nextReadyStatusAction(
   return "stay";
 }
 
-export const PRODUCT_SESSION_END_EVENT = "cowboy:product-sign-out";
+export { announceProductSessionEnd, PRODUCT_SESSION_END_EVENT } from "../productSessionEnd";
 export const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
 export const WS_AUTH_REQUIRED_CLOSE_CODE = 4001;
 
@@ -84,10 +84,6 @@ export function isAuthLostCloseCode(code: number): boolean {
 
 export function announceProductAuthLost(): void {
   globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
-}
-
-export function announceProductSessionEnd(): void {
-  globalThis.dispatchEvent(new Event(PRODUCT_SESSION_END_EVENT));
 }
 
 export function showRegistration(registration: RegistrationPublicStatus | undefined): boolean {

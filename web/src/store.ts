@@ -18,6 +18,7 @@ import {
 } from "@cowboy/state-sync";
 import { createIdbPersistenceOwner } from "@cowboy/state-sync-idb";
 import { createSyncShutdown } from "./syncShutdown";
+import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
   isAppleTouchWebView,
@@ -354,7 +355,7 @@ function clearReconnectTimer(): void {
   }
 }
 
-function abandonProductSocket(): void {
+function abandonProductSocket(): Promise<void> {
   productSessionAbandoned = true;
   productSessionPausedForAuth = false;
   clearReconnectTimer();
@@ -365,10 +366,11 @@ function abandonProductSocket(): void {
   // Sign-out ends these local sync writers, not the Machine's sessions. Seal
   // synchronously so late IDB hydration / durable-send continuations cannot
   // publish into an abandoned product session. Existing outboxes are retained.
-  void closeProductSync([...syncClients.values(), ...qClients.values()])
-    .catch(() => console.warn("sync owner cleanup failed"));
+  const closing = closeProductSync([...syncClients.values(), ...qClients.values()]);
+  void closing.catch(() => console.warn("sync owner cleanup failed"));
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
+  return closing;
 }
 
 function pauseProductSocketForAuth(): void {
@@ -503,7 +505,10 @@ if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
   globalThis.addEventListener("online", () => reconnectNow("network_online"));
-  globalThis.addEventListener("cowboy:product-sign-out", abandonProductSocket);
+  globalThis.addEventListener("cowboy:product-sign-out", (event) => {
+    const closing = abandonProductSocket();
+    if (event instanceof ProductSessionEndEvent) event.waitUntil(closing);
+  });
   globalThis.addEventListener(
     PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
     resumeProductSocketAfterAuthCookieChange,
