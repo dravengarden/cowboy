@@ -284,7 +284,7 @@ export function ProductLoginPage({
         <Box>
           <Box
             component="img"
-            src="/cowboy-app-icon-192-v4.png"
+            src="/cowboy-app-icon-192-v5.png"
             alt=""
             width={48}
             height={48}

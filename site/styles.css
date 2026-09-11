@@ -1,49 +1,22 @@
 :root {
   color-scheme: light;
-  --canvas: #f6f4fb;
-  --canvas-strong: #efecf7;
+  --canvas: #f5f6fa;
+  --canvas-strong: #eceff5;
   --paper: #ffffff;
-  --paper-soft: #fbfaff;
-  --ink: #252131;
-  --ink-soft: #665f74;
-  --ink-faint: #8a8396;
-  --primary: #6e56cf;
-  --primary-bright: #8b79e0;
-  --primary-soft: #eeeafd;
-  --primary-wash: rgba(110, 86, 207, 0.09);
-  --line: rgba(61, 49, 81, 0.14);
-  --line-strong: rgba(61, 49, 81, 0.24);
+  --paper-soft: #f9fafc;
+  --ink: #232831;
+  --ink-soft: #5d6676;
+  --ink-faint: #7a8495;
+  --primary: #4b6486;
+  --primary-bright: #657fa2;
+  --primary-soft: #e6edf6;
+  --primary-wash: rgba(75, 100, 134, 0.09);
+  --line: rgba(52, 66, 88, 0.14);
+  --line-strong: rgba(52, 66, 88, 0.24);
   --success: #287a3d;
-  --shadow-sm: 0 8px 28px rgba(63, 48, 93, 0.08);
-  --shadow-lg: 0 28px 80px rgba(54, 38, 87, 0.18);
-  --header: rgba(246, 244, 251, 0.82);
-  --brand-aura-spectrum: conic-gradient(
-    from 18deg,
-    rgba(115, 87, 255, 0.76),
-    rgba(53, 167, 255, 0.64),
-    rgba(33, 211, 187, 0.54),
-    rgba(244, 207, 71, 0.48),
-    rgba(255, 141, 66, 0.54),
-    rgba(255, 95, 157, 0.62),
-    rgba(115, 87, 255, 0.76)
-  );
-  --brand-spectrum: repeating-linear-gradient(
-    112deg,
-    #7357ff 0%,
-    #35a7ff 8.333%,
-    #21d3bb 16.666%,
-    #f4cf47 25%,
-    #ff8d42 33.333%,
-    #ff5f9d 41.666%,
-    #7357ff 50%
-  );
-  --brand-aura-opacity: 0.5;
-  --brand-spectrum-opacity: 0.48;
-  --brand-spectrum-blend: color;
-  --brand-filter-rest: saturate(1.26) contrast(1.07) brightness(1.04)
-    hue-rotate(-5deg) drop-shadow(0 6px 8px rgba(69, 48, 178, 0.24));
-  --brand-filter-peak: saturate(1.42) contrast(1.08) brightness(1.12)
-    hue-rotate(5deg) drop-shadow(0 9px 14px rgba(60, 95, 235, 0.34));
+  --shadow-sm: 0 8px 28px rgba(35, 40, 49, 0.08);
+  --shadow-lg: 0 28px 80px rgba(35, 40, 49, 0.16);
+  --header: rgba(245, 246, 250, 0.88);
   --codex-accent: #29252f;
   --shell: 1280px;
   --radius-sm: 10px;
@@ -57,50 +30,23 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #15111d;
-  --canvas-strong: #1a1523;
-  --paper: #1f1a2c;
-  --paper-soft: #241e32;
-  --ink: #ede9fe;
-  --ink-soft: #b7accb;
-  --ink-faint: #8f83a8;
-  --primary: #9e8cfc;
-  --primary-bright: #c9bcff;
-  --primary-soft: #2d2446;
-  --primary-wash: rgba(158, 140, 252, 0.12);
-  --line: rgba(231, 224, 255, 0.12);
-  --line-strong: rgba(231, 224, 255, 0.22);
+  --canvas: #232831;
+  --canvas-strong: #1d222a;
+  --paper: #2d3440;
+  --paper-soft: #343d4b;
+  --ink: #eef1f7;
+  --ink-soft: #bcc7d7;
+  --ink-faint: #91a0b5;
+  --primary: #bdd2ed;
+  --primary-bright: #d4e3f5;
+  --primary-soft: #35445a;
+  --primary-wash: rgba(189, 210, 237, 0.12);
+  --line: rgba(189, 210, 237, 0.16);
+  --line-strong: rgba(189, 210, 237, 0.26);
   --success: #74c986;
   --shadow-sm: 0 8px 30px rgba(0, 0, 0, 0.2);
   --shadow-lg: 0 30px 90px rgba(0, 0, 0, 0.38);
-  --header: rgba(21, 17, 29, 0.84);
-  --brand-aura-spectrum: conic-gradient(
-    from 18deg,
-    rgba(155, 134, 255, 0.9),
-    rgba(86, 199, 255, 0.8),
-    rgba(70, 225, 203, 0.68),
-    rgba(255, 229, 107, 0.62),
-    rgba(255, 171, 88, 0.72),
-    rgba(255, 116, 192, 0.8),
-    rgba(155, 134, 255, 0.9)
-  );
-  --brand-spectrum: repeating-linear-gradient(
-    112deg,
-    #9b86ff 0%,
-    #56c7ff 8.333%,
-    #46e1cb 16.666%,
-    #ffe56b 25%,
-    #ffab58 33.333%,
-    #ff74c0 41.666%,
-    #9b86ff 50%
-  );
-  --brand-aura-opacity: 0.68;
-  --brand-spectrum-opacity: 0.58;
-  --brand-spectrum-blend: color;
-  --brand-filter-rest: saturate(1.36) contrast(1.04) brightness(1.17)
-    hue-rotate(-2deg) drop-shadow(0 7px 12px rgba(115, 84, 255, 0.46));
-  --brand-filter-peak: saturate(1.52) contrast(1.04) brightness(1.28)
-    hue-rotate(8deg) drop-shadow(0 10px 18px rgba(67, 159, 255, 0.55));
+  --header: rgba(35, 40, 49, 0.9);
   --codex-accent: #f0ecf8;
 }
 
@@ -266,114 +212,27 @@ kbd {
   display: block;
   width: 38px;
   aspect-ratio: 1;
-  background: var(--primary);
-  filter: drop-shadow(0 5px 10px rgba(74, 55, 142, 0.18));
-  -webkit-mask: url("assets/cowboy-hat-mark.svg") center / contain no-repeat;
-  mask: url("assets/cowboy-hat-mark.svg") center / contain no-repeat;
+  border-radius: 10px;
+  background: url("assets/cowboy-brand-mark.png") center / contain no-repeat;
 }
 
 .brand-icon-stage {
-  position: relative;
-  display: grid;
+  display: block;
   flex: 0 0 auto;
-  width: 52px;
+  width: 48px;
   aspect-ratio: 1;
-  isolation: isolate;
-  place-items: center;
-}
-
-.brand-icon-stage::before,
-.brand-icon-stage::after {
-  position: absolute;
-  content: "";
-  pointer-events: none;
-}
-
-.brand-icon-stage::before {
-  z-index: -1;
-  inset: 5%;
-  transform: scale(0.94);
-  border-radius: 44% 56% 52% 48%;
-  background: var(--brand-aura-spectrum);
-  filter: blur(9px) saturate(1.12);
-  opacity: var(--brand-aura-opacity);
-  will-change: transform;
-}
-
-.brand-icon-stage::after {
-  z-index: 2;
-  inset: 0;
-  background: var(--brand-spectrum);
-  background-position: 0% 50%;
-  background-size: 200% 100%;
-  mix-blend-mode: var(--brand-spectrum-blend);
-  opacity: var(--brand-spectrum-opacity);
-  -webkit-mask: url("assets/cowboy-brand-mark.png") center / contain no-repeat;
-  mask: url("assets/cowboy-brand-mark.png") center / contain no-repeat;
-  will-change: background-position;
 }
 
 .brand-icon {
-  position: relative;
-  z-index: 1;
+  display: block;
   width: 100%;
-  filter: var(--brand-filter-rest);
+  height: 100%;
   object-fit: contain;
-}
-
-.site-header .brand-icon {
-  animation: brand-color-breathe 7.5s ease-in-out infinite;
-  will-change: filter;
-}
-
-.site-header .brand-icon-stage::before {
-  animation: brand-aura-orbit 8s linear infinite;
-}
-
-.site-header .brand-icon-stage::after {
-  animation: brand-spectrum-flow 6s linear infinite;
+  border-radius: 12px;
 }
 
 .site-footer .brand-icon-stage {
-  width: 46px;
-}
-
-.site-footer .brand-icon-stage::before {
-  opacity: 0.34;
-}
-
-@keyframes brand-color-breathe {
-  0%,
-  100% {
-    filter: var(--brand-filter-rest);
-  }
-
-  50% {
-    filter: var(--brand-filter-peak);
-  }
-}
-
-@keyframes brand-aura-orbit {
-  0% {
-    transform: scale(0.94) rotate(0deg);
-  }
-  50% {
-    transform: scale(1.07) rotate(180deg);
-  }
-
-  100% {
-    transform: scale(0.94) rotate(360deg);
-  }
-}
-
-@keyframes brand-spectrum-flow {
-  from {
-    background-position: 0% 50%;
-  }
-
-  to {
-    background-position: 100% 50%;
-  }
+  width: 44px;
 }
 
 .site-navigation {

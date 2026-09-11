@@ -349,8 +349,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     "repository landing pages should begin with reciprocal language choices and default to English",
   );
   assert(
-    readme.includes("site/assets/cowboy-readme-mark-light-v2.png") &&
-      readme.includes("site/assets/cowboy-readme-mark-dark-v2.png") &&
+    readme.includes("site/assets/cowboy-readme-icon-v5.png") &&
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
       readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
@@ -362,8 +361,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   );
   for (
     const asset of [
-      "site/assets/cowboy-readme-mark-light-v2.png",
-      "site/assets/cowboy-readme-mark-dark-v2.png",
+      "site/assets/cowboy-readme-icon-v5.png",
       "site/assets/cowboy-remote-topology-light-v3.webp",
       "site/assets/cowboy-remote-topology-dark-v3.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
@@ -505,21 +503,14 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes('src="assets/cowboy-brand-mark.png"') &&
         (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
-      "wordmarks should stage the background-free Cowboy brand icon for theme-aware light",
+      "wordmarks should show the approved default icon",
     );
     assert(
-      styles.includes("--brand-filter-rest:") &&
-        styles.includes("--brand-filter-peak:") &&
-        styles.includes("--brand-spectrum:") &&
-        styles.includes("--brand-spectrum-opacity:") &&
-        styles.includes("@keyframes brand-color-breathe") &&
-        styles.includes("@keyframes brand-aura-orbit") &&
-        styles.includes("@keyframes brand-spectrum-flow") &&
-        styles.includes("animation: brand-spectrum-flow 6s linear infinite") &&
-        styles.includes(".site-header .brand-icon-stage::after") &&
-        !styles.includes("@keyframes brand-sheen-pass") &&
-        styles.includes("animation: none !important"),
-      "header brand lighting should continuously flow through a theme-aware spectrum and honor reduced motion",
+      styles.includes("--canvas: #232831") &&
+        styles.includes("--primary: #bdd2ed") &&
+        !styles.includes("filter: var(--brand-filter-rest)") &&
+        !styles.includes("@keyframes brand-color-breathe"),
+      "brand colors remain faithful to the selected icon in light and dark themes",
     );
     const controlGroupStart = html.indexOf('<div class="nav-actions"');
     const navToggleStart = html.indexOf('class="nav-toggle"');
@@ -714,16 +705,16 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v2-32.png" type="image/png" sizes="32x32"',
+        'href="assets/cowboy-tab-icon-v5-32.png" type="image/png" sizes="32x32"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v2-16.png" type="image/png" sizes="16x16"',
+          'href="assets/cowboy-tab-icon-v5-16.png" type="image/png" sizes="16x16"',
         ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v2.ico" sizes="any"',
+          'href="assets/cowboy-tab-icon-v5.ico" sizes="any"',
         ) &&
         !html.includes('href="assets/cowboy-hat-mark.svg"'),
-      "document should expose transparent, tab-sized Cowboy favicons",
+      "document should expose tab-sized Cowboy favicons",
     );
     assert(
       !html.includes("cowboy-desktop.webp") &&
@@ -754,9 +745,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v2-16.png",
-        "cowboy-tab-icon-v2-32.png",
-        "cowboy-tab-icon-v2.ico",
+        "cowboy-tab-icon-v5-16.png",
+        "cowboy-tab-icon-v5-32.png",
+        "cowboy-tab-icon-v5.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

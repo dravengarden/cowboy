@@ -14,21 +14,21 @@
     />
     <!-- Per-scheme so the FIRST paint (before React's applyThemeColor runs)
          already latches the status-bar colour that matches the OS scheme — the
-         app's actual background (#f6f4fb light / #15111d dark), NOT the primary
+         app's actual background (#f5f6fa light / #232831 dark), NOT the primary
          violet. After mount, theme.ts owns it (incl. a manual light/dark
          override + re-assert on resume). -->
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f4fb" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15111d" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6fa" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#232831" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Cowboy" />
-    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1623" />
-    <link rel="icon" href="/cowboy-favicon-v4.ico" sizes="any" />
-    <link rel="icon" href="/cowboy-app-icon-512-v4.png" type="image/png" />
+    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1650" />
+    <link rel="icon" href="/cowboy-favicon-v5.ico" sizes="any" />
+    <link rel="icon" href="/cowboy-app-icon-512-v5.png" type="image/png" />
     <!-- New filename: Safari caches apple-touch-icon.png by path and ignores
          query strings, so a redeploy cannot update Add to Home Screen. -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/cowboy-app-icon-180-v4.png" />
-    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/cowboy-app-icon-180-v4.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/cowboy-app-icon-180-v5.png" />
+    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/cowboy-app-icon-180-v5.png" />
     <title>Cowboy</title>
     <style>
       /* Hard reset so the root flex container has a 100% canvas to work on
@@ -126,13 +126,13 @@
         align-items: center;
         justify-content: center;
         gap: 16px;
-        background: #f6f4fb;
+        background: #f5f6fa;
         color: #665f74;
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
       }
       @media (prefers-color-scheme: dark) {
         #app-splash {
-          background: #15111d;
+          background: #232831;
           color: #a899c4;
         }
       }

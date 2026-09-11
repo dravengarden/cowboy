@@ -131,17 +131,17 @@ const NON_AGENT_PRESENTATION: Record<
 const REQUIRED_ASSETS = [
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   [
-    "site/assets/cowboy-tab-icon-v2-16.png",
-    "assets/cowboy-tab-icon-v2-16.png",
+    "site/assets/cowboy-tab-icon-v5-16.png",
+    "assets/cowboy-tab-icon-v5-16.png",
   ],
   [
-    "site/assets/cowboy-tab-icon-v2-32.png",
-    "assets/cowboy-tab-icon-v2-32.png",
+    "site/assets/cowboy-tab-icon-v5-32.png",
+    "assets/cowboy-tab-icon-v5-32.png",
   ],
-  ["site/assets/cowboy-tab-icon-v2.ico", "assets/cowboy-tab-icon-v2.ico"],
-  ["site/assets/cowboy-readme-mark-v1.png", "assets/cowboy-logo-512.png"],
+  ["site/assets/cowboy-tab-icon-v5.ico", "assets/cowboy-tab-icon-v5.ico"],
+  ["site/assets/cowboy-brand-icon-v5.png", "assets/cowboy-logo-512.png"],
   [
-    "site/assets/cowboy-brand-mark-transparent-v5.png",
+    "site/assets/cowboy-brand-icon-v5.png",
     "assets/cowboy-brand-mark.png",
   ],
   [

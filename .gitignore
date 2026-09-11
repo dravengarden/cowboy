@@ -22,6 +22,7 @@ tools/__pycache__/
 /result-*
 
 # Local / runtime
+/output/
 .env
 .env.*
 *.log

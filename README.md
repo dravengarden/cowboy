@@ -4,10 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-readme-mark-dark-v2.png">
-      <img src="site/assets/cowboy-readme-mark-light-v2.png" width="180" height="101" alt="Cowboy">
-    </picture>
+    <img src="site/assets/cowboy-readme-icon-v5.png" width="128" height="128" alt="Cowboy — pink crown and ice-blue brim on charcoal">
   </a>
 </p>
 
@@ -20,13 +17,13 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-6e56cf?style=flat-square" alt="Cowboy website">
+    <img src="https://img.shields.io/badge/website-live-4b6486?style=flat-square" alt="Cowboy website">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-7c5cbf?style=flat-square" alt="MIT license">
+    <img src="https://img.shields.io/badge/license-MIT-98627d?style=flat-square" alt="MIT license">
   </a>
   <a href="https://agentclientprotocol.com/">
     <img src="https://img.shields.io/badge/protocol-ACP_native-4a90d9?style=flat-square" alt="ACP native">
@@ -79,6 +76,10 @@ process away from the Machine where it started.
   cloud.
 
 ## Quick start
+
+Prefer another colorway? **Settings → Appearance → App icon** includes the full
+color library with previews and filters. See [app icons and platform behavior](docs/branding-and-app-icons.md)
+for Home Screen installation and native switching.
 
 ### Prerequisites
 
