@@ -45,7 +45,7 @@ const BOTTOM_PAD = "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)";
 
 function barTopPadding(bottom: boolean, transparent: boolean): string | number {
   if (!bottom) {
-    return "env(safe-area-inset-top, 0px)";
+    return "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))";
   }
   return transparent ? 0 : BOTTOM_PAD;
 }
@@ -336,7 +336,7 @@ export function NavShell(props: NavShellProps): ReactNode {
             width: { xs: "min(84%, 360px)", sm: "min(52%, 440px)" },
             maxWidth: "calc(100% - 48px)",
             height: "100%",
-            pt: "env(safe-area-inset-top, 0px)",
+            pt: "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
             pb: "env(safe-area-inset-bottom, 0px)",
             pl: "env(safe-area-inset-left, 0px)",
             overflow: "hidden",

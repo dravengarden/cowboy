@@ -19,6 +19,12 @@
         font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         background: #15111d;
         color: #f6f1ff;
+        --cowboy-system-top-clearance: env(safe-area-inset-top, 0px);
+      }
+      @media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) {
+        :root {
+          --cowboy-system-top-clearance: max(env(safe-area-inset-top, 0px), 24px);
+        }
       }
       body {
         min-height: 100dvh;
@@ -30,7 +36,7 @@
       main {
         box-sizing: border-box;
         width: min(100%, 32rem);
-        padding: max(2rem, env(safe-area-inset-top)) 1.5rem
+        padding: max(2rem, var(--cowboy-system-top-clearance, env(safe-area-inset-top))) 1.5rem
           max(2rem, env(safe-area-inset-bottom));
       }
       .mark {

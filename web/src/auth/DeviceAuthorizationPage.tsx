@@ -105,7 +105,7 @@ export function DeviceAuthorizationPage(): React.JSX.Element {
         placeItems: "center",
         bgcolor: "background.default",
         px: 2,
-        py: "max(24px, env(safe-area-inset-top))",
+        py: "max(24px, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
       }}
     >
       <Stack spacing={2.5} sx={{ width: "100%", maxWidth: 520 }}>

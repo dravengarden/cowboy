@@ -168,7 +168,11 @@ const frostSheen = (mode: "light" | "dark", isTop: boolean): string => {
 // render above it for free — no per-control z-index overrides needed anywhere.
 const Z = 1250;
 const SAFE_BOTTOM = "calc(16px + env(safe-area-inset-bottom, 0px))";
-const SAFE_TOP = "env(safe-area-inset-top, 0px)";
+// Prefer Cowboy's iPad PWA floor when the host publishes it. Standalone
+// WebKit often reports a zero safe-area while still painting status chrome
+// over the grabber; env() remains the fallback for hosts without the var.
+const SAFE_TOP =
+  "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))";
 
 // `cover` variant — a TRUE full-screen sheet: the frosted-glass layer fills the
 // whole screen (`100dvh`, the DYNAMIC viewport, tracks the visible height under

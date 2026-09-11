@@ -269,7 +269,7 @@ export function ProductLoginPage({
         justifyContent: "flex-start",
         px: 3,
         pt: {
-          xs: "max(2.75rem, env(safe-area-inset-top, 0px))",
+          xs: "max(2.75rem, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
           sm: 10,
         },
         pb: "max(2rem, env(safe-area-inset-bottom, 0px))",

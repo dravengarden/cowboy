@@ -3019,14 +3019,15 @@ export function App({
                     />
                 )}
                 {/* Top system-chrome material. Bottom-mode Transcript uses the real
-                    safe-area inset plus a narrow phone-standalone floor: its continuous
-                    scrolling content can pass beneath this quiet, theme-aware glass
-                    while the synthetic 24px iPad fallback never becomes a second band. The
-                    material is a dedicated drawer follower, so it moves off with the
-                    Agent page instead of blurring the revealed Sessions rail. Top
-                    mode (desktop): a solid, full navbar-height slab behind the
-                    transparent top AppBar, so Desktop keeps its dense, stable chrome.
-                    Height tracks the measured
+                    safe-area inset plus a phone-standalone or iPad-PWA floor: its
+                    continuous scrolling content can pass beneath this quiet,
+                    theme-aware glass. The iPad floor is the same 24px clearance as
+                    titles/sheets, so it is one band, not a second pad stacked on
+                    the frost. The material is a dedicated drawer follower, so it
+                    moves off with the Agent page instead of blurring the revealed
+                    Sessions rail. Top mode (desktop): a solid, full navbar-height
+                    slab behind the transparent top AppBar, so Desktop keeps its
+                    dense, stable chrome. Height tracks the measured
                     --navbar-h. pointer-events:none so taps reach the (lifted) navbar.
                     DROPPED in split mode: nothing scrolls under the AppBar (the transcript
                     is an in-flow column below it), so the bar just sits on the app surface. */}
@@ -3576,9 +3577,10 @@ export function App({
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
-                                // The iPad fallback stays out of Transcript. A phone
-                                // standalone gets only the narrow scroll-edge shelf,
-                                // which content can pass beneath after scrolling.
+                                // Phone standalone and iPad PWA share this shelf:
+                                // content rests below the frost and may pass beneath
+                                // it after scrolling. The iPad floor lives in the
+                                // CSS variable, not a second Transcript pad.
                                 topInset={navbarAtBottom
                                     ? "var(--cowboy-mobile-status-material-height)"
                                     : "var(--navbar-h, 0px)"}

@@ -29,6 +29,27 @@ const changesSource = await Deno.readTextFile(
 const exploreSource = await Deno.readTextFile(
   new URL("./explore/ExploreSurface.tsx", import.meta.url),
 );
+const detentSheetSource = await Deno.readTextFile(
+  new URL("../../components/app-shell/detent-sheet.tsx", import.meta.url),
+);
+const connectionBannerSource = await Deno.readTextFile(
+  new URL("../../components/app-shell/connection-banner.tsx", import.meta.url),
+);
+const mobileNavigationSource = await Deno.readTextFile(
+  new URL("../../components/app-shell/mobile-navigation.tsx", import.meta.url),
+);
+const navShellSource = await Deno.readTextFile(
+  new URL("../../components/app-shell/nav-shell.tsx", import.meta.url),
+);
+const loginSource = await Deno.readTextFile(
+  new URL("./auth/ProductLoginPage.tsx", import.meta.url),
+);
+const deviceAuthSource = await Deno.readTextFile(
+  new URL("./auth/DeviceAuthorizationPage.tsx", import.meta.url),
+);
+const passkeyHtml = await Deno.readTextFile(
+  new URL("../passkey.html", import.meta.url),
+);
 
 Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   assert(
@@ -39,6 +60,16 @@ Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   assert(
     html.includes(
       "--cowboy-system-top-clearance: max(env(safe-area-inset-top, 0px), 24px)",
+    ),
+  );
+  assert(
+    html.includes(
+      "--cowboy-mobile-status-material-height: max(env(safe-area-inset-top, 0px), 24px)",
+    ),
+  );
+  assert(
+    html.includes(
+      "html:has([data-detent-sheet='true']) [data-detent-sheet-chrome='true']",
     ),
   );
   assertEquals(
@@ -131,6 +162,54 @@ Deno.test("transient Explore glass clears rather than overlaps iPad system chrom
   assert(
     exploreSource.includes(
       'top: "calc(var(--cowboy-system-top-clearance) + 8px)"',
+    ),
+  );
+});
+
+Deno.test("cover sheets and shared chrome consume the iPad top-clearance contract", () => {
+  assert(
+    detentSheetSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assertEquals(
+    detentSheetSource.includes(
+      'const SAFE_TOP = "env(safe-area-inset-top, 0px)"',
+    ),
+    false,
+  );
+  assert(
+    connectionBannerSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assert(
+    mobileNavigationSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assertEquals(
+    navShellSource.includes('return "env(safe-area-inset-top, 0px)"'),
+    false,
+  );
+  assert(
+    navShellSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assert(
+    loginSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assert(
+    deviceAuthSource.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assert(
+    passkeyHtml.includes(
+      "--cowboy-system-top-clearance: max(env(safe-area-inset-top, 0px), 24px)",
     ),
   );
 });

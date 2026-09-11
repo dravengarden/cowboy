@@ -13,6 +13,18 @@ Deno.test("drag paints the pointer sample without a frame of lag", () => {
   );
 });
 
+Deno.test("cover sheets clear Cowboy's iPad PWA top inset when the host publishes it", () => {
+  assert(
+    source.includes(
+      "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
+    ),
+  );
+  assertEquals(
+    source.includes('const SAFE_TOP = "env(safe-area-inset-top, 0px)"'),
+    false,
+  );
+});
+
 Deno.test("overlay footers own the exclusive hit strip over the scroll body", () => {
   const footer = source.slice(source.indexOf("data-detent-sheet-footer"));
   assert(footer.includes('data-detent-sheet-footer={footerOverlay ? "overlay" : "row"}'));

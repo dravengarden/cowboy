@@ -336,7 +336,7 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
         px: 2,
         py: 0.75,
         // Owns the notch when shown (it's the topmost element).
-        pt: "calc(env(safe-area-inset-top, 0px) + 6px)",
+        pt: "calc(var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)) + 6px)",
         bgcolor: `${palette}.main`,
         color: `${palette}.contrastText`,
         fontSize: "0.8125rem",

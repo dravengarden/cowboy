@@ -36,7 +36,7 @@ export function MobileNavigation({
         paper: {
           sx: {
             maxHeight: "85dvh",
-            pt: "env(safe-area-inset-top, 0px)",
+            pt: "var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px))",
             display: "flex",
             flexDirection: "column",
           },
