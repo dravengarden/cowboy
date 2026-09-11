@@ -105,3 +105,8 @@ Primary-icon upgrades retain all existing alternate identifiers, including 103,
 and add 54 as an alternate. This preserves previously installed choices while
 the primary artwork becomes 103. The current native bundle therefore includes
 200 compatibility alternatives; the product selector exposes only 20 styles.
+
+SideStore **0.1.30** makes Neon (103) the primary icon. Its Apple release build
+and isolated Simulator conformance checks passed; both iPhone and iPad inventories
+contain the 200 compatibility alternatives. The public source and published IPA
+were verified after publication. Physical-device acceptance is not yet recorded.

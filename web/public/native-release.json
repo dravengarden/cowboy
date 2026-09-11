@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "app_id": "top.thundersparrow.cowboy",
-  "latest_version": "0.1.29",
+  "latest_version": "0.1.30",
   "minimum_version": "0.1.0",
-  "release_notes": "Adds 200 Home Screen icon colorways in Settings → Appearance → App icon, with rose and ice blue as the default. Update through SideStore, then reopen Cowboy.",
+  "release_notes": "Neon (103) is the official default icon. Choose 20 curated icon and theme styles with light and dark previews in Settings → Appearance → Icon & theme. Update through SideStore, then reopen Cowboy.",
   "preferred_channel": "sidestore",
   "channels": [
     {
