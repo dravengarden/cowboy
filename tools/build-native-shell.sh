@@ -64,8 +64,11 @@ native_build="$(mktemp -d "$native_repo/dist/native-shell/$native_platform-${nat
 echo "Native build directory: $native_build"
 # Git archive is a local staging operation, not a cross-machine source copy.
 # It includes tracked icons/bridges and cannot borrow an unversioned Mac shell.
-git archive "$native_revision" apps/native-shell | tar -xf - -C "$native_build"
 native_source="$native_build/apps/native-shell"
+mkdir -p "$native_source"
+# Archive the subtree itself: partial clones must not hydrate unrelated Web
+# artwork merely to stage the native product's committed source.
+git archive "$native_revision:apps/native-shell" | tar -xf - -C "$native_source"
 export CARGO_TARGET_DIR="$native_build/target"
 cd "$native_source/tauri"
 if [ "$native_platform" = macos ]; then
