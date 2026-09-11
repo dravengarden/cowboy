@@ -79,9 +79,10 @@ Mirrored clients:
   promises eventual remote delivery; explicit `flush()` is the write barrier and
   surfaces failures. Cleanup does not invent a remote write or undo a prior one.
 
-The browser persistence adapter is **borrowed**, not closed by each store. Its
-existing shared IndexedDB connection cache has not yet migrated to explicit
-connection leases; its lifetime and cross-tab ownership remain a follow-up. The
+The browser persistence adapter is **borrowed**, not closed by each store. The
+subsequent [owned IDB slice](owned-idb-connections.md) replaces the shared
+connection cache with explicit owner/transaction leases. Cross-tab writer
+arbitration remains separate. The
 scope does not validate arbitrary `LocalPersistence<T>` bytes or retrofit a
 schema codec onto IndexedDB. The current preference codecs are unchanged.
 

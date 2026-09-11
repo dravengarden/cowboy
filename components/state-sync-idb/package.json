@@ -1,12 +1,13 @@
 {
   "name": "@cowboy/state-sync-idb",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "exports": {
     ".": "./index.ts"
   },
   "files": ["*.ts"],
   "peerDependencies": {
+    "@cowboy/state-store": "2.1.0",
     "@cowboy/state-sync": "1.4.0"
   },
   "publishConfig": {

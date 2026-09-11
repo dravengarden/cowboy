@@ -551,6 +551,8 @@
         cowboy-zed-adapter-portable = cowboy-zed-adapter-portable;
         cowboy-zed-server = cowboy-zed-server;
         cowboy-web = cowboy-web;
+        # Optional local conformance tool, never part of a product runtime.
+        cowboy-idb-test-browser = pkgs.firefox;
         cowboy-controller-release = cowboy-controller-release;
         cowboy-web-release = cowboy-web-release;
         cowboy-machine-bootstrap-release = cowboy-machine-bootstrap-release;

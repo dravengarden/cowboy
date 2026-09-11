@@ -13,8 +13,9 @@ implementations and templates. Owned units do not acquire an installation
 identity. The schema-3 dependency-closure release gate and state-store's typed,
 owned persistence implement the first component slice of sections 9–10.
 [Owned component scopes](owned-component-scopes.md) now add process-local
-`OwnedResourceScope` and state-sync owner barriers; general host/IDB connection
-migration and durable execution/recovery remain pending. This gate grants no
+`OwnedResourceScope` and state-sync owner barriers. [Owned IDB connections](owned-idb-connections.md)
+add database owners and transaction leases; general host migration, cross-tab
+writer arbitration and durable execution/recovery remain pending. This gate grants no
 runtime authority. The later [core Web host slice](core-web-plugin-host.md)
 removes the application's dependency on the mixed Plugin runtime and adds typed
 slots with owned inventory observations. Published SDK/native ABI retirement and
@@ -124,6 +125,10 @@ registry schemas and projects each Plugin's own release label; the registry is
 embedded build metadata, so an old Controller/rollback binary still reads its
 own matrix and the same signed Catalog. No new Catalog envelope or reader bridge
 is needed.
+
+Scoped release 3.3.0 adds state-sync-idb 1.5.0's explicit database owner, bounded
+open results, transaction-terminal leases and exact state-store 2.1.0 peer.
+The seven Plugin releases and their 2.9.0 pins remain unchanged.
 
 Scoped release 3.2.0 adds state-store 2.1.0's owned resource scope, state-sync
 1.4.0's lifetime/barrier fixes, and the state-sync-idb 1.4.0 transitive peer

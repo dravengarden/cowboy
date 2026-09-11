@@ -101,7 +101,7 @@ export async function signOutProductSession(options: {
     // Logout is best-effort: still drop the socket graph and local history.
   }
   await deleteProductHistoryCache();
-  announceProductSessionEnd();
+  await announceProductSessionEnd();
   if (providerLogoutUrl) {
     globalThis.location.assign(providerLogoutUrl);
   } else {
@@ -366,7 +366,7 @@ export function ProductAuthGate({
         }
         generationRef.current += 1;
         await deleteProductHistoryCache();
-        announceProductSessionEnd();
+        await announceProductSessionEnd();
         globalThis.location.reload();
         return;
       }
@@ -493,7 +493,7 @@ export function ProductAuthGate({
       generationRef.current += 1;
       void (async () => {
         await deleteProductHistoryCache();
-        announceProductSessionEnd();
+        await announceProductSessionEnd();
         globalThis.location.reload();
       })();
       return;
