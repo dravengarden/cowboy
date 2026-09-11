@@ -27,9 +27,9 @@ def write(path, data):
 def magick(*args):
     subprocess.run(['magick', *map(str, args)], check=True)
 
-def export(source, destination, size):
+def export(source, destination, size, rgba=False):
     destination.parent.mkdir(parents=True, exist_ok=True)
-    magick(source, '-resize', f'{size}x{size}', '-strip', '-define', 'png:exclude-chunk=date,time', 'PNG24:' + str(destination))
+    magick(source, '-resize', f'{size}x{size}', '-strip', '-define', 'png:exclude-chunk=date,time', ('PNG32:' if rgba else 'PNG24:') + str(destination))
 
 def family(color):
     r,g,b = [int(color[i:i+2],16)/255 for i in (1,3,5)]
@@ -118,7 +118,7 @@ native=ROOT/'apps/native-shell/tauri/icons'
     '  <color name="ic_launcher_background">#232831</color>\n</resources>\n')
 for file in native.glob('*.png'):
     size=struct.unpack('>I',file.read_bytes()[16:20])[0]
-    export(source,file,size)
+    export(source,file,size,rgba=True)
 shutil.copyfile(favicon,native/'icon.ico')
 for base in (native/'ios',ROOT/'apps/native-shell/apple/Assets.xcassets/AppIcon.appiconset'):
     for file in base.glob('*.png'):

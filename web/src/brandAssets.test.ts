@@ -32,10 +32,16 @@ Deno.test("default 54 exports cover web, native, Manager and website", async () 
   for (
     const path of [
       "web/public/cowboy-app-icon-512-v5.png",
-      "apps/native-shell/tauri/icons/icon.png",
     ]
   ) {
     assertEquals(await bytes(path), expected, path);
+  }
+  // Tauri embeds RGBA bytes; Apple launcher assets use opaque RGB. Equal
+  // artwork does not mean these platform encodings have equal file bytes.
+  for (
+    const name of ["32x32.png", "128x128.png", "128x128@2x.png", "icon.png"]
+  ) {
+    assertEquals((await bytes(`apps/native-shell/tauri/icons/${name}`))[25], 6);
   }
   assertEquals(
     await bytes("web/public/apple-touch-icon.png"),
