@@ -60,6 +60,13 @@ export function appIconAsset(
   return `/app-icons/v5/${appIcon(id).id}/icon-${size}.png`;
 }
 
+// Native Neon supplies paired appearances; archived styles retain their artwork.
+export function appIconAppearanceAsset(id: string, dark: boolean): string {
+  return appIcon(id).id === "palette-103" && !dark
+    ? "/app-icons/v6/palette-103/icon-light-192.png"
+    : appIconAsset(id, 192);
+}
+
 export function appIconInstallPath(id: string): string {
   return `/app-icons/v5/${appIcon(id).id}/install.html`;
 }

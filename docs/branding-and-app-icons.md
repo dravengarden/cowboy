@@ -117,3 +117,11 @@ were verified after publication. Physical-device acceptance is not yet recorded.
 New preferences default to System appearance and Source Serif 4 for reading.
 Explicit saved theme and font choices remain unchanged. The Home Screen artwork
 has its own opaque background; the in-app System setting does not recolor it.
+
+Neon now supplies native Any (light) and Dark app-icon appearances, both for the
+primary icon and its existing alternate identifier. The Home Screen's Automatic
+appearance selects between them; an explicit system Home Screen appearance wins.
+This is independent of Cowboy's in-app Theme setting. Other curated artworks
+retain their chosen backgrounds. Installed PWA icons remain static snapshots.
+The approved light counterpart is `assets/brand/cowboy-neon-light-source.png`;
+`tools/build-icon-appearances.py` exports it without regenerating artwork.

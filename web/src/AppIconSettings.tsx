@@ -8,12 +8,14 @@ import {
   createTheme,
   Stack,
   Typography,
+  useTheme,
 } from "@mui/material";
 import {
   APP_ICON_GROUPS,
   APP_ICONS,
   appearanceStyle,
   appIcon,
+  appIconAppearanceAsset,
   appIconAsset,
   appIconInstallPath,
   currentAppIcon,
@@ -50,7 +52,7 @@ function StylePreview(
       <Stack direction="row" alignItems="center" spacing={1}>
         <Box
           component="img"
-          src={appIconAsset(id, 96)}
+          src={appIconAppearanceAsset(id, dark)}
           alt=""
           width={28}
           height={28}
@@ -120,6 +122,7 @@ function StylePreview(
 }
 
 export function AppIconSettings(): React.JSX.Element {
+  const dark = useTheme().palette.mode === "dark";
   const selected = useSyncExternalStore(
     subscribeAppIcon,
     currentAppIcon,
@@ -175,7 +178,7 @@ export function AppIconSettings(): React.JSX.Element {
       <Stack direction="row" spacing={1.5} alignItems="center">
         <Box
           component="img"
-          src={appIconAsset(selected, 96)}
+          src={appIconAppearanceAsset(selected, dark)}
           alt="Current Cowboy icon"
           width={48}
           height={48}
@@ -261,7 +264,7 @@ export function AppIconSettings(): React.JSX.Element {
                   >
                     <Box
                       component="img"
-                      src={appIconAsset(item.id, 96)}
+                      src={appIconAppearanceAsset(item.id, dark)}
                       alt=""
                       loading="lazy"
                       width={56}

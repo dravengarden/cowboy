@@ -83,7 +83,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
   }
   const index = await read("web/index.html");
   assert(index.includes("/cowboy-app-icon-180-v6.png"));
-  assert(index.includes("/manifest.webmanifest?v=cowboy-v1663"));
+  assert(index.includes("/manifest.webmanifest?v=cowboy-v1664"));
   const manifest = JSON.parse(await read("web/public/manifest.webmanifest"));
   assertEquals(manifest.id, "/");
   assertEquals(manifest.start_url, "/");
@@ -93,7 +93,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
     ),
   );
   const sw = await read("web/public/sw.js");
-  assert(sw.includes('const VERSION = "cowboy-v1663"'));
+  assert(sw.includes('const VERSION = "cowboy-v1664"'));
   assert(sw.includes('icon: "/cowboy-app-icon-192-v6.png"'));
 });
 
@@ -120,4 +120,21 @@ Deno.test("native alternate icon declarations cover the complete web catalog", a
   assert(bridge.includes("cowboy.stormbird.xyz"));
   assert(bridge.includes("cowboyBundledAlternateIcons()[name] == nil"));
   assert(bridge.includes("setAlternateIconName:name"));
+});
+
+Deno.test("Neon primary and alternate icons bundle automatic light and dark appearances", async () => {
+  for (const name of ["AppIcon", "Cowboy-palette-103"]) {
+    const base = `apps/native-shell/apple/Assets.xcassets/${name}.appiconset/`;
+    const catalog = JSON.parse(await read(base + "Contents.json"));
+    assertEquals(catalog.images.length, 2);
+    assertEquals(catalog.images[0].filename, "icon-light.png");
+    assertEquals(catalog.images[0].appearances, undefined);
+    assertEquals(catalog.images[1].appearances, [{
+      appearance: "luminosity",
+      value: "dark",
+    }]);
+    for (const image of catalog.images) {
+      assertEquals(await pngSize(base + image.filename), [1024, 1024]);
+    }
+  }
 });

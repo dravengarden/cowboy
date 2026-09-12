@@ -147,3 +147,6 @@ export(source,ROOT/'site/assets/cowboy-brand-icon-v6.png',256)
 export(source,ROOT/'site/assets/cowboy-readme-icon-v6.png',256)
 export(source,ROOT/'apps/native-shell/loader/cowboy-icon.png',180)
 print(json.dumps({'icons':len(rows),'default':DEFAULT,'catalog':str(CATALOG)}))
+
+# Preserve native light/dark appearance slots when rebuilding brand exports.
+subprocess.run(['python3', str(ROOT / 'tools/build-icon-appearances.py')], check=True)
