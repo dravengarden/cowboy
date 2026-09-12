@@ -4161,6 +4161,14 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, feature = "full"))]
+pub(crate) fn telemetry_release_for_test(
+    publisher: &crate::machine_auth::MachineIdentity,
+    version: &str,
+) -> DesiredPlugin {
+    tests::telemetry_release(publisher, version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

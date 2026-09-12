@@ -1,6 +1,93 @@
 use super::*;
 
 #[test]
+fn namespace_cas_is_required_for_writes_without_changing_legacy_request_bytes() {
+    #[derive(Serialize)]
+    struct HistoricalStep<'a> {
+        schema: u16,
+        operation_id: &'a str,
+        service_id: &'a str,
+        machine_id: &'a str,
+        plan_digest: &'a BindingDigest,
+        expected: &'a BindingSnapshot,
+        change: &'a BindingChange,
+        expires_at_ms: i64,
+    }
+    let old = fixture();
+    let historical = HistoricalStep {
+        schema: old.schema,
+        operation_id: &old.operation_id,
+        service_id: &old.service_id,
+        machine_id: &old.machine_id,
+        plan_digest: &old.plan_digest,
+        expected: &old.expected,
+        change: &old.change,
+        expires_at_ms: old.expires_at_ms,
+    };
+    let original = serde_json::to_vec(&historical).unwrap();
+    assert_eq!(serde_json::to_vec(&old).unwrap(), original);
+    assert_eq!(old.request_digest().unwrap(), binding_digest(&original));
+    assert!(old.validate_commit().is_err());
+    let mut null_namespace = serde_json::to_value(&old).unwrap();
+    null_namespace["expected_namespace"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<BindingStep>(null_namespace).is_err());
+    let new = execution_fixture();
+    new.validate_commit().unwrap();
+    let mut changed = new.clone();
+    changed.expected_namespace = Some(BindingNamespace::Managed);
+    assert_ne!(
+        new.request_digest().unwrap(),
+        changed.request_digest().unwrap()
+    );
+    changed.expected_namespace = None;
+    assert!(changed.validate().is_err());
+    changed = old;
+    changed.expected_namespace = Some(BindingNamespace::Unmanaged);
+    assert!(changed.validate().is_err());
+    changed = new.clone();
+    changed.expected = new.after().unwrap();
+    assert!(changed.validate().is_err());
+}
+
+#[test]
+fn protocol_fifteen_gates_both_namespace_observation_and_finite_mutation() {
+    use crate::machine_protocol::{MachineCommand, MachineEvent};
+    for command in [
+        MachineCommand::QueryTelemetryBinding {
+            request_id: "query".into(),
+            step: Box::new(execution_fixture()),
+        },
+        MachineCommand::CommitTelemetryBinding {
+            request_id: "commit".into(),
+            step: Box::new(execution_fixture()),
+        },
+    ] {
+        assert_eq!(command.minimum_protocol(), 15);
+        assert_eq!(
+            serde_json::from_slice::<MachineCommand>(&serde_json::to_vec(&command).unwrap())
+                .unwrap(),
+            command
+        );
+    }
+    let event = MachineEvent::TelemetryBindingCommitted {
+        request_id: "commit".into(),
+        result: Box::new(BindingCommitResult::Unavailable {
+            failure: BindingCommitFailure::ReaderOnly,
+        }),
+    };
+    assert_eq!(
+        serde_json::from_slice::<MachineEvent>(&serde_json::to_vec(&event).unwrap()).unwrap(),
+        event
+    );
+    for mut invalid in [
+        serde_json::json!({"state":"unavailable","failure":{"kind":"reader_only"},"authorized":true}),
+        serde_json::json!({"state":"unavailable","failure":{"kind":"reader_only","token":"private"}}),
+    ] {
+        assert!(serde_json::from_value::<BindingCommitResult>(invalid.take()).is_err());
+    }
+}
+
+#[test]
 fn counters_preserve_u64_exactly_and_reject_noncanonical_wire_values() {
     for raw in ["0", "1", "9007199254740993", "18446744073709551615"] {
         let json = format!("\"{raw}\"");

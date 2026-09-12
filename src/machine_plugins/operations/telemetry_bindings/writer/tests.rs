@@ -5,6 +5,76 @@ use std::cell::Cell;
 use std::os::unix::fs::MetadataExt as _;
 use std::sync::Arc;
 
+#[test]
+fn namespace_presence_is_an_independent_cas_even_when_revision_is_still_zero() {
+    use crate::machine_protocol::telemetry_binding::execution_fixture;
+    let root = tempfile::tempdir().unwrap();
+    let journal = Journal::open(root.path()).unwrap();
+    let bindings = &journal.telemetry_bindings;
+    enable(bindings);
+    let initial = execution_fixture();
+    let mut expects_managed = initial.clone();
+    expects_managed.expected_namespace = Some(BindingNamespace::Managed);
+    assert_eq!(
+        commit(bindings, &expects_managed),
+        Err(WriteError::Rejected(BindingRejection::TargetChanged))
+    );
+    assert!(!bindings.path.exists());
+    let owner = scope(&initial);
+    let lease = owner.telemetry_binding(&initial).unwrap();
+    let persisted = Cell::new(false);
+    let rejected = bindings
+        .commit_with_io(
+            &initial,
+            &lease,
+            &mut || {
+                if persisted.get() {
+                    Err(BindingRejection::AuthorizationEnded)
+                } else {
+                    Ok(())
+                }
+            },
+            |bytes| {
+                durable(&bindings.path, bytes)?;
+                persisted.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(result(rejected).current, Some(BindingSnapshot::initial()));
+    let mut next = initial.clone();
+    next.operation_id = "namespace-next-operation".into();
+    let before = fs::read(&bindings.path).unwrap();
+    assert_eq!(
+        commit(bindings, &next),
+        Err(WriteError::Rejected(BindingRejection::TargetChanged))
+    );
+    assert_eq!(fs::read(&bindings.path).unwrap(), before);
+    next.expected_namespace = Some(BindingNamespace::Managed);
+    assert_eq!(
+        result(commit(bindings, &next).unwrap()).current,
+        Some(next.after().unwrap())
+    );
+    assert!(
+        commit(bindings, &initial).unwrap().matches(&initial),
+        "duplicate evidence never reexecutes namespace CAS"
+    );
+    let mut invalid = bindings.state.lock().ledger.clone().unwrap();
+    let second = &mut invalid.receipts[1];
+    second.step.expected_namespace = Some(BindingNamespace::Unmanaged);
+    second.request_digest = second.step.request_digest().unwrap();
+    assert!(
+        invalid.validate().is_err(),
+        "even a rechecksummed second initial namespace is invalid"
+    );
+    drop(journal);
+    let reader = Journal::open(root.path()).unwrap();
+    assert_eq!(
+        result(reader.telemetry_bindings.query(&next)).current,
+        Some(next.after().unwrap())
+    );
+}
+
 fn scope(step: &BindingStep) -> PluginExecutionScope {
     PluginExecutionScope::new(Some(&step.service_id), &step.machine_id)
 }

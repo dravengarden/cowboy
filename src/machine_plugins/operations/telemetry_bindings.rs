@@ -1,13 +1,13 @@
 //! Reader floor for Machine-local telemetry binding authority. The enclosing
 //! Plugin journal owns the process lock. Opening/querying NEVER writes this
 //! namespace, adopts private policy, starts an exporter or replays an intent.
-//! The finite writer is staged behind a closed admission gate, not a wire API.
+//! The finite wire command cannot open the independently closed admission gate.
 
 use super::*;
 use crate::machine_protocol::telemetry_binding::{
-    BindingChange, BindingDigest, BindingObservation, BindingObservationSnapshot, BindingOutcome,
-    BindingReceipt, BindingSnapshot, BindingStep, BindingUnavailable, binding_digest,
-    valid_service,
+    BindingChange, BindingDigest, BindingNamespace, BindingObservation, BindingObservationSnapshot,
+    BindingOutcome, BindingReceipt, BindingSnapshot, BindingStep, BindingUnavailable,
+    binding_digest, valid_service,
 };
 
 pub(super) const FILE: &str = "telemetry-bindings-v1.json";
@@ -55,7 +55,7 @@ impl Ledger {
         let mut ids = BTreeSet::new();
         let mut applied: BTreeMap<String, &BindingReceipt> = BTreeMap::new();
         let mut unresolved = false;
-        for receipt in &self.receipts {
+        for (index, receipt) in self.receipts.iter().enumerate() {
             ensure!(
                 !unresolved
                     && receipt.matches(&receipt.step)
@@ -64,6 +64,13 @@ impl Ledger {
                     && ids.insert(&receipt.step.operation_id),
                 "invalid telemetry binding receipt chain"
             );
+            if let Some(namespace) = receipt.step.expected_namespace {
+                ensure!(
+                    receipt.step.expected == current
+                        && (namespace != BindingNamespace::Unmanaged || index == 0),
+                    "binding namespace predecessor mismatch"
+                );
+            }
             if matches!(receipt.outcome, BindingOutcome::Rejected { .. }) {
                 continue;
             }
@@ -229,9 +236,7 @@ impl Bindings {
     }
 }
 
-// Production compiles the same finite transaction exercised by fixtures, but
-// no command/coordinator can enable it in this reader-floor release.
-#[cfg_attr(not(test), allow(dead_code))]
+// Protocol support does not enable the independent, currently closed writer.
 mod writer;
 
 fn unavailable(reason: BindingUnavailable) -> BindingObservation {
@@ -239,6 +244,11 @@ fn unavailable(reason: BindingUnavailable) -> BindingObservation {
 }
 
 impl MachinePluginStore {
+    #[cfg(test)]
+    pub(crate) fn enable_binding_writer_for_test(&self) {
+        self.operations.telemetry_bindings.state.lock().writer = true;
+    }
+
     pub(crate) async fn telemetry_binding_observation(
         &self,
         step: &BindingStep,

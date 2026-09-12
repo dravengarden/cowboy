@@ -57,6 +57,10 @@ Machine 绑定账本校验与旧外发路径隔离。绑定 revision 和 policy 
 持续授权、双数据库原子 head/回执账本和有限协调器；测试覆盖丢 ACK 只查询、各边界失权、并发 CAS、
 重启隔离与历史回执。生产只接入 Service reader 和旧外发路径隔离，不新增写 API/传输适配器或启用
 Machine writer；managed export lease、双侧 live/rollback/cold reader 验收和独立中断处置仍待完成。
+第二十三批 [跨端有限绑定协议](telemetry-binding-wire.md) 加入协议 15、显式 namespace CAS、原连接
+Service 传输与 Machine 接收时租约；真实签名安装、消息编解码和 SQL 协调测试覆盖选择、撤销、恢复与
+丢 ACK 后只查询。schema 1 保持原字节读取，mutation 只接纳 schema 2；两侧生产写开关仍关闭，
+managed export lease、rollback/cold reader 基线和独立中断恢复仍待完成，不宣称 P2 已上线。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

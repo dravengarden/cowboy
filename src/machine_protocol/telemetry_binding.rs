@@ -1,5 +1,5 @@
 //! Durable binding evidence, never a serialized egress or recovery grant.
-//! Protocol 14 is a reader bridge: it adds a query, not a mutation command.
+//! Protocol 14 reads schema one; protocol 15 also carries namespace-CAS writes.
 
 use super::installation_revision::InstallationRevision;
 use super::plugin_step::digest;
@@ -175,13 +175,35 @@ pub struct BindingStep {
     /// Complete independently authorized Service intent, including its actor.
     pub plan_digest: BindingDigest,
     pub expected: BindingSnapshot,
+    /// Schema two makes namespace creation part of the exact CAS. Omitted in
+    /// retained schema one so its canonical request digest stays unchanged.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "namespace"
+    )]
+    pub expected_namespace: Option<BindingNamespace>,
     pub change: BindingChange,
     pub expires_at_ms: i64,
 }
 
+fn namespace<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> std::result::Result<Option<BindingNamespace>, D::Error> {
+    // Omission is the historical schema-one representation; explicit null is
+    // not a namespace and must not normalize into an apparently absent field.
+    BindingNamespace::deserialize(decoder).map(Some)
+}
+
 impl BindingStep {
     pub(crate) fn validate(&self) -> Result<()> {
-        ensure!(self.schema == 1, "unsupported telemetry binding schema");
+        ensure!(
+            matches!(
+                (self.schema, self.expected_namespace),
+                (1, None) | (2, Some(_))
+            ),
+            "unsupported telemetry binding schema or namespace"
+        );
         ensure!(
             id(&self.operation_id, 16)
                 && id(&self.machine_id, 1)
@@ -193,7 +215,19 @@ impl BindingStep {
             "invalid telemetry binding deadline"
         );
         self.expected.validate()?;
+        if self.expected_namespace == Some(BindingNamespace::Unmanaged) {
+            ensure!(
+                self.expected == BindingSnapshot::initial(),
+                "unmanaged binding has a head"
+            );
+        }
         self.after()?.validate()
+    }
+
+    pub(crate) fn validate_commit(&self) -> Result<()> {
+        self.validate()?;
+        ensure!(self.schema == 2, "binding mutation requires namespace CAS");
+        Ok(())
     }
 
     pub(crate) fn after(&self) -> Result<BindingSnapshot> {
@@ -230,6 +264,35 @@ impl BindingStep {
         self.validate()?;
         Ok(binding_digest(&serde_json::to_vec(self)?))
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingNamespace {
+    Unmanaged,
+    Managed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "reason",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum BindingCommitFailure {
+    ReaderOnly,
+    Unavailable(BindingUnavailable),
+    Rejected(BindingRejection),
+    Fenced,
+    Capacity,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BindingCommitResult {
+    Observed { observation: BindingObservation },
+    Unavailable { failure: BindingCommitFailure },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -352,6 +415,7 @@ pub(crate) fn fixture() -> BindingStep {
         machine_id: "machine-test".into(),
         plan_digest: binding_digest(b"approved fixture plan"),
         expected: BindingSnapshot::initial(),
+        expected_namespace: None,
         change: BindingChange::Select {
             installation: BindingInstallation {
                 plugin_id: "victoria".into(),
@@ -366,6 +430,14 @@ pub(crate) fn fixture() -> BindingStep {
         },
         expires_at_ms: 1_900_000_000_000,
     }
+}
+
+#[cfg(test)]
+pub(crate) fn execution_fixture() -> BindingStep {
+    let mut step = fixture();
+    step.schema = 2;
+    step.expected_namespace = Some(BindingNamespace::Unmanaged);
+    step
 }
 
 #[cfg(test)]

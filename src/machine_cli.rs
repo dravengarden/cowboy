@@ -26,6 +26,8 @@ use crate::machine_protocol::{
     MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
 };
 
+pub(crate) mod telemetry_binding;
+
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
     input: tokio::sync::mpsc::UnboundedSender<String>,
@@ -1732,6 +1734,9 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::CommitTelemetryBinding { request_id, step } => {
+            telemetry_binding::commit(request_id, *step, providers, execution, events);
+        }
         MachineCommand::QueryTelemetryBinding { request_id, step } => {
             tokio::spawn(async move {
                 let observation = providers

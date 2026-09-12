@@ -5,8 +5,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::machine_protocol::telemetry_binding::{
-    BindingChange, BindingObservation, BindingOutcome, BindingSnapshot, BindingStep,
-    binding_digest, valid_service,
+    BindingChange, BindingNamespace, BindingObservation, BindingOutcome, BindingSnapshot,
+    BindingStep, binding_digest, valid_service,
 };
 use crate::plugin_operation::Actor;
 
@@ -36,7 +36,7 @@ impl Intent {
             Actor::Admin { account } => account,
         };
         ensure!(
-            self.schema == 1
+            matches!(self.schema, 1 | 2)
                 && !actor.is_empty()
                 && actor.len() <= 256
                 && !actor.chars().any(char::is_control),
@@ -48,11 +48,16 @@ impl Intent {
             "binding intent exceeds budget"
         );
         let step = BindingStep {
-            schema: 1,
+            schema: self.schema,
             operation_id: self.operation_id.clone(),
             service_id: self.service_id.clone(),
             machine_id: self.machine_id.clone(),
             plan_digest: binding_digest(&bytes),
+            expected_namespace: (self.schema == 2).then_some(if self.expected.is_some() {
+                BindingNamespace::Managed
+            } else {
+                BindingNamespace::Unmanaged
+            }),
             expected: self
                 .expected
                 .clone()
@@ -275,8 +280,8 @@ impl Ledger {
     }
 }
 
-// Staged finite writer. No HTTP mutation, wire command or production admission
-// switch is exported by this reader release. Tests exercise these exact paths.
+// Staged finite writer. Protocol 15 exists, but no HTTP mutation or production
+// admission switch is exported. Tests exercise these exact paths.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod writer {
     use super::*;

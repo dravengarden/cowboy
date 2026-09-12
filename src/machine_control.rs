@@ -16,7 +16,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
-use crate::machine_protocol::telemetry_binding::{BindingObservation, BindingStep};
+use crate::machine_protocol::telemetry_binding::{
+    BindingCommitResult, BindingObservation, BindingStep,
+};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
     PluginInstallationState, PluginInventory,
@@ -84,6 +86,7 @@ enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
     Connection(&'a ConnectionToken),
     Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
+    Telemetry(&'a ConnectionToken, &'a BindingStep),
 }
 
 #[derive(Clone, Copy)]
@@ -118,6 +121,7 @@ enum ReplyKind {
     PluginStep,
     PluginRecovery,
     TelemetryBinding,
+    TelemetryBindingCommit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -130,6 +134,7 @@ enum Reply {
     PluginStep(Box<StepObservation>),
     PluginRecovery(Box<RecoveryObservation>),
     TelemetryBinding(Box<BindingObservation>),
+    TelemetryBindingCommit(Box<BindingCommitResult>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -146,6 +151,7 @@ impl Reply {
             Self::PluginStep(_) => ReplyKind::PluginStep,
             Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
             Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
+            Self::TelemetryBindingCommit(_) => ReplyKind::TelemetryBindingCommit,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -222,6 +228,31 @@ struct LiveState {
 }
 
 impl LiveState {
+    fn telemetry_target_matches(&self, machine: &str, step: &BindingStep) -> bool {
+        let Ok(after) = step.after() else {
+            return false;
+        };
+        let Some(target) = after.selection else {
+            return true;
+        };
+        self.plugin_inventory.get(machine).is_some_and(|inventory| {
+            let mut slot = inventory
+                .plugins
+                .iter()
+                .filter(|p| p.plugin_id == target.plugin_id);
+            slot.next().is_some_and(|plugin| {
+                plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                    && plugin.state == PluginInstallationState::Active
+                    && plugin.auth_generation.is_none()
+                    && plugin.plugin_version == target.plugin_version
+                    && plugin.generation_digest == String::from(target.generation_digest.clone())
+                    && plugin.contract_fingerprint
+                        == String::from(target.contract_fingerprint.clone())
+                    && plugin.installation_revision.as_ref() == Some(&target.installation_revision)
+            }) && slot.next().is_none()
+        })
+    }
+
     fn is_current(&self, token: &ConnectionToken) -> bool {
         self.connections
             .get(&token.0.machine_id)
@@ -425,6 +456,9 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryBindingCommitted { request_id, result } => {
+                live.complete(token, &request_id, Reply::TelemetryBindingCommit(result));
+            }
             MachineEvent::TelemetryBindingObservation {
                 request_id,
                 observation,
@@ -533,11 +567,19 @@ impl MachineControl {
             .get(machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
         Self::check_protocol(connection, &command)?;
-        if let Some(RequestBinding::Connection(token) | RequestBinding::Reactivate(token, _)) =
-            binding
+        if let Some(
+            RequestBinding::Connection(token)
+            | RequestBinding::Reactivate(token, _)
+            | RequestBinding::Telemetry(token, _),
+        ) = binding
             && !connection.token.same(token)
         {
             return Err("Machine operation connection is no longer current".to_owned());
+        }
+        if let Some(RequestBinding::Telemetry(_, step)) = binding
+            && !live.telemetry_target_matches(machine_id, step)
+        {
+            return Err("Telemetry binding installation changed before dispatch".to_owned());
         }
         if let Some(RequestBinding::Reactivate(_, target)) = binding
             && !live.may_reactivate(machine_id, target)
@@ -882,6 +924,90 @@ impl MachineControl {
             _ => Err(fail(
                 CommandFailure::Unknown,
                 "telemetry binding query evidence unavailable",
+            )),
+        }
+    }
+
+    pub(crate) fn telemetry_binding_target_current(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> bool {
+        let live = self.live.read();
+        step.validate_commit().is_ok()
+            && step.machine_id == token.0.machine_id
+            && live.connections.get(&token.0.machine_id).is_some_and(|c| {
+                c.token.same(token)
+                    && c.protocol
+                        >= crate::machine_protocol::TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
+            })
+            && live.telemetry_target_matches(&token.0.machine_id, step)
+    }
+
+    pub(crate) async fn commit_telemetry_binding(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> Result<BindingObservation, CommandRequestError> {
+        let failure = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.into(),
+        };
+        if step.validate_commit().is_err() || step.machine_id != token.0.machine_id {
+            return Err(failure(
+                CommandFailure::NotSent,
+                "invalid telemetry binding mutation",
+            ));
+        }
+        let request_id = self.request_id("telemetry-binding-commit").map_err(|_| {
+            failure(
+                CommandFailure::NotSent,
+                "binding request identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::CommitTelemetryBinding {
+                    request_id: request_id.clone(),
+                    step: Box::new(step.clone()),
+                },
+                ReplyKind::TelemetryBindingCommit,
+                Some(RequestBinding::Telemetry(token, step)),
+            )
+            .map_err(|_| {
+                failure(
+                    CommandFailure::NotSent,
+                    "binding mutation channel or target unavailable",
+                )
+            })?;
+        match tokio::time::timeout(std::time::Duration::from_secs(45), rx).await {
+            Ok(Ok(Reply::TelemetryBindingCommit(result))) => match *result {
+                BindingCommitResult::Observed { observation } if observation.matches(step) => {
+                    Ok(observation)
+                }
+                BindingCommitResult::Unavailable {
+                    failure:
+                        crate::machine_protocol::telemetry_binding::BindingCommitFailure::Unavailable(
+                            crate::machine_protocol::telemetry_binding::BindingUnavailable::Storage,
+                        ),
+                } => Err(failure(
+                    CommandFailure::Unknown,
+                    "binding persistence outcome is uncertain",
+                )),
+                BindingCommitResult::Unavailable { .. } => Err(failure(
+                    CommandFailure::Rejected,
+                    "binding mutation returned a rejection",
+                )),
+                BindingCommitResult::Observed { .. } => Err(failure(
+                    CommandFailure::Unknown,
+                    "binding mutation evidence mismatch",
+                )),
+            },
+            _ => Err(failure(
+                CommandFailure::Unknown,
+                "binding mutation receipt unavailable",
             )),
         }
     }

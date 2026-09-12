@@ -13,7 +13,7 @@ pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod telemetry_binding;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 14;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 15;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -26,6 +26,8 @@ pub const PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION: u16 = 12;
 pub const PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION: u16 = 13;
 /// Read-only durable telemetry binding evidence; no new effect admission.
 pub const TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION: u16 = 14;
+/// Namespace-CAS finite binding commands. This is not writer admission.
+pub const TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION: u16 = 15;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -711,6 +713,10 @@ pub enum MachineCommand {
         request_id: String,
         step: Box<telemetry_binding::BindingStep>,
     },
+    CommitTelemetryBinding {
+        request_id: String,
+        step: Box<telemetry_binding::BindingStep>,
+    },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
@@ -762,7 +768,14 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
-            Self::QueryTelemetryBinding { .. } => TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION,
+            Self::CommitTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
+            Self::QueryTelemetryBinding { step, .. } => {
+                if step.schema == 1 {
+                    TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION
+                } else {
+                    TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
+                }
+            }
             Self::QueryPluginUninstallRecovery { .. } => {
                 PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION
             }
@@ -1002,6 +1015,10 @@ pub enum MachineEvent {
     TelemetryBindingObservation {
         request_id: String,
         observation: Box<telemetry_binding::BindingObservation>,
+    },
+    TelemetryBindingCommitted {
+        request_id: String,
+        result: Box<telemetry_binding::BindingCommitResult>,
     },
     /// Sensitive Plugin output is correlated directly to the requester and
     /// must not enter the ordinary Machine event history.

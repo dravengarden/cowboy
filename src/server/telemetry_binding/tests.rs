@@ -3,7 +3,7 @@ use crate::machine_protocol::telemetry_binding::{BindingObservationSnapshot, Bin
 use crate::telemetry_binding::tests::{applied, observed};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-struct FixtureEffects {
+pub(super) struct FixtureEffects {
     intent: Intent,
     result: BindingObservation,
     lose_ack: bool,
@@ -29,7 +29,7 @@ fn fixture(suffix: &str) -> Intent {
 }
 
 impl FixtureEffects {
-    fn new(intent: &Intent) -> Self {
+    pub(super) fn new(intent: &Intent) -> Self {
         let hub = crate::core::Hub::new();
         let devices = crate::client_auth::DeviceAccessSessions::default();
         let authentication = crate::auth_plugins::ProductAuthentication::test_default(None);
@@ -70,6 +70,19 @@ impl FixtureEffects {
             authentication,
         }
     }
+
+    pub(super) fn confirmation(&self) -> Confirmation<'_> {
+        Confirmation {
+            authority: &self.authority,
+            auth: crate::server::ProductRequestAuth {
+                product_auth_enabled: false,
+                store: None,
+                hub: &self.hub,
+                device_access: &self.devices,
+                product_authentication: &self.authentication,
+            },
+        }
+    }
 }
 
 async fn coordinate(
@@ -81,23 +94,7 @@ async fn coordinate(
     // Exercise the production confirmation gate using actual explicit local
     // Operator capture. Cookie/device/token revocation is covered alongside it
     // in operator_approval's real credential-backed fixtures.
-    super::coordinate(
-        store,
-        fence,
-        intent,
-        Confirmation {
-            authority: &effects.authority,
-            auth: crate::server::ProductRequestAuth {
-                product_auth_enabled: false,
-                store: None,
-                hub: &effects.hub,
-                device_access: &effects.devices,
-                product_authentication: &effects.authentication,
-            },
-        },
-        effects,
-    )
-    .await
+    super::coordinate(store, fence, intent, effects.confirmation(), effects).await
 }
 
 impl Effects for FixtureEffects {

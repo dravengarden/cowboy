@@ -32,6 +32,192 @@ fn missing(step: &BindingStep) -> BindingObservation {
 }
 
 #[tokio::test]
+async fn telemetry_binding_commit_requires_protocol_fifteen_and_namespace_cas() {
+    use crate::machine_protocol::telemetry_binding::execution_fixture;
+    for protocol in 1..15 {
+        let control = MachineControl::default();
+        let (connection, mut commands) = connect(&control, protocol);
+        for step in [fixture(), execution_fixture()] {
+            assert_eq!(
+                control
+                    .commit_telemetry_binding(&connection, &step)
+                    .await
+                    .unwrap_err()
+                    .certainty,
+                CommandFailure::NotSent
+            );
+        }
+        assert_eq!(
+            control
+                .telemetry_binding_observation(&connection, &execution_fixture())
+                .await
+                .unwrap_err()
+                .certainty,
+            CommandFailure::NotSent
+        );
+        assert!(commands.try_recv().is_err());
+        assert!(control.live.read().pending.is_empty());
+    }
+    let control = MachineControl::default();
+    let (connection, mut commands) = connect(&control, 15);
+    assert_eq!(
+        control
+            .commit_telemetry_binding(&connection, &fixture())
+            .await
+            .unwrap_err()
+            .certainty,
+        CommandFailure::NotSent
+    );
+    assert_eq!(
+        control
+            .commit_telemetry_binding(&connection, &execution_fixture())
+            .await
+            .unwrap_err()
+            .certainty,
+        CommandFailure::NotSent,
+        "selection requires the exact active installation at enqueue"
+    );
+    assert!(commands.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn telemetry_binding_commit_replies_cannot_substitute_query_or_command_results() {
+    use crate::machine_protocol::telemetry_binding::{
+        BindingChange, BindingCommitResult, execution_fixture,
+    };
+    let control = MachineControl::default();
+    let (connection, mut commands) = connect(&control, 15);
+    let mut step = execution_fixture();
+    step.change = BindingChange::Revoke {
+        policy_epoch: "1".to_owned().try_into().unwrap(),
+    };
+    for forged in [false, true] {
+        let commit = control.commit_telemetry_binding(&connection, &step);
+        let reply = async {
+            let MachineCommand::CommitTelemetryBinding {
+                request_id,
+                step: received,
+            } = commands.recv().await.unwrap()
+            else {
+                panic!()
+            };
+            assert_eq!(*received, step);
+            control.record_remote(
+                &connection,
+                MachineEvent::CommandResult {
+                    request_id: request_id.clone(),
+                    accepted: true,
+                    detail: None,
+                },
+            );
+            control.record_remote(
+                &connection,
+                MachineEvent::TelemetryBindingObservation {
+                    request_id: request_id.clone(),
+                    observation: Box::new(missing(&step)),
+                },
+            );
+            assert_eq!(control.live.read().pending.len(), 1);
+            let mut observation = missing(&step);
+            if forged && let BindingObservation::Observed { snapshot } = &mut observation {
+                snapshot.request_digest = binding_digest(b"not this original intent");
+            }
+            control.record_remote(
+                &connection,
+                MachineEvent::TelemetryBindingCommitted {
+                    request_id,
+                    result: Box::new(BindingCommitResult::Observed { observation }),
+                },
+            );
+        };
+        let (result, ()) = tokio::join!(commit, reply);
+        assert_eq!(result.is_ok(), !forged);
+        assert!(control.live.read().pending.is_empty());
+        assert!(
+            !control
+                .events("machine-test")
+                .iter()
+                .any(|event| matches!(event, MachineEvent::TelemetryBindingCommitted { .. }))
+        );
+    }
+}
+
+#[tokio::test]
+async fn telemetry_binding_commit_late_reply_never_crosses_a_connection_incarnation() {
+    use crate::machine_protocol::telemetry_binding::{
+        BindingChange, BindingCommitResult, execution_fixture,
+    };
+    let control = MachineControl::default();
+    let (connection, mut commands) = connect(&control, 15);
+    let mut step = execution_fixture();
+    step.change = BindingChange::Revoke {
+        policy_epoch: "1".to_owned().try_into().unwrap(),
+    };
+    let commit = control.commit_telemetry_binding(&connection, &step);
+    let replace = async {
+        let MachineCommand::CommitTelemetryBinding { request_id, .. } =
+            commands.recv().await.unwrap()
+        else {
+            panic!()
+        };
+        let (_replacement, _commands) = connect(&control, 15);
+        control.record_remote(
+            &connection,
+            MachineEvent::TelemetryBindingCommitted {
+                request_id,
+                result: Box::new(BindingCommitResult::Observed {
+                    observation: missing(&step),
+                }),
+            },
+        );
+    };
+    let (result, ()) = tokio::join!(commit, replace);
+    assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+    assert!(control.live.read().pending.is_empty());
+    assert_eq!(
+        control
+            .commit_telemetry_binding(&connection, &step)
+            .await
+            .unwrap_err()
+            .certainty,
+        CommandFailure::NotSent
+    );
+    assert!(control.events("machine-test").is_empty());
+}
+
+#[tokio::test]
+async fn telemetry_binding_commit_storage_failure_is_not_proof_of_no_effect() {
+    use crate::machine_protocol::telemetry_binding::{
+        BindingChange, BindingCommitFailure, BindingCommitResult, execution_fixture,
+    };
+    let control = MachineControl::default();
+    let (connection, mut commands) = connect(&control, 15);
+    let mut step = execution_fixture();
+    step.change = BindingChange::Revoke {
+        policy_epoch: "1".to_owned().try_into().unwrap(),
+    };
+    let commit = control.commit_telemetry_binding(&connection, &step);
+    let reply = async {
+        let MachineCommand::CommitTelemetryBinding { request_id, .. } =
+            commands.recv().await.unwrap()
+        else {
+            panic!()
+        };
+        control.record_remote(
+            &connection,
+            MachineEvent::TelemetryBindingCommitted {
+                request_id,
+                result: Box::new(BindingCommitResult::Unavailable {
+                    failure: BindingCommitFailure::Unavailable(BindingUnavailable::Storage),
+                }),
+            },
+        );
+    };
+    let (result, ()) = tokio::join!(commit, reply);
+    assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown);
+}
+
+#[tokio::test]
 async fn telemetry_binding_query_checks_protocol_owner_and_syntax_before_enqueue() {
     for protocol in 1..14 {
         let control = MachineControl::default();

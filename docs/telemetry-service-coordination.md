@@ -7,6 +7,11 @@ is no production mutation route, dispatch adapter or writer switch.** Machine
 protocol 14 remains read-only, and the Machine-local writer remains closed. This
 is not P2 end-to-end activation or recovery acceptance.
 
+The subsequent [protocol-15 transport](telemetry-binding-wire.md) implements the
+cross-wire adapter and explicit namespace CAS while keeping both writer gates
+closed. The protocol-14 and missing-adapter descriptions below record this
+earlier slice, not a production write authorization.
+
 ## Evidence and authority
 
 The intent binds schema, operation, Service, actual confirming actor, Machine,

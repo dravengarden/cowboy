@@ -3,16 +3,9 @@
 
 use super::*;
 use crate::machine_plugins::operations::lease::BindingExecutionLease;
-use crate::machine_protocol::telemetry_binding::BindingRejection;
-
-#[derive(Debug, PartialEq, Eq)]
-enum WriteError {
-    ReaderOnly,
-    Unavailable(BindingUnavailable),
-    Rejected(BindingRejection),
-    Fenced,
-    Capacity,
-}
+use crate::machine_protocol::telemetry_binding::{
+    BindingCommitFailure as WriteError, BindingCommitResult, BindingRejection,
+};
 
 impl From<BindingRejection> for WriteError {
     fn from(reason: BindingRejection) -> Self {
@@ -134,6 +127,11 @@ impl Bindings {
             state.poisoned = true;
             return Err(WriteError::Unavailable(BindingUnavailable::Storage));
         }
+        if step.expected_namespace.is_some_and(|expected| {
+            (expected == BindingNamespace::Managed) != state.ledger.is_some()
+        }) {
+            return Err(BindingRejection::TargetChanged.into());
+        }
         let mut prepared = state.ledger.clone().unwrap_or_else(|| Ledger {
             schema: 1,
             service_id: step.service_id.clone(),
@@ -220,6 +218,22 @@ fn completions(
 }
 
 impl MachinePluginStore {
+    pub(crate) async fn commit_telemetry_binding_command(
+        &self,
+        step: &BindingStep,
+        lease: BindingExecutionLease,
+    ) -> BindingCommitResult {
+        if step.validate_commit().is_err() {
+            return BindingCommitResult::Unavailable {
+                failure: WriteError::Unavailable(BindingUnavailable::InvalidRequest),
+            };
+        }
+        match self.commit_telemetry_binding(step, lease).await {
+            Ok(observation) => BindingCommitResult::Observed { observation },
+            Err(failure) => BindingCommitResult::Unavailable { failure },
+        }
+    }
+
     async fn commit_telemetry_binding(
         &self,
         step: &BindingStep,

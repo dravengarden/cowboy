@@ -48,10 +48,9 @@ impl PluginExecutionScope {
         self.uninstall_at(step, TimeSample::now())
     }
 
-    /// Staged finite binding executor only; no Machine wire command exposes
-    /// this until Service coordination and reader-floor admission are accepted.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(in crate::machine_plugins) fn telemetry_binding(
+    /// Capture on protocol receipt, before detached scheduling. A negotiated
+    /// command still cannot enable the independent local writer admission.
+    pub(crate) fn telemetry_binding(
         &self,
         step: &BindingStep,
     ) -> Result<BindingExecutionLease, BindingUnavailable> {
@@ -95,7 +94,7 @@ impl PluginExecutionScope {
 }
 
 /// No deserialization, cloning, retargeting or renewal from a stored receipt.
-pub(in crate::machine_plugins) struct BindingExecutionLease {
+pub(crate) struct BindingExecutionLease {
     connected: Arc<AtomicBool>,
     request_digest: BindingDigest,
     budget: OperationBudget,

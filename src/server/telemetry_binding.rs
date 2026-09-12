@@ -1,6 +1,5 @@
-//! Staged finite Service coordinator. There is deliberately no production
-//! transport implementation or mutation route before the writer-reader floors
-//! and managed export leases are accepted. Tests drive this same coordinator.
+//! Finite Service coordinator and connection-bound protocol-15 transport.
+//! Admission and HTTP mutations remain closed pending reader floors/leases.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::machine_protocol::telemetry_binding::{BindingObservation, BindingOutcome, BindingStep};
@@ -9,6 +8,9 @@ use crate::telemetry_binding::{
     Attention, Intent, LegacyFence, Operation, Progress, writer::Change,
 };
 use anyhow::{Result, ensure};
+
+#[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
+mod live;
 
 struct Confirmation<'a> {
     authority: &'a super::operator_approval::TelemetryBindingAuthority,
@@ -110,20 +112,13 @@ async fn coordinate(
     effects: &impl Effects,
 ) -> Result<Operation> {
     let step = intent.machine_step()?;
-    if let Some(ledger) = store.telemetry_binding_ledger(&intent.service_id).await? {
-        // Duplicate/recovered intent is evidence only, including Prepared. Do
-        // not reconstruct a grant or replay even with a new current Operator.
-        if let Some(existing) = ledger
-            .operations
-            .iter()
-            .find(|op| op.intent.operation_id == intent.operation_id)
-        {
-            ensure!(
-                &existing.intent == intent,
-                "binding operation identity conflict"
-            );
-            return Ok(existing.clone());
-        }
+    // Validate owner, capacity, restoration and slot state in memory before
+    // observing another Machine or closing legacy admission. The transaction
+    // repeats this validation under its writer lock; this is not the CAS itself.
+    let mut preview = store.telemetry_binding_ledger(&intent.service_id).await?;
+    let proposed = crate::telemetry_binding::writer::apply(&mut preview, &Change::Begin(intent))?;
+    if !proposed.admitted {
+        return Ok(proposed.operation);
     }
     ensure!(
         confirmation.authorized(intent, effects).await,
