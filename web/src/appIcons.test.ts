@@ -8,6 +8,7 @@ import {
   APP_ICON_GROUPS,
   APP_ICONS,
   appIcon,
+  appIconAppearanceAsset,
   appIconAsset,
   appIconInstallPath,
   currentAppIcon,
@@ -167,5 +168,22 @@ Deno.test("every icon has installable files with a shared identity and an isolat
     assert(install.includes('rel="apple-touch-icon"'));
     assert(install.includes(`/?app-icon=${icon.id}`));
     assert(!install.includes("tmpfiles.org"));
+  }
+});
+
+Deno.test("Neon previews resolve light and dark assets without changing other styles", () => {
+  assertEquals(
+    appIconAppearanceAsset(DEFAULT_APP_ICON, false),
+    "/app-icons/v6/palette-103/icon-light-192.png",
+  );
+  assertEquals(
+    appIconAppearanceAsset(DEFAULT_APP_ICON, true),
+    appIconAsset(DEFAULT_APP_ICON, 192),
+  );
+  for (const icon of APP_ICONS.filter((icon) => icon.id !== DEFAULT_APP_ICON)) {
+    assertEquals(
+      appIconAppearanceAsset(icon.id, false),
+      appIconAppearanceAsset(icon.id, true),
+    );
   }
 });
