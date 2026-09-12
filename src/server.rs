@@ -910,6 +910,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without a database URL the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host without durable storage configured.
+    let plugin_lifecycle_fences;
     let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
         if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
@@ -920,6 +921,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .initialize_core_security(core_security.as_ref(), &plugin_dir)
                 .await
                 .context("initializing core security authority")?;
+            // Restore durable admission fences before any background writer,
+            // sweeper, Plugin host or runtime can race the startup scan.
+            plugin_lifecycle_fences = plugin_uninstall::recover_fences(Some(&store), &service_id)
+                .await
+                .context("restoring Plugin lifecycle fences")?;
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -992,6 +998,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             )
         } else {
             tracing::info!("no --database-url: running in-memory only");
+            plugin_lifecycle_fences = plugin_uninstall::recover_fences(None, &service_id).await?;
             (Hub::new(), None, None, None, None, 1)
         };
     let plugin_storage = match store.as_ref() {
@@ -1294,9 +1301,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    let plugin_lifecycle_fences = plugin_uninstall::recover_fences(store.as_ref(), &service_id)
-        .await
-        .context("restoring Plugin lifecycle fences")?;
     runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
