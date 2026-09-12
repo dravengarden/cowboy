@@ -43,6 +43,7 @@ struct Receipt {
     purpose: &'static str,
     source_revision: String,
     artifacts: Vec<Artifact>,
+    ssh_keygen: manifest::Executable,
     checks: Vec<Check>,
     accepted: bool,
     not_checked: [&'static str; 6],
@@ -88,6 +89,7 @@ async fn immutable_telemetry_readers() -> Result<()> {
         purpose: "supplied_immutable_telemetry_reader_matrix",
         source_revision: revision,
         artifacts,
+        ssh_keygen: manifest::ssh_keygen()?,
         checks: Vec::new(),
         accepted: false,
         not_checked: [
@@ -103,7 +105,7 @@ async fn immutable_telemetry_readers() -> Result<()> {
         for fixture in &fixtures {
             // Reopen the SAME disposable state twice, including corrupt cases.
             let root = tempfile::tempdir()?;
-            let setup = probe::seed(root.path(), fixture).await;
+            let setup = probe::seed(root.path(), fixture, &receipt.ssh_keygen.path).await;
             for cold_read in 1..=2 {
                 let result = if setup.is_ok() {
                     probe::run(artifact, fixture, root.path()).await

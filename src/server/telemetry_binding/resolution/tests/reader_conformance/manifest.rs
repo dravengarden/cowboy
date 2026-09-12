@@ -45,9 +45,24 @@ pub(super) struct Artifact {
 }
 
 #[derive(Serialize)]
-struct Executable {
-    path: PathBuf,
+pub(super) struct Executable {
+    pub path: PathBuf,
     sha256: String,
+}
+
+pub(super) fn ssh_keygen() -> Result<Executable> {
+    for directory in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
+        let Ok(path) = directory.join("ssh-keygen").canonicalize() else {
+            continue;
+        };
+        if path.starts_with("/nix/store") && path.is_file() {
+            return Ok(Executable {
+                sha256: sha256(&std::fs::read(&path)?),
+                path,
+            });
+        }
+    }
+    anyhow::bail!("pinned shell must supply an immutable OpenSSH helper")
 }
 
 fn executable_chain(lane: Lane, release: &Path, entry: &Path) -> Result<Vec<Executable>> {

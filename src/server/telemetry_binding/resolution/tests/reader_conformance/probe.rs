@@ -50,17 +50,19 @@ fn row(fixture: &Fixture) -> Option<(String, String)> {
     })
 }
 
-pub(super) async fn seed(root: &Path, fixture: &Fixture) -> Result<()> {
+pub(super) async fn seed(root: &Path, fixture: &Fixture, ssh_keygen: &Path) -> Result<()> {
     for dir in [
         "controller",
         "machine/plugin-operations",
         "workspace",
         "tmp",
+        "tools",
     ] {
         let dir = root.join(dir);
         std::fs::create_dir_all(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     }
+    std::os::unix::fs::symlink(ssh_keygen, root.join("tools/ssh-keygen"))?;
     private_write(&root.join("controller/service-id"), SERVICE.as_bytes())?;
     if let Some(bytes) = &fixture.machine {
         private_write(&root.join("machine").join(JOURNAL), bytes)?;
@@ -100,7 +102,7 @@ fn command(executable: &Path, root: &Path) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(executable);
     command
         .env_clear()
-        .env("PATH", "/no-ambient-commands")
+        .env("PATH", root.join("tools"))
         .env("LANG", "C.UTF-8")
         .env("RUST_LOG", "info")
         .env("TMPDIR", root.join("tmp"))
@@ -451,10 +453,10 @@ async fn machine(
             | MachineFrame::Event {
                 event: MachineEvent::Inventory { .. },
             } => {}
-            frame => {
-                eprintln!("isolated fixture event: {frame:?}");
-                return Err(Failure::WrongObservation);
-            }
+            MachineFrame::Event {
+                event: MachineEvent::PluginInventory { plugins, .. },
+            } if plugins.is_empty() => {}
+            _ => return Err(Failure::WrongObservation),
         }
     }
     send(
@@ -486,10 +488,10 @@ async fn machine(
             | MachineFrame::Event {
                 event: MachineEvent::Inventory { .. },
             } => {}
-            frame => {
-                eprintln!("isolated fixture event: {frame:?}");
-                return Err(Failure::WrongObservation);
-            }
+            MachineFrame::Event {
+                event: MachineEvent::PluginInventory { plugins, .. },
+            } if plugins.is_empty() => {}
+            _ => return Err(Failure::WrongObservation),
         }
     }
 }
@@ -507,6 +509,6 @@ fn child_environment_is_closed_and_cannot_inherit_auth_or_host_paths() {
         env.keys().copied().collect::<Vec<_>>(),
         ["LANG", "PATH", "RUST_LOG", "TMPDIR"]
     );
-    assert_eq!(env["PATH"], "/no-ambient-commands");
+    assert_eq!(env["PATH"], "/tmp/isolated-fixture/tools");
     assert_eq!(command.as_std().get_current_dir(), Some(root));
 }
