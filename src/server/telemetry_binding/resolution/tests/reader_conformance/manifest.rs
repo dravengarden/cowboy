@@ -212,11 +212,15 @@ pub(super) fn clean_revision() -> Result<String> {
 }
 
 pub(super) fn require_isolation() -> Result<()> {
-    let interfaces: Vec<_> = std::fs::read_dir("/sys/class/net")?
-        .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<std::io::Result<_>>()?;
+    // /sys may still be the outer namespace's mount. proc net is scoped to
+    // this process even without a separate mount namespace.
+    let devices = std::fs::read_to_string("/proc/self/net/dev")?;
+    let interfaces: Vec<_> = devices
+        .lines()
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+        .collect();
     ensure!(
-        interfaces == [std::ffi::OsString::from("lo")] && !rustix::process::geteuid().is_root(),
+        interfaces == ["lo"] && !rustix::process::geteuid().is_root(),
         "non-root isolated loopback required"
     );
     Ok(())
