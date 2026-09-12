@@ -276,14 +276,7 @@ mod machine {
         value: serde_json::Value,
         otlp: bool,
     ) -> Result<(PreparedPolicy, Payload)> {
-        let (config, snapshot): (Configuration, _) = read_private_snapshot(path)?;
-        config.plugin.validate()?;
-        ensure!(
-            config.plugin.plugin_id == selection.plugin_id
-                && config.plugin.plugin_version == selection.plugin_version
-                && config.plugin.generation_digest == selection.generation_digest,
-            "telemetry release is not enabled by Machine policy"
-        );
+        let policy = prepare_policy(path, selection)?;
         let payload = if otlp {
             let payload: crate::otlp::Export = serde_json::from_value(value)
                 .map_err(|_| anyhow::anyhow!("invalid OTLP export payload"))?;
@@ -298,13 +291,31 @@ mod machine {
             );
             Payload::Legacy(payload)
         };
+        Ok((policy, payload))
+    }
+
+    /// Read and validate local authority without creating a payload or emitting
+    /// HTTP. The returned inode/bytes observation is process-local, never a
+    /// durable policy credential or part of the binding receipt.
+    pub(crate) fn prepare_policy(
+        path: &Path,
+        selection: &PluginSelection,
+    ) -> Result<PreparedPolicy> {
+        let (config, snapshot): (Configuration, _) = read_private_snapshot(path)?;
+        config.plugin.validate()?;
+        ensure!(
+            config.plugin.plugin_id == selection.plugin_id
+                && config.plugin.plugin_version == selection.plugin_version
+                && config.plugin.generation_digest == selection.generation_digest,
+            "telemetry release is not enabled by Machine policy"
+        );
         for endpoint in [&config.logs, &config.metrics, &config.traces]
             .into_iter()
             .flatten()
         {
             endpoint.validate()?;
         }
-        Ok((PreparedPolicy { config, snapshot }, payload))
+        Ok(PreparedPolicy { config, snapshot })
     }
 
     impl Endpoint {
@@ -673,4 +684,4 @@ mod machine {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) use machine::{export, prepare};
+pub(crate) use machine::{PreparedPolicy, export, prepare, prepare_policy};

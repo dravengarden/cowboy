@@ -48,6 +48,11 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 Machine 绑定账本校验与旧外发路径隔离。绑定 revision 和 policy epoch 使用独立的精确 64-bit 类型；
 历史回执不能覆盖后来状态。没有生产写入或恢复执行入口；Service 协调账本、策略 epoch 签发和
 双侧授权提交仍待实现，不能把 reader 部署当成 P2 完成。
+第二十一批 [Machine 有限绑定事务](telemetry-binding-transactions.md) 实现选择、撤销和精确前态恢复，
+在同一文件内持久化 head 与回执，每次成功提交签发下一 policy epoch；原连接租约、签名安装与
+私有策略在 intent 前后重复核对。新增并发、断线、策略变化及 rename/fsync 故障测试；生产写入
+仍关闭，没有新增 mutation 命令。Service 持续授权/协调、managed export lease 和独立中断处置
+仍是 P2 的未完成项，不把本地恢复测试通过当成跨端上线完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

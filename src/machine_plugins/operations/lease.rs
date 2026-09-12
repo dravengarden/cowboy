@@ -3,6 +3,9 @@
 //! from a durable receipt. This does not grant recovery or Provider credentials.
 
 use crate::machine_protocol::plugin_step::{StepUnavailable, UninstallStep};
+use crate::machine_protocol::telemetry_binding::{
+    BindingDigest, BindingRejection, BindingStep, BindingUnavailable,
+};
 use crate::operation_budget::{OperationBudget, TimeSample};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,6 +48,30 @@ impl PluginExecutionScope {
         self.uninstall_at(step, TimeSample::now())
     }
 
+    /// Staged finite binding executor only; no Machine wire command exposes
+    /// this until Service coordination and reader-floor admission are accepted.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::machine_plugins) fn telemetry_binding(
+        &self,
+        step: &BindingStep,
+    ) -> Result<BindingExecutionLease, BindingUnavailable> {
+        let received = TimeSample::now();
+        let request_digest = step
+            .request_digest()
+            .map_err(|_| BindingUnavailable::InvalidRequest)?;
+        if !self.connected.load(Ordering::Acquire)
+            || self.service.as_deref() != Some(step.service_id.as_str())
+            || self.machine != step.machine_id
+        {
+            return Err(BindingUnavailable::WrongOwner);
+        }
+        Ok(BindingExecutionLease {
+            connected: Arc::clone(&self.connected),
+            request_digest,
+            budget: OperationBudget::new(step.expires_at_ms, MAX_EXECUTION_TIME, received),
+        })
+    }
+
     fn uninstall_at(
         &self,
         step: &UninstallStep,
@@ -64,6 +91,45 @@ impl PluginExecutionScope {
             request_digest,
             budget: OperationBudget::new(step.expires_at_ms, MAX_EXECUTION_TIME, received),
         })
+    }
+}
+
+/// No deserialization, cloning, retargeting or renewal from a stored receipt.
+pub(in crate::machine_plugins) struct BindingExecutionLease {
+    connected: Arc<AtomicBool>,
+    request_digest: BindingDigest,
+    budget: OperationBudget,
+}
+
+impl BindingExecutionLease {
+    pub(super) fn matches(&self, step: &BindingStep) -> bool {
+        step.request_digest()
+            .is_ok_and(|digest| digest == self.request_digest)
+    }
+
+    pub(super) fn check(&self) -> Result<(), BindingRejection> {
+        if !self.connected.load(Ordering::Acquire) {
+            Err(BindingRejection::AuthorizationEnded)
+        } else if self.budget.expired() {
+            Err(BindingRejection::Expired)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn remaining(&self) -> Result<Duration, BindingRejection> {
+        self.check()?;
+        let remaining = self.budget.remaining();
+        if remaining.is_zero() {
+            Err(BindingRejection::Expired)
+        } else {
+            Ok(remaining)
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn expire_for_test(&self) {
+        self.budget.expire_for_test();
     }
 }
 

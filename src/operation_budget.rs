@@ -51,6 +51,15 @@ impl OperationBudget {
         self.check_at(TimeSample::now())
     }
 
+    #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
+    pub(crate) fn remaining(&self) -> Duration {
+        if self.expired() {
+            Duration::ZERO
+        } else {
+            self.deadline.saturating_duration_since(Instant::now())
+        }
+    }
+
     fn check_at(&self, now: TimeSample) -> bool {
         let previous_wall = self
             .wall_high_water

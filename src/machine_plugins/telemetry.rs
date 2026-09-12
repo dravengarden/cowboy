@@ -192,7 +192,7 @@ impl MachinePluginStore {
         })
     }
 
-    fn telemetry_inventory(
+    pub(super) fn telemetry_inventory(
         &self,
         selection: &crate::telemetry_plugin::PluginSelection,
     ) -> Result<PluginInventory> {
@@ -210,7 +210,7 @@ impl MachinePluginStore {
         Ok(active)
     }
 
-    fn telemetry_contract(
+    pub(super) fn telemetry_contract(
         &self,
         selection: &crate::telemetry_plugin::PluginSelection,
         inventory: &PluginInventory,

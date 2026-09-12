@@ -242,7 +242,7 @@ fn rejection_never_advances_binding_and_capacity_rejects_without_pruning() {
     save(&path, ledger(receipts.clone()));
     let reader = Bindings::open(&path).unwrap();
     assert_eq!(
-        reader.ledger.as_ref().unwrap().current,
+        reader.state.lock().ledger.as_ref().unwrap().current,
         BindingSnapshot::initial()
     );
     let mut too_many = receipts;

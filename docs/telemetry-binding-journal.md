@@ -1,9 +1,13 @@
 # Durable telemetry binding reader bridge
 
-Status: twentieth spatiotemporal slice, 2026-09-11. This is the Machine journal
+Status: twentieth spatiotemporal slice, 2026-09-11. This describes the Machine journal
 reader and the authenticated Service query path for P2, **not** an enabled
 binding coordinator. No production path creates this namespace, writes a
 binding, imports a policy epoch, or executes restoration.
+
+The subsequent [finite local transactions](telemetry-binding-transactions.md)
+implement selection/revocation/CAS restoration against this same format, with
+production admission still closed. The reader-only wire contract remains intact.
 
 ## Evidence and identity
 
@@ -95,8 +99,9 @@ protocol floors, actual Service-to-Machine query framing, signed legacy/OTLP
 preflight fencing, corrupt/rechecksummed evidence, capacity, prepared/unknown
 reopen, historical ACK queries and CAS-restoration conflicts.
 
-Still required for P2: the Service durable selection/revocation coordinator,
-fresh dual-side authorization, durable Machine policy-epoch issuance and actual
-binding commits, managed export leases, lost-ACK reconciliation, separately
+The subsequent finite writer implements Machine-local commits and next-epoch
+issuance behind closed admission. Still required for P2: the Service durable
+selection/revocation coordinator, fresh dual-side authorization, production
+binding admission, managed export leases, lost-ACK reconciliation, separately
 authorized interruption resolution/restoration, and accepted production writer
 and cold-recovery floors. External OTel emission remains `NoRestore`.

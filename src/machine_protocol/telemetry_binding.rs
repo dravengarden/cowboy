@@ -40,6 +40,18 @@ macro_rules! counter {
 counter!(BindingRevision);
 counter!(PolicyEpoch);
 
+impl PolicyEpoch {
+    /// The Machine issues exactly one next epoch on a new binding commit.
+    /// Restoring a selection does not restore its old policy authority.
+    #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
+    pub(crate) fn next(self) -> Result<Self> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or_else(|| anyhow::anyhow!("telemetry policy epoch exhausted"))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct BindingDigest(String);

@@ -1,6 +1,7 @@
 //! Reader floor for Machine-local telemetry binding authority. The enclosing
 //! Plugin journal owns the process lock. Opening/querying NEVER writes this
 //! namespace, adopts private policy, starts an exporter or replays an intent.
+//! The finite writer is staged behind a closed admission gate, not a wire API.
 
 use super::*;
 use crate::machine_protocol::telemetry_binding::{
@@ -23,7 +24,7 @@ struct LedgerFile {
 // One finite Machine export slot, scoped to its pinned Service. Receipt and
 // binding-state updates belong in one atomic durable replacement, not separate
 // files whose agreement is guessed after restart. No endpoint or token here.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Ledger {
     schema: u16,
@@ -101,12 +102,33 @@ impl Ledger {
 }
 
 pub(in crate::machine_plugins) struct Bindings {
+    path: PathBuf,
+    state: parking_lot::Mutex<BindingState>,
+}
+
+struct BindingState {
     ledger: Option<Ledger>,
+    poisoned: bool,
+    // There is intentionally no production setter. Service coordination and
+    // accepted live/cold readers must precede any managed-namespace creation.
+    writer: bool,
 }
 
 impl Bindings {
     #[allow(clippy::verbose_bit_mask)] // Keep the conventional Unix group/other permission mask.
     pub(super) fn open(path: &Path) -> Result<Self> {
+        Ok(Self {
+            path: path.to_owned(),
+            state: parking_lot::Mutex::new(BindingState {
+                ledger: Self::read(path)?,
+                poisoned: false,
+                writer: false,
+            }),
+        })
+    }
+
+    #[allow(clippy::verbose_bit_mask)]
+    fn read(path: &Path) -> Result<Option<Ledger>> {
         use std::os::unix::fs::MetadataExt as _;
         let file = match OpenOptions::new()
             .read(true)
@@ -115,7 +137,7 @@ impl Bindings {
         {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self { ledger: None });
+                return Ok(None);
             }
             Err(error) => return Err(error).context("opening telemetry binding evidence"),
         };
@@ -150,24 +172,30 @@ impl Bindings {
             "telemetry binding evidence integrity failure"
         );
         record.ledger.validate()?;
-        Ok(Self {
-            ledger: Some(record.ledger),
-        })
+        Ok(Some(record.ledger))
     }
 
     pub(in crate::machine_plugins) fn ensure_legacy_allowed(&self) -> Result<()> {
+        let state = self.state.lock();
         ensure!(
-            self.ledger.is_none(),
+            !state.poisoned && state.ledger.is_none(),
             "telemetry binding authority is reader-only"
         );
         Ok(())
     }
 
     pub(super) fn query(&self, step: &BindingStep) -> BindingObservation {
+        Self::lookup(&self.state.lock(), step)
+    }
+
+    fn lookup(state: &BindingState, step: &BindingStep) -> BindingObservation {
+        if state.poisoned {
+            return unavailable(BindingUnavailable::Storage);
+        }
         let Ok(request_digest) = step.request_digest() else {
             return unavailable(BindingUnavailable::InvalidRequest);
         };
-        let Some(ledger) = &self.ledger else {
+        let Some(ledger) = &state.ledger else {
             return BindingObservation::Observed {
                 snapshot: Box::new(BindingObservationSnapshot {
                     request_digest,
@@ -200,6 +228,11 @@ impl Bindings {
         }
     }
 }
+
+// Production compiles the same finite transaction exercised by fixtures, but
+// no command/coordinator can enable it in this reader-floor release.
+#[cfg_attr(not(test), allow(dead_code))]
+mod writer;
 
 fn unavailable(reason: BindingUnavailable) -> BindingObservation {
     BindingObservation::Unavailable { reason }
