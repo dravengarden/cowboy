@@ -110,8 +110,11 @@ installation is interrupted by the actual Machine writer, reopened, and closed
 through JSON frames and CLI admission before a separately confirmed Service
 resolution. No real destination or production credential is used.
 
-Still required for P2: accepted populated active/rollback/cold reader floors on
-both Sites, user-facing finite confirmation surfaces, explicit writer and
+Hawk's populated active/rollback/cold reader floor on both Sites is now
+[accepted](releases/telemetry-reader-floors-2026-09-13.md). Other targets and
+subsequent artifacts still need their own floor acceptance.
+
+Still required for P2: user-facing finite confirmation surfaces, explicit writer and
 background-policy admission, and full production cross-end failure/restart
 acceptance. Unknown/schema-one evidence intentionally remains quarantined and
 needs a separately justified treatment, not a universal “repair” button. Already

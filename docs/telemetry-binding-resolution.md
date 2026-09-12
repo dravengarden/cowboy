@@ -113,3 +113,8 @@ protocol 17 and atomic Machine audit schema two. It can close only a validated
 reopened schema-two Prepared step, without changing its head or the Service
 operation. A separate Service confirmation remains necessary afterwards;
 Unknown/corrupt evidence and all production writer gates remain fenced.
+
+The later [populated reader-floor acceptance](releases/telemetry-reader-floors-2026-09-13.md)
+accepts the actual active/next-transaction rollback/cold artifacts for Hawk's
+Service and Hawk Machine Sites. It does not enable either writer, cover other
+Machines, or complete the finite confirmation and production effect gates above.
