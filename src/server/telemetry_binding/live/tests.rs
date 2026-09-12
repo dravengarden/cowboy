@@ -250,6 +250,7 @@ impl Fixture {
 }
 
 mod export;
+mod resolution;
 
 #[tokio::test]
 async fn finite_wire_select_revoke_restore_recovers_evidence_without_replay() {

@@ -65,6 +65,10 @@ managed export lease、rollback/cold reader 基线和独立中断恢复仍待完
 OTLP 请求/回执，Service 与 Machine 共同核验精确绑定，原连接与短预算限制一次 HTTP 尝试；
 部分接收、响应丢失与重定向不自动重试。绑定历史不生成新外发权；后台策略激活、reader 恢复基线、
 生产写入及独立中断处置仍未完成，现有显式配置外发不受此 staging 路径替换。
+第二十五批 [Service 绑定独立中断处置](telemetry-binding-resolution.md) 加入新 Operator 确认、
+完整原操作 CAS 与原子审计；仅能终止尚未派发的 Prepared，或通过原连接重新查询后记录明确的
+Applied/Rejected。不会重发命令、自动补偿、恢复私有策略或生成外发权。Service reader 支持新的
+schema 2 审计，生产写入仍关闭；双侧恢复基线、Machine 未决记录处置、后台策略激活和跨端验收仍待完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

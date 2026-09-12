@@ -15,6 +15,8 @@ pub(crate) const MAX_OPERATIONS: usize = 1024;
 const MAX_INTENT_BYTES: usize = 16 * 1024;
 const MAX_OBSERVATION_BYTES: usize = 16 * 1024;
 
+pub(crate) mod resolution;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Intent {
@@ -193,6 +195,9 @@ pub(crate) struct Ledger {
     machine_id: String,
     pub current: Option<BindingSnapshot>,
     pub operations: Vec<Operation>,
+    /// Schema one remains byte-compatible until the first explicit resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolutions: Vec<resolution::ResolutionRecord>,
 }
 
 impl Ledger {
@@ -223,8 +228,13 @@ impl Ledger {
 
     fn validate(&self, service: &str) -> Result<()> {
         ensure!(
-            self.schema == 1 && valid_service(service) && self.service_id == service,
+            matches!(self.schema, 1 | 2) && valid_service(service) && self.service_id == service,
             "binding journal owner changed"
+        );
+        ensure!(
+            (self.schema == 1) == self.resolutions.is_empty()
+                && self.resolutions.len() <= self.operations.len(),
+            "invalid binding resolution schema or capacity"
         );
         ensure!(
             !self.operations.is_empty() && self.operations.len() <= MAX_OPERATIONS,
@@ -252,6 +262,28 @@ impl Ledger {
             head == self.current,
             "Service binding journal head mismatch"
         );
+        let mut resolved = std::collections::HashSet::new();
+        let mut resolution_ids = std::collections::HashSet::new();
+        let mut previous_resolution = None;
+        for record in &self.resolutions {
+            ensure!(
+                resolved.insert(&record.intent.operation_id)
+                    && resolution_ids.insert(&record.intent.resolution_id),
+                "duplicate binding resolution"
+            );
+            let (index, operation) = self
+                .operations
+                .iter()
+                .enumerate()
+                .find(|(_, op)| op.intent.operation_id == record.intent.operation_id)
+                .ok_or_else(|| anyhow::anyhow!("missing resolved binding operation"))?;
+            ensure!(
+                previous_resolution.is_none_or(|previous| previous < index),
+                "binding resolution order changed"
+            );
+            previous_resolution = Some(index);
+            record.validate(operation)?;
+        }
         Ok(())
     }
 
@@ -306,6 +338,7 @@ pub(crate) mod writer {
             expected: &'a Operation,
             progress: Progress,
         },
+        Resolve(&'a resolution::ResolutionPermit),
     }
 
     impl Change<'_> {
@@ -313,6 +346,14 @@ pub(crate) mod writer {
             match self {
                 Self::Begin(intent) => &intent.service_id,
                 Self::Advance { expected, .. } => &expected.intent.service_id,
+                Self::Resolve(permit) => &permit.intent().service_id,
+            }
+        }
+
+        pub(crate) fn within_budget(&self) -> bool {
+            match self {
+                Self::Resolve(permit) => permit.within_budget(),
+                _ => true,
             }
         }
     }
@@ -324,7 +365,11 @@ pub(crate) mod writer {
     }
 
     pub(crate) fn apply(ledger: &mut Option<Ledger>, change: &Change<'_>) -> Result<Updated> {
+        if let Some(ledger) = ledger.as_ref() {
+            ledger.validate(change.service())?;
+        }
         match change {
+            Change::Resolve(permit) => resolution::apply(ledger, permit),
             Change::Begin(intent) => {
                 intent.machine_step()?;
                 if let Some(ledger) = ledger {
@@ -373,13 +418,18 @@ pub(crate) mod writer {
                     machine_id: intent.machine_id.clone(),
                     current: None,
                     operations: Vec::new(),
+                    resolutions: Vec::new(),
                 });
                 ledger.operations.push(operation.clone());
                 let bytes = ledger.encode(&intent.service_id)?.len();
                 // Reserve the largest bounded completion plus a new head before
                 // the intent can fence legacy admission. Never prune evidence.
                 ensure!(
-                    bytes + MAX_OBSERVATION_BYTES + MAX_INTENT_BYTES <= MAX_BYTES,
+                    bytes
+                        + MAX_OBSERVATION_BYTES
+                        + MAX_INTENT_BYTES
+                        + resolution::MAX_RESOLUTION_BYTES
+                        <= MAX_BYTES,
                     "binding completion capacity exhausted"
                 );
                 Ok(Updated {

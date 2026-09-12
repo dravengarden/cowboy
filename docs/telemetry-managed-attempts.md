@@ -87,7 +87,12 @@ and independent persistence with unchanged binding evidence.
 
 Still required before production managed activation: accepted live/rollback/cold
 reader floors on both Sites, explicit writer and background-export admission,
-independently authorized interruption resolution, and cross-end restart/recovery
+Machine-side unresolved-record handling and cross-end restart/recovery
 acceptance. This finite path is not P2 completion or a generic executable Plugin
 DAG. Signed Plugin/SDK bytes, native ABI, worker generation inputs and Provider
 authentication/installations are unchanged by this slice.
+
+The subsequent [Service resolution slice](telemetry-binding-resolution.md) stages
+freshly authorized local abort or acceptance of definite Machine observations.
+It does not enable the writers, repair unresolved Machine evidence, or create
+export authority from a resolution audit.

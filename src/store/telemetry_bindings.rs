@@ -68,14 +68,14 @@ macro_rules! journal {
                 // In particular, reserve SQLite's writer before SELECT. A WAL
                 // snapshot upgrade is not repaired by busy_timeout.
                 sqlx::query($lock).execute(&mut *tx).await?;
-                ensure!(within_budget(), "binding admission ended while waiting for storage");
+                ensure!(within_budget() && change.within_budget(), "binding admission ended while waiting for storage");
                 let mut ledger = sqlx::query_as::<_, Record>("SELECT document, document_sha256 FROM telemetry_binding_journal WHERE slot = 'telemetry'")
                     .fetch_optional(&mut *tx).await?.map(|record| record.decode(change.service())).transpose()?;
                 let updated = crate::telemetry_binding::writer::apply(&mut ledger, change)?;
                 let document = ledger.ok_or_else(|| anyhow::anyhow!("missing updated binding journal"))?.encode(change.service())?;
                 sqlx::query("INSERT INTO telemetry_binding_journal (slot, document, document_sha256) VALUES ('telemetry', $1, $2) ON CONFLICT (slot) DO UPDATE SET document = excluded.document, document_sha256 = excluded.document_sha256")
                     .bind(&document).bind(checksum(&document)).execute(&mut *tx).await?;
-                ensure!(within_budget(), "binding admission ended before commit");
+                ensure!(within_budget() && change.within_budget(), "binding admission ended before commit");
                 tx.commit().await?;
                 Ok(updated)
             }

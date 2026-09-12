@@ -2,6 +2,8 @@ use super::*;
 use crate::telemetry_binding::{LegacyFence, Progress, fixture, tests::applied};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod resolution;
+
 #[allow(clippy::too_many_lines)] // One atomic head/evidence/CAS story exercised on both real backends.
 async fn contract(store: &Store) {
     store.migrate().await.unwrap();

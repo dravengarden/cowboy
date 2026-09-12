@@ -12,6 +12,7 @@ use anyhow::{Result, ensure};
 mod export;
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 mod live;
+mod resolution;
 
 struct Confirmation<'a> {
     authority: &'a super::operator_approval::TelemetryBindingAuthority,

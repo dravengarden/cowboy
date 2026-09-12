@@ -12,6 +12,11 @@ cross-wire adapter and explicit namespace CAS while keeping both writer gates
 closed. The protocol-14 and missing-adapter descriptions below record this
 earlier slice, not a production write authorization.
 
+Subsequent slices add [single-attempt managed export](telemetry-managed-attempts.md)
+and [independently authorized Service resolution](telemetry-binding-resolution.md).
+The latter requires a schema-two Service audit reader before resolution writes;
+both production binding writers and the resolution entrypoint remain closed.
+
 ## Evidence and authority
 
 The intent binds schema, operation, Service, actual confirming actor, Machine,

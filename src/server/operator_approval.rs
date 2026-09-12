@@ -274,6 +274,8 @@ impl OperatorApproval {
 
 mod telemetry_export;
 pub(super) use telemetry_export::TelemetryExportAuthority;
+mod telemetry_resolution;
+pub(super) use telemetry_resolution::TelemetryResolutionAuthority;
 
 pub(super) struct UninstallAuthority {
     approval: OperatorApproval,

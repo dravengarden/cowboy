@@ -3,6 +3,111 @@ use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
 #[tokio::test]
+async fn telemetry_resolution_has_new_purpose_original_credential_and_nonrenewing_budget() {
+    use crate::telemetry_binding::{
+        Operation, Progress, resolution::tests::intent as resolution_intent,
+    };
+    for change in [
+        "none",
+        "logout",
+        "role",
+        "disabled",
+        "actor",
+        "service",
+        "action",
+        "operation",
+        "deadline",
+        "queued",
+    ] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let mut approval =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap();
+        let mut old = crate::telemetry_binding::fixture("resolution-auth");
+        old.expires_at_ms = 1;
+        let before = Operation {
+            intent: old,
+            progress: Progress::Prepared,
+        };
+        let mut intent = resolution_intent(&before, None);
+        intent.actor = approval.actor().clone();
+        assert_ne!(
+            intent.actor, before.intent.actor,
+            "a different current Operator may resolve"
+        );
+        if change == "queued" {
+            approval.received = TimeSample::for_test(
+                std::time::Instant::now() - Duration::from_secs(61),
+                auth_now_ms(),
+            );
+        }
+        let authority = approval.bind_telemetry_resolution(&intent).unwrap();
+        let mut changed = intent.clone();
+        match change {
+            "logout" => {
+                h.store
+                    .revoke_user_session_for_user(
+                        &h.user.id,
+                        "session-approval",
+                        "logout",
+                        auth_now_ms(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "role" => h.role(AdminRole::Viewer),
+            "disabled" => h
+                .store
+                .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
+                .await
+                .unwrap(),
+            "actor" => {
+                changed.actor = Actor::Admin {
+                    account: "another".into(),
+                }
+            }
+            "service" => changed.service_id = "foreign-service".into(),
+            "action" => {
+                changed.action =
+                    crate::telemetry_binding::resolution::ResolutionAction::AcceptApplied {
+                        observation_digest:
+                            crate::machine_protocol::telemetry_binding::binding_digest(b"changed"),
+                    }
+            }
+            "operation" => {
+                changed.operation_digest =
+                    crate::machine_protocol::telemetry_binding::binding_digest(b"changed")
+            }
+            "deadline" => changed.expires_at_ms += 1,
+            _ => {}
+        }
+        assert_eq!(
+            authority.check(h.context(), &changed).await,
+            change == "none",
+            "{change}"
+        );
+        h.role(AdminRole::Operator);
+        h.store
+            .set_user_disabled_at(&h.user.id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            authority.check(h.context(), &intent).await,
+            change == "none",
+            "repair cannot renew {change}"
+        );
+        assert_eq!(
+            authority
+                .into_permit(h.context(), intent, before, None)
+                .await
+                .is_ok(),
+            change == "none"
+        );
+    }
+}
+
+#[tokio::test]
 async fn managed_export_requires_fresh_original_operator_and_exact_payload() {
     for change in [
         "none", "logout", "role", "disabled", "service", "payload", "budget",
