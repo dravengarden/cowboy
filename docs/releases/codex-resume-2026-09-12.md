@@ -1,11 +1,11 @@
 # Codex resume transport — 2026-09-12
 
 Source `7e59b22f5b024535fe64b98e2131d39bf1e94eb2` is integrated into remote
-`main`. Codex 3.1.18 is signed and published as immutable Catalog files. Service
-Catalog refresh and Hawk activation are pending an authenticated AdminOperator
-refresh. The existing product device credential cannot authorize that endpoint;
-its request returned HTTP 401. No installation, session rebind, Controller
-restart or Machine restart has been performed by this release.
+`main`. Codex 3.1.18 is signed, published and active on Hawk. The original
+failed session resumed successfully at `2026-09-12T10:59:44.811150Z` with the
+same native thread, authentication runtime generation and worktree. Its queued
+message completed at `2026-09-12T11:02:03.288Z`. This release did not restart
+the Controller or resident Machine.
 
 ## Release identity
 
@@ -81,14 +81,46 @@ They contain no Provider credentials or inference requests. Catalog files being
 published is distinct from the running Service advertising the new version or a
 Machine activating it.
 
-## Activation remaining
+## Production activation
 
-After the authorized Admin refresh, verify `/api/plugins` advertises the exact
-ready release. Install that exact version/digest on Hawk through the normal
-Plugin operation. Use the existing compatible Provider reload plan for the
-failed session, preserving its native thread, authentication runtime generation,
-worktree, saved options and queued prompt. Observe native restore readiness and
-read back the resulting session identity. Do not restart unrelated workers.
+The first publication attempt could not refresh the running Catalog: the product
+device credential received HTTP 401 from the AdminOperator-only refresh
+endpoint. No installation or rebind occurred then. At the later reported
+failure, both Hawk and the failed session were still on 3.1.16. The 18:56
+local-time messages were the existing restore hold rejecting another send,
+without a new restore attempt.
+
+By `2026-09-12T10:57Z`, the running Service advertised the exact signed 3.1.18
+release as ready. The normal Hawk Plugin install returned HTTP 409 after
+activation. Its diagnostic was `Machine command response channel closed`. No
+duplicate install was issued. Authoritative Machine inventory and the active
+package both confirmed 3.1.18 with the intended digest. The compatible reload
+plan then accepted the 3.1.16-to-3.1.18 transition, and the reload request
+returned HTTP 202.
+
+The production worker used `--resume` with the original native thread and
+retained authentication generation 5. It logged agent spawn at
+`2026-09-12T10:59:44.199329Z` and successful `session/resume` at
+`2026-09-12T10:59:44.811150Z`: approximately 0.612 seconds from spawn to resume,
+including adapter initialization. The Controller marked the incident recovered
+at `2026-09-12T10:59:44.845195Z`.
+
+Session readback confirmed 3.1.18, the exact published digest, unchanged native
+ID, worktree and authentication generation, `busy` status and an empty queue
+after the previously queued message was dispatched. The original
+220,926,098-byte rollout prefix retained its original SHA-256; normal resumed
+activity appended to that history. No replacement thread was created. Other
+sessions retained their existing Provider bindings.
+
+Subsequent native history recorded one task start at `2026-09-12T10:59:44.853Z`
+and one task completion at `2026-09-12T11:02:03.288Z`, including successful
+tool-call outputs. This confirms that the original queued request continued
+beyond restore and completed a turn.
+
+The private production receipt is
+`/tmp/cowboy-resume-diag/production-resume-receipt-20260912.json`. The public
+Provider version was unchanged by this activation; only this release note
+changed.
 
 The [architecture decision](../codex-durable-resume.md) records the corrected
 root cause, why stripping `result` is unsafe, and the separate native media
