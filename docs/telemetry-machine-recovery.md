@@ -112,3 +112,7 @@ acceptance. Unknown/schema-one evidence intentionally remains quarantined and
 needs a separately justified treatment, not a universal “repair” button. Already
 emitted OTel is `NoRestore`; this slice adds no external inverse or automatic
 compensation. Provider, native ABI, signed Plugin/SDK and worker inputs are unchanged.
+
+The [reader-only release receipt](releases/telemetry-machine-recovery-2026-09-12.md)
+records the separately accepted Controller/Machine transactions, protocol 17,
+unchanged workers/Web and still-closed production admission.
