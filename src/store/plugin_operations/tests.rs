@@ -195,6 +195,63 @@ async fn contract(store: &Store) {
 }
 
 #[tokio::test]
+async fn sqlite_recovery_waits_for_writer_before_reading_journal() {
+    contended_sqlite_recovery(true).await;
+}
+
+#[tokio::test]
+async fn sqlite_empty_recovery_waits_for_writer() {
+    contended_sqlite_recovery(false).await;
+}
+
+async fn contended_sqlite_recovery(pending: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", root.path().join("journal.sqlite").display());
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let intent = fixture("contended-recovery");
+    if pending {
+        store.begin_plugin_uninstall(&intent).await.unwrap();
+    }
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        unreachable!()
+    };
+    let mut writer = db.pool.begin().await.unwrap();
+    sqlx::query("UPDATE plugin_uninstall_operations SET phase = 'stopping_sessions'")
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+
+    // A deferred reader can see Prepared while this writer is uncommitted,
+    // but cannot upgrade that snapshot to a writer, even with busy_timeout.
+    let recovery = store.recover_plugin_uninstalls("service-test");
+    tokio::pin!(recovery);
+    let early = tokio::time::timeout(std::time::Duration::from_millis(100), &mut recovery).await;
+    writer.commit().await.unwrap();
+    assert!(
+        early.is_err(),
+        "recovery must wait for the writer: {early:?}"
+    );
+    let operations = recovery.await.unwrap();
+    if !pending {
+        assert!(operations.is_empty());
+        return;
+    }
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].phase, Phase::NeedsAttention);
+    assert_eq!(operations[0].attention_from, Some(Phase::StoppingSessions));
+    assert_eq!(operations[0].problem, Some(Problem::Interrupted));
+    let again = store
+        .recover_plugin_uninstalls("service-test")
+        .await
+        .unwrap();
+    assert_eq!(again[0].attention_from, operations[0].attention_from);
+    assert_eq!(again[0].updated_at_ms, operations[0].updated_at_ms);
+}
+
+#[tokio::test]
 async fn sqlite_plugin_uninstall_transaction_contract() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))

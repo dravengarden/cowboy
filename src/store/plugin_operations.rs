@@ -349,7 +349,11 @@ implement_journal!(
 implement_journal!(
     SqliteStorage,
     "SELECT 1",
-    "SELECT 1",
+    // Reserve the WAL writer before any journal SELECT, even for an empty
+    // table. Upgrading a deferred read transaction can fail immediately with
+    // SQLITE_BUSY/BUSY_SNAPSHOT instead of honoring busy_timeout when startup
+    // sweepers write concurrently. This statement changes no rows.
+    "UPDATE plugin_uninstall_operations SET phase = phase WHERE 0",
     "UPDATE sessions SET deleted_at_ms = $2, purge_after_at_ms = $3 \
      WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at_ms IS NULL"
 );
