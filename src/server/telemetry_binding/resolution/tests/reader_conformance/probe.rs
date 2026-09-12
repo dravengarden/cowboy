@@ -273,12 +273,6 @@ pub(super) async fn run(
     .unwrap_or(Err(Failure::Timeout));
     let cleanup = running.finish().await;
     let retained = unchanged(root, fixture).map_err(|_| Failure::EvidenceChanged);
-    if result.is_err() && fixture.case == Case::Absent && artifact.role == Role::Active {
-        eprintln!(
-            "isolated fixture stderr: {}",
-            String::from_utf8_lossy(&running.logs.lock())
-        );
-    }
     cleanup.and(retained).and(result)
 }
 
@@ -511,4 +505,84 @@ fn child_environment_is_closed_and_cannot_inherit_auth_or_host_paths() {
     );
     assert_eq!(env["PATH"], "/tmp/isolated-fixture/tools");
     assert_eq!(command.as_std().get_current_dir(), Some(root));
+}
+
+const CHILD_TEST: &str = "server::telemetry_binding::resolution::tests::reader_conformance::probe::hanging_child_fixture";
+
+#[test]
+#[ignore = "private child of timeout_and_cleanup_reap_only_the_owned_process_group"]
+fn hanging_child_fixture() {
+    // This is launched through the exact same closed Command builder. Check
+    // the ACTUAL environment, not only get_envs()'s explicit overrides.
+    let mut names: Vec<_> = std::env::vars_os().map(|(name, _)| name).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["LANG", "PATH", "RUST_LOG", "TMPDIR"].map(std::ffi::OsString::from)
+    );
+    private_write(
+        &std::env::current_dir().unwrap().join("child-ready"),
+        b"ready",
+    )
+    .unwrap();
+    loop {
+        std::thread::park();
+    }
+}
+
+#[tokio::test]
+async fn timeout_and_cleanup_reap_only_the_owned_process_group() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut cmd = command(&std::env::current_exe()?, root.path());
+    cmd.args(["--ignored", "--exact", CHILD_TEST]);
+    let mut child = Running::spawn(&mut cmd).unwrap();
+    let ready = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if root.path().join("child-ready").exists() {
+                break;
+            }
+            assert!(
+                child.child.try_wait().unwrap().is_none(),
+                "closed environment fixture failed"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(ready.is_ok());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), child.child.wait())
+            .await
+            .is_err()
+    );
+    child.finish().await.unwrap();
+    assert_eq!(
+        rustix::process::test_kill_process_group(child.pid),
+        Err(rustix::io::Errno::SRCH)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn evidence_checker_detects_service_tampering_and_machine_namespace_creation() -> Result<()> {
+    let fixture = Fixture::all()
+        .await?
+        .into_iter()
+        .find(|fixture| fixture.case == Case::Absent)
+        .unwrap();
+    let keygen = manifest::ssh_keygen()?;
+    for site in [Lane::Controller, Lane::Machine] {
+        let root = tempfile::tempdir()?;
+        seed(root.path(), &fixture, &keygen.path).await?;
+        unchanged(root.path(), &fixture)?;
+        match site {
+            Lane::Controller => {
+                let db = rusqlite::Connection::open(root.path().join("controller/store.sqlite3"))?;
+                db.execute("INSERT INTO telemetry_binding_journal (slot, document, document_sha256) VALUES ('telemetry', '{}', ?1)", [sha256(b"wrong checksum")])?;
+            }
+            Lane::Machine => private_write(&root.path().join("machine").join(JOURNAL), b"{}")?,
+        }
+        assert!(unchanged(root.path(), &fixture).is_err());
+    }
+    Ok(())
 }

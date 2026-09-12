@@ -36,6 +36,20 @@ Machine-private `telemetry.json` policy are both required. Do not read or
 publish the private endpoint/token policy as release evidence; check bounded
 delivery receipts instead. See `docs/telemetry-plugins.md`.
 
+For managed telemetry binding/recovery reader floors, use the repository-owned
+`just telemetry-reader-conformance <matrix.json> <new-receipt.json>` from clean
+committed source in the pinned Linux shell. It executes immutable Controller
+and Machine readers against populated temporary journals, including interrupted
+attempts, schema-two audits, subsequent head changes and corruption. Require
+all supplied active/rollback/cold roles and both cold reads; health alone and
+an empty production ledger do not establish compatibility. The closed receipt
+must not contain private policy, credentials or logs. Independently bind the
+matrix to the actual host profiles, next-transaction recovery target and active
+closure's bootstrap outputs; a historical `previousRelease` is not necessarily
+the next transaction's target. Keep writes closed until those floors are
+accepted. See `docs/telemetry-reader-conformance.md`; this does not replace the
+signed Victoria runtime gates or authorize a host refresh.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

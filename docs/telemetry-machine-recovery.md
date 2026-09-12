@@ -62,6 +62,11 @@ this local mutation and audit; the original Service intent already persists.
 
 ## Atomic audit and reader floor
 
+The repository-owned [populated reader conformance](telemetry-reader-conformance.md)
+executes actual immutable Controller/Machine releases for this boundary. Its
+supplied artifact matrix is distinct from acceptance of the host's live,
+effective rollback and cold-profile configuration.
+
 One replacement stores the old terminal binding receipt and the new complete
 recovery audit together, then fsyncs the directory. Failure before rename or
 after rename/before directory flush poisons the running owner and returns
