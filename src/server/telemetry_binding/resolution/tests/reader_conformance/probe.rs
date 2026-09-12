@@ -271,6 +271,12 @@ pub(super) async fn run(
     .unwrap_or(Err(Failure::Timeout));
     let cleanup = running.finish().await;
     let retained = unchanged(root, fixture).map_err(|_| Failure::EvidenceChanged);
+    if result.is_err() && fixture.case == Case::Absent && artifact.role == Role::Active {
+        eprintln!(
+            "isolated fixture stderr: {}",
+            String::from_utf8_lossy(&running.logs.lock())
+        );
+    }
     cleanup.and(retained).and(result)
 }
 
@@ -445,7 +451,10 @@ async fn machine(
             | MachineFrame::Event {
                 event: MachineEvent::Inventory { .. },
             } => {}
-            _ => return Err(Failure::WrongObservation),
+            frame => {
+                eprintln!("isolated fixture event: {frame:?}");
+                return Err(Failure::WrongObservation);
+            }
         }
     }
     send(
@@ -477,7 +486,10 @@ async fn machine(
             | MachineFrame::Event {
                 event: MachineEvent::Inventory { .. },
             } => {}
-            _ => return Err(Failure::WrongObservation),
+            frame => {
+                eprintln!("isolated fixture event: {frame:?}");
+                return Err(Failure::WrongObservation);
+            }
         }
     }
 }
