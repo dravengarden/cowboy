@@ -10,9 +10,8 @@ use crate::machine_protocol::plugin_step::{StepLookup, StepOutcome};
 use crate::plugin_operation::{Actor, Phase, Problem, UninstallIntent};
 use anyhow::{Result, ensure};
 
-mod authority;
 pub(super) mod resolution;
-use authority::{OperatorApproval, UninstallAuthority};
+use super::operator_approval::{OperatorApproval, UninstallAuthority};
 
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
 // Its rollback path keeps evidence/fences and pauses new uninstall admission.

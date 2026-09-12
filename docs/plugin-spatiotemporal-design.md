@@ -53,6 +53,10 @@ Machine 绑定账本校验与旧外发路径隔离。绑定 revision 和 policy 
 私有策略在 intent 前后重复核对。新增并发、断线、策略变化及 rename/fsync 故障测试；生产写入
 仍关闭，没有新增 mutation 命令。Service 持续授权/协调、managed export lease 和独立中断处置
 仍是 P2 的未完成项，不把本地恢复测试通过当成跨端上线完成。
+第二十二批 [Service 绑定协调](telemetry-service-coordination.md) 加入闭集精确 intent、复用核心 Operator
+持续授权、双数据库原子 head/回执账本和有限协调器；测试覆盖丢 ACK 只查询、各边界失权、并发 CAS、
+重启隔离与历史回执。生产只接入 Service reader 和旧外发路径隔离，不新增写 API/传输适配器或启用
+Machine writer；managed export lease、双侧 live/rollback/cold reader 验收和独立中断处置仍待完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

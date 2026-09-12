@@ -6,6 +6,12 @@ Operator authority at each Service effect boundary. This hardens the existing
 finite coordinator; it does not grant independent recovery or enable durable
 compensation.
 
+The [Service telemetry binding slice](telemetry-service-coordination.md) moves
+this approval implementation into the shared core `server/operator_approval`
+module and adds a distinct one-minute binding authority. Uninstall and local
+resolution grants cannot be converted into it; no production binding writer is
+enabled by that reuse.
+
 ## An actor is evidence, not an authenticated continuation
 
 Previously confirmation checked the actor once and detached execution from the

@@ -3,6 +3,95 @@ use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
 #[tokio::test]
+async fn telemetry_binding_requires_original_operator_and_complete_intent() {
+    for change in [
+        "none",
+        "logout",
+        "role",
+        "disabled",
+        "actor",
+        "service",
+        "target",
+        "namespace",
+        "budget",
+    ] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let approval =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap();
+        let mut intent = crate::telemetry_binding::fixture("authority");
+        intent.actor = approval.actor().clone();
+        let authority = approval.bind_telemetry(&intent).unwrap();
+        assert!(authority.check(h.context(), "service-test", &intent).await);
+        let mut changed = intent.clone();
+        match change {
+            "logout" => {
+                h.store
+                    .revoke_user_session_for_user(
+                        &h.user.id,
+                        "session-approval",
+                        "logout",
+                        auth_now_ms(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "role" => h.role(AdminRole::Viewer),
+            "disabled" => h
+                .store
+                .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
+                .await
+                .unwrap(),
+            "actor" => {
+                changed.actor = Actor::Admin {
+                    account: "another".into(),
+                }
+            }
+            "service" => changed.service_id = "another-service".into(),
+            "target" => changed.machine_id = "another-machine".into(),
+            "namespace" => {
+                changed.expected =
+                    Some(crate::machine_protocol::telemetry_binding::BindingSnapshot::initial())
+            }
+            "budget" => authority.budget.expire_for_test(),
+            _ => {}
+        }
+        assert_eq!(
+            authority.check(h.context(), "service-test", &changed).await,
+            change == "none",
+            "{change}"
+        );
+        h.role(AdminRole::Operator);
+        h.store
+            .set_user_disabled_at(&h.user.id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            authority.check(h.context(), "service-test", &intent).await,
+            change == "none",
+            "observed revocation is sticky: {change}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn queued_telemetry_confirmation_cannot_mint_a_new_minute() {
+    let h = Harness::new().await;
+    let (headers, verified) = h.cookie().await;
+    let mut approval =
+        OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers).unwrap();
+    approval.received = TimeSample::for_test(
+        std::time::Instant::now() - Duration::from_secs(61),
+        auth_now_ms(),
+    );
+    let mut intent = crate::telemetry_binding::fixture("queued");
+    intent.actor = approval.actor().clone();
+    let authority = approval.bind_telemetry(&intent).unwrap();
+    assert!(!authority.check(h.context(), "service-test", &intent).await);
+}
+
+#[tokio::test]
 async fn resolution_requires_new_authority_and_does_not_renew_an_expired_uninstall() {
     use crate::plugin_operation::resolution::{ResolutionIntent, fixture as interrupted};
     for change in [

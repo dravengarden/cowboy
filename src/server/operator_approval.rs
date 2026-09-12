@@ -5,6 +5,8 @@
 use super::*;
 use crate::admin::{AdminRole, hex_sha256};
 use crate::operation_budget::{OperationBudget, TimeSample};
+use crate::plugin_operation::{Actor, UninstallIntent};
+use anyhow::{Result, ensure};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -163,6 +165,29 @@ impl OperatorApproval {
         })
     }
 
+    // A separate closed operation kind; an uninstall/resolution grant cannot
+    // be converted into a telemetry binding or used to restore old credentials.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn bind_telemetry(
+        self,
+        intent: &crate::telemetry_binding::Intent,
+    ) -> Result<TelemetryBindingAuthority> {
+        ensure!(
+            self.actor == intent.actor && self.service == intent.service_id,
+            "binding confirmation owner changed"
+        );
+        Ok(TelemetryBindingAuthority {
+            request_digest: intent.machine_step()?.request_digest()?,
+            budget: OperationBudget::new(
+                intent.expires_at_ms,
+                Duration::from_mins(1),
+                self.received,
+            ),
+            approval: self,
+            revoked: AtomicBool::new(false),
+        })
+    }
+
     async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
         match &self.credential {
             Credential::Admin { token_hash } => {
@@ -277,6 +302,46 @@ impl UninstallAuthority {
 
     pub(super) fn revoke(&self) {
         self.revoked.store(true, Ordering::Release);
+    }
+
+    pub(super) fn within_budget(&self) -> bool {
+        !self.revoked.load(Ordering::Acquire) && !self.budget.expired()
+    }
+}
+
+// Reader release: the authority is exercised in hermetic tests, not exposed by
+// a production mutation endpoint. Intentionally no Clone/serde/Debug.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct TelemetryBindingAuthority {
+    approval: OperatorApproval,
+    request_digest: crate::machine_protocol::telemetry_binding::BindingDigest,
+    budget: OperationBudget,
+    revoked: AtomicBool,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl TelemetryBindingAuthority {
+    pub(super) fn revoke(&self) {
+        self.revoked.store(true, Ordering::Release);
+    }
+    pub(super) async fn check(
+        &self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        intent: &crate::telemetry_binding::Intent,
+    ) -> bool {
+        let valid = self.within_budget()
+            && self.approval.service == service
+            && intent
+                .machine_step()
+                .and_then(|s| s.request_digest())
+                .is_ok_and(|d| d == self.request_digest)
+            && self.approval.current_operator(auth).await.as_ref() == Some(&self.approval.actor)
+            && self.within_budget();
+        if !valid {
+            self.revoke();
+        }
+        valid
     }
 
     pub(super) fn within_budget(&self) -> bool {

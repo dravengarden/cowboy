@@ -157,6 +157,8 @@ mod store;
 #[cfg(feature = "full")]
 mod supervisor;
 #[cfg(feature = "full")]
+mod telemetry_binding;
+#[cfg(feature = "full")]
 mod telemetry_file;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod telemetry_plugin;

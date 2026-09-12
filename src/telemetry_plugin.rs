@@ -132,12 +132,18 @@ pub(crate) fn controller_exporter(
     path: Option<&Path>,
     control: std::sync::Arc<crate::machine_control::MachineControl>,
     catalog: std::sync::Arc<crate::plugin_catalog::PluginCatalog>,
+    fence: crate::telemetry_binding::LegacyFence,
 ) -> Result<Option<crate::observability::TelemetryExporter>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Configuration {
         machine_id: String,
         plugin: PluginSelection,
+    }
+    // A reader bridge retains evidence and stops legacy egress. It must not
+    // read/adopt an obsolete private selection to synthesize managed authority.
+    if !fence.allows_legacy() {
+        return Ok(None);
     }
     let Some(path) = path else {
         return Ok(None);
@@ -153,7 +159,11 @@ pub(crate) fn controller_exporter(
         let machine_id = config.machine_id.clone();
         let control = std::sync::Arc::clone(&control);
         let catalog = std::sync::Arc::clone(&catalog);
+        let fence = fence.clone();
         Box::pin(async move {
+            if !fence.allows_legacy() {
+                return crate::observability::ExportReceipt::default();
+            }
             // Policy is the private, exact Service selection captured at
             // startup. A composition JSON report can never select this port.
             let Ok(release) = catalog.resolve_telemetry_backend(
@@ -184,6 +194,9 @@ pub(crate) fn controller_exporter(
                 Some(otlp) => serde_json::to_value(otlp).expect("OTLP envelope"),
                 None => serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
             };
+            if !fence.allows_legacy() {
+                return crate::observability::ExportReceipt::default();
+            }
             let result = control.invoke_plugin_host(binding, payload).await;
             // Never log commands or private endpoint errors. Only bounded lane
             // receipts reach observability; no host payload enters history.

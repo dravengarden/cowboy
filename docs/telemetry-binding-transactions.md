@@ -7,6 +7,10 @@ closed.** There is no new wire command, HTTP mutation endpoint, startup adoption
 or flag that enables this writer. Only hermetic tests enable their own store.
 This is not the completed Service/Machine P2 coordinator.
 
+The next [Service coordination slice](telemetry-service-coordination.md) adds
+the durable Service reader, original Operator continuation and staged finite
+coordinator. Its production dispatch adapter and both writers remain closed.
+
 ## Exact admission and restoration
 
 The existing authenticated connection owner constructs a non-cloneable,

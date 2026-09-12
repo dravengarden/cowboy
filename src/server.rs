@@ -62,7 +62,9 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod operator_approval;
 mod plugin_uninstall;
+mod telemetry_binding;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
     api_machine_plugin_recovery_assessment, api_machine_plugin_uninstall,
@@ -911,6 +913,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host without durable storage configured.
     let plugin_lifecycle_fences;
+    let telemetry_binding_fence;
     let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
         if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
@@ -926,6 +929,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_lifecycle_fences = plugin_uninstall::recover_fences(Some(&store), &service_id)
                 .await
                 .context("restoring Plugin lifecycle fences")?;
+            telemetry_binding_fence =
+                crate::telemetry_binding::LegacyFence::recover(Some(&store), &service_id)
+                    .await
+                    .context("restoring Service telemetry binding fence")?;
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -999,6 +1006,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         } else {
             tracing::info!("no --database-url: running in-memory only");
             plugin_lifecycle_fences = plugin_uninstall::recover_fences(None, &service_id).await?;
+            telemetry_binding_fence =
+                crate::telemetry_binding::LegacyFence::recover(None, &service_id).await?;
             (Hub::new(), None, None, None, None, 1)
         };
     let plugin_storage = match store.as_ref() {
@@ -1290,6 +1299,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             args.telemetry_plugin_config.as_deref(),
             Arc::clone(&machine_control),
             Arc::clone(&plugin_catalog),
+            telemetry_binding_fence,
         )?,
     );
     let telemetry_shutdown = observability.clone();
@@ -4384,6 +4394,7 @@ async fn resolve_product_request_principal(
 /// The same authentication context serves API middleware and the standalone
 /// authentication router. A verified request extension is reused by handlers:
 /// sender-constrained proof nonces must never be consumed twice.
+#[derive(Clone, Copy)] // Borrowed core services, not an approval or credential.
 struct ProductRequestAuth<'a> {
     product_auth_enabled: bool,
     store: Option<&'a Store>,
