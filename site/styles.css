@@ -7,10 +7,11 @@
   --ink: #101014;
   --ink-soft: #5d6676;
   --ink-faint: #7a8495;
-  --primary: #006e99;
-  --primary-bright: #008ab5;
-  --primary-soft: #e4f5fc;
-  --primary-wash: rgba(0, 110, 153, 0.09);
+  --primary: #7b42b5;
+  --secondary: #006e99;
+  --primary-bright: #69339f;
+  --primary-soft: #f1e8fc;
+  --primary-wash: rgba(123, 66, 181, 0.09);
   --line: rgba(52, 66, 88, 0.14);
   --line-strong: rgba(52, 66, 88, 0.24);
   --success: #287a3d;
@@ -37,10 +38,11 @@ html[data-theme="dark"] {
   --ink: #eef1f7;
   --ink-soft: #bcc7d7;
   --ink-faint: #91a0b5;
-  --primary: #51c9ff;
-  --primary-bright: #8bdbff;
-  --primary-soft: #123442;
-  --primary-wash: rgba(81, 201, 255, 0.12);
+  --primary: #bb83ff;
+  --secondary: #51c9ff;
+  --primary-bright: #cba0ff;
+  --primary-soft: #30203f;
+  --primary-wash: rgba(187, 131, 255, 0.12);
   --line: rgba(81, 201, 255, 0.16);
   --line-strong: rgba(81, 201, 255, 0.26);
   --success: #74c986;
@@ -143,7 +145,7 @@ kbd {
 }
 
 :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--primary) 72%, white);
+  outline: 3px solid color-mix(in srgb, var(--secondary) 72%, white);
   outline-offset: 3px;
 }
 
@@ -552,7 +554,7 @@ kbd {
   gap: 10px;
   align-items: center;
   margin: 0 0 20px;
-  color: var(--primary);
+  color: var(--secondary);
   font-family: var(--mono);
   font-size: 0.72rem;
   font-weight: 760;
@@ -600,7 +602,7 @@ kbd {
   gap: 10px;
   align-items: center;
   margin: 16px 0 0;
-  color: var(--primary);
+  color: var(--secondary);
   font-family: var(--mono);
   font-size: 0.64rem;
   letter-spacing: 0.035em;
@@ -1372,7 +1374,7 @@ html[data-theme="dark"] .control-machine {
 
 .safety-points strong {
   display: block;
-  color: #c9bcff;
+  color: #51c9ff;
   font-size: 0.78rem;
 }
 
@@ -1877,7 +1879,7 @@ html[data-theme="dark"] .control-machine {
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  color: #c9bcff;
+  color: #51c9ff;
   font-size: 0.78rem;
   font-weight: 680;
 }
@@ -2303,7 +2305,7 @@ html[data-theme="dark"] .control-machine {
 
 .topology-section .text-link {
   margin-top: 30px;
-  color: var(--primary);
+  color: var(--secondary);
 }
 
 .topology-diagram {

@@ -507,7 +507,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       styles.includes("--canvas: #101014") &&
-        styles.includes("--primary: #51c9ff") &&
+        styles.includes("--primary: #bb83ff") &&
+        styles.includes("--secondary: #51c9ff") &&
+        styles.includes("--primary: #7b42b5") &&
         !styles.includes("filter: var(--brand-filter-rest)") &&
         !styles.includes("@keyframes brand-color-breathe"),
       "brand colors remain faithful to the selected icon in light and dark themes",
@@ -685,7 +687,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes("Self-hosted remote Agent IDE") &&
         html.includes(
-          'One workspace.</span><br><span data-i18n="hero.hosted">Self-hosted.',
+          'One workspace.</span></em><br><span data-i18n="hero.hosted">Self-hosted.',
         ) &&
         html.includes("Self-host Cowboy on your infrastructure") &&
         script.includes('"hero.hosted":') &&

@@ -3,8 +3,9 @@
 The default is colorway **103**, **Neon**: cyan crown `#51C9FF`, violet brim `#BB83FF`,
 and ink background `#101014`. It uses the approved Boomerang West shape.
 The website and app accents follow these colors; CSS must not recolor the logo
-with hue rotation, a mask, or a rainbow overlay. The light theme uses deeper blue
-and violet accents so text remains readable against pale surfaces.
+with hue rotation, a mask, or a rainbow overlay. Neon uses violet as primary and cyan as secondary; the light theme deepens
+both accents for readable text. The website keeps most headline text neutral
+and reserves the purple emphasis for “One workspace.”
 
 ## Choosing an icon
 

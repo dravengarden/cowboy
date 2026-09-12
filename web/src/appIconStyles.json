@@ -6,7 +6,7 @@
       "name": "Electric",
       "description": "Bright contrasts on ink",
       "styles": [
-        { "id": "palette-103", "name": "Neon", "themeColor": "#51C9FF" },
+        { "id": "palette-103", "name": "Neon", "themeColor": "#BB83FF" },
         { "id": "palette-101", "name": "Ember", "themeColor": "#FF982D" },
         { "id": "palette-108", "name": "Pop", "themeColor": "#FF48AE" },
         { "id": "palette-111", "name": "Prism", "themeColor": "#E35EFF" }

@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-006e99?style=flat-square" alt="Cowboy website">
+    <img src="https://img.shields.io/badge/website-live-7b42b5?style=flat-square" alt="Cowboy website">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
