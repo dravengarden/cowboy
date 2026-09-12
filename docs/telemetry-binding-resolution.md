@@ -17,7 +17,9 @@ policy is introduced. This is not P2 production activation.
 An unchanged head without a receipt does not prove no effect after Dispatching.
 Prepared/Unknown/unavailable receipts, later Machine heads and missing provenance
 stay fenced. `NeedsAttention` cannot be aborted merely because its observation is
-absent. Generic progress advancement does not acquire these resolution edges.
+absent. Generic advancement cannot resolve `NeedsAttention`. The original
+coordinator may still abort its own Prepared operation before dispatch when its
+authority ends; independent recovery uses the new confirmation and audit path.
 
 The new intent binds a unique resolution ID, exact original operation ID and
 canonical full-operation digest, both owners, the NEW confirming actor, closed
@@ -101,3 +103,7 @@ cross-end restart/failure acceptance. Service resolution deliberately cannot
 declare a Machine's unresolved Prepared/Unknown record repaired. Generic DAG
 execution, durable compensation and strict external reversibility are not
 claimed by this slice.
+
+The [reader-only Controller release receipt](releases/telemetry-binding-resolution-2026-09-12.md)
+records the accepted artifact, gates, unchanged Machine/workers/Web and closed
+production admission.
