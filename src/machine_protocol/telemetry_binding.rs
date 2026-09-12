@@ -374,7 +374,6 @@ pub enum BindingObservation {
 }
 
 impl BindingObservation {
-    #[cfg(any(feature = "full", test))]
     pub(crate) fn matches(&self, step: &BindingStep) -> bool {
         let Ok(expected) = step.request_digest() else {
             return false;

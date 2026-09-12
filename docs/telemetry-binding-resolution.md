@@ -107,3 +107,9 @@ claimed by this slice.
 The [reader-only Controller release receipt](releases/telemetry-binding-resolution-2026-09-12.md)
 records the accepted artifact, gates, unchanged Machine/workers/Web and closed
 production admission.
+
+The subsequent [Machine recovery slice](telemetry-machine-recovery.md) stages
+protocol 17 and atomic Machine audit schema two. It can close only a validated
+reopened schema-two Prepared step, without changing its head or the Service
+operation. A separate Service confirmation remains necessary afterwards;
+Unknown/corrupt evidence and all production writer gates remain fenced.

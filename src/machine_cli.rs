@@ -28,6 +28,7 @@ use crate::machine_protocol::{
 
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
+pub(crate) mod telemetry_recovery;
 
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
@@ -1735,6 +1736,20 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::RecoverTelemetryBinding {
+            request_id,
+            recovery,
+        } => {
+            telemetry_recovery::recover(request_id, *recovery, providers, execution, events);
+        }
+        MachineCommand::QueryTelemetryRecovery {
+            request_id,
+            recovery,
+        } => {
+            telemetry_recovery::query(
+                request_id, *recovery, providers, service_id, machine_id, events,
+            );
+        }
         MachineCommand::ExportBoundTelemetry {
             request_id,
             attempt,

@@ -102,6 +102,27 @@ fn durable(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn historical_duplicate_never_trusts_cache_after_out_of_band_corruption() {
+    let root = tempfile::tempdir().unwrap();
+    let journal = Journal::open(root.path()).unwrap();
+    let bindings = &journal.telemetry_bindings;
+    enable(bindings);
+    let step = fixture();
+    commit(bindings, &step).unwrap();
+    let bytes = fs::read(&bindings.path).unwrap();
+    durable(&bindings.path, b"{}").unwrap();
+    assert_eq!(
+        commit(bindings, &step),
+        Err(WriteError::Unavailable(BindingUnavailable::Storage))
+    );
+    durable(&bindings.path, &bytes).unwrap();
+    assert_eq!(
+        commit(bindings, &step),
+        Err(WriteError::Unavailable(BindingUnavailable::Storage))
+    );
+}
+
 fn next(previous: &BindingStep, index: usize) -> BindingStep {
     let mut step = fixture();
     step.operation_id = format!("binding-operation-{index:04}");
@@ -535,6 +556,7 @@ fn capacity_preserves_receipts_and_epoch_exhaustion_does_not_wrap() {
         machine_id: "machine-test".into(),
         current: BindingSnapshot::initial(),
         receipts,
+        resolutions: Vec::new(),
     };
     let before = ledger.encode().unwrap();
     durable(&path, &before).unwrap();

@@ -96,3 +96,8 @@ The subsequent [Service resolution slice](telemetry-binding-resolution.md) stage
 freshly authorized local abort or acceptance of definite Machine observations.
 It does not enable the writers, repair unresolved Machine evidence, or create
 export authority from a resolution audit.
+
+The later [Machine recovery slice](telemetry-machine-recovery.md) adds a finite
+closure for validated reopened Prepared evidence, retaining both the namespace
+and Service fence. Unknown/corrupt evidence stays isolated; the production
+reader-floor, confirmation-surface and policy-admission requirements remain.

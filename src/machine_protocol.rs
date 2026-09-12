@@ -13,8 +13,9 @@ pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod telemetry_binding;
 pub mod telemetry_export;
+pub mod telemetry_recovery;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 16;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 17;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -31,6 +32,8 @@ pub const TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION: u16 = 14;
 pub const TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION: u16 = 15;
 /// A separately authorized single managed OTLP attempt; no writer enablement.
 pub const TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION: u16 = 16;
+/// Independently authorized closure of a reopened Prepared binding, not replay.
+pub const TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION: u16 = 17;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -720,6 +723,14 @@ pub enum MachineCommand {
         request_id: String,
         step: Box<telemetry_binding::BindingStep>,
     },
+    RecoverTelemetryBinding {
+        request_id: String,
+        recovery: Box<telemetry_recovery::RecoveryRequest>,
+    },
+    QueryTelemetryRecovery {
+        request_id: String,
+        recovery: Box<telemetry_recovery::RecoveryRequest>,
+    },
     ExportBoundTelemetry {
         request_id: String,
         attempt: Box<telemetry_export::ExportAttempt>,
@@ -776,6 +787,9 @@ impl MachineCommand {
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
             Self::ExportBoundTelemetry { .. } => TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION,
+            Self::RecoverTelemetryBinding { .. } | Self::QueryTelemetryRecovery { .. } => {
+                TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION
+            }
             Self::CommitTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
             Self::QueryTelemetryBinding { step, .. } => {
                 if step.schema == 1 {
@@ -1027,6 +1041,14 @@ pub enum MachineEvent {
     TelemetryBindingCommitted {
         request_id: String,
         result: Box<telemetry_binding::BindingCommitResult>,
+    },
+    TelemetryBindingRecovered {
+        request_id: String,
+        result: Box<telemetry_recovery::RecoveryResult>,
+    },
+    TelemetryRecoveryObservation {
+        request_id: String,
+        observation: Box<telemetry_recovery::RecoveryObservation>,
     },
     TelemetryExported {
         request_id: String,

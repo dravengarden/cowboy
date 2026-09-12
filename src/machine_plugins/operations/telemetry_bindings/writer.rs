@@ -54,7 +54,7 @@ impl Ledger {
         Ok(())
     }
 
-    fn encode(&self) -> WriteResult<Vec<u8>> {
+    pub(super) fn encode(&self) -> WriteResult<Vec<u8>> {
         #[derive(serde::Serialize)]
         struct Evidence<'a> {
             ledger: &'a Ledger,
@@ -106,6 +106,9 @@ impl Bindings {
             return Err(WriteError::Unavailable(BindingUnavailable::InvalidRequest));
         }
         let mut state = self.state.lock();
+        if !self.retained_current(&mut state) {
+            return Err(WriteError::Unavailable(BindingUnavailable::Storage));
+        }
         let observation = Self::lookup(&state, step);
         match &observation {
             BindingObservation::Unavailable { reason } => {
@@ -121,12 +124,6 @@ impl Bindings {
         if !state.writer {
             return Err(WriteError::ReaderOnly);
         }
-        // Do not replace corrupt, deleted, linked or out-of-band changed
-        // authority using a formerly valid in-memory head.
-        if !Self::read(&self.path).is_ok_and(|retained| retained == state.ledger) {
-            state.poisoned = true;
-            return Err(WriteError::Unavailable(BindingUnavailable::Storage));
-        }
         if step.expected_namespace.is_some_and(|expected| {
             (expected == BindingNamespace::Managed) != state.ledger.is_some()
         }) {
@@ -138,6 +135,7 @@ impl Bindings {
             machine_id: step.machine_id.clone(),
             current: BindingSnapshot::initial(),
             receipts: Vec::new(),
+            resolutions: Vec::new(),
         });
         prepared.precondition(step)?;
         if prepared.receipts.len() >= MAX_BINDING_RECORDS {
@@ -212,12 +210,56 @@ fn completions(
         .map(|outcome| {
             let mut completed = prepared.clone();
             completed.finish(outcome.clone());
-            completed.encode().map(|bytes| (outcome, bytes))
+            let bytes = completed.encode()?;
+            if (bytes.len() + crate::machine_protocol::telemetry_recovery::MAX_RECOVERY_BYTES + 128)
+                as u64
+                > MAX_BINDING_BYTES
+            {
+                return Err(WriteError::Capacity);
+            }
+            Ok((outcome, bytes))
         })
         .collect()
 }
 
 impl MachinePluginStore {
+    /// Execute real target/policy checks but interrupt the second replacement.
+    /// The resulting live owner is poisoned; a new owner must validate reopen.
+    #[cfg(test)]
+    pub(crate) async fn interrupt_binding_for_test(&self, step: &BindingStep) {
+        let _lifecycle = self.lifecycle.lock().await;
+        let scope = crate::machine_plugins::PluginExecutionScope::new(
+            Some(&step.service_id),
+            &step.machine_id,
+        );
+        let lease = scope.telemetry_binding(step).unwrap();
+        let after = step.after().unwrap();
+        let mut policy = None;
+        let bindings = &self.operations.telemetry_bindings;
+        let mut writes = 0;
+        let result = bindings.commit_with_io(
+            step,
+            &lease,
+            &mut || self.check_binding_target(&after, &mut policy),
+            |bytes| {
+                writes += 1;
+                ensure!(
+                    writes == 1,
+                    "hermetic interruption before completion replacement"
+                );
+                atomic_write(&bindings.path, bytes, 0o600)?;
+                fs::File::open(bindings.path.parent().unwrap())?.sync_all()?;
+                Ok(())
+            },
+        );
+        assert_eq!(writes, 2);
+        assert_eq!(
+            result,
+            Err(WriteError::Unavailable(BindingUnavailable::Storage))
+        );
+        assert!(bindings.state.lock().poisoned);
+    }
+
     pub(crate) async fn commit_telemetry_binding_command(
         &self,
         step: &BindingStep,

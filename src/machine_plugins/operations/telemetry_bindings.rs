@@ -9,6 +9,7 @@ use crate::machine_protocol::telemetry_binding::{
     BindingOutcome, BindingReceipt, BindingSnapshot, BindingStep, BindingUnavailable,
     binding_digest, valid_service,
 };
+use crate::machine_protocol::telemetry_recovery::RecoveryReceipt;
 
 pub(super) const FILE: &str = "telemetry-bindings-v1.json";
 const MAX_BINDING_RECORDS: usize = 1024;
@@ -32,12 +33,14 @@ struct Ledger {
     machine_id: String,
     current: BindingSnapshot,
     receipts: Vec<BindingReceipt>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    resolutions: Vec<RecoveryReceipt>,
 }
 
 impl Ledger {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema == 1
+            matches!(self.schema, 1 | 2)
                 && valid_service(&self.service_id)
                 && !self.machine_id.is_empty()
                 && self.machine_id.len() <= 128
@@ -48,7 +51,9 @@ impl Ledger {
             "invalid telemetry binding journal owner"
         );
         ensure!(
-            self.receipts.len() <= MAX_BINDING_RECORDS,
+            self.receipts.len() <= MAX_BINDING_RECORDS
+                && self.resolutions.len() <= self.receipts.len()
+                && (self.schema == 1) == self.resolutions.is_empty(),
             "telemetry binding journal capacity exceeded"
         );
         let mut current = BindingSnapshot::initial();
@@ -104,6 +109,28 @@ impl Ledger {
             }
         }
         ensure!(self.current == current, "telemetry binding head mismatch");
+        let mut resolved = BTreeSet::new();
+        let mut resolution_ids = BTreeSet::new();
+        let mut previous = None;
+        for resolution in &self.resolutions {
+            resolution.validate()?;
+            let (index, receipt) = self
+                .receipts
+                .iter()
+                .enumerate()
+                .find(|(_, receipt)| {
+                    receipt.step.operation_id == resolution.request.step.operation_id
+                })
+                .context("missing resolved Machine binding")?;
+            ensure!(
+                resolved.insert(&receipt.step.operation_id)
+                    && resolution_ids.insert(&resolution.request.resolution_id)
+                    && previous.is_none_or(|previous| previous < index)
+                    && receipt == &resolution.binding,
+                "Machine binding resolution chain changed"
+            );
+            previous = Some(index);
+        }
         self.current.validate()
     }
 }
@@ -119,6 +146,10 @@ struct BindingState {
     // There is intentionally no production setter. Service coordination and
     // accepted live/cold readers must precede any managed-namespace creation.
     writer: bool,
+    recovery_writer: bool,
+    /// Process-local proof of validated reopen, never reconstructed from a
+    /// live failed write or a serialized request. Unknown/schema-one stay fenced.
+    reopened_prepared: Option<BindingDigest>,
 }
 
 impl Bindings {
@@ -130,11 +161,10 @@ impl Bindings {
         request: &crate::machine_protocol::telemetry_export::ExportAttempt,
     ) -> Result<()> {
         let mut state = self.state.lock();
-        ensure!(!state.poisoned, "telemetry binding evidence is unavailable");
-        if !Self::read(&self.path).is_ok_and(|current| current == state.ledger) {
-            state.poisoned = true;
-            bail!("telemetry binding evidence changed outside its owner");
-        }
+        ensure!(
+            self.retained_current(&mut state),
+            "telemetry binding evidence is unavailable"
+        );
         let ledger = state
             .ledger
             .as_ref()
@@ -155,12 +185,22 @@ impl Bindings {
 
     #[allow(clippy::verbose_bit_mask)] // Keep the conventional Unix group/other permission mask.
     pub(super) fn open(path: &Path) -> Result<Self> {
+        let ledger = Self::read(path)?;
+        let reopened_prepared = ledger
+            .as_ref()
+            .and_then(|ledger| ledger.receipts.last())
+            .filter(|receipt| {
+                receipt.step.schema == 2 && matches!(receipt.outcome, BindingOutcome::Prepared {})
+            })
+            .map(|receipt| receipt.request_digest.clone());
         Ok(Self {
             path: path.to_owned(),
             state: parking_lot::Mutex::new(BindingState {
-                ledger: Self::read(path)?,
+                ledger,
                 poisoned: false,
                 writer: false,
+                recovery_writer: false,
+                reopened_prepared,
             }),
         })
     }
@@ -214,16 +254,29 @@ impl Bindings {
     }
 
     pub(in crate::machine_plugins) fn ensure_legacy_allowed(&self) -> Result<()> {
-        let state = self.state.lock();
+        let mut state = self.state.lock();
         ensure!(
-            !state.poisoned && state.ledger.is_none(),
+            self.retained_current(&mut state) && state.ledger.is_none(),
             "telemetry binding authority is reader-only"
         );
         Ok(())
     }
 
     pub(super) fn query(&self, step: &BindingStep) -> BindingObservation {
-        Self::lookup(&self.state.lock(), step)
+        let mut state = self.state.lock();
+        if !self.retained_current(&mut state) {
+            return unavailable(BindingUnavailable::Storage);
+        }
+        Self::lookup(&state, step)
+    }
+
+    fn retained_current(&self, state: &mut BindingState) -> bool {
+        if state.poisoned || !Self::read(&self.path).is_ok_and(|retained| retained == state.ledger)
+        {
+            state.poisoned = true;
+            return false;
+        }
+        true
     }
 
     fn lookup(state: &BindingState, step: &BindingStep) -> BindingObservation {
@@ -268,6 +321,7 @@ impl Bindings {
 }
 
 // Protocol support does not enable the independent, currently closed writer.
+mod recovery;
 mod writer;
 
 fn unavailable(reason: BindingUnavailable) -> BindingObservation {
@@ -278,6 +332,15 @@ impl MachinePluginStore {
     #[cfg(test)]
     pub(crate) fn enable_binding_writer_for_test(&self) {
         self.operations.telemetry_bindings.state.lock().writer = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enable_binding_recovery_for_test(&self) {
+        self.operations
+            .telemetry_bindings
+            .state
+            .lock()
+            .recovery_writer = true;
     }
 
     pub(crate) async fn telemetry_binding_observation(

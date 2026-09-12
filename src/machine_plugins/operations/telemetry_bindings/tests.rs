@@ -12,7 +12,7 @@ fn receipt(step: BindingStep) -> BindingReceipt {
     }
 }
 
-fn ledger(receipts: Vec<BindingReceipt>) -> Ledger {
+pub(super) fn ledger(receipts: Vec<BindingReceipt>) -> Ledger {
     let current = receipts
         .iter()
         .filter_map(|receipt| match &receipt.outcome {
@@ -27,10 +27,11 @@ fn ledger(receipts: Vec<BindingReceipt>) -> Ledger {
         machine_id: "machine-test".into(),
         current,
         receipts,
+        resolutions: Vec::new(),
     }
 }
 
-fn save(path: &Path, ledger: Ledger) {
+pub(super) fn save(path: &Path, ledger: Ledger) {
     let record = LedgerFile {
         evidence_digest: binding_digest(&serde_json::to_vec(&ledger).unwrap()),
         ledger,

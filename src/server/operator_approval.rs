@@ -276,6 +276,8 @@ mod telemetry_export;
 pub(super) use telemetry_export::TelemetryExportAuthority;
 mod telemetry_resolution;
 pub(super) use telemetry_resolution::TelemetryResolutionAuthority;
+mod telemetry_recovery;
+pub(super) use telemetry_recovery::TelemetryRecoveryAuthority;
 
 pub(super) struct UninstallAuthority {
     approval: OperatorApproval,

@@ -13,6 +13,9 @@ use std::time::Duration;
 
 const MAX_EXECUTION_TIME: Duration = Duration::from_mins(1);
 
+mod telemetry_recovery;
+pub(crate) use telemetry_recovery::BindingRecoveryLease;
+
 /// The connection task is the unique owner. Detached command tasks receive only
 /// leases; retaining one must not keep a disconnected connection authorized.
 pub(crate) struct PluginExecutionScope {

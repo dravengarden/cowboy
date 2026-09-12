@@ -2,6 +2,8 @@ use super::*;
 use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
+mod telemetry_recovery;
+
 #[tokio::test]
 async fn telemetry_resolution_has_new_purpose_original_credential_and_nonrenewing_budget() {
     use crate::telemetry_binding::{

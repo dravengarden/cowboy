@@ -22,6 +22,7 @@ struct Fixture {
     fences: crate::server::PluginLifecycleFences,
     connection: ConnectionToken,
     installed: PluginInventory,
+    pending: Option<Intent>,
     sends: Arc<AtomicUsize>,
     queries: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
@@ -39,13 +40,17 @@ fn wire(frame: MachineFrame) -> MachineFrame {
 
 impl Fixture {
     async fn new(writer: bool, lose_ack: bool) -> Self {
+        Self::setup(writer, lose_ack, false).await
+    }
+
+    async fn setup(writer: bool, lose_ack: bool, interrupted: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let publisher =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
                 .unwrap();
         let desired = crate::machine_plugins::telemetry_release_for_test(&publisher, "1.1.0");
         let machine_root = root.path().join("machine");
-        let machine = Arc::new(
+        let mut machine = Arc::new(
             MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap(),
         );
         machine.enable_installation_tracking().await.unwrap();
@@ -60,6 +65,20 @@ impl Fixture {
             "metrics": null, "traces": null
         })).unwrap()).unwrap();
         fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
+        let pending = if interrupted {
+            let intent = Self::selection(&installed);
+            machine
+                .interrupt_binding_for_test(&intent.machine_step().unwrap())
+                .await;
+            drop(machine);
+            machine = Arc::new(
+                MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap(),
+            );
+            machine.enable_binding_recovery_for_test();
+            Some(intent)
+        } else {
+            None
+        };
         let catalog_root = root.path().join("catalog");
         fs::create_dir_all(catalog_root.join("trusted-publishers")).unwrap();
         fs::write(
@@ -93,7 +112,7 @@ impl Fixture {
         let control = Arc::new(MachineControl::default());
         let (tx, mut commands) = mpsc::unbounded_channel();
         let connection =
-            control.install("machine-test".into(), "fixture-epoch".into(), false, 16, tx);
+            control.install("machine-test".into(), "fixture-epoch".into(), false, 17, tx);
         control.record_remote(
             &connection,
             MachineEvent::PluginInventory {
@@ -120,6 +139,39 @@ impl Fixture {
                         unreachable!()
                     };
                     let event = match command {
+                        MachineCommand::RecoverTelemetryBinding {
+                            request_id,
+                            recovery,
+                        } => {
+                            sends.fetch_add(1, Ordering::Relaxed);
+                            crate::machine_cli::telemetry_recovery::recover(
+                                request_id,
+                                *recovery,
+                                machine.clone(),
+                                &scope,
+                                events.clone(),
+                            );
+                            let event = replies.recv().await.unwrap();
+                            if lose_ack {
+                                continue;
+                            }
+                            event
+                        }
+                        MachineCommand::QueryTelemetryRecovery {
+                            request_id,
+                            recovery,
+                        } => {
+                            queries.fetch_add(1, Ordering::Relaxed);
+                            crate::machine_cli::telemetry_recovery::query(
+                                request_id,
+                                *recovery,
+                                machine.clone(),
+                                Some("service-test".into()),
+                                "machine-test".into(),
+                                events.clone(),
+                            );
+                            replies.recv().await.unwrap()
+                        }
                         MachineCommand::ExportBoundTelemetry {
                             request_id,
                             attempt,
@@ -180,6 +232,7 @@ impl Fixture {
             fences: Default::default(),
             connection,
             installed,
+            pending,
             sends,
             queries,
             task,
@@ -187,6 +240,10 @@ impl Fixture {
     }
 
     fn select(&self) -> Intent {
+        Self::selection(&self.installed)
+    }
+
+    fn selection(installed: &PluginInventory) -> Intent {
         let mut intent = crate::telemetry_binding::fixture("wire-select");
         intent.schema = 2;
         intent.actor = crate::plugin_operation::Actor::Product {
@@ -194,16 +251,11 @@ impl Fixture {
         };
         intent.change = BindingChange::Select {
             installation: BindingInstallation {
-                plugin_id: self.installed.plugin_id.clone(),
-                plugin_version: self.installed.plugin_version.clone(),
-                generation_digest: self.installed.generation_digest.clone().try_into().unwrap(),
-                installation_revision: self.installed.installation_revision.clone().unwrap(),
-                contract_fingerprint: self
-                    .installed
-                    .contract_fingerprint
-                    .clone()
-                    .try_into()
-                    .unwrap(),
+                plugin_id: installed.plugin_id.clone(),
+                plugin_version: installed.plugin_version.clone(),
+                generation_digest: installed.generation_digest.clone().try_into().unwrap(),
+                installation_revision: installed.installation_revision.clone().unwrap(),
+                contract_fingerprint: installed.contract_fingerprint.clone().try_into().unwrap(),
             },
             policy_epoch: "1".to_owned().try_into().unwrap(),
         };
@@ -250,6 +302,7 @@ impl Fixture {
 }
 
 mod export;
+mod recovery;
 mod resolution;
 
 #[tokio::test]

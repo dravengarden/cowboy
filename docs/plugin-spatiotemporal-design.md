@@ -69,6 +69,12 @@ OTLP 请求/回执，Service 与 Machine 共同核验精确绑定，原连接与
 完整原操作 CAS 与原子审计；仅能终止尚未派发的 Prepared，或通过原连接重新查询后记录明确的
 Applied/Rejected。不会重发命令、自动补偿、恢复私有策略或生成外发权。Service reader 支持新的
 schema 2 审计，生产写入仍关闭；双侧恢复基线、Machine 未决记录处置、后台策略激活和跨端验收仍待完成。
+第二十六批 [Machine 绑定独立中断处置](telemetry-machine-recovery.md) 加入协议 17、新用途租约和
+原子审计，仅能关闭经独占 owner 重新打开校验后仍为 Prepared 的 schema 2 步骤；保持原 head、
+policy epoch 与 managed namespace，不宣称零效果。Service 原 NeedsAttention 不变，需另一次确认
+后重新查询并记账；Unknown、旧 schema 和 live poison 不自动修复。查询、重复命令与 legacy
+preflight 也会重新验证磁盘，发现变化后不复活缓存信任。生产写入、双侧 populated reader 基线、
+用户确认界面、后台策略激活和跨端上线验收仍未完成，不将有限恢复闭环等同 P2 完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

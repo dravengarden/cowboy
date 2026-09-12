@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
 mod telemetry_export;
+mod telemetry_recovery;
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
@@ -129,6 +130,8 @@ enum ReplyKind {
     TelemetryBinding,
     TelemetryBindingCommit,
     TelemetryExport,
+    TelemetryRecovery,
+    TelemetryRecoveryCommit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -143,6 +146,8 @@ enum Reply {
     TelemetryBinding(Box<BindingObservation>),
     TelemetryBindingCommit(Box<BindingCommitResult>),
     TelemetryExport(Option<Box<crate::machine_protocol::telemetry_export::ExportReceipt>>),
+    TelemetryRecovery(Box<crate::machine_protocol::telemetry_recovery::RecoveryObservation>),
+    TelemetryRecoveryCommit(Box<crate::machine_protocol::telemetry_recovery::RecoveryResult>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -161,6 +166,8 @@ impl Reply {
             Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
             Self::TelemetryBindingCommit(_) => ReplyKind::TelemetryBindingCommit,
             Self::TelemetryExport(_) => ReplyKind::TelemetryExport,
+            Self::TelemetryRecovery(_) => ReplyKind::TelemetryRecovery,
+            Self::TelemetryRecoveryCommit(_) => ReplyKind::TelemetryRecoveryCommit,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -466,6 +473,7 @@ impl MachineControl {
 
     /// Remote callers cannot invent a source Machine/epoch. Late or mismatched
     /// replies are dropped before touching a waiter or retaining their payload.
+    #[allow(clippy::too_many_lines)] // Keep the closed reply dispatch under one correlation lock.
     pub(crate) fn record_remote(&self, token: &ConnectionToken, event: MachineEvent) {
         let mut live = self.live.write();
         if !live.is_current(token) {
@@ -473,6 +481,15 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryBindingRecovered { request_id, result } => {
+                live.complete(token, &request_id, Reply::TelemetryRecoveryCommit(result));
+            }
+            MachineEvent::TelemetryRecoveryObservation {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryRecovery(observation));
+            }
             MachineEvent::TelemetryExported {
                 request_id,
                 receipt,
