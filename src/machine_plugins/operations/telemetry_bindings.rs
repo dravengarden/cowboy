@@ -122,6 +122,37 @@ struct BindingState {
 }
 
 impl Bindings {
+    /// Called under the Machine lifecycle lock before each managed emission.
+    /// Re-read the owned evidence: a missing/tampered file must not make cached
+    /// authority usable, nor may restoring its bytes revive this process.
+    pub(in crate::machine_plugins) fn ensure_export_current(
+        &self,
+        request: &crate::machine_protocol::telemetry_export::ExportAttempt,
+    ) -> Result<()> {
+        let mut state = self.state.lock();
+        ensure!(!state.poisoned, "telemetry binding evidence is unavailable");
+        if !Self::read(&self.path).is_ok_and(|current| current == state.ledger) {
+            state.poisoned = true;
+            bail!("telemetry binding evidence changed outside its owner");
+        }
+        let ledger = state
+            .ledger
+            .as_ref()
+            .context("managed telemetry binding is absent")?;
+        ensure!(
+            ledger.service_id == request.service_id
+                && ledger.machine_id == request.machine_id
+                && ledger.current == request.binding
+                && ledger.current.selection.is_some()
+                && !ledger.receipts.last().is_some_and(|r| matches!(
+                    r.outcome,
+                    BindingOutcome::Prepared {} | BindingOutcome::Unknown {}
+                )),
+            "managed telemetry binding is not current"
+        );
+        Ok(())
+    }
+
     #[allow(clippy::verbose_bit_mask)] // Keep the conventional Unix group/other permission mask.
     pub(super) fn open(path: &Path) -> Result<Self> {
         Ok(Self {

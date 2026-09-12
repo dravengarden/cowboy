@@ -3,6 +3,65 @@ use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
 #[tokio::test]
+async fn managed_export_requires_fresh_original_operator_and_exact_payload() {
+    for change in [
+        "none", "logout", "role", "disabled", "service", "payload", "budget",
+    ] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let mut approval =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap();
+        if change == "budget" {
+            approval.received = TimeSample::for_test(
+                std::time::Instant::now() - Duration::from_secs(16),
+                auth_now_ms(),
+            );
+        }
+        let request = crate::machine_protocol::telemetry_export::fixture();
+        let authority = approval.bind_telemetry_export(&request).unwrap();
+        let mut changed = request.clone();
+        match change {
+            "logout" => {
+                h.store
+                    .revoke_user_session_for_user(
+                        &h.user.id,
+                        "session-approval",
+                        "logout",
+                        auth_now_ms(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "role" => h.role(AdminRole::Viewer),
+            "disabled" => h
+                .store
+                .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
+                .await
+                .unwrap(),
+            "service" => changed.service_id = "foreign-service".into(),
+            "payload" => changed.payload.signal = crate::otlp::Signal::Metrics,
+            _ => {}
+        }
+        assert_eq!(
+            authority.check(h.context(), &changed).await,
+            change == "none",
+            "{change}"
+        );
+        h.role(AdminRole::Operator);
+        h.store
+            .set_user_disabled_at(&h.user.id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            authority.check(h.context(), &request).await,
+            change == "none",
+            "repair cannot renew {change}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn telemetry_binding_requires_original_operator_and_complete_intent() {
     for change in [
         "none",

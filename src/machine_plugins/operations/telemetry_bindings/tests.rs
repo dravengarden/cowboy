@@ -59,6 +59,43 @@ fn chain() -> Vec<BindingReceipt> {
 }
 
 #[test]
+fn managed_export_requires_current_owned_evidence_and_storage_repair_cannot_revive_it() {
+    for boundary in ["delete", "corrupt", "public", "symlink"] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(FILE);
+        let original = ledger(vec![receipt(fixture())]);
+        save(&path, original.clone());
+        let reader = Bindings::open(&path).unwrap();
+        let request = crate::machine_protocol::telemetry_export::fixture();
+        reader.ensure_export_current(&request).unwrap();
+        match boundary {
+            "delete" => fs::remove_file(&path).unwrap(),
+            "corrupt" => fs::write(&path, b"{}").unwrap(),
+            "public" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+            "symlink" => {
+                let retained = root.path().join("retained");
+                fs::rename(&path, &retained).unwrap();
+                symlink(&retained, &path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            reader.ensure_export_current(&request).is_err(),
+            "{boundary}"
+        );
+        if boundary == "symlink" {
+            fs::remove_file(&path).unwrap();
+        }
+        save(&path, original);
+        assert!(
+            reader.ensure_export_current(&request).is_err(),
+            "repair cannot revive {boundary}"
+        );
+        assert!(reader.ensure_legacy_allowed().is_err());
+    }
+}
+
+#[test]
 fn absent_namespace_queries_do_not_adopt_or_write_authority() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join(FILE);

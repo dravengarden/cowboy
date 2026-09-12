@@ -93,7 +93,7 @@ impl Fixture {
         let control = Arc::new(MachineControl::default());
         let (tx, mut commands) = mpsc::unbounded_channel();
         let connection =
-            control.install("machine-test".into(), "fixture-epoch".into(), false, 15, tx);
+            control.install("machine-test".into(), "fixture-epoch".into(), false, 16, tx);
         control.record_remote(
             &connection,
             MachineEvent::PluginInventory {
@@ -120,6 +120,19 @@ impl Fixture {
                         unreachable!()
                     };
                     let event = match command {
+                        MachineCommand::ExportBoundTelemetry {
+                            request_id,
+                            attempt,
+                        } => {
+                            crate::machine_cli::telemetry_export::export(
+                                request_id,
+                                *attempt,
+                                machine.clone(),
+                                &scope,
+                                events.clone(),
+                            );
+                            replies.recv().await.unwrap()
+                        }
                         MachineCommand::CommitTelemetryBinding { request_id, step } => {
                             sends.fetch_add(1, Ordering::Relaxed);
                             crate::machine_cli::telemetry_binding::commit(
@@ -235,6 +248,8 @@ impl Fixture {
         );
     }
 }
+
+mod export;
 
 #[tokio::test]
 async fn finite_wire_select_revoke_restore_recovers_evidence_without_replay() {

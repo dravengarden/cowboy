@@ -94,7 +94,9 @@ cold recovery artifacts must understand schema-two evidence. Existing legacy
 export remains valid only while each binding namespace is absent. Never remove
 authority records or alter applied SQL migrations to satisfy an older reader.
 
-Still required: managed per-attempt export leases, explicit production admission,
-accepted rollback/cold floors on both Sites, independently authorized interrupted
-operation resolution and live cross-end failure/recovery acceptance. Binding
-restoration never retracts already emitted OTel data (`NoRestore`).
+Protocol 16 subsequently adds [a separately authorized single OTLP attempt](telemetry-managed-attempts.md),
+not automatic background export or authorization restored from binding receipts.
+Still required: explicit production writer/background-export admission, accepted
+rollback/cold floors on both Sites, independently authorized interrupted operation
+resolution and live cross-end failure/recovery acceptance. Binding restoration
+never retracts already emitted OTel data (`NoRestore`).

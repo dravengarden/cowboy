@@ -11,6 +11,7 @@ mod operations;
 mod telemetry;
 
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
+pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
 
 use std::collections::{BTreeMap, BTreeSet};

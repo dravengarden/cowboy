@@ -8,6 +8,8 @@ use std::sync::atomic::AtomicBool;
 
 const ADMISSION_BUDGET: Duration = Duration::from_secs(15);
 
+pub(crate) mod managed;
+
 pub(crate) struct PluginHostRequest {
     pub plugin_id: String,
     pub plugin_version: String,

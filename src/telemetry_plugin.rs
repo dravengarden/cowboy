@@ -375,6 +375,41 @@ mod machine {
         F: Fn() -> Fut + Sync,
         Fut: std::future::Future<Output = bool> + Send,
     {
+        export_with_attempts(contract, policy, payload, admit, 2).await
+    }
+
+    /// Managed callers authorize exactly one signal/attempt. No local retry,
+    /// encoding downgrade, or acquisition of a second authorization here.
+    pub(crate) async fn export_once<F, Fut>(
+        contract: &TelemetryBackendContract,
+        policy: &PreparedPolicy,
+        payload: crate::otlp::Export,
+        admit: &F,
+    ) -> OtlpResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        export_with_attempts(contract, policy, Payload::Otlp(payload), admit, 1)
+            .await
+            .otlp
+            .unwrap_or(OtlpResult {
+                enabled: true,
+                ..Default::default()
+            })
+    }
+
+    async fn export_with_attempts<F, Fut>(
+        contract: &TelemetryBackendContract,
+        policy: &PreparedPolicy,
+        payload: Payload,
+        admit: &F,
+        attempts: u8,
+    ) -> ExportResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
         let config = &policy.config;
         let Ok(client) = reqwest::Client::builder()
             .no_proxy()
@@ -396,7 +431,7 @@ mod machine {
                         (contract.traces.as_ref(), config.traces.as_ref())
                     }
                 };
-                let receipt = post_otlp(&client, route, endpoint, &payload, admit).await;
+                let receipt = post_otlp(&client, route, endpoint, &payload, admit, attempts).await;
                 return ExportResult {
                     otlp: Some(receipt),
                     ..Default::default()
@@ -495,6 +530,7 @@ mod machine {
         endpoint: Option<&Endpoint>,
         payload: &crate::otlp::Export,
         admit: &F,
+        attempts: u8,
     ) -> OtlpResult
     where
         F: Fn() -> Fut + Sync,
@@ -524,7 +560,7 @@ mod machine {
             url.path().trim_end_matches('/'),
             route.path
         ));
-        for attempt in 0..2 {
+        for attempt in 0..attempts {
             let mut request = client
                 .post(url.clone())
                 .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
@@ -571,7 +607,7 @@ mod machine {
                 Ok(response) => matches!(response.status().as_u16(), 429 | 502 | 503 | 504),
                 Err(_) => true,
             };
-            if !retry || attempt == 1 {
+            if !retry || attempt + 1 == attempts {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
@@ -697,4 +733,4 @@ mod machine {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) use machine::{PreparedPolicy, export, prepare, prepare_policy};
+pub(crate) use machine::{PreparedPolicy, export, export_once, prepare, prepare_policy};

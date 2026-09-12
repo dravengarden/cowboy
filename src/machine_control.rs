@@ -14,6 +14,8 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+mod telemetry_export;
+
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
 use crate::machine_protocol::telemetry_binding::{
@@ -87,6 +89,10 @@ enum RequestBinding<'a> {
     Connection(&'a ConnectionToken),
     Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
     Telemetry(&'a ConnectionToken, &'a BindingStep),
+    TelemetryExport(
+        &'a ConnectionToken,
+        &'a crate::machine_protocol::telemetry_export::ExportAttempt,
+    ),
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +128,7 @@ enum ReplyKind {
     PluginRecovery,
     TelemetryBinding,
     TelemetryBindingCommit,
+    TelemetryExport,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,6 +142,7 @@ enum Reply {
     PluginRecovery(Box<RecoveryObservation>),
     TelemetryBinding(Box<BindingObservation>),
     TelemetryBindingCommit(Box<BindingCommitResult>),
+    TelemetryExport(Option<Box<crate::machine_protocol::telemetry_export::ExportReceipt>>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -152,6 +160,7 @@ impl Reply {
             Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
             Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
             Self::TelemetryBindingCommit(_) => ReplyKind::TelemetryBindingCommit,
+            Self::TelemetryExport(_) => ReplyKind::TelemetryExport,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -235,6 +244,14 @@ impl LiveState {
         let Some(target) = after.selection else {
             return true;
         };
+        self.telemetry_installation_matches(machine, &target)
+    }
+
+    fn telemetry_installation_matches(
+        &self,
+        machine: &str,
+        target: &crate::machine_protocol::telemetry_binding::BindingInstallation,
+    ) -> bool {
         self.plugin_inventory.get(machine).is_some_and(|inventory| {
             let mut slot = inventory
                 .plugins
@@ -456,6 +473,12 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryExported {
+                request_id,
+                receipt,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryExport(receipt));
+            }
             MachineEvent::TelemetryBindingCommitted { request_id, result } => {
                 live.complete(token, &request_id, Reply::TelemetryBindingCommit(result));
             }
@@ -570,7 +593,8 @@ impl MachineControl {
         if let Some(
             RequestBinding::Connection(token)
             | RequestBinding::Reactivate(token, _)
-            | RequestBinding::Telemetry(token, _),
+            | RequestBinding::Telemetry(token, _)
+            | RequestBinding::TelemetryExport(token, _),
         ) = binding
             && !connection.token.same(token)
         {
@@ -580,6 +604,15 @@ impl MachineControl {
             && !live.telemetry_target_matches(machine_id, step)
         {
             return Err("Telemetry binding installation changed before dispatch".to_owned());
+        }
+        if let Some(RequestBinding::TelemetryExport(_, attempt)) = binding
+            && !attempt
+                .binding
+                .selection
+                .as_ref()
+                .is_some_and(|target| live.telemetry_installation_matches(machine_id, target))
+        {
+            return Err("Managed telemetry installation changed before dispatch".to_owned());
         }
         if let Some(RequestBinding::Reactivate(_, target)) = binding
             && !live.may_reactivate(machine_id, target)

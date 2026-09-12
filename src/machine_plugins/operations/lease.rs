@@ -22,6 +22,24 @@ pub(crate) struct PluginExecutionScope {
 }
 
 impl PluginExecutionScope {
+    pub(crate) fn telemetry_export(
+        &self,
+        request: &crate::machine_protocol::telemetry_export::ExportAttempt,
+    ) -> anyhow::Result<crate::machine_plugins::ManagedExportInvocation> {
+        let received = TimeSample::now();
+        anyhow::ensure!(
+            self.connected.load(Ordering::Acquire)
+                && self.service.as_deref() == Some(request.service_id.as_str())
+                && self.machine == request.machine_id,
+            "managed export owner changed"
+        );
+        crate::machine_plugins::ManagedExportInvocation::new(
+            request.clone(),
+            Arc::clone(&self.connected),
+            received,
+        )
+    }
+
     pub(crate) fn new(service: Option<&str>, machine: &str) -> Self {
         Self {
             connected: Arc::new(AtomicBool::new(true)),

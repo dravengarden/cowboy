@@ -16,7 +16,7 @@ pub(crate) const MAX_ITEMS: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Signal {
+pub enum Signal {
     Logs,
     Metrics,
     Traces,
@@ -50,12 +50,22 @@ impl Signal {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Export {
+pub struct Export {
     pub signal: Signal,
     /// Base64 transports protobuf through the existing authenticated JSON RPC.
     pub protobuf: String,
+}
+
+// A protocol Debug dump must not copy telemetry bodies into diagnostics.
+impl std::fmt::Debug for Export {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Export")
+            .field("signal", &self.signal)
+            .field("encoded_bytes", &self.protobuf.len())
+            .finish_non_exhaustive()
+    }
 }
 
 pub(crate) enum Request {
@@ -65,7 +75,6 @@ pub(crate) enum Request {
 }
 
 impl Export {
-    #[cfg(feature = "machine-host")]
     pub(crate) fn decode(&self) -> Result<(Vec<u8>, usize)> {
         ensure!(
             self.protobuf.len() <= MAX_BYTES.div_ceil(3) * 4,

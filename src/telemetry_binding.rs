@@ -196,6 +196,20 @@ pub(crate) struct Ledger {
 }
 
 impl Ledger {
+    /// Evidence required by a fresh, independently authorized export attempt.
+    /// This predicate itself never creates a sending capability.
+    #[cfg_attr(not(all(test, feature = "machine-host")), allow(dead_code))]
+    pub(crate) fn permits_export(
+        &self,
+        attempt: &crate::machine_protocol::telemetry_export::ExportAttempt,
+    ) -> bool {
+        self.service_id == attempt.service_id
+            && self.machine_id == attempt.machine_id
+            && self.current.as_ref() == Some(&attempt.binding)
+            && attempt.binding.selection.is_some()
+            && !self.operations.iter().any(|op| op.progress.unresolved())
+    }
+
     pub(crate) fn decode(document: &str, service: &str) -> Result<Self> {
         ensure!(
             document.len() <= MAX_BYTES,

@@ -12,8 +12,9 @@ pub mod installation_revision;
 pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod telemetry_binding;
+pub mod telemetry_export;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 15;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 16;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -28,6 +29,8 @@ pub const PLUGIN_EXECUTION_LEASE_PROTOCOL_VERSION: u16 = 13;
 pub const TELEMETRY_BINDING_OBSERVATION_PROTOCOL_VERSION: u16 = 14;
 /// Namespace-CAS finite binding commands. This is not writer admission.
 pub const TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION: u16 = 15;
+/// A separately authorized single managed OTLP attempt; no writer enablement.
+pub const TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION: u16 = 16;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -717,6 +720,10 @@ pub enum MachineCommand {
         request_id: String,
         step: Box<telemetry_binding::BindingStep>,
     },
+    ExportBoundTelemetry {
+        request_id: String,
+        attempt: Box<telemetry_export::ExportAttempt>,
+    },
     /// Compensate a Controller uninstall saga whose durable session commit
     /// failed after the Machine removed its active link. Only retained,
     /// previously verified generation bytes may be re-activated.
@@ -768,6 +775,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::ExportBoundTelemetry { .. } => TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION,
             Self::CommitTelemetryBinding { .. } => TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION,
             Self::QueryTelemetryBinding { step, .. } => {
                 if step.schema == 1 {
@@ -1019,6 +1027,11 @@ pub enum MachineEvent {
     TelemetryBindingCommitted {
         request_id: String,
         result: Box<telemetry_binding::BindingCommitResult>,
+    },
+    TelemetryExported {
+        request_id: String,
+        /// None means the request was invalid before a digest could be bound.
+        receipt: Option<Box<telemetry_export::ExportReceipt>>,
     },
     /// Sensitive Plugin output is correlated directly to the requester and
     /// must not enter the ordinary Machine event history.

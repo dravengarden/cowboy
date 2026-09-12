@@ -272,6 +272,9 @@ impl OperatorApproval {
     }
 }
 
+mod telemetry_export;
+pub(super) use telemetry_export::TelemetryExportAuthority;
+
 pub(super) struct UninstallAuthority {
     approval: OperatorApproval,
     request_digest: String,

@@ -61,6 +61,10 @@ Machine writer；managed export lease、双侧 live/rollback/cold reader 验收�
 Service 传输与 Machine 接收时租约；真实签名安装、消息编解码和 SQL 协调测试覆盖选择、撤销、恢复与
 丢 ACK 后只查询。schema 1 保持原字节读取，mutation 只接纳 schema 2；两侧生产写开关仍关闭，
 managed export lease、rollback/cold reader 基线和独立中断恢复仍待完成，不宣称 P2 已上线。
+第二十四批 [managed 单次遥测外发](telemetry-managed-attempts.md) 加入协议 16 的独立授权和闭集
+OTLP 请求/回执，Service 与 Machine 共同核验精确绑定，原连接与短预算限制一次 HTTP 尝试；
+部分接收、响应丢失与重定向不自动重试。绑定历史不生成新外发权；后台策略激活、reader 恢复基线、
+生产写入及独立中断处置仍未完成，现有显式配置外发不受此 staging 路径替换。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
