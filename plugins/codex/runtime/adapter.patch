@@ -1,0 +1,349 @@
+diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
+index f9995a9..a97776f 100644
+--- a/src/CodexAcpClient.ts
++++ b/src/CodexAcpClient.ts
+@@ -532,6 +532,7 @@ export class CodexAcpClient {
+         await this.refreshSkills(request.cwd, additionalDirectories);
+ 
+         const response = await this.codexClient.threadResume({
++            excludeTurns: true,
+             config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),
+             cwd: request.cwd,
+             modelProvider: await this.getResumeModelProvider(),
+diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
+index 0f79117..f33231c 100644
+--- a/src/CodexJsonRpcConnection.ts
++++ b/src/CodexJsonRpcConnection.ts
+@@ -3,6 +3,7 @@ import type {MessageConnection} from "vscode-jsonrpc/node";
+ import type {ChildProcessWithoutNullStreams} from "node:child_process";
+ import {spawn} from "node:child_process";
+ import {createRequire} from "node:module";
++import {isAbsolute} from "node:path";
+ 
+ import {createJSONRPCReader, createJSONRPCWriter} from "./StdUtils";
+ import {logger} from "./Logger";
+@@ -14,12 +15,22 @@ export interface CodexConnection {
+ 
+ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv): CodexConnection {
+     const spawnEnv = env ?? process.env;
++    const configuration: unknown = JSON.parse(spawnEnv['COWBOY_PRIVATE_CODEX_ARGUMENTS'] ?? '[]');
++    if (!Array.isArray(configuration) || configuration.length % 2 !== 0 ||
++        configuration.some((value, index) => typeof value !== 'string' ||
++            (index % 2 === 0 ? value !== '-c' : !/^[a-zA-Z0-9_.-]+=/.test(value)))) {
++        throw new Error('Invalid private Codex configuration arguments');
++    }
++    if (configuration.length && (!codexPath || !isAbsolute(codexPath))) {
++        throw new Error('Configured Codex requires an exact executable');
++    }
++    const nativeArguments = [...configuration, 'app-server'] as string[];
+ 
+     let codex: ChildProcessWithoutNullStreams;
+     if (codexPath) {
+         codex = process.platform === 'win32'
+             ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv })
+-            : spawn(codexPath, ['app-server'], { env: spawnEnv });
++            : spawn(codexPath, nativeArguments, { env: spawnEnv });
+     } else {
+         const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
+         codex = spawn(process.execPath, [bundledCodexPath, 'app-server'], {env: spawnEnv});
+@@ -32,6 +43,13 @@ export function startCodexConnection(codexPath?: string, env?: NodeJS.ProcessEnv
+ 
+     let connection = rpc.createMessageConnection(reader, writer);
+ 
++    // Closing the stream must reject pending requests, including resume. The
++    // JSON-RPC library's close notification alone does not dispose requests.
++    connection.onClose(() => {
++        connection.dispose();
++        if (codex.exitCode === null && codex.signalCode === null) codex.kill();
++    });
++
+     connection.listen();
+ 
+     // Terminate all current activities on process termination
+diff --git a/src/StdUtils.ts b/src/StdUtils.ts
+index 3d9e215..3dd6a4c 100644
+--- a/src/StdUtils.ts
++++ b/src/StdUtils.ts
+@@ -28,40 +28,112 @@ export function createJSONRPCWriter(writable: Writable): MessageWriter {
+     };
+ }
+ 
+-//TODO ask to include proper jsonrpc field and remove
+-export function createJSONRPCReader(readable: Readable): MessageReader {
+-    return {
+-        listen(callback: DataCallback): Disposable {
+-            let buf = '';
+-            const onData = (chunk: Buffer) => {
+-                buf += chunk.toString();
+-                for (;;) {
+-                    const i = buf.indexOf('\n');
+-                    if (i < 0) break;
+-                    const line = buf.slice(0, i).trim();
+-                    buf = buf.slice(i + 1);
+-                    if (!line) continue;
+-                    try {
+-                        const msg = JSON.parse(line);
+-                        if (msg && typeof msg === 'object' && msg.jsonrpc === undefined) {
+-                            msg.jsonrpc = '2.0';
+-                        }
+-                        callback(msg);
+-                    } catch {/* ignore malformed lines; they're still logged above */}
++// Legacy history loads can still contain a large inline-image frame. Resume
++// excludes turns; this compatibility ceiling bounds a broken or hostile peer.
++export const MAX_APP_SERVER_FRAME_BYTES = 256 * 1024 * 1024;
++
++export function createJSONRPCReader(readable: Readable, maxFrameBytes = MAX_APP_SERVER_FRAME_BYTES): MessageReader {
++    const errors = new Emitter<Error>();
++    const closes = new Emitter<void>();
++    const partials = new Emitter<PartialMessageInfo>();
++    const decoder = new TextDecoder('utf-8', {fatal: true});
++    let fragments: Buffer[] = [];
++    let frameBytes = 0;
++    let callback: DataCallback | undefined;
++    let closed = false;
++
++    function detach() {
++        readable.off('data', onData);
++        readable.off('error', onError);
++        readable.off('end', onEnd);
++        readable.off('close', onClose);
++        fragments = [];
++        frameBytes = 0;
++        callback = undefined;
++    }
++    function onClose() {
++        if (closed) return;
++        closed = true;
++        detach();
++        closes.fire();
++    }
++    function fail(message: string) {
++        if (closed) return;
++        errors.fire(new Error(message));
++        onClose();
++        readable.destroy();
++    }
++    function onError() {
++        fail('App Server transport failed');
++    }
++    function onEnd() {
++        if (frameBytes) fail('App Server closed with an incomplete JSON frame');
++        else onClose();
++    }
++    function onData(chunk: Buffer) {
++        // Search only the incoming bytes. Assemble and decode each complete
++        // frame once, preserving UTF-8 sequences split between chunks.
++        let offset = 0;
++        while (offset < chunk.length && !closed) {
++            const newline = chunk.indexOf(10, offset);
++            const end = newline < 0 ? chunk.length : newline;
++            const size = end - offset;
++            if (frameBytes + size > maxFrameBytes) {
++                fail('App Server JSON frame exceeds the supported byte limit');
++                return;
++            }
++            if (size) {
++                fragments.push(chunk.subarray(offset, end));
++                frameBytes += size;
++            }
++            if (newline < 0) return;
++            const bytes = Buffer.concat(fragments, frameBytes);
++            fragments = [];
++            frameBytes = 0;
++            let message: Message;
++            try {
++                const line = decoder.decode(bytes).trim();
++                if (!line) {
++                    offset = newline + 1;
++                    continue;
+                 }
+-            };
+-            readable.on('data', onData);
+-            return {
+-                dispose() {
+-                    readable.off('data', onData);
++                const value: unknown = JSON.parse(line);
++                if (!value || typeof value !== 'object' || Array.isArray(value)) {
++                    throw new Error('Expected a JSON-RPC object');
+                 }
++                message = value as Message;
++                if (message.jsonrpc === undefined) message.jsonrpc = '2.0';
++            } catch {
++                // Parser messages may contain conversation data. Report only
++                // the failure class and close outstanding RPCs explicitly.
++                fail('App Server returned an invalid UTF-8 or JSON frame');
++                return;
+             }
+-        },
+-        onError: new Emitter<Error>().event,
+-        onClose: new Emitter<void>().event,
+-        onPartialMessage: new Emitter<PartialMessageInfo>().event,
+-        dispose() {}
++            callback?.(message);
++            offset = newline + 1;
++        }
+     }
++    return {
++        listen(listener: DataCallback): Disposable {
++            if (closed || callback) throw new Error('App Server reader is not available');
++            callback = listener;
++            readable.on('data', onData);
++            readable.on('error', onError);
++            readable.on('end', onEnd);
++            readable.on('close', onClose);
++            return {dispose: detach};
++        },
++        onError: errors.event,
++        onClose: closes.event,
++        onPartialMessage: partials.event,
++        dispose() {
++            closed = true;
++            detach();
++            errors.dispose();
++            closes.dispose();
++            partials.dispose();
++        }
++    };
+ }
+ 
+ export function createJsonStream(readable: Readable, writable: Writable){
+diff --git a/src/__tests__/CodexJsonRpcConnection.test.ts b/src/__tests__/CodexJsonRpcConnection.test.ts
+new file mode 100644
+index 0000000..a3e56c1
+--- /dev/null
++++ b/src/__tests__/CodexJsonRpcConnection.test.ts
+@@ -0,0 +1,28 @@
++import {EventEmitter} from 'node:events';
++import {PassThrough} from 'node:stream';
++import {afterEach, expect, it, vi} from 'vitest';
++import {spawn} from 'node:child_process';
++import type {ChildProcessWithoutNullStreams} from 'node:child_process';
++import {startCodexConnection} from '../CodexJsonRpcConnection';
++
++vi.mock('node:child_process', () => ({spawn: vi.fn()}));
++afterEach(() => vi.clearAllMocks());
++
++it('rejects a pending restore and terminates its native process on malformed output', async () => {
++    const child = Object.assign(new EventEmitter(), {
++        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
++        exitCode: null, signalCode: null, kill: vi.fn(),
++    });
++    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcessWithoutNullStreams);
++    const {connection} = startCodexConnection('/exact/codex', {
++        COWBOY_PRIVATE_CODEX_ARGUMENTS: '["-c","approval_policy=never"]',
++    });
++    expect(spawn).toHaveBeenCalledWith('/exact/codex', ['-c', 'approval_policy=never', 'app-server'], expect.anything());
++    const pending = connection.sendRequest('thread/resume', {threadId: 'kept-thread', excludeTurns: true});
++    const rejected = expect(pending).rejects.toThrow('disposed');
++    child.stdout.write('{invalid\n');
++    await rejected;
++    expect(child.kill).toHaveBeenCalledOnce();
++    child.stdin.destroy();
++    child.stderr.destroy();
++});
+diff --git a/src/__tests__/StdUtils.test.ts b/src/__tests__/StdUtils.test.ts
+new file mode 100644
+index 0000000..8c6b285
+--- /dev/null
++++ b/src/__tests__/StdUtils.test.ts
+@@ -0,0 +1,100 @@
++import {PassThrough} from 'node:stream';
++import {describe, expect, it} from 'vitest';
++import {createJSONRPCReader} from '../StdUtils';
++import type {ResponseMessage} from 'vscode-jsonrpc/node';
++
++describe('App Server JSON frames', () => {
++    it('preserves Unicode and multiple frames across every byte boundary', () => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream);
++        const received: unknown[] = [];
++        reader.listen(message => received.push(message));
++        const frame = Buffer.from('\r\n' + JSON.stringify({id: 1, result: '图标🦅'}) + '\r\n' +
++            JSON.stringify({id: 2, result: {path: '/space here/a.png'}}) + '\n');
++        for (const byte of frame) stream.write(Buffer.from([byte]));
++        expect(received).toEqual([
++            {jsonrpc: '2.0', id: 1, result: '图标🦅'},
++            {jsonrpc: '2.0', id: 2, result: {path: '/space here/a.png'}},
++        ]);
++        reader.dispose();
++        stream.destroy();
++    });
++
++    it.each([
++        Buffer.from('{"secret":"not valid JSON"\n'),
++        Buffer.from([123, 34, 120, 34, 58, 34, 255, 34, 125, 10]),
++        Buffer.from('[]\n'),
++    ])('closes malformed input without exposing payloads', frame => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream);
++        const errors: string[] = [];
++        let closed = 0;
++        let received = 0;
++        reader.onError(error => errors.push(error.message));
++        reader.onClose(() => closed++);
++        reader.listen(() => received++);
++        stream.write(frame);
++        expect(errors).toEqual(['App Server returned an invalid UTF-8 or JSON frame']);
++        expect(closed).toBe(1);
++        expect(received).toBe(0);
++        expect(stream.destroyed).toBe(true);
++        reader.dispose();
++    });
++
++    it('bounds an unterminated frame before allocating the entire response', () => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream, 64);
++        const errors: string[] = [];
++        reader.onError(error => errors.push(error.message));
++        reader.listen(() => { throw new Error('Oversized input must not be delivered'); });
++        stream.write(Buffer.alloc(32, 32));
++        stream.write(Buffer.alloc(33, 32));
++        expect(errors).toEqual(['App Server JSON frame exceeds the supported byte limit']);
++        expect(stream.destroyed).toBe(true);
++        reader.dispose();
++    });
++
++    it('reports EOF during a frame and resolves clean EOF once', async () => {
++        for (const incomplete of [false, true]) {
++            const stream = new PassThrough();
++            const reader = createJSONRPCReader(stream);
++            const errors: string[] = [];
++            let closes = 0;
++            reader.onError(error => errors.push(error.message));
++            const closed = new Promise<void>(resolve => reader.onClose(() => { closes++; resolve(); }));
++            reader.listen(() => {});
++            stream.end(incomplete ? '{' : '{}\n');
++            await closed;
++            expect(closes).toBe(1);
++            expect(errors).toEqual(incomplete ? ['App Server closed with an incomplete JSON frame'] : []);
++            reader.dispose();
++        }
++    });
++
++    it('releases retained fragments and listeners when disposed', () => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream);
++        let received = 0;
++        reader.listen(() => received++);
++        stream.write(Buffer.from('{'));
++        reader.dispose();
++        stream.write(Buffer.from('}\n'));
++        expect(received).toBe(0);
++        for (const event of ['data', 'error', 'end', 'close']) expect(stream.listenerCount(event)).toBe(0);
++        stream.destroy();
++    });
++
++    it('handles a large image result supplied in small chunks', () => {
++        const stream = new PassThrough();
++        const reader = createJSONRPCReader(stream);
++        let length = 0;
++        reader.listen(message => { length = ((message as ResponseMessage).result as string).length; });
++        stream.write('{"id":1,"result":"');
++        const chunk = Buffer.alloc(1024, 65);
++        for (let index = 0; index < 32 * 1024; index++) stream.write(chunk);
++        stream.write('"}\n');
++        expect(length).toBe(32 * 1024 * 1024);
++        reader.dispose();
++        stream.destroy();
++    });
++});

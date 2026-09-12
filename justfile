@@ -216,7 +216,12 @@ plugin-isolation-check PLUGIN="codex":
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"
+    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
+
+# No Service credentials or inference: copy an existing rollout into a private
+# home and exercise the real packaged ACP launch in a network namespace.
+codex-resume-conformance ADAPTER CODEX ROLLOUT RECEIPT:
+    python3 plugins/codex/runtime/resume_conformance.py --adapter "{{ADAPTER}}" --codex "{{CODEX}}" --rollout "{{ROLLOUT}}" --receipt "{{RECEIPT}}"
 
 plugin-set-artifact-url PLUGIN URL:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"
@@ -303,6 +308,8 @@ provider-release-coverage CATALOG:
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
+    deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/source.json
+    deno check plugins/codex/runtime/build.ts
     deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
