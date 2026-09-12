@@ -145,7 +145,7 @@ inbound listener；本地 Machine 可以使用 UDS。每个 Session 都会记录
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v3.webp">
     <img src="site/assets/cowboy-desktop-surface-light-v2.webp" alt="Cowboy Desktop 抽象工作区，包含 Session 导航、prompt 编辑器和实时 Agent timeline" width="1100">
   </picture>
 </p>
@@ -156,7 +156,7 @@ inbound listener；本地 Machine 可以使用 UDS。每个 Session 都会记录
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v3.webp">
     <img src="site/assets/cowboy-mobile-light-v2.webp" alt="Cowboy Mobile 的 Session、Agent 工作与代码审查抽象界面" width="960">
   </picture>
 </p>

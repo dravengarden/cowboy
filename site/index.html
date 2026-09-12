@@ -229,7 +229,9 @@
 
         <div class="hero-product">
           <div class="product-window hero-product-window">
-            <img
+            <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-hero-devices-dark.webp">
+              <img
               class="theme-art workspace-art"
               src="assets/cowboy-hero-devices-light.webp"
               alt="Abstract Cowboy Desktop and Phone workspaces connected through one Hub to multiple macOS and Linux Machines"
@@ -238,6 +240,7 @@
               height="1024"
               fetchpriority="high"
             >
+              </picture>
           </div>
           <div
             class="hero-control-plane"
@@ -415,6 +418,8 @@
               <small data-i18n="desktop.keyboardDetail">Vim-like · fully addressable</small>
             </div>
             <div class="desktop-illustration">
+              <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-desktop-surface-dark.webp">
               <img
                 class="theme-art"
                 src="assets/cowboy-desktop-surface-light.webp"
@@ -424,6 +429,7 @@
                 height="860"
                 loading="lazy"
               >
+              </picture>
               <div class="markdown-composer" aria-hidden="true">
                 <div class="markdown-composer-bar">
                   <span>prompt.md</span>
@@ -465,6 +471,8 @@
               safe keyboard behavior, and progressively disclosed code tools.
             </p>
             <div class="mobile-illustration">
+              <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-mobile-dark.webp">
               <img
                 class="theme-art"
                 src="assets/cowboy-mobile-light.webp"
@@ -474,6 +482,7 @@
                 height="1024"
                 loading="lazy"
               >
+              </picture>
             </div>
           </article>
         </div>

@@ -353,9 +353,9 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
       readme.includes("site/assets/cowboy-remote-topology-dark-v4.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
-      readme.includes("site/assets/cowboy-desktop-surface-dark-v2.webp") &&
+      readme.includes("site/assets/cowboy-desktop-surface-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
-      readme.includes("site/assets/cowboy-mobile-dark-v2.webp") &&
+      readme.includes("site/assets/cowboy-mobile-dark-v3.webp") &&
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
   );
@@ -365,9 +365,9 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
       "site/assets/cowboy-remote-topology-light-v3.webp",
       "site/assets/cowboy-remote-topology-dark-v4.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
-      "site/assets/cowboy-desktop-surface-dark-v2.webp",
+      "site/assets/cowboy-desktop-surface-dark-v3.webp",
       "site/assets/cowboy-mobile-light-v2.webp",
-      "site/assets/cowboy-mobile-dark-v2.webp",
+      "site/assets/cowboy-mobile-dark-v3.webp",
     ]
   ) {
     assert(
@@ -724,7 +724,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "published HTML should not expose real product captures",
     );
     assert(
-      styles.includes('html[data-theme="dark"] .theme-art'),
+      !styles.includes("filter: invert(") &&
+        (html.match(/data-theme-art-dark/gu) ?? []).length === 3 &&
+        script.includes('theme === "dark" ? "all" : "not all"'),
       "product illustrations should respond to the selected theme",
     );
     assert(

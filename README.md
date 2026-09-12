@@ -156,7 +156,7 @@ keyboard/Vim control for sustained engineering work.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v3.webp">
     <img src="site/assets/cowboy-desktop-surface-light-v2.webp" alt="Abstract Cowboy Desktop workspace with a session rail, prompt editor, and live Agent timeline" width="1100">
   </picture>
 </p>
@@ -168,7 +168,7 @@ same durable worker.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v3.webp">
     <img src="site/assets/cowboy-mobile-light-v2.webp" alt="Abstract Cowboy Mobile surfaces for sessions, Agent work, and code review" width="960">
   </picture>
 </p>

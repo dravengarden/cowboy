@@ -772,12 +772,9 @@ html[data-theme="dark"] .button-primary {
   background: var(--paper);
 }
 
-.theme-art {
-  transition: filter 220ms ease;
-}
-
-html[data-theme="dark"] .theme-art {
-  filter: invert(0.88) hue-rotate(180deg) saturate(0.9) brightness(0.82) contrast(1.06);
+.theme-art-picture {
+  display: block;
+  height: 100%;
 }
 
 .workspace-art {

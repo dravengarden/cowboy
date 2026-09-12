@@ -129,6 +129,15 @@ const NON_AGENT_PRESENTATION: Record<
 };
 
 const REQUIRED_ASSETS = [
+  [
+    "site/assets/cowboy-hero-devices-dark-v5.webp",
+    "assets/cowboy-hero-devices-dark.webp",
+  ],
+  [
+    "site/assets/cowboy-desktop-surface-dark-v3.webp",
+    "assets/cowboy-desktop-surface-dark.webp",
+  ],
+  ["site/assets/cowboy-mobile-dark-v3.webp", "assets/cowboy-mobile-dark.webp"],
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   [
     "site/assets/cowboy-tab-icon-v6-16.png",
