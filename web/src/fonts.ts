@@ -45,9 +45,7 @@ const loadNotoSerifSC = (): Promise<unknown> =>
   ]);
 
 export const FONT_PRESETS: FontPreset[] = [
-  // "System" first + default: keeps the OS-native UI font cowboy's theme is
-  // built around, and downloads no webfont — existing users see no change and
-  // no surprise fetch until they pick another face.
+  // Keep the native system face available as an explicit reading choice.
   {
     id: "system",
     label: "System",
@@ -124,7 +122,7 @@ export const FONT_PRESETS: FontPreset[] = [
   },
 ];
 
-export const DEFAULT_FONT_ID = "system";
+export const DEFAULT_FONT_ID = "source-serif-4";
 
 // The fallback face for an unset / unknown id — the product default. Resolved
 // from DEFAULT_FONT_ID so read()'s `getFontPreset("")` lands on it.

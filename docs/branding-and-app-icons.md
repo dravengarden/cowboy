@@ -113,3 +113,7 @@ SideStore **0.1.30** makes Neon (103) the primary icon. Its Apple release build
 and isolated Simulator conformance checks passed; both iPhone and iPad inventories
 contain the 200 compatibility alternatives. The public source and published IPA
 were verified after publication. Physical-device acceptance is not yet recorded.
+
+New preferences default to System appearance and Source Serif 4 for reading.
+Explicit saved theme and font choices remain unchanged. The Home Screen artwork
+has its own opaque background; the in-app System setting does not recolor it.
