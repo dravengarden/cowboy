@@ -298,6 +298,12 @@ agent-generation-failure-isolation RELEASE ARTIFACTS WORKER *ARGS:
 catalog-reader-conformance BRIDGE BASELINE CANDIDATE SDK LEGACY_PACKAGE RECEIPT *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/catalog_reader_conformance.py "$@"' conformance "{{BRIDGE}}" "{{BASELINE}}" "{{CANDIDATE}}" "{{SDK}}" "{{LEGACY_PACKAGE}}" --receipt "{{RECEIPT}}" {{ARGS}}
 
+# Populated Service/Machine journals against every supplied immutable active,
+# rollback and cold reader. Clean source, no external network or live state.
+telemetry-reader-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.

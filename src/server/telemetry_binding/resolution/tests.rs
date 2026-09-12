@@ -4,6 +4,9 @@ use crate::server::{AuthenticatedProductRequest, operator_approval::OperatorAppr
 use crate::telemetry_binding::{resolution::tests::intent as resolution_intent, tests::applied};
 use std::sync::atomic::AtomicUsize;
 
+#[cfg(all(target_os = "linux", feature = "machine-host"))]
+mod reader_conformance;
+
 pub(in crate::server::telemetry_binding) fn request(
     before: &Operation,
     observation: Option<&BindingObservation>,

@@ -22,6 +22,21 @@ struct LedgerFile {
     evidence_digest: BindingDigest,
 }
 
+#[cfg(test)]
+impl MachinePluginStore {
+    /// Re-checksummed negative fixtures must use the real wire field order.
+    pub(crate) fn rewrite_binding_fixture(
+        bytes: &[u8],
+        change: impl FnOnce(&mut serde_json::Value),
+    ) -> Vec<u8> {
+        let mut json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        change(&mut json["ledger"]);
+        let mut file: LedgerFile = serde_json::from_value(json).unwrap();
+        file.evidence_digest = binding_digest(&serde_json::to_vec(&file.ledger).unwrap());
+        serde_json::to_vec(&file).unwrap()
+    }
+}
+
 // One finite Machine export slot, scoped to its pinned Service. Receipt and
 // binding-state updates belong in one atomic durable replacement, not separate
 // files whose agreement is guessed after restart. No endpoint or token here.
