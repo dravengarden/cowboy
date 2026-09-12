@@ -336,17 +336,18 @@ async fn send(socket: &mut Socket, frame: MachineFrame) -> Result<(), Failure> {
     socket
         .send(Message::Text(json.into()))
         .await
-        .map_err(|_| Failure::WrongProtocol)
+        .map_err(|_| Failure::FrameSend)
 }
 
 async fn receive(socket: &mut Socket) -> Result<MachineFrame, Failure> {
     loop {
         match socket.next().await {
             Some(Ok(Message::Text(text))) => {
-                return serde_json::from_str(&text).map_err(|_| Failure::WrongProtocol);
+                return serde_json::from_str(&text).map_err(|_| Failure::FrameDecode);
             }
             Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-            _ => return Err(Failure::WrongProtocol),
+            Some(Ok(Message::Binary(_) | Message::Frame(_))) => return Err(Failure::FrameDecode),
+            _ => return Err(Failure::ConnectionClosed),
         }
     }
 }
@@ -366,7 +367,7 @@ async fn machine(
         .max_frame_size(Some(256 * 1024));
     let mut socket = tokio_tungstenite::accept_async_with_config(stream, Some(config))
         .await
-        .map_err(|_| Failure::WrongProtocol)?;
+        .map_err(|_| Failure::SocketUpgrade)?;
     let expires = chrono::Utc::now().timestamp_millis() + 30_000;
     send(
         &mut socket,
@@ -379,7 +380,7 @@ async fn machine(
     )
     .await?;
     let MachineFrame::Hello { hello } = receive(&mut socket).await? else {
-        return Err(Failure::WrongProtocol);
+        return Err(Failure::UnexpectedHandshake);
     };
     if hello.machine_id != MACHINE
         || hello.min_protocol > 17
@@ -389,7 +390,7 @@ async fn machine(
         return Err(Failure::WrongProtocol);
     }
     let public = std::fs::read_to_string(root.join("machine/identity_ed25519.pub"))
-        .map_err(|_| Failure::WrongProtocol)?;
+        .map_err(|_| Failure::ChallengeSignature)?;
     let proof = crate::machine_protocol::challenge_proof_v3(
         "isolated-reader-challenge",
         "isolated-reader-nonce",
@@ -403,11 +404,25 @@ async fn machine(
             hello
                 .challenge_signature
                 .as_deref()
-                .ok_or(Failure::WrongProtocol)?,
+                .ok_or(Failure::ChallengeSignature)?,
         )
-        .map_err(|_| Failure::WrongProtocol)?
+        .map_err(|_| Failure::ChallengeSignature)?
     {
-        return Err(Failure::WrongProtocol);
+        return Err(Failure::ChallengeSignature);
+    }
+    // Unlike production's systemd socket activation, direct-mode listener
+    // creation is asynchronous. A stale path from read one is insufficient;
+    // require THIS child to announce its bound broker before welcoming it.
+    while !running.log_contains("cowboy Machine broker listening") {
+        if running
+            .child
+            .try_wait()
+            .map_err(|_| Failure::ExitedBeforeReady)?
+            .is_some()
+        {
+            return Err(Failure::ExitedBeforeReady);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     send(
         &mut socket,
