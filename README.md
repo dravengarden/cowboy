@@ -41,7 +41,7 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v3.webp">
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v4.webp">
       <img src="site/assets/cowboy-remote-topology-light-v3.webp" alt="Cowboy Desktop and Mobile connect through one self-hosted Hub to three generic macOS and Linux Machines running multiple coding agents" width="1100">
     </picture>
   </a>

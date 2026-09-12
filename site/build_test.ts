@@ -351,7 +351,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   assert(
     readme.includes("site/assets/cowboy-readme-icon-v6.png") &&
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
-      readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
+      readme.includes("site/assets/cowboy-remote-topology-dark-v4.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-dark-v2.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
@@ -363,7 +363,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     const asset of [
       "site/assets/cowboy-readme-icon-v6.png",
       "site/assets/cowboy-remote-topology-light-v3.webp",
-      "site/assets/cowboy-remote-topology-dark-v3.webp",
+      "site/assets/cowboy-remote-topology-dark-v4.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
       "site/assets/cowboy-desktop-surface-dark-v2.webp",
       "site/assets/cowboy-mobile-light-v2.webp",
