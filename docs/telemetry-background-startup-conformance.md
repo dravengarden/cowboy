@@ -48,11 +48,13 @@ Both reads reopen the **same** temporary journal, policy and telemetry directory
 Every successful startup requires `/healthz`, the exact closed writer/fence log,
 and the expected bounded background activation log (or its absence in unconfigured
 mode). It then submits the official client protobuf fixtures for logs, metrics
-and traces through the actual HTTP intake. Private local JSONL records must grow;
+and traces through the actual HTTP intake. Each sample has a distinct batch ID,
+including the two separate metrics samples. Private local JSONL records must grow;
 creating an empty file is not acceptance. Local/drop counters must remain zero.
 
 No Machine is connected. An active queue therefore consumes each new batch once
-as not-admitted, with exactly one failed batch per signal. Stopped/unconfigured
+as not-admitted, with exactly one failure per sample (one log, one trace and two
+metrics batches). Stopped/unconfigured
 modes must leave all remote counters zero. Each cold start begins with zero
 accepted batches: retained local files cannot be replayed. Journal document and
 checksum, Machine fixture bytes and policy bytes must remain unchanged after

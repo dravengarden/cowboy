@@ -132,7 +132,7 @@ async fn local_recording(
         return Err(Failure::WrongExportState); // A cold read cannot replay local files.
     }
     let fixtures = crate::otlp::client_fixtures();
-    for (signal, body) in &fixtures {
+    for (index, (signal, body)) in fixtures.iter().enumerate() {
         let signal = match signal {
             crate::otlp::Signal::Logs => "logs",
             crate::otlp::Signal::Metrics => "metrics",
@@ -140,7 +140,7 @@ async fn local_recording(
         };
         let response = client
             .post(format!(
-                "http://{address}/api/telemetry/v1/{signal}?batch_id=startup-{cold_read}-{signal}"
+                "http://{address}/api/telemetry/v1/{signal}?batch_id=startup-{cold_read}-{index}"
             ))
             .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
             .body(body.clone())
@@ -154,24 +154,40 @@ async fn local_recording(
     loop {
         let current = metrics(&client, address).await?;
         let failures = [
-            "observability_failed_log_batches",
-            "observability_failed_metric_batches",
-            "observability_failed_trace_batches",
+            (
+                "observability_failed_log_batches",
+                crate::otlp::Signal::Logs,
+            ),
+            (
+                "observability_failed_metric_batches",
+                crate::otlp::Signal::Metrics,
+            ),
+            (
+                "observability_failed_trace_batches",
+                crate::otlp::Signal::Traces,
+            ),
         ];
         // No Machine exists in this isolated startup gate. An ACTIVE queue
         // consumes each new batch once as not-admitted; stopped/unconfigured
         // modes have no queue and must leave every remote counter at zero.
-        let expected = u64::from(active);
-        if failures
-            .iter()
-            .any(|key| current[key].as_u64().is_none_or(|value| value > expected))
-            || [
-                "observability_failed_file_batches",
-                "observability_dropped_export_batches",
-                "observability_dropped_batches",
-            ]
-            .iter()
-            .any(|key| current[key] != 0)
+        let expected = |signal| {
+            if active {
+                fixtures.iter().filter(|(kind, _)| *kind == signal).count() as u64
+            } else {
+                0
+            }
+        };
+        if failures.iter().any(|(key, signal)| {
+            current[key]
+                .as_u64()
+                .is_none_or(|value| value > expected(*signal))
+        }) || [
+            "observability_failed_file_batches",
+            "observability_dropped_export_batches",
+            "observability_dropped_batches",
+        ]
+        .iter()
+        .any(|key| current[key] != 0)
         {
             return Err(Failure::WrongExportState);
         }
@@ -179,7 +195,7 @@ async fn local_recording(
             && current["observability_accepted_batches"].as_u64() == Some(fixtures.len() as u64)
             && failures
                 .iter()
-                .all(|key| current[key].as_u64() == Some(expected))
+                .all(|(key, signal)| current[key].as_u64() == Some(expected(*signal)))
         {
             let bytes = std::fs::read(&file).map_err(|_| Failure::LocalRecording)?;
             if bytes.len() as u64 <= before
