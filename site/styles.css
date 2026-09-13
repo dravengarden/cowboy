@@ -2705,7 +2705,7 @@ html[data-theme="dark"] .topology-machines article {
   overflow: hidden;
   border: 1px solid rgba(231, 224, 255, 0.14);
   border-radius: 15px;
-  background: rgba(10, 8, 15, 0.52);
+  background: #141019;
   box-shadow: 0 20px 55px rgba(0, 0, 0, 0.26);
 }
 
