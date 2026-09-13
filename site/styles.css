@@ -10,10 +10,9 @@
   --ink: #101014;
   --ink-soft: #605b6b;
   --ink-faint: #716b7d;
-  --primary: #8045b8;
-  --primary-display: #a365df;
-  --secondary: #096c91;
-  --primary-bright: #6f35a7;
+  --primary: #bb83ff;
+  --secondary: #51c9ff;
+  --primary-bright: #cba0ff;
   --primary-soft: #f1e8fc;
   --primary-wash: rgba(187, 131, 255, 0.10);
   --line: rgba(77, 55, 103, 0.13);
@@ -43,7 +42,6 @@ html[data-theme="dark"] {
   --ink-soft: #c4becf;
   --ink-faint: #a49bb3;
   --primary: #bb83ff;
-  --primary-display: var(--brand-purple);
   --secondary: #51c9ff;
   --primary-bright: #cba0ff;
   --primary-soft: #30203f;
@@ -313,7 +311,7 @@ kbd {
   .github-link:hover,
   .nav-toggle:hover {
     background: var(--primary-wash);
-    color: var(--primary);
+    color: var(--ink);
   }
 }
 
@@ -476,8 +474,8 @@ kbd {
 }
 
 .preference-options button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--paper) 88%, var(--primary-wash));
-  color: var(--primary);
+  background: var(--brand-purple);
+  color: var(--on-brand);
   box-shadow:
     0 1px 2px rgba(50, 39, 79, 0.08),
     0 6px 16px color-mix(in srgb, var(--primary) 9%, transparent);
@@ -537,8 +535,13 @@ kbd {
   display: flex;
   gap: 10px;
   align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #17131f;
   margin: 0 0 20px;
-  color: var(--secondary);
+  color: var(--brand-cyan);
   font-family: var(--mono);
   font-size: 0.72rem;
   font-weight: 760;
@@ -548,9 +551,10 @@ kbd {
 }
 
 .eyebrow > span {
+  flex: 0 0 18px;
   width: 18px;
   height: 1px;
-  background: currentColor;
+  background: var(--brand-purple);
 }
 
 .eyebrow b,
@@ -569,7 +573,12 @@ kbd {
 
 .hero h1 em,
 .section-heading h2 em {
-  color: var(--primary-display);
+  padding-inline: 0.08em;
+  border-radius: 0.08em;
+  background: var(--brand-purple);
+  color: var(--on-brand);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
   font-style: normal;
 }
 
@@ -586,7 +595,7 @@ kbd {
   gap: 10px;
   align-items: center;
   margin: 16px 0 0;
-  color: var(--secondary);
+  color: var(--ink-soft);
   font-family: var(--mono);
   font-size: 0.64rem;
   letter-spacing: 0.035em;
@@ -858,7 +867,7 @@ kbd {
 
 .control-plane-summary strong span {
   margin-inline: 3px;
-  color: var(--primary);
+  color: var(--ink);
 }
 
 .control-plane-summary strong > i,
@@ -887,7 +896,7 @@ kbd {
 }
 
 .control-fleet-count b {
-  color: var(--primary);
+  color: var(--ink);
   font-size: 0.68rem;
 }
 
@@ -937,7 +946,7 @@ kbd {
 }
 
 .control-hub-node code {
-  color: var(--primary);
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 0.49rem;
   letter-spacing: 0.035em;
@@ -1260,7 +1269,7 @@ kbd {
 }
 
 .control-agent-custom {
-  color: var(--primary);
+  color: var(--ink);
 }
 
 html[data-theme="dark"] .control-machine-grok {
@@ -1419,7 +1428,7 @@ html[data-theme="dark"] .control-machine {
 
 .surface-label > span,
 .contract-points article > span {
-  color: var(--primary);
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 0.67rem;
   font-weight: 720;
@@ -1452,7 +1461,7 @@ html[data-theme="dark"] .control-machine {
 
 .keyboard-mode {
   grid-row: 1 / 3;
-  color: var(--primary);
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 0.57rem;
   font-weight: 720;
@@ -1469,7 +1478,7 @@ html[data-theme="dark"] .control-machine {
 
 .keyboard-promise strong > span {
   margin-right: 5px;
-  color: var(--primary);
+  color: var(--ink);
   font-family: var(--mono);
 }
 
@@ -1574,7 +1583,7 @@ html[data-theme="dark"] .control-machine {
   padding: 0.7cqw 1.1cqw;
   border-radius: 999px;
   background: var(--primary-wash);
-  color: var(--primary);
+  color: var(--ink);
   font: inherit;
   font-weight: 760;
 }
@@ -1604,7 +1613,7 @@ html[data-theme="dark"] .control-machine {
 
 .markdown-line > i {
   flex: 0 0 auto;
-  color: var(--primary);
+  color: var(--ink);
   font-style: normal;
   font-weight: 760;
 }
@@ -1634,7 +1643,7 @@ html[data-theme="dark"] .control-machine {
   border: 1px solid color-mix(in srgb, var(--primary) 16%, var(--line));
   border-radius: 1.4cqw;
   background: color-mix(in srgb, var(--primary-wash) 72%, var(--paper));
-  color: var(--primary);
+  color: var(--ink);
   font-size: 0.92em;
 }
 
@@ -1667,7 +1676,7 @@ html[data-theme="dark"] .control-machine {
 }
 
 .markdown-composer-status span:first-child {
-  color: var(--primary);
+  color: var(--ink);
   font-weight: 760;
 }
 
@@ -1736,7 +1745,7 @@ html[data-theme="dark"] .control-machine {
 }
 
 .capability-strip span {
-  color: var(--primary);
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 0.64rem;
   font-weight: 720;
@@ -1790,7 +1799,7 @@ html[data-theme="dark"] .control-machine {
 }
 
 .ecosystem-section .eyebrow {
-  color: var(--primary);
+  color: var(--brand-cyan);
 }
 
 .ecosystem-heading {
@@ -1798,10 +1807,6 @@ html[data-theme="dark"] .control-machine {
   grid-template-columns: 1.25fr 0.75fr;
   gap: 64px;
   align-items: end;
-}
-
-.ecosystem-heading .section-heading h2 em {
-  color: var(--primary-display);
 }
 
 .ecosystem-intro {
@@ -1846,24 +1851,29 @@ html[data-theme="dark"] .control-machine {
 }
 
 .filter-group button[aria-pressed="true"] {
-  border-color: var(--primary);
-  background: var(--primary-soft);
-  color: var(--primary);
+  border-color: var(--ink);
+  background: var(--brand-purple);
+  color: var(--on-brand);
 }
 
 .plugin-controls > a,
 .text-link {
+  text-decoration: underline;
+  text-decoration-color: var(--brand-cyan);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
   display: inline-flex;
   gap: 8px;
   align-items: center;
-  color: var(--secondary);
+  color: var(--ink-soft);
   font-size: 0.78rem;
   font-weight: 680;
 }
 
 .plugin-controls > a:hover,
 .text-link:hover {
-  color: var(--primary-bright);
+  color: var(--ink);
+  text-decoration-thickness: 3px;
 }
 
 .plugin-grid {
@@ -1907,7 +1917,7 @@ html[data-theme="dark"] .control-machine {
 }
 
 .telemetry-signals dt {
-  color: var(--secondary);
+  color: var(--ink-soft);
   font-weight: 650;
 }
 
@@ -2022,7 +2032,7 @@ html[data-theme="dark"] .control-machine {
 
 .plugin-card-footer code {
   overflow: hidden;
-  color: var(--primary);
+  color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2079,7 +2089,7 @@ html[data-theme="dark"] .plugin-card {
 }
 
 .lifecycle > li > p code {
-  color: var(--primary);
+  color: var(--ink);
   font-size: 0.68rem;
 }
 
@@ -2286,7 +2296,7 @@ html[data-theme="dark"] .plugin-card {
 
 .topology-section .text-link {
   margin-top: 30px;
-  color: var(--secondary);
+  color: var(--ink-soft);
 }
 
 .topology-diagram {
@@ -2357,7 +2367,7 @@ html[data-theme="dark"] .plugin-card {
   height: 38px;
   border-radius: 50%;
   background: var(--primary-wash);
-  color: var(--primary);
+  color: var(--ink);
 }
 
 .topology-clients svg {
@@ -2665,7 +2675,7 @@ html[data-theme="dark"] .topology-machines article {
 }
 
 .start-copy .eyebrow {
-  color: var(--primary);
+  color: var(--brand-cyan);
 }
 
 .start-copy h2 {
@@ -2817,7 +2827,7 @@ html[data-theme="dark"] .topology-machines article {
 }
 
 .footer-links a:hover {
-  color: var(--primary);
+  color: var(--ink);
 }
 
 .back-to-top {
@@ -2833,7 +2843,7 @@ html[data-theme="dark"] .topology-machines article {
   border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--line));
   border-radius: 50%;
   background: color-mix(in srgb, var(--paper) 88%, var(--primary-wash));
-  color: var(--primary);
+  color: var(--ink);
   box-shadow: 0 14px 34px color-mix(in srgb, var(--primary) 17%, transparent);
   transition: opacity 160ms ease, transform 160ms ease, border-color 160ms ease, color 160ms ease;
   backdrop-filter: blur(18px) saturate(145%);
@@ -2863,7 +2873,7 @@ html[data-theme="dark"] .topology-machines article {
 
 .back-to-top.is-visible:hover {
   border-color: color-mix(in srgb, var(--primary) 64%, var(--line));
-  color: var(--primary);
+  color: var(--ink);
   transform: translateY(-3px);
 }
 
@@ -3039,7 +3049,7 @@ html[data-theme="dark"] .topology-machines article {
 
   .nav-toggle[aria-expanded="true"] {
     background: var(--primary-wash);
-    color: var(--primary);
+    color: var(--ink);
   }
 
   .nav-toggle[aria-expanded="true"] .menu-icon-bars {

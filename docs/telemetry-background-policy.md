@@ -6,6 +6,9 @@ implements policy admission; it does not enable production binding writers or
 change the configured Victoria destination. The initial production configuration
 continues to use its explicitly configured legacy exporter.
 
+Controller implementation release and populated-reader acceptance:
+[2026-09-13 receipt](releases/telemetry-background-policy-2026-09-13.md).
+
 ## Authority and restart semantics
 
 Core owns this policy, not the installed Plugin or a UI composition. The host
@@ -100,6 +103,12 @@ Provider state or worker-generation input changes. The Controller release still
 requires populated immutable [reader conformance](telemetry-reader-conformance.md)
 against the actual active, next rollback and cold floors. That gate is not a
 production writer/export policy acceptance receipt.
+
+The reader gate deliberately runs without the new policy setting. Older
+Controller floors do not implement this startup option: accepting journal bytes
+does not establish that they can parse a new CLI flag or retain background export
+under rollback. Before a configuration cutover, separately accept the complete
+candidate/recovery/cold startup configuration and its explicit export behavior.
 
 Remaining P2 work: explicit per-target production writer admission, an owned
 configuration cutover to this new mode, and cross-end production write/failure/
