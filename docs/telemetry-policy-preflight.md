@@ -5,6 +5,12 @@ Controller telemetry writer and managed-background policies. Previously this
 command returned before their startup validators, so a successful host check
 could hide malformed, foreign or unsafe telemetry configuration.
 
+The
+[2026-09-14 Controller release](releases/telemetry-policy-preflight-2026-09-14.md)
+records actual owner preflight, immutable role acceptance and activation,
+including the separate failed all-worker continuity observation. It does not
+accept a production managed-policy cutover.
+
 Use the intended Service arguments/environment and the exact immutable
 Controller being evaluated. In particular, preserve the data directory,
 authentication/host configuration, database setting and explicit telemetry

@@ -102,6 +102,13 @@ Controller × Machine 的全部九种角色组合。最新
 撤销/恢复后的旧策略隔离、独立本地记录及重启不重放。临时身份与隔离协议接收端不等同真实 Victoria
 或生产配置；实际 Operator 授权、主机策略切换及生产外发/故障/重启验收仍是 P2 退出前提。
 
+[Controller 配置预检](telemetry-policy-preflight.md) 已复用真实启动校验，拒绝无效 writer/background
+策略且不创建 Service 或授予外发权；[2026-09-14 发布](releases/telemetry-policy-preflight-2026-09-14.md)
+已通过最终制品 96/294/78/45 项验收并只激活 Controller。生产 managed 配置仍未切换；发布期间
+3 个 Grok worker 发生 drain/resume，日志指向自动凭据换代；严格零中断核验未通过，不能将恢复就绪
+写成所有 worker 从未重启。其余 10 个 worker、Machine 进程与 Web 保持不变，凭据换代下的
+会话连续性仍需独立验收。
+
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
 [components contract](plugin-components.md)
