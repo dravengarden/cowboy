@@ -7,6 +7,9 @@ struct Record {
     counts: WireCounts,
     failure: Option<Failure>,
     rejection: Option<RelayRejection>,
+    generation: Option<String>,
+    configured: bool,
+    mutation_started: Option<std::time::Instant>,
 }
 
 pub(super) struct Proxy {
@@ -181,7 +184,22 @@ fn inspect(
             if downstream
                 && hello.machine_id == MACHINE
                 && hello.challenge_signature.is_some()
-                && hello.encryption_public_key.is_some() => {}
+                && hello.encryption_public_key.is_some() =>
+        {
+            let generation = hello
+                .components
+                .iter()
+                .find(|component| {
+                    component.id.kind == crate::machine_protocol::ComponentKind::AcpRuntime
+                        && component.state == crate::machine_protocol::ComponentState::Active
+                })
+                .map_or(hello.host_build, |component| component.generation.clone());
+            if generation.is_empty() || generation.len() > 128 {
+                return Err(Failure::UnexpectedHandshake);
+            }
+            record.generation = Some(generation);
+            record.configured = false;
+        }
         MachineFrame::Welcome {
             protocol: 18,
             desired_components,
@@ -192,10 +210,36 @@ fn inspect(
         }
         MachineFrame::Command { command } if !downstream => match command {
             MachineCommand::RefreshInventory { .. } => {}
-            MachineCommand::QueryTelemetryBinding { .. } => counts.binding_queries += 1,
-            MachineCommand::CommitTelemetryBinding { .. } => counts.binding_commands += 1,
-            MachineCommand::QueryTelemetryRecovery { .. } => counts.recovery_queries += 1,
-            MachineCommand::RecoverTelemetryBinding { .. } => counts.recovery_commands += 1,
+            MachineCommand::QueryTelemetryBinding { .. } => {
+                counts.binding_queries += 1;
+                if flow == Flow::BindingLostAck
+                    && counts.dropped_binding_acks == 1
+                    && counts.fallback_after_ms.is_none()
+                {
+                    counts.fallback_after_ms = record
+                        .mutation_started
+                        .map(|time| u64::try_from(time.elapsed().as_millis()).unwrap_or(u64::MAX));
+                }
+            }
+            MachineCommand::CommitTelemetryBinding { .. } => {
+                counts.binding_commands += 1;
+                record.mutation_started = Some(std::time::Instant::now());
+            }
+            MachineCommand::QueryTelemetryRecovery { .. } => {
+                counts.recovery_queries += 1;
+                if flow == Flow::PreparedRecovery
+                    && counts.dropped_recovery_acks == 1
+                    && counts.fallback_after_ms.is_none()
+                {
+                    counts.fallback_after_ms = record
+                        .mutation_started
+                        .map(|time| u64::try_from(time.elapsed().as_millis()).unwrap_or(u64::MAX));
+                }
+            }
+            MachineCommand::RecoverTelemetryBinding { .. } => {
+                counts.recovery_commands += 1;
+                record.mutation_started = Some(std::time::Instant::now());
+            }
             MachineCommand::QueryTelemetryRecoveryAudit { .. } => counts.audit_queries += 1,
             _ => return Err(Failure::WrongObservation), // No install, Provider, session or export commands.
         },
@@ -229,6 +273,22 @@ fn inspect(
             _ => return Err(Failure::WrongObservation),
         },
         MachineFrame::Runtime { frame } => match frame {
+            // Normal Core-to-empty-broker initialization. It must retain the
+            // authenticated Machine's own generation and cannot supply a worker
+            // executable, change a generation, or dispatch any session.
+            crate::runtime_wire::Frame::CoreCommand {
+                command:
+                    crate::runtime_wire::CoreCommand::SetDesiredGeneration {
+                        generation,
+                        worker_command: None,
+                    },
+            } if !downstream
+                && !record.configured
+                && record.generation.as_ref() == Some(&generation) =>
+            {
+                record.configured = true;
+                counts.runtime_configurations += 1;
+            }
             crate::runtime_wire::Frame::Hello {
                 session_id: None, ..
             }
@@ -279,4 +339,61 @@ fn relay_drops_only_one_selected_ack_and_never_admits_worker_commands() {
         .into(),
     );
     assert!(inspect(&command, false, Flow::BindingRoundTrip, &mut record).is_err());
+}
+
+#[test]
+fn relay_admits_only_one_exact_empty_broker_generation_without_an_executable() {
+    use crate::runtime_wire::{CoreCommand, Frame};
+    let message = |generation: &str, worker_command: Option<&str>| {
+        Message::Text(
+            serde_json::to_string(&MachineFrame::Runtime {
+                frame: Frame::CoreCommand {
+                    command: CoreCommand::SetDesiredGeneration {
+                        generation: generation.into(),
+                        worker_command: worker_command.map(str::to_owned),
+                    },
+                },
+            })
+            .unwrap()
+            .into(),
+        )
+    };
+    let ready = || Record {
+        generation: Some("fixture-generation".into()),
+        ..Record::default()
+    };
+    let valid = message("fixture-generation", None);
+    let mut record = ready();
+    assert_eq!(
+        inspect(&valid, false, Flow::BindingLostAck, &mut record).unwrap(),
+        Action::Forward
+    );
+    assert_eq!(record.counts.runtime_configurations, 1);
+    assert!(inspect(&valid, false, Flow::BindingLostAck, &mut record).is_err());
+    assert!(inspect(&valid, false, Flow::BindingLostAck, &mut Record::default()).is_err());
+    assert!(inspect(&valid, true, Flow::BindingLostAck, &mut ready()).is_err());
+    for rejected in [
+        message("foreign-generation", None),
+        message("fixture-generation", Some("no-worker")),
+    ] {
+        assert!(inspect(&rejected, false, Flow::BindingLostAck, &mut ready()).is_err());
+    }
+    for command in [
+        CoreCommand::Cancel {
+            session_id: "forbidden".into(),
+            command_id: "forbidden".into(),
+        },
+        CoreCommand::RollProvider {
+            provider: "forbidden".into(),
+        },
+    ] {
+        let frame = Message::Text(
+            serde_json::to_string(&MachineFrame::Runtime {
+                frame: Frame::CoreCommand { command },
+            })
+            .unwrap()
+            .into(),
+        );
+        assert!(inspect(&frame, false, Flow::BindingLostAck, &mut ready()).is_err());
+    }
 }

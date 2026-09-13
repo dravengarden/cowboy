@@ -16,6 +16,7 @@ pub(in super::super) struct ConnectedFixture {
     pub password: String,
     pub package_sha256: String,
     pub release_sha256: String,
+    pub controller_binding: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -169,14 +170,16 @@ impl ConnectedFixture {
                 "schema":"dravengarden.cowboy.core-security/v1","passkeys":{"namespace_id":"passkey","source":"fresh"}
             }))?,
         )?;
-        admission::PolicyCase::All.write(&root.join("controller-writer.json"))?;
-        admission::PolicyCase::All.write(&machine_root.join("telemetry-writer-policy.json"))?;
+        let (controller_policy, machine_policy) = flow.policies();
+        controller_policy.write(&root.join("controller-writer.json"))?;
+        machine_policy.write(&machine_root.join("telemetry-writer-policy.json"))?;
         Ok(Self {
             reader,
             installation,
             password,
             package_sha256: sha256(&package),
             release_sha256: sha256(&release),
+            controller_binding: controller_policy.startup_binding(),
         })
     }
 }

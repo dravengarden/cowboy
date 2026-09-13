@@ -22,6 +22,33 @@ impl Flow {
         Self::BindingDisconnected,
         Self::PreparedRecovery,
     ];
+
+    pub fn policies(self) -> (admission::PolicyCase, admission::PolicyCase) {
+        use admission::PolicyCase::{Binding, BindingResolution, Recovery, RecoveryResolution};
+        match self {
+            Self::BindingRoundTrip | Self::BindingLostAck => (Binding, Binding),
+            Self::BindingDisconnected => (BindingResolution, Binding),
+            Self::PreparedRecovery => (RecoveryResolution, Recovery),
+        }
+    }
+}
+
+#[test]
+fn connected_flows_admit_only_their_independent_finite_purposes() {
+    use admission::PolicyCase::{Binding, BindingResolution, Recovery, RecoveryResolution};
+    for flow in [Flow::BindingRoundTrip, Flow::BindingLostAck] {
+        assert_eq!(flow.policies(), (Binding, Binding));
+    }
+    assert_eq!(
+        Flow::BindingDisconnected.policies(),
+        (BindingResolution, Binding)
+    );
+    assert_eq!(
+        Flow::PreparedRecovery.policies(),
+        (RecoveryResolution, Recovery)
+    );
+    assert!(!Flow::PreparedRecovery.policies().0.startup_binding());
+    assert!(!Flow::PreparedRecovery.policies().1.admits(1));
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -45,6 +72,7 @@ pub(super) enum Stage {
 pub(super) struct WireCounts {
     pub protocol: Option<u16>,
     pub connections: u32,
+    pub runtime_configurations: u32,
     pub binding_commands: u32,
     pub binding_queries: u32,
     pub recovery_commands: u32,
@@ -53,6 +81,7 @@ pub(super) struct WireCounts {
     pub dropped_binding_acks: u32,
     pub dropped_recovery_acks: u32,
     pub forced_disconnects: u32,
+    pub fallback_after_ms: Option<u64>,
 }
 
 #[derive(Default, Serialize)]
@@ -112,6 +141,8 @@ struct Check {
     controller_role: Role,
     machine_role: Role,
     flow: Flow,
+    controller_policy: admission::PolicyCase,
+    machine_policy: admission::PolicyCase,
     accepted: bool,
     outcome: Outcome,
 }
@@ -189,6 +220,8 @@ async fn immutable_connected_telemetry() -> Result<()> {
                     controller_role: controller.role,
                     machine_role: machine.role,
                     flow,
+                    controller_policy: flow.policies().0,
+                    machine_policy: flow.policies().1,
                     accepted,
                     outcome,
                 },

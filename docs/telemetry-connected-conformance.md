@@ -34,12 +34,21 @@ Catalog and private dummy destination policy. It does not install over the live
 network or publish that fixture. Both processes perform the real enrolled
 SSHSIG challenge/response; all connections must negotiate protocol **18**. The
 Controller discovers the actual installation from accepted Machine inventory.
+Each flow enables only its finite writer purposes: binding on both Sites for
+round-trip/lost-ACK; binding plus Service resolution on the Controller for
+disconnect; recovery plus Service resolution on the Controller and recovery only
+on the Machine for Prepared recovery. Recovery never implicitly enables binding.
 
 The proxy forwards original message bytes unchanged. It may drop exactly one
 selected acknowledgment or close a connection; it cannot synthesize a success
 reply, command, timestamp or lease. It records bounded frame-kind counters, not
 raw frames. Unexpected Plugin/Provider mutations, worker/session commands and
 telemetry export commands fail the gate. No worker executable is supplied.
+The normal Core-to-empty-broker `SetDesiredGeneration` startup frame is allowed
+exactly once per connection, only for the authenticated Machine's own generation
+and only without a worker executable. Readiness waits for this frame as well as
+the authenticated connection and actual inventory/audit. A replacement
+generation, executable, duplicate initialization or session command is rejected.
 
 | Flow | Required behavior |
 | --- | --- |
@@ -49,6 +58,9 @@ telemetry export commands fail the gate. No worker executable is supplied.
 | Reopened Prepared recovery | Real prepared interruption fixture; one recovery command, dropped ACK and the unchanged 15-second deadline; one fallback observation; Service evidence stays unchanged until a separately confirmed resolution records rejection |
 
 Each flow then restarts **both** child processes against the same durable state.
+The proxy records monotonic command-to-fallback-query time; lost-ACK flows require
+at least 44/14 seconds respectively (one-second observation margin around the
+unchanged real 45/15-second runtime deadlines), not just a query count.
 Real cookies remain readable, consumed confirmations cannot be reused, and
 historical receipt reads cannot send mutations. New read-only previews query the
 reopened Machine head. Recovery additionally requires protocol-18 audit discovery
@@ -83,6 +95,8 @@ The private, atomic create-only schema-one receipt hashes clean source,
 manifests/launchers/actual ELF chains, pinned SSH helper, signed fixture package
 and release, installation and before/after journals. Closed fields identify
 artifact roles, flow, last stage, protocol, wire counters and failure category.
+They also identify the two finite-purpose policies, elapsed times, last HTTP
+status/closed result category and relay-rejection or connection-stop markers.
 No password, cookie, key, frame, raw policy, endpoint, exception or log is copied.
 Use a new absolute output path in an existing directory. A failed required flow
 writes `accepted: false` and exits nonzero. Do not overwrite failed evidence.

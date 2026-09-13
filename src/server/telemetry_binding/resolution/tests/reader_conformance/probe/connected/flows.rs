@@ -181,6 +181,7 @@ async fn lost_ack(pair: &mut Pair<'_>, stage: &mut Stage) -> Result<(), Failure>
         counts.binding_commands == 1
             && counts.dropped_binding_acks == 1
             && counts.binding_queries == queries + 2
+            && counts.fallback_after_ms.is_some_and(|ms| ms >= 44_000)
             && counts.recovery_commands == 0,
     )?;
     // The two reads are the coordinator's preflight and one post-timeout
@@ -301,6 +302,7 @@ async fn recovery(pair: &mut Pair<'_>, stage: &mut Stage) -> Result<(), Failure>
     check(
         counts.recovery_commands == 1
             && counts.recovery_queries == queries + 3
+            && counts.fallback_after_ms.is_some_and(|ms| ms >= 14_000)
             && counts.dropped_recovery_acks == 1
             && counts.binding_commands == 0,
     )?;

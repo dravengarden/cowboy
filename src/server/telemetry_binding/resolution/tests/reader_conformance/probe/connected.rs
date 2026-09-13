@@ -42,7 +42,7 @@ impl Pair<'_> {
                 self.controller.as_mut().unwrap(),
                 self.address,
                 &reader,
-                true,
+                self.fixture.controller_binding,
             ),
         )
         .await
@@ -69,7 +69,9 @@ impl Pair<'_> {
     }
 
     async fn ready(&self, minimum: u32) -> Result<bool, Failure> {
-        if self.proxy.counts()?.connections < minimum
+        let counts = self.proxy.counts()?;
+        if counts.connections < minimum
+            || counts.runtime_configurations != counts.connections
             || !self
                 .machine
                 .as_ref()
