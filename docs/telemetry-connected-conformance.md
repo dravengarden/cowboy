@@ -8,10 +8,11 @@ loopback WebSocket fault proxy. It supplements the separate
 [background startup](telemetry-background-startup-conformance.md) gates. Run
 from clean committed Cowboy source in the pinned Linux shell.
 
-The
-[2026-09-13 acceptance receipt](releases/telemetry-connected-conformance-2026-09-13.md)
-records the actual Hawk roles, accepted matrix, failed harness attempts and
-independently checked production continuity.
+The initial
+[36-result acceptance](releases/telemetry-connected-conformance-2026-09-13.md)
+records the first four flows and failed harness attempts. The subsequent
+[45-result managed-delivery acceptance](releases/telemetry-managed-delivery-conformance-2026-09-13.md)
+adds the fifth flow and fresh actual-role/production-continuity evidence.
 
 The closed schema-one matrix is the same as the reader/writer matrix:
 `controller` and `machine`, each with `active`, `rollback` and `cold` absolute
