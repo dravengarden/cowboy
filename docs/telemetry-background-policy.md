@@ -104,6 +104,12 @@ requires populated immutable [reader conformance](telemetry-reader-conformance.m
 against the actual active, next rollback and cold floors. That gate is not a
 production writer/export policy acceptance receipt.
 
+The reader gate deliberately runs without the new policy setting. Older
+Controller floors do not implement this startup option: accepting journal bytes
+does not establish that they can parse a new CLI flag or retain background export
+under rollback. Before a configuration cutover, separately accept the complete
+candidate/recovery/cold startup configuration and its explicit export behavior.
+
 Remaining P2 work: explicit per-target production writer admission, an owned
 configuration cutover to this new mode, and cross-end production write/failure/
 restart acceptance. First binding intent fences legacy export even on an aborted
