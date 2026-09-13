@@ -198,6 +198,7 @@ import {
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
 import { retainUnpresentedOptimistic } from "./sendImagePreviews";
+import { messageBubbleSurfaceSx } from "./messageBubble";
 import {
   CONVERSATION_SKELETON_TURNS,
   shouldPaintTranscriptLifecycle,
@@ -1329,18 +1330,15 @@ function OptimisticUserBubble({
       sx={{ alignSelf: "stretch", maxWidth: "100%" }}
     >
       <Paper
-        variant="outlined"
-        sx={{
+        elevation={0}
+        sx={(theme) => ({
           position: "relative",
           p: { xs: 1, sm: 1.25 },
           maxWidth: { xs: "88%", sm: "78%" },
-          bgcolor: "primary.main",
-          color: "primary.contrastText",
-          overflow: "hidden",
           opacity: inFlight ? 0.62 : 1,
           transition: "opacity 0.2s ease",
-          ...(failed && { borderColor: "error.main" }),
-        }}
+          ...messageBubbleSurfaceSx("user", theme, failed),
+        })}
       >
         {content.length === 0
           ? <Markdown text="📎 attachment" invert />
@@ -1536,31 +1534,33 @@ function MessageBubble({
       />
     );
   }
-  // Assistant replies render flush in the page (Zed-style): no border, no card
-  // background, just markdown flowing inline. The per-item `py` in the
-  // transcript row is the only separator between consecutive replies. Only the
-  // user's own messages keep the right-aligned bubble — the conventional "my
-  // message" affordance.
+  // Send and receive share a chat-card: large far-side corners, tighter
+  // speaker-side corners, mirrored left vs right. Assistant keeps a quiet
+  // fill so long Markdown still reads as a message, not a document page.
   if (!mine) {
     return (
-      <Box
-        sx={{ alignSelf: "stretch", maxWidth: "100%", color: "text.primary" }}
+      <Paper
+        elevation={0}
+        sx={(theme) => ({
+          p: { xs: 1.15, sm: 1.4 },
+          alignSelf: "flex-start",
+          maxWidth: { xs: "92%", sm: "86%" },
+          ...messageBubbleSurfaceSx("assistant", theme),
+        })}
       >
         {body}
-      </Box>
+      </Paper>
     );
   }
   return (
     <Paper
-      variant="outlined"
-      sx={{
+      elevation={0}
+      sx={(theme) => ({
         p: { xs: 1, sm: 1.25 },
         alignSelf: "flex-end",
         maxWidth: { xs: "88%", sm: "78%" },
-        bgcolor: "primary.main",
-        color: "primary.contrastText",
-        overflow: "hidden",
-      }}
+        ...messageBubbleSurfaceSx("user", theme),
+      })}
     >
       <CollapsibleUserBody
         containsImage={chunks.some((chunk) => chunk.type === "image")}
