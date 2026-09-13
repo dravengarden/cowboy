@@ -151,10 +151,35 @@ pub fn annotate_inbound_user_prompt(update: &mut Value, provider_id: &str) {
     }
 }
 
+fn image_field<'a>(value: &'a Value, source: Option<&'a Value>, keys: &[&str]) -> Option<&'a str> {
+    for key in keys {
+        if let Some(text) = value.get(*key).and_then(Value::as_str) {
+            return Some(text);
+        }
+        if let Some(text) = source
+            .and_then(|child| child.get(*key))
+            .and_then(Value::as_str)
+        {
+            return Some(text);
+        }
+    }
+    None
+}
+
+fn image_payload(value: &Value) -> (Option<&str>, Option<&str>) {
+    let source = value.get("source");
+    (
+        image_field(value, source, &["data"]),
+        image_field(value, source, &["url"]),
+    )
+}
+
 /// Whether two ACP user-content blocks are the same prompt piece.
 ///
 /// An agent that "accepts" a prompt by echoing it may reserialize the same
-/// type/text/url/data. Extra keys must not keep a replay visible.
+/// type/text/url/data. Extra keys must not keep a replay visible. Cowboy's live
+/// echo externalizes large images to `/api/artifacts/…` while `last_echoed`
+/// still holds the original `data` block; those are one prompt piece.
 pub fn user_content_equiv(left: &Value, right: &Value) -> bool {
     let left_type = left.get("type").and_then(Value::as_str);
     if left_type != right.get("type").and_then(Value::as_str) {
@@ -163,9 +188,16 @@ pub fn user_content_equiv(left: &Value, right: &Value) -> bool {
     match left_type {
         Some("text") => left.get("text") == right.get("text"),
         Some("image") => {
-            left.get("url") == right.get("url")
-                && left.get("data") == right.get("data")
-                && left.get("mimeType") == right.get("mimeType")
+            let (left_data, left_url) = image_payload(left);
+            let (right_data, right_url) = image_payload(right);
+            if left_data.is_some() && right_data.is_some() {
+                return left_data == right_data;
+            }
+            if left_url.is_some() && right_url.is_some() {
+                return left_url == right_url;
+            }
+            (left_data.is_some() || left_url.is_some())
+                && (right_data.is_some() || right_url.is_some())
         }
         _ => left == right,
     }
@@ -295,6 +327,39 @@ mod tests {
         });
         assert!(take_matching_inbound_prompt_echo(&image, &mut remaining));
         assert!(take_matching_inbound_prompt_echo(&text, &mut remaining));
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn inbound_prompt_echo_matches_externalized_image_bytes() {
+        let mut remaining = vec![serde_json::json!({
+            "type": "image",
+            "mimeType": "image/jpeg",
+            "data": "c2hvdA=="
+        })];
+        let artifact = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+                "type": "image",
+                "mimeType": "image/jpeg",
+                "url": "/api/artifacts/shot.jpg"
+            }
+        });
+        assert!(take_matching_inbound_prompt_echo(&artifact, &mut remaining));
+        assert!(remaining.is_empty());
+    }
+
+    #[test]
+    fn inbound_prompt_echo_matches_nested_image_source() {
+        let mut remaining = vec![serde_json::json!({
+            "type": "image",
+            "source": { "data": "c2hvdA==", "media_type": "image/jpeg" }
+        })];
+        let flat = serde_json::json!({
+            "sessionUpdate": "user_message_chunk",
+            "content": { "type": "image", "data": "c2hvdA==", "mimeType": "image/jpeg" }
+        });
+        assert!(take_matching_inbound_prompt_echo(&flat, &mut remaining));
         assert!(remaining.is_empty());
     }
 

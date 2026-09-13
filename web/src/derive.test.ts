@@ -473,6 +473,52 @@ Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () =>
   }
 });
 
+Deno.test("derive hides an image replay whose bytes were externalized to an artifact URL", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      cmid: "c1",
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "image", url: "/api/artifacts/shot.jpg" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "lifecycle",
+      status: "busy",
+      detail: null,
+    },
+    {
+      session_id: "s1",
+      seq: 3,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "image", data: "c2hvdA==", mimeType: "image/jpeg" },
+      },
+    },
+  ]);
+  const users = items.filter((item) => item.kind === "message" && item.role === "user");
+  if (users.length !== 1) {
+    throw new Error(`expected one user bubble, got ${users.length}`);
+  }
+  const user = users[0];
+  if (user?.kind !== "message" || user.cmid !== "c1") {
+    throw new Error("the Cowboy artifact echo must remain the only bubble");
+  }
+  if (user.chunks.length !== 1 || user.chunks[0]?.type !== "image") {
+    throw new Error("the replay data URI must not append a second image");
+  }
+  if (user.chunks[0].src !== "/api/artifacts/shot.jpg") {
+    throw new Error("the visible image should keep the live artifact URL");
+  }
+});
+
 Deno.test("a second human prompt still becomes its own bubble", () => {
   const items = derive([
     {

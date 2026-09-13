@@ -284,6 +284,14 @@ function sameContentChunk(left: ContentChunk, right: ContentChunk): boolean {
   return false;
 }
 
+/** ACP accept-echoes the prompt Cowboy already painted. Live image echoes are
+ *  externalized to `/api/artifacts/…`; the agent often replays the original
+ *  `data:` payload. Those are the same prompt piece, not a second send. */
+function isPromptReplayChunk(expected: ContentChunk, actual: ContentChunk): boolean {
+  if (expected.type === "image" && actual.type === "image") return true;
+  return sameContentChunk(expected, actual);
+}
+
 /** Grok ACP accepts a prompt by re-emitting the same `user_message_chunk`s.
  *  Cowboy already echoed those blocks. A `lifecycle: busy` between the two
  *  copies resets the coalesce cursor, so the replay must be dropped or it
@@ -301,7 +309,7 @@ function isUnoriginatedPromptReplay(
   const expected = lastUser?.role === "user" && isHumanPrompt(lastUser.origin)
     ? lastUser.chunks[replayOffset]
     : undefined;
-  return expected !== undefined && sameContentChunk(expected, chunk);
+  return expected !== undefined && isPromptReplayChunk(expected, chunk);
 }
 
 export function derive(timeline: Envelope[]): RenderItem[] {
