@@ -1,10 +1,11 @@
 //! Finite core confirmation surface. Preview is read-only, commit is one-use
 //! and purpose-bound, receipt reads never repeat a Machine command or DB write.
+use super::super::http::{ApiError, ApiState};
 use super::*;
 use crate::machine_protocol::telemetry_binding::{BindingDigest, binding_digest};
 use crate::operation_budget::{OperationBudget, TimeSample};
 use crate::plugin_operation::Actor;
-use crate::server::{AppState, AuthenticatedProductRequest, operator_approval::OperatorApproval};
+use crate::server::{AuthenticatedProductRequest, operator_approval::OperatorApproval};
 use anyhow::Context;
 use axum::{
     Extension, Json, Router,
@@ -15,7 +16,7 @@ use axum::{
 };
 use std::{collections::HashMap, time::Duration};
 
-mod view;
+pub(in crate::server::telemetry_binding) mod view;
 use view::{Action, PlanView, ReceiptView, StatusView};
 
 struct Preview {
@@ -64,80 +65,13 @@ impl Plans {
     }
 }
 
-// Only the dependencies needed by this core surface, not Plugin-controlled
-// state or an alternative authentication registry. Clone holds no authority.
-#[derive(Clone)]
-pub(in crate::server) struct ApiState {
-    service: String,
-    store: Option<Store>,
-    control: Arc<MachineControl>,
-    plans: Arc<Plans>,
-    hub: crate::core::Hub,
-    product_auth_enabled: bool,
-    devices: Arc<crate::client_auth::DeviceAccessSessions>,
-    authentication: Arc<crate::auth_plugins::ProductAuthentication>,
-    #[cfg(test)]
-    fixture_write_admission: bool,
-}
-
-impl FromRef<Arc<AppState>> for ApiState {
-    fn from_ref(state: &Arc<AppState>) -> Self {
-        Self {
-            service: state.service_id.clone(),
-            store: state.store.clone(),
-            control: state.machine_control.clone(),
-            plans: state.telemetry_resolution_plans.clone(),
-            hub: state.hub.clone(),
-            product_auth_enabled: state.product_auth_enabled,
-            devices: state.device_access.clone(),
-            authentication: state.product_authentication.clone(),
-            #[cfg(test)]
-            fixture_write_admission: false,
-        }
-    }
-}
-
 impl ApiState {
-    fn auth(&self) -> ProductRequestAuth<'_> {
-        ProductRequestAuth {
-            product_auth_enabled: self.product_auth_enabled,
-            store: self.store.as_ref(),
-            hub: &self.hub,
-            device_access: &self.devices,
-            product_authentication: &self.authentication,
-        }
-    }
-
     fn write_admitted(&self) -> bool {
         #[cfg(test)]
         if self.fixture_write_admission {
             return true;
         }
         RESOLUTION_WRITE_ADMISSION
-    }
-
-    fn store(&self) -> Result<&Store, ApiError> {
-        self.store.as_ref().ok_or(ApiError::EvidenceUnavailable)
-    }
-
-    async fn ledger(&self) -> Result<Option<Ledger>, ApiError> {
-        self.store()?
-            .telemetry_binding_ledger(&self.service)
-            .await
-            .map_err(|_| ApiError::EvidenceUnavailable)
-    }
-
-    async fn approve(
-        &self,
-        verified: Option<&AuthenticatedProductRequest>,
-        headers: &HeaderMap,
-    ) -> Result<OperatorApproval, ApiError> {
-        let approval = OperatorApproval::capture(self.auth(), &self.service, verified, headers)
-            .map_err(ApiError::Authorization)?;
-        if approval.current_operator(self.auth()).await.as_ref() != Some(approval.actor()) {
-            return Err(ApiError::Authorization(StatusCode::UNAUTHORIZED));
-        }
-        Ok(approval)
     }
 
     async fn complete(self, preview: Preview, approval: OperatorApproval) -> Result<ReceiptView> {
@@ -203,34 +137,6 @@ struct Inspect {}
 struct Confirmation {
     plan_id: String,
     action: Action,
-}
-
-#[derive(Debug)]
-enum ApiError {
-    Authorization(StatusCode),
-    EvidenceUnavailable,
-    NotFound,
-    Changed,
-    AdmissionClosed,
-    OutcomeUnverified,
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, code) = match self {
-            Self::Authorization(status) => (status, "authorization_required"),
-            Self::EvidenceUnavailable => (StatusCode::SERVICE_UNAVAILABLE, "evidence_unavailable"),
-            Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
-            Self::Changed => (StatusCode::CONFLICT, "preview_or_evidence_changed"),
-            Self::AdmissionClosed => (StatusCode::CONFLICT, "resolution_admission_closed"),
-            Self::OutcomeUnverified => (StatusCode::CONFLICT, "outcome_unverified"),
-        };
-        (
-            status,
-            Json(serde_json::json!({"schema": 1, "error": code})),
-        )
-            .into_response()
-    }
 }
 
 pub(in crate::server) fn routes<S>() -> Router<S>
@@ -433,4 +339,4 @@ async fn receipt(
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::server::telemetry_binding) mod tests;

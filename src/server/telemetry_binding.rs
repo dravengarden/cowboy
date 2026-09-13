@@ -10,6 +10,7 @@ use crate::telemetry_binding::{
 use anyhow::{Result, ensure};
 
 mod export;
+mod http;
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 mod live;
 pub(super) mod recovery;

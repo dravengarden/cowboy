@@ -76,6 +76,12 @@ policy epoch 与 managed namespace，不宣称零效果。Service 原 NeedsAtten
 preflight 也会重新验证磁盘，发现变化后不复活缓存信任。生产写入、双侧 populated reader 基线、
 用户确认界面、后台策略激活和跨端上线验收仍未完成，不将有限恢复闭环等同 P2 完成。
 
+后续 [Service 确认界面](telemetry-resolution-surface.md) 与
+[Machine 中断处置界面](telemetry-machine-recovery-surface.md) 已接入核心 Settings → Info：
+复用认证和闭集数据解析，但分别持有计划、用途授权与一次性预算。Machine 确认不自动接续 Service
+确认，预览不证明 Machine 已完成 journal reopen。生产写入仍关闭；普通绑定确认、耐久 HTTP
+恢复审计发现、后台策略准入与跨端生产验收仍待完成，不能将界面发布等同 P2 退出。
+
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
 [components contract](plugin-components.md)
