@@ -6,14 +6,14 @@ mod machine;
 mod service;
 
 #[derive(PartialEq, Eq)]
-struct PolicySnapshot {
+pub(super) struct PolicySnapshot {
     identity: [u64; 5],
     changed: (i64, i64),
     link: Option<PathBuf>,
     bytes: Vec<u8>,
 }
 
-fn policy_snapshot(path: &Path) -> Result<Option<PolicySnapshot>> {
+pub(super) fn policy_snapshot(path: &Path) -> Result<Option<PolicySnapshot>> {
     let meta = match path.symlink_metadata() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         value => value?,

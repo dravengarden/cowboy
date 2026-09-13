@@ -113,6 +113,12 @@ unsafe-file refusal, restart loss of unsubmitted previews, durable resolution
 and Machine duplicate reads. This is additional executable contract evidence,
 not acceptance of production Operator authority or connected cross-end faults.
 
+The [connected executable gate](telemetry-connected-conformance.md) additionally
+drives real authenticated Controller/Machine child processes through all role
+pairs, with signed temporary Victoria installation, ACK loss, disconnection and
+both-process reopen. Synthetic Operator login and bounded proxy faults still do
+not accept the full production configuration, real account or policy cutover.
+
 No protocol, journal schema, applied SQL migration, signed Plugin/SDK, native
 ABI, Provider state or worker-generation input changes. Release Controller and
 Machine independently, preserving detached workers, and run populated immutable

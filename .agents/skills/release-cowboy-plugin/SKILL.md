@@ -70,6 +70,17 @@ delivery or the full owned configuration. Keep that cutover separate; see
 `docs/telemetry-writer-conformance.md`. Test-only harness changes do not require
 activating new runtime artifacts merely to update their source-manifest revision.
 
+For authenticated cross-process telemetry acceptance, run
+`just telemetry-connected-conformance <matrix.json> <new-receipt.json>` across
+all nine Controller/Machine role pairs. Require actual fixture password login,
+enrolled protocol-18 connections, one-use previews, select/revoke/restore,
+lost-ACK observation without resend, independent recovery/Service resolution,
+and durable reads after both processes restart. The byte-preserving fault proxy
+must never fabricate a reply. This uses temporary signed Victoria installation
+and identities, not production credentials, external delivery or complete owned
+configuration. See `docs/telemetry-connected-conformance.md`; it does not by
+itself authorize production policy cutover or complete P2.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

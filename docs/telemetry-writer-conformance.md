@@ -95,3 +95,9 @@ The [writer-admission contract](telemetry-writer-admission.md) still governs
 cutover. Do not open production policies alone, delete managed evidence or
 recycle Agent sessions to make this gate pass. Completing this gate is not
 completion of P2 or the whole Plugin refactor.
+
+The separate [connected executable gate](telemetry-connected-conformance.md)
+covers actual Controller/Machine process pairs, fixture login, selected packet
+loss/disconnection, finite binding/recovery and receipt discovery after restart.
+It remains distinct from complete production configuration and actual Operator
+account/cutover acceptance.

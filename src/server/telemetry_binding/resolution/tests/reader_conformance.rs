@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 mod admission;
+mod connected;
 mod fixtures;
 mod manifest;
 mod probe;

@@ -125,9 +125,19 @@ pub(super) async fn local_recording(
         .timeout(Duration::from_secs(1))
         .build()
         .map_err(|_| Failure::Setup)?;
+    local_recording_with_client(&client, address, root, cold_read, active).await
+}
+
+pub(super) async fn local_recording_with_client(
+    client: &reqwest::Client,
+    address: std::net::SocketAddr,
+    root: &Path,
+    cold_read: u8,
+    active: bool,
+) -> Result<(), Failure> {
     let file = root.join("controller/telemetry/telemetry.jsonl");
     let before = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
-    let start = metrics(&client, address).await?;
+    let start = metrics(client, address).await?;
     if start["observability_accepted_batches"] != 0 {
         return Err(Failure::WrongExportState); // A cold read cannot replay local files.
     }
@@ -152,7 +162,7 @@ pub(super) async fn local_recording(
         }
     }
     loop {
-        let current = metrics(&client, address).await?;
+        let current = metrics(client, address).await?;
         let failures = [
             (
                 "observability_failed_log_batches",
@@ -167,7 +177,7 @@ pub(super) async fn local_recording(
                 crate::otlp::Signal::Traces,
             ),
         ];
-        // No Machine exists in this isolated startup gate. An ACTIVE queue
+        // No Machine exists in the active-queue startup fixtures. An ACTIVE queue
         // consumes each new batch once as not-admitted; stopped/unconfigured
         // modes have no queue and must leave every remote counter at zero.
         let expected = |signal| {

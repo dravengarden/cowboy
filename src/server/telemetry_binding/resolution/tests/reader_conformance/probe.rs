@@ -20,8 +20,10 @@ const DEADLINE: Duration = Duration::from_secs(12);
 const LOG_BYTES: usize = 128 * 1024;
 
 mod admission;
+mod connected;
 mod startup;
 pub(super) use admission::run as writer_admission;
+pub(super) use connected::run as connected_pair;
 pub(super) use startup::run as background_startup;
 
 pub(super) fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
