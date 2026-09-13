@@ -119,7 +119,12 @@ core previews and separately gated confirmation plumbing. It cannot perform
 this Machine-only recovery. Its [distinct confirmation surface](telemetry-machine-recovery-surface.md)
 now provides exact previews and separately gated one-use plumbing.
 
-Still required for P2: remaining user-facing finite confirmation surfaces, explicit writer and
+The [ordinary binding surface](telemetry-binding-surface.md) now stages the
+remaining finite select/revoke/restore confirmations. [Durable audit discovery](telemetry-recovery-audit-discovery.md)
+also reads this Machine-owned history after Controller handle loss and later
+Service resolution; no execution authority or replicated journal is created.
+
+Still required for P2: explicit writer and
 background-policy admission, and full production cross-end failure/restart
 acceptance. Unknown/schema-one evidence intentionally remains quarantined and
 needs a separately justified treatment, not a universal “repair” button. Already
