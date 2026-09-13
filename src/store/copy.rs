@@ -19,6 +19,7 @@ const TABLES: &[&str] = &[
     "machines",
     "plugin_uninstall_operations",
     "plugin_uninstall_resolutions",
+    "telemetry_binding_journal",
     "users",
     "sessions",
     "events",

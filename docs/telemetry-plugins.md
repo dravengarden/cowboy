@@ -138,6 +138,21 @@ uninstalling fails closed for subsequent exports. A bounded in-flight request
 may finish. Changing a Plugin version/digest does not silently inherit old
 activation authority.
 
+The [Machine attempt-owner hardening](telemetry-execution-leases.md) additionally
+checks the original connection, admission budget, installation and unchanged
+private policy before each HTTP attempt, including retries. A queued or retrying
+call cannot adopt a replacement endpoint or revive after its lease ends. This
+requires deployment of the hardened Machine; unchanged protocol numbers or a
+Controller release are not proof of that deployment. Durable binding activation
+and restart recovery remain separate unfinished work.
+
+The staged [managed single-attempt path](telemetry-managed-attempts.md) uses
+protocol 16 and fresh independent authorization for one standard OTLP batch.
+It makes no automatic HTTP retry and does not reconstruct export grants from
+binding history. It does not replace the production legacy exporter or enable
+managed writes/background export; reader-floor and recovery acceptance remain
+separate prerequisites.
+
 Each Controller batch additionally resolves that exact release from the accepted
 signed Catalog snapshot and compares its telemetry kind, contract fingerprint
 and encoding with the active Machine inventory. Its opaque port binding is

@@ -73,21 +73,6 @@ function applyThemeColor(color: string): void {
   if (doc.body) doc.body.style.backgroundColor = color;
 }
 
-// Keep the first visit calm and readable even when the host OS is in dark
-// mode. Settings can still opt into System or Dark; this only seeds the
-// preference when Cowboy has never stored one before. In particular, do not
-// overwrite an existing choice made by the user on a later visit.
-function seedLightThemeDefault(): void {
-  try {
-    if (globalThis.localStorage.getItem("cowboy-theme-mode") === null) {
-      globalThis.localStorage.setItem("cowboy-theme-mode", "light");
-    }
-  } catch {
-    // Private browsing / disabled storage: the shared hook will fall back to
-    // its normal system behaviour without making theme selection fatal.
-  }
-}
-
 // Native desktop UIs size their system font per-OS: macOS renders SF at ~13px,
 // Windows/Linux UIs sit a touch larger. The web default of 16px is a *document
 // reading* size and looks oversized for an app chrome on macOS (the reference
@@ -122,7 +107,6 @@ export interface ThemeControls {
 }
 
 export function useThemeMode(): ThemeControls {
-  seedLightThemeDefault();
   const { choice, resolved, setChoice, cycle } = useSharedThemeMode("cowboy");
   const dark = resolved === "dark";
   const icon = useSyncExternalStore(

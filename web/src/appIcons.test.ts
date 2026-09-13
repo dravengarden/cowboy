@@ -8,8 +8,10 @@ import {
   APP_ICON_GROUPS,
   APP_ICONS,
   appIcon,
+  appIconAppearanceAsset,
   appIconAsset,
   appIconInstallPath,
+  appIconTabAsset,
   currentAppIcon,
   DEFAULT_APP_ICON,
   filterAppIcons,
@@ -168,4 +170,36 @@ Deno.test("every icon has installable files with a shared identity and an isolat
     assert(install.includes(`/?app-icon=${icon.id}`));
     assert(!install.includes("tmpfiles.org"));
   }
+});
+
+Deno.test("Neon previews resolve light and dark assets without changing other styles", () => {
+  assertEquals(
+    appIconAppearanceAsset(DEFAULT_APP_ICON, false),
+    "/app-icons/v6/palette-103/icon-light-192.png",
+  );
+  assertEquals(
+    appIconAppearanceAsset(DEFAULT_APP_ICON, true),
+    appIconAsset(DEFAULT_APP_ICON, 192),
+  );
+  for (const icon of APP_ICONS.filter((icon) => icon.id !== DEFAULT_APP_ICON)) {
+    assertEquals(
+      appIconAppearanceAsset(icon.id, false),
+      appIconAppearanceAsset(icon.id, true),
+    );
+  }
+});
+
+Deno.test("tab marks are independent of opaque installation icons", () => {
+  assertEquals(
+    appIconTabAsset(DEFAULT_APP_ICON),
+    "/app-icons/v8/palette-103/favicon.svg",
+  );
+  assertEquals(
+    appIconTabAsset("palette-054"),
+    "/app-icons/v8/palette-054/favicon.svg",
+  );
+  assertEquals(
+    appIconTabAsset("original-001"),
+    appIconAsset("original-001", 192),
+  );
 });

@@ -351,11 +351,11 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   assert(
     readme.includes("site/assets/cowboy-readme-icon-v6.png") &&
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
-      readme.includes("site/assets/cowboy-remote-topology-dark-v3.webp") &&
+      readme.includes("site/assets/cowboy-remote-topology-dark-v4.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
-      readme.includes("site/assets/cowboy-desktop-surface-dark-v2.webp") &&
+      readme.includes("site/assets/cowboy-desktop-surface-dark-v3.webp") &&
       readme.includes("site/assets/cowboy-mobile-light-v2.webp") &&
-      readme.includes("site/assets/cowboy-mobile-dark-v2.webp") &&
+      readme.includes("site/assets/cowboy-mobile-dark-v3.webp") &&
       !readme.includes("docs/screenshots/"),
     "repository landing page should use the abstract public artwork instead of private product captures",
   );
@@ -363,11 +363,11 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     const asset of [
       "site/assets/cowboy-readme-icon-v6.png",
       "site/assets/cowboy-remote-topology-light-v3.webp",
-      "site/assets/cowboy-remote-topology-dark-v3.webp",
+      "site/assets/cowboy-remote-topology-dark-v4.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
-      "site/assets/cowboy-desktop-surface-dark-v2.webp",
+      "site/assets/cowboy-desktop-surface-dark-v3.webp",
       "site/assets/cowboy-mobile-light-v2.webp",
-      "site/assets/cowboy-mobile-dark-v2.webp",
+      "site/assets/cowboy-mobile-dark-v3.webp",
     ]
   ) {
     assert(
@@ -507,7 +507,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       styles.includes("--canvas: #101014") &&
-        styles.includes("--primary: #51c9ff") &&
+        styles.includes("--primary: #bb83ff") &&
+        styles.includes("--secondary: #51c9ff") &&
+        styles.includes("--primary: #7b42b5") &&
         !styles.includes("filter: var(--brand-filter-rest)") &&
         !styles.includes("@keyframes brand-color-breathe"),
       "brand colors remain faithful to the selected icon in light and dark themes",
@@ -685,7 +687,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     assert(
       html.includes("Self-hosted remote Agent IDE") &&
         html.includes(
-          'One workspace.</span><br><span data-i18n="hero.hosted">Self-hosted.',
+          'One workspace.</span></em><br><span data-i18n="hero.hosted">Self-hosted.',
         ) &&
         html.includes("Self-host Cowboy on your infrastructure") &&
         script.includes('"hero.hosted":') &&
@@ -705,16 +707,12 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v6-32.png" type="image/png" sizes="32x32"',
+        'href="assets/cowboy-tab-icon-v8.svg" type="image/svg+xml" sizes="any"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v6-16.png" type="image/png" sizes="16x16"',
-        ) &&
-        html.includes(
-          'href="assets/cowboy-tab-icon-v6.ico" sizes="any"',
-        ) &&
-        !html.includes('href="assets/cowboy-hat-mark.svg"'),
-      "document should expose tab-sized Cowboy favicons",
+          'href="assets/cowboy-tab-icon-v8.ico" sizes="16x16 32x32 48x48"',
+        ),
+      "browser tabs use transparent scalable marks with explicit raster fallbacks",
     );
     assert(
       !html.includes("cowboy-desktop.webp") &&
@@ -722,7 +720,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "published HTML should not expose real product captures",
     );
     assert(
-      styles.includes('html[data-theme="dark"] .theme-art'),
+      !styles.includes("filter: invert(") &&
+        (html.match(/data-theme-art-dark/gu) ?? []).length === 3 &&
+        script.includes('theme === "dark" ? "all" : "not all"'),
       "product illustrations should respond to the selected theme",
     );
     assert(
@@ -745,9 +745,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v6-16.png",
-        "cowboy-tab-icon-v6-32.png",
-        "cowboy-tab-icon-v6.ico",
+        "cowboy-tab-icon-v8-16.png",
+        "cowboy-tab-icon-v8-32.png",
+        "cowboy-tab-icon-v8.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

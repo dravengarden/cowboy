@@ -45,7 +45,7 @@ const LEGACY_FONT_SCALE_DEFAULTS = new Set([0.55, 1]);
 const FONT_SCALE_MIGRATION_KEY = "cowboy:font-scale-migrated-v3";
 // Default reading comfort: 8px side gutter, 1.6 line-height, 65% scale — the
 // product-chosen defaults for an unset/garbage value (a user's own picks still
-// win). The system stack is the default face (see fonts.ts DEFAULT_FONT_ID).
+// win). Source Serif 4 is the default reading face (see fonts.ts DEFAULT_FONT_ID).
 // A one-shot migration rewrites earlier product defaults to 65%.
 export const PADDING_DEFAULT = 8;
 export const LINE_HEIGHT_DEFAULT = 1.6;

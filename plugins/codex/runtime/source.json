@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "adapter": {
+    "version": "1.10.0",
+    "revision": "061f9a4a2e463a220d7a3ab2ae5e9732837085ef",
+    "archive_url": "https://codeload.github.com/agentclientprotocol/codex-acp/tar.gz/061f9a4a2e463a220d7a3ab2ae5e9732837085ef",
+    "archive_sha256": "e308d40d813e543a87af50771a1109e5f050e536b3fce6556552be2475869ec0",
+    "npm_lock_sha256": "bbf4e0b19d1cf02a8d96c2f0487475ba68b231a1818dc6de08f9fff858eee8a3",
+    "patch": "adapter.patch"
+  }
+}

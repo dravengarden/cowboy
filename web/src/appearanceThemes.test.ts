@@ -41,6 +41,10 @@ Deno.test("all twenty styles retain readable light and dark controls and text", 
   }
   assertEquals(
     appearancePalette(DEFAULT_APP_ICON, true).primary.main,
+    "#bb83ff",
+  );
+  assertEquals(
+    appearancePalette(DEFAULT_APP_ICON, true).secondary.main,
     "#51c9ff",
   );
   assertEquals(

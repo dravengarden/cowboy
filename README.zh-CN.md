@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-006e99?style=flat-square" alt="Cowboy 官网">
+    <img src="https://img.shields.io/badge/website-live-7b42b5?style=flat-square" alt="Cowboy 官网">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="官网构建状态">
@@ -41,7 +41,7 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v3.webp">
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v4.webp">
       <img src="site/assets/cowboy-remote-topology-light-v3.webp" alt="Cowboy Desktop 与 Mobile 通过一个自托管 Hub 连接三台通用 macOS 和 Linux Machine，并运行多个编码 Agent" width="1100">
     </picture>
   </a>
@@ -145,7 +145,7 @@ inbound listener；本地 Machine 可以使用 UDS。每个 Session 都会记录
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v3.webp">
     <img src="site/assets/cowboy-desktop-surface-light-v2.webp" alt="Cowboy Desktop 抽象工作区，包含 Session 导航、prompt 编辑器和实时 Agent timeline" width="1100">
   </picture>
 </p>
@@ -156,7 +156,7 @@ inbound listener；本地 Machine 可以使用 UDS。每个 Session 都会记录
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v3.webp">
     <img src="site/assets/cowboy-mobile-light-v2.webp" alt="Cowboy Mobile 的 Session、Agent 工作与代码审查抽象界面" width="960">
   </picture>
 </p>

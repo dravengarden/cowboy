@@ -20,7 +20,25 @@ pub(crate) struct PluginSelection {
     pub generation_digest: String,
 }
 
+#[cfg(feature = "full")]
 fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    read_private_snapshot(path).map(|(value, _)| value)
+}
+
+// Local observation fences, not durable policy epochs. Holding the open file
+// pins its inode so atomic replacement cannot recreate the same identity while
+// a request retains this snapshot. No bytes, paths or digests enter a receipt.
+#[cfg_attr(not(feature = "machine-host"), allow(dead_code))] // Controller only consumes the parsed startup selection.
+struct PrivateSnapshot {
+    file: std::fs::File,
+    digest: [u8; 32],
+    changed: (i64, i64),
+}
+
+fn read_private_snapshot<T: serde::de::DeserializeOwned>(
+    path: &Path,
+) -> Result<(T, PrivateSnapshot)> {
+    use sha2::{Digest as _, Sha256};
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
@@ -35,12 +53,31 @@ fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         "telemetry configuration must be an owned private regular file"
     );
     let mut bytes = Vec::new();
-    file.take(64 * 1024 + 1).read_to_end(&mut bytes)?;
+    (&file).take(64 * 1024 + 1).read_to_end(&mut bytes)?;
     ensure!(
         bytes.len() <= 64 * 1024,
         "telemetry configuration too large"
     );
-    serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid telemetry configuration"))
+    let after = file.metadata()?;
+    ensure!(
+        metadata.ctime() == after.ctime()
+            && metadata.ctime_nsec() == after.ctime_nsec()
+            && metadata.len() == after.len()
+            && metadata.mode() == after.mode()
+            && metadata.nlink() == after.nlink()
+            && metadata.uid() == after.uid(),
+        "telemetry configuration changed during read"
+    );
+    let value = serde_json::from_slice(&bytes)
+        .map_err(|_| anyhow::anyhow!("invalid telemetry configuration"))?;
+    Ok((
+        value,
+        PrivateSnapshot {
+            file,
+            digest: Sha256::digest(&bytes).into(),
+            changed: (after.ctime(), after.ctime_nsec()),
+        },
+    ))
 }
 
 impl PluginSelection {
@@ -95,12 +132,18 @@ pub(crate) fn controller_exporter(
     path: Option<&Path>,
     control: std::sync::Arc<crate::machine_control::MachineControl>,
     catalog: std::sync::Arc<crate::plugin_catalog::PluginCatalog>,
+    fence: crate::telemetry_binding::LegacyFence,
 ) -> Result<Option<crate::observability::TelemetryExporter>> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Configuration {
         machine_id: String,
         plugin: PluginSelection,
+    }
+    // A reader bridge retains evidence and stops legacy egress. It must not
+    // read/adopt an obsolete private selection to synthesize managed authority.
+    if !fence.allows_legacy() {
+        return Ok(None);
     }
     let Some(path) = path else {
         return Ok(None);
@@ -116,7 +159,11 @@ pub(crate) fn controller_exporter(
         let machine_id = config.machine_id.clone();
         let control = std::sync::Arc::clone(&control);
         let catalog = std::sync::Arc::clone(&catalog);
+        let fence = fence.clone();
         Box::pin(async move {
+            if !fence.allows_legacy() {
+                return crate::observability::ExportReceipt::default();
+            }
             // Policy is the private, exact Service selection captured at
             // startup. A composition JSON report can never select this port.
             let Ok(release) = catalog.resolve_telemetry_backend(
@@ -147,6 +194,9 @@ pub(crate) fn controller_exporter(
                 Some(otlp) => serde_json::to_value(otlp).expect("OTLP envelope"),
                 None => serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
             };
+            if !fence.allows_legacy() {
+                return crate::observability::ExportReceipt::default();
+            }
             let result = control.invoke_plugin_host(binding, payload).await;
             // Never log commands or private endpoint errors. Only bounded lane
             // receipts reach observability; no host payload enters history.
@@ -190,6 +240,29 @@ mod machine {
         traces: Option<Endpoint>,
     }
 
+    pub(crate) struct PreparedPolicy {
+        config: Configuration,
+        snapshot: PrivateSnapshot,
+    }
+
+    impl PreparedPolicy {
+        pub(crate) fn unchanged(&self, path: &Path) -> bool {
+            let Ok((_, current)) = read_private_snapshot::<Configuration>(path) else {
+                return false;
+            };
+            let Ok(original) = self.snapshot.file.metadata() else {
+                return false;
+            };
+            let Ok(observed) = current.file.metadata() else {
+                return false;
+            };
+            original.dev() == observed.dev()
+                && original.ino() == observed.ino()
+                && self.snapshot.digest == current.digest
+                && self.snapshot.changed == current.changed
+        }
+    }
+
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Endpoint {
@@ -215,15 +288,8 @@ mod machine {
         selection: &PluginSelection,
         value: serde_json::Value,
         otlp: bool,
-    ) -> Result<(Configuration, Payload)> {
-        let config: Configuration = read_private(path)?;
-        config.plugin.validate()?;
-        ensure!(
-            config.plugin.plugin_id == selection.plugin_id
-                && config.plugin.plugin_version == selection.plugin_version
-                && config.plugin.generation_digest == selection.generation_digest,
-            "telemetry release is not enabled by Machine policy"
-        );
+    ) -> Result<(PreparedPolicy, Payload)> {
+        let policy = prepare_policy(path, selection)?;
         let payload = if otlp {
             let payload: crate::otlp::Export = serde_json::from_value(value)
                 .map_err(|_| anyhow::anyhow!("invalid OTLP export payload"))?;
@@ -238,13 +304,31 @@ mod machine {
             );
             Payload::Legacy(payload)
         };
+        Ok((policy, payload))
+    }
+
+    /// Read and validate local authority without creating a payload or emitting
+    /// HTTP. The returned inode/bytes observation is process-local, never a
+    /// durable policy credential or part of the binding receipt.
+    pub(crate) fn prepare_policy(
+        path: &Path,
+        selection: &PluginSelection,
+    ) -> Result<PreparedPolicy> {
+        let (config, snapshot): (Configuration, _) = read_private_snapshot(path)?;
+        config.plugin.validate()?;
+        ensure!(
+            config.plugin.plugin_id == selection.plugin_id
+                && config.plugin.plugin_version == selection.plugin_version
+                && config.plugin.generation_digest == selection.generation_digest,
+            "telemetry release is not enabled by Machine policy"
+        );
         for endpoint in [&config.logs, &config.metrics, &config.traces]
             .into_iter()
             .flatten()
         {
             endpoint.validate()?;
         }
-        Ok((config, payload))
+        Ok(PreparedPolicy { config, snapshot })
     }
 
     impl Endpoint {
@@ -281,11 +365,52 @@ mod machine {
         }
     }
 
-    pub(crate) async fn export(
+    pub(crate) async fn export<F, Fut>(
         contract: &TelemetryBackendContract,
-        config: Configuration,
+        policy: &PreparedPolicy,
         payload: Payload,
-    ) -> ExportResult {
+        admit: &F,
+    ) -> ExportResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        export_with_attempts(contract, policy, payload, admit, 2).await
+    }
+
+    /// Managed callers authorize exactly one signal/attempt. No local retry,
+    /// encoding downgrade, or acquisition of a second authorization here.
+    pub(crate) async fn export_once<F, Fut>(
+        contract: &TelemetryBackendContract,
+        policy: &PreparedPolicy,
+        payload: crate::otlp::Export,
+        admit: &F,
+    ) -> OtlpResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        export_with_attempts(contract, policy, Payload::Otlp(payload), admit, 1)
+            .await
+            .otlp
+            .unwrap_or(OtlpResult {
+                enabled: true,
+                ..Default::default()
+            })
+    }
+
+    async fn export_with_attempts<F, Fut>(
+        contract: &TelemetryBackendContract,
+        policy: &PreparedPolicy,
+        payload: Payload,
+        admit: &F,
+        attempts: u8,
+    ) -> ExportResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
+        let config = &policy.config;
         let Ok(client) = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -306,7 +431,7 @@ mod machine {
                         (contract.traces.as_ref(), config.traces.as_ref())
                     }
                 };
-                let receipt = post_otlp(&client, route, endpoint, &payload).await;
+                let receipt = post_otlp(&client, route, endpoint, &payload, admit, attempts).await;
                 return ExportResult {
                     otlp: Some(receipt),
                     ..Default::default()
@@ -319,13 +444,15 @@ mod machine {
                 &client,
                 contract.logs.as_ref(),
                 config.logs.as_ref(),
-                payload.logs
+                payload.logs,
+                admit
             ),
             post(
                 &client,
                 contract.metrics.as_ref(),
                 config.metrics.as_ref(),
-                payload.metrics
+                payload.metrics,
+                admit
             ),
         );
         ExportResult {
@@ -335,12 +462,17 @@ mod machine {
         }
     }
 
-    async fn post(
+    async fn post<F, Fut>(
         client: &reqwest::Client,
         route: Option<&TelemetryRoute>,
         endpoint: Option<&Endpoint>,
         body: String,
-    ) -> bool {
+        admit: &F,
+    ) -> bool
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
         if body.is_empty() {
             return true;
         }
@@ -373,6 +505,9 @@ mod machine {
             if let Some(token) = &endpoint.bearer_token {
                 request = request.bearer_auth(token);
             }
+            if !admit().await {
+                return false;
+            }
             let retry = match request.send().await {
                 Ok(response) if response.status().is_success() => return true,
                 Ok(response) => {
@@ -389,12 +524,18 @@ mod machine {
         false
     }
 
-    async fn post_otlp(
+    async fn post_otlp<F, Fut>(
         client: &reqwest::Client,
         route: Option<&TelemetryRoute>,
         endpoint: Option<&Endpoint>,
         payload: &crate::otlp::Export,
-    ) -> OtlpResult {
+        admit: &F,
+        attempts: u8,
+    ) -> OtlpResult
+    where
+        F: Fn() -> Fut + Sync,
+        Fut: std::future::Future<Output = bool> + Send,
+    {
         // Explicitly disabled lanes stay local. Missing/incompatible routes on
         // an enabled lane are failures, never a legacy-encoding fallback.
         let Some(endpoint) = endpoint else {
@@ -419,13 +560,16 @@ mod machine {
             url.path().trim_end_matches('/'),
             route.path
         ));
-        for attempt in 0..2 {
+        for attempt in 0..attempts {
             let mut request = client
                 .post(url.clone())
                 .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
                 .body(body.clone());
             if let Some(token) = &endpoint.bearer_token {
                 request = request.bearer_auth(token);
+            }
+            if !admit().await {
+                return failed();
             }
             let retry = match request.send().await {
                 Ok(mut response) if response.status() == reqwest::StatusCode::OK => {
@@ -463,7 +607,7 @@ mod machine {
                 Ok(response) => matches!(response.status().as_u16(), 429 | 502 | 503 | 504),
                 Err(_) => true,
             };
-            if !retry || attempt == 1 {
+            if !retry || attempt + 1 == attempts {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(150)).await;
@@ -555,13 +699,29 @@ mod machine {
                 path: "/redirect".into(),
                 query: Default::default(),
             };
-            assert!(!post(&client, Some(&route), Some(&endpoint), "{}\n".into()).await);
+            let admit = || async { true };
+            assert!(
+                !post(
+                    &client,
+                    Some(&route),
+                    Some(&endpoint),
+                    "{}\n".into(),
+                    &admit
+                )
+                .await
+            );
             assert_eq!(count.load(Ordering::Relaxed), 1);
             route.path = "/slow".into();
             assert!(
                 !tokio::time::timeout(
                     Duration::from_secs(1),
-                    post(&client, Some(&route), Some(&endpoint), "{}\n".into())
+                    post(
+                        &client,
+                        Some(&route),
+                        Some(&endpoint),
+                        "{}\n".into(),
+                        &admit
+                    )
                 )
                 .await
                 .unwrap()
@@ -573,4 +733,4 @@ mod machine {
 }
 
 #[cfg(feature = "machine-host")]
-pub(crate) use machine::{export, prepare};
+pub(crate) use machine::{PreparedPolicy, export, export_once, prepare, prepare_policy};

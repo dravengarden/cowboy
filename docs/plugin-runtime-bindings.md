@@ -50,6 +50,12 @@ export policy on execution. No endpoint or credential travels in the binding.
 No version, Machine, encoding or localhost fallback is added. Local files and
 incident persistence retain their independent queues and failure handling.
 
+The later [telemetry attempt owner](telemetry-execution-leases.md) binds Machine
+execution to the original connection and a monotonic admission budget, then
+rechecks the exact installation and unchanged private policy at every HTTP
+attempt. It is a separately deployed Machine hardening, not a durable binding
+activation protocol or automatic effect restoration.
+
 A binding expires on an observed installation identity/state/auth change,
 including a switch away and back. Lease-count/detail-only observations preserve
 it. The inventory revision is a conservative, connection-local observation fence,

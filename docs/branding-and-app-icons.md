@@ -3,8 +3,9 @@
 The default is colorway **103**, **Neon**: cyan crown `#51C9FF`, violet brim `#BB83FF`,
 and ink background `#101014`. It uses the approved Boomerang West shape.
 The website and app accents follow these colors; CSS must not recolor the logo
-with hue rotation, a mask, or a rainbow overlay. The light theme uses deeper blue
-and violet accents so text remains readable against pale surfaces.
+with hue rotation, a mask, or a rainbow overlay. Neon uses violet as primary and cyan as secondary; the light theme deepens
+both accents for readable text. The website keeps most headline text neutral
+and reserves the purple emphasis for “One workspace.”
 
 ## Choosing an icon
 
@@ -113,3 +114,26 @@ SideStore **0.1.30** makes Neon (103) the primary icon. Its Apple release build
 and isolated Simulator conformance checks passed; both iPhone and iPad inventories
 contain the 200 compatibility alternatives. The public source and published IPA
 were verified after publication. Physical-device acceptance is not yet recorded.
+
+New preferences default to System appearance and Source Serif 4 for reading.
+Explicit saved theme and font choices remain unchanged. The Home Screen artwork
+has its own opaque background; the in-app System setting does not recolor it.
+
+Neon now supplies native Any (light) and Dark app-icon appearances, both for the
+primary icon and its existing alternate identifier. The Home Screen's Automatic
+appearance selects between them; an explicit system Home Screen appearance wins.
+This is independent of Cowboy's in-app Theme setting. Other curated artworks
+retain their chosen backgrounds. Installed PWA icons remain static snapshots.
+The approved light counterpart is `assets/brand/cowboy-neon-light-source.png`;
+`tools/build-icon-appearances.py` exports it without regenerating artwork.
+
+Browser tabs use an independent transparent SVG mark with less padding, stronger
+light-mode colors and bright dark-mode colors. `assets/brand/cowboy-tab-contours.json`
+retains contours traced from the approved 103 artwork; `tools/build-tab-icons.py`
+exports palette favicons and explicit 16/32/48px ICO fallback frames. Native and
+PWA installation artwork retain their own backgrounds. Browser appearance, not
+the page's manual theme selection, selects the favicon color treatment.
+
+The v8 browser-only optical frame gives the wide hat more vertical presence in
+a fixed 16px tab slot, with its ink center near the slot center. This optical
+proportion is independent of the unchanged website logo and installation icon.

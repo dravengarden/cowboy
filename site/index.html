@@ -36,9 +36,8 @@
       content="https://dravengarden.github.io/cowboy/assets/cowboy-logo-512.png"
     >
     <link rel="canonical" href="https://dravengarden.github.io/cowboy/">
-    <link rel="icon" href="assets/cowboy-tab-icon-v6-32.png" type="image/png" sizes="32x32">
-    <link rel="icon" href="assets/cowboy-tab-icon-v6-16.png" type="image/png" sizes="16x16">
-    <link rel="alternate icon" href="assets/cowboy-tab-icon-v6.ico" sizes="any">
+    <link rel="icon" href="assets/cowboy-tab-icon-v8.ico" sizes="16x16 32x32 48x48">
+    <link rel="icon" href="assets/cowboy-tab-icon-v8.svg" type="image/svg+xml" sizes="any">
     <link rel="preload" href="assets/cowboy-hero-devices-light.webp" as="image" type="image/webp">
     <script>
       document.documentElement.classList.add("js");
@@ -200,7 +199,7 @@
       <section class="hero section-shell" id="top">
         <div class="hero-copy">
           <p class="eyebrow"><span></span> <b data-i18n="hero.eyebrow">Self-hosted remote Agent IDE</b></p>
-          <h1><span data-i18n="hero.agents">Your agents.</span><br><span data-i18n="hero.machines">Your machines.</span><br><em><span data-i18n="hero.workspace">One workspace.</span><br><span data-i18n="hero.hosted">Self-hosted.</span></em></h1>
+          <h1><span data-i18n="hero.agents">Your agents.</span><br><span data-i18n="hero.machines">Your machines.</span><br><em><span data-i18n="hero.workspace">One workspace.</span></em><br><span data-i18n="hero.hosted">Self-hosted.</span></h1>
           <p class="hero-lede" data-i18n="hero.lede">
             Self-host Cowboy on your infrastructure. Direct Codex, Claude Code,
             Gemini, Grok, and DeepSeek across every enrolled Machine, then
@@ -229,7 +228,9 @@
 
         <div class="hero-product">
           <div class="product-window hero-product-window">
-            <img
+            <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-hero-devices-dark.webp">
+              <img
               class="theme-art workspace-art"
               src="assets/cowboy-hero-devices-light.webp"
               alt="Abstract Cowboy Desktop and Phone workspaces connected through one Hub to multiple macOS and Linux Machines"
@@ -238,6 +239,7 @@
               height="1024"
               fetchpriority="high"
             >
+              </picture>
           </div>
           <div
             class="hero-control-plane"
@@ -415,6 +417,8 @@
               <small data-i18n="desktop.keyboardDetail">Vim-like · fully addressable</small>
             </div>
             <div class="desktop-illustration">
+              <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-desktop-surface-dark.webp">
               <img
                 class="theme-art"
                 src="assets/cowboy-desktop-surface-light.webp"
@@ -424,6 +428,7 @@
                 height="860"
                 loading="lazy"
               >
+              </picture>
               <div class="markdown-composer" aria-hidden="true">
                 <div class="markdown-composer-bar">
                   <span>prompt.md</span>
@@ -465,6 +470,8 @@
               safe keyboard behavior, and progressively disclosed code tools.
             </p>
             <div class="mobile-illustration">
+              <picture class="theme-art-picture">
+              <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/cowboy-mobile-dark.webp">
               <img
                 class="theme-art"
                 src="assets/cowboy-mobile-light.webp"
@@ -474,6 +481,7 @@
                 height="1024"
                 loading="lazy"
               >
+              </picture>
             </div>
           </article>
         </div>

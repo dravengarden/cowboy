@@ -164,6 +164,7 @@ impl Fixture {
             Some(&self.policy(|_| {})),
             Arc::clone(control),
             Arc::clone(catalog),
+            crate::telemetry_binding::LegacyFence::unmanaged_fixture(),
         )
         .unwrap()
         .unwrap()
@@ -332,6 +333,38 @@ async fn legacy_contract_does_not_accept_otlp_or_lower_protocols() {
 }
 
 #[tokio::test]
+async fn managed_service_fence_stops_all_new_batches_and_skips_legacy_policy_read() {
+    let fixture = Fixture::new(2);
+    let catalog = fixture.catalog();
+    let control = Arc::new(MachineControl::default());
+    let (_, mut rx) = connect(&control, "hawk", 14, vec![fixture.inventory()]);
+    let fence = crate::telemetry_binding::LegacyFence::unmanaged_fixture();
+    let exporter = controller_exporter(
+        Some(&fixture.policy(|_| {})),
+        Arc::clone(&control),
+        Arc::clone(&catalog),
+        fence.clone(),
+    )
+    .unwrap()
+    .unwrap();
+    fence.close();
+    for signal in [
+        None,
+        Some(Signal::Logs),
+        Some(Signal::Metrics),
+        Some(Signal::Traces),
+    ] {
+        denied(&exporter, signal, &mut rx).await;
+    }
+    let absent_policy = fixture.root.path().join("must-not-be-read.json");
+    assert!(
+        controller_exporter(Some(&absent_policy), control, catalog, fence)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn service_policy_and_inventory_never_fall_back_to_a_different_identity() {
     let fixture = Fixture::new(2);
     let catalog = fixture.catalog();
@@ -343,15 +376,25 @@ async fn service_policy_and_inventory_never_fall_back_to_a_different_identity() 
         ("generation_digest", format!("sha256:{}", "a".repeat(64))),
     ] {
         let path = fixture.policy(|config| config["plugin"][field] = value.into());
-        let exporter = controller_exporter(Some(&path), Arc::clone(&control), Arc::clone(&catalog))
-            .unwrap()
-            .unwrap();
+        let exporter = controller_exporter(
+            Some(&path),
+            Arc::clone(&control),
+            Arc::clone(&catalog),
+            crate::telemetry_binding::LegacyFence::unmanaged_fixture(),
+        )
+        .unwrap()
+        .unwrap();
         denied(&exporter, Some(Signal::Logs), &mut rx).await;
     }
     let path = fixture.policy(|config| config["machine_id"] = "falcon".into());
-    let exporter = controller_exporter(Some(&path), Arc::clone(&control), Arc::clone(&catalog))
-        .unwrap()
-        .unwrap();
+    let exporter = controller_exporter(
+        Some(&path),
+        Arc::clone(&control),
+        Arc::clone(&catalog),
+        crate::telemetry_binding::LegacyFence::unmanaged_fixture(),
+    )
+    .unwrap()
+    .unwrap();
     denied(&exporter, Some(Signal::Logs), &mut rx).await;
     let exporter = fixture.exporter(&control, &catalog);
     for mismatch in 0..7 {

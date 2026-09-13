@@ -14,8 +14,14 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+mod telemetry_export;
+mod telemetry_recovery;
+
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
+use crate::machine_protocol::telemetry_binding::{
+    BindingCommitResult, BindingObservation, BindingStep,
+};
 use crate::machine_protocol::{
     MachineCommand, MachineEvent, PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION, PluginHostOperation,
     PluginInstallationState, PluginInventory,
@@ -83,6 +89,11 @@ enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
     Connection(&'a ConnectionToken),
     Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
+    Telemetry(&'a ConnectionToken, &'a BindingStep),
+    TelemetryExport(
+        &'a ConnectionToken,
+        &'a crate::machine_protocol::telemetry_export::ExportAttempt,
+    ),
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +127,11 @@ enum ReplyKind {
     PluginHost,
     PluginStep,
     PluginRecovery,
+    TelemetryBinding,
+    TelemetryBindingCommit,
+    TelemetryExport,
+    TelemetryRecovery,
+    TelemetryRecoveryCommit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -127,6 +143,11 @@ pub(crate) enum PluginUninstallTransport {
 enum Reply {
     PluginStep(Box<StepObservation>),
     PluginRecovery(Box<RecoveryObservation>),
+    TelemetryBinding(Box<BindingObservation>),
+    TelemetryBindingCommit(Box<BindingCommitResult>),
+    TelemetryExport(Option<Box<crate::machine_protocol::telemetry_export::ExportReceipt>>),
+    TelemetryRecovery(Box<crate::machine_protocol::telemetry_recovery::RecoveryObservation>),
+    TelemetryRecoveryCommit(Box<crate::machine_protocol::telemetry_recovery::RecoveryResult>),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -142,6 +163,11 @@ impl Reply {
         match self {
             Self::PluginStep(_) => ReplyKind::PluginStep,
             Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
+            Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
+            Self::TelemetryBindingCommit(_) => ReplyKind::TelemetryBindingCommit,
+            Self::TelemetryExport(_) => ReplyKind::TelemetryExport,
+            Self::TelemetryRecovery(_) => ReplyKind::TelemetryRecovery,
+            Self::TelemetryRecoveryCommit(_) => ReplyKind::TelemetryRecoveryCommit,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -218,6 +244,39 @@ struct LiveState {
 }
 
 impl LiveState {
+    fn telemetry_target_matches(&self, machine: &str, step: &BindingStep) -> bool {
+        let Ok(after) = step.after() else {
+            return false;
+        };
+        let Some(target) = after.selection else {
+            return true;
+        };
+        self.telemetry_installation_matches(machine, &target)
+    }
+
+    fn telemetry_installation_matches(
+        &self,
+        machine: &str,
+        target: &crate::machine_protocol::telemetry_binding::BindingInstallation,
+    ) -> bool {
+        self.plugin_inventory.get(machine).is_some_and(|inventory| {
+            let mut slot = inventory
+                .plugins
+                .iter()
+                .filter(|p| p.plugin_id == target.plugin_id);
+            slot.next().is_some_and(|plugin| {
+                plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                    && plugin.state == PluginInstallationState::Active
+                    && plugin.auth_generation.is_none()
+                    && plugin.plugin_version == target.plugin_version
+                    && plugin.generation_digest == String::from(target.generation_digest.clone())
+                    && plugin.contract_fingerprint
+                        == String::from(target.contract_fingerprint.clone())
+                    && plugin.installation_revision.as_ref() == Some(&target.installation_revision)
+            }) && slot.next().is_none()
+        })
+    }
+
     fn is_current(&self, token: &ConnectionToken) -> bool {
         self.connections
             .get(&token.0.machine_id)
@@ -414,6 +473,7 @@ impl MachineControl {
 
     /// Remote callers cannot invent a source Machine/epoch. Late or mismatched
     /// replies are dropped before touching a waiter or retaining their payload.
+    #[allow(clippy::too_many_lines)] // Keep the closed reply dispatch under one correlation lock.
     pub(crate) fn record_remote(&self, token: &ConnectionToken, event: MachineEvent) {
         let mut live = self.live.write();
         if !live.is_current(token) {
@@ -421,6 +481,30 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryBindingRecovered { request_id, result } => {
+                live.complete(token, &request_id, Reply::TelemetryRecoveryCommit(result));
+            }
+            MachineEvent::TelemetryRecoveryObservation {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryRecovery(observation));
+            }
+            MachineEvent::TelemetryExported {
+                request_id,
+                receipt,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryExport(receipt));
+            }
+            MachineEvent::TelemetryBindingCommitted { request_id, result } => {
+                live.complete(token, &request_id, Reply::TelemetryBindingCommit(result));
+            }
+            MachineEvent::TelemetryBindingObservation {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::TelemetryBinding(observation));
+            }
             MachineEvent::PluginUninstallRecovery {
                 request_id,
                 observation,
@@ -523,11 +607,29 @@ impl MachineControl {
             .get(machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
         Self::check_protocol(connection, &command)?;
-        if let Some(RequestBinding::Connection(token) | RequestBinding::Reactivate(token, _)) =
-            binding
+        if let Some(
+            RequestBinding::Connection(token)
+            | RequestBinding::Reactivate(token, _)
+            | RequestBinding::Telemetry(token, _)
+            | RequestBinding::TelemetryExport(token, _),
+        ) = binding
             && !connection.token.same(token)
         {
             return Err("Machine operation connection is no longer current".to_owned());
+        }
+        if let Some(RequestBinding::Telemetry(_, step)) = binding
+            && !live.telemetry_target_matches(machine_id, step)
+        {
+            return Err("Telemetry binding installation changed before dispatch".to_owned());
+        }
+        if let Some(RequestBinding::TelemetryExport(_, attempt)) = binding
+            && !attempt
+                .binding
+                .selection
+                .as_ref()
+                .is_some_and(|target| live.telemetry_installation_matches(machine_id, target))
+        {
+            return Err("Managed telemetry installation changed before dispatch".to_owned());
         }
         if let Some(RequestBinding::Reactivate(_, target)) = binding
             && !live.may_reactivate(machine_id, target)
@@ -822,6 +924,144 @@ impl MachineControl {
         }
     }
 
+    // Reader bridge for the forthcoming durable Service coordinator. No live
+    // mutation endpoint can manufacture an operation or invoke this as a grant.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) async fn telemetry_binding_observation(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> Result<BindingObservation, CommandRequestError> {
+        let fail = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.to_owned(),
+        };
+        step.validate()
+            .map_err(|_| fail(CommandFailure::NotSent, "invalid telemetry binding query"))?;
+        if step.machine_id != token.0.machine_id {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "telemetry binding query target mismatch",
+            ));
+        }
+        let request_id = self.request_id("telemetry-binding").map_err(|_| {
+            fail(
+                CommandFailure::NotSent,
+                "telemetry binding query identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::QueryTelemetryBinding {
+                    request_id: request_id.clone(),
+                    step: Box::new(step.clone()),
+                },
+                ReplyKind::TelemetryBinding,
+                Some(RequestBinding::Connection(token)),
+            )
+            .map_err(|_| {
+                fail(
+                    CommandFailure::NotSent,
+                    "telemetry binding query channel unavailable",
+                )
+            })?;
+        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(Reply::TelemetryBinding(observation))) if observation.matches(step) => {
+                Ok(*observation)
+            }
+            _ => Err(fail(
+                CommandFailure::Unknown,
+                "telemetry binding query evidence unavailable",
+            )),
+        }
+    }
+
+    pub(crate) fn telemetry_binding_target_current(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> bool {
+        let live = self.live.read();
+        step.validate_commit().is_ok()
+            && step.machine_id == token.0.machine_id
+            && live.connections.get(&token.0.machine_id).is_some_and(|c| {
+                c.token.same(token)
+                    && c.protocol
+                        >= crate::machine_protocol::TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
+            })
+            && live.telemetry_target_matches(&token.0.machine_id, step)
+    }
+
+    pub(crate) async fn commit_telemetry_binding(
+        &self,
+        token: &ConnectionToken,
+        step: &BindingStep,
+    ) -> Result<BindingObservation, CommandRequestError> {
+        let failure = |certainty, detail: &str| CommandRequestError {
+            certainty,
+            detail: detail.into(),
+        };
+        if step.validate_commit().is_err() || step.machine_id != token.0.machine_id {
+            return Err(failure(
+                CommandFailure::NotSent,
+                "invalid telemetry binding mutation",
+            ));
+        }
+        let request_id = self.request_id("telemetry-binding-commit").map_err(|_| {
+            failure(
+                CommandFailure::NotSent,
+                "binding request identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::CommitTelemetryBinding {
+                    request_id: request_id.clone(),
+                    step: Box::new(step.clone()),
+                },
+                ReplyKind::TelemetryBindingCommit,
+                Some(RequestBinding::Telemetry(token, step)),
+            )
+            .map_err(|_| {
+                failure(
+                    CommandFailure::NotSent,
+                    "binding mutation channel or target unavailable",
+                )
+            })?;
+        match tokio::time::timeout(std::time::Duration::from_secs(45), rx).await {
+            Ok(Ok(Reply::TelemetryBindingCommit(result))) => match *result {
+                BindingCommitResult::Observed { observation } if observation.matches(step) => {
+                    Ok(observation)
+                }
+                BindingCommitResult::Unavailable {
+                    failure:
+                        crate::machine_protocol::telemetry_binding::BindingCommitFailure::Unavailable(
+                            crate::machine_protocol::telemetry_binding::BindingUnavailable::Storage,
+                        ),
+                } => Err(failure(
+                    CommandFailure::Unknown,
+                    "binding persistence outcome is uncertain",
+                )),
+                BindingCommitResult::Unavailable { .. } => Err(failure(
+                    CommandFailure::Rejected,
+                    "binding mutation returned a rejection",
+                )),
+                BindingCommitResult::Observed { .. } => Err(failure(
+                    CommandFailure::Unknown,
+                    "binding mutation evidence mismatch",
+                )),
+            },
+            _ => Err(failure(
+                CommandFailure::Unknown,
+                "binding mutation receipt unavailable",
+            )),
+        }
+    }
+
     pub(crate) async fn command_on_connection(
         &self,
         connection: &ConnectionToken,
@@ -1038,6 +1278,10 @@ impl MachineControl {
             .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+#[path = "machine_control/telemetry_binding_tests.rs"]
+mod telemetry_binding_tests;
 
 #[cfg(test)]
 mod tests {

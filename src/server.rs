@@ -62,7 +62,9 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod operator_approval;
 mod plugin_uninstall;
+mod telemetry_binding;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
     api_machine_plugin_recovery_assessment, api_machine_plugin_uninstall,
@@ -225,6 +227,7 @@ struct AppState {
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
     plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
     plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
+    telemetry_resolution_plans: Arc<telemetry_binding::resolution::surface::Plans>,
     plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -910,6 +913,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // clients can connect. Without a database URL the daemon falls back to
     // pure in-memory mode — same behaviour as before, useful for dev or for
     // running on a host without durable storage configured.
+    let plugin_lifecycle_fences;
+    let telemetry_binding_fence;
     let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
         if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
@@ -920,6 +925,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .initialize_core_security(core_security.as_ref(), &plugin_dir)
                 .await
                 .context("initializing core security authority")?;
+            // Restore durable admission fences before any background writer,
+            // sweeper, Plugin host or runtime can race the startup scan.
+            plugin_lifecycle_fences = plugin_uninstall::recover_fences(Some(&store), &service_id)
+                .await
+                .context("restoring Plugin lifecycle fences")?;
+            telemetry_binding_fence =
+                crate::telemetry_binding::LegacyFence::recover(Some(&store), &service_id)
+                    .await
+                    .context("restoring Service telemetry binding fence")?;
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -992,6 +1006,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             )
         } else {
             tracing::info!("no --database-url: running in-memory only");
+            plugin_lifecycle_fences = plugin_uninstall::recover_fences(None, &service_id).await?;
+            telemetry_binding_fence =
+                crate::telemetry_binding::LegacyFence::recover(None, &service_id).await?;
             (Hub::new(), None, None, None, None, 1)
         };
     let plugin_storage = match store.as_ref() {
@@ -1283,6 +1300,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             args.telemetry_plugin_config.as_deref(),
             Arc::clone(&machine_control),
             Arc::clone(&plugin_catalog),
+            telemetry_binding_fence,
         )?,
     );
     let telemetry_shutdown = observability.clone();
@@ -1294,9 +1312,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // agent here, off the lock. Wired before any client connects.
     let (dispatch_tx, dispatch_rx) = mpsc::channel::<DispatchReq>(1_024);
     hub.set_dispatch_tx(dispatch_tx);
-    let plugin_lifecycle_fences = plugin_uninstall::recover_fences(store.as_ref(), &service_id)
-        .await
-        .context("restoring Plugin lifecycle fences")?;
     runtime_health.set_dispatcher(true);
     let dispatcher_health = Arc::clone(&runtime_health);
     let dispatcher_hub = hub.clone();
@@ -1416,6 +1431,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
             plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
+            telemetry_resolution_plans: Arc::default(),
             plugin_lifecycle_fences,
             desired_machine_components,
             web_root: args.web_root,
@@ -4091,6 +4107,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/metrics" {
         return RouteAuth::MetricsScrape;
     }
+    if path == "/api/telemetry/binding" || path.starts_with("/api/telemetry/binding/") {
+        return RouteAuth::ProductOrAdminOperator;
+    }
     if path == "/ws" {
         return RouteAuth::Product;
     }
@@ -4380,6 +4399,7 @@ async fn resolve_product_request_principal(
 /// The same authentication context serves API middleware and the standalone
 /// authentication router. A verified request extension is reused by handlers:
 /// sender-constrained proof nonces must never be consumed twice.
+#[derive(Clone, Copy)] // Borrowed core services, not an approval or credential.
 struct ProductRequestAuth<'a> {
     product_auth_enabled: bool,
     store: Option<&'a Store>,
@@ -8889,6 +8909,7 @@ async fn serve_axum(
     };
 
     let app = Router::new()
+        .merge(telemetry_binding::resolution::surface::routes())
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))

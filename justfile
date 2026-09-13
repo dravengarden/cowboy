@@ -216,7 +216,12 @@ plugin-isolation-check PLUGIN="codex":
 agent-plugin-runtime-build PLUGIN BASE_URL:
     case "{{PLUGIN}}" in (*[!a-z0-9-]*|"") echo "invalid plugin id" >&2; exit 2;; esac
     test "$(jq -r .kind "plugins/{{PLUGIN}}/plugin.json")" = agent_provider
-    deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"
+    if test -f "plugins/{{PLUGIN}}/runtime/build.ts"; then deno run --allow-read --allow-write=dist --allow-net --allow-run "plugins/{{PLUGIN}}/runtime/build.ts" "{{BASE_URL}}"; else deno run --allow-read --allow-write=dist --allow-net --allow-run components/provider-runtime/build.ts "plugins/{{PLUGIN}}" "{{BASE_URL}}"; fi
+
+# No Service credentials or inference: copy an existing rollout into a private
+# home and exercise the real packaged ACP launch in a network namespace.
+codex-resume-conformance ADAPTER CODEX ROLLOUT RECEIPT:
+    python3 plugins/codex/runtime/resume_conformance.py --adapter "{{ADAPTER}}" --codex "{{CODEX}}" --rollout "{{ROLLOUT}}" --receipt "{{RECEIPT}}"
 
 plugin-set-artifact-url PLUGIN URL:
     cargo run --locked -p cowboy-plugin-sdk --bin cowboy-plugin-pack -- set-artifact-url "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.cowboy-plugin" "dist/plugins/{{PLUGIN}}/{{PLUGIN}}.release.json" "{{URL}}"
@@ -293,6 +298,12 @@ agent-generation-failure-isolation RELEASE ARTIFACTS WORKER *ARGS:
 catalog-reader-conformance BRIDGE BASELINE CANDIDATE SDK LEGACY_PACKAGE RECEIPT *ARGS:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec python3 tools/catalog_reader_conformance.py "$@"' conformance "{{BRIDGE}}" "{{BASELINE}}" "{{CANDIDATE}}" "{{SDK}}" "{{LEGACY_PACKAGE}}" --receipt "{{RECEIPT}}" {{ARGS}}
 
+# Populated Service/Machine journals against every supplied immutable active,
+# rollback and cold reader. Clean source, no external network or live state.
+telemetry-reader-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.
@@ -303,6 +314,8 @@ provider-release-coverage CATALOG:
 # payload gate used by the generic Plugin release workflow.
 provider-check: plugin-check
     node --test components/provider-runtime/packages/codex-acp/launch_test.mjs
+    deno fmt --check plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/source.json
+    deno check plugins/codex/runtime/build.ts
     deno check components/provider-runtime/build.ts components/provider-runtime/check.ts tools/check-provider-release-coverage.ts tools/check-provider-release-coverage_test.ts tools/plugin-publication-receipt.ts tools/publish-plugin-release.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts

@@ -26,6 +26,10 @@ use crate::machine_protocol::{
     MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
 };
 
+pub(crate) mod telemetry_binding;
+pub(crate) mod telemetry_export;
+pub(crate) mod telemetry_recovery;
+
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
     input: tokio::sync::mpsc::UnboundedSender<String>,
@@ -1732,6 +1736,40 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::RecoverTelemetryBinding {
+            request_id,
+            recovery,
+        } => {
+            telemetry_recovery::recover(request_id, *recovery, providers, execution, events);
+        }
+        MachineCommand::QueryTelemetryRecovery {
+            request_id,
+            recovery,
+        } => {
+            telemetry_recovery::query(
+                request_id, *recovery, providers, service_id, machine_id, events,
+            );
+        }
+        MachineCommand::ExportBoundTelemetry {
+            request_id,
+            attempt,
+        } => {
+            telemetry_export::export(request_id, *attempt, providers, execution, events);
+        }
+        MachineCommand::CommitTelemetryBinding { request_id, step } => {
+            telemetry_binding::commit(request_id, *step, providers, execution, events);
+        }
+        MachineCommand::QueryTelemetryBinding { request_id, step } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .telemetry_binding_observation(&step, service_id.as_deref(), &machine_id)
+                    .await;
+                let _ = events.send(MachineEvent::TelemetryBindingObservation {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
         MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
             tokio::spawn(async move {
                 let observation = providers
@@ -2003,17 +2041,16 @@ fn handle_machine_command(
             operation,
             payload,
         } => {
+            let invocation = execution.host(crate::machine_plugins::PluginHostRequest {
+                plugin_id,
+                plugin_version,
+                generation_digest,
+                auth_generation,
+                operation,
+                payload,
+            });
             tokio::spawn(async move {
-                let result = providers
-                    .invoke_host(
-                        &plugin_id,
-                        &plugin_version,
-                        &generation_digest,
-                        auth_generation,
-                        operation,
-                        payload,
-                    )
-                    .await;
+                let result = providers.invoke_host(invocation).await;
                 let event = match result {
                     Ok(payload) => MachineEvent::PluginHostResponse {
                         request_id,

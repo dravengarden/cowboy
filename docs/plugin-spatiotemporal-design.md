@@ -41,6 +41,40 @@ tombstone，Service 再检查自身记录是否变化；只读结果不授予恢
 退出时先排空全部同步 writer 再关数据库；补齐只读 abort、受阻/超时 open 的晚到清理与旧连接代次隔离。
 组件闭包按 3.3.0 独立换代，数据格式和 Plugin 不变；跨 tab 单 writer 仲裁与存储 codec 不在本批内。
 通用图授权、跨端激活和耐久恢复仍是后续目标，不能把结构检查通过当成可执行计划。
+第十九批 [遥测执行租约](telemetry-execution-leases.md) 将实际 Machine 遥测命令绑定到原认证连接、
+接收时开始的单调预算与精确请求；每次 HTTP 外发/重试重新核对安装与原私有策略，禁止排队命令和重试
+跨连接/策略换代复活。已接纳外发不撤回；协议和耐久格式不变，P2 的持久绑定与恢复闭环仍未完成。
+第二十批 [持久化遥测绑定 reader](telemetry-binding-journal.md) 加入协议 14 的只读精确查询、
+Machine 绑定账本校验与旧外发路径隔离。绑定 revision 和 policy epoch 使用独立的精确 64-bit 类型；
+历史回执不能覆盖后来状态。没有生产写入或恢复执行入口；Service 协调账本、策略 epoch 签发和
+双侧授权提交仍待实现，不能把 reader 部署当成 P2 完成。
+第二十一批 [Machine 有限绑定事务](telemetry-binding-transactions.md) 实现选择、撤销和精确前态恢复，
+在同一文件内持久化 head 与回执，每次成功提交签发下一 policy epoch；原连接租约、签名安装与
+私有策略在 intent 前后重复核对。新增并发、断线、策略变化及 rename/fsync 故障测试；生产写入
+仍关闭，没有新增 mutation 命令。Service 持续授权/协调、managed export lease 和独立中断处置
+仍是 P2 的未完成项，不把本地恢复测试通过当成跨端上线完成。
+第二十二批 [Service 绑定协调](telemetry-service-coordination.md) 加入闭集精确 intent、复用核心 Operator
+持续授权、双数据库原子 head/回执账本和有限协调器；测试覆盖丢 ACK 只查询、各边界失权、并发 CAS、
+重启隔离与历史回执。生产只接入 Service reader 和旧外发路径隔离，不新增写 API/传输适配器或启用
+Machine writer；managed export lease、双侧 live/rollback/cold reader 验收和独立中断处置仍待完成。
+第二十三批 [跨端有限绑定协议](telemetry-binding-wire.md) 加入协议 15、显式 namespace CAS、原连接
+Service 传输与 Machine 接收时租约；真实签名安装、消息编解码和 SQL 协调测试覆盖选择、撤销、恢复与
+丢 ACK 后只查询。schema 1 保持原字节读取，mutation 只接纳 schema 2；两侧生产写开关仍关闭，
+managed export lease、rollback/cold reader 基线和独立中断恢复仍待完成，不宣称 P2 已上线。
+第二十四批 [managed 单次遥测外发](telemetry-managed-attempts.md) 加入协议 16 的独立授权和闭集
+OTLP 请求/回执，Service 与 Machine 共同核验精确绑定，原连接与短预算限制一次 HTTP 尝试；
+部分接收、响应丢失与重定向不自动重试。绑定历史不生成新外发权；后台策略激活、reader 恢复基线、
+生产写入及独立中断处置仍未完成，现有显式配置外发不受此 staging 路径替换。
+第二十五批 [Service 绑定独立中断处置](telemetry-binding-resolution.md) 加入新 Operator 确认、
+完整原操作 CAS 与原子审计；仅能终止尚未派发的 Prepared，或通过原连接重新查询后记录明确的
+Applied/Rejected。不会重发命令、自动补偿、恢复私有策略或生成外发权。Service reader 支持新的
+schema 2 审计，生产写入仍关闭；双侧恢复基线、Machine 未决记录处置、后台策略激活和跨端验收仍待完成。
+第二十六批 [Machine 绑定独立中断处置](telemetry-machine-recovery.md) 加入协议 17、新用途租约和
+原子审计，仅能关闭经独占 owner 重新打开校验后仍为 Prepared 的 schema 2 步骤；保持原 head、
+policy epoch 与 managed namespace，不宣称零效果。Service 原 NeedsAttention 不变，需另一次确认
+后重新查询并记账；Unknown、旧 schema 和 live poison 不自动修复。查询、重复命令与 legacy
+preflight 也会重新验证磁盘，发现变化后不复活缓存信任。生产写入、双侧 populated reader 基线、
+用户确认界面、后台策略激活和跨端上线验收仍未完成，不将有限恢复闭环等同 P2 完成。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

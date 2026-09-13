@@ -86,6 +86,7 @@
           ./web/src/protocol.ts
           ./tests/fixtures/otel-client.json
           ./tests/fixtures/composition-v1.json
+          ./tests/fixtures/telemetry-resolution-surface.json
         ] ++ plugin-contract-files ++ plugin-host-files);
       };
 
@@ -115,6 +116,7 @@
           ./src/machine_broker.rs
           ./src/machine_code_plugins.rs
           ./src/machine_cli.rs
+          ./src/machine_cli
           ./src/machine_auth.rs
           ./src/machine_components.rs
           ./src/machine_install.rs

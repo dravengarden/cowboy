@@ -60,6 +60,20 @@ export function appIconAsset(
   return `/app-icons/v5/${appIcon(id).id}/icon-${size}.png`;
 }
 
+// Native Neon supplies paired appearances; archived styles retain their artwork.
+export function appIconAppearanceAsset(id: string, dark: boolean): string {
+  return appIcon(id).id === "palette-103" && !dark
+    ? "/app-icons/v6/palette-103/icon-light-192.png"
+    : appIconAsset(id, 192);
+}
+
+export function appIconTabAsset(id: string): string {
+  const icon = appIcon(id);
+  return icon.collection === "palette"
+    ? `/app-icons/v8/${icon.id}/favicon.svg`
+    : appIconAsset(icon.id, 192);
+}
+
 export function appIconInstallPath(id: string): string {
   return `/app-icons/v5/${appIcon(id).id}/install.html`;
 }
@@ -190,8 +204,9 @@ export function applyAppIconDocument(id: string): void {
   }
   const favicon = doc.createElement("link");
   favicon.rel = "icon";
-  favicon.type = "image/png";
-  favicon.href = appIconAsset(selected.id, 192);
+  favicon.href = appIconTabAsset(selected.id);
+  favicon.type = favicon.href.endsWith(".svg") ? "image/svg+xml" : "image/png";
+  favicon.sizes.value = favicon.type === "image/svg+xml" ? "any" : "192x192";
   doc.head.appendChild(favicon);
   for (
     const link of doc.querySelectorAll<HTMLLinkElement>(

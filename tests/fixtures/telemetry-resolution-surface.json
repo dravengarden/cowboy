@@ -1,0 +1,69 @@
+{
+  "fixture_schema": 1,
+  "source_operation": {
+    "intent": {
+      "schema": 2,
+      "operation_id": "service-binding-contract-fixture",
+      "service_id": "service-test",
+      "actor": { "kind": "product", "user_id": "old-fixture-operator" },
+      "machine_id": "machine-test",
+      "expected": null,
+      "change": { "kind": "revoke", "policy_epoch": "1" },
+      "expires_at_ms": 1
+    },
+    "progress": { "phase": "prepared" }
+  },
+  "public": {
+    "absent": {
+      "schema": 1,
+      "resolution_admission": "closed",
+      "journal": { "state": "absent" }
+    },
+    "retained": {
+      "schema": 1,
+      "resolution_admission": "closed",
+      "journal": {
+        "state": "retained",
+        "current": null,
+        "latest": {
+          "operation_id": "service-binding-contract-fixture",
+          "machine_id": "machine-test",
+          "operation_digest": "sha256:fb835446dc9869726da6dcb3cc150419576d3da8aaf98a664745391b1d6d298d",
+          "phase": "prepared",
+          "attention": null,
+          "expected": null,
+          "change": { "kind": "revoke", "policy_epoch": "1" }
+        },
+        "resolution": null
+      }
+    },
+    "plan": {
+      "schema": 1,
+      "plan_id": "resolution-contract-fixture",
+      "action": "abort_before_dispatch",
+      "expires_at_ms": 2300000000000,
+      "confirmation_available": false,
+      "operation": {
+        "operation_id": "service-binding-contract-fixture",
+        "machine_id": "machine-test",
+        "operation_digest": "sha256:fb835446dc9869726da6dcb3cc150419576d3da8aaf98a664745391b1d6d298d",
+        "phase": "prepared",
+        "attention": null,
+        "expected": null,
+        "change": { "kind": "revoke", "policy_epoch": "1" }
+      },
+      "result_phase": "aborted",
+      "result_head": null
+    },
+    "receipt": {
+      "schema": 1,
+      "resolution_id": "resolution-contract-fixture",
+      "operation_id": "service-binding-contract-fixture",
+      "machine_id": "machine-test",
+      "action": "abort_before_dispatch",
+      "operation_digest": "sha256:fb835446dc9869726da6dcb3cc150419576d3da8aaf98a664745391b1d6d298d",
+      "phase": "aborted",
+      "resolved_at_ms": 2200000000000
+    }
+  }
+}

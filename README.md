@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-006e99?style=flat-square" alt="Cowboy website">
+    <img src="https://img.shields.io/badge/website-live-7b42b5?style=flat-square" alt="Cowboy website">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
@@ -41,7 +41,7 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v3.webp">
+      <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-remote-topology-dark-v4.webp">
       <img src="site/assets/cowboy-remote-topology-light-v3.webp" alt="Cowboy Desktop and Mobile connect through one self-hosted Hub to three generic macOS and Linux Machines running multiple coding agents" width="1100">
     </picture>
   </a>
@@ -156,7 +156,7 @@ keyboard/Vim control for sustained engineering work.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-desktop-surface-dark-v3.webp">
     <img src="site/assets/cowboy-desktop-surface-light-v2.webp" alt="Abstract Cowboy Desktop workspace with a session rail, prompt editor, and live Agent timeline" width="1100">
   </picture>
 </p>
@@ -168,7 +168,7 @@ same durable worker.
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v2.webp">
+    <source media="(prefers-color-scheme: dark)" srcset="site/assets/cowboy-mobile-dark-v3.webp">
     <img src="site/assets/cowboy-mobile-light-v2.webp" alt="Abstract Cowboy Mobile surfaces for sessions, Agent work, and code review" width="960">
   </picture>
 </p>

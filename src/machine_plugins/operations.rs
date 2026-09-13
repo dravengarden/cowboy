@@ -10,6 +10,7 @@ use crate::machine_protocol::plugin_step::{
 
 pub(super) mod installations;
 pub(crate) mod lease;
+mod telemetry_bindings;
 
 use lease::UninstallExecutionLease;
 
@@ -39,6 +40,7 @@ pub(super) struct Journal {
     _owner: OwnerLock,
     state: parking_lot::Mutex<JournalState>,
     pub(super) installations: installations::Installations,
+    pub(in crate::machine_plugins) telemetry_bindings: telemetry_bindings::Bindings,
 }
 
 struct OwnerLock(fs::File);
@@ -80,6 +82,7 @@ impl Journal {
             let name = name.to_str().context("invalid Machine journal entry")?;
             if name == "owner.lock"
                 || name == installations::DIRECTORY
+                || name == telemetry_bindings::FILE
                 || (name.starts_with('.') && name.ends_with(".partial"))
             {
                 continue;
@@ -126,6 +129,9 @@ impl Journal {
         }
         Ok(Self {
             installations: installations::Installations::open(root.join(installations::DIRECTORY))?,
+            telemetry_bindings: telemetry_bindings::Bindings::open(
+                &root.join(telemetry_bindings::FILE),
+            )?,
             root,
             _owner: owner,
             state: parking_lot::Mutex::new(JournalState {

@@ -8,8 +8,11 @@
 #![warn(clippy::pedantic)]
 
 mod operations;
+mod telemetry;
 
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
+pub(crate) use telemetry::managed::ManagedExportInvocation;
+pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -776,7 +779,22 @@ impl MachinePluginStore {
             .await
     }
 
-    async fn export_telemetry(
+    pub async fn invoke_host(
+        &self,
+        invocation: PluginHostInvocation,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let (request, telemetry) = invocation.into_parts();
+        if let Some(lease) = telemetry {
+            return self.export_telemetry(request, lease).await;
+        }
+        self.invoke_executable_host(request).await
+    }
+
+    // Existing domain fixtures still use this convenience constructor, while
+    // lease fault tests exercise the same production entry with an explicit
+    // connection owner. No unleased telemetry entry exists in a product build.
+    #[cfg(test)]
+    async fn invoke_host_for_test(
         &self,
         plugin_id: &str,
         plugin_version: &str,
@@ -784,90 +802,37 @@ impl MachinePluginStore {
         auth_generation: Option<u64>,
         operation: PluginHostOperation,
         payload: serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let _export = self
-            .telemetry_export
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("telemetry exporter is busy"))?;
-        // No Provider home, auth generation, executable or usage sidecar.
-        // Verification uses the lifecycle lock; bounded network I/O does
-        // not hold it or block installation/agent operations.
-        let (contract, config, payload) = {
-            let _lifecycle = self.lifecycle.lock().await;
-            self.operations.ensure_unfenced(plugin_id)?;
-            (|| -> Result<_> {
-                ensure!(
-                    auth_generation.is_none(),
-                    "telemetry cannot use Provider credentials"
-                );
-                let active = self
-                    .inventory_one(plugin_id)?
-                    .context("telemetry Plugin is not installed")?;
-                ensure!(
-                    active.state == PluginInstallationState::Active
-                        && active.plugin_version == plugin_version
-                        && active.generation_digest == generation_digest
-                        && active.plugin_kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend,
-                    "active telemetry Plugin generation mismatch"
-                );
-                let (package, _, _) =
-                    self.verified_plugin_generation(plugin_id, generation_digest)?;
-                let PluginPayload::TelemetryBackend(contract) = package.payload else {
-                    anyhow::bail!("Plugin is not a telemetry backend");
-                };
-                let selection = crate::telemetry_plugin::PluginSelection {
-                    plugin_id: plugin_id.to_owned(),
-                    plugin_version: plugin_version.to_owned(),
-                    generation_digest: generation_digest.to_owned(),
-                };
-                let (config, payload) = crate::telemetry_plugin::prepare(
-                    &self
-                        .root
-                        .parent()
-                        .context("Machine state directory is missing")?
-                        .join("telemetry.json"),
-                    &selection,
-                    payload,
-                    operation == PluginHostOperation::ExportOtlp,
-                )?;
-                Ok((contract, config, payload))
-            })()?
-        };
-        serde_json::to_value(crate::telemetry_plugin::export(&contract, config, payload).await)
-            .map_err(anyhow::Error::from)
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let scope = PluginExecutionScope::new(Some("service-test"), "machine-test");
+        self.invoke_host(scope.host(PluginHostRequest {
+            plugin_id: plugin_id.to_owned(),
+            plugin_version: plugin_version.to_owned(),
+            generation_digest: generation_digest.to_owned(),
+            auth_generation,
+            operation,
+            payload,
+        }))
+        .await
     }
 
-    pub async fn invoke_host(
+    async fn invoke_executable_host(
         &self,
-        plugin_id: &str,
-        plugin_version: &str,
-        generation_digest: &str,
-        auth_generation: Option<u64>,
-        operation: PluginHostOperation,
-        mut payload: serde_json::Value,
+        request: PluginHostRequest,
     ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
-        if matches!(
+        let PluginHostRequest {
+            plugin_id,
+            plugin_version,
+            generation_digest,
+            auth_generation,
             operation,
-            PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp
-        ) {
-            return self
-                .export_telemetry(
-                    plugin_id,
-                    plugin_version,
-                    generation_digest,
-                    auth_generation,
-                    operation,
-                    payload,
-                )
-                .await
-                .map_err(PluginHostInvocationFailure::from);
-        }
+            mut payload,
+        } = request;
         let _lifecycle = self.lifecycle.lock().await;
         let resolved = self
             .resolve_host_invocation(
-                plugin_id,
-                plugin_version,
-                generation_digest,
+                &plugin_id,
+                &plugin_version,
+                &generation_digest,
                 auth_generation,
                 operation,
                 &mut payload,
@@ -4197,6 +4162,14 @@ fn set_directory_chain_permissions(root: &Path, leaf: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, feature = "full"))]
+pub(crate) fn telemetry_release_for_test(
+    publisher: &crate::machine_auth::MachineIdentity,
+    version: &str,
+) -> DesiredPlugin {
+    tests::telemetry_release(publisher, version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4342,7 +4315,7 @@ mod tests {
         // Installation alone never authorizes network egress.
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.0",
                     &installed.generation_digest,
@@ -4395,7 +4368,7 @@ mod tests {
         )
         .unwrap();
         let receipt = store
-            .invoke_host(
+            .invoke_host_for_test(
                 "victoria",
                 "1.0.0",
                 &installed.generation_digest,
@@ -4434,7 +4407,7 @@ mod tests {
         }
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.0",
                     &installed.generation_digest,
@@ -4447,7 +4420,7 @@ mod tests {
         );
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.0",
                     &installed.generation_digest,
@@ -4466,7 +4439,7 @@ mod tests {
         );
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.0",
                     &installed.generation_digest,
@@ -4479,7 +4452,7 @@ mod tests {
         );
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.1",
                     &upgraded.generation_digest,
@@ -4496,7 +4469,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.1",
                     &upgraded.generation_digest,
@@ -4512,7 +4485,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .invoke_host(
+            .invoke_host_for_test(
                 "victoria",
                 "1.0.0",
                 &installed.generation_digest,
@@ -4530,7 +4503,7 @@ mod tests {
         atomic_write(&content.join("package.cowboy-plugin"), b"{}\n", 0o600).unwrap();
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.0.0",
                     &installed.generation_digest,
@@ -4610,7 +4583,7 @@ mod tests {
         let payload = |signal, bytes: &[u8]| serde_json::json!({"signal":signal,"protobuf":base64::engine::general_purpose::STANDARD.encode(bytes)});
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.1.0",
                     &installed.generation_digest,
@@ -4627,7 +4600,7 @@ mod tests {
         })).unwrap(), 0o600).unwrap();
         for (signal, bytes) in &fixtures {
             let receipt = store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.1.0",
                     &installed.generation_digest,
@@ -4668,7 +4641,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.1.1",
                     &next.generation_digest,
@@ -4685,7 +4658,7 @@ mod tests {
             .unwrap();
         assert!(
             store
-                .invoke_host(
+                .invoke_host_for_test(
                     "victoria",
                     "1.1.1",
                     &next.generation_digest,
@@ -4698,7 +4671,7 @@ mod tests {
         );
         store.install(&desired).await.unwrap();
         let receipt = store
-            .invoke_host(
+            .invoke_host_for_test(
                 "victoria",
                 "1.1.0",
                 &installed.generation_digest,
@@ -4979,7 +4952,7 @@ mod tests {
         let first_receipt = store.apply_auth(&envelope).await.unwrap();
         assert!(first_receipt.auth_generation_advanced);
         let collected = store
-            .invoke_host(
+            .invoke_host_for_test(
                 "gemini",
                 &package.manifest.version,
                 &release.artifact_digest,
@@ -5001,7 +4974,7 @@ mod tests {
                 .is_some_and(|home| home.ends_with("/runtime/generations/1/home"))
         );
         let wrong_auth = store
-            .invoke_host(
+            .invoke_host_for_test(
                 "gemini",
                 &package.manifest.version,
                 &release.artifact_digest,
@@ -5018,7 +4991,7 @@ mod tests {
             .join("content/host/collector/index.js");
         fs::write(&installed_collector, b"console.log('{}')").unwrap();
         let tampered = store
-            .invoke_host(
+            .invoke_host_for_test(
                 "gemini",
                 &package.manifest.version,
                 &release.artifact_digest,
