@@ -1483,11 +1483,13 @@ function MessageBubble({
 }): React.JSX.Element | null {
   const mine = role === "user";
   const human = !mine || isHumanPrompt(origin);
-  const displayChunks = mine ? applySendImagePreviews(chunks, cmid) : chunks;
+  const displayChunks: ContentChunk[] = mine
+    ? [...applySendImagePreviews(chunks, cmid)]
+    : chunks;
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
-  if (!mine && isCompactingMessage(displayChunks)) {
+  if (!mine && isCompactingMessage(chunks)) {
     return (
       <CompactingWidget
         active={!!streaming}
