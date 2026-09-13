@@ -193,9 +193,11 @@ import {
 } from "./transcriptViewport";
 import {
   hasNewOptimisticDelivery,
+  hasNewerLiveUserItem,
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
+import { retainUnpresentedOptimistic } from "./sendImagePreviews";
 import {
   advanceTimelinePresentation,
   revealHistoryPrepend,
@@ -4077,18 +4079,45 @@ export function Transcript({
     (snapshot) =>
       snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
   );
+  // Canonical echo can drop the store overlay while this renderer is still
+  // presenting a frozen timeline. Keep the last local copy until the presented
+  // envelopes can actually replace it, otherwise send clears the composer into
+  // a hole and the bubble only returns after scroll/drawer catch-up.
+  const lingeringOptimisticRef = useRef<{
+    sessionId: string;
+    messages: readonly QueuedMessage[];
+  }>({
+    sessionId,
+    messages: EMPTY_OPTIMISTIC_MESSAGES,
+  });
+  if (lingeringOptimisticRef.current.sessionId !== sessionId) {
+    lingeringOptimisticRef.current = {
+      sessionId,
+      messages: EMPTY_OPTIMISTIC_MESSAGES,
+    };
+  }
   // Local unconfirmed sends are not page keys yet. Filtering them through the
   // current Explore window hid a just-submitted prompt behind the restore
   // skeleton whenever that window was empty or still loading.
   const optimisticMsgs = useMemo(
     () => {
-      if (!visibleItemKeys || liveTail) return pendingMessages;
-      const matched = pendingMessages.filter((message) =>
-        visibleItemKeys.has(optimisticQuestionKey(message))
+      const fromStore = !visibleItemKeys || liveTail
+        ? pendingMessages
+        : (() => {
+          const matched = pendingMessages.filter((message) =>
+            visibleItemKeys.has(optimisticQuestionKey(message))
+          );
+          return matched.length > 0 ? matched : pendingMessages;
+        })();
+      const merged = retainUnpresentedOptimistic(
+        lingeringOptimisticRef.current.messages,
+        fromStore,
+        presentedTimeline,
       );
-      return matched.length > 0 ? matched : pendingMessages;
+      lingeringOptimisticRef.current = { sessionId, messages: merged };
+      return merged;
     },
-    [pendingMessages, visibleItemKeys, liveTail],
+    [pendingMessages, presentedTimeline, sessionId, visibleItemKeys, liveTail],
   );
   const optimisticCmids = useMemo(() => {
     const ids = new Set<string>();
@@ -5048,24 +5077,52 @@ export function Transcript({
     message.cmid ?? message.id
   );
   const optimisticDeliverySignature = optimisticDeliveryIds.join("\u001f");
+  const liveUserItemKeys = useMemo(
+    () =>
+      items.flatMap((item) =>
+        item.kind === "message" && item.role === "user" &&
+          isHumanPrompt(item.origin)
+          ? [item.key]
+          : []
+      ),
+    [items],
+  );
+  const liveUserItemSignature = liveUserItemKeys.join("\u001f");
   const previousOptimisticDeliveriesRef = useRef({
     sessionId,
+    pageId: pageId ?? "",
     ids: optimisticDeliveryIds,
+    userKeys: liveUserItemKeys,
   });
 
   // A fresh local prompt is an explicit request to see the new delivery. Pin it
   // immediately even if the reader had detached from the live edge; do not wait
   // for the first server planning/timeline event to make it visible. Re-pin for
   // two frames so an attachment preview can establish its intrinsic geometry.
+  // Also pin when the overlay was reconciled before paint and only the
+  // confirmed human row remains — otherwise the bubble sits under the composer
+  // until a later stream event happens to follow.
   useLayoutEffect(() => {
     const previous = previousOptimisticDeliveriesRef.current;
+    const pageKey = pageId ?? "";
     const arrived = previous.sessionId === sessionId &&
-      hasNewOptimisticDelivery(previous.ids, optimisticDeliveryIds);
+      previous.pageId === pageKey && (
+        hasNewOptimisticDelivery(previous.ids, optimisticDeliveryIds) ||
+        hasNewerLiveUserItem(previous.userKeys, liveUserItemKeys)
+      );
     previousOptimisticDeliveriesRef.current = {
       sessionId,
+      pageId: pageKey,
       ids: optimisticDeliveryIds,
+      userKeys: liveUserItemKeys,
     };
     if (!arrived) return undefined;
+    if (renderPausedRef.current || drawerCatchupActiveRef.current) {
+      renderPausedRef.current = false;
+      drawerCatchupActiveRef.current = false;
+      presentedTimelineRef.current = latestTimelineRef.current;
+      setRenderPausedForScroll(false);
+    }
     if (
       shouldInterruptTranscriptViewportRestore(
         viewportRestoreActiveRef.current,
@@ -5088,7 +5145,12 @@ export function Transcript({
     };
     pin();
     return () => cancelAnimationFrame(frame);
-  }, [optimisticDeliverySignature, sessionId]);
+  }, [
+    liveUserItemSignature,
+    optimisticDeliverySignature,
+    pageId,
+    sessionId,
+  ]);
 
   // A live Page is allowed to follow only for the duration of its active turn.
   // As soon as that turn settles, freeze it as an ordinary reading page at its

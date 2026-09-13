@@ -664,6 +664,52 @@ function waitForState(
   });
 }
 
+/** Composer clear must wait for the painted snapshot, not canonical reduce.
+ * A drawer/pager hold keeps `presentedState` frozen while IndexedDB already
+ * has the overlay, and clearing then leaves a blank hole until the hold ends. */
+function waitForPresentedState(
+  predicate: (snapshot: State) => boolean,
+  label: string,
+): Promise<void> {
+  if (predicate(presentedState)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timeout = 0;
+    const done = (): void => {
+      listeners.delete(check);
+      globalThis.clearTimeout(timeout);
+      resolve();
+    };
+    const check = (): void => {
+      if (predicate(presentedState)) done();
+    };
+    listeners.add(check);
+    timeout = globalThis.setTimeout(() => {
+      listeners.delete(check);
+      reject(new Error(`${label} was not acknowledged`));
+    }, NETWORK_ACTION_TIMEOUT_MS);
+    check();
+  });
+}
+
+function transcriptDeliveryVisible(
+  snapshot: State,
+  sessionId: string,
+  cmid: string,
+  attachments: readonly Attachment[],
+): boolean {
+  if (
+    (snapshot.optimisticMessages.get(sessionId) ?? []).some((message) =>
+      message.cmid === cmid
+    )
+  ) {
+    return true;
+  }
+  return promptEchoReadyToReplaceOptimistic(
+    { cmid, attachments },
+    snapshot.timelines.get(sessionId) ?? [],
+  );
+}
+
 function sendWithAck(
   command: Inbound,
   predicate: (snapshot: State) => boolean,
@@ -1413,20 +1459,18 @@ function handle(msg: Outbound): void {
         ? applyEnvelope(state.timelines, env)
         : state.timelines;
       if (
-        cached &&
-        env.kind === "update" &&
-        env.update.sessionUpdate === "user_message_chunk"
+        cached && (
+          cmid !== undefined ||
+          (env.kind === "update" &&
+            env.update.sessionUpdate === "user_message_chunk")
+        )
       ) {
+        // A tagged non-chunk event is not a painted user row. Drop the overlay
+        // only when the presented echo can actually replace it.
         optimisticMessages = reconcileReadyOptimistic(
           optimisticMessages,
           env.session_id,
           timelines.get(env.session_id) ?? [],
-        );
-      } else if (cmid !== undefined && cached) {
-        optimisticMessages = reconcileOptimistic(
-          optimisticMessages,
-          env.session_id,
-          new Set([cmid]),
         );
       }
       setState({
@@ -2703,6 +2747,9 @@ async function qAdd(
     mutation_id: cmid,
     target,
   });
+  const ackLabel = target === "drafts" || target === "scheduled"
+    ? "Save draft"
+    : "Send message";
   await waitForState(
     (snapshot) =>
       target === "transcript"
@@ -2714,8 +2761,15 @@ async function qAdd(
           : snapshot.queues)
           .get(sessionId)
           ?.some((message) => message.cmid === cmid) === true,
-    target === "drafts" || target === "scheduled" ? "Save draft" : "Send message",
+    ackLabel,
   );
+  if (target === "transcript") {
+    await waitForPresentedState(
+      (snapshot) =>
+        transcriptDeliveryVisible(snapshot, sessionId, cmid, attachments),
+      ackLabel,
+    );
+  }
 }
 
 /** Retry a failed optimistic queue/draft row from THIS device: re-anchor it to

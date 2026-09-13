@@ -1,6 +1,7 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import {
   hasNewOptimisticDelivery,
+  hasNewerLiveUserItem,
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy.ts";
@@ -25,16 +26,13 @@ Deno.test("a just-sent prompt keeps the restore skeleton from covering it", asyn
     transcript.includes("matched.length > 0 ? matched : pendingMessages"),
     true,
   );
+  assert(store.includes("reconcileReadyOptimistic("));
   assertEquals(
-    /if\s*\(\s*cached &&\s*env\.kind === "update" &&\s*env\.update\.sessionUpdate === "user_message_chunk"\s*\)\s*\{\s*optimisticMessages = reconcileReadyOptimistic\(/
-      .test(store),
-    true,
+    store.includes("else if (cmid !== undefined && cached)"),
+    false,
   );
-  assertEquals(
-    /else if \(cmid !== undefined && cached\)\s*\{\s*optimisticMessages = reconcileOptimistic\(/
-      .test(store),
-    true,
-  );
+  assert(store.includes("waitForPresentedState("));
+  assert(store.includes("transcriptDeliveryVisible("));
 });
 
 Deno.test("a newly submitted prompt interrupts a saved viewport restore", () => {
@@ -48,4 +46,11 @@ Deno.test("a fresh local delivery is detected even when an echo keeps the count 
   assertEquals(hasNewOptimisticDelivery(["old"], ["old", "new"]), true);
   assertEquals(hasNewOptimisticDelivery(["old"], ["old"]), false);
   assertEquals(hasNewOptimisticDelivery(["old"], []), false);
+});
+
+Deno.test("confirmed human rows pin only when a newer seq arrives", () => {
+  assertEquals(hasNewerLiveUserItem(["10"], ["10", "11"]), true);
+  assertEquals(hasNewerLiveUserItem(["11"], ["9", "11"]), false);
+  assertEquals(hasNewerLiveUserItem(["11"], ["11"]), false);
+  assertEquals(hasNewerLiveUserItem([], ["3"]), true);
 });
