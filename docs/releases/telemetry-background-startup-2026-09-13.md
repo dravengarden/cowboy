@@ -86,6 +86,11 @@ Its actual absent-profile outputs remain:
 
 ## Explicit cold-configuration gap
 
+This historical gap was subsequently closed for Hawk by the separately owned
+[cold-start floor refresh](telemetry-cold-start-floor-2026-09-13.md), with both
+gates repeated against the actual activated roles. The original negative
+evidence below remains unchanged; production policy cutover is still pending.
+
 The separate startup matrix using the actual post-release roles is deliberately
 **not accepted**: active and next-recovery Controller each passed 26/26; cold
 passed only the two unconfigured reads and failed 24 configured checks. The

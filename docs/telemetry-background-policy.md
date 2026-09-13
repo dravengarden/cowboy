@@ -11,6 +11,10 @@ Controller implementation release and populated-reader acceptance:
 The subsequent [startup availability release](releases/telemetry-background-startup-2026-09-13.md)
 fixes stale-policy core startup and records separate candidate/actual-cold
 configuration evidence without enabling production managed export.
+Hawk's subsequent [cold-start floor refresh](releases/telemetry-cold-start-floor-2026-09-13.md)
+accepts both gates against its actual active/next-rollback/cold roles before and
+after the host transaction. Full production configuration and cutover remain
+separate; Falcon and production writer policy were not changed.
 
 ## Authority and restart semantics
 
