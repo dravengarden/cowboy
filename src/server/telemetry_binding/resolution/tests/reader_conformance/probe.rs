@@ -192,7 +192,7 @@ pub(super) async fn run(
     artifact: &Artifact,
     fixture: &Fixture,
     root: &Path,
-) -> Result<(), Failure> {
+) -> Result<Option<u16>, Failure> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|_| Failure::Setup)?;
@@ -262,11 +262,15 @@ pub(super) async fn run(
             if status.code().is_none_or(|code| code == 0) || !running.log_contains(marker) {
                 return Err(Failure::UnexpectedReadiness);
             }
-            return Ok(());
+            return Ok(None);
         }
         match listener {
-            Some(listener) => machine(&mut running, listener, fixture, root).await,
-            None => controller(&mut running, address, fixture).await,
+            Some(listener) => machine(&mut running, listener, fixture, root)
+                .await
+                .map(Some),
+            None => controller(&mut running, address, fixture)
+                .await
+                .map(|()| None),
         }
     })
     .await
@@ -357,7 +361,7 @@ async fn machine(
     listener: TcpListener,
     fixture: &Fixture,
     root: &Path,
-) -> Result<(), Failure> {
+) -> Result<u16, Failure> {
     let stream = tokio::select! {
         connection = listener.accept() => connection.map_err(|_| Failure::WrongProtocol)?.0,
         _ = running.child.wait() => return Err(Failure::ExitedBeforeReady),
@@ -389,6 +393,7 @@ async fn machine(
     {
         return Err(Failure::WrongProtocol);
     }
+    let protocol = if hello.max_protocol >= 18 { 18 } else { 17 };
     let public = std::fs::read_to_string(root.join("machine/identity_ed25519.pub"))
         .map_err(|_| Failure::ChallengeSignature)?;
     let proof = crate::machine_protocol::challenge_proof_v3(
@@ -427,7 +432,7 @@ async fn machine(
     send(
         &mut socket,
         MachineFrame::Welcome {
-            protocol: 17,
+            protocol,
             controller_epoch: 1,
             heartbeat_interval_ms: 1000,
             desired_components: Vec::new(),
@@ -487,11 +492,66 @@ async fn machine(
                         observation,
                     },
             } => {
-                return if request_id == "recovery-read-only" && *observation == fixture.audit {
-                    Ok(())
-                } else {
-                    Err(Failure::WrongObservation)
-                };
+                if request_id != "recovery-read-only" || *observation != fixture.audit {
+                    return Err(Failure::WrongObservation);
+                }
+                break;
+            }
+            MachineFrame::Heartbeat { .. }
+            | MachineFrame::Event {
+                event: MachineEvent::Inventory { .. },
+            } => {}
+            MachineFrame::Event {
+                event: MachineEvent::PluginInventory { plugins, .. },
+            } if plugins.is_empty() => {}
+            _ => return Err(Failure::WrongObservation),
+        }
+    }
+    if protocol >= 18 {
+        discover_audit(&mut socket, fixture).await?;
+    }
+    Ok(protocol)
+}
+
+async fn discover_audit(socket: &mut Socket, fixture: &Fixture) -> Result<(), Failure> {
+    use crate::machine_protocol::telemetry_recovery::RecoveryObservation;
+    use crate::machine_protocol::telemetry_recovery_audit::{
+        RecoveryAuditObservation, RecoveryAuditQuery, RecoveryAuditSnapshot,
+    };
+    let query = RecoveryAuditQuery {
+        schema: 1,
+        step: fixture.step.clone(),
+    };
+    let RecoveryObservation::Observed { snapshot } = &fixture.audit else {
+        return Err(Failure::Setup);
+    };
+    let expected = RecoveryAuditObservation::Observed {
+        snapshot: Box::new(RecoveryAuditSnapshot {
+            query_digest: query.digest().map_err(|_| Failure::Setup)?,
+            receipt: snapshot.receipt.clone(),
+            binding: snapshot.binding.clone(),
+        }),
+    };
+    send(
+        socket,
+        MachineFrame::Command {
+            command: MachineCommand::QueryTelemetryRecoveryAudit {
+                request_id: "audit-discovery-read-only".into(),
+                query: Box::new(query),
+            },
+        },
+    )
+    .await?;
+    loop {
+        match receive(socket).await? {
+            MachineFrame::Event {
+                event:
+                    MachineEvent::TelemetryRecoveryAuditObservation {
+                        request_id,
+                        observation,
+                    },
+            } if request_id == "audit-discovery-read-only" && *observation == expected => {
+                return Ok(());
             }
             MachineFrame::Heartbeat { .. }
             | MachineFrame::Event {

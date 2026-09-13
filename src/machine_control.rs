@@ -132,6 +132,7 @@ enum ReplyKind {
     TelemetryExport,
     TelemetryRecovery,
     TelemetryRecoveryCommit,
+    TelemetryRecoveryAudit,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -148,6 +149,9 @@ enum Reply {
     TelemetryExport(Option<Box<crate::machine_protocol::telemetry_export::ExportReceipt>>),
     TelemetryRecovery(Box<crate::machine_protocol::telemetry_recovery::RecoveryObservation>),
     TelemetryRecoveryCommit(Box<crate::machine_protocol::telemetry_recovery::RecoveryResult>),
+    TelemetryRecoveryAudit(
+        Box<crate::machine_protocol::telemetry_recovery_audit::RecoveryAuditObservation>,
+    ),
     Adapter(Result<serde_json::Value, String>),
     Command(Result<(), String>),
     PluginHost {
@@ -168,6 +172,7 @@ impl Reply {
             Self::TelemetryExport(_) => ReplyKind::TelemetryExport,
             Self::TelemetryRecovery(_) => ReplyKind::TelemetryRecovery,
             Self::TelemetryRecoveryCommit(_) => ReplyKind::TelemetryRecoveryCommit,
+            Self::TelemetryRecoveryAudit(_) => ReplyKind::TelemetryRecoveryAudit,
             Self::Adapter(_) => ReplyKind::Adapter,
             Self::Command(_) => ReplyKind::Command,
             Self::PluginHost { .. } => ReplyKind::PluginHost,
@@ -481,6 +486,16 @@ impl MachineControl {
         }
         let machine_id = &token.0.machine_id;
         match event {
+            MachineEvent::TelemetryRecoveryAuditObservation {
+                request_id,
+                observation,
+            } => {
+                live.complete(
+                    token,
+                    &request_id,
+                    Reply::TelemetryRecoveryAudit(observation),
+                );
+            }
             MachineEvent::TelemetryBindingRecovered { request_id, result } => {
                 live.complete(token, &request_id, Reply::TelemetryRecoveryCommit(result));
             }

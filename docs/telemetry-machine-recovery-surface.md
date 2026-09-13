@@ -18,6 +18,7 @@ The protected core routes are:
 POST /api/telemetry/binding/operations/{operation}/machine-recovery-plan
 POST /api/telemetry/binding/operations/{operation}/recover-machine
 GET  /api/telemetry/binding/operations/{operation}/machine-recoveries/{resolution}
+GET  /api/telemetry/binding/operations/{operation}/machine-recovery-audit
 ```
 
 Preview accepts exactly `{}`. Core reads the validated latest Service operation,
@@ -77,13 +78,14 @@ never becomes success. Receipt reads use fresh Operator authorization and a
 fresh read-only connection, even if the original recovery deadline has ended;
 they cannot create an execution lease.
 
-These HTTP handles are deliberately **not durable recovery history**. Controller
-restart or the retention limit can make GET return not-found even when Machine
-recovery committed. The Machine audit is not deleted. The UI must report
-unverified, never resend or infer failure from handle absence. A new independent
-Service preview can inspect the current binding evidence. Persistent HTTP audit
-discovery remains a separate gap; this slice does not silently introduce a new
-Service writer/schema solely to retain query handles.
+These HTTP handles are deliberately **not durable recovery history**. The
+[protocol-18 audit discovery](telemetry-recovery-audit-discovery.md) follow-up
+reads the Machine's retained audit without them, including after Controller
+restart and later Service resolution. Exact receipt GET falls back to this
+read when its handle is missing and additionally checks the resolution ID.
+Protocol-17 peers cannot satisfy that fallback and report unavailable. No
+second Service recovery journal is created; missing/unavailable evidence never
+proves failure or authorizes a retry.
 
 Closing the Info surface, refreshing its operation scope or signing out aborts
 observation and ignores late responses. A synchronous submitted-ID guard
@@ -108,17 +110,17 @@ interruption/reopen, wire and separate Service resolution fixtures remain part
 of the full gate. They are not physical-device interaction or production
 fault-injection acceptance.
 
-No Machine protocol, durable schema, SQL migration, signed Plugin/SDK, Provider,
+The original confirmation slice changed no Machine protocol, durable schema, SQL migration, signed Plugin/SDK, Provider,
 native ABI, private telemetry policy or worker input changes. Controller and Web
-release independently; no Machine or host-system activation is needed. Actual
+released independently, without a Machine or host-system activation. Its
+protocol-18 discovery follow-up requires a separate Machine maintenance release. Actual
 active/rollback/cold reader conformance remains a separate release prerequisite.
 
 The [ordinary binding surface](telemetry-binding-surface.md) now stages separate
 select/revoke/restore confirmations and durable Service operation reads. Those
-reads do not close this Machine recovery audit-discovery gap.
+reads are distinct from Machine-owned recovery audit discovery.
 
-Remaining P2: durable HTTP recovery
-audit discovery, per-target writer/background-policy admission and full
+Remaining P2: per-target writer/background-policy admission and full
 production cross-end failure/restart acceptance. Unknown/schema-one Machine
 evidence stays quarantined; this is not a universal repair button or executable
 DAG.

@@ -61,8 +61,9 @@ insufficient: an old Controller can ignore the table entirely.
 
 Each Machine starts its own temporary broker and connects to a loopback-only
 Controller fixture. The harness verifies its fresh SSHSIG handshake, negotiates
-protocol 17, and sends **only** the existing `QueryTelemetryBinding` and
-`QueryTelemetryRecovery` commands. Both correlated observations must exactly
+protocol 17 or 18, and sends **only** `QueryTelemetryBinding`,
+`QueryTelemetryRecovery` and (on protocol 18) `QueryTelemetryRecoveryAudit`.
+All correlated observations must exactly
 match the fixture's receipt, current head, uncertainty and audit. Empty startup
 inventories and heartbeats are allowed; other replies cannot stand in for the
 expected evidence. No worker executable or session command is supplied.
@@ -83,6 +84,13 @@ startup's OpenSSH helper comes from the pinned shell, is exposed through a
 single-tool fixture directory, and is hashed in the receipt. Machine release
 wrappers retain their immutable packaged helpers. No Service/Provider/SSH-agent
 credentials, production policy or host inventory are inherited.
+
+The schema-two receipt additionally records `machine_protocol` on each
+successful non-corrupt Machine check. A protocol-18 result requires the new
+audit query, including after the second cold start and subsequent head changes;
+an unsupported protocol-17 floor cannot be misreported as discovery acceptance.
+Controller, failed and corrupt-start checks carry null there. The input matrix
+remains schema one; earlier create-only receipts remain unchanged.
 
 The receipt hashes each source manifest, release launcher, actual ELF reader,
 fixture document and Machine ledger. It contains closed result categories, not

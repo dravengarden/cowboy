@@ -337,6 +337,7 @@ impl Bindings {
 
 // Protocol support does not enable the independent, currently closed writer.
 mod recovery;
+mod recovery_audit;
 mod writer;
 
 fn unavailable(reason: BindingUnavailable) -> BindingObservation {

@@ -12,14 +12,14 @@ use axum::http::Method;
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicUsize;
 
-fn path(before: &Operation, suffix: &str) -> String {
+pub(super) fn path(before: &Operation, suffix: &str) -> String {
     format!(
         "/api/telemetry/binding/operations/{}/{suffix}",
         before.intent.operation_id
     )
 }
 
-async fn pending(f: &Fixture) -> Operation {
+pub(super) async fn pending(f: &Fixture) -> Operation {
     let before = f.pending(true).await;
     crate::server::telemetry_binding::advance(
         f.state.store.as_ref().unwrap(),
@@ -232,11 +232,12 @@ async fn recovery_http_is_one_use_with_exact_read_after_ambiguous_ack_and_no_ser
             StatusCode::CONFLICT,
             "rejected Machine state is not a new Prepared recovery"
         );
-        // Restart loses only the bounded query handle, not evidence or a permit.
+        // Protocol 17 cannot discover audit once this handle is lost. Refuse
+        // the read explicitly rather than treating unsupported as no audit.
         f.state.recovery_plans.0.lock().clear();
         assert_eq!(
             f.request(Method::GET, &query, None).await.0,
-            StatusCode::NOT_FOUND
+            StatusCode::SERVICE_UNAVAILABLE
         );
         assert_eq!(wire.sends.load(Ordering::Relaxed), 1);
         wire.stop().await;
@@ -720,7 +721,22 @@ fn recovery_public_projection_matches_shared_web_fixture() {
         panic!()
     };
     snapshot.receipt.as_mut().unwrap().resolved_at_ms = 2_200_000_000_000;
-    let actual = json!({"plan":PlanView::new(&request,&before,false).unwrap(),"receipt":ReceiptView::new(&request,&observed).unwrap()});
+    use crate::machine_protocol::telemetry_recovery_audit::{
+        RecoveryAuditObservation, RecoveryAuditQuery, RecoveryAuditSnapshot,
+    };
+    let query = RecoveryAuditQuery {
+        schema: 1,
+        step: request.step.clone(),
+    };
+    let audit_observation = RecoveryAuditObservation::Observed {
+        snapshot: Box::new(RecoveryAuditSnapshot {
+            query_digest: query.digest().unwrap(),
+            receipt: snapshot.receipt.clone(),
+            binding: snapshot.binding.clone(),
+        }),
+    };
+    let ledger = crate::telemetry_binding::Ledger::decode(&json!({"schema":1,"service_id":"service-test","machine_id":"machine-test","current":null,"operations":[before]}).to_string(),"service-test").unwrap();
+    let actual = json!({"plan":PlanView::new(&request,&before,false).unwrap(),"receipt":ReceiptView::new(&request,&observed).unwrap(), "audit":audit::AuditView::new(&ledger, &before, &query, &audit_observation).unwrap()});
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../../../tests/fixtures/telemetry-recovery-surface.json"
     ))
