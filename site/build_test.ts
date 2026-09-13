@@ -516,7 +516,7 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       styles.includes("--canvas: #101014") &&
         styles.includes("--primary: #bb83ff") &&
         styles.includes("--secondary: #51c9ff") &&
-        styles.includes("--primary: #8045b8") &&
+        styles.includes("--brand-cyan: #51c9ff") &&
         !styles.includes("filter: var(--brand-filter-rest)") &&
         !styles.includes("@keyframes brand-color-breathe"),
       "brand colors remain faithful to the selected icon in light and dark themes",

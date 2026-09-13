@@ -149,13 +149,15 @@ for crown/brim. Brand artwork keeps these colors in both light and dark themes;
 only interface controls use contrast-adjusted primary/secondary colors.
 They do not reuse installation tiles or the browser favicon's optical frame.
 
-The website palette separates the fixed logo colors from readable text tones.
-Primary action fills use the original violet `#BB83FF` with dark `#21132F`
-labels in both themes; cyan `#51C9FF` remains the supporting brand accent.
-Light-mode display headings use `#A365DF`, smaller violet text uses `#8045B8`,
-and cyan links use `#096C91`. Dark-mode accents use the original logo colors.
+The website uses the original violet `#BB83FF` and cyan `#51C9FF` as
+brand pigments in both themes. Do not substitute darker violet or teal text
+variants. Primary actions, selected controls, and highlighted headings place dark
+`#21132F` text on original violet. Section labels place original cyan text on a
+solid `#17131F` badge with a violet rule. Body copy and small navigation text use
+neutral ink; link underlines, focus indicators, and diagrams carry brand colors.
+This keeps the original pigments visible without low-contrast text on white.
 The light canvas is `#FAF9FC`; the dark canvas is `#101014`. Browser theme-color,
-first-paint initialization, and the runtime theme switch must match these canvases.
-Plugin cards and the final call-to-action follow the selected theme, with neutral
-violet-gray borders rather than cyan outlines. Terminal examples retain dark
-surfaces. Provider identities and semantic status colors remain independent.
+first-paint initialization, and runtime theme switching match these canvases.
+Plugin cards and the final call-to-action follow the selected theme. Terminal
+examples retain opaque dark surfaces. Provider identities and semantic status
+colors remain independent.
