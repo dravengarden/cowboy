@@ -328,6 +328,11 @@ pub(super) struct TelemetryBindingAuthority {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl TelemetryBindingAuthority {
+    pub(super) fn constrain_to_preview(mut self, preview: OperationBudget) -> Self {
+        self.budget = self.budget.intersect(preview);
+        self
+    }
+
     pub(super) fn revoke(&self) {
         self.revoked.store(true, Ordering::Release);
     }

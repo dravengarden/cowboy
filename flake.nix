@@ -88,6 +88,7 @@
           ./tests/fixtures/composition-v1.json
           ./tests/fixtures/telemetry-resolution-surface.json
           ./tests/fixtures/telemetry-recovery-surface.json
+          ./tests/fixtures/telemetry-binding-surface.json
         ] ++ plugin-contract-files ++ plugin-host-files);
       };
 

@@ -102,7 +102,11 @@ The [distinct Machine recovery surface](telemetry-machine-recovery-surface.md)
 now stages its own exact preview and one-use confirmation without chaining a
 Service resolution. Its production admission remains closed.
 
-Still required: ordinary binding select/revoke/restore confirmation, durable
+The [ordinary binding surface](telemetry-binding-surface.md) now supplies
+select/revoke/restore previews, one-use confirmation and durable operation GETs.
+Its production admission remains closed.
+
+Still required: durable
 HTTP recovery audit discovery, per-target production writer and
 background-export policy admission, and production cross-end failure/restart
 acceptance. Unknown and schema-one Machine evidence remain quarantined. This

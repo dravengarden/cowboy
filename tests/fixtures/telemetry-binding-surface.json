@@ -1,0 +1,64 @@
+{
+  "plan": {
+    "schema": 1,
+    "plan_id": "service-binding-binding-surface-fixture",
+    "action": "select",
+    "request_digest": "sha256:f8b140c3dc88c796cffd34f925a34afe41d980a92647865448429db9063946a5",
+    "expires_at_ms": 2300000000000,
+    "confirmation_available": false,
+    "operation": {
+      "operation_id": "service-binding-binding-surface-fixture",
+      "machine_id": "machine-test",
+      "operation_digest": "sha256:d0adb6ed74da86c4c2b31b7a157b44d1ec9180003ae7b209cb5910203ba1dc24",
+      "phase": "prepared",
+      "attention": null,
+      "expected": null,
+      "change": {
+        "kind": "select",
+        "installation": {
+          "plugin_id": "victoria",
+          "plugin_version": "1.1.0",
+          "generation_digest": "sha256:a4d451ec23463726f72c43d64c710968f6b602cd653b4de8adee1b556240a829",
+          "installation_revision": "installation-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contract_fingerprint": "sha256:cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf"
+        },
+        "policy_epoch": "1"
+      }
+    },
+    "result_head": {
+      "revision": "1",
+      "policy_epoch": "1",
+      "selection": {
+        "plugin_id": "victoria",
+        "plugin_version": "1.1.0",
+        "generation_digest": "sha256:a4d451ec23463726f72c43d64c710968f6b602cd653b4de8adee1b556240a829",
+        "installation_revision": "installation-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "contract_fingerprint": "sha256:cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf"
+      }
+    },
+    "restores_operation_id": null
+  },
+  "receipt": {
+    "schema": 1,
+    "request_digest": "sha256:f8b140c3dc88c796cffd34f925a34afe41d980a92647865448429db9063946a5",
+    "operation": {
+      "operation_id": "service-binding-binding-surface-fixture",
+      "machine_id": "machine-test",
+      "operation_digest": "sha256:d3be95bb3be8e4e7c8701cffedd615764f3beaec5b8f350ff41f3ea8ee0a1c73",
+      "phase": "aborted",
+      "attention": null,
+      "expected": null,
+      "change": {
+        "kind": "select",
+        "installation": {
+          "plugin_id": "victoria",
+          "plugin_version": "1.1.0",
+          "generation_digest": "sha256:a4d451ec23463726f72c43d64c710968f6b602cd653b4de8adee1b556240a829",
+          "installation_revision": "installation-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contract_fingerprint": "sha256:cc8321d6375c494d043fdd0260f21bc0ec51dacc9f6abb7f909cdcd3041b78bf"
+        },
+        "policy_epoch": "1"
+      }
+    }
+  }
+}

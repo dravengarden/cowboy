@@ -9,9 +9,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-const BINDING_WRITE_ADMISSION: bool = false;
+pub(super) const BINDING_WRITE_ADMISSION: bool = false;
 
-struct LiveEffects {
+pub(super) struct LiveEffects {
     control: Arc<MachineControl>,
     catalog: Arc<PluginCatalog>,
     fences: crate::server::PluginLifecycleFences,
@@ -34,7 +34,7 @@ impl LiveEffects {
         Self::bind(control, catalog, fences, intent)
     }
 
-    fn bind(
+    pub(super) fn bind(
         control: Arc<MachineControl>,
         catalog: Arc<PluginCatalog>,
         fences: crate::server::PluginLifecycleFences,
@@ -60,7 +60,7 @@ impl LiveEffects {
         Ok(effects)
     }
 
-    fn current(&self) -> bool {
+    pub(super) fn current(&self) -> bool {
         let valid = !self.ended.load(Ordering::Acquire)
             && self
                 .control
@@ -138,4 +138,4 @@ impl Effects for LiveEffects {
 }
 
 #[cfg(all(test, feature = "machine-host"))]
-mod tests;
+pub(super) mod tests;
