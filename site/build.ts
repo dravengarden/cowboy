@@ -476,7 +476,11 @@ export async function buildSite(
   const codeCount =
     plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
   const template = await Deno.readTextFile(joinPath(root, "site/index.html"));
+  const brandMark = await Deno.readTextFile(
+    joinPath(root, "site/assets/cowboy-wordmark-v1.svg"),
+  );
   const html = template
+    .replaceAll("{{BRAND_MARK}}", brandMark)
     .replaceAll("{{PLUGIN_COUNT}}", String(plugins.length))
     .replaceAll("{{AGENT_PLUGIN_COUNT}}", String(agentCount))
     .replaceAll("{{CODE_PLUGIN_COUNT}}", String(codeCount))

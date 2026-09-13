@@ -501,7 +501,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero wiring should start at both client component edges, connect to one Hub, and branch to three Machines without ornamental endpoint circles",
     );
     assert(
-      html.includes('src="assets/cowboy-brand-mark.png"') &&
+      !html.includes('src="assets/cowboy-brand-mark.png"') &&
+        (html.match(/class="brand-icon"/gu) ?? []).length === 2 &&
+        html.includes('class="brand-crown"') &&
+        html.includes('class="brand-brim"') &&
         (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
       "wordmarks should show the approved default icon",
     );
