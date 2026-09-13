@@ -1,18 +1,18 @@
 import { alpha, type Theme } from "@mui/material";
 
-/** Far-side corners stay pill-like. The edge facing the speaker is tighter,
- * so left and right bubbles are mirrors rather than identical rounded rects. */
+/** Three corners stay pill-like. Only the bottom corner on the speaker side
+ * is tighter — assistant bottom-left, user bottom-right. */
 export const MESSAGE_BUBBLE_RADIUS_PX = 18;
-export const MESSAGE_BUBBLE_EDGE_RADIUS_PX = 6;
+export const MESSAGE_BUBBLE_TAIL_RADIUS_PX = 6;
 
 export function messageBubbleBorderRadius(
   role: "user" | "assistant",
 ): string {
   const round = `${MESSAGE_BUBBLE_RADIUS_PX}px`;
-  const edge = `${MESSAGE_BUBBLE_EDGE_RADIUS_PX}px`;
+  const tail = `${MESSAGE_BUBBLE_TAIL_RADIUS_PX}px`;
   return role === "user"
-    ? `${round} ${edge} ${edge} ${round}`
-    : `${edge} ${round} ${round} ${edge}`;
+    ? `${round} ${round} ${tail} ${round}`
+    : `${round} ${round} ${round} ${tail}`;
 }
 
 export function messageBubbleSurfaceSx(

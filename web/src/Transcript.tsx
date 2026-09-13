@@ -1534,9 +1534,9 @@ function MessageBubble({
       />
     );
   }
-  // Send and receive share a chat-card: large far-side corners, tighter
-  // speaker-side corners, mirrored left vs right. Assistant keeps a quiet
-  // fill so long Markdown still reads as a message, not a document page.
+  // Send and receive share a chat-card: three large corners, a tight tail on
+  // the speaker-side bottom (right for you, left for the agent). Assistant
+  // keeps a quiet fill so long Markdown still reads as a message.
   if (!mine) {
     return (
       <Paper

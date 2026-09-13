@@ -1,14 +1,14 @@
 import { assert, assertEquals } from "jsr:@std/assert";
 import { messageBubbleBorderRadius } from "./messageBubble.ts";
 
-Deno.test("user and assistant bubbles mirror left/right corner radii", () => {
+Deno.test("only the speaker-side bottom corner is the small radius", () => {
   assertEquals(
     messageBubbleBorderRadius("user"),
-    "18px 6px 6px 18px",
+    "18px 18px 6px 18px",
   );
   assertEquals(
     messageBubbleBorderRadius("assistant"),
-    "6px 18px 18px 6px",
+    "18px 18px 18px 6px",
   );
 });
 
