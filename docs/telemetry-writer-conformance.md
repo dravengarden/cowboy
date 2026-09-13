@@ -5,6 +5,9 @@ actual Controller and Machine release executables with synthetic private writer
 policies and disposable journals. Run from clean committed Cowboy source in the
 pinned Linux shell. It never enables a production writer or installs a Plugin.
 
+The [Hawk acceptance record](releases/telemetry-writer-conformance-2026-09-13.md)
+binds the first complete run to independently captured actual host roles.
+
 The closed schema-one input is the same complete two-Site matrix as
 [reader conformance](telemetry-reader-conformance.md): `controller` and
 `machine`, each with `active`, `rollback` and `cold` absolute immutable Nix
