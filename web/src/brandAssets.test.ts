@@ -56,7 +56,7 @@ Deno.test("default 103 exports cover web, native, Manager and website", async ()
   ], [0, 0, 1, 0]);
   assertEquals(
     await bytes("web/public/favicon.ico"),
-    await bytes("web/public/cowboy-favicon-v7.ico"),
+    await bytes("web/public/cowboy-favicon-v8.ico"),
   );
   assertEquals(
     new TextDecoder().decode(
@@ -78,12 +78,12 @@ Deno.test("entry points use the current icon and the service worker changes gene
   }
   for (const path of ["web/index.html", "web/admin.html"]) {
     const text = await read(path);
-    assert(text.includes("/cowboy-favicon-v7.ico"));
-    assert(text.includes("/cowboy-favicon-v7.svg"));
+    assert(text.includes("/cowboy-favicon-v8.ico"));
+    assert(text.includes("/cowboy-favicon-v8.svg"));
   }
   const index = await read("web/index.html");
   assert(index.includes("/cowboy-app-icon-180-v6.png"));
-  assert(index.includes("/manifest.webmanifest?v=cowboy-v1667"));
+  assert(index.includes("/manifest.webmanifest?v=cowboy-v1668"));
   const manifest = JSON.parse(await read("web/public/manifest.webmanifest"));
   assertEquals(manifest.id, "/");
   assertEquals(manifest.start_url, "/");
@@ -93,7 +93,7 @@ Deno.test("entry points use the current icon and the service worker changes gene
     ),
   );
   const sw = await read("web/public/sw.js");
-  assert(sw.includes('const VERSION = "cowboy-v1667"'));
+  assert(sw.includes('const VERSION = "cowboy-v1668"'));
   assert(sw.includes('icon: "/cowboy-app-icon-192-v6.png"'));
 });
 
@@ -140,13 +140,13 @@ Deno.test("Neon primary and alternate icons bundle automatic light and dark appe
 });
 
 Deno.test("tab SVGs are transparent vectors and ICO has native browser frames", async () => {
-  const svg = await read("web/public/cowboy-favicon-v7.svg");
+  const svg = await read("web/public/cowboy-favicon-v8.svg");
   assert(svg.includes("prefers-color-scheme:dark"));
   assert(
     svg.includes('<path class="crown"') && svg.includes('<path class="brim"'),
   );
   assert(!svg.includes("<image") && !svg.includes("<rect"));
-  const ico = await bytes("web/public/cowboy-favicon-v7.ico");
+  const ico = await bytes("web/public/cowboy-favicon-v8.ico");
   const view = new DataView(ico.buffer, ico.byteOffset, ico.byteLength);
   assertEquals(view.getUint16(4, true), 3);
   assertEquals([ico[6], ico[22], ico[38]], [16, 32, 48]);

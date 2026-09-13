@@ -133,3 +133,7 @@ retains contours traced from the approved 103 artwork; `tools/build-tab-icons.py
 exports palette favicons and explicit 16/32/48px ICO fallback frames. Native and
 PWA installation artwork retain their own backgrounds. Browser appearance, not
 the page's manual theme selection, selects the favicon color treatment.
+
+The v8 browser-only optical frame gives the wide hat more vertical presence in
+a fixed 16px tab slot, with its ink center near the slot center. This optical
+proportion is independent of the unchanged website logo and installation icon.

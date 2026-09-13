@@ -192,11 +192,11 @@ Deno.test("Neon previews resolve light and dark assets without changing other st
 Deno.test("tab marks are independent of opaque installation icons", () => {
   assertEquals(
     appIconTabAsset(DEFAULT_APP_ICON),
-    "/app-icons/v7/palette-103/favicon.svg",
+    "/app-icons/v8/palette-103/favicon.svg",
   );
   assertEquals(
     appIconTabAsset("palette-054"),
-    "/app-icons/v7/palette-054/favicon.svg",
+    "/app-icons/v8/palette-054/favicon.svg",
   );
   assertEquals(
     appIconTabAsset("original-001"),

@@ -70,7 +70,7 @@ export function appIconAppearanceAsset(id: string, dark: boolean): string {
 export function appIconTabAsset(id: string): string {
   const icon = appIcon(id);
   return icon.collection === "palette"
-    ? `/app-icons/v7/${icon.id}/favicon.svg`
+    ? `/app-icons/v8/${icon.id}/favicon.svg`
     : appIconAsset(icon.id, 192);
 }
 
