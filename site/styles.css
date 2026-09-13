@@ -225,14 +225,6 @@ kbd {
   overflow: visible;
 }
 
-.brand-crown {
-  fill: var(--secondary);
-}
-
-.brand-brim {
-  fill: var(--primary);
-}
-
 .site-footer .brand-icon-stage {
   width: 36px;
   height: 26px;

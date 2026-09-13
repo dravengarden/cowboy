@@ -505,6 +505,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         (html.match(/class="brand-icon"/gu) ?? []).length === 2 &&
         html.includes('class="brand-crown"') &&
         html.includes('class="brand-brim"') &&
+        html.includes('class="brand-crown" fill="#51C9FF"') &&
+        html.includes('class="brand-brim" fill="#BB83FF"') &&
+        !styles.includes(".brand-crown {") &&
+        !styles.includes(".brand-brim {") &&
         (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
       "wordmarks should show the approved default icon",
     );
