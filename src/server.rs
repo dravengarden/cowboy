@@ -857,6 +857,23 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
+    // Explicit host policy is independent of binding/recovery confirmations.
+    // Reject an ambiguous mode even for a programmatically constructed CLI.
+    anyhow::ensure!(
+        args.telemetry_managed_export_policy.is_none() || args.telemetry_plugin_config.is_none(),
+        "managed and legacy telemetry configurations are mutually exclusive"
+    );
+    let managed_export_policy = args
+        .telemetry_managed_export_policy
+        .as_deref()
+        .map(|path| {
+            crate::telemetry_plugin::background_policy::BackgroundPolicy::load(path, &service_id)
+        })
+        .transpose()?;
+    anyhow::ensure!(
+        managed_export_policy.is_none() || args.database_url().is_some(),
+        "managed telemetry export requires the durable Service store"
+    );
     let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
         serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
             &std::fs::read(path).with_context(|| {
@@ -937,6 +954,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 crate::telemetry_binding::LegacyFence::recover(Some(&store), &service_id)
                     .await
                     .context("restoring Service telemetry binding fence")?;
+            if let Some(policy) = &managed_export_policy {
+                anyhow::ensure!(
+                    policy.check_binding(&store).await,
+                    "managed telemetry startup policy does not match the retained binding"
+                );
+            }
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -1299,12 +1322,23 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             chrono::Utc::now().timestamp_millis(),
         )
         .context("opening local telemetry")?,
-        crate::telemetry_plugin::controller_exporter(
-            args.telemetry_plugin_config.as_deref(),
-            Arc::clone(&machine_control),
-            Arc::clone(&plugin_catalog),
-            telemetry_binding_fence.clone(),
-        )?,
+        match managed_export_policy {
+            Some(policy) => Some(telemetry_binding::background::exporter(
+                policy,
+                store
+                    .clone()
+                    .context("managed telemetry requires a durable store")?,
+                Arc::clone(&machine_control),
+                Arc::clone(&plugin_catalog),
+                Arc::clone(&plugin_lifecycle_fences),
+            )),
+            None => crate::telemetry_plugin::controller_exporter(
+                args.telemetry_plugin_config.as_deref(),
+                Arc::clone(&machine_control),
+                Arc::clone(&plugin_catalog),
+                telemetry_binding_fence.clone(),
+            )?,
+        },
     );
     let telemetry_shutdown = observability.clone();
 

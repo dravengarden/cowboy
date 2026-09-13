@@ -9,6 +9,7 @@ use crate::telemetry_binding::{
 };
 use anyhow::{Result, ensure};
 
+pub(super) mod background;
 mod export;
 mod http;
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]

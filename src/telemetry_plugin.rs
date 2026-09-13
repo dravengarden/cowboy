@@ -35,6 +35,24 @@ struct PrivateSnapshot {
     changed: (i64, i64),
 }
 
+impl PrivateSnapshot {
+    fn matches(&self, current: &Self) -> bool {
+        let Ok(original) = self.file.metadata() else {
+            return false;
+        };
+        let Ok(observed) = current.file.metadata() else {
+            return false;
+        };
+        original.dev() == observed.dev()
+            && original.ino() == observed.ino()
+            && self.digest == current.digest
+            && self.changed == current.changed
+    }
+}
+
+#[cfg(feature = "full")]
+pub(crate) mod background_policy;
+
 fn read_private_snapshot<T: serde::de::DeserializeOwned>(
     path: &Path,
 ) -> Result<(T, PrivateSnapshot)> {
@@ -250,16 +268,7 @@ mod machine {
             let Ok((_, current)) = read_private_snapshot::<Configuration>(path) else {
                 return false;
             };
-            let Ok(original) = self.snapshot.file.metadata() else {
-                return false;
-            };
-            let Ok(observed) = current.file.metadata() else {
-                return false;
-            };
-            original.dev() == observed.dev()
-                && original.ino() == observed.ino()
-                && self.snapshot.digest == current.digest
-                && self.snapshot.changed == current.changed
+            self.snapshot.matches(&current)
         }
     }
 

@@ -1,6 +1,5 @@
-//! Staged single-attempt managed egress. No production endpoint/background
-//! activation: accepted reader floors and independently authorized recovery
-//! remain prerequisites. Completed binding receipts cannot construct this.
+//! Single-attempt managed egress. A fresh Operator confirmation and an explicit
+//! host background policy are distinct authorities, never binding receipts.
 #![cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 
 use crate::machine_control::{ConnectionToken, MachineControl};
@@ -9,19 +8,52 @@ use crate::plugin_catalog::PluginCatalog;
 use crate::server::operator_approval::{OperatorApproval, TelemetryExportAuthority};
 use crate::server::{PluginLifecycleFences, ProductRequestAuth};
 use crate::store::Store;
+use crate::telemetry_plugin::background_policy::BackgroundPermit;
 use anyhow::{Result, ensure};
+use futures::future::BoxFuture;
 use std::sync::Arc;
+use std::time::Duration;
 
-pub(super) struct ExportScope {
+pub(super) trait Authority: Sync {
+    fn remaining(&self) -> Duration;
+    fn revoke(&self);
+    fn reject_binding(&self);
+}
+
+impl Authority for TelemetryExportAuthority {
+    fn remaining(&self) -> Duration {
+        self.remaining()
+    }
+    fn revoke(&self) {
+        self.revoke();
+    }
+    fn reject_binding(&self) {
+        self.revoke();
+    }
+}
+
+impl Authority for BackgroundPermit {
+    fn remaining(&self) -> Duration {
+        self.remaining()
+    }
+    fn revoke(&self) {
+        self.revoke();
+    }
+    fn reject_binding(&self) {
+        self.reject_binding();
+    }
+}
+
+pub(super) struct ExportScope<A = TelemetryExportAuthority> {
     attempt: ExportAttempt,
-    authority: TelemetryExportAuthority,
+    authority: A,
     connection: ConnectionToken,
     control: Arc<MachineControl>,
     catalog: Arc<PluginCatalog>,
     fences: PluginLifecycleFences,
 }
 
-impl ExportScope {
+impl ExportScope<TelemetryExportAuthority> {
     pub(super) fn capture(
         attempt: ExportAttempt,
         approval: OperatorApproval,
@@ -30,6 +62,49 @@ impl ExportScope {
         fences: PluginLifecycleFences,
     ) -> Result<Self> {
         let authority = approval.bind_telemetry_export(&attempt)?;
+        Self::bind(attempt, authority, control, catalog, fences)
+    }
+
+    pub(super) async fn execute(
+        self,
+        store: &Store,
+        auth: ProductRequestAuth<'_>,
+    ) -> Result<ExportReceipt> {
+        self.execute_with(store, || {
+            Box::pin(self.authority.check(auth, &self.attempt))
+        })
+        .await
+    }
+}
+
+impl ExportScope<BackgroundPermit> {
+    pub(super) fn background(
+        attempt: ExportAttempt,
+        permit: BackgroundPermit,
+        control: Arc<MachineControl>,
+        catalog: Arc<PluginCatalog>,
+        fences: PluginLifecycleFences,
+    ) -> Result<Self> {
+        ensure!(permit.check(&attempt), "background export permit changed");
+        Self::bind(attempt, permit, control, catalog, fences)
+    }
+
+    pub(super) async fn execute_background(self, store: &Store) -> Result<ExportReceipt> {
+        self.execute_with(store, || {
+            Box::pin(async { self.authority.check(&self.attempt) })
+        })
+        .await
+    }
+}
+
+impl<A: Authority> ExportScope<A> {
+    fn bind(
+        attempt: ExportAttempt,
+        authority: A,
+        control: Arc<MachineControl>,
+        catalog: Arc<PluginCatalog>,
+        fences: PluginLifecycleFences,
+    ) -> Result<Self> {
         let connection = control
             .operation_connection(&attempt.machine_id)
             .map_err(|_| anyhow::anyhow!("managed export Machine is not connected"))?;
@@ -91,17 +166,24 @@ impl ExportScope {
         valid
     }
 
-    async fn authorized(&self, store: &Store, auth: ProductRequestAuth<'_>) -> bool {
-        let valid = self.current()
-            && self.authority.check(auth, &self.attempt).await
-            && store
-                .telemetry_binding_ledger(&self.attempt.service_id)
-                .await
-                .is_ok_and(|ledger| {
-                    ledger.is_some_and(|ledger| ledger.permits_export(&self.attempt))
-                })
-            && self.current()
-            && self.authority.check(auth, &self.attempt).await;
+    async fn authorized<'a>(
+        &self,
+        store: &Store,
+        check: &(impl Fn() -> BoxFuture<'a, bool> + Sync),
+    ) -> bool {
+        if !self.current() || !check().await {
+            self.authority.revoke();
+            return false;
+        }
+        let binding_current = store
+            .telemetry_binding_ledger(&self.attempt.service_id)
+            .await
+            .is_ok_and(|ledger| ledger.is_some_and(|ledger| ledger.permits_export(&self.attempt)));
+        if !binding_current {
+            self.authority.reject_binding();
+            return false;
+        }
+        let valid = self.current() && check().await;
         if !valid {
             self.authority.revoke();
         }
@@ -111,10 +193,10 @@ impl ExportScope {
     /// Consume even failures. This is one bounded grant, not a retryable
     /// exporter factory. Later revocation stops future grants; already-admitted
     /// HTTP can finish. Missing ACKs cannot justify replay or inverse emission.
-    pub(super) async fn execute(
-        self,
+    async fn execute_with<'a>(
+        &self,
         store: &Store,
-        auth: ProductRequestAuth<'_>,
+        check: impl Fn() -> BoxFuture<'a, bool> + Send + Sync,
     ) -> Result<ExportReceipt> {
         let budget = self.authority.remaining();
         let digest = self.attempt.request_digest()?;
@@ -124,7 +206,7 @@ impl ExportScope {
         };
         match tokio::time::timeout(budget, async {
             ensure!(
-                self.authorized(store, auth).await,
+                self.authorized(store, &check).await,
                 "managed export authorization ended"
             );
             Ok(self

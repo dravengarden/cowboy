@@ -66,6 +66,7 @@ publication; the implementation gates below are not production receipts.
 | `COWBOY_TELEMETRY_SEGMENT_BYTES` | 8388608 (8 MiB) | 65536–67108864 |
 | `COWBOY_TELEMETRY_RETAINED_FILES` | 8, including current | 2–32 |
 | `COWBOY_TELEMETRY_PLUGIN_CONFIG` | absent, local only | Exact Controller selection file |
+| `COWBOY_TELEMETRY_MANAGED_EXPORT_POLICY` | absent | Explicit exact-binding OTLP policy; mutually exclusive with legacy selection |
 
 Instance directory identity includes effective UID and data directory. The
 writer owns mode-0700 directory, mode-0600 files, and an exclusive writer lock.
@@ -146,12 +147,16 @@ requires deployment of the hardened Machine; unchanged protocol numbers or a
 Controller release are not proof of that deployment. Durable binding activation
 and restart recovery remain separate unfinished work.
 
-The staged [managed single-attempt path](telemetry-managed-attempts.md) uses
-protocol 16 and fresh independent authorization for one standard OTLP batch.
-It makes no automatic HTTP retry and does not reconstruct export grants from
-binding history. It does not replace the production legacy exporter or enable
-managed writes/background export; reader-floor and recovery acceptance remain
-separate prerequisites.
+The [managed single-attempt path](telemetry-managed-attempts.md) uses protocol 16
+and independent authorization for one standard OTLP batch. It makes no automatic
+HTTP retry and does not reconstruct export grants from binding history. The
+subsequent [explicit background policy](telemetry-background-policy.md) can feed
+the existing queue under host-owned standing authority instead of a confirmation
+per batch. It requires exact owners/binding/signals and an explicit startup
+choice, mutually exclusive with the legacy selection file. Installing or
+resolving a binding never creates that policy. Production managed writer
+admission/configuration cutover and failure acceptance remain separate; existing
+configured legacy export is not changed merely by publishing this implementation.
 
 Each Controller batch additionally resolves that exact release from the accepted
 signed Catalog snapshot and compares its telemetry kind, contract fingerprint
