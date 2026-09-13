@@ -106,6 +106,13 @@ exercise normal writes, each host's independent refusal, and recovery followed
 by a separately admitted Service resolution. These are hermetic tests, not a
 claim of production fault acceptance.
 
+The separate [immutable writer-policy gate](telemetry-writer-conformance.md)
+executes actual Controller/Machine releases for every supplied recovery role,
+with private synthetic policies, all purpose combinations, foreign-owner and
+unsafe-file refusal, restart loss of unsubmitted previews, durable resolution
+and Machine duplicate reads. This is additional executable contract evidence,
+not acceptance of production Operator authority or connected cross-end faults.
+
 No protocol, journal schema, applied SQL migration, signed Plugin/SDK, native
 ABI, Provider state or worker-generation input changes. Release Controller and
 Machine independently, preserving detached workers, and run populated immutable

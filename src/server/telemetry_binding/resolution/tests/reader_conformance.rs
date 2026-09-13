@@ -3,6 +3,7 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod admission;
 mod fixtures;
 mod manifest;
 mod probe;

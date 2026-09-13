@@ -114,7 +114,7 @@ async fn metrics(
         .map_err(|_| Failure::LocalRecording)
 }
 
-async fn local_recording(
+pub(super) async fn local_recording(
     address: std::net::SocketAddr,
     root: &Path,
     cold_read: u8,

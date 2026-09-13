@@ -59,6 +59,17 @@ gate does not accept actual host-role provenance, full production configuration,
 writer admission, Machine startup or cross-end delivery. Accept those separately
 before cutover; see `docs/telemetry-background-startup-conformance.md`.
 
+For writer-policy startup and finite-purpose acceptance, additionally run
+`just telemetry-writer-conformance <matrix.json> <new-receipt.json>` against
+every immutable Controller/Machine role. Require independent binding, recovery
+and Service resolution admission, exact malformed/foreign-policy rejection,
+loss of unsubmitted previews on restart, durable receipts and duplicate reads
+without replay. This uses synthetic local Operator/peer authority only; it does
+not accept production credentials, connected cross-end transport, signed Plugin
+delivery or the full owned configuration. Keep that cutover separate; see
+`docs/telemetry-writer-conformance.md`. Test-only harness changes do not require
+activating new runtime artifacts merely to update their source-manifest revision.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

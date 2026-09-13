@@ -14,6 +14,7 @@ dist/native-shell/
 dist/catalog-reader-conformance/
 dist/telemetry-reader-conformance/
 dist/telemetry-background-startup-conformance/
+dist/telemetry-writer-conformance/
 apps/native-shell/tauri/target/
 apps/native-shell/tauri/gen/
 tools/__pycache__/

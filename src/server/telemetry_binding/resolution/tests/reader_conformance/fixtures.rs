@@ -53,6 +53,7 @@ impl Case {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Fixture {
     pub case: Case,
     pub document: Option<String>,
