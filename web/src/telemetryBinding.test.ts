@@ -289,4 +289,6 @@ Deno.test("the product Info entry uses core mobile/desktop confirmation and clea
   );
   assert(panel.includes("plan?.confirmation_available"));
   assert(panel.includes("Already emitted telemetry cannot be undone"));
+  assert(panel.includes("No binding head recorded on the Service"));
+  assert(!panel.includes("No managed Machine namespace observed"));
 });

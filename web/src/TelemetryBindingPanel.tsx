@@ -15,7 +15,7 @@ function Head({ value }: { value: BindingHead | null }): React.JSX.Element {
   return (
     <Typography variant="body2" sx={{ overflowWrap: "anywhere" }}>
       {value === null
-        ? "No managed Machine namespace observed"
+        ? "No binding head recorded on the Service"
         : `Revision ${value.revision} · policy epoch ${value.policy_epoch} · ${
           value.selection
             ? `${value.selection.plugin_id} ${value.selection.plugin_version}`
