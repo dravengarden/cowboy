@@ -1,7 +1,7 @@
 import {
   type ProviderUsage,
   providerUsageErrorMessage,
-  providerUsageRefreshLabel,
+  relativeUpdateTime,
   shortResetTime,
   topBarUsageLimits,
 } from "./usageLimits";
@@ -92,18 +92,27 @@ export type SessionProviderUsageRow = {
 /** Compact account windows for the session Provider facts list.
  *  Remaining-percent windows keep a sibling Resets row so the sheet stays a
  *  two-column list. DeepSeek exposes balance rather than a percent window. */
+export function sessionProviderUpdatedValue(
+  usage: ProviderUsage,
+  now = Date.now(),
+): string {
+  const when = relativeUpdateTime(usage.observed_at_ms, now);
+  return usage.refresh?.stale === true ? `Cached · ${when}` : when;
+}
+
 export function sessionProviderUsageRows(
   usage: ProviderUsage | undefined,
+  now = Date.now(),
 ): SessionProviderUsageRow[] {
   if (!usage) return [];
-  const freshness = providerUsageRefreshLabel(usage);
-  const freshnessRows: SessionProviderUsageRow[] = freshness
-    ? [{ id: "usage-refresh", label: "Usage", value: freshness }]
-    : [];
+  const updated: SessionProviderUsageRow = {
+    id: "usage-updated",
+    label: "Updated",
+    value: sessionProviderUpdatedValue(usage, now),
+  };
   const widget = usageWidgetForAccount(usage);
   if (widget && usageWidgetHasBalance(widget)) {
     return [
-      ...freshnessRows,
       {
         id: widget.kind,
         label: usageWidgetBalanceLabel(usage.provider),
@@ -114,10 +123,10 @@ export function sessionProviderUsageRows(
         label: usageWidgetSpendLabel(usage.provider),
         value: formatCompactCurrency(widget.spend24h, widget.currency),
       },
+      updated,
     ];
   }
   return [
-    ...freshnessRows,
     ...topBarUsageLimits(usage).flatMap((limit) => [
       {
         id: limit.id,
@@ -131,6 +140,7 @@ export function sessionProviderUsageRows(
         value: shortResetTime(limit.resetsAt),
       }]),
     ]),
+    updated,
   ];
 }
 

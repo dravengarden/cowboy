@@ -15,6 +15,34 @@ export function messageBubbleBorderRadius(
     : `${round} ${round} ${round} ${tail}`;
 }
 
+/** Assistant replies are reading surface: use the full column. User sends
+ * shrink to their text so "hi" stays a compact chip, then grow up to the
+ * same column so a long prompt is not a floating island. */
+export function messageBubbleLayoutSx(role: "user" | "assistant"): {
+  alignSelf: "stretch" | "flex-end";
+  width: string;
+  maxWidth: string;
+  minWidth: number;
+  boxSizing: "border-box";
+} {
+  if (role === "user") {
+    return {
+      alignSelf: "flex-end",
+      width: "fit-content",
+      maxWidth: "100%",
+      minWidth: 0,
+      boxSizing: "border-box",
+    };
+  }
+  return {
+    alignSelf: "stretch",
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    boxSizing: "border-box",
+  };
+}
+
 export function messageBubbleSurfaceSx(
   role: "user" | "assistant",
   theme: Theme,

@@ -154,13 +154,20 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
         },
       },
     },
-  });
+  }, 1);
   assertEquals(weekly[0]?.label, "Weekly");
   assertEquals(weekly[0]?.value, "63% remaining");
   assertEquals(weekly[0]?.remaining, 63);
   assertEquals(weekly[1]?.label, "Resets");
   assertEquals((weekly[1]?.value ?? "").length > 0, true);
+  assertEquals(weekly.at(-1), {
+    id: "usage-updated",
+    label: "Updated",
+    value: "Just now",
+  });
   assertEquals(composerSource.includes("row.remaining"), true);
+  assertEquals(composerSource.includes('aria-label="Refresh provider usage"'), true);
+  assertEquals(composerSource.includes('fontSize: "1em"'), true);
 
   const stale = sessionProviderUsageRows({
     provider: "openai",
@@ -180,11 +187,11 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
       next_auto_refresh_at_ms: 62_000,
       stale: true,
     },
-  });
-  assertEquals(stale[0], {
-    id: "usage-refresh",
-    label: "Usage",
-    value: "Cached · retrying automatically",
+  }, 1);
+  assertEquals(stale.at(-1), {
+    id: "usage-updated",
+    label: "Updated",
+    value: "Cached · Just now",
   });
 
   assertEquals(
@@ -219,10 +226,11 @@ Deno.test("signed-in session Providers show this account's usage windows", () =>
           },
         },
       },
-    }),
+    }, 1),
     [
       { id: "deepseek-balance", label: "Balance", value: "CNY 108.80" },
       { id: "deepseek-spend", label: "24h spend", value: "CNY 2.51" },
+      { id: "usage-updated", label: "Updated", value: "Just now" },
     ],
   );
 

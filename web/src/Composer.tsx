@@ -7945,6 +7945,21 @@ function SessionProviderUsage({
 }): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = globalThis.setInterval(() => setClock(Date.now()), 30_000);
+    return (): void => globalThis.clearInterval(timer);
+  }, []);
+  const load = useCallback(async (manual: boolean): Promise<void> => {
+    const response = await fetch(
+      manual ? `/api/usage/${encodeURIComponent(provider)}` : "/api/usage",
+      { method: manual ? "POST" : "GET" },
+    );
+    if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+    setSnapshot(await response.json() as UsageSnapshot);
+    setError(null);
+    setClock(Date.now());
+  }, [provider]);
   useEffect(() => {
     const ctrl = new AbortController();
     void fetch("/api/usage", { signal: ctrl.signal })
@@ -7967,9 +7982,26 @@ function SessionProviderUsage({
     providerVersion,
     providerDigest,
   );
-  const rows = sessionProviderUsageRows(usage);
+  const rows = sessionProviderUsageRows(usage, clock);
+  const refresh = (
+    <NetworkIconButton
+      aria-label="Refresh provider usage"
+      size="small"
+      reliableTouch
+      networkAction={() => load(true)}
+      sx={{
+        width: "2.75em",
+        height: "2.75em",
+        p: 0,
+        color: "text.secondary",
+        "& .MuiSvgIcon-root": { fontSize: "1em" },
+      }}
+    >
+      <Refresh />
+    </NetworkIconButton>
+  );
   if (error) {
-    return <SheetDetailRow label="Usage" value={error} />;
+    return <SheetDetailRow label="Usage" value={error} action={refresh} />;
   }
   if (!snapshot) {
     return <SheetDetailRow label="Usage" value="Loading…" />;
@@ -7979,6 +8011,7 @@ function SessionProviderUsage({
       <SheetDetailRow
         label="Usage"
         value={sessionProviderUsageEmptyMessage(usage)}
+        action={refresh}
       />
     );
   }
@@ -7986,7 +8019,11 @@ function SessionProviderUsage({
     <>
       {rows.map((row) => (
         <Box key={row.id}>
-          <SheetDetailRow label={row.label} value={row.value} />
+          <SheetDetailRow
+            label={row.label}
+            value={row.value}
+            action={row.id === "usage-updated" ? refresh : undefined}
+          />
           {row.remaining !== undefined && (
             <LinearProgress
               variant="determinate"
@@ -8011,10 +8048,12 @@ function SheetDetailRow({
   label,
   value,
   mono = false,
+  action,
 }: {
   label: string;
   value: string;
   mono?: boolean;
+  action?: ReactNode;
 }): React.JSX.Element {
   return (
     <Box
@@ -8022,7 +8061,7 @@ function SheetDetailRow({
         py: 0.75,
         display: "flex",
         gap: 2,
-        alignItems: "baseline",
+        alignItems: action ? "center" : "baseline",
       }}
     >
       <Typography
@@ -8044,6 +8083,7 @@ function SheetDetailRow({
       >
         {value}
       </Typography>
+      {action}
     </Box>
   );
 }

@@ -198,7 +198,10 @@ import {
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
 import { retainUnpresentedOptimistic } from "./sendImagePreviews";
-import { messageBubbleSurfaceSx } from "./messageBubble";
+import {
+  messageBubbleLayoutSx,
+  messageBubbleSurfaceSx,
+} from "./messageBubble";
 import {
   CONVERSATION_SKELETON_TURNS,
   shouldPaintTranscriptLifecycle,
@@ -1334,9 +1337,9 @@ function OptimisticUserBubble({
         sx={(theme) => ({
           position: "relative",
           p: { xs: 1, sm: 1.25 },
-          maxWidth: { xs: "88%", sm: "78%" },
           opacity: inFlight ? 0.62 : 1,
           transition: "opacity 0.2s ease",
+          ...messageBubbleLayoutSx("user"),
           ...messageBubbleSurfaceSx("user", theme, failed),
         })}
       >
@@ -1543,8 +1546,7 @@ function MessageBubble({
         elevation={0}
         sx={(theme) => ({
           p: { xs: 1.15, sm: 1.4 },
-          alignSelf: "flex-start",
-          maxWidth: { xs: "92%", sm: "86%" },
+          ...messageBubbleLayoutSx("assistant"),
           ...messageBubbleSurfaceSx("assistant", theme),
         })}
       >
@@ -1557,8 +1559,7 @@ function MessageBubble({
       elevation={0}
       sx={(theme) => ({
         p: { xs: 1, sm: 1.25 },
-        alignSelf: "flex-end",
-        maxWidth: { xs: "88%", sm: "78%" },
+        ...messageBubbleLayoutSx("user"),
         ...messageBubbleSurfaceSx("user", theme),
       })}
     >

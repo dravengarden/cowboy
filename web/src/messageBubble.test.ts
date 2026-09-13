@@ -1,5 +1,8 @@
 import { assert, assertEquals } from "jsr:@std/assert";
-import { messageBubbleBorderRadius } from "./messageBubble.ts";
+import {
+  messageBubbleBorderRadius,
+  messageBubbleLayoutSx,
+} from "./messageBubble.ts";
 
 Deno.test("only the speaker-side bottom corner is the small radius", () => {
   assertEquals(
@@ -10,6 +13,16 @@ Deno.test("only the speaker-side bottom corner is the small radius", () => {
     messageBubbleBorderRadius("assistant"),
     "18px 18px 18px 6px",
   );
+});
+
+Deno.test("long replies use the column; short sends stay compact", () => {
+  const user = messageBubbleLayoutSx("user");
+  const assistant = messageBubbleLayoutSx("assistant");
+  assertEquals(user.width, "fit-content");
+  assertEquals(user.maxWidth, "100%");
+  assertEquals(user.alignSelf, "flex-end");
+  assertEquals(assistant.width, "100%");
+  assertEquals(assistant.alignSelf, "stretch");
 });
 
 Deno.test("confirmed and optimistic bubbles share the chat radius", async () => {
@@ -23,6 +36,10 @@ Deno.test("confirmed and optimistic bubbles share the chat radius", async () => 
   const optimistic = transcript.slice(bubbleStart, messageStart);
   const confirmed = transcript.slice(messageStart, messageEnd);
   assert(optimistic.includes('messageBubbleSurfaceSx("user"'));
+  assert(optimistic.includes('messageBubbleLayoutSx("user"'));
   assert(confirmed.includes('messageBubbleSurfaceSx("user"'));
+  assert(confirmed.includes('messageBubbleLayoutSx("user"'));
   assert(confirmed.includes('messageBubbleSurfaceSx("assistant"'));
+  assert(confirmed.includes('messageBubbleLayoutSx("assistant"'));
+  assertEquals(confirmed.includes('maxWidth: { xs: "88%"'), false);
 });
