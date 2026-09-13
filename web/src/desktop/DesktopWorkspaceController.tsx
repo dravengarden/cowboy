@@ -6,7 +6,10 @@ import {
   useMemo,
   useState,
 } from "react";
-import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
+import {
+  paneChromeOwnsFocus,
+  verticalWorkspaceRegion,
+} from "./verticalWorkspaceRegion";
 import {
   desktopPointerLeftComposer,
   desktopPointerLeftRegion,
@@ -52,6 +55,24 @@ function paneFromTarget(target: EventTarget | null): DesktopPane | null {
 function regionFromTarget(target: EventTarget | null): string | null {
   if (!(target instanceof Element)) return null;
   return target.closest<HTMLElement>("[data-desktop-region]")?.dataset.desktopRegion ?? null;
+}
+
+function syncDesktopPaneChrome(
+  focusedPane: DesktopPane,
+  focusedRegion: string | null,
+): void {
+  for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
+    const pane = element.dataset.desktopPane;
+    if (
+      pane === "sessions" || pane === "prompt" || pane === "conversation"
+    ) {
+      if (paneChromeOwnsFocus(focusedPane, focusedRegion, pane)) {
+        element.dataset.desktopPaneFocused = "true";
+      } else {
+        delete element.dataset.desktopPaneFocused;
+      }
+    }
+  }
 }
 
 function focusElement(element: HTMLElement | null): void {
@@ -166,16 +187,7 @@ export function DesktopWorkspaceProvider({
         );
       }
       const pane = paneFromTarget(event.target);
-      if (pane) {
-        setFocusedPane(pane);
-        for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
-          if (element.dataset.desktopPane === pane) {
-            element.dataset.desktopPaneFocused = "true";
-          } else {
-            delete element.dataset.desktopPaneFocused;
-          }
-        }
-      }
+      if (pane) setFocusedPane(pane);
       const region = desktopRegionFromPointerTarget(event.target) ??
         regionFromTarget(event.target);
       if (
@@ -210,6 +222,12 @@ export function DesktopWorkspaceProvider({
           }
         }
       }
+      if (pane || region === "topbar.controls") {
+        syncDesktopPaneChrome(
+          pane ?? "prompt",
+          region === "topbar.controls" ? "topbar.controls" : region,
+        );
+      }
     };
     document.addEventListener("pointerdown", syncPane, true);
     document.addEventListener("focusin", syncPane, true);
@@ -232,13 +250,7 @@ export function DesktopWorkspaceProvider({
 
   useEffect(() => {
     const syncMountedWorkspace = (): boolean => {
-      for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-pane]")) {
-        if (element.dataset.desktopPane === focusedPane) {
-          element.dataset.desktopPaneFocused = "true";
-        } else {
-          delete element.dataset.desktopPaneFocused;
-        }
-      }
+      syncDesktopPaneChrome(focusedPane, focusedRegion);
       let focusedElement: HTMLElement | null = null;
       for (const element of document.querySelectorAll<HTMLElement>("[data-desktop-region]")) {
         if (element.dataset.desktopRegion === focusedRegion) {

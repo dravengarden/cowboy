@@ -16,6 +16,14 @@ DOM integration uses `data-desktop-pane`, `data-desktop-region`, and
 `data-desktop-focus-default`. Mouse focus and keyboard navigation update the
 same controller state.
 
+The Top Bar is a workspace region, not a fourth pane. Focusing it (workspace
+prefix `T`, or Ctrl-K from a pane) is mutually exclusive with Sessions and
+Prompt: pane-header chrome clears, the bar itself takes the shared focus fill
+plus a primary underline, and only the focused control receives the keyboard
+cursor. Do not set `color: primary` on the Toolbar; `color="inherit"` children
+would then all look selected. Ctrl-J returns to the pane that still owns
+`focusedPane`.
+
 ## Core interaction laws
 
 These rules are the canonical Desktop-mode primitive contract. New controls,

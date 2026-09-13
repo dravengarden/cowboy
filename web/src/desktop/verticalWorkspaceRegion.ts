@@ -23,3 +23,14 @@ export function verticalWorkspaceRegion(
   }
   return delta === -1 ? "topbar.controls" : null;
 }
+
+/** The Top Bar is a workspace region, not a pane. While it owns keyboard
+ * input, Sessions/Prompt/Conversation headers must not keep pane chrome. */
+export function paneChromeOwnsFocus(
+  focusedPane: DesktopPane,
+  focusedRegion: string | null,
+  pane: DesktopPane,
+): boolean {
+  if (focusedRegion === "topbar.controls") return false;
+  return focusedPane === pane;
+}

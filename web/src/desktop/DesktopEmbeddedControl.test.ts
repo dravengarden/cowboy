@@ -72,12 +72,26 @@ Deno.test("idle Desktop controls use a neutral boundary", () => {
   );
 });
 
-Deno.test("focused Topbar paints only the real keyboard cursor", () => {
+Deno.test("Top Bar run configuration is the region's default keyboard target", async () => {
+  const topbar = await Deno.readTextFile(
+    new URL("./DesktopTopBarControls.tsx", import.meta.url),
+  );
+  assertEquals(topbar.includes('data-desktop-item="topbar-config"'), true);
+  assertEquals(topbar.includes("data-desktop-focus-default"), true);
+});
+
+Deno.test("focused Topbar paints the region without selecting every inherit control", () => {
   assertEquals(
     appSource.includes(
       '"& [data-desktop-region=\'topbar.controls\'][data-desktop-focused=\'true\']":',
     ),
-    false,
+    true,
+  );
+  assertEquals(
+    appSource.includes(
+      "`inset 0 -2px 0 0 ${t.palette.primary.main}`",
+    ),
+    true,
   );
   assertEquals(
     appSource.includes(

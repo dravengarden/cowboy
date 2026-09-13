@@ -1,5 +1,8 @@
 import { strict as assert } from "node:assert";
-import { verticalWorkspaceRegion } from "./verticalWorkspaceRegion";
+import {
+  paneChromeOwnsFocus,
+  verticalWorkspaceRegion,
+} from "./verticalWorkspaceRegion";
 
 Deno.test("Ctrl-K moves Prompt focus to the top bar, skipping auxiliary panels", () => {
   for (const region of [
@@ -30,4 +33,23 @@ Deno.test("Ctrl-J returns from the top bar to the pane's primary region", () => 
 Deno.test("vertical movement does not wrap past the workspace edges", () => {
   assert.equal(verticalWorkspaceRegion("prompt", "topbar.controls", -1), null);
   assert.equal(verticalWorkspaceRegion("prompt", "prompt.composer", 1), null);
+});
+
+Deno.test("Top Bar focus releases Sessions and Prompt pane chrome", () => {
+  assert.equal(
+    paneChromeOwnsFocus("prompt", "topbar.controls", "prompt"),
+    false,
+  );
+  assert.equal(
+    paneChromeOwnsFocus("sessions", "topbar.controls", "sessions"),
+    false,
+  );
+  assert.equal(
+    paneChromeOwnsFocus("prompt", "prompt.composer", "prompt"),
+    true,
+  );
+  assert.equal(
+    paneChromeOwnsFocus("prompt", "prompt.composer", "sessions"),
+    false,
+  );
 });

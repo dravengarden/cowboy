@@ -2597,13 +2597,19 @@ export function App({
                         outline: "none",
                         boxShadow: "none",
                     },
-                    // The Topbar status line already identifies the active
-                    // keyboard region. Paint only its real cursor: styling the
-                    // Toolbar would make every color="inherit" control look
-                    // selected at once. Programmatic focus() does not reliably
-                    // produce :focus-visible in macOS WKWebView, so combine
-                    // region ownership with real DOM :focus just as Sessions
-                    // does below.
+                    // Top Bar is a workspace region, exclusive with Sessions
+                    // and Prompt. Paint the strip itself with the shared focus
+                    // fill and a primary underline. Do not set `color` on the
+                    // Toolbar: every color="inherit" control would then look
+                    // selected. The keyboard cursor still belongs to the
+                    // focused control; programmatic focus() is not reliably
+                    // :focus-visible on macOS, so combine region ownership
+                    // with real DOM :focus just as Sessions does below.
+                    "& [data-desktop-region='topbar.controls'][data-desktop-focused='true']": {
+                        bgcolor: desktopFocusFill,
+                        boxShadow: (t) =>
+                            `inset 0 -2px 0 0 ${t.palette.primary.main}`,
+                    },
                     "& [data-desktop-region='topbar.controls'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
                         borderColor: "primary.main",

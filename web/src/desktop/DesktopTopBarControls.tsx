@@ -1518,6 +1518,7 @@ export function DesktopTopBarControls({
           <Tooltip title={configSummary || "Run configuration"}>
             <Button
               data-desktop-item="topbar-config"
+              data-desktop-focus-default
               data-desktop-topbar-action="config"
               data-desktop-run-config
               size="small"
