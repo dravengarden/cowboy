@@ -218,6 +218,14 @@ impl ReceiptView {
             .as_ref()
             .context("missing recovery audit")?;
         ensure!(receipt.matches(request), "recovery audit mismatch");
+        Self::from_audit(receipt)
+    }
+
+    fn from_audit(
+        receipt: &crate::machine_protocol::telemetry_recovery::RecoveryReceipt,
+    ) -> Result<Self> {
+        receipt.validate()?;
+        let request = &receipt.request;
         Ok(Self {
             schema: 1,
             resolution_id: request.resolution_id.clone(),
@@ -248,6 +256,10 @@ where
         .route(
             "/api/telemetry/binding/operations/{operation}/machine-recoveries/{resolution}",
             get(receipt),
+        )
+        .route(
+            "/api/telemetry/binding/operations/{operation}/machine-recovery-audit",
+            get(audit::inspect),
         )
         .layer(DefaultBodyLimit::max(1024))
         .layer(axum::middleware::map_response(
@@ -394,15 +406,27 @@ async fn receipt(
     let approval = state
         .approve(verified.as_ref().map(|Extension(v)| v), &headers)
         .await?;
-    let request = state
-        .recovery_plans
-        .submitted(
-            &approval.actor().into(),
-            &state.service,
-            &operation,
-            &resolution,
-        )
-        .map_err(|_| ApiError::NotFound)?;
+    let request = state.recovery_plans.submitted(
+        &approval.actor().into(),
+        &state.service,
+        &operation,
+        &resolution,
+    );
+    let request = match request {
+        Ok(request) => request,
+        Err(_) => {
+            // Restart/expiry discards an execution preview, not the Machine's
+            // durable audit. A current Operator may read history, never use it
+            // to recreate that preview's Actor, lease or original deadline.
+            return tokio::time::timeout(
+                budget.remaining(),
+                audit::find_receipt(&state, &operation, &resolution, &approval, &budget),
+            )
+            .await
+            .map_err(|_| ApiError::EvidenceUnavailable)?
+            .map(Json);
+        }
+    };
     if budget.expired() {
         return Err(ApiError::EvidenceUnavailable);
     }
@@ -425,3 +449,5 @@ async fn receipt(
 
 #[cfg(test)]
 mod tests;
+
+mod audit;

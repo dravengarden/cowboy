@@ -1,6 +1,7 @@
 //! Capture this new purpose's connection and deadline BEFORE detached work.
 use crate::machine_plugins::{MachinePluginStore, PluginExecutionScope};
 use crate::machine_protocol::telemetry_recovery::{RecoveryRequest, RecoveryResult};
+use crate::machine_protocol::telemetry_recovery_audit::RecoveryAuditQuery;
 use crate::machine_protocol::{MachineEvent, telemetry_binding::BindingCommitFailure};
 use std::sync::Arc;
 
@@ -45,6 +46,26 @@ pub(crate) fn query(
             .telemetry_recovery_observation(&request, service.as_deref(), &machine)
             .await;
         let _ = events.send(MachineEvent::TelemetryRecoveryObservation {
+            request_id,
+            observation: Box::new(observation),
+        });
+    });
+}
+
+pub(super) fn query_audit(
+    request_id: String,
+    query: RecoveryAuditQuery,
+    plugins: Arc<MachinePluginStore>,
+    service: Option<String>,
+    machine: String,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    // No execution scope or lease is captured for a historical read.
+    tokio::spawn(async move {
+        let observation = plugins
+            .telemetry_recovery_audit(&query, service.as_deref(), &machine)
+            .await;
+        let _ = events.send(MachineEvent::TelemetryRecoveryAuditObservation {
             request_id,
             observation: Box::new(observation),
         });

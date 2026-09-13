@@ -4,6 +4,7 @@ import { ConfirmSheet } from "./Sheet";
 import { type BindingOperation, PreviewDeadline } from "./telemetryBinding";
 import {
   confirmRecoveryOnce,
+  type RecoveryAudit,
   type RecoveryPlan,
   telemetryRecoveryApi,
 } from "./telemetryRecovery";
@@ -14,6 +15,7 @@ export function TelemetryRecoveryPanel(
   { operation }: { operation: BindingOperation },
 ): React.JSX.Element {
   const [plan, setPlan] = useState<RecoveryPlan | null>(null);
+  const [audit, setAudit] = useState<RecoveryAudit | null>(null);
   const [busy, setBusy] = useState(false);
   const [expired, setExpired] = useState(false);
   const [message, setMessage] = useState<
@@ -30,6 +32,7 @@ export function TelemetryRecoveryPanel(
       pending.current?.abort();
       deadline.current = null;
       setPlan(null);
+      setAudit(null);
       setBusy(false);
       setMessage(null);
     };
@@ -73,6 +76,7 @@ export function TelemetryRecoveryPanel(
     if (busy || operation.phase !== "needs_attention") return;
     setMessage(null);
     setPlan(null);
+    setAudit(null);
     const work = begin(15_000);
     try {
       const next = await telemetryRecoveryApi.plan(
@@ -113,6 +117,28 @@ export function TelemetryRecoveryPanel(
     }
   }
 
+  async function inspectAudit() {
+    if (busy) return;
+    setPlan(null);
+    setAudit(null);
+    setMessage(null);
+    const work = begin(15_000);
+    try {
+      const next = await telemetryRecoveryApi.audit(operation, work.signal);
+      if (work.current()) setAudit(next);
+    } catch {
+      if (work.current()) {
+        setMessage({
+          kind: "warning",
+          text:
+            "Recovery audit is unverified. Refresh if the Service operation changed. Current Operator access and an online protocol-18 Machine are required; no action was sent or retried.",
+        });
+      }
+    } finally {
+      work.finish();
+    }
+  }
+
   async function confirm() {
     if (
       !plan || !plan.confirmation_available || busy ||
@@ -125,6 +151,7 @@ export function TelemetryRecoveryPanel(
     const value = plan;
     submitted.current = value.plan_id; // Claim synchronously, not after React renders busy.
     setPlan(null); // Never preserve a submitted confirmation for retry.
+    setAudit(null);
     setMessage({
       kind: "info",
       text: "Checking the exact Machine recovery audit…",
@@ -147,7 +174,7 @@ export function TelemetryRecoveryPanel(
           : {
             kind: "warning",
             text:
-              "The outcome is unverified; the request was not resent. Refresh the Service evidence. Recovery query handles are bounded and are lost on Controller restart; absence is not proof of failure.",
+              "The outcome is unverified; the request was not resent. Inspect recorded Machine recovery or refresh Service evidence. A missing audit is not proof of failure.",
           },
       );
     }
@@ -157,9 +184,24 @@ export function TelemetryRecoveryPanel(
   return (
     <Stack spacing={1} data-telemetry-binding="machine-recovery">
       {message && <Alert severity={message.kind}>{message.text}</Alert>}
-      <Button disabled={busy} onClick={() => void inspect()}>
-        Review Machine interruption…
+      <Button disabled={busy} onClick={() => void inspectAudit()}>
+        Inspect recorded Machine recovery
       </Button>
+      {audit && (
+        <Alert severity="info">
+          {audit.recovery
+            ? `Historical Machine recovery recorded: ${audit.recovery.receipt.resolution_id}. This is audit evidence, not current binding authority. Service resolution remains a separate action; nothing was replayed or exported.`
+            : "No Machine recovery audit was recorded for this exact operation at the time of this read. This does not prove a previous request failed or authorize a retry."}
+        </Alert>
+      )}
+      {operation.phase === "needs_attention" && (
+        <Button
+          disabled={busy}
+          onClick={() => void inspect()}
+        >
+          Review Machine interruption…
+        </Button>
+      )}
       <ConfirmSheet
         open={plan !== null}
         onClose={() => setPlan(null)}

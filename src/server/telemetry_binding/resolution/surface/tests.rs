@@ -125,6 +125,27 @@ impl Fixture {
             fixture_recovery_admission: recovery,
             fixture_binding_admission: binding_write,
         };
+        Self::serve(root, state).await
+    }
+
+    #[cfg(feature = "machine-host")]
+    pub(in crate::server::telemetry_binding) async fn restart(self) -> Self {
+        let Self {
+            _root,
+            mut state,
+            task,
+            ..
+        } = self;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        state.plans = Arc::default();
+        state.recovery_plans = Arc::default();
+        state.binding_plans = Arc::default();
+        state.control = Arc::default();
+        Self::serve(_root, state).await
+    }
+
+    async fn serve(root: tempfile::TempDir, state: ApiState) -> Self {
         let router = routes()
             .merge(crate::server::telemetry_binding::recovery::surface::routes())
             .merge(crate::server::telemetry_binding::surface::routes())

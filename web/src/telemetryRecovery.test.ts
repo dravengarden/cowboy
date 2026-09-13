@@ -8,6 +8,7 @@ import { PreviewDeadline } from "./telemetryBinding.ts";
 import {
   confirmRecoveryOnce,
   matchesRecovery,
+  parseRecoveryAudit,
   parseRecoveryPlan,
   parseRecoveryReceipt,
   telemetryRecoveryApi,
@@ -30,6 +31,7 @@ const response = (value: unknown) =>
 Deno.test("Machine recovery projections agree with Rust and carry no serialized authority", () => {
   assertEquals(parseRecoveryPlan(fixture.plan), fixture.plan);
   assertEquals(parseRecoveryReceipt(fixture.receipt), fixture.receipt);
+  assertEquals(parseRecoveryAudit(fixture.audit), fixture.audit);
   assert(
     matchesRecovery(
       parseRecoveryPlan(fixture.plan),
@@ -40,6 +42,109 @@ Deno.test("Machine recovery projections agree with Rust and carry no serialized 
     const field of ["actor", "endpoint", "observation_digest", "token", "step"]
   ) {
     assert(!JSON.stringify(fixture).includes(field));
+  }
+});
+
+Deno.test("durable recovery audit binds the original before separately from a terminal Service operation", () => {
+  const resolved = {
+    ...fixture.audit,
+    operation: {
+      ...fixture.audit.operation,
+      phase: "rejected",
+      attention: null,
+      operation_digest: `sha256:${"cd".repeat(32)}`,
+    },
+  };
+  assertEquals(parseRecoveryAudit(resolved), resolved);
+  assertEquals(
+    parseRecoveryAudit({ ...resolved, recovery: null }).recovery,
+    null,
+  );
+  for (
+    const change of [
+      { schema: 2 },
+      { actor: "injected" },
+      { recovery: undefined },
+      { recovery: { ...resolved.recovery, grant: "injected" } },
+      { recovery: { ...resolved.recovery, before: resolved.operation } },
+      { operation: { ...resolved.operation, phase: "completed" } },
+      { operation: { ...resolved.operation, machine_id: "another-machine" } },
+      {
+        operation: {
+          ...fixture.audit.operation,
+          operation_digest: `sha256:${"ef".repeat(32)}`,
+        },
+      },
+      {
+        recovery: {
+          ...resolved.recovery,
+          receipt: {
+            ...fixture.receipt,
+            operation_digest: resolved.operation.operation_digest,
+          },
+        },
+      },
+      {
+        recovery: {
+          ...resolved.recovery,
+          receipt: { ...fixture.receipt, operation_id: "different-operation" },
+        },
+      },
+    ]
+  ) assertThrows(() => parseRecoveryAudit({ ...resolved, ...change }));
+});
+
+Deno.test("durable audit discovery sends one GET with no stored plan and rejects changed operation or unsupported Machine", async () => {
+  const previous = globalThis.fetch;
+  for (
+    const mode of ["recorded", "absent", "changed", "unavailable", "oversized"]
+  ) {
+    let calls = 0;
+    globalThis.fetch = ((url, init) => {
+      calls++;
+      assert(
+        String(url).endsWith(
+          `/${fixture.audit.operation.operation_id}/machine-recovery-audit`,
+        ),
+      );
+      assertEquals(init?.method, "GET");
+      assertEquals(init?.body, undefined);
+      if (mode === "unavailable") {
+        return Promise.resolve(new Response("{}", { status: 503 }));
+      }
+      return Promise.resolve(
+        response(
+          mode === "oversized" ? "x".repeat(65_537) : {
+            ...fixture.audit,
+            recovery: mode === "absent" || mode === "changed"
+              ? null
+              : fixture.audit.recovery,
+            operation: mode === "changed"
+              ? {
+                ...fixture.audit.operation,
+                operation_digest: `sha256:${"ab".repeat(32)}`,
+              }
+              : fixture.audit.operation,
+          },
+        ),
+      );
+    }) as typeof fetch;
+    try {
+      if (mode === "recorded" || mode === "absent") {
+        assertEquals(
+          (await telemetryRecoveryApi.audit(fixture.audit.operation, signal()))
+            .recovery,
+          mode === "absent" ? null : fixture.audit.recovery,
+        );
+      } else {
+        await assertRejects(() =>
+          telemetryRecoveryApi.audit(fixture.audit.operation, signal())
+        );
+      }
+      assertEquals(calls, 1);
+    } finally {
+      globalThis.fetch = previous;
+    }
   }
 });
 
@@ -231,7 +336,10 @@ Deno.test("Machine recovery uses a separate core ConfirmSheet under an exact ope
     new URL("./TelemetryBindingPanel.tsx", import.meta.url),
   );
   assert(parent.includes("operation.operation_digest}"));
-  assert(parent.includes('operation?.phase === "needs_attention"'));
+  assert(parent.includes("{operation && !busy && ("));
+  assert(panel.includes('operation.phase === "needs_attention"'));
+  assert(panel.includes("Inspect recorded Machine recovery"));
+  assert(panel.includes("telemetryRecoveryApi.audit(operation, work.signal)"));
   assert(panel.includes("<ConfirmSheet"));
   assert(!panel.includes("<Dialog"));
   assert(panel.includes("cowboy:product-sign-out"));

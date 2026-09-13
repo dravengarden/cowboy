@@ -37,6 +37,9 @@ struct Check {
     role: Role,
     case: Case,
     cold_read: u8,
+    /// Successful Machine reads negotiate and exercise the newest supported
+    /// query floor (17 or 18); Controller/corruption checks have no handshake.
+    machine_protocol: Option<u16>,
     service_fixture_sha256: Option<String>,
     machine_fixture_sha256: Option<String>,
     accepted: bool,
@@ -91,7 +94,7 @@ async fn immutable_telemetry_readers() -> Result<()> {
     // receive no write/installation admission or mutation commands.
     let fixtures = Fixture::all().await?;
     let mut receipt = Receipt {
-        schema: 1,
+        schema: 2,
         purpose: "supplied_immutable_telemetry_reader_matrix",
         source_revision: revision,
         artifacts,
@@ -127,6 +130,7 @@ async fn immutable_telemetry_readers() -> Result<()> {
                     role: artifact.role,
                     case: fixture.case,
                     cold_read,
+                    machine_protocol: result.as_ref().ok().copied().flatten(),
                     service_fixture_sha256: fixture.document.as_ref().map(|s| sha256(s.as_bytes())),
                     machine_fixture_sha256: fixture.machine.as_deref().map(sha256),
                     accepted: result.is_ok(),

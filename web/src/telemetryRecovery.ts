@@ -28,6 +28,41 @@ export interface RecoveryReceipt {
   resolved_at_ms: number;
 }
 
+export interface RecoveryAudit {
+  schema: 1;
+  operation: BindingOperation;
+  recovery: {
+    before: BindingOperation & { phase: "needs_attention" };
+    receipt: RecoveryReceipt;
+  } | null;
+}
+
+export function parseRecoveryAudit(value: unknown): RecoveryAudit {
+  const r = c.record(value, ["schema", "operation", "recovery"]);
+  const operation = c.operation(r.operation);
+  let recovery: RecoveryAudit["recovery"] = null;
+  if (r.recovery !== null) {
+    const saved = c.record(r.recovery, ["before", "receipt"]);
+    const before = c.operation(saved.before);
+    const receipt = parseRecoveryReceipt(saved.receipt);
+    if (
+      before.phase !== "needs_attention" ||
+      !["needs_attention", "rejected"].includes(operation.phase) ||
+      before.operation_id !== operation.operation_id ||
+      before.machine_id !== operation.machine_id ||
+      JSON.stringify(before.expected) !== JSON.stringify(operation.expected) ||
+      JSON.stringify(before.change) !== JSON.stringify(operation.change) ||
+      (operation.phase === "needs_attention" &&
+        before.operation_digest !== operation.operation_digest) ||
+      receipt.operation_id !== before.operation_id ||
+      receipt.machine_id !== before.machine_id ||
+      receipt.operation_digest !== before.operation_digest
+    ) return c.invalid();
+    recovery = { before: { ...before, phase: "needs_attention" }, receipt };
+  }
+  return { schema: c.schema(r.schema), operation, recovery };
+}
+
 export function parseRecoveryPlan(value: unknown): RecoveryPlan {
   const r = c.record(value, [
     "schema",
@@ -100,6 +135,20 @@ export function matchesRecovery(
 }
 
 export const telemetryRecoveryApi = {
+  audit: async (
+    operation: BindingOperation,
+    signal: AbortSignal,
+  ): Promise<RecoveryAudit> => {
+    const audit = await bindingRequest(
+      bindingPath(operation.operation_id, "machine-recovery-audit"),
+      parseRecoveryAudit,
+      signal,
+    );
+    return JSON.stringify(audit.operation) ===
+        JSON.stringify(c.operation(operation))
+      ? audit
+      : c.invalid();
+  },
   plan: async (
     operationId: string,
     signal: AbortSignal,
@@ -144,7 +193,8 @@ export const telemetryRecoveryApi = {
 };
 
 // An ended view may refuse the independent read. Never repeats a POST, chains
-// Service resolution, or treats a missing/expired query handle as success.
+// Service resolution, or treats missing/unavailable audit as success. Core's
+// receipt GET can discover the exact durable record after Controller restart.
 export async function confirmRecoveryOnce(
   plan: RecoveryPlan,
   signal: AbortSignal,

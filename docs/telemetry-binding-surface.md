@@ -119,7 +119,9 @@ native ABI, worker generation or private destination policy changes. Release
 Controller and Web independently through the component activator, preserving
 Machine/workers and checking actual populated active/rollback/cold readers.
 
-Remaining P2: durable HTTP **Machine recovery audit discovery** (distinct from
-these durable ordinary operation receipts), per-target production writer and
+[Durable Machine recovery audit discovery](telemetry-recovery-audit-discovery.md)
+is a separate protocol-18 read, distinct from these ordinary operation receipts.
+
+Remaining P2: per-target production writer and
 background-export policy admission, and cross-end production failure/restart
 acceptance. Unknown and schema-one Machine recovery evidence remain quarantined.

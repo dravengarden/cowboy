@@ -7,6 +7,9 @@ use super::{
 use crate::machine_protocol::telemetry_recovery::{
     RecoveryObservation, RecoveryRequest, RecoveryResult,
 };
+use crate::machine_protocol::telemetry_recovery_audit::{
+    RecoveryAuditObservation, RecoveryAuditQuery,
+};
 
 fn fail(certainty: CommandFailure, detail: &str) -> CommandRequestError {
     CommandRequestError {
@@ -16,6 +19,64 @@ fn fail(certainty: CommandFailure, detail: &str) -> CommandRequestError {
 }
 
 impl MachineControl {
+    pub(crate) fn telemetry_recovery_audit_target_current(
+        &self,
+        token: &ConnectionToken,
+        query: &RecoveryAuditQuery,
+    ) -> bool {
+        query.digest().is_ok()
+            && query.step.machine_id == token.0.machine_id
+            && self.connection_supports(
+                token,
+                crate::machine_protocol::TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
+            )
+    }
+
+    pub(crate) async fn telemetry_recovery_audit(
+        &self,
+        token: &ConnectionToken,
+        query: &RecoveryAuditQuery,
+    ) -> Result<RecoveryAuditObservation, CommandRequestError> {
+        if !self.telemetry_recovery_audit_target_current(token, query) {
+            return Err(fail(
+                CommandFailure::NotSent,
+                "recovery audit target unavailable",
+            ));
+        }
+        let request_id = self.request_id("binding-recovery-audit").map_err(|_| {
+            fail(
+                CommandFailure::NotSent,
+                "recovery audit identity unavailable",
+            )
+        })?;
+        let (rx, _pending) = self
+            .begin_request(
+                &token.0.machine_id,
+                &request_id,
+                MachineCommand::QueryTelemetryRecoveryAudit {
+                    request_id: request_id.clone(),
+                    query: Box::new(query.clone()),
+                },
+                ReplyKind::TelemetryRecoveryAudit,
+                Some(RequestBinding::Connection(token)),
+            )
+            .map_err(|_| {
+                fail(
+                    CommandFailure::NotSent,
+                    "recovery audit channel unavailable",
+                )
+            })?;
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(Reply::TelemetryRecoveryAudit(observation))) if observation.matches(query) => {
+                Ok(*observation)
+            }
+            _ => Err(fail(
+                CommandFailure::Unknown,
+                "recovery audit evidence unavailable",
+            )),
+        }
+    }
+
     pub(crate) fn telemetry_recovery_target_current(
         &self,
         token: &ConnectionToken,

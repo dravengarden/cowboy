@@ -1750,6 +1750,11 @@ fn handle_machine_command(
                 request_id, *recovery, providers, service_id, machine_id, events,
             );
         }
+        MachineCommand::QueryTelemetryRecoveryAudit { request_id, query } => {
+            telemetry_recovery::query_audit(
+                request_id, *query, providers, service_id, machine_id, events,
+            );
+        }
         MachineCommand::ExportBoundTelemetry {
             request_id,
             attempt,

@@ -14,8 +14,9 @@ pub mod plugin_step;
 pub mod telemetry_binding;
 pub mod telemetry_export;
 pub mod telemetry_recovery;
+pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 17;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 18;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -34,6 +35,8 @@ pub const TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION: u16 = 15;
 pub const TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION: u16 = 16;
 /// Independently authorized closure of a reopened Prepared binding, not replay.
 pub const TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION: u16 = 17;
+/// Read-only audit discovery by the complete original binding step.
+pub const TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION: u16 = 18;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -731,6 +734,10 @@ pub enum MachineCommand {
         request_id: String,
         recovery: Box<telemetry_recovery::RecoveryRequest>,
     },
+    QueryTelemetryRecoveryAudit {
+        request_id: String,
+        query: Box<telemetry_recovery_audit::RecoveryAuditQuery>,
+    },
     ExportBoundTelemetry {
         request_id: String,
         attempt: Box<telemetry_export::ExportAttempt>,
@@ -786,6 +793,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::QueryTelemetryRecoveryAudit { .. } => TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
             Self::ExportBoundTelemetry { .. } => TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION,
             Self::RecoverTelemetryBinding { .. } | Self::QueryTelemetryRecovery { .. } => {
                 TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION
@@ -1049,6 +1057,10 @@ pub enum MachineEvent {
     TelemetryRecoveryObservation {
         request_id: String,
         observation: Box<telemetry_recovery::RecoveryObservation>,
+    },
+    TelemetryRecoveryAuditObservation {
+        request_id: String,
+        observation: Box<telemetry_recovery_audit::RecoveryAuditObservation>,
     },
     TelemetryExported {
         request_id: String,

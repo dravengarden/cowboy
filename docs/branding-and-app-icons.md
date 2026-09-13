@@ -144,6 +144,7 @@ shape remain unchanged. Raster exports check the intended optical offset.
 
 Website header/footer wordmarks inline `site/assets/cowboy-wordmark-v1.svg`.
 They use the original hat proportions, transparent negative space, a 40×28px
-header slot (36×26px footer), and the website's secondary/primary colors for
-crown/brim. Both manual and System theme changes recolor them through CSS.
+header slot (36×26px footer), and fixed original cyan `#51C9FF` / violet `#BB83FF`
+for crown/brim. Brand artwork keeps these colors in both light and dark themes;
+only interface controls use contrast-adjusted primary/secondary colors.
 They do not reuse installation tiles or the browser favicon's optical frame.

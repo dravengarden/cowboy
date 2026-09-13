@@ -258,7 +258,7 @@ export function TelemetryBindingPanel(): React.JSX.Element {
           Review resolution…
         </Button>
       )}
-      {operation?.phase === "needs_attention" && !busy && (
+      {operation && !busy && (
         <TelemetryRecoveryPanel
           key={`${operation.operation_id}:${operation.operation_digest}`}
           operation={operation}
