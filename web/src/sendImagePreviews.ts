@@ -58,6 +58,44 @@ function userMessageChunkType(env: Envelope): string | undefined {
   return typeof content?.type === "string" ? content.type : undefined;
 }
 
+function userMessageChunkContent(
+  env: Envelope,
+): {
+  type?: string;
+  data?: unknown;
+  url?: unknown;
+  source?: { data?: unknown; url?: unknown };
+} | undefined {
+  if (env.kind !== "update") return undefined;
+  if (env.update.sessionUpdate !== "user_message_chunk") return undefined;
+  return env.update.content as {
+    type?: string;
+    data?: unknown;
+    url?: unknown;
+    source?: { data?: unknown; url?: unknown };
+  } | undefined;
+}
+
+function hasRenderableMediaSource(
+  source: { data?: unknown; url?: unknown } | undefined,
+): boolean {
+  return typeof source?.url === "string" && source.url.length > 0 ||
+    typeof source?.data === "string" && source.data.length > 0;
+}
+
+/** A tagged echo is not the same as a painted bubble. Empty image blocks and
+ * unknown content types exist on the wire before `derive` can mount a row. */
+export function isRenderableUserMessageChunk(env: Envelope): boolean {
+  const content = userMessageChunkContent(env);
+  const type = content?.type;
+  if (type === "text" || type === "resource" || type === "resource_link") {
+    return true;
+  }
+  if (type !== "image") return false;
+  return hasRenderableMediaSource(content) ||
+    hasRenderableMediaSource(content?.source);
+}
+
 /** The first echo carries `cmid`; later blocks of the same prompt are untagged.
  * Dropping the optimistic bubble on that first envelope leaves a text-only or
  * artifact-URL row until the rest arrives, which is the flash the user sees. */
@@ -75,12 +113,40 @@ export function promptEchoReadyToReplaceOptimistic(
   const needed = (message.attachments ?? []).filter((attachment) =>
     attachment.isImage
   ).length;
-  if (needed === 0) return true;
   let images = 0;
+  let renderable = false;
   for (let index = start; index < timeline.length; index += 1) {
-    const type = userMessageChunkType(timeline[index]!);
+    const env = timeline[index]!;
+    const type = userMessageChunkType(env);
     if (type === undefined) break;
-    if (type === "image") images += 1;
+    if (isRenderableUserMessageChunk(env)) renderable = true;
+    if (type === "image" && isRenderableUserMessageChunk(env)) images += 1;
   }
-  return images >= needed;
+  return renderable && images >= needed;
+}
+
+/** Keep a local send visible until the *presented* timeline can replace it.
+ * Canonical echo can drop the store overlay while Transcript is still frozen
+ * for a swipe/scroll, which is the disappear-then-reappear hole. */
+export function retainUnpresentedOptimistic<
+  T extends {
+    cmid?: string;
+    attachments?: readonly { isImage?: boolean }[];
+  },
+>(
+  previous: readonly T[],
+  fromStore: readonly T[],
+  presentedTimeline: readonly Envelope[],
+): readonly T[] {
+  const fromStoreIds = new Set(
+    fromStore.flatMap((message) =>
+      message.cmid === undefined ? [] : [message.cmid]
+    ),
+  );
+  const lingering = previous.filter((message) =>
+    message.cmid !== undefined &&
+    !fromStoreIds.has(message.cmid) &&
+    !promptEchoReadyToReplaceOptimistic(message, presentedTimeline)
+  );
+  return lingering.length === 0 ? fromStore : [...fromStore, ...lingering];
 }

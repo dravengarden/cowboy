@@ -4,6 +4,7 @@ import {
   confirmedImageSrc,
   promptEchoReadyToReplaceOptimistic,
   rememberSendImagePreviews,
+  retainUnpresentedOptimistic,
 } from "./sendImagePreviews.ts";
 
 function envelope(
@@ -61,6 +62,49 @@ Deno.test("text-only sends replace on the first tagged echo", () => {
       envelope(1, "text", "c1"),
     ]),
     true,
+  );
+});
+
+Deno.test("a tagged but unrenderable image echo cannot replace the overlay", () => {
+  const emptyImage: Envelope = {
+    session_id: "s1",
+    seq: 1,
+    cmid: "c1",
+    kind: "update",
+    update: {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "image" },
+    },
+  };
+  assertEquals(
+    promptEchoReadyToReplaceOptimistic({ cmid: "c1", attachments: [] }, [
+      emptyImage,
+    ]),
+    false,
+  );
+  assertEquals(
+    promptEchoReadyToReplaceOptimistic(imageMessage, [emptyImage]),
+    false,
+  );
+});
+
+Deno.test("unpresented overlays linger until the presented timeline can replace them", () => {
+  const overlay = { cmid: "c1", attachments: [] as { isImage?: boolean }[] };
+  assertEquals(
+    retainUnpresentedOptimistic([overlay], [], []),
+    [overlay],
+  );
+  assertEquals(
+    retainUnpresentedOptimistic([overlay], [], [
+      envelope(1, "text", "c1"),
+    ]),
+    [],
+  );
+  assertEquals(
+    retainUnpresentedOptimistic([overlay], [overlay], [
+      envelope(1, "text", "c1"),
+    ]),
+    [overlay],
   );
 });
 
