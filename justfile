@@ -304,6 +304,12 @@ telemetry-reader-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
+# Separate from journal-reader acceptance: explicit managed startup policy,
+# stopped optional export, local recording and no legacy fallback on restart.
+telemetry-background-startup-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_STARTUP_MATRIX="$1" COWBOY_TEST_TELEMETRY_STARTUP_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::startup::immutable_background_startup -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.

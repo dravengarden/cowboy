@@ -32,6 +32,13 @@ pub(super) struct Matrix {
     machine: Readers,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ControllerMatrix {
+    schema: u16,
+    controller: Readers,
+}
+
 #[derive(Serialize)]
 pub(super) struct Artifact {
     pub lane: Lane,
@@ -107,99 +114,108 @@ fn immutable(path: &Path) -> bool {
 impl Matrix {
     pub(super) fn resolve(self) -> Result<Vec<Artifact>> {
         ensure!(self.schema == 1, "unsupported matrix schema");
-        let mut artifacts = Vec::new();
-        for (lane, readers) in [
+        resolve([
             (Lane::Controller, self.controller),
             (Lane::Machine, self.machine),
-        ] {
-            for (role, release) in [
-                (Role::Active, readers.active),
-                (Role::Rollback, readers.rollback),
-                (Role::Cold, readers.cold),
-            ] {
-                ensure!(
-                    immutable(&release) && release.canonicalize()? == release,
-                    "exact immutable release required"
-                );
-                let source_bytes = std::fs::read(release.join("etc/cowboy-release/source.json"))?;
-                let source: serde_json::Value = serde_json::from_slice(&source_bytes)?;
-                let expected_lane = if lane == Lane::Controller {
-                    "controller"
-                } else {
-                    "machine"
-                };
-                ensure!(
-                    source["schema"] == 1
-                        && source["component"] == "cowboy"
-                        && source["lane"] == expected_lane
-                        && source["dirty"] == false
-                        && source["repository"] == "git@github.com:dravengarden/cowboy.git"
-                        && source["revision"].as_str().is_some_and(revision_valid),
-                    "invalid release provenance"
-                );
-                ensure!(
-                    source["bootstrap"].is_null()
-                        || (source["bootstrap"] == true
-                            && role == Role::Cold
-                            && lane == Lane::Machine),
-                    "bootstrap is only a cold Machine reader"
-                );
-                // Do not copy arbitrary manifest fields into evidence.
-                let allowed = [
-                    "schema",
-                    "component",
-                    "lane",
-                    "dirty",
-                    "repository",
-                    "revision",
-                    "workerGeneration",
-                    "bootstrap",
-                ];
-                ensure!(
-                    source
-                        .as_object()
-                        .is_some_and(|o| o.keys().all(|key| allowed.contains(&key.as_str()))),
-                    "unknown provenance field"
-                );
-                ensure!(
-                    if lane == Lane::Machine {
-                        source["workerGeneration"].as_str().is_some_and(|value| {
-                            value.len() == 27
-                                && value.starts_with("worker-")
-                                && value[7..].bytes().all(|b| b.is_ascii_hexdigit())
-                        })
-                    } else {
-                        source["workerGeneration"].is_null()
-                    },
-                    "invalid worker provenance"
-                );
-                let executable = release
-                    .join("bin")
-                    .join(if lane == Lane::Controller {
-                        "cowboy"
-                    } else {
-                        "cowboy-machine"
-                    })
-                    .canonicalize()?;
-                ensure!(
-                    executable.starts_with("/nix/store") && executable.is_file(),
-                    "immutable executable required"
-                );
-                let executable_chain = executable_chain(lane, &release, &executable)?;
-                artifacts.push(Artifact {
-                    lane,
-                    role,
-                    release,
-                    executable_sha256: sha256(&std::fs::read(&executable)?),
-                    executable,
-                    source_sha256: sha256(&source_bytes),
-                    source,
-                    executable_chain,
-                });
-            }
-        }
-        Ok(artifacts)
+        ])
     }
+}
+
+impl ControllerMatrix {
+    pub(super) fn resolve(self) -> Result<Vec<Artifact>> {
+        ensure!(self.schema == 1, "unsupported matrix schema");
+        resolve([(Lane::Controller, self.controller)])
+    }
+}
+
+fn resolve(lanes: impl IntoIterator<Item = (Lane, Readers)>) -> Result<Vec<Artifact>> {
+    let mut artifacts = Vec::new();
+    for (lane, readers) in lanes {
+        for (role, release) in [
+            (Role::Active, readers.active),
+            (Role::Rollback, readers.rollback),
+            (Role::Cold, readers.cold),
+        ] {
+            ensure!(
+                immutable(&release) && release.canonicalize()? == release,
+                "exact immutable release required"
+            );
+            let source_bytes = std::fs::read(release.join("etc/cowboy-release/source.json"))?;
+            let source: serde_json::Value = serde_json::from_slice(&source_bytes)?;
+            let expected_lane = if lane == Lane::Controller {
+                "controller"
+            } else {
+                "machine"
+            };
+            ensure!(
+                source["schema"] == 1
+                    && source["component"] == "cowboy"
+                    && source["lane"] == expected_lane
+                    && source["dirty"] == false
+                    && source["repository"] == "git@github.com:dravengarden/cowboy.git"
+                    && source["revision"].as_str().is_some_and(revision_valid),
+                "invalid release provenance"
+            );
+            ensure!(
+                source["bootstrap"].is_null()
+                    || (source["bootstrap"] == true && role == Role::Cold && lane == Lane::Machine),
+                "bootstrap is only a cold Machine reader"
+            );
+            // Do not copy arbitrary manifest fields into evidence.
+            let allowed = [
+                "schema",
+                "component",
+                "lane",
+                "dirty",
+                "repository",
+                "revision",
+                "workerGeneration",
+                "bootstrap",
+            ];
+            ensure!(
+                source
+                    .as_object()
+                    .is_some_and(|o| o.keys().all(|key| allowed.contains(&key.as_str()))),
+                "unknown provenance field"
+            );
+            ensure!(
+                if lane == Lane::Machine {
+                    source["workerGeneration"].as_str().is_some_and(|value| {
+                        value.len() == 27
+                            && value.starts_with("worker-")
+                            && value[7..].bytes().all(|b| b.is_ascii_hexdigit())
+                    })
+                } else {
+                    source["workerGeneration"].is_null()
+                },
+                "invalid worker provenance"
+            );
+            let executable = release
+                .join("bin")
+                .join(if lane == Lane::Controller {
+                    "cowboy"
+                } else {
+                    "cowboy-machine"
+                })
+                .canonicalize()?;
+            ensure!(
+                executable.starts_with("/nix/store") && executable.is_file(),
+                "immutable executable required"
+            );
+            let executable_chain = executable_chain(lane, &release, &executable)?;
+            artifacts.push(Artifact {
+                lane,
+                role,
+                release,
+                executable_sha256: sha256(&std::fs::read(&executable)?),
+                executable,
+                source_sha256: sha256(&source_bytes),
+                source,
+                executable_chain,
+            });
+        }
+    }
+    Ok(artifacts)
 }
 
 fn revision_valid(revision: &str) -> bool {
@@ -268,4 +284,26 @@ fn matrix_is_closed_and_requires_every_role_without_mutable_paths() {
     ] {
         assert!(!immutable(Path::new(path)), "{path}");
     }
+}
+
+#[test]
+fn background_matrix_requires_all_controller_roles_and_no_ambient_settings() {
+    let valid =
+        serde_json::json!({"schema":1, "controller":{"active":"a", "rollback":"b", "cold":"c"}});
+    for role in ["active", "rollback", "cold"] {
+        let mut missing = valid.clone();
+        missing["controller"].as_object_mut().unwrap().remove(role);
+        assert!(serde_json::from_value::<ControllerMatrix>(missing).is_err());
+    }
+    for field in ["machine", "environment", "policy", "credentials"] {
+        let mut extra = valid.clone();
+        extra[field] = serde_json::json!({});
+        assert!(serde_json::from_value::<ControllerMatrix>(extra).is_err());
+    }
+    assert!(
+        serde_json::from_value::<ControllerMatrix>(valid)
+            .unwrap()
+            .resolve()
+            .is_err()
+    );
 }

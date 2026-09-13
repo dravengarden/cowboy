@@ -42,11 +42,25 @@ Policy setup is an independent machine-configuration maintenance action, not a
 side effect of installation, binding confirmation, resolution, or deployment.
 
 Before starting background writers/Plugin hosts, the Controller requires a durable
-Service store, a validated resolved ledger, and the exact policy-selected binding
-and owners. Absence, corruption, an unresolved operation, a revoked selection or
-a later revision fail startup. A Machine need not be connected during Controller
-startup; every subsequent batch independently requires its current authenticated
-connection, supported protocol, signed Catalog entry and exact installation.
+Service store and runs mandatory journal integrity recovery. Corruption still
+fails core startup; malformed/unsafe explicit policy, wrong ownership, conflicting
+modes or a missing durable store are still configuration errors.
+
+A valid policy with absent, unresolved, revoked or superseded binding evidence
+instead starts the core **with optional export stopped**. This is an expected
+result after binding maintenance, not a reason to lose the API, local recording
+or session recovery on restart. The typed startup result distinguishes
+unconfigured, active and configured-but-stopped modes. Stopped mode creates no
+remote queue and cannot choose the legacy exporter. Its bounded startup log says
+`export_active=false`; no policy path, binding identity or credential is logged.
+Later matching history cannot activate that process; an explicit new startup
+must independently revalidate standing policy. This supersedes the initial
+release's fatal behavior for stale binding evidence.
+
+An active background queue requires the complete exact resolved binding and
+owners. A Machine need not be connected during Controller startup; every
+subsequent batch independently requires its current authenticated connection,
+supported protocol, signed Catalog entry and exact installation.
 
 ## Lifetime and failure rules
 
@@ -109,6 +123,11 @@ Controller floors do not implement this startup option: accepting journal bytes
 does not establish that they can parse a new CLI flag or retain background export
 under rollback. Before a configuration cutover, separately accept the complete
 candidate/recovery/cold startup configuration and its explicit export behavior.
+The separate immutable
+[background startup gate](telemetry-background-startup-conformance.md) exercises
+this policy contract against supplied Controller roles, including local intake
+after revocation and two cold starts. It does not establish host-role provenance
+or accept the complete production configuration.
 
 The subsequent [per-target writer policy](telemetry-writer-admission.md) supplies
 separate typed binding/recovery admission; it does not enable this export mode.

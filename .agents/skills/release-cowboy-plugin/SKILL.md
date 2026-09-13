@@ -50,6 +50,15 @@ the next transaction's target. Keep writes closed until those floors are
 accepted. See `docs/telemetry-reader-conformance.md`; this does not replace the
 signed Victoria runtime gates or authorize a host refresh.
 
+Managed background policy additionally uses
+`just telemetry-background-startup-conformance <matrix.json> <new-receipt.json>`
+for all supplied immutable Controller roles. Require core/local recording to
+survive stale or unresolved binding evidence with optional export stopped, while
+corruption and invalid explicit configuration still fail. This synthetic policy
+gate does not accept actual host-role provenance, full production configuration,
+writer admission, Machine startup or cross-end delivery. Accept those separately
+before cutover; see `docs/telemetry-background-startup-conformance.md`.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

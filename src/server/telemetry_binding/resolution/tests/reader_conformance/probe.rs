@@ -19,6 +19,9 @@ use tokio_tungstenite::{
 const DEADLINE: Duration = Duration::from_secs(12);
 const LOG_BYTES: usize = 128 * 1024;
 
+mod startup;
+pub(super) use startup::run as background_startup;
+
 fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
     std::fs::OpenOptions::new()
