@@ -1,5 +1,17 @@
 import type { PasskeyOptions } from "./authApi";
 
+export interface PasskeyDisplayContext {
+  standalone: boolean;
+  mobile: boolean;
+}
+
+/** webauthn-rs 0.5 emits `residentKey: "discouraged"` and no `hints`. Chrome
+ * then ranks the hybrid QR sheet above Touch ID, and a Chromium desktop PWA
+ * cannot see iCloud Keychain passkeys at all (crbug 364926914). Prefer the
+ * local platform authenticator; keep hybrid as a desktop fallback. */
+export const LOCAL_PASSKEY_HINTS = ["client-device", "hybrid"] as const;
+export const MOBILE_PASSKEY_HINTS = ["client-device"] as const;
+
 function bufferToBase64Url(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -22,21 +34,99 @@ function base64UrlToBuffer(value: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+function mediaMatches(query: string): boolean {
+  return globalThis.matchMedia?.(query).matches === true;
+}
+
+export function currentPasskeyDisplayContext(): PasskeyDisplayContext {
+  return {
+    standalone: mediaMatches("(display-mode: standalone)") ||
+      mediaMatches("(display-mode: window-controls-overlay)") ||
+      mediaMatches("(display-mode: minimal-ui)") ||
+      (globalThis.navigator as Navigator & { standalone?: boolean })
+          .standalone === true,
+    mobile: mediaMatches("(pointer: coarse)") ||
+      (globalThis.navigator?.maxTouchPoints ?? 0) > 0,
+  };
+}
+
+function passkeyHints(display: PasskeyDisplayContext): string[] {
+  return display.mobile
+    ? [...MOBILE_PASSKEY_HINTS]
+    : [...LOCAL_PASSKEY_HINTS];
+}
+
+function withLocalTransports(
+  existing: unknown,
+  display: PasskeyDisplayContext,
+): AuthenticatorTransport[] {
+  const transports = new Set<string>(
+    Array.isArray(existing)
+      ? existing.filter((item): item is string => typeof item === "string")
+      : [],
+  );
+  transports.add("internal");
+  if (display.mobile) transports.delete("hybrid");
+  else transports.add("hybrid");
+  return [...transports] as AuthenticatorTransport[];
+}
+
+export function shapePasskeyCreationPublicKey(
+  options: Record<string, unknown>,
+  display: PasskeyDisplayContext = currentPasskeyDisplayContext(),
+): Record<string, unknown> {
+  const selection = {
+    ...((options.authenticatorSelection ?? {}) as Record<string, unknown>),
+  };
+  if (selection.residentKey !== "required") {
+    selection.residentKey = "preferred";
+    selection.requireResidentKey = false;
+  }
+  if (display.standalone) selection.authenticatorAttachment = "platform";
+  return {
+    ...options,
+    hints: passkeyHints(display),
+    authenticatorSelection: selection,
+  };
+}
+
+export function shapePasskeyRequestPublicKey(
+  options: Record<string, unknown>,
+  display: PasskeyDisplayContext = currentPasskeyDisplayContext(),
+): Record<string, unknown> {
+  const allowCredentials = Array.isArray(options.allowCredentials)
+    ? options.allowCredentials.map((item) => {
+      const descriptor = { ...(item as Record<string, unknown>) };
+      descriptor.transports = withLocalTransports(
+        descriptor.transports,
+        display,
+      );
+      return descriptor;
+    })
+    : options.allowCredentials;
+  return {
+    ...options,
+    hints: passkeyHints(display),
+    allowCredentials,
+  };
+}
+
 function reviveCreateOptions(
   options: Record<string, unknown>,
 ): CredentialCreationOptions {
-  const publicKey = { ...options } as unknown as
+  const shaped = shapePasskeyCreationPublicKey(options);
+  const publicKey = { ...shaped } as unknown as
     & PublicKeyCredentialCreationOptions
     & {
       challenge: BufferSource;
       user: PublicKeyCredentialUserEntity;
     };
-  publicKey.challenge = base64UrlToBuffer(String(options.challenge));
-  const user = { ...(options.user as PublicKeyCredentialUserEntity) };
-  user.id = base64UrlToBuffer(String((options.user as { id: string }).id));
+  publicKey.challenge = base64UrlToBuffer(String(shaped.challenge));
+  const user = { ...(shaped.user as PublicKeyCredentialUserEntity) };
+  user.id = base64UrlToBuffer(String((shaped.user as { id: string }).id));
   publicKey.user = user;
-  if (Array.isArray(options.excludeCredentials)) {
-    publicKey.excludeCredentials = options.excludeCredentials.map((item) => {
+  if (Array.isArray(shaped.excludeCredentials)) {
+    publicKey.excludeCredentials = shaped.excludeCredentials.map((item) => {
       const descriptor = { ...(item as PublicKeyCredentialDescriptor) };
       descriptor.id = base64UrlToBuffer(String((item as { id: string }).id));
       return descriptor;
@@ -48,12 +138,13 @@ function reviveCreateOptions(
 function reviveRequestOptions(
   options: Record<string, unknown>,
 ): CredentialRequestOptions {
+  const shaped = shapePasskeyRequestPublicKey(options);
   const publicKey = {
-    ...options,
+    ...shaped,
   } as unknown as PublicKeyCredentialRequestOptions;
-  publicKey.challenge = base64UrlToBuffer(String(options.challenge));
-  if (Array.isArray(options.allowCredentials)) {
-    publicKey.allowCredentials = options.allowCredentials.map((item) => {
+  publicKey.challenge = base64UrlToBuffer(String(shaped.challenge));
+  if (Array.isArray(shaped.allowCredentials)) {
+    publicKey.allowCredentials = shaped.allowCredentials.map((item) => {
       const descriptor = { ...(item as PublicKeyCredentialDescriptor) };
       descriptor.id = base64UrlToBuffer(String((item as { id: string }).id));
       return descriptor;

@@ -320,7 +320,13 @@ cookie rotation, and audit. Clients select one presentation transport from a
 shared ordered registry; every direct transport must return the same standard
 WebAuthn credential JSON before the existing completion endpoint accepts it:
 
-- browser/PWA uses `navigator.credentials` at the Cowboy origin;
+- browser/PWA uses `navigator.credentials` at the Cowboy origin, with
+  `hints: ["client-device", "hybrid"]` (this-device first) so Chromium does not
+  open the hybrid QR sheet when a local fingerprint passkey exists. Installed
+  PWAs also request `authenticatorAttachment: "platform"` on registration.
+  Chromium desktop PWAs still cannot see iCloud Keychain passkeys
+  ([crbug 364926914](https://issues.chromium.org/issues/364926914)); a Passkey
+  created in the PWA is stored in Chrome's own manager and can use Touch ID.
 - an Apple shell may use AuthenticationServices only when its build explicitly
   declares the exact Relying Party, carries the matching Associated Domains
   entitlement, and the origin publishes the matching `webcredentials`
