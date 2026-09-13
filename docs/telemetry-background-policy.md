@@ -6,6 +6,9 @@ implements policy admission; it does not enable production binding writers or
 change the configured Victoria destination. The initial production configuration
 continues to use its explicitly configured legacy exporter.
 
+Controller implementation release and populated-reader acceptance:
+[2026-09-13 receipt](releases/telemetry-background-policy-2026-09-13.md).
+
 ## Authority and restart semantics
 
 Core owns this policy, not the installed Plugin or a UI composition. The host
