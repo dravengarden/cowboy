@@ -75,9 +75,16 @@ For authenticated cross-process telemetry acceptance, run
 all nine Controller/Machine role pairs. Require actual fixture password login,
 enrolled protocol-18 connections, one-use previews, select/revoke/restore,
 lost-ACK observation without resend, independent recovery/Service resolution,
-and durable reads after both processes restart. The byte-preserving fault proxy
-must never fabricate a reply. This uses temporary signed Victoria installation
-and identities, not production credentials, external delivery or complete owned
+and durable reads after both processes restart. Require all five flows (45 role
+results), including managed OTLP intake/queue/RPC/HTTP delivery through the real
+signed fixture exporter to an isolated protocol receiver. Verify partial success,
+503/429/redirect refusal, lost export ACK/disconnection without resend, dedup,
+independent local recording, revoke/restore fencing, stale and active restarts,
+and explicit per-signal activation. The byte-preserving fault proxy must never
+fabricate a reply; correlate bounded request/payload hashes with actual receipt
+and receiver counts without publishing raw telemetry or destination policy.
+This uses temporary signed Victoria installation and identities, not production
+credentials, a real Victoria database, external delivery or complete owned
 configuration. See `docs/telemetry-connected-conformance.md`; it does not by
 itself authorize production policy cutover or complete P2.
 

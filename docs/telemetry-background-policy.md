@@ -136,6 +136,13 @@ this policy contract against supplied Controller roles, including local intake
 after revocation and two cold starts. It does not establish host-role provenance
 or accept the complete production configuration.
 
+The [connected gate](telemetry-connected-conformance.md) additionally exercises
+the real managed queue/RPC/HTTP path across all nine immutable role pairs. Its
+16-stage delivery flow checks explicit activation, OTLP partial success and HTTP
+failure, ACK loss/disconnection without resend, revoke/restore fencing, stale and
+active restarts, per-signal selection and local recording throughout. The private
+protocol receiver is not a Victoria database or production endpoint.
+
 The subsequent [per-target writer policy](telemetry-writer-admission.md) supplies
 separate typed binding/recovery admission; it does not enable this export mode.
 Remaining P2 work: an owned configuration cutover and cross-end production write/failure/

@@ -8,7 +8,7 @@ const CONFIRM: &str = "/api/telemetry/binding/confirm";
 fn confirmation(plan: &Value) -> Value {
     json!({"plan_id":plan["plan_id"],"action":plan["action"]})
 }
-fn id(plan: &Value) -> Result<&str, Failure> {
+pub(super) fn id(plan: &Value) -> Result<&str, Failure> {
     plan["plan_id"]
         .as_str()
         .filter(|s| !s.is_empty() && s.len() <= 128)
@@ -18,7 +18,7 @@ fn route(operation: &str, suffix: &str) -> String {
     format!("/api/telemetry/binding/operations/{operation}/{suffix}")
 }
 
-async fn plan(pair: &Pair<'_>, body: Value) -> Result<Value, Failure> {
+pub(super) async fn plan(pair: &Pair<'_>, body: Value) -> Result<Value, Failure> {
     let before = pair.evidence()?;
     let value = pair.http.post(PLAN, body).await?;
     check(value["confirmation_available"] == true && value["operation"]["machine_id"] == MACHINE)?;
@@ -27,7 +27,7 @@ async fn plan(pair: &Pair<'_>, body: Value) -> Result<Value, Failure> {
     Ok(value)
 }
 
-async fn applied(pair: &Pair<'_>, plan: &Value) -> Result<Value, Failure> {
+pub(super) async fn applied(pair: &Pair<'_>, plan: &Value) -> Result<Value, Failure> {
     let before = pair.evidence()?;
     let receipt = pair.http.post(CONFIRM, confirmation(plan)).await?;
     let after = pair.evidence()?;
@@ -88,6 +88,7 @@ pub(super) async fn exercise(
         Flow::BindingLostAck => lost_ack(pair, stage).await,
         Flow::BindingDisconnected => disconnected(pair, stage).await,
         Flow::PreparedRecovery => recovery(pair, stage).await,
+        Flow::ManagedDelivery => Err(Failure::Setup), // Its independent export evidence is required.
     }
 }
 

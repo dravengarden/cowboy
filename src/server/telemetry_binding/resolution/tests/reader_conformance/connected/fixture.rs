@@ -75,7 +75,16 @@ impl Evidence {
 }
 
 impl ConnectedFixture {
-    pub async fn seed(root: &Path, flow: Flow, ssh_keygen: &Path) -> Result<Self> {
+    pub async fn seed(
+        root: &Path,
+        flow: Flow,
+        ssh_keygen: &Path,
+        destination: Option<std::net::SocketAddr>,
+    ) -> Result<Self> {
+        ensure!(
+            (flow == Flow::ManagedDelivery) == destination.is_some(),
+            "exact isolated delivery fixture required"
+        );
         let reader = Fixture::build(if flow == Flow::PreparedRecovery {
             Case::Prepared
         } else {
@@ -119,11 +128,12 @@ impl ConnectedFixture {
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("installation revision missing"))?,
         };
+        let lane = json!({"base_url": destination.map_or_else(|| "http://127.0.0.1:1".into(), |address| format!("http://{address}")), "bearer_token":"isolated-fixture-only"});
         probe::private_write(
             &machine_root.join("telemetry.json"),
             &serde_json::to_vec(&json!({
                 "plugin":{"plugin_id":installed.plugin_id,"plugin_version":installed.plugin_version,"generation_digest":installed.generation_digest},
-                "logs":{"base_url":"http://127.0.0.1:1","bearer_token":"isolated-fixture-only"},"metrics":null,"traces":null,
+                "logs":lane,"metrics":destination.map(|_| &lane),"traces":destination.map(|_| &lane),
             }))?,
         )?;
         let identity = crate::machine_auth::MachineIdentity::load_or_create(&machine_root)?;
@@ -189,7 +199,7 @@ async fn connected_seed_has_real_enrolled_identity_signed_installation_and_no_lo
 {
     let root = tempfile::tempdir().unwrap();
     let helper = manifest::ssh_keygen().unwrap();
-    let f = ConnectedFixture::seed(root.path(), Flow::BindingRoundTrip, &helper.path)
+    let f = ConnectedFixture::seed(root.path(), Flow::BindingRoundTrip, &helper.path, None)
         .await
         .unwrap();
     let evidence = Evidence::read(root.path()).unwrap();

@@ -5,6 +5,10 @@ use futures::{StreamExt as _, stream};
 
 mod fixture;
 pub(super) use fixture::{ConnectedFixture, Evidence};
+mod delivery;
+pub(super) use delivery::{
+    Ack, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport, ResponseMode, WireExport,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -13,20 +17,24 @@ pub(super) enum Flow {
     BindingLostAck,
     BindingDisconnected,
     PreparedRecovery,
+    ManagedDelivery,
 }
 
 impl Flow {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::BindingRoundTrip,
         Self::BindingLostAck,
         Self::BindingDisconnected,
         Self::PreparedRecovery,
+        Self::ManagedDelivery,
     ];
 
     pub fn policies(self) -> (admission::PolicyCase, admission::PolicyCase) {
         use admission::PolicyCase::{Binding, BindingResolution, Recovery, RecoveryResolution};
         match self {
-            Self::BindingRoundTrip | Self::BindingLostAck => (Binding, Binding),
+            Self::BindingRoundTrip | Self::BindingLostAck | Self::ManagedDelivery => {
+                (Binding, Binding)
+            }
             Self::BindingDisconnected => (BindingResolution, Binding),
             Self::PreparedRecovery => (RecoveryResolution, Recovery),
         }
@@ -36,7 +44,11 @@ impl Flow {
 #[test]
 fn connected_flows_admit_only_their_independent_finite_purposes() {
     use admission::PolicyCase::{Binding, BindingResolution, Recovery, RecoveryResolution};
-    for flow in [Flow::BindingRoundTrip, Flow::BindingLostAck] {
+    for flow in [
+        Flow::BindingRoundTrip,
+        Flow::BindingLostAck,
+        Flow::ManagedDelivery,
+    ] {
         assert_eq!(flow.policies(), (Binding, Binding));
     }
     assert_eq!(
@@ -64,6 +76,9 @@ pub(super) enum Stage {
     Recovery,
     Resolution,
     Reopen,
+    ExportActivation,
+    ExportDelivery,
+    ExportRevocation,
     Cleanup,
     Complete,
 }
@@ -82,6 +97,9 @@ pub(super) struct WireCounts {
     pub dropped_recovery_acks: u32,
     pub forced_disconnects: u32,
     pub fallback_after_ms: Option<u64>,
+    pub export_commands: u32,
+    pub export_receipts: u32,
+    pub dropped_export_acks: u32,
 }
 
 #[derive(Default, Serialize)]
@@ -101,6 +119,7 @@ pub(super) struct Outcome {
     pub service_after_sha256: Option<String>,
     pub machine_after_sha256: Option<String>,
     pub failure: Option<Failure>,
+    pub delivery: Option<DeliveryReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]

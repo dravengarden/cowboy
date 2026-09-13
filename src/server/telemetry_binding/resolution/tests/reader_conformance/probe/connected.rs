@@ -1,13 +1,20 @@
 use super::super::connected::{
-    ConnectedFixture, Evidence, Flow, HttpObservation, HttpResult, Outcome, RelayRejection, Stage,
-    WireCounts,
+    Ack, ConnectedFixture, DeliveryReport, DeliveryRound, DeliveryStep, Evidence, Flow, HttpExport,
+    HttpObservation, HttpResult, Outcome, RelayRejection, ResponseMode, Stage, WireCounts,
+    WireExport,
 };
 use super::*;
 use serde_json::{Value, json};
 
+mod delivery;
 mod flows;
 mod http;
 mod proxy;
+
+struct Background {
+    path: PathBuf,
+    active: bool,
+}
 
 struct Pair<'a> {
     root: &'a Path,
@@ -19,6 +26,8 @@ struct Pair<'a> {
     machine: Option<Running>,
     proxy: proxy::Proxy,
     http: http::Http,
+    destination: Option<delivery::Destination>,
+    background: Option<Background>,
 }
 
 impl Pair<'_> {
@@ -33,6 +42,11 @@ impl Pair<'_> {
             .arg(self.root.join("controller-writer.json"))
             .arg("--plugin-catalog-dir")
             .arg(self.root.join("catalog"));
+        if let Some(background) = &self.background {
+            command
+                .arg("--telemetry-managed-export-policy")
+                .arg(&background.path);
+        }
         self.controller = Some(Running::spawn(&mut command)?);
         let mut reader = self.fixture.reader.clone();
         reader.document = self.evidence()?.service;
@@ -46,7 +60,19 @@ impl Pair<'_> {
             ),
         )
         .await
-        .map_err(|_| Failure::Timeout)?
+        .map_err(|_| Failure::Timeout)??;
+        if let Some(background) = &self.background {
+            let running = self.controller.as_ref().unwrap();
+            check(
+                running.log_contains("managed telemetry background startup evaluated")
+                    && running.log_contains(if background.active {
+                        "export_active=true"
+                    } else {
+                        "export_active=false"
+                    }),
+            )?;
+        }
+        Ok(())
     }
 
     fn start_machine(&mut self) -> Result<(), Failure> {
@@ -154,7 +180,11 @@ impl Pair<'_> {
         if let Some(mut process) = self.controller.take() {
             result = result.and(process.finish().await);
         }
-        result.and(self.proxy.finish().await)
+        result = result.and(self.proxy.finish().await);
+        if let Some(destination) = self.destination.as_mut() {
+            result = result.and(destination.finish().await);
+        }
+        result
     }
 }
 
@@ -188,9 +218,19 @@ async fn prepare(
     outcome: &mut Outcome,
 ) -> Result<(), Failure> {
     let root = tempfile::tempdir().map_err(|_| Failure::Setup)?;
-    let fixture = ConnectedFixture::seed(root.path(), flow, ssh_keygen)
-        .await
-        .map_err(|_| Failure::Setup)?;
+    let destination = if flow == Flow::ManagedDelivery {
+        Some(delivery::Destination::start().await?)
+    } else {
+        None
+    };
+    let fixture = ConnectedFixture::seed(
+        root.path(),
+        flow,
+        ssh_keygen,
+        destination.as_ref().map(|d| d.address),
+    )
+    .await
+    .map_err(|_| Failure::Setup)?;
     outcome.fixture_package_sha256 = Some(fixture.package_sha256.clone());
     outcome.fixture_release_sha256 = Some(fixture.release_sha256.clone());
     outcome.installation_sha256 = Some(sha256(
@@ -204,6 +244,9 @@ async fn prepare(
         .map_err(|_| Failure::Setup)?;
     let address = listener.local_addr().map_err(|_| Failure::Setup)?;
     let proxy = proxy::Proxy::start(address, flow).await?;
+    if flow == Flow::ManagedDelivery {
+        proxy.export_target(fixture.installation.clone())?;
+    }
     let http = http::Http::new(address)?;
     let mut pair = Pair {
         root: root.path(),
@@ -215,6 +258,8 @@ async fn prepare(
         machine: None,
         proxy,
         http,
+        destination,
+        background: None,
     };
     drop(listener);
     let policies = policy_snapshots(root.path())?;
@@ -232,9 +277,15 @@ async fn prepare(
         pair.start_machine()?;
         pair.connected(1).await?;
         before.matches(pair.root)?;
-        flows::exercise(&mut pair, flow, &mut outcome.stage).await?;
-        let client = pair.http.recording_client()?;
-        startup::local_recording_with_client(&client, pair.address, pair.root, 1, false).await?;
+        if flow == Flow::ManagedDelivery {
+            let report = outcome.delivery.insert(DeliveryReport::default());
+            delivery::exercise(&mut pair, &mut outcome.stage, report).await?;
+        } else {
+            flows::exercise(&mut pair, flow, &mut outcome.stage).await?;
+            let client = pair.http.recording_client()?;
+            startup::local_recording_with_client(&client, pair.address, pair.root, 1, false)
+                .await?;
+        }
         pair.proxy.counts()?;
         check(policy_snapshots(pair.root)? == policies)?;
         Ok(())
@@ -246,6 +297,12 @@ async fn prepare(
     outcome.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     outcome.last_http = pair.http.last();
     outcome.relay_rejection = pair.proxy.rejection();
+    if let Some(report) = outcome.delivery.as_mut() {
+        report.exports = pair.proxy.export_snapshot();
+        if let Some(destination) = &pair.destination {
+            report.http = destination.records().unwrap_or_default();
+        }
+    }
     outcome.controller_connection_fenced = pair
         .controller
         .as_ref()

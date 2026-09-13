@@ -10,6 +10,7 @@ struct Record {
     generation: Option<String>,
     configured: bool,
     mutation_started: Option<std::time::Instant>,
+    delivery: Option<delivery::Wire>,
 }
 
 pub(super) struct Proxy {
@@ -31,7 +32,10 @@ impl Proxy {
             .await
             .map_err(|_| Failure::Setup)?;
         let address = listener.local_addr().map_err(|_| Failure::Setup)?;
-        let record = Arc::new(parking_lot::Mutex::new(Record::default()));
+        let record = Arc::new(parking_lot::Mutex::new(Record {
+            delivery: (flow == Flow::ManagedDelivery).then(delivery::Wire::default),
+            ..Record::default()
+        }));
         let (cut, mut signal) = watch::channel(0_u64);
         let observed = record.clone();
         let task = tokio::spawn(async move {
@@ -111,6 +115,37 @@ impl Proxy {
 
     pub fn snapshot(&self) -> WireCounts {
         self.record.lock().counts.clone()
+    }
+
+    pub fn export_target(
+        &self,
+        target: crate::machine_protocol::telemetry_binding::BindingInstallation,
+    ) -> Result<(), Failure> {
+        self.record
+            .lock()
+            .delivery
+            .as_mut()
+            .ok_or(Failure::Setup)?
+            .target(target)
+    }
+
+    pub fn export_ack(&self, ack: Ack) -> Result<(), Failure> {
+        self.counts()?;
+        self.record
+            .lock()
+            .delivery
+            .as_mut()
+            .ok_or(Failure::Setup)?
+            .arm(ack)
+    }
+
+    pub fn export_snapshot(&self) -> Vec<WireExport> {
+        self.record
+            .lock()
+            .delivery
+            .as_ref()
+            .map(|d| d.entries.clone())
+            .unwrap_or_default()
     }
 
     pub fn rejection(&self) -> Option<RelayRejection> {
@@ -209,6 +244,17 @@ fn inspect(
             counts.connections += 1;
         }
         MachineFrame::Command { command } if !downstream => match command {
+            MachineCommand::ExportBoundTelemetry {
+                request_id,
+                attempt,
+            } if flow == Flow::ManagedDelivery => {
+                record
+                    .delivery
+                    .as_mut()
+                    .ok_or(Failure::Setup)?
+                    .begin(request_id, *attempt)?;
+                counts.export_commands += 1;
+            }
             MachineCommand::RefreshInventory { .. } => {}
             MachineCommand::QueryTelemetryBinding { .. } => {
                 counts.binding_queries += 1;
@@ -244,6 +290,29 @@ fn inspect(
             _ => return Err(Failure::WrongObservation), // No install, Provider, session or export commands.
         },
         MachineFrame::Event { event } if downstream => match event {
+            MachineEvent::TelemetryExported {
+                request_id,
+                receipt,
+            } if flow == Flow::ManagedDelivery => {
+                let ack = record
+                    .delivery
+                    .as_mut()
+                    .ok_or(Failure::Setup)?
+                    .finish(&request_id, receipt.map(|r| *r))?;
+                counts.export_receipts += 1;
+                match ack {
+                    Ack::Forward => {}
+                    Ack::Drop => {
+                        counts.dropped_export_acks += 1;
+                        return Ok(Action::Drop);
+                    }
+                    Ack::Disconnect => {
+                        counts.dropped_export_acks += 1;
+                        counts.forced_disconnects += 1;
+                        return Ok(Action::Disconnect);
+                    }
+                }
+            }
             MachineEvent::TelemetryBindingCommitted { .. }
                 if flow == Flow::BindingLostAck && counts.dropped_binding_acks == 0 =>
             {

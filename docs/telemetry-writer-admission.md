@@ -116,7 +116,10 @@ not acceptance of production Operator authority or connected cross-end faults.
 The [connected executable gate](telemetry-connected-conformance.md) additionally
 drives real authenticated Controller/Machine child processes through all role
 pairs, with signed temporary Victoria installation, ACK loss, disconnection and
-both-process reopen. Synthetic Operator login and bounded proxy faults still do
+both-process reopen. Its managed-delivery flow additionally requires exact
+intake/dedup/local-recording and real Machine-to-isolated-receiver HTTP evidence,
+including partial success, failed delivery, revoke/restore fencing and explicit
+background-policy restart. Synthetic Operator login and bounded proxy faults still do
 not accept the full production configuration, real account or policy cutover.
 
 No protocol, journal schema, applied SQL migration, signed Plugin/SDK, native
