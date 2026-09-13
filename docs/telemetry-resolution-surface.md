@@ -98,8 +98,12 @@ needed. The accepted
 [Hawk populated reader floor](releases/telemetry-reader-floors-2026-09-13.md) is
 a separate prerequisite, not authority to open writes.
 
-Still required: ordinary binding select/revoke/restore confirmation, the
-distinct Machine recovery confirmation, per-target production writer and
+The [distinct Machine recovery surface](telemetry-machine-recovery-surface.md)
+now stages its own exact preview and one-use confirmation without chaining a
+Service resolution. Its production admission remains closed.
+
+Still required: ordinary binding select/revoke/restore confirmation, durable
+HTTP recovery audit discovery, per-target production writer and
 background-export policy admission, and production cross-end failure/restart
 acceptance. Unknown and schema-one Machine evidence remain quarantined. This
 surface is not a generic executable DAG, automatic compensation or a universal

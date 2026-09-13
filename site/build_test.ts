@@ -501,7 +501,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       "hero wiring should start at both client component edges, connect to one Hub, and branch to three Machines without ornamental endpoint circles",
     );
     assert(
-      html.includes('src="assets/cowboy-brand-mark.png"') &&
+      !html.includes('src="assets/cowboy-brand-mark.png"') &&
+        (html.match(/class="brand-icon"/gu) ?? []).length === 2 &&
+        html.includes('class="brand-crown"') &&
+        html.includes('class="brand-brim"') &&
         (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
       "wordmarks should show the approved default icon",
     );
@@ -707,10 +710,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v8.svg" type="image/svg+xml" sizes="any"',
+        'href="assets/cowboy-tab-icon-v9.svg" type="image/svg+xml" sizes="any"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v8.ico" sizes="16x16 32x32 48x48"',
+          'href="assets/cowboy-tab-icon-v9.ico" sizes="16x16 32x32 48x48"',
         ),
       "browser tabs use transparent scalable marks with explicit raster fallbacks",
     );
@@ -745,9 +748,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v8-16.png",
-        "cowboy-tab-icon-v8-32.png",
-        "cowboy-tab-icon-v8.ico",
+        "cowboy-tab-icon-v9-16.png",
+        "cowboy-tab-icon-v9-32.png",
+        "cowboy-tab-icon-v9.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

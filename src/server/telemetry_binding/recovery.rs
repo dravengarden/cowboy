@@ -13,6 +13,8 @@ use std::sync::{
 
 const RECOVERY_WRITE_ADMISSION: bool = false;
 
+pub(in crate::server) mod surface;
+
 trait Effects: Sync {
     fn current(&self) -> bool;
     fn observe(

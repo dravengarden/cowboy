@@ -15,6 +15,7 @@ async fn machine_recovery_binds_fresh_actor_original_credential_full_operation_a
         "deadline",
         "queued",
         "retained",
+        "preview_expired",
     ] {
         let h = Harness::new().await;
         let (headers, verified) = h.cookie().await;
@@ -56,9 +57,18 @@ async fn machine_recovery_binds_fresh_actor_original_credential_full_operation_a
                 auth_now_ms(),
             );
         }
+        let preview = OperationBudget::new(
+            request.expires_at_ms,
+            Duration::from_mins(1),
+            TimeSample::now(),
+        );
+        if boundary == "preview_expired" {
+            preview.expire_for_test();
+        }
         let authority = approval
             .bind_telemetry_recovery(&request, &captured)
-            .unwrap();
+            .unwrap()
+            .constrain_to_preview(preview);
         let mut changed = request.clone();
         match boundary {
             "logout" => {

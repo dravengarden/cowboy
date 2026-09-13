@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Stack, Typography } from "@mui/material";
 import { ConfirmSheet } from "./Sheet";
+import { TelemetryRecoveryPanel } from "./TelemetryRecoveryPanel";
 import {
   type BindingHead,
   type BindingStatus,
@@ -255,6 +256,12 @@ export function TelemetryBindingPanel(): React.JSX.Element {
         <Button disabled={busy} onClick={() => void inspect()}>
           Review resolution…
         </Button>
+      )}
+      {operation?.phase === "needs_attention" && !busy && (
+        <TelemetryRecoveryPanel
+          key={`${operation.operation_id}:${operation.operation_digest}`}
+          operation={operation}
+        />
       )}
       <ConfirmSheet
         open={plan !== null}

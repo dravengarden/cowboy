@@ -137,3 +137,13 @@ the page's manual theme selection, selects the favicon color treatment.
 The v8 browser-only optical frame gives the wide hat more vertical presence in
 a fixed 16px tab slot, with its ink center near the slot center. This optical
 proportion is independent of the unchanged website logo and installation icon.
+
+The v9 favicon keeps v8 sizing and shifts the artwork down by one logical pixel
+at 16px to align visually with browser tab titles. Horizontal position and
+shape remain unchanged. Raster exports check the intended optical offset.
+
+Website header/footer wordmarks inline `site/assets/cowboy-wordmark-v1.svg`.
+They use the original hat proportions, transparent negative space, a 40×28px
+header slot (36×26px footer), and the website's secondary/primary colors for
+crown/brim. Both manual and System theme changes recolor them through CSS.
+They do not reuse installation tiles or the browser favicon's optical frame.

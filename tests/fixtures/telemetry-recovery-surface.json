@@ -1,0 +1,37 @@
+{
+  "plan": {
+    "schema": 1,
+    "plan_id": "machine-recovery-contract-fixture",
+    "action": "reject_interrupted_prepared",
+    "request_digest": "sha256:03b0579855aba18236fb72fba20ef4b1ef8ddd9c6f4a2f13f4f2e243a716d96d",
+    "expires_at_ms": 2300000000000,
+    "confirmation_available": false,
+    "operation": {
+      "operation_id": "service-binding-contract-fixture",
+      "machine_id": "machine-test",
+      "operation_digest": "sha256:2ec2a8578617b5d7e4ddcb6b709a0028ad088ab12ecb6278650391de8fca1e3b",
+      "phase": "needs_attention",
+      "attention": "uncertain",
+      "expected": null,
+      "change": {
+        "kind": "revoke",
+        "policy_epoch": "1"
+      }
+    },
+    "machine_head": {
+      "revision": "0",
+      "policy_epoch": "0",
+      "selection": null
+    }
+  },
+  "receipt": {
+    "schema": 1,
+    "resolution_id": "machine-recovery-contract-fixture",
+    "operation_id": "service-binding-contract-fixture",
+    "machine_id": "machine-test",
+    "action": "reject_interrupted_prepared",
+    "operation_digest": "sha256:2ec2a8578617b5d7e4ddcb6b709a0028ad088ab12ecb6278650391de8fca1e3b",
+    "request_digest": "sha256:03b0579855aba18236fb72fba20ef4b1ef8ddd9c6f4a2f13f4f2e243a716d96d",
+    "resolved_at_ms": 2200000000000
+  }
+}

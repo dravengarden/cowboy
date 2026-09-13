@@ -365,9 +365,10 @@ export class PreviewDeadline {
     private readonly expires: number,
     private readonly received: number,
     wall: number,
+    cap: 60_000 | 120_000 = 120_000,
   ) {
     this.highWater = wall;
-    this.end = received + Math.min(120_000, Math.max(0, expires - wall));
+    this.end = received + Math.min(cap, Math.max(0, expires - wall));
   }
   ended(monotonic: number, wall: number): boolean {
     this.expired ||= !Number.isFinite(monotonic) || !Number.isFinite(wall) ||
@@ -384,7 +385,7 @@ export const resolutionLabels: Record<ResolutionAction, string> = {
   record_rejected: "Record the rejected binding",
 };
 
-async function request<T>(
+export async function bindingRequest<T>(
   path: string,
   parse: (value: unknown) => T,
   signal: AbortSignal,
@@ -438,11 +439,26 @@ async function request<T>(
     JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
   );
 }
-function path(operationId: string, action: string): string {
+export function bindingPath(operationId: string, action: string): string {
   return `/api/telemetry/binding/operations/${
     encodeURIComponent(id(operationId, 16))
   }/${action}`;
 }
+// Shared closed projections/transport, not shared confirmation authority.
+export const bindingCodec = {
+  record,
+  choice,
+  id,
+  digest,
+  timestamp,
+  schema,
+  boolean,
+  operation,
+  head,
+  invalid,
+};
+const request = bindingRequest;
+const path = bindingPath;
 export const telemetryBindingApi = {
   status: (signal: AbortSignal) =>
     request("/api/telemetry/binding", parseBindingStatus, signal),

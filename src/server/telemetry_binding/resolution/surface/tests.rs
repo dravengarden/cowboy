@@ -36,20 +36,34 @@ fn public_projection_matches_the_shared_web_contract() {
     assert_eq!(fixture["public"], actual);
 }
 
-struct Fixture {
+pub(in crate::server::telemetry_binding) struct Fixture {
     _root: tempfile::TempDir,
-    state: ApiState,
-    base: String,
-    client: reqwest::Client,
+    pub(in crate::server::telemetry_binding) state: ApiState,
+    pub(in crate::server::telemetry_binding) base: String,
+    pub(in crate::server::telemetry_binding) client: reqwest::Client,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl Fixture {
-    async fn new(write_admitted: bool) -> Self {
+    pub(in crate::server::telemetry_binding) async fn new(write_admitted: bool) -> Self {
         Self::with_auth(write_admitted, false).await
     }
 
-    async fn with_auth(write_admitted: bool, product_auth_enabled: bool) -> Self {
+    pub(in crate::server::telemetry_binding) async fn with_auth(
+        write_admitted: bool,
+        product_auth_enabled: bool,
+    ) -> Self {
+        Self::build(write_admitted, false, product_auth_enabled).await
+    }
+
+    pub(in crate::server::telemetry_binding) async fn with_recovery(
+        write: bool,
+        auth: bool,
+    ) -> Self {
+        Self::build(false, write, auth).await
+    }
+
+    async fn build(write_admitted: bool, recovery: bool, product_auth_enabled: bool) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let root = tempfile::tempdir().unwrap();
         let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
@@ -61,6 +75,7 @@ impl Fixture {
             store: Some(store),
             control: Arc::default(),
             plans: Arc::default(),
+            recovery_plans: Arc::default(),
             hub: crate::core::Hub::new(),
             product_auth_enabled,
             devices: Arc::default(),
@@ -68,30 +83,31 @@ impl Fixture {
                 None,
             )),
             fixture_write_admission: write_admitted,
+            fixture_recovery_admission: recovery,
         };
-        let router =
-            routes()
-                .with_state(state.clone())
-                .layer(axum::middleware::from_fn_with_state(
-                    state.clone(),
-                    |State(state): State<ApiState>,
-                     mut request: axum::extract::Request,
-                     next: axum::middleware::Next| async move {
-                        // Use the real credential resolver. Production additionally
-                        // supplies its standard origin/freshness/routing middleware.
-                        let verified = crate::server::resolve_product_api_request_principal(
-                            state.auth(),
-                            request.method(),
-                            request.uri(),
-                            request.headers(),
-                        )
-                        .await;
-                        if let Ok(Some(verified)) = verified {
-                            request.extensions_mut().insert(verified);
-                        }
-                        next.run(request).await
-                    },
-                ));
+        let router = routes()
+            .merge(crate::server::telemetry_binding::recovery::surface::routes())
+            .with_state(state.clone())
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                |State(state): State<ApiState>,
+                 mut request: axum::extract::Request,
+                 next: axum::middleware::Next| async move {
+                    // Use the real credential resolver. Production additionally
+                    // supplies its standard origin/freshness/routing middleware.
+                    let verified = crate::server::resolve_product_api_request_principal(
+                        state.auth(),
+                        request.method(),
+                        request.uri(),
+                        request.headers(),
+                    )
+                    .await;
+                    if let Ok(Some(verified)) = verified {
+                        request.extensions_mut().insert(verified);
+                    }
+                    next.run(request).await
+                },
+            ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -110,7 +126,7 @@ impl Fixture {
         }
     }
 
-    async fn request(
+    pub(in crate::server::telemetry_binding) async fn request(
         &self,
         method: Method,
         path: &str,
@@ -142,7 +158,7 @@ impl Fixture {
         )
     }
 
-    async fn pending(&self, dispatch: bool) -> Operation {
+    pub(in crate::server::telemetry_binding) async fn pending(&self, dispatch: bool) -> Operation {
         let mut intent = crate::telemetry_binding::fixture("surface-original");
         intent.schema = 2;
         intent.expires_at_ms = 1; // Historical intent is never renewed.
@@ -170,7 +186,7 @@ impl Fixture {
         .await
     }
 
-    async fn stop(self) {
+    pub(in crate::server::telemetry_binding) async fn stop(self) {
         self.task.abort();
         assert!(self.task.await.unwrap_err().is_cancelled());
     }
