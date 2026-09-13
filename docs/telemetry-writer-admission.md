@@ -5,6 +5,10 @@ one exact Service/Machine pair. The configuration is not enabled in production
 by this source change. P2 still requires an owned configuration cutover and
 cross-end production failure/restart acceptance.
 
+The [release receipt](releases/telemetry-writer-admission-2026-09-13.md) records
+the accepted source, separate component activations, reader gates and worker
+continuity. Production configuration remains unchanged.
+
 ## Independent host policy
 
 The Controller accepts `--telemetry-writer-policy /absolute/private/writer.json`
