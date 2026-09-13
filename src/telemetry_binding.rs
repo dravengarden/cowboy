@@ -208,10 +208,19 @@ impl Ledger {
         &self,
         attempt: &crate::machine_protocol::telemetry_export::ExportAttempt,
     ) -> bool {
-        self.service_id == attempt.service_id
-            && self.machine_id == attempt.machine_id
-            && self.current.as_ref() == Some(&attempt.binding)
-            && attempt.binding.selection.is_some()
+        self.permits_binding(&attempt.service_id, &attempt.machine_id, &attempt.binding)
+    }
+
+    pub(crate) fn permits_binding(
+        &self,
+        service: &str,
+        machine: &str,
+        binding: &BindingSnapshot,
+    ) -> bool {
+        self.service_id == service
+            && self.machine_id == machine
+            && self.current.as_ref() == Some(binding)
+            && binding.selection.is_some()
             && !self.operations.iter().any(|op| op.progress.unresolved())
     }
 

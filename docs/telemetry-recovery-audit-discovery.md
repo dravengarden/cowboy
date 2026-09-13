@@ -6,6 +6,10 @@ owner; Service keeps only its existing binding operations and resolution
 records. **All production binding, recovery, resolution and managed-export
 writer admission remains closed.** This is not P2 exit.
 
+The [Hawk release receipt](releases/telemetry-recovery-audit-discovery-2026-09-13.md)
+records the accepted Controller/Machine/Web transactions, reader floors and
+worker continuity.
+
 ## Separate read purpose
 
 Protocol 18 adds `QueryTelemetryRecoveryAudit` and its distinct correlated

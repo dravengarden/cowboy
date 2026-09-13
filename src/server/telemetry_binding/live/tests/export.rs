@@ -6,6 +6,8 @@ use crate::server::telemetry_binding::export::ExportScope;
 use crate::server::{AuthenticatedProductRequest, ProductRequestAuth};
 use axum::http::StatusCode;
 
+mod background;
+
 struct Approval {
     hub: crate::core::Hub,
     devices: crate::client_auth::DeviceAccessSessions,

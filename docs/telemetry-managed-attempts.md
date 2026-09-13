@@ -1,5 +1,11 @@
 # Managed telemetry: one bounded OTLP attempt
 
+This records the original protocol-16 slice. The later
+[explicit background policy](telemetry-background-policy.md) adds a separately
+typed host-owned standing authority and startup choice for the existing queue;
+it does not convert the single Operator confirmation described below into a
+reusable grant. Production managed writes and configuration cutover remain closed.
+
 Protocol 16 adds a **single-attempt** managed export path. It does not enable
 binding writes, add an HTTP mutation endpoint, activate a background exporter,
 or restore authorization on startup. Production continues using its explicitly

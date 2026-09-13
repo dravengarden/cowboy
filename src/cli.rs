@@ -353,6 +353,14 @@ pub struct ServeArgs {
     /// Optional exact Machine/Plugin/release selection. No remote export by default.
     #[arg(long, env = "COWBOY_TELEMETRY_PLUGIN_CONFIG")]
     pub telemetry_plugin_config: Option<PathBuf>,
+
+    /// Explicit private managed OTLP startup policy; never inferred from history.
+    #[arg(
+        long,
+        env = "COWBOY_TELEMETRY_MANAGED_EXPORT_POLICY",
+        conflicts_with = "telemetry_plugin_config"
+    )]
+    pub telemetry_managed_export_policy: Option<PathBuf>,
 }
 
 impl Cli {

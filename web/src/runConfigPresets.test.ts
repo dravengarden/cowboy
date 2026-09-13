@@ -188,8 +188,19 @@ Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => 
   assertEquals(storeSource.includes('"Update agent preset"'), true);
   assertEquals(storeSource.includes("canonicalAckListeners"), true);
   assertEquals(storeSource.includes("notifyCanonicalAcks"), true);
+  // Only canonical acknowledgements belong to this helper. Later presentation
+  // observers intentionally subscribe to the separately held painted state.
+  const waitForState = storeSource.match(
+    /^function waitForState\([\s\S]*?^\}/m,
+  )?.[0] ?? "";
+  assertEquals(waitForState.startsWith("function waitForState("), true);
   assertEquals(
-    /function waitForState[\s\S]*listeners\.add\(check\)/.test(storeSource),
-    false,
+    waitForState.includes("canonicalAckListeners.add(check)"),
+    true,
   );
+  assertEquals(
+    waitForState.includes("canonicalAckListeners.delete(check)"),
+    true,
+  );
+  assertEquals(waitForState.includes("listeners.add(check)"), false);
 });

@@ -85,8 +85,11 @@ preflight 也会重新验证磁盘，发现变化后不复活缓存信任。生�
 export fence；首次 intent 即可能关闭旧外发，恢复不撤回已发 OTel。
 [耐久 Machine 恢复审计发现](telemetry-recovery-audit-discovery.md) 加入协议 18 的独立只读用途，
 在 Controller 临时计划丢失、Service 已结算或后来 head 变化后仍核对 Machine 原始审计。
-Service 留存的原 NeedsAttention 与当前状态分别核验，不复制恢复日志或复活授权。生产写入仍关闭；
-后台策略准入与跨端生产验收仍待完成，不能将界面发布等同 P2 退出。
+Service 留存的原 NeedsAttention 与当前状态分别核验，不复制恢复日志或复活授权。
+[独立后台外发策略](telemetry-background-policy.md) 将 managed 单次协议接入既有有界队列，
+要求主机显式持有完整绑定和信号策略；类型区分单次 Operator 确认与后台 permit，策略变动后旧实例
+停止外发，重启只重新核验显式 standing policy、不从账本恢复授权。生产绑定写入仍关闭；
+实际策略切换、逐目标 writer 准入与跨端生产验收仍待完成，不能将实现发布等同 P2 退出。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
