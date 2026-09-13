@@ -13,6 +13,8 @@ use std::sync::{
 
 const RESOLUTION_WRITE_ADMISSION: bool = false;
 
+pub(in crate::server) mod surface;
+
 trait Journal: Sync {
     fn read(
         &self,

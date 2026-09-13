@@ -44,6 +44,7 @@ import {
   type UsageSnapshot,
 } from "./usageLimits";
 import { ConfirmSheet } from "./Sheet";
+import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import {
   type ClientRuntimeMetrics,
   readClientRuntimeMetrics,
@@ -941,6 +942,8 @@ export function InfoContent({
             <ClientStorageInfoSection />
           </Stack>
         </Stack>
+        {!desktop && <Divider />}
+        <TelemetryBindingPanel />
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}

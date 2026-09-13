@@ -108,6 +108,11 @@ The [reader-only Controller release receipt](releases/telemetry-binding-resoluti
 records the accepted artifact, gates, unchanged Machine/workers/Web and closed
 production admission.
 
+The subsequent [core confirmation surface](telemetry-resolution-surface.md)
+adds Product Operator inspection and single-use confirmation plumbing in
+Settings → Info. Production resolution admission remains closed; ordinary
+binding and Machine recovery confirmations are separate remaining work.
+
 The subsequent [Machine recovery slice](telemetry-machine-recovery.md) stages
 protocol 17 and atomic Machine audit schema two. It can close only a validated
 reopened schema-two Prepared step, without changing its head or the Service

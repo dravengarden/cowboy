@@ -13,7 +13,7 @@ mod export;
 #[cfg_attr(not(feature = "machine-host"), allow(dead_code))]
 mod live;
 pub(super) mod recovery;
-mod resolution;
+pub(super) mod resolution;
 
 struct Confirmation<'a> {
     authority: &'a super::operator_approval::TelemetryBindingAuthority,

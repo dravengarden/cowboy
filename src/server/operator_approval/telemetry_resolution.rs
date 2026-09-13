@@ -37,6 +37,11 @@ impl OperatorApproval {
 }
 
 impl TelemetryResolutionAuthority {
+    pub(in crate::server) fn constrain_to_preview(mut self, preview: OperationBudget) -> Self {
+        self.budget = self.budget.intersect(preview);
+        self
+    }
+
     pub(in crate::server) fn remaining(&self) -> Duration {
         if self.revoked.load(Ordering::Acquire) {
             Duration::ZERO

@@ -227,6 +227,7 @@ struct AppState {
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
     plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
     plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
+    telemetry_resolution_plans: Arc<telemetry_binding::resolution::surface::Plans>,
     plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -1430,6 +1431,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
             plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
+            telemetry_resolution_plans: Arc::default(),
             plugin_lifecycle_fences,
             desired_machine_components,
             web_root: args.web_root,
@@ -4104,6 +4106,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path == "/metrics" {
         return RouteAuth::MetricsScrape;
+    }
+    if path == "/api/telemetry/binding" || path.starts_with("/api/telemetry/binding/") {
+        return RouteAuth::ProductOrAdminOperator;
     }
     if path == "/ws" {
         return RouteAuth::Product;
@@ -8904,6 +8909,7 @@ async fn serve_axum(
     };
 
     let app = Router::new()
+        .merge(telemetry_binding::resolution::surface::routes())
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))

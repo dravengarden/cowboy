@@ -114,7 +114,11 @@ Hawk's populated active/rollback/cold reader floor on both Sites is now
 [accepted](releases/telemetry-reader-floors-2026-09-13.md). Other targets and
 subsequent artifacts still need their own floor acceptance.
 
-Still required for P2: user-facing finite confirmation surfaces, explicit writer and
+The [Service resolution surface](telemetry-resolution-surface.md) now provides
+core previews and separately gated confirmation plumbing. It cannot perform
+this Machine-only recovery; its distinct confirmation surface is still pending.
+
+Still required for P2: remaining user-facing finite confirmation surfaces, explicit writer and
 background-policy admission, and full production cross-end failure/restart
 acceptance. Unknown/schema-one evidence intentionally remains quarantined and
 needs a separately justified treatment, not a universal “repair” button. Already

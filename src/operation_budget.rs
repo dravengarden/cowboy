@@ -35,6 +35,24 @@ pub(crate) struct OperationBudget {
 }
 
 impl OperationBudget {
+    /// Consume both original budgets without renewing either clock or clearing
+    /// an observed failure. Used when a fresh confirmation consumes a preview.
+    #[cfg_attr(not(feature = "full"), allow(dead_code))]
+    pub(crate) fn intersect(self, other: Self) -> Self {
+        let expired = self.expired() | other.expired();
+        Self {
+            received: self.received.max(other.received),
+            deadline: self.deadline.min(other.deadline),
+            expires_at_ms: self.expires_at_ms.min(other.expires_at_ms),
+            wall_high_water: AtomicI64::new(
+                self.wall_high_water
+                    .load(Ordering::Acquire)
+                    .max(other.wall_high_water.load(Ordering::Acquire)),
+            ),
+            expired: AtomicBool::new(expired),
+        }
+    }
+
     pub(crate) fn new(expires_at_ms: i64, cap: Duration, received: TimeSample) -> Self {
         let remaining = expires_at_ms.saturating_sub(received.wall_ms).max(0);
         let budget = Duration::from_millis(remaining.unsigned_abs()).min(cap);
@@ -89,6 +107,30 @@ impl OperationBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intersect_never_renews_a_preview_or_clears_an_expired_budget() {
+        let now = Instant::now();
+        let wall = chrono::Utc::now().timestamp_millis();
+        let preview = OperationBudget::new(
+            wall + 120_000,
+            Duration::from_mins(2),
+            TimeSample::for_test(now - Duration::from_secs(119), wall - 119_000),
+        );
+        let confirmation = OperationBudget::new(
+            wall + 120_000,
+            Duration::from_mins(1),
+            TimeSample::for_test(now, wall),
+        );
+        let both = confirmation.intersect(preview);
+        assert!(!both.expired());
+        assert!(both.remaining() <= Duration::from_secs(1));
+        assert!(both.expired_at(TimeSample::for_test(now + Duration::from_secs(2), wall + 1)));
+        let first = OperationBudget::new(wall + 60_000, Duration::from_mins(1), TimeSample::now());
+        first.expire_for_test();
+        let fresh = OperationBudget::new(wall + 60_000, Duration::from_mins(1), TimeSample::now());
+        assert!(fresh.intersect(first).expired());
+    }
 
     #[test]
     fn original_monotonic_budget_survives_a_slow_or_repaired_wall_clock() {

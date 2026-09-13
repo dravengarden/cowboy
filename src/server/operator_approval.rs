@@ -188,7 +188,7 @@ impl OperatorApproval {
         })
     }
 
-    async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
+    pub(super) async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
         match &self.credential {
             Credential::Admin { token_hash } => {
                 return admin_identities(auth.hub)
