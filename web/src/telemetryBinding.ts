@@ -15,7 +15,7 @@ type Attention =
   | "uncertain"
   | "invalid_evidence"
   | "head_changed";
-interface Installation {
+export interface Installation {
   plugin_id: string;
   plugin_version: string;
   generation_digest: string;
@@ -455,6 +455,7 @@ export const bindingCodec = {
   boolean,
   operation,
   head,
+  installation,
   invalid,
 };
 const request = bindingRequest;

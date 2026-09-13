@@ -113,7 +113,11 @@ native ABI, private telemetry policy or worker input changes. Controller and Web
 release independently; no Machine or host-system activation is needed. Actual
 active/rollback/cold reader conformance remains a separate release prerequisite.
 
-Remaining P2: ordinary select/revoke/restore confirmation, durable HTTP recovery
+The [ordinary binding surface](telemetry-binding-surface.md) now stages separate
+select/revoke/restore confirmations and durable Service operation reads. Those
+reads do not close this Machine recovery audit-discovery gap.
+
+Remaining P2: durable HTTP recovery
 audit discovery, per-target writer/background-policy admission and full
 production cross-end failure/restart acceptance. Unknown/schema-one Machine
 evidence stays quarantined; this is not a universal repair button or executable

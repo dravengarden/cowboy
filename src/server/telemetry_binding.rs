@@ -15,6 +15,7 @@ mod http;
 mod live;
 pub(super) mod recovery;
 pub(super) mod resolution;
+pub(super) mod surface;
 
 struct Confirmation<'a> {
     authority: &'a super::operator_approval::TelemetryBindingAuthority,

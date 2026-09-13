@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Stack, Typography } from "@mui/material";
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryRecoveryPanel } from "./TelemetryRecoveryPanel";
+import { TelemetryMutationPanel } from "./TelemetryMutationPanel";
 import {
   type BindingHead,
   type BindingStatus,
@@ -261,6 +262,12 @@ export function TelemetryBindingPanel(): React.JSX.Element {
         <TelemetryRecoveryPanel
           key={`${operation.operation_id}:${operation.operation_digest}`}
           operation={operation}
+        />
+      )}
+      {status && !busy && !inspectable && (
+        <TelemetryMutationPanel
+          key={operation?.operation_digest ?? "unmanaged"}
+          status={status}
         />
       )}
       <ConfirmSheet

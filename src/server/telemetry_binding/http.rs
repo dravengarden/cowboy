@@ -22,6 +22,10 @@ pub(in crate::server) struct ApiState {
     pub(super) control: Arc<MachineControl>,
     pub(super) plans: Arc<super::resolution::surface::Plans>,
     pub(super) recovery_plans: Arc<super::recovery::surface::Plans>,
+    pub(super) binding_plans: Arc<super::surface::Plans>,
+    pub(super) catalog: Arc<crate::plugin_catalog::PluginCatalog>,
+    pub(super) fences: crate::server::PluginLifecycleFences,
+    pub(super) legacy_fence: LegacyFence,
     pub(super) hub: crate::core::Hub,
     pub(super) product_auth_enabled: bool,
     pub(super) devices: Arc<crate::client_auth::DeviceAccessSessions>,
@@ -30,6 +34,8 @@ pub(in crate::server) struct ApiState {
     pub(super) fixture_write_admission: bool,
     #[cfg(test)]
     pub(super) fixture_recovery_admission: bool,
+    #[cfg(test)]
+    pub(super) fixture_binding_admission: bool,
 }
 
 impl FromRef<Arc<AppState>> for ApiState {
@@ -40,6 +46,10 @@ impl FromRef<Arc<AppState>> for ApiState {
             control: state.machine_control.clone(),
             plans: state.telemetry_resolution_plans.clone(),
             recovery_plans: state.telemetry_recovery_plans.clone(),
+            binding_plans: state.telemetry_binding_plans.clone(),
+            catalog: state.plugin_catalog.clone(),
+            fences: state.plugin_lifecycle_fences.clone(),
+            legacy_fence: state.telemetry_binding_fence.clone(),
             hub: state.hub.clone(),
             product_auth_enabled: state.product_auth_enabled,
             devices: state.device_access.clone(),
@@ -48,6 +58,8 @@ impl FromRef<Arc<AppState>> for ApiState {
             fixture_write_admission: false,
             #[cfg(test)]
             fixture_recovery_admission: false,
+            #[cfg(test)]
+            fixture_binding_admission: false,
         }
     }
 }
@@ -97,6 +109,7 @@ pub(super) enum ApiError {
     AdmissionClosed,
     OutcomeUnverified,
     RecoveryAdmissionClosed,
+    BindingAdmissionClosed,
 }
 
 impl IntoResponse for ApiError {
@@ -108,6 +121,7 @@ impl IntoResponse for ApiError {
             Self::Changed => (StatusCode::CONFLICT, "preview_or_evidence_changed"),
             Self::AdmissionClosed => (StatusCode::CONFLICT, "resolution_admission_closed"),
             Self::RecoveryAdmissionClosed => (StatusCode::CONFLICT, "recovery_admission_closed"),
+            Self::BindingAdmissionClosed => (StatusCode::CONFLICT, "binding_admission_closed"),
             Self::OutcomeUnverified => (StatusCode::CONFLICT, "outcome_unverified"),
         };
         (

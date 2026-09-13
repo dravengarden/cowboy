@@ -13,18 +13,18 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::sync::atomic::AtomicUsize;
 use tokio::sync::mpsc;
 
-struct Fixture {
+pub(in crate::server::telemetry_binding) struct Fixture {
     root: tempfile::TempDir,
     machine: Arc<MachinePluginStore>,
     store: Store,
-    control: Arc<MachineControl>,
-    catalog: Arc<PluginCatalog>,
-    fences: crate::server::PluginLifecycleFences,
-    connection: ConnectionToken,
-    installed: PluginInventory,
+    pub(in crate::server::telemetry_binding) control: Arc<MachineControl>,
+    pub(in crate::server::telemetry_binding) catalog: Arc<PluginCatalog>,
+    pub(in crate::server::telemetry_binding) fences: crate::server::PluginLifecycleFences,
+    pub(in crate::server::telemetry_binding) connection: ConnectionToken,
+    pub(in crate::server::telemetry_binding) installed: PluginInventory,
     pending: Option<Intent>,
-    sends: Arc<AtomicUsize>,
-    queries: Arc<AtomicUsize>,
+    pub(in crate::server::telemetry_binding) sends: Arc<AtomicUsize>,
+    pub(in crate::server::telemetry_binding) queries: Arc<AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -39,7 +39,7 @@ fn wire(frame: MachineFrame) -> MachineFrame {
 }
 
 impl Fixture {
-    async fn new(writer: bool, lose_ack: bool) -> Self {
+    pub(in crate::server::telemetry_binding) async fn new(writer: bool, lose_ack: bool) -> Self {
         Self::setup(writer, lose_ack, false).await
     }
 

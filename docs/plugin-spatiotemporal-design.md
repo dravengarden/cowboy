@@ -79,8 +79,11 @@ preflight 也会重新验证磁盘，发现变化后不复活缓存信任。生�
 后续 [Service 确认界面](telemetry-resolution-surface.md) 与
 [Machine 中断处置界面](telemetry-machine-recovery-surface.md) 已接入核心 Settings → Info：
 复用认证和闭集数据解析，但分别持有计划、用途授权与一次性预算。Machine 确认不自动接续 Service
-确认，预览不证明 Machine 已完成 journal reopen。生产写入仍关闭；普通绑定确认、耐久 HTTP
-恢复审计发现、后台策略准入与跨端生产验收仍待完成，不能将界面发布等同 P2 退出。
+确认，预览不证明 Machine 已完成 journal reopen。
+[普通绑定确认](telemetry-binding-surface.md) 也已接入：精确安装选择、撤销与前态恢复分别预览，
+确认消耗原一分钟预算和连接，持久化操作 GET 不依赖进程内计划、不重发命令。共用实际 legacy
+export fence；首次 intent 即可能关闭旧外发，恢复不撤回已发 OTel。生产写入仍关闭；耐久 HTTP
+Machine 恢复审计发现、后台策略准入与跨端生产验收仍待完成，不能将界面发布等同 P2 退出。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

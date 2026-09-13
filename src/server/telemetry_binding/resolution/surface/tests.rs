@@ -2,6 +2,13 @@ use super::*;
 use axum::http::Method;
 use serde_json::{Value, json};
 
+type BindingFixture = (
+    bool,
+    Arc<crate::machine_control::MachineControl>,
+    Arc<crate::plugin_catalog::PluginCatalog>,
+    crate::server::PluginLifecycleFences,
+);
+
 #[test]
 fn public_projection_matches_the_shared_web_contract() {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -53,27 +60,59 @@ impl Fixture {
         write_admitted: bool,
         product_auth_enabled: bool,
     ) -> Self {
-        Self::build(write_admitted, false, product_auth_enabled).await
+        Self::build(write_admitted, false, product_auth_enabled, None).await
     }
 
     pub(in crate::server::telemetry_binding) async fn with_recovery(
         write: bool,
         auth: bool,
     ) -> Self {
-        Self::build(false, write, auth).await
+        Self::build(false, write, auth, None).await
     }
 
-    async fn build(write_admitted: bool, recovery: bool, product_auth_enabled: bool) -> Self {
+    #[cfg(feature = "machine-host")]
+    pub(in crate::server::telemetry_binding) async fn with_binding(
+        write: bool,
+        auth: bool,
+        control: Arc<crate::machine_control::MachineControl>,
+        catalog: Arc<crate::plugin_catalog::PluginCatalog>,
+        fences: crate::server::PluginLifecycleFences,
+    ) -> Self {
+        Self::build(false, false, auth, Some((write, control, catalog, fences))).await
+    }
+
+    async fn build(
+        write_admitted: bool,
+        recovery: bool,
+        product_auth_enabled: bool,
+        binding: Option<BindingFixture>,
+    ) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let root = tempfile::tempdir().unwrap();
         let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
             .await
             .unwrap();
         store.migrate().await.unwrap();
+        let legacy_fence =
+            crate::telemetry_binding::LegacyFence::recover(Some(&store), "service-test")
+                .await
+                .unwrap();
+        let (binding_write, control, catalog, fences) = binding.unwrap_or_else(|| {
+            (
+                false,
+                Arc::default(),
+                Arc::new(crate::plugin_catalog::PluginCatalog::open(root.path(), None).unwrap()),
+                Default::default(),
+            )
+        });
         let state = ApiState {
             service: "service-test".into(),
             store: Some(store),
-            control: Arc::default(),
+            control,
+            catalog,
+            fences,
+            legacy_fence,
+            binding_plans: Arc::default(),
             plans: Arc::default(),
             recovery_plans: Arc::default(),
             hub: crate::core::Hub::new(),
@@ -84,9 +123,11 @@ impl Fixture {
             )),
             fixture_write_admission: write_admitted,
             fixture_recovery_admission: recovery,
+            fixture_binding_admission: binding_write,
         };
         let router = routes()
             .merge(crate::server::telemetry_binding::recovery::surface::routes())
+            .merge(crate::server::telemetry_binding::surface::routes())
             .with_state(state.clone())
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
