@@ -57,6 +57,34 @@ Deno.test("structured agent questions are not presented as tool approvals", () =
   }
 });
 
+Deno.test("clean worker exits are not transcript rows", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "lifecycle",
+      status: "exited",
+      detail: null,
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "hello" },
+      },
+    },
+  ]);
+  if (items.some((item) => item.kind === "lifecycle")) {
+    throw new Error("a clean exit must not paint in the conversation");
+  }
+  if (items.length !== 1 || items[0]?.kind !== "message") {
+    throw new Error("the human prompt should remain");
+  }
+});
+
 Deno.test("derive collapses equivalent crash JSON dumps onto one row", () => {
   const dump =
     'Internal error: { "message": "You\'ve hit your usage limit.", "codexErrorInfo": "usageLimitExceeded" }';

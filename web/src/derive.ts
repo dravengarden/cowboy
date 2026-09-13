@@ -6,6 +6,7 @@
 import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch } from "./crashDetail";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
+import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import {
   isHumanPrompt,
   isInternalRuntimePrompt,
@@ -457,9 +458,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
       }
       case "lifecycle": {
-        // Only surface notable transitions (crash/exit); running/busy show in
-        // the header.
-        if (env.status === "crashed" || env.status === "exited") {
+        // Crashes (and interrupted turns) explain a broken turn in the log.
+        // A clean worker exit is session chrome — dormant in the status bar —
+        // not a chat event. Painting "exited" in the transcript reads as a
+        // failed load, especially while older history is still arriving.
+        if (shouldPaintTranscriptLifecycle(env.status)) {
           const previous = items.at(-1);
           if (
             previous?.kind === "lifecycle" && previous.status === env.status &&

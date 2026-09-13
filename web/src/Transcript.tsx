@@ -199,6 +199,12 @@ import {
 } from "./transcriptRestorePolicy";
 import { retainUnpresentedOptimistic } from "./sendImagePreviews";
 import {
+  CONVERSATION_SKELETON_TURNS,
+  shouldPaintTranscriptLifecycle,
+  transcriptLifecycleLabel,
+  transcriptRestoreCaption,
+} from "./transcriptLoadingPresentation";
+import {
   advanceTimelinePresentation,
   revealHistoryPrepend,
 } from "./timelinePresentation";
@@ -271,27 +277,11 @@ async function waitForScrollbackMount(
 // --- Loading primitives -----------------------------------------------------
 
 // Chat-history skeleton shown while a session's snapshot is still in flight (the
-// startup blank). A handful of placeholder turns — assistant blocks read as
-// left-aligned prose lines, "mine" blocks as a right-aligned bubble — so it
-// reads as a conversation, not a form. Sizes are %/maxWidth-relative and it
-// rides inside the transcript's padded reading column, so the same markup gives
-// the right gutter + line width on iPhone, iPad and desktop with no breakpoints.
-const SKELETON_TURNS: { mine: boolean; lines: string[] }[] = [
-  { mine: false, lines: ["92%", "84%", "61%"] },
-  { mine: true, lines: ["52%"] },
-  { mine: false, lines: ["88%", "96%", "72%", "47%"] },
-  { mine: true, lines: ["38%"] },
-  { mine: false, lines: ["80%", "65%"] },
-];
-
-const LOADING_FILL_TURNS: { mine: boolean; lines: string[] }[] = [
-  { mine: false, lines: ["84%", "63%"] },
-  { mine: true, lines: ["46%"] },
-  { mine: false, lines: ["91%", "72%", "54%"] },
-  { mine: false, lines: ["76%", "58%"] },
-  { mine: true, lines: ["39%"] },
-  { mine: false, lines: ["88%", "69%", "45%"] },
-];
+// startup blank). Placeholder turns — assistant blocks as left-aligned prose
+// lines, "mine" blocks as a right-aligned bubble — so it reads as a
+// conversation, not a form. Sizes are %/maxWidth-relative and it rides inside
+// the transcript's padded reading column, so the same markup gives the right
+// gutter + line width on iPhone, iPad and desktop with no breakpoints.
 
 function TranscriptSkeleton({
   desktop,
@@ -330,25 +320,23 @@ function TranscriptSkeleton({
       aria-busy="true"
       aria-label="Loading chat history"
     >
-      {!desktop && (
-        <Stack
-          direction="row"
-          spacing={1}
-          alignItems="center"
-          sx={{ color: "text.secondary" }}
-        >
-          <CircularProgress
-            size={14}
-            thickness={4}
-            color="inherit"
-            aria-hidden
-          />
-          <Typography variant="caption" sx={{ fontWeight: 650 }}>
-            Restoring {agent} conversation…
-          </Typography>
-        </Stack>
-      )}
-      {SKELETON_TURNS.map((turn, i) => (
+      <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
+        sx={{ color: "text.secondary" }}
+      >
+        <CircularProgress
+          size={14}
+          thickness={4}
+          color="inherit"
+          aria-hidden
+        />
+        <Typography variant="caption" sx={{ fontWeight: 650 }}>
+          {transcriptRestoreCaption("hydrate", agent)}
+        </Typography>
+      </Stack>
+      {CONVERSATION_SKELETON_TURNS.map((turn, i) => (
         <Stack
           // Static placeholder list — index keys are fine (no reordering).
           key={i}
@@ -359,9 +347,9 @@ function TranscriptSkeleton({
             ? (
               <Skeleton
                 variant="rounded"
-                animation="pulse"
+                animation="wave"
                 width={turn.lines[0]}
-                height={34}
+                height={38}
                 sx={{ maxWidth: "75%", borderRadius: 2.5 }}
               />
             )
@@ -369,10 +357,11 @@ function TranscriptSkeleton({
               turn.lines.map((w, j) => (
                 <Skeleton
                   key={j}
-                  variant="text"
-                  animation="pulse"
+                  variant="rounded"
+                  animation="wave"
                   width={w}
-                  height={20}
+                  height={12}
+                  sx={{ borderRadius: 99 }}
                 />
               ))
             )}
@@ -399,8 +388,8 @@ function TranscriptSkeleton({
 // During the first older-page restore, turn otherwise ambiguous unused space
 // into a quiet loading outline. Never show it merely because the agent is
 // working: the real status/thinking/tool rows already describe execution, and
-// labelling that state "Loading conversation data" leaves a permanent-looking
-// skeleton above an already-hydrated transcript. This is a FLEX filler, not
+// a restore caption over a live turn looks like history is still arriving.
+// This is a FLEX filler, not
 // guessed history height: it consumes only free viewport space, shrinks
 // one-for-one as real rows grow, and reaches zero before the transcript
 // overflows. It therefore never adds scroll range or disturbs iOS' anchor.
@@ -426,76 +415,82 @@ function TranscriptLoadingFill({
         position: "relative",
         minHeight: 0,
         overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <Stack
+        direction="row"
+        spacing={1}
+        alignItems="center"
         sx={{
-          position: "absolute",
-          inset: "12px 20px",
+          flexShrink: 0,
+          px: { xs: 2.5, sm: 4 },
+          pt: { xs: 1.25, sm: 1.75 },
+          pb: 0.75,
+          maxWidth: 760,
           mx: "auto",
-          maxWidth: 560,
-          minHeight: 0,
-          justifyContent: "space-evenly",
-          gap: 1.1,
-          opacity: 0.62,
-          "@media (min-width: 600px)": {
-            inset: "20px 32px",
-            maxWidth: 760,
-            // The filler owns exactly the otherwise-empty transcript space.
-            // Spread enough conversation-shaped rows through that area on
-            // iPad instead of leaving one small cluster floating in its centre.
-            justifyContent: "space-evenly",
-            gap: 1.5,
-          },
-          maskImage:
-            "linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)",
-          WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 12%, black 88%, transparent 100%)",
+          width: "100%",
+          color: "text.secondary",
         }}
       >
-        <Stack direction="row" spacing={1} alignItems="center">
-          {paused ? null : (
-            <CircularProgress
-              size={13}
-              thickness={4}
-              color="inherit"
-              aria-hidden
-            />
-          )}
-          <Typography
-            variant="caption"
-            sx={{ color: "text.secondary", fontWeight: 600 }}
+        {paused ? null : (
+          <CircularProgress
+            size={13}
+            thickness={4}
+            color="inherit"
+            aria-hidden
+          />
+        )}
+        <Typography variant="caption" sx={{ fontWeight: 650 }}>
+          {label}
+        </Typography>
+        {paused && onContinue && (
+          <Button
+            size="small"
+            variant="text"
+            onClick={onContinue}
+            sx={{ minHeight: 34, textTransform: "none" }}
           >
-            {label}
-          </Typography>
-          {paused && onContinue && (
-            <Button
-              size="small"
-              variant="text"
-              onClick={onContinue}
-              sx={{ minHeight: 34, textTransform: "none" }}
-            >
-              Continue
-            </Button>
-          )}
-        </Stack>
-        {LOADING_FILL_TURNS.map(({ mine, lines }, turn) => (
+            Continue
+          </Button>
+        )}
+      </Stack>
+      <Stack
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          px: { xs: 2.5, sm: 4 },
+          pb: { xs: 1.5, sm: 2.5 },
+          mx: "auto",
+          width: "100%",
+          maxWidth: 760,
+          justifyContent: "space-evenly",
+          gap: { xs: 1.15, sm: 1.6 },
+          opacity: paused ? 0.48 : 0.78,
+          maskImage:
+            "linear-gradient(to bottom, black 0%, black 82%, transparent 100%)",
+          WebkitMaskImage:
+            "linear-gradient(to bottom, black 0%, black 82%, transparent 100%)",
+        }}
+      >
+        {CONVERSATION_SKELETON_TURNS.map(({ mine, lines }, turn) => (
           <Stack
             // Static outline with no reordering.
             key={turn}
-            spacing={0.8}
+            spacing={0.7}
             sx={{
               width: mine ? "58%" : "100%",
               alignSelf: mine ? "flex-end" : "stretch",
-              p: mine ? 1.15 : 0,
+              p: mine ? 1.1 : 0,
               borderRadius: mine ? 2.5 : 0,
               "@media (min-width: 600px)": {
                 width: mine ? "44%" : "100%",
                 maxWidth: mine ? 360 : "none",
-                p: mine ? 1.25 : 0,
+                p: mine ? 1.2 : 0,
               },
               bgcolor: mine
-                ? (theme) => alpha(theme.palette.primary.main, 0.045)
+                ? (theme) => alpha(theme.palette.primary.main, 0.05)
                 : "transparent",
             }}
           >
@@ -503,13 +498,13 @@ function TranscriptLoadingFill({
               <Skeleton
                 key={width}
                 variant="rounded"
-                animation={false}
+                animation={paused ? false : "wave"}
                 width={width}
-                height={9}
+                height={mine ? 14 : 11}
                 sx={{
                   borderRadius: 99,
                   bgcolor: (theme) =>
-                    alpha(theme.palette.text.secondary, 0.105),
+                    alpha(theme.palette.text.secondary, mine ? 0.08 : 0.12),
                 }}
               />
             ))}
@@ -535,13 +530,13 @@ function ScrollbackLoadingSkeleton({
   failed: boolean;
   onRetry: () => void;
 }): React.JSX.Element {
-  const rows = ["58%", "42%", "51%"];
+  const rows = ["58%", "42%", "51%", "63%", "37%"];
   return (
     <Box
       data-transcript-scrollback-fill
       role="status"
       aria-live="polite"
-      aria-label="Loading earlier messages"
+      aria-label={transcriptRestoreCaption("backfill")}
       sx={{
         height: `${Math.max(0, height)}px`,
         minHeight: 0,
@@ -550,7 +545,7 @@ function ScrollbackLoadingSkeleton({
         userSelect: "none",
         WebkitUserSelect: "none",
         transition: "height 160ms ease-out, opacity 140ms ease",
-        opacity: failed ? 1 : loading ? 0.68 : 0.38,
+        opacity: failed ? 1 : loading ? 0.72 : 0.42,
       }}
     >
       {failed
@@ -586,21 +581,22 @@ function ScrollbackLoadingSkeleton({
             {rows.map((title, index) => (
               <Stack key={title} spacing={0.55}>
                 <Skeleton
-                  variant="text"
-                  animation={loading && index >= rows.length - 2
-                    ? "wave"
-                    : false}
+                  variant="rounded"
+                  animation={loading ? "wave" : false}
                   width={title}
-                  height={13}
-                  sx={{ ml: 1.5, transform: "none" }}
+                  height={11}
+                  sx={{ ml: 1.5, borderRadius: 99 }}
                 />
                 {loading && (
                   <Skeleton
                     variant="rounded"
-                    animation={index >= rows.length - 2 ? "wave" : false}
-                    width="100%"
-                    height={44}
-                    sx={{ borderRadius: 1.75 }}
+                    animation="wave"
+                    width={index % 2 === 0 ? "100%" : "62%"}
+                    height={index % 3 === 1 ? 36 : 14}
+                    sx={{
+                      borderRadius: index % 3 === 1 ? 2.5 : 99,
+                      ml: index % 2 === 0 ? 0 : "auto",
+                    }}
                   />
                 )}
               </Stack>
@@ -2949,7 +2945,13 @@ const ItemView = memo(function ItemView({
     case "lifecycle": {
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
       // amber record that stays in the log after the session resumes; crashes are
-      // red; everything else is a quiet grey note.
+      // red. Clean exits are session chrome, not a transcript event.
+      const label = transcriptLifecycleLabel(
+        item.status,
+        item.detail,
+        prettifyCrashDetail,
+      );
+      if (!label) return null;
       const interrupted = item.status === "interrupted";
       const color = item.status === "crashed"
         ? "error.main"
@@ -2965,7 +2967,7 @@ const ItemView = memo(function ItemView({
             variant="caption"
             sx={{ fontWeight: interrupted ? 600 : 400 }}
           >
-            {item.detail ? prettifyCrashDetail(item.detail) : item.status}
+            {label}
           </Typography>
         </Stack>
       );
@@ -5566,6 +5568,8 @@ export function Transcript({
                 .slice()
                 .reverse()
                 .filter((item) =>
+                  !(item.kind === "lifecycle" &&
+                    !shouldPaintTranscriptLifecycle(item.status)) &&
                   !(item.kind === "message" &&
                     item.role === "user" &&
                     (
@@ -5663,9 +5667,9 @@ export function Transcript({
               {!desktopNavigation &&
                 showHistoryLoadingFill && (
                 <TranscriptLoadingFill
-                  label={viewportBackfillPaused
-                    ? "Earlier conversation is available"
-                    : "Loading conversation data"}
+                  label={transcriptRestoreCaption(
+                    viewportBackfillPaused ? "paused" : "backfill",
+                  )}
                   paused={viewportBackfillPaused}
                   onContinue={viewportBackfillPaused
                     ? () => {
