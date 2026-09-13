@@ -852,8 +852,9 @@ read as empty inventories, never created by inspection or refresh. It does not
 create Service identities, caches, directories, generations or authority
 markers; connect to a database; run migrations/Plugins; call a login endpoint;
 or start a listener. Ordinary startup now also completes this preflight before
-creating Service state. Only the host/login selection subset of `serve`
-configuration is checked; unrelated Machine component manifests, Web roots and
+creating Service state. The host/login selection subset and explicitly supplied
+[telemetry writer/background policies](telemetry-policy-preflight.md) are checked;
+unrelated Machine component manifests, Web roots and
 listener availability are not validated. JSON errors in private host,
 Authentication and legacy
 OIDC configuration report category and line/column without echoing values or
@@ -870,6 +871,16 @@ live authentication. This is a point-in-time configuration check, not an
 activation receipt or proof that the database, filesystem permissions, runtime
 artifacts or real login work. Recheck changed inputs and still verify the
 authorized activation. A failed check exits nonzero without altering state.
+
+The actual `serve` check additionally reports `telemetry` with schema
+`dravengarden.cowboy.telemetry-policy-preflight/v1`. Explicit managed policies
+must match the existing Service identity and pass the shared startup validators;
+no identity is created, no store opened and no background authority activated.
+Its nested `not_checked` distinguishes policy validity from actual binding,
+Machine admission, legacy fence and delivery readiness. A supplied legacy
+selection remains explicitly unchecked because startup may ignore it behind a
+durable fence. Require this nested report when checking managed configuration;
+an older Controller's successful host-only report does not cover telemetry.
 
 The optional file defaults to `bootstrap` when absent. `bootstrap` retains the
 per-ID source migration fallback but honors every supplied exact pin. This

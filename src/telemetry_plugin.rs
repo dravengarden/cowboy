@@ -53,6 +53,9 @@ impl PrivateSnapshot {
 #[cfg(feature = "full")]
 pub(crate) mod background_policy;
 
+#[cfg(feature = "full")]
+pub(crate) mod controller_policy;
+
 pub(crate) mod writer_admission;
 
 fn read_private_snapshot<T: serde::de::DeserializeOwned>(

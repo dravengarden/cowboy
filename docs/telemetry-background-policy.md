@@ -111,6 +111,13 @@ the existing lane failure counters without logging private configuration.
 
 ## Verification and rollout boundary
 
+The [Controller policy preflight](telemetry-policy-preflight.md) validates an
+explicit file with the same constructor as startup, including its exact Service,
+private-file requirements and mutually exclusive export mode. It does not read
+the binding journal or call `activate`; `configuration_valid` never means the
+background queue is active. Missing nested telemetry evidence in an older
+host-only report is not acceptance of this configuration.
+
 Tests cover closed policy decoding and exact u64 values, file/identity changes,
 sticky rejection, full batch correlation, the original deadline, mutually
 exclusive CLI modes, and separately typed Operator/background scopes. Signed

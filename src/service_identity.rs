@@ -56,10 +56,35 @@ pub(crate) fn service_state_dir(home: &Path, service_id: &str) -> Result<PathBuf
         .join(service_id))
 }
 
+/// Read an already established identity for configuration-only checks. Never
+/// creates a directory/identity, follows a final symlink, or waits on a FIFO.
+#[cfg(feature = "full")]
+pub(crate) fn inspect(data_dir: &Path) -> Result<String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
+        .open(data_dir.join(SERVICE_ID_FILE))
+        .context("telemetry policy preflight requires an existing Service identity")?;
+    anyhow::ensure!(
+        file.metadata()?.is_file(),
+        "invalid Cowboy Service identity file"
+    );
+    let mut value = String::new();
+    file.take(129).read_to_string(&mut value)?;
+    anyhow::ensure!(value.len() <= 128, "Cowboy Service identity is too large");
+    parse(value)
+}
+
 #[cfg(feature = "full")]
 fn read(path: &Path) -> Result<String> {
     let value = std::fs::read_to_string(path)
         .with_context(|| format!("reading Cowboy Service identity {}", path.display()))?;
+    parse(value)
+}
+
+#[cfg(feature = "full")]
+fn parse(value: String) -> Result<String> {
     let value = value.trim().to_owned();
     anyhow::ensure!(valid_service_id(&value), "invalid Cowboy Service identity");
     Ok(value)

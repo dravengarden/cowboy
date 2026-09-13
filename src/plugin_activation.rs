@@ -88,6 +88,8 @@ pub(crate) struct HostPreflightReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     core_security: Option<crate::core_security::PasskeyConfig>,
     catalog_defaults: Vec<HostPreflightDefault>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) telemetry: Option<crate::telemetry_plugin::controller_policy::PreflightReport>,
     not_checked: [&'static str; 5],
 }
 
@@ -283,6 +285,7 @@ impl HostActivationPolicy {
             webauthn_storage_required: self.require_webauthn_storage,
             core_security: self.core_security.clone(),
             catalog_defaults,
+            telemetry: None,
             not_checked: [
                 "runtime_artifact_bytes",
                 "generation_staging",

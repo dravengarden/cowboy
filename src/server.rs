@@ -845,10 +845,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let (plugin_catalog, product_authentication, core_security) =
         crate::plugin_activation::prepare_controller_hosts(&args)?;
     if args.check_plugin_hosts {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&plugin_catalog.host_preflight_report()?)?
-        );
+        let mut report = plugin_catalog.host_preflight_report()?;
+        report.telemetry = Some(crate::telemetry_plugin::controller_policy::inspect(&args)?);
+        println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
     plugin_catalog.initialize()?;
@@ -859,35 +858,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
-    let telemetry_writer_admission = args
-        .telemetry_writer_policy
-        .as_deref()
-        .map(crate::telemetry_plugin::writer_admission::WriterAdmission::load)
-        .transpose()?;
-    anyhow::ensure!(
-        telemetry_writer_admission
-            .as_ref()
-            .is_none_or(|policy| policy.owns_service(&service_id))
-            && (telemetry_writer_admission.is_none() || args.database_url().is_some()),
-        "telemetry writer policy requires its exact durable Service"
-    );
-    // Explicit host policy is independent of binding/recovery confirmations.
-    // Reject an ambiguous mode even for a programmatically constructed CLI.
-    anyhow::ensure!(
-        args.telemetry_managed_export_policy.is_none() || args.telemetry_plugin_config.is_none(),
-        "managed and legacy telemetry configurations are mutually exclusive"
-    );
-    let managed_export_policy = args
-        .telemetry_managed_export_policy
-        .as_deref()
-        .map(|path| {
-            crate::telemetry_plugin::background_policy::BackgroundPolicy::load(path, &service_id)
-        })
-        .transpose()?;
-    anyhow::ensure!(
-        managed_export_policy.is_none() || args.database_url().is_some(),
-        "managed telemetry export requires the durable Service store"
-    );
+    let crate::telemetry_plugin::controller_policy::ControllerPolicy {
+        writer: telemetry_writer_admission,
+        background: managed_export_policy,
+    } = crate::telemetry_plugin::controller_policy::ControllerPolicy::load(&args, &service_id)?;
     let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
         serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
             &std::fs::read(path).with_context(|| {

@@ -319,6 +319,8 @@ pub struct ServeArgs {
     /// and exit without starting services or writing state. Uses the same
     /// authentication and database flags as an actual start; never connects to
     /// the database or executes migrations, Plugins, or login requests.
+    /// Validates explicit telemetry writer/background policies against the
+    /// existing Service identity; this is not binding or export readiness.
     #[arg(long)]
     pub check_plugin_hosts: bool,
 
@@ -610,6 +612,9 @@ impl ServeArgs {
         args.cardea_oidc_config = None;
         args.database_url = None;
         args.postgres_url = None;
+        args.telemetry_writer_policy = None;
+        args.telemetry_managed_export_policy = None;
+        args.telemetry_plugin_config = None;
         args.product_auth_enabled = false;
         *args
     }

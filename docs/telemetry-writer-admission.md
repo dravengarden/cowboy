@@ -96,6 +96,12 @@ Local rotating files remain independent.
 
 ## Verification and production cutover
 
+The Controller [policy preflight](telemetry-policy-preflight.md) now checks
+explicit writer/background files against the existing Service identity using
+the normal startup validators. It does not connect to the store, activate
+admission or prove Machine readiness; require its nested telemetry report rather
+than treating an older host-only preflight as policy acceptance.
+
 Tests use real private policy files and production constructors, independent
 from fixture writer booleans. Coverage includes all purpose combinations,
 foreign owners, closed schema, replacement/revocation, private file failures,
