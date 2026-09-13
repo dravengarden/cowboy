@@ -373,6 +373,36 @@ Deno.test("derive strips cowboy-att tokens from user text so Markdown cannot pai
   if (image?.type !== "image") throw new Error("image chunk should remain");
 });
 
+Deno.test("derive keeps the originating cmid on a coalesced user prompt", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      cmid: "c1",
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "image", url: "/api/artifacts/a.jpg" },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "caption" },
+      },
+    },
+  ]);
+  const user = items.find((item) => item.kind === "message" && item.role === "user");
+  if (user?.kind !== "message" || user.cmid !== "c1") {
+    throw new Error(`expected coalesced user cmid c1, got ${JSON.stringify(user)}`);
+  }
+});
+
 Deno.test("derive hides a Grok prompt echo after an unrendered lifecycle", () => {
   const items = derive([
     {

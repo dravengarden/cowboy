@@ -21,6 +21,10 @@ import { createSyncShutdown } from "./syncShutdown";
 import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
+  promptEchoReadyToReplaceOptimistic,
+  rememberSendImagePreviews,
+} from "./sendImagePreviews";
+import {
   isAppleTouchWebView,
   shouldReconnectOnForeground,
   shouldStartImmediateReconnect,
@@ -1405,21 +1409,33 @@ function handle(msg: Outbound): void {
         }
       }
       const cached = transcriptIsCached(env.session_id);
+      const timelines = cached
+        ? applyEnvelope(state.timelines, env)
+        : state.timelines;
+      if (
+        cached &&
+        env.kind === "update" &&
+        env.update.sessionUpdate === "user_message_chunk"
+      ) {
+        optimisticMessages = reconcileReadyOptimistic(
+          optimisticMessages,
+          env.session_id,
+          timelines.get(env.session_id) ?? [],
+        );
+      } else if (cmid !== undefined && cached) {
+        optimisticMessages = reconcileOptimistic(
+          optimisticMessages,
+          env.session_id,
+          new Set([cmid]),
+        );
+      }
       setState({
         ...state,
         // Live fan-out covers every running session. Only the MRU working set
         // owns transcript payloads; inactive evictions rehydrate on demand.
-        timelines: cached
-          ? applyEnvelope(state.timelines, env)
-          : state.timelines,
+        timelines,
         pagination,
         optimisticMessages,
-        // Never drop a just-sent bubble unless its echo actually landed in the
-        // cached timeline. A restore snapshot racing the send used to confirm
-        // the cmid while the envelope was discarded, leaving an empty skeleton.
-        ...(cmid !== undefined && cached && {
-          optimisticMessages: reconcileOptimistic(state.optimisticMessages, env.session_id, new Set([cmid])),
-        }),
       });
       if (
         env.session_id !== openedSessionId &&
@@ -2563,6 +2579,9 @@ function commitQueue(sessionId: string): void {
     if (row.cmid !== undefined && bubbles.some((message) => message.cmid === row.cmid)) {
       continue;
     }
+    if (row.cmid !== undefined) {
+      rememberSendImagePreviews(row.cmid, row.attachments);
+    }
     bubbles.push({
       ...row,
       status: (row.cmid !== undefined ? qStatus.get(row.cmid) : undefined) ?? row.status ?? "pending",
@@ -2619,6 +2638,7 @@ async function qAdd(
   const mode = opts.mode ?? "back";
   const origin = opts.origin ?? "composer";
   const cmid = opts.cmid ?? newCmid();
+  if (target === "transcript") rememberSendImagePreviews(cmid, attachments);
   const row: QueuedMessage = {
     id: `opt-${cmid}`,
     text,
@@ -2959,6 +2979,24 @@ function reconcileOptimistic(
   if (kept.length > 0) next.set(sessionId, kept);
   else next.delete(sessionId);
   return next;
+}
+
+/** Keep an image-bearing optimistic bubble until every prompt block has been
+ * echoed. The first envelope is tagged; later image/text blocks are not. */
+function reconcileReadyOptimistic(
+  current: Map<string, QueuedMessage[]>,
+  sessionId: string,
+  timeline: Envelope[],
+): Map<string, QueuedMessage[]> {
+  const list = current.get(sessionId);
+  if (!list) return current;
+  const ready = new Set<string | undefined>();
+  for (const message of list) {
+    if (promptEchoReadyToReplaceOptimistic(message, timeline)) {
+      ready.add(message.cmid);
+    }
+  }
+  return ready.size > 0 ? reconcileOptimistic(current, sessionId, ready) : current;
 }
 
 /** Retry a failed optimistic chat bubble from THIS device (idempotent — the

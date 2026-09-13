@@ -84,6 +84,7 @@ import {
 } from "./conversationClearance";
 import { Markdown } from "./Markdown";
 import { attachmentDisplayParts, isLoadablePreviewUrl } from "./attachments";
+import { applySendImagePreviews } from "./sendImagePreviews";
 import { CodeView, Labeled } from "./tools/blocks";
 import { ToolBody, type ToolCtx } from "./tools/registry";
 import {
@@ -1145,7 +1146,9 @@ function TranscriptImage(
         component="img"
         src={src}
         alt={alt}
-        loading="lazy"
+        loading={src.startsWith("data:") || src.startsWith("blob:")
+          ? undefined
+          : "lazy"}
         {...openTap}
         sx={{
           maxWidth: "min(360px, 100%)",
@@ -1460,6 +1463,7 @@ function MessageBubble({
   chunks,
   streaming,
   origin,
+  cmid,
   provider,
   providerVersion,
   providerDigest,
@@ -1471,6 +1475,7 @@ function MessageBubble({
    *  the model is still producing. */
   streaming?: boolean;
   origin?: PromptOrigin | undefined;
+  cmid?: string | undefined;
   provider: string;
   providerVersion?: string | undefined;
   providerDigest?: string | undefined;
@@ -1478,10 +1483,11 @@ function MessageBubble({
 }): React.JSX.Element | null {
   const mine = role === "user";
   const human = !mine || isHumanPrompt(origin);
+  const displayChunks = mine ? applySendImagePreviews(chunks, cmid) : chunks;
   // Claude Code's "Compacting..." auto-compaction notice → purpose-built widget
   // instead of a stray one-word assistant reply. `streaming` (last item + turn
   // busy) means it's condensing right now; otherwise it's a finished record.
-  if (!mine && isCompactingMessage(chunks)) {
+  if (!mine && isCompactingMessage(displayChunks)) {
     return (
       <CompactingWidget
         active={!!streaming}
@@ -1508,8 +1514,8 @@ function MessageBubble({
     // products. A second slash-command chip made Desktop diverge from Mobile.
     return null;
   }
-  const lastChunkIdx = chunks.length - 1;
-  const body = chunks.map((c, i) => (
+  const lastChunkIdx = displayChunks.length - 1;
+  const body = displayChunks.map((c, i) => (
     <Box key={i} sx={{ position: "relative" }}>
       <ChunkView chunk={c} invert={mine && human} />
       {streaming && i === lastChunkIdx && c.type === "text" && (
@@ -2897,6 +2903,7 @@ const ItemView = memo(function ItemView({
           chunks={item.chunks}
           streaming={!!streaming && item.role === "assistant"}
           origin={item.origin}
+          cmid={item.cmid}
           provider={provider}
           providerVersion={providerVersion}
           providerDigest={providerDigest}
@@ -4061,8 +4068,9 @@ export function Transcript({
     return () => observer.disconnect();
   }, [items.length, managesScrollHistory, sessionId]);
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
-  // user bubbles below the latest real item (newest at the very bottom), dropped
-  // by cmid the moment the echo lands. Empty in the common (confirmed) case.
+  // user bubbles below the latest real item (newest at the very bottom). Image
+  // prompts stay on this overlay until every content block has been echoed, so
+  // the picture does not unmount for an artifact URL fetch.
   const pendingMessages = useStoreSelector(
     (snapshot) =>
       snapshot.optimisticMessages.get(sessionId) ?? EMPTY_OPTIMISTIC_MESSAGES,
@@ -4080,6 +4088,13 @@ export function Transcript({
     },
     [pendingMessages, visibleItemKeys, liveTail],
   );
+  const optimisticCmids = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of optimisticMsgs) {
+      if (message.cmid !== undefined) ids.add(message.cmid);
+    }
+    return ids;
+  }, [optimisticMsgs]);
   const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
     loading,
     items.length,
@@ -5478,6 +5493,12 @@ export function Transcript({
               {mountedItems
                 .slice()
                 .reverse()
+                .filter((item) =>
+                  !(item.kind === "message" &&
+                    item.role === "user" &&
+                    item.cmid !== undefined &&
+                    optimisticCmids.has(item.cmid))
+                )
                 .map((item) => (
                   <Box
                     key={item.key}

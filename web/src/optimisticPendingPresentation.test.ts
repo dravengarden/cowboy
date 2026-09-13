@@ -86,6 +86,11 @@ Deno.test("mdlive leaves cowboy-att images for the inline widget instead of hidi
   assert(inlinePreviewSource.includes("!imageText.includes('cowboy-att:')"));
 });
 
+Deno.test("confirmed user rows stay hidden while the optimistic image bubble is up", () => {
+  assert(transcript.includes("optimisticCmids.has(item.cmid)"));
+  assert(transcript.includes("applySendImagePreviews(chunks, cmid)"));
+});
+
 Deno.test("failed transcript sends offer return to the list they left", () => {
   const start = transcript.indexOf("function OptimisticUserBubble(");
   const end = transcript.indexOf("function MessageBubble(", start);
@@ -109,6 +114,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
       add.indexOf("await store.mutateDurably"),
   );
   assert(add.indexOf("await store.mutateDurably") >= 0);
+  assert(add.includes("rememberSendImagePreviews(cmid, attachments)"));
 
   const activateStart = store.indexOf("export async function activateDraft(");
   const activateEnd = store.indexOf(
@@ -124,6 +130,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
   assert(activate.includes("destination: dest"));
   assertEquals(activate.includes("await optimisticMessage("), false);
   assertEquals(activate.includes("await discardQueued("), false);
+  assert(store.includes("reconcileReadyOptimistic("));
 
   const commitStart = store.indexOf("function commitQueue(");
   const commitEnd = store.indexOf("function armQTimers", commitStart);

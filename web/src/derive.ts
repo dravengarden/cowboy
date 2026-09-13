@@ -39,6 +39,8 @@ export type RenderItem = { key: string } & (
     role: "assistant" | "user";
     chunks: ContentChunk[];
     origin?: PromptOrigin | undefined;
+    /** Originating client id on the first `user_message_chunk` of a prompt. */
+    cmid?: string | undefined;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -115,6 +117,7 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
   switch (a.kind) {
     case "message":
       return b.kind === "message" && a.role === b.role &&
+        a.cmid === b.cmid &&
         samePromptOrigin(a.origin, b.origin) && sameChunks(a.chunks, b.chunks);
     case "thought":
       return b.kind === "thought" && sameStrings(a.sections, b.sections);
@@ -344,6 +347,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 chunks: [chunk],
                 key: String(env.seq),
                 origin,
+                ...(role === "user" && env.cmid !== undefined
+                  ? { cmid: env.cmid }
+                  : {}),
               });
               cursor = { kind: "message", role };
             }
