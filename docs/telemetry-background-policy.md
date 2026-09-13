@@ -8,6 +8,9 @@ continues to use its explicitly configured legacy exporter.
 
 Controller implementation release and populated-reader acceptance:
 [2026-09-13 receipt](releases/telemetry-background-policy-2026-09-13.md).
+The subsequent [startup availability release](releases/telemetry-background-startup-2026-09-13.md)
+fixes stale-policy core startup and records separate candidate/actual-cold
+configuration evidence without enabling production managed export.
 
 ## Authority and restart semantics
 
