@@ -26,7 +26,13 @@ Deno.test("a just-sent prompt keeps the restore skeleton from covering it", asyn
     true,
   );
   assertEquals(
-    store.includes("cmid !== undefined && cached &&"),
+    /if\s*\(\s*cached &&\s*env\.kind === "update" &&\s*env\.update\.sessionUpdate === "user_message_chunk"\s*\)\s*\{\s*optimisticMessages = reconcileReadyOptimistic\(/
+      .test(store),
+    true,
+  );
+  assertEquals(
+    /else if \(cmid !== undefined && cached\)\s*\{\s*optimisticMessages = reconcileOptimistic\(/
+      .test(store),
     true,
   );
 });
