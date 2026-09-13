@@ -126,3 +126,10 @@ This is independent of Cowboy's in-app Theme setting. Other curated artworks
 retain their chosen backgrounds. Installed PWA icons remain static snapshots.
 The approved light counterpart is `assets/brand/cowboy-neon-light-source.png`;
 `tools/build-icon-appearances.py` exports it without regenerating artwork.
+
+Browser tabs use an independent transparent SVG mark with less padding, stronger
+light-mode colors and bright dark-mode colors. `assets/brand/cowboy-tab-contours.json`
+retains contours traced from the approved 103 artwork; `tools/build-tab-icons.py`
+exports palette favicons and explicit 16/32/48px ICO fallback frames. Native and
+PWA installation artwork retain their own backgrounds. Browser appearance, not
+the page's manual theme selection, selects the favicon color treatment.

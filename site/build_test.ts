@@ -707,16 +707,12 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v6-32.png" type="image/png" sizes="32x32"',
+        'href="assets/cowboy-tab-icon-v7.svg" type="image/svg+xml" sizes="any"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v6-16.png" type="image/png" sizes="16x16"',
-        ) &&
-        html.includes(
-          'href="assets/cowboy-tab-icon-v6.ico" sizes="any"',
-        ) &&
-        !html.includes('href="assets/cowboy-hat-mark.svg"'),
-      "document should expose tab-sized Cowboy favicons",
+          'href="assets/cowboy-tab-icon-v7.ico" sizes="16x16 32x32 48x48"',
+        ),
+      "browser tabs use transparent scalable marks with explicit raster fallbacks",
     );
     assert(
       !html.includes("cowboy-desktop.webp") &&
@@ -749,9 +745,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v6-16.png",
-        "cowboy-tab-icon-v6-32.png",
-        "cowboy-tab-icon-v6.ico",
+        "cowboy-tab-icon-v7-16.png",
+        "cowboy-tab-icon-v7-32.png",
+        "cowboy-tab-icon-v7.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

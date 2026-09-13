@@ -150,3 +150,6 @@ print(json.dumps({'icons':len(rows),'default':DEFAULT,'catalog':str(CATALOG)}))
 
 # Preserve native light/dark appearance slots when rebuilding brand exports.
 subprocess.run(['python3', str(ROOT / 'tools/build-icon-appearances.py')], check=True)
+
+# Browser marks have their own transparent silhouette and native-size frames.
+subprocess.run(['python3', str(ROOT / 'tools/build-tab-icons.py')], check=True)

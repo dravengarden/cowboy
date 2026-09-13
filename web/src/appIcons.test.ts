@@ -11,6 +11,7 @@ import {
   appIconAppearanceAsset,
   appIconAsset,
   appIconInstallPath,
+  appIconTabAsset,
   currentAppIcon,
   DEFAULT_APP_ICON,
   filterAppIcons,
@@ -186,4 +187,19 @@ Deno.test("Neon previews resolve light and dark assets without changing other st
       appIconAppearanceAsset(icon.id, true),
     );
   }
+});
+
+Deno.test("tab marks are independent of opaque installation icons", () => {
+  assertEquals(
+    appIconTabAsset(DEFAULT_APP_ICON),
+    "/app-icons/v7/palette-103/favicon.svg",
+  );
+  assertEquals(
+    appIconTabAsset("palette-054"),
+    "/app-icons/v7/palette-054/favicon.svg",
+  );
+  assertEquals(
+    appIconTabAsset("original-001"),
+    appIconAsset("original-001", 192),
+  );
 });
