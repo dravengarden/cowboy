@@ -6,6 +6,7 @@ pub(super) struct Http {
     base: String,
     client: Client,
     cookie: Option<String>,
+    last: parking_lot::Mutex<Option<HttpObservation>>,
 }
 
 pub(super) struct Reply {
@@ -29,6 +30,7 @@ impl Http {
         Ok(Self {
             base: format!("http://{address}"),
             cookie: None,
+            last: parking_lot::Mutex::new(None),
             client: Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -45,6 +47,12 @@ impl Http {
         path: &str,
         body: Option<Value>,
     ) -> Result<Reply, Failure> {
+        let started = std::time::Instant::now();
+        *self.last.lock() = Some(HttpObservation {
+            status: None,
+            elapsed_ms: 0,
+            result: HttpResult::Transport,
+        });
         let mut request = self
             .client
             .request(method, format!("{}{path}", self.base))
@@ -55,11 +63,23 @@ impl Http {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let mut response = request
-            .send()
-            .await
-            .map_err(|_| Failure::WrongObservation)?;
+        let mut response = request.send().await.map_err(|error| {
+            if let Some(last) = self.last.lock().as_mut() {
+                last.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                last.result = if error.is_timeout() {
+                    HttpResult::Timeout
+                } else {
+                    HttpResult::Transport
+                };
+            }
+            Failure::WrongObservation
+        })?;
         let status = response.status();
+        *self.last.lock() = Some(HttpObservation {
+            status: Some(status.as_u16()),
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            result: HttpResult::Body,
+        });
         if path.starts_with("/api/telemetry/")
             && status == StatusCode::OK
             && response
@@ -94,11 +114,34 @@ impl Http {
         }
         // Auth middleware may return a bounded plain-text/empty denial. Only
         // status is used there; successful telemetry views must be valid JSON.
+        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        let result = if status == StatusCode::UNAUTHORIZED {
+            HttpResult::Denied
+        } else if value["error"] == "outcome_unverified" {
+            HttpResult::OutcomeUnverified
+        } else if value["error"] == "preview_or_evidence_changed" {
+            HttpResult::Changed
+        } else if value["operation"]["phase"] == "needs_attention" {
+            HttpResult::NeedsAttention
+        } else if status == StatusCode::OK && !value.is_null() {
+            HttpResult::Json
+        } else {
+            HttpResult::Other
+        };
+        *self.last.lock() = Some(HttpObservation {
+            status: Some(status.as_u16()),
+            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            result,
+        });
         Ok(Reply {
             status,
-            value: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+            value,
             cookie: cookies.into_iter().next(),
         })
+    }
+
+    pub fn last(&self) -> Option<HttpObservation> {
+        self.last.lock().clone()
     }
 
     pub async fn login(&mut self, password: &str) -> Result<(), Failure> {

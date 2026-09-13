@@ -59,6 +59,10 @@ pub(super) struct WireCounts {
 pub(super) struct Outcome {
     pub stage: Stage,
     pub wire: WireCounts,
+    pub elapsed_ms: u64,
+    pub last_http: Option<HttpObservation>,
+    pub controller_connection_fenced: bool,
+    pub controller_runtime_stopped: bool,
     pub fixture_package_sha256: Option<String>,
     pub fixture_release_sha256: Option<String>,
     pub installation_sha256: Option<String>,
@@ -67,6 +71,27 @@ pub(super) struct Outcome {
     pub service_after_sha256: Option<String>,
     pub machine_after_sha256: Option<String>,
     pub failure: Option<Failure>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct HttpObservation {
+    pub status: Option<u16>,
+    pub elapsed_ms: u64,
+    pub result: HttpResult,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum HttpResult {
+    Transport,
+    Timeout,
+    Body,
+    Json,
+    NeedsAttention,
+    OutcomeUnverified,
+    Changed,
+    Denied,
+    Other,
 }
 
 #[derive(Serialize)]

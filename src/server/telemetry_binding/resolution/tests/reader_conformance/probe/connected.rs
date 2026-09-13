@@ -1,4 +1,6 @@
-use super::super::connected::{ConnectedFixture, Evidence, Flow, Outcome, Stage, WireCounts};
+use super::super::connected::{
+    ConnectedFixture, Evidence, Flow, HttpObservation, HttpResult, Outcome, Stage, WireCounts,
+};
 use super::*;
 use serde_json::{Value, json};
 
@@ -213,6 +215,7 @@ async fn prepare(
     };
     drop(listener);
     let policies = policy_snapshots(root.path())?;
+    let started = std::time::Instant::now();
     let result = tokio::time::timeout(Duration::from_secs(125), async {
         outcome.stage = Stage::Start;
         pair.start_controller().await?;
@@ -237,6 +240,17 @@ async fn prepare(
     .unwrap_or(Err(Failure::Timeout));
     let wire = pair.proxy.counts();
     outcome.wire = pair.proxy.snapshot();
+    outcome.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    outcome.last_http = pair.http.last();
+    outcome.controller_connection_fenced = pair
+        .controller
+        .as_ref()
+        .is_some_and(|c| c.log_contains("Machine connection fenced"));
+    outcome.controller_runtime_stopped = pair.controller.as_ref().is_some_and(|c| {
+        c.log_contains("Machine runtime forwarding stopped")
+            || c.log_contains("Machine runtime writer stopped")
+            || c.log_contains("Machine runtime handshake failed")
+    });
     let after = pair.evidence();
     if let Ok(after) = &after {
         outcome.service_after_sha256 = after.service.as_deref().map(|s| sha256(s.as_bytes()));
