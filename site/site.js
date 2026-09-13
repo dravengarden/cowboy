@@ -26,7 +26,7 @@ function setThemeMode(mode, { persist = true } = {}) {
   if (!["system", "light", "dark"].includes(mode)) return;
   themeMode = mode;
   const theme = resolvedTheme(mode);
-  const canvas = theme === "dark" ? "rgb(21, 17, 29)" : "rgb(246, 244, 251)";
+  const canvas = theme === "dark" ? "rgb(16, 16, 20)" : "rgb(250, 249, 252)";
   root.dataset.theme = theme;
   document.querySelectorAll("source[data-theme-art-dark]").forEach((source) => {
     source.setAttribute("media", theme === "dark" ? "all" : "not all");
