@@ -61,6 +61,7 @@ pub(super) struct Outcome {
     pub wire: WireCounts,
     pub elapsed_ms: u64,
     pub last_http: Option<HttpObservation>,
+    pub relay_rejection: Option<RelayRejection>,
     pub controller_connection_fenced: bool,
     pub controller_runtime_stopped: bool,
     pub fixture_package_sha256: Option<String>,
@@ -92,6 +93,18 @@ pub(super) enum HttpResult {
     Changed,
     Denied,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RelayRejection {
+    MachineCommand,
+    MachineEvent,
+    RuntimeGeneration,
+    RuntimeCoreCommand,
+    RuntimeOther,
+    Handshake,
+    Decode,
 }
 
 #[derive(Serialize)]
@@ -162,8 +175,13 @@ async fn immutable_connected_telemetry() -> Result<()> {
             let outcome = probe::connected_pair(controller, machine, flow, helper).await;
             let accepted = outcome.failure.is_none();
             eprintln!(
-                "{:?}/{:?}/{flow:?}: {:?}/{:?}",
-                controller.role, machine.role, outcome.stage, outcome.failure
+                "{:?}/{:?}/{flow:?}: {:?}/{:?}, relay={:?}, elapsed_ms={}",
+                controller.role,
+                machine.role,
+                outcome.stage,
+                outcome.failure,
+                outcome.relay_rejection,
+                outcome.elapsed_ms
             );
             (
                 index,

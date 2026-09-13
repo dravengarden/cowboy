@@ -1,5 +1,6 @@
 use super::super::connected::{
-    ConnectedFixture, Evidence, Flow, HttpObservation, HttpResult, Outcome, Stage, WireCounts,
+    ConnectedFixture, Evidence, Flow, HttpObservation, HttpResult, Outcome, RelayRejection, Stage,
+    WireCounts,
 };
 use super::*;
 use serde_json::{Value, json};
@@ -242,6 +243,7 @@ async fn prepare(
     outcome.wire = pair.proxy.snapshot();
     outcome.elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     outcome.last_http = pair.http.last();
+    outcome.relay_rejection = pair.proxy.rejection();
     outcome.controller_connection_fenced = pair
         .controller
         .as_ref()

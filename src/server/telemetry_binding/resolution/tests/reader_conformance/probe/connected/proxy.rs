@@ -6,6 +6,7 @@ use tokio::sync::watch;
 struct Record {
     counts: WireCounts,
     failure: Option<Failure>,
+    rejection: Option<RelayRejection>,
 }
 
 pub(super) struct Proxy {
@@ -69,7 +70,9 @@ impl Proxy {
                     let decision = inspect(&message, downstream, flow, &mut observed.lock());
                     match decision {
                         Err(failure) => {
-                            observed.lock().failure = Some(failure);
+                            let mut record = observed.lock();
+                            record.failure = Some(failure);
+                            record.rejection = Some(rejection(&message));
                             break;
                         }
                         Ok(Action::Drop) => continue,
@@ -107,6 +110,10 @@ impl Proxy {
         self.record.lock().counts.clone()
     }
 
+    pub fn rejection(&self) -> Option<RelayRejection> {
+        self.record.lock().rejection
+    }
+
     pub fn disconnect(&self) {
         self.record.lock().counts.forced_disconnects += 1;
         self.cut.send_modify(|value| *value += 1);
@@ -126,6 +133,26 @@ enum Action {
     Forward,
     Drop,
     Disconnect,
+}
+
+fn rejection(message: &Message) -> RelayRejection {
+    use crate::runtime_wire::{CoreCommand, Frame};
+    let Message::Text(text) = message else {
+        return RelayRejection::Decode;
+    };
+    match serde_json::from_str::<MachineFrame>(text) {
+        Ok(MachineFrame::Command { .. }) => RelayRejection::MachineCommand,
+        Ok(MachineFrame::Event { .. }) => RelayRejection::MachineEvent,
+        Ok(MachineFrame::Runtime { frame }) => match frame {
+            Frame::CoreCommand {
+                command: CoreCommand::SetDesiredGeneration { .. },
+            } => RelayRejection::RuntimeGeneration,
+            Frame::CoreCommand { .. } => RelayRejection::RuntimeCoreCommand,
+            _ => RelayRejection::RuntimeOther,
+        },
+        Ok(_) => RelayRejection::Handshake,
+        Err(_) => RelayRejection::Decode,
+    }
 }
 
 fn inspect(
