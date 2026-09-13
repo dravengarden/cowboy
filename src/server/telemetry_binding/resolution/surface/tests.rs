@@ -9,6 +9,59 @@ type BindingFixture = (
     crate::server::PluginLifecycleFences,
 );
 
+#[tokio::test]
+async fn host_policy_admits_only_separate_offline_resolution_purpose() {
+    use crate::telemetry_plugin::writer_admission::tests::policy;
+    for purposes in [[true, true, false], [false, false, true]] {
+        let root = tempfile::tempdir().unwrap();
+        let policy_path = root.path().join("writer.json");
+        let f = Fixture::new(false)
+            .await
+            .with_admission(policy(
+                &policy_path,
+                "service-test",
+                "machine-test",
+                purposes,
+            ))
+            .await;
+        let before = f.pending(false).await;
+        let (status, plan) = f.inspect(&before).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(plan["confirmation_available"], purposes[2]);
+        let (status, receipt) = f
+            .request(
+                Method::POST,
+                &path(&before, "resolve"),
+                Some(json!({"plan_id":plan["plan_id"], "action":plan["action"]})),
+            )
+            .await;
+        if purposes[2] {
+            assert_eq!(status, StatusCode::OK, "{receipt}");
+            assert_eq!(receipt["phase"], "aborted");
+            std::fs::remove_file(&policy_path).unwrap();
+            let (status, history) = f
+                .request(Method::GET, &path(&before, "resolution"), None)
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(history, receipt);
+        } else {
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(receipt["error"], "resolution_admission_closed");
+            assert_eq!(
+                f.state.ledger().await.unwrap().unwrap().operations,
+                vec![before]
+            );
+        }
+        assert!(
+            !LegacyFence::recover(f.state.store.as_ref(), "service-test")
+                .await
+                .unwrap()
+                .allows_legacy()
+        );
+        f.stop().await;
+    }
+}
+
 #[test]
 fn public_projection_matches_the_shared_web_contract() {
     let fixture: Value = serde_json::from_str(include_str!(
@@ -52,6 +105,28 @@ pub(in crate::server::telemetry_binding) struct Fixture {
 }
 
 impl Fixture {
+    pub(in crate::server::telemetry_binding) async fn with_admission(
+        self,
+        policy: Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>,
+    ) -> Self {
+        let Self {
+            _root,
+            mut state,
+            task,
+            ..
+        } = self;
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        state.admission = Some(policy);
+        state.fixture_binding_admission = false;
+        state.fixture_recovery_admission = false;
+        state.fixture_write_admission = false;
+        state.plans = Arc::default();
+        state.recovery_plans = Arc::default();
+        state.binding_plans = Arc::default();
+        Self::serve(_root, state).await
+    }
+
     pub(in crate::server::telemetry_binding) async fn new(write_admitted: bool) -> Self {
         Self::with_auth(write_admitted, false).await
     }
@@ -112,6 +187,7 @@ impl Fixture {
             catalog,
             fences,
             legacy_fence,
+            admission: None,
             binding_plans: Arc::default(),
             plans: Arc::default(),
             recovery_plans: Arc::default(),

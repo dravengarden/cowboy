@@ -122,6 +122,8 @@ Machine/workers and checking actual populated active/rollback/cold readers.
 [Durable Machine recovery audit discovery](telemetry-recovery-audit-discovery.md)
 is a separate protocol-18 read, distinct from these ordinary operation receipts.
 
-Remaining P2: per-target production writer and
-background-export policy admission, and cross-end production failure/restart
-acceptance. Unknown and schema-one Machine recovery evidence remain quarantined.
+Subsequent core slices implement [per-target writer admission](telemetry-writer-admission.md)
+and [background-export policy](telemetry-background-policy.md). Production remains
+unconfigured for these managed paths. P2 still needs the owned configuration
+cutover and cross-end production failure/restart acceptance. Unknown and
+schema-one Machine recovery evidence remain quarantined.

@@ -2,6 +2,7 @@
 //! dispatch and loopback HTTP. No Operator cookie or production policy is used.
 use super::*;
 use crate::observability::{ExportBatch, TelemetryExporter};
+use crate::telemetry_plugin::background_policy::Activation;
 use crate::telemetry_plugin::background_policy::BackgroundPolicy;
 
 fn policy_path(f: &Fixture) -> std::path::PathBuf {
@@ -114,14 +115,19 @@ async fn background_activation_requires_current_complete_binding_and_does_not_ad
     configure(&f, &destination.endpoint);
     write_policy(&f);
     let absent = BackgroundPolicy::load(&policy_path(&f), "service-test").unwrap();
-    assert!(!absent.check_binding(&f.store).await);
+    assert!(matches!(
+        absent.clone().activate(&f.store).await,
+        Activation::Stopped
+    ));
     f.coordinate(&f.select()).await;
     assert!(
-        !absent.check_binding(&f.store).await,
-        "startup failure is sticky"
+        matches!(absent.activate(&f.store).await, Activation::Stopped),
+        "stopped startup cannot adopt a later binding"
     );
     let policy = BackgroundPolicy::load(&policy_path(&f), "service-test").unwrap();
-    assert!(policy.check_binding(&f.store).await);
+    let Activation::Active(policy) = policy.activate(&f.store).await else {
+        panic!("a fresh explicit activation must accept the exact binding");
+    };
     let export = exporter(&f, policy);
     assert!(export(batch(&f, 1)).await.logs_delivered);
 

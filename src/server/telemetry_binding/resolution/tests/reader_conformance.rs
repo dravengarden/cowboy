@@ -3,9 +3,12 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod admission;
+mod connected;
 mod fixtures;
 mod manifest;
 mod probe;
+mod startup;
 
 use fixtures::{Case, Fixture};
 use manifest::{Artifact, Lane, Matrix, Role};
@@ -28,6 +31,8 @@ enum Failure {
     UnexpectedHandshake,
     WrongObservation,
     EvidenceChanged,
+    WrongExportState,
+    LocalRecording,
     Cleanup,
 }
 

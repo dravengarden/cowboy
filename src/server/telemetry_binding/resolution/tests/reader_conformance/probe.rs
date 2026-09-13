@@ -19,7 +19,14 @@ use tokio_tungstenite::{
 const DEADLINE: Duration = Duration::from_secs(12);
 const LOG_BYTES: usize = 128 * 1024;
 
-fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
+mod admission;
+mod connected;
+mod startup;
+pub(super) use admission::run as writer_admission;
+pub(super) use connected::run as connected_pair;
+pub(super) use startup::run as background_startup;
+
+pub(super) fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write as _;
     std::fs::OpenOptions::new()
         .create_new(true)
@@ -197,6 +204,54 @@ pub(super) async fn run(
         .await
         .map_err(|_| Failure::Setup)?;
     let address = listener.local_addr().map_err(|_| Failure::Setup)?;
+    let mut command = configured_command(artifact, root, address);
+    let listener = if artifact.lane == Lane::Controller {
+        drop(listener);
+        None
+    } else {
+        Some(listener)
+    };
+    let mut running = Running::spawn(&mut command)?;
+    let result = tokio::time::timeout(DEADLINE, async {
+        if fixture.case.corrupt() {
+            // A flag error, unrelated crash or timeout is NOT a corrupt-reader pass.
+            rejected_startup(&mut running, corruption_marker(artifact.lane, fixture.case)).await?;
+            return Ok(None);
+        }
+        match listener {
+            Some(listener) => machine(&mut running, listener, fixture, root)
+                .await
+                .map(Some),
+            None => controller(&mut running, address, fixture)
+                .await
+                .map(|()| None),
+        }
+    })
+    .await
+    .unwrap_or(Err(Failure::Timeout));
+    let cleanup = running.finish().await;
+    let retained = unchanged(root, fixture).map_err(|_| Failure::EvidenceChanged);
+    cleanup.and(retained).and(result)
+}
+
+async fn rejected_startup(running: &mut Running, marker: &str) -> Result<(), Failure> {
+    let status = running
+        .child
+        .wait()
+        .await
+        .map_err(|_| Failure::ExitedBeforeReady)?;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    if status.code().is_none_or(|code| code == 0) || !running.log_contains(marker) {
+        return Err(Failure::UnexpectedReadiness);
+    }
+    Ok(())
+}
+
+fn configured_command(
+    artifact: &Artifact,
+    root: &Path,
+    address: std::net::SocketAddr,
+) -> tokio::process::Command {
     let mut command = command(&artifact.executable, root);
     match artifact.lane {
         Lane::Controller => {
@@ -242,42 +297,7 @@ pub(super) async fn run(
                 .arg(format!("fixture={}", root.join("workspace").display()));
         }
     }
-    let listener = if artifact.lane == Lane::Controller {
-        drop(listener);
-        None
-    } else {
-        Some(listener)
-    };
-    let mut running = Running::spawn(&mut command)?;
-    let result = tokio::time::timeout(DEADLINE, async {
-        if fixture.case.corrupt() {
-            // A flag error, unrelated crash or timeout is NOT a corrupt-reader pass.
-            let status = running
-                .child
-                .wait()
-                .await
-                .map_err(|_| Failure::ExitedBeforeReady)?;
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            let marker = corruption_marker(artifact.lane, fixture.case);
-            if status.code().is_none_or(|code| code == 0) || !running.log_contains(marker) {
-                return Err(Failure::UnexpectedReadiness);
-            }
-            return Ok(None);
-        }
-        match listener {
-            Some(listener) => machine(&mut running, listener, fixture, root)
-                .await
-                .map(Some),
-            None => controller(&mut running, address, fixture)
-                .await
-                .map(|()| None),
-        }
-    })
-    .await
-    .unwrap_or(Err(Failure::Timeout));
-    let cleanup = running.finish().await;
-    let retained = unchanged(root, fixture).map_err(|_| Failure::EvidenceChanged);
-    cleanup.and(retained).and(result)
+    command
 }
 
 fn corruption_marker(lane: Lane, case: Case) -> &'static str {
@@ -294,6 +314,15 @@ async fn controller(
     running: &mut Running,
     address: std::net::SocketAddr,
     fixture: &Fixture,
+) -> Result<(), Failure> {
+    controller_admission(running, address, fixture, false).await
+}
+
+async fn controller_admission(
+    running: &mut Running,
+    address: std::net::SocketAddr,
+    fixture: &Fixture,
+    admitted: bool,
 ) -> Result<(), Failure> {
     let client = reqwest::Client::builder()
         .no_proxy()
@@ -321,7 +350,11 @@ async fn controller(
                 "managed_namespace=false"
             };
             return if running.log_contains("Service telemetry binding reader recovered")
-                && running.log_contains("admission_enabled=false")
+                && running.log_contains(if admitted {
+                    "admission_enabled=true"
+                } else {
+                    "admission_enabled=false"
+                })
                 && running.log_contains(managed)
             {
                 Ok(())
@@ -356,12 +389,11 @@ async fn receive(socket: &mut Socket) -> Result<MachineFrame, Failure> {
     }
 }
 
-async fn machine(
+async fn connect_machine(
     running: &mut Running,
     listener: TcpListener,
-    fixture: &Fixture,
     root: &Path,
-) -> Result<u16, Failure> {
+) -> Result<(Socket, u16), Failure> {
     let stream = tokio::select! {
         connection = listener.accept() => connection.map_err(|_| Failure::WrongProtocol)?.0,
         _ = running.child.wait() => return Err(Failure::ExitedBeforeReady),
@@ -439,8 +471,27 @@ async fn machine(
         },
     )
     .await?;
+    Ok((socket, protocol))
+}
+
+async fn machine(
+    running: &mut Running,
+    listener: TcpListener,
+    fixture: &Fixture,
+    root: &Path,
+) -> Result<u16, Failure> {
+    let (mut socket, protocol) = connect_machine(running, listener, root).await?;
+    observe_machine(&mut socket, protocol, fixture).await?;
+    Ok(protocol)
+}
+
+async fn observe_machine(
+    socket: &mut Socket,
+    protocol: u16,
+    fixture: &Fixture,
+) -> Result<(), Failure> {
     send(
-        &mut socket,
+        socket,
         MachineFrame::Command {
             command: MachineCommand::QueryTelemetryBinding {
                 request_id: "binding-read-only".into(),
@@ -450,7 +501,7 @@ async fn machine(
     )
     .await?;
     loop {
-        match receive(&mut socket).await? {
+        match receive(socket).await? {
             MachineFrame::Event {
                 event:
                     MachineEvent::TelemetryBindingObservation {
@@ -474,7 +525,7 @@ async fn machine(
         }
     }
     send(
-        &mut socket,
+        socket,
         MachineFrame::Command {
             command: MachineCommand::QueryTelemetryRecovery {
                 request_id: "recovery-read-only".into(),
@@ -484,7 +535,7 @@ async fn machine(
     )
     .await?;
     loop {
-        match receive(&mut socket).await? {
+        match receive(socket).await? {
             MachineFrame::Event {
                 event:
                     MachineEvent::TelemetryRecoveryObservation {
@@ -508,9 +559,9 @@ async fn machine(
         }
     }
     if protocol >= 18 {
-        discover_audit(&mut socket, fixture).await?;
+        discover_audit(socket, fixture).await?;
     }
-    Ok(protocol)
+    Ok(())
 }
 
 async fn discover_audit(socket: &mut Socket, fixture: &Fixture) -> Result<(), Failure> {

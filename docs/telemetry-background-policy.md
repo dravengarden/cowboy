@@ -8,6 +8,13 @@ continues to use its explicitly configured legacy exporter.
 
 Controller implementation release and populated-reader acceptance:
 [2026-09-13 receipt](releases/telemetry-background-policy-2026-09-13.md).
+The subsequent [startup availability release](releases/telemetry-background-startup-2026-09-13.md)
+fixes stale-policy core startup and records separate candidate/actual-cold
+configuration evidence without enabling production managed export.
+Hawk's subsequent [cold-start floor refresh](releases/telemetry-cold-start-floor-2026-09-13.md)
+accepts both gates against its actual active/next-rollback/cold roles before and
+after the host transaction. Full production configuration and cutover remain
+separate; Falcon and production writer policy were not changed.
 
 ## Authority and restart semantics
 
@@ -42,11 +49,25 @@ Policy setup is an independent machine-configuration maintenance action, not a
 side effect of installation, binding confirmation, resolution, or deployment.
 
 Before starting background writers/Plugin hosts, the Controller requires a durable
-Service store, a validated resolved ledger, and the exact policy-selected binding
-and owners. Absence, corruption, an unresolved operation, a revoked selection or
-a later revision fail startup. A Machine need not be connected during Controller
-startup; every subsequent batch independently requires its current authenticated
-connection, supported protocol, signed Catalog entry and exact installation.
+Service store and runs mandatory journal integrity recovery. Corruption still
+fails core startup; malformed/unsafe explicit policy, wrong ownership, conflicting
+modes or a missing durable store are still configuration errors.
+
+A valid policy with absent, unresolved, revoked or superseded binding evidence
+instead starts the core **with optional export stopped**. This is an expected
+result after binding maintenance, not a reason to lose the API, local recording
+or session recovery on restart. The typed startup result distinguishes
+unconfigured, active and configured-but-stopped modes. Stopped mode creates no
+remote queue and cannot choose the legacy exporter. Its bounded startup log says
+`export_active=false`; no policy path, binding identity or credential is logged.
+Later matching history cannot activate that process; an explicit new startup
+must independently revalidate standing policy. This supersedes the initial
+release's fatal behavior for stale binding evidence.
+
+An active background queue requires the complete exact resolved binding and
+owners. A Machine need not be connected during Controller startup; every
+subsequent batch independently requires its current authenticated connection,
+supported protocol, signed Catalog entry and exact installation.
 
 ## Lifetime and failure rules
 
@@ -109,9 +130,22 @@ Controller floors do not implement this startup option: accepting journal bytes
 does not establish that they can parse a new CLI flag or retain background export
 under rollback. Before a configuration cutover, separately accept the complete
 candidate/recovery/cold startup configuration and its explicit export behavior.
+The separate immutable
+[background startup gate](telemetry-background-startup-conformance.md) exercises
+this policy contract against supplied Controller roles, including local intake
+after revocation and two cold starts. It does not establish host-role provenance
+or accept the complete production configuration.
 
-Remaining P2 work: explicit per-target production writer admission, an owned
-configuration cutover to this new mode, and cross-end production write/failure/
+The [connected gate](telemetry-connected-conformance.md) additionally exercises
+the real managed queue/RPC/HTTP path across all nine immutable role pairs. Its
+16-stage delivery flow checks explicit activation, OTLP partial success and HTTP
+failure, ACK loss/disconnection without resend, revoke/restore fencing, stale and
+active restarts, per-signal selection and local recording throughout. The private
+protocol receiver is not a Victoria database or production endpoint.
+
+The subsequent [per-target writer policy](telemetry-writer-admission.md) supplies
+separate typed binding/recovery admission; it does not enable this export mode.
+Remaining P2 work: an owned configuration cutover and cross-end production write/failure/
 restart acceptance. First binding intent fences legacy export even on an aborted
 operation, so the cutover must account for that interval; do not silently migrate
 the existing policy, open write gates alone, or delete evidence to regain legacy

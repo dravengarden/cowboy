@@ -86,9 +86,9 @@ impl Bindings {
             }
             RecoveryObservation::Observed { snapshot } => snapshot,
         };
-        if !state.recovery_writer {
-            return Err(Failure::ReaderOnly);
-        }
+        let scope = self
+            .write_scope::<MachineRecovery>(&state, &request.step)
+            .ok_or(Failure::ReaderOnly)?;
         if !request.expects(&snapshot.binding) {
             return Err(Failure::Rejected(BindingRejection::TargetChanged));
         }
@@ -97,7 +97,13 @@ impl Bindings {
         {
             return Err(Failure::Fenced);
         }
-        lease.check().map_err(Failure::Rejected)?;
+        let check = || {
+            if !scope.check() {
+                return Err(Failure::Rejected(BindingRejection::AuthorizationEnded));
+            }
+            lease.check().map_err(Failure::Rejected)
+        };
+        check()?;
         let mut ledger = state.ledger.clone().ok_or(Failure::Fenced)?;
         let last = ledger.receipts.last_mut().ok_or(Failure::Fenced)?;
         if !last.matches(&request.step) || !matches!(last.outcome, BindingOutcome::Prepared {}) {
@@ -118,7 +124,7 @@ impl Bindings {
         ledger.resolutions.push(receipt);
         ledger.schema = 2;
         let bytes = ledger.encode()?;
-        lease.check().map_err(Failure::Rejected)?;
+        check()?;
         if persist(&bytes).is_err() {
             state.poisoned = true;
             return Err(Failure::Unavailable(BindingUnavailable::Storage));

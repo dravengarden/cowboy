@@ -53,6 +53,7 @@ impl Case {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Fixture {
     pub case: Case,
     pub document: Option<String>,
@@ -72,7 +73,7 @@ impl Fixture {
         Ok(fixtures)
     }
 
-    async fn build(case: Case) -> Result<Self> {
+    pub(super) async fn build(case: Case) -> Result<Self> {
         let root = tempfile::tempdir()?;
         let state = root.path().join("machine");
         let open = || MachinePluginStore::new(&state, Platform::Linux, "x86_64".into());

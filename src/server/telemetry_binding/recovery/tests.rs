@@ -194,7 +194,8 @@ async fn recovery_never_replays_or_changes_service_and_rechecks_history_authorit
                 &request,
                 authority(auth, &request, &before),
                 auth,
-                Arc::new(MachineControl::default())
+                Arc::new(MachineControl::default()),
+                None,
             )
             .await
             .is_err(),

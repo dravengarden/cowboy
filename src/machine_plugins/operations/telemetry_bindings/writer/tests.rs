@@ -6,6 +6,103 @@ use std::os::unix::fs::MetadataExt as _;
 use std::sync::Arc;
 
 #[test]
+fn production_host_policy_is_exact_and_does_not_create_a_namespace_on_open() {
+    use crate::telemetry_plugin::writer_admission::{MACHINE_POLICY_FILE, tests::policy};
+    for purposes in [
+        [false, false, false],
+        [false, true, true],
+        [true, false, false],
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let step = crate::machine_protocol::telemetry_binding::execution_fixture();
+        policy(
+            &root.path().join(MACHINE_POLICY_FILE),
+            &step.service_id,
+            &step.machine_id,
+            purposes,
+        );
+        let journal = Journal::open(root.path()).unwrap();
+        let bindings = &journal.telemetry_bindings;
+        assert!(!bindings.path.exists());
+        assert!(bindings.ensure_legacy_allowed().is_ok());
+        assert!(!bindings.state.lock().writer);
+        let mut foreign = step.clone();
+        foreign.machine_id = "foreign-machine".into();
+        assert_eq!(commit(bindings, &foreign), Err(WriteError::ReaderOnly));
+        foreign = step.clone();
+        foreign.service_id = "service-foreign".into();
+        assert_eq!(commit(bindings, &foreign), Err(WriteError::ReaderOnly));
+        assert!(!bindings.path.exists());
+        if purposes[0] {
+            assert!(commit(bindings, &step).unwrap().matches(&step));
+        } else {
+            assert_eq!(commit(bindings, &step), Err(WriteError::ReaderOnly));
+            assert!(!bindings.path.exists());
+        }
+    }
+}
+
+#[test]
+fn revoking_real_policy_after_prepared_records_rejection_and_keeps_reader_and_fence() {
+    use crate::telemetry_plugin::writer_admission::{MACHINE_POLICY_FILE, tests::policy};
+    let root = tempfile::tempdir().unwrap();
+    let step = crate::machine_protocol::telemetry_binding::execution_fixture();
+    let policy_path = root.path().join(MACHINE_POLICY_FILE);
+    policy(
+        &policy_path,
+        &step.service_id,
+        &step.machine_id,
+        [true, false, false],
+    );
+    let journal = Journal::open(root.path()).unwrap();
+    let bindings = &journal.telemetry_bindings;
+    let owner = scope(&step);
+    let writes = Cell::new(0);
+    let observed = bindings
+        .commit_with_io(
+            &step,
+            &owner.telemetry_binding(&step).unwrap(),
+            &mut || Ok(()),
+            |bytes| {
+                durable(&bindings.path, bytes)?;
+                writes.set(writes.get() + 1);
+                if writes.get() == 1 {
+                    fs::remove_file(&policy_path).unwrap();
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+    let snapshot = result(observed);
+    assert_eq!(snapshot.current, Some(BindingSnapshot::initial()));
+    assert_eq!(
+        snapshot.receipt.unwrap().outcome,
+        BindingOutcome::Rejected {
+            reason: BindingRejection::AuthorizationEnded
+        }
+    );
+    assert_eq!(writes.get(), 2);
+    assert!(bindings.ensure_legacy_allowed().is_err());
+    let evidence = fs::read(&bindings.path).unwrap();
+    assert!(bindings.query(&step).matches(&step));
+    assert!(
+        commit(bindings, &step).unwrap().matches(&step),
+        "historical duplicate remains read-only"
+    );
+    policy(
+        &policy_path,
+        &step.service_id,
+        &step.machine_id,
+        [true, false, false],
+    );
+    let mut another = step.clone();
+    another.operation_id = "new-after-revocation".into();
+    another.expected_namespace = Some(BindingNamespace::Managed);
+    assert_eq!(commit(bindings, &another), Err(WriteError::ReaderOnly));
+    assert_eq!(fs::read(&bindings.path).unwrap(), evidence);
+}
+
+#[test]
 fn namespace_presence_is_an_independent_cas_even_when_revision_is_still_zero() {
     use crate::machine_protocol::telemetry_binding::execution_fixture;
     let root = tempfile::tempdir().unwrap();

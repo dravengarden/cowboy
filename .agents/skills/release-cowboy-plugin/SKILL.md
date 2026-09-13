@@ -50,6 +50,44 @@ the next transaction's target. Keep writes closed until those floors are
 accepted. See `docs/telemetry-reader-conformance.md`; this does not replace the
 signed Victoria runtime gates or authorize a host refresh.
 
+Managed background policy additionally uses
+`just telemetry-background-startup-conformance <matrix.json> <new-receipt.json>`
+for all supplied immutable Controller roles. Require core/local recording to
+survive stale or unresolved binding evidence with optional export stopped, while
+corruption and invalid explicit configuration still fail. This synthetic policy
+gate does not accept actual host-role provenance, full production configuration,
+writer admission, Machine startup or cross-end delivery. Accept those separately
+before cutover; see `docs/telemetry-background-startup-conformance.md`.
+
+For writer-policy startup and finite-purpose acceptance, additionally run
+`just telemetry-writer-conformance <matrix.json> <new-receipt.json>` against
+every immutable Controller/Machine role. Require independent binding, recovery
+and Service resolution admission, exact malformed/foreign-policy rejection,
+loss of unsubmitted previews on restart, durable receipts and duplicate reads
+without replay. This uses synthetic local Operator/peer authority only; it does
+not accept production credentials, connected cross-end transport, signed Plugin
+delivery or the full owned configuration. Keep that cutover separate; see
+`docs/telemetry-writer-conformance.md`. Test-only harness changes do not require
+activating new runtime artifacts merely to update their source-manifest revision.
+
+For authenticated cross-process telemetry acceptance, run
+`just telemetry-connected-conformance <matrix.json> <new-receipt.json>` across
+all nine Controller/Machine role pairs. Require actual fixture password login,
+enrolled protocol-18 connections, one-use previews, select/revoke/restore,
+lost-ACK observation without resend, independent recovery/Service resolution,
+and durable reads after both processes restart. Require all five flows (45 role
+results), including managed OTLP intake/queue/RPC/HTTP delivery through the real
+signed fixture exporter to an isolated protocol receiver. Verify partial success,
+503/429/redirect refusal, lost export ACK/disconnection without resend, dedup,
+independent local recording, revoke/restore fencing, stale and active restarts,
+and explicit per-signal activation. The byte-preserving fault proxy must never
+fabricate a reply; correlate bounded request/payload hashes with actual receipt
+and receiver counts without publishing raw telemetry or destination policy.
+This uses temporary signed Victoria installation and identities, not production
+credentials, a real Victoria database, external delivery or complete owned
+configuration. See `docs/telemetry-connected-conformance.md`; it does not by
+itself authorize production policy cutover or complete P2.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

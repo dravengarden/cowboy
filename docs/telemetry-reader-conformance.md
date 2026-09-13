@@ -104,6 +104,12 @@ The receipt explicitly excludes host-role provenance, production data,
 PostgreSQL startup, writer/confirmation admission, actual Plugin and OTLP
 effects, native clients, existing sessions and deployment. Unit and isolated
 PostgreSQL gates remain separate.
+The separate [managed background startup gate](telemetry-background-startup-conformance.md)
+checks explicit policy, stale binding availability and local recording across
+two Controller starts. Neither gate alone accepts complete host configuration.
+The [writer-policy gate](telemetry-writer-conformance.md) separately checks actual
+finite-purpose admission and durable effects using synthetic local authority;
+it does not open production writers or accept connected cross-end transport.
 
 ## Host recovery acceptance
 

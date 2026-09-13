@@ -66,16 +66,7 @@ impl Plans {
 }
 
 impl ApiState {
-    fn write_admitted(&self) -> bool {
-        #[cfg(test)]
-        if self.fixture_write_admission {
-            return true;
-        }
-        RESOLUTION_WRITE_ADMISSION
-    }
-
     async fn complete(self, preview: Preview, approval: OperatorApproval) -> Result<ReceiptView> {
-        ensure!(self.write_admitted(), "resolution admission closed");
         let authority = approval
             .bind_telemetry_resolution(&preview.intent)?
             .constrain_to_preview(preview.budget);
@@ -88,26 +79,13 @@ impl ApiState {
             )?)
         };
         let store = self.store.as_ref().context("missing journal")?;
-        // Hermetic tests exercise the same coordinator with only their own
-        // temporary DB admitted. No feature flag, env or HTTP body can enable it.
-        #[cfg(test)]
-        if self.fixture_write_admission {
-            coordinate(
-                store,
-                &preview.intent,
-                authority,
-                self.auth(),
-                observer.as_ref(),
-            )
-            .await?;
-            return self.exact_receipt(&preview.intent).await;
-        }
         resolve(
             store,
             &preview.intent,
             authority,
             self.auth(),
             observer.as_ref(),
+            self.write_scope::<ServiceResolution>(&preview.intent.machine_id),
         )
         .await?;
         self.exact_receipt(&preview.intent).await
@@ -192,9 +170,17 @@ async fn status(
     state
         .approve(verified.as_ref().map(|Extension(v)| v), &headers)
         .await?;
-    StatusView::new(state.ledger().await?.as_ref(), state.write_admitted())
-        .map(Json)
-        .map_err(|_| ApiError::EvidenceUnavailable)
+    let ledger = state.ledger().await?;
+    let machine = ledger
+        .as_ref()
+        .and_then(|ledger| ledger.operations.last())
+        .map(|op| op.intent.machine_id.as_str());
+    StatusView::new(
+        ledger.as_ref(),
+        state.write_admitted::<ServiceResolution>(machine),
+    )
+    .map(Json)
+    .map_err(|_| ApiError::EvidenceUnavailable)
 }
 
 async fn plan(
@@ -285,8 +271,13 @@ async fn plan(
     {
         return Err(ApiError::Changed);
     }
-    let view = PlanView::new(&intent, before, after, state.write_admitted())
-        .map_err(|_| ApiError::Changed)?;
+    let view = PlanView::new(
+        &intent,
+        before,
+        after,
+        state.write_admitted::<ServiceResolution>(Some(&intent.machine_id)),
+    )
+    .map_err(|_| ApiError::Changed)?;
     state
         .plans
         .insert(Preview { intent, budget })
@@ -304,13 +295,16 @@ async fn confirm(
     let approval = state
         .approve(verified.as_ref().map(|Extension(v)| v), &headers)
         .await?;
-    if !state.write_admitted() {
+    if !state.write_admitted::<ServiceResolution>(None) {
         return Err(ApiError::AdmissionClosed);
     }
     let preview = state
         .plans
         .consume(approval.actor(), &state.service, &operation, &request)
         .map_err(|_| ApiError::Changed)?;
+    if !state.write_admitted::<ServiceResolution>(Some(&preview.intent.machine_id)) {
+        return Err(ApiError::AdmissionClosed);
+    }
     // Observer cancellation detaches the admitted task. The one-use plan is
     // never put back. Lost HTTP/COMMIT responses are inspected via GET only.
     tokio::spawn(state.complete(preview, approval))

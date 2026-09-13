@@ -71,6 +71,14 @@ pub(crate) struct BackgroundPolicy {
     stopped: AtomicBool,
 }
 
+/// A configured but stopped exporter is distinct from an unconfigured one.
+/// Retain that distinction through startup so stopping optional egress cannot
+/// select a legacy fallback. Stopped activations have no queue or retry task.
+pub(crate) enum Activation {
+    Active(Arc<BackgroundPolicy>),
+    Stopped,
+}
+
 impl BackgroundPolicy {
     pub(crate) fn load(path: &Path, service: &str) -> Result<Arc<Self>> {
         ensure!(
@@ -121,8 +129,24 @@ impl BackgroundPolicy {
         valid
     }
 
-    /// Startup prerequisite. The typed export scope repeats the same binding
-    /// predicate per batch; neither check is the source of policy authority.
+    /// Missing, unresolved or superseded evidence stops optional export, not
+    /// the Controller. Mandatory journal integrity recovery runs BEFORE this
+    /// check and still rejects corruption. There is no later auto-activation.
+    pub(crate) async fn activate(self: Arc<Self>, store: &crate::store::Store) -> Activation {
+        let export_active = self.check_binding(store).await;
+        tracing::info!(
+            export_active,
+            "managed telemetry background startup evaluated"
+        );
+        if export_active {
+            Activation::Active(self)
+        } else {
+            Activation::Stopped
+        }
+    }
+
+    /// Export prerequisite, not core availability. The typed export scope
+    /// repeats this binding predicate per batch; neither check grants authority.
     pub(crate) async fn check_binding(&self, store: &crate::store::Store) -> bool {
         let valid = self.current()
             && store

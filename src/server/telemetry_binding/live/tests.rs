@@ -44,12 +44,34 @@ impl Fixture {
     }
 
     async fn setup(writer: bool, lose_ack: bool, interrupted: bool) -> Self {
+        Self::setup_admission(writer, lose_ack, interrupted, None).await
+    }
+
+    async fn setup_admission(
+        writer: bool,
+        lose_ack: bool,
+        interrupted: bool,
+        admission: Option<[bool; 3]>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let publisher =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
                 .unwrap();
         let desired = crate::machine_plugins::telemetry_release_for_test(&publisher, "1.1.0");
         let machine_root = root.path().join("machine");
+        if let Some(purposes) = admission {
+            fs::create_dir_all(&machine_root).unwrap();
+            crate::telemetry_plugin::writer_admission::tests::policy(
+                &machine_root.join(crate::telemetry_plugin::writer_admission::MACHINE_POLICY_FILE),
+                "service-test",
+                "machine-test",
+                if interrupted {
+                    [true, false, false]
+                } else {
+                    purposes
+                },
+            );
+        }
         let mut machine = Arc::new(
             MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap(),
         );
@@ -71,10 +93,21 @@ impl Fixture {
                 .interrupt_binding_for_test(&intent.machine_step().unwrap())
                 .await;
             drop(machine);
+            if let Some(purposes) = admission {
+                crate::telemetry_plugin::writer_admission::tests::policy(
+                    &machine_root
+                        .join(crate::telemetry_plugin::writer_admission::MACHINE_POLICY_FILE),
+                    "service-test",
+                    "machine-test",
+                    purposes,
+                );
+            }
             machine = Arc::new(
                 MachinePluginStore::new(&machine_root, Platform::Linux, "x86_64".into()).unwrap(),
             );
-            machine.enable_binding_recovery_for_test();
+            if admission.is_none() {
+                machine.enable_binding_recovery_for_test();
+            }
             Some(intent)
         } else {
             None
@@ -269,6 +302,7 @@ impl Fixture {
             self.fences.clone(),
             intent,
         )
+        .map(|effects| effects.admit(Some(WriteScope::fixture())))
     }
 
     async fn coordinate(&self, intent: &Intent) -> Operation {
@@ -301,6 +335,7 @@ impl Fixture {
     }
 }
 
+mod admission;
 mod export;
 mod recovery;
 mod resolution;
@@ -385,13 +420,15 @@ async fn production_capture_and_machine_writer_remain_closed() {
     let fixture = Fixture::new(false, false).await;
     let select = fixture.select();
     assert!(
-        LiveEffects::capture(
+        !LiveEffects::bind(
             fixture.control.clone(),
             fixture.catalog.clone(),
             fixture.fences.clone(),
             &select
         )
-        .is_err()
+        .unwrap()
+        .authorized(&select)
+        .await
     );
     assert!(
         fixture

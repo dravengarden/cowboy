@@ -6,12 +6,11 @@ use crate::machine_control::{
 };
 use crate::machine_protocol::telemetry_recovery::{RecoveryObservation, RecoveryRequest};
 use crate::server::{ProductRequestAuth, operator_approval::TelemetryRecoveryAuthority};
+use crate::telemetry_plugin::writer_admission::{MachineRecovery, WriteScope};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-
-const RECOVERY_WRITE_ADMISSION: bool = false;
 
 pub(in crate::server) mod surface;
 
@@ -91,18 +90,52 @@ impl Effects for Live {
     }
 }
 
+struct AdmittedLive {
+    live: Live,
+    scope: WriteScope<MachineRecovery>,
+}
+
+impl Effects for AdmittedLive {
+    fn current(&self) -> bool {
+        self.scope.check_for(
+            &self.live.request.step.service_id,
+            &self.live.request.step.machine_id,
+        ) && self.live.current()
+    }
+    async fn observe(
+        &self,
+        request: &RecoveryRequest,
+    ) -> Result<RecoveryObservation, CommandRequestError> {
+        self.live.observe(request).await
+    }
+    async fn recover(
+        &self,
+        request: &RecoveryRequest,
+    ) -> Result<RecoveryObservation, CommandRequestError> {
+        if !self.current() {
+            return Err(CommandRequestError {
+                certainty: CommandFailure::NotSent,
+                detail: "binding recovery admission ended".into(),
+            });
+        }
+        self.live.recover(request).await
+    }
+}
+
 async fn recover_machine(
     store: &Store,
     request: &RecoveryRequest,
     authority: TelemetryRecoveryAuthority,
     auth: ProductRequestAuth<'_>,
     control: Arc<MachineControl>,
+    scope: Option<WriteScope<MachineRecovery>>,
 ) -> Result<RecoveryObservation> {
-    ensure!(
-        RECOVERY_WRITE_ADMISSION,
-        "Machine binding recovery admission is closed"
-    );
-    let live = Live::bind(control, request)?;
+    let scope =
+        scope.ok_or_else(|| anyhow::anyhow!("Machine binding recovery admission is closed"))?;
+    let live = AdmittedLive {
+        live: Live::bind(control, request)?,
+        scope,
+    };
     coordinate(store, request, authority, auth, &live).await
 }
 

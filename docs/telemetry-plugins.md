@@ -3,6 +3,11 @@
 Source implementation and operational contract. This document is not a
 publication or production-activation receipt.
 
+Managed binding and interruption writes have independent
+[per-target core host admission](telemetry-writer-admission.md). This is separate
+from installing a Victoria Plugin, its private endpoint policy and explicit
+background export activation; source support does not enable production policy.
+
 ## Ownership and scope
 
 Cowboy owns instrumentation, validated/redacted events, bounded queues, health

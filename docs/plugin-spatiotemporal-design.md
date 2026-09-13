@@ -89,7 +89,18 @@ Service 留存的原 NeedsAttention 与当前状态分别核验，不复制恢�
 [独立后台外发策略](telemetry-background-policy.md) 将 managed 单次协议接入既有有界队列，
 要求主机显式持有完整绑定和信号策略；类型区分单次 Operator 确认与后台 permit，策略变动后旧实例
 停止外发，重启只重新核验显式 standing policy、不从账本恢复授权。生产绑定写入仍关闭；
-实际策略切换、逐目标 writer 准入与跨端生产验收仍待完成，不能将实现发布等同 P2 退出。
+实际策略切换、跨端生产验收仍待完成，不能将实现发布等同 P2 退出。
+[逐目标 writer 准入](telemetry-writer-admission.md) 已实现两端独立的主机私有策略：普通绑定、
+Machine 中断处置和 Service 结算分别使用不可互换的类型化 scope，并在本地效果边界重复检查。
+策略撤回不删账本、不解除 legacy fence、不复活旧确认；恢复预览只显示 Service 准入，不冒充
+Machine writer readiness 或后台外发授权。生产配置尚未切换，P2 及后续 P3/P4 仍未全部完成。
+
+[不可变跨端验收](telemetry-connected-conformance.md) 已覆盖实际 active/rollback/cold
+Controller × Machine 的全部九种角色组合。最新
+[managed OTLP 验收](releases/telemetry-managed-delivery-conformance-2026-09-13.md)
+通过 45 个流程结果，包含 144 个外发阶段：真实进程队列、绑定 RPC、HTTP、丢 ACK 不重发、
+撤销/恢复后的旧策略隔离、独立本地记录及重启不重放。临时身份与隔离协议接收端不等同真实 Victoria
+或生产配置；实际 Operator 授权、主机策略切换及生产外发/故障/重启验收仍是 P2 退出前提。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

@@ -231,6 +231,8 @@ struct AppState {
     telemetry_recovery_plans: Arc<telemetry_binding::recovery::surface::Plans>,
     telemetry_binding_plans: Arc<telemetry_binding::surface::Plans>,
     telemetry_binding_fence: crate::telemetry_binding::LegacyFence,
+    telemetry_writer_admission:
+        Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
     plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -857,6 +859,18 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
+    let telemetry_writer_admission = args
+        .telemetry_writer_policy
+        .as_deref()
+        .map(crate::telemetry_plugin::writer_admission::WriterAdmission::load)
+        .transpose()?;
+    anyhow::ensure!(
+        telemetry_writer_admission
+            .as_ref()
+            .is_none_or(|policy| policy.owns_service(&service_id))
+            && (telemetry_writer_admission.is_none() || args.database_url().is_some()),
+        "telemetry writer policy requires its exact durable Service"
+    );
     // Explicit host policy is independent of binding/recovery confirmations.
     // Reject an ambiguous mode even for a programmatically constructed CLI.
     anyhow::ensure!(
@@ -935,6 +949,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     // running on a host without durable storage configured.
     let plugin_lifecycle_fences;
     let telemetry_binding_fence;
+    let managed_export_activation;
     let (hub, mut store, persistence_health, writer_task, purge_task, session_id_floor) =
         if let Some(url) = args.database_url() {
             let store = Store::connect(url, args.data_dir.join("artifacts"))
@@ -954,12 +969,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 crate::telemetry_binding::LegacyFence::recover(Some(&store), &service_id)
                     .await
                     .context("restoring Service telemetry binding fence")?;
-            if let Some(policy) = &managed_export_policy {
-                anyhow::ensure!(
-                    policy.check_binding(&store).await,
-                    "managed telemetry startup policy does not match the retained binding"
-                );
-            }
+            managed_export_activation = match managed_export_policy {
+                Some(policy) => Some(policy.activate(&store).await),
+                None => None,
+            };
             let session_id_floor = store
                 .next_session_number()
                 .await
@@ -1035,6 +1048,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_lifecycle_fences = plugin_uninstall::recover_fences(None, &service_id).await?;
             telemetry_binding_fence =
                 crate::telemetry_binding::LegacyFence::recover(None, &service_id).await?;
+            managed_export_activation = None;
             (Hub::new(), None, None, None, None, 1)
         };
     let plugin_storage = match store.as_ref() {
@@ -1322,16 +1336,19 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             chrono::Utc::now().timestamp_millis(),
         )
         .context("opening local telemetry")?,
-        match managed_export_policy {
-            Some(policy) => Some(telemetry_binding::background::exporter(
-                policy,
-                store
-                    .clone()
-                    .context("managed telemetry requires a durable store")?,
-                Arc::clone(&machine_control),
-                Arc::clone(&plugin_catalog),
-                Arc::clone(&plugin_lifecycle_fences),
-            )),
+        match managed_export_activation {
+            Some(crate::telemetry_plugin::background_policy::Activation::Active(policy)) => {
+                Some(telemetry_binding::background::exporter(
+                    policy,
+                    store
+                        .clone()
+                        .context("managed telemetry requires a durable store")?,
+                    Arc::clone(&machine_control),
+                    Arc::clone(&plugin_catalog),
+                    Arc::clone(&plugin_lifecycle_fences),
+                ))
+            }
+            Some(crate::telemetry_plugin::background_policy::Activation::Stopped) => None,
             None => crate::telemetry_plugin::controller_exporter(
                 args.telemetry_plugin_config.as_deref(),
                 Arc::clone(&machine_control),
@@ -1472,6 +1489,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             telemetry_recovery_plans: Arc::default(),
             telemetry_binding_plans: Arc::default(),
             telemetry_binding_fence,
+            telemetry_writer_admission,
             plugin_lifecycle_fences,
             desired_machine_components,
             web_root: args.web_root,

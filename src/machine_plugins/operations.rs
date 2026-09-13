@@ -129,8 +129,11 @@ impl Journal {
         }
         Ok(Self {
             installations: installations::Installations::open(root.join(installations::DIRECTORY))?,
-            telemetry_bindings: telemetry_bindings::Bindings::open(
+            telemetry_bindings: telemetry_bindings::Bindings::open_with_admission(
                 &root.join(telemetry_bindings::FILE),
+                crate::telemetry_plugin::writer_admission::WriterAdmission::load_optional(
+                    &state_dir.join(crate::telemetry_plugin::writer_admission::MACHINE_POLICY_FILE),
+                )?,
             )?,
             root,
             _owner: owner,

@@ -1,5 +1,11 @@
 # Finite Machine telemetry binding transactions
 
+Current follow-up: [per-target host writer policy](telemetry-writer-admission.md)
+now supplies explicit production-code admission, independently on each host and
+for each purpose. Production configuration remains closed. The original slice
+and its acceptance boundary below are historical; newer wire, confirmation and
+recovery slices are linked from the overall design.
+
 Status: twenty-first spatiotemporal slice, 2026-09-12. The Machine-local
 `select`, `revoke` and `restore` transaction is implemented and exercised with
 real private files and signed Plugin fixtures. **Production admission remains
