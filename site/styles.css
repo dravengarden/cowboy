@@ -384,31 +384,17 @@ kbd {
   position: absolute;
   z-index: 120;
   top: calc(100% + 10px);
-  right: -3px;
+  right: 0;
   display: grid;
   gap: 12px;
   width: min(296px, calc(100vw - 24px));
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
   border-radius: 20px;
-  background: color-mix(in srgb, var(--paper) 92%, transparent);
-  box-shadow: 0 20px 60px rgba(47, 35, 76, 0.2);
+  background: var(--paper);
+  box-shadow: 0 12px 32px rgba(16, 16, 20, 0.16), 0 2px 6px rgba(16, 16, 20, 0.06);
   transform-origin: calc(100% - 18px) top;
   animation: preferences-pop-in 160ms ease-out;
-  backdrop-filter: blur(28px) saturate(145%);
-}
-
-.preferences-popover::before {
-  position: absolute;
-  top: -6px;
-  right: 15px;
-  width: 11px;
-  height: 11px;
-  transform: rotate(45deg);
-  border-top: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
-  border-left: 1px solid color-mix(in srgb, var(--line-strong) 78%, transparent);
-  background: color-mix(in srgb, var(--paper) 96%, transparent);
-  content: "";
 }
 
 .preferences-popover[hidden] {
