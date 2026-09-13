@@ -6,6 +6,10 @@ ordinary Product Operator and core `ConfirmSheet`, not an admin-only page or
 Plugin-rendered authority. **Production Machine recovery and all managed
 binding/export writer admission remain closed.** This is not P2 exit.
 
+The [release receipt](releases/telemetry-machine-recovery-surface-2026-09-13.md)
+records the actual Controller transaction, independently activated Web revision,
+reader-floor checks and Machine/worker continuity.
+
 ## One finite purpose, two independent confirmations
 
 The protected core routes are:
