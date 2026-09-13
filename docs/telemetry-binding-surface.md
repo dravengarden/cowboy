@@ -6,6 +6,10 @@ recovery surfaces. Core owns this UI and HTTP boundary. **Production managed
 binding, recovery and background-export admission remain closed.** This slice
 does not complete P2 or publish a new Plugin/SDK.
 
+The [release receipt](releases/telemetry-binding-surface-2026-09-13.md) records
+the actual Controller/Web activations, populated reader checks and session
+continuity boundary.
+
 ## Closed target discovery and preview
 
 ```text
