@@ -129,7 +129,7 @@ const NON_AGENT_PRESENTATION: Record<
 };
 
 const REQUIRED_ASSETS = [
-  ["site/assets/cowboy-tab-icon-v8.svg", "assets/cowboy-tab-icon-v8.svg"],
+  ["site/assets/cowboy-tab-icon-v9.svg", "assets/cowboy-tab-icon-v9.svg"],
   [
     "site/assets/cowboy-hero-devices-dark-v5.webp",
     "assets/cowboy-hero-devices-dark.webp",
@@ -141,14 +141,14 @@ const REQUIRED_ASSETS = [
   ["site/assets/cowboy-mobile-dark-v3.webp", "assets/cowboy-mobile-dark.webp"],
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   [
-    "site/assets/cowboy-tab-icon-v8-16.png",
-    "assets/cowboy-tab-icon-v8-16.png",
+    "site/assets/cowboy-tab-icon-v9-16.png",
+    "assets/cowboy-tab-icon-v9-16.png",
   ],
   [
-    "site/assets/cowboy-tab-icon-v8-32.png",
-    "assets/cowboy-tab-icon-v8-32.png",
+    "site/assets/cowboy-tab-icon-v9-32.png",
+    "assets/cowboy-tab-icon-v9-32.png",
   ],
-  ["site/assets/cowboy-tab-icon-v8.ico", "assets/cowboy-tab-icon-v8.ico"],
+  ["site/assets/cowboy-tab-icon-v9.ico", "assets/cowboy-tab-icon-v9.ico"],
   ["site/assets/cowboy-brand-icon-v6.png", "assets/cowboy-logo-512.png"],
   [
     "site/assets/cowboy-brand-icon-v6.png",
