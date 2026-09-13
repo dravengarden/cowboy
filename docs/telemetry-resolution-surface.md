@@ -6,6 +6,10 @@ not require a separate admin account. The same core `ConfirmSheet` serves
 Desktop and Mobile. **Production Service resolution admission remains closed**;
 the deployed surface permits inspection, not confirmation. This is not P2 exit.
 
+The [release receipt](releases/telemetry-resolution-surface-2026-09-13.md)
+records the separate Controller/Web transactions, actual reader checks and
+session continuity boundaries.
+
 ## Exact preview, fresh confirmation
 
 The core, not a Plugin, owns these Product/admin Operator routes:
