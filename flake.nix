@@ -128,6 +128,8 @@
           ./src/machine_plugins
           ./src/operation_budget.rs
           ./src/telemetry_plugin.rs
+          ./src/telemetry_plugin/writer_admission.rs
+          ./src/telemetry_plugin/writer_admission
           ./src/otlp.rs
           ./src/provider/deepseek_cache.rs
           ./src/provider/deepseek_context.rs

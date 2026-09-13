@@ -1,5 +1,6 @@
 //! Finite Service coordinator and connection-bound protocol-15 transport.
-//! Admission and HTTP mutations remain closed pending reader floors/leases.
+//! Each purpose requires explicit per-target host policy, fresh Operator
+//! authority and original leases. Absent host policy leaves mutations closed.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::machine_protocol::telemetry_binding::{BindingObservation, BindingOutcome, BindingStep};

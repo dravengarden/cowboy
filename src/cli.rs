@@ -361,6 +361,10 @@ pub struct ServeArgs {
         conflicts_with = "telemetry_plugin_config"
     )]
     pub telemetry_managed_export_policy: Option<PathBuf>,
+
+    /// Private per-target binding/recovery admission; does not authorize exports.
+    #[arg(long, env = "COWBOY_TELEMETRY_WRITER_POLICY")]
+    pub telemetry_writer_policy: Option<PathBuf>,
 }
 
 impl Cli {

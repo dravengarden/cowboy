@@ -1,5 +1,5 @@
 //! Finite local CAS, not a general executor or a Service authorization API.
-//! Admission is closed in production. Fixtures enable only their own store.
+//! Explicit local host admission is independent of Service and lease authority.
 
 use super::*;
 use crate::machine_plugins::operations::lease::BindingExecutionLease;
@@ -121,9 +121,9 @@ impl Bindings {
             }
             BindingObservation::Observed { .. } => {}
         }
-        if !state.writer {
-            return Err(WriteError::ReaderOnly);
-        }
+        let scope = self
+            .write_scope::<BindingWrites>(&state, step)
+            .ok_or(WriteError::ReaderOnly)?;
         if step.expected_namespace.is_some_and(|expected| {
             (expected == BindingNamespace::Managed) != state.ledger.is_some()
         }) {
@@ -142,8 +142,14 @@ impl Bindings {
             return Err(WriteError::Capacity);
         }
         let mut check = || {
+            if !scope.check() {
+                return Err(BindingRejection::AuthorizationEnded);
+            }
             lease.check()?;
             check_local()?;
+            if !scope.check() {
+                return Err(BindingRejection::AuthorizationEnded);
+            }
             lease.check()
         };
         check()?;

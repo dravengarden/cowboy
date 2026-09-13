@@ -179,7 +179,7 @@ async fn offline_prepared_resolution_retains_legacy_fence_and_has_no_machine_que
             &request,
             authority(auth, &request),
             auth,
-            None::<&Observer>
+            None::<&Observer>,
         )
         .await
         .unwrap(),
@@ -301,7 +301,8 @@ async fn production_resolution_admission_stays_closed() {
             &request,
             authority(auth, &request),
             auth,
-            None::<&Observer>
+            None::<&Observer>,
+            None,
         )
         .await
         .is_err()

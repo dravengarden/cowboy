@@ -4,12 +4,11 @@
 use super::*;
 use crate::machine_control::{ConnectionToken, MachineControl};
 use crate::plugin_catalog::PluginCatalog;
+use crate::telemetry_plugin::writer_admission::{BindingWrites, WriteScope};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-
-pub(super) const BINDING_WRITE_ADMISSION: bool = false;
 
 pub(super) struct LiveEffects {
     control: Arc<MachineControl>,
@@ -18,20 +17,19 @@ pub(super) struct LiveEffects {
     connection: ConnectionToken,
     step: BindingStep,
     ended: AtomicBool,
+    admission: Option<WriteScope<BindingWrites>>,
 }
 
 impl LiveEffects {
-    fn capture(
-        control: Arc<MachineControl>,
-        catalog: Arc<PluginCatalog>,
-        fences: crate::server::PluginLifecycleFences,
-        intent: &Intent,
-    ) -> Result<Self> {
-        ensure!(
-            BINDING_WRITE_ADMISSION,
-            "telemetry binding writer admission is closed"
-        );
-        Self::bind(control, catalog, fences, intent)
+    pub(super) fn admit(mut self, scope: Option<WriteScope<BindingWrites>>) -> Self {
+        self.admission = scope;
+        self
+    }
+
+    fn admitted(&self) -> bool {
+        self.admission
+            .as_ref()
+            .is_some_and(|scope| scope.check_for(&self.step.service_id, &self.step.machine_id))
     }
 
     pub(super) fn bind(
@@ -52,6 +50,7 @@ impl LiveEffects {
             connection,
             step,
             ended: AtomicBool::new(false),
+            admission: None,
         };
         ensure!(
             effects.current(),
@@ -104,7 +103,9 @@ impl LiveEffects {
 
 impl Effects for LiveEffects {
     async fn authorized(&self, intent: &Intent) -> bool {
-        let valid = intent.machine_step().is_ok_and(|step| step == self.step) && self.current();
+        let valid = intent.machine_step().is_ok_and(|step| step == self.step)
+            && self.admitted()
+            && self.current();
         if !valid {
             self.ended.store(true, Ordering::Release);
         }
@@ -114,12 +115,14 @@ impl Effects for LiveEffects {
     fn within_budget(&self) -> bool {
         // The independently required Confirmation owns the original time
         // budget; this transport cannot renew it while checking its connection.
-        !self.ended.load(Ordering::Acquire) && self.control.is_current(&self.connection)
+        self.admitted()
+            && !self.ended.load(Ordering::Acquire)
+            && self.control.is_current(&self.connection)
     }
 
     async fn dispatch(&self, step: &BindingStep) -> Result<BindingObservation> {
         ensure!(
-            step == &self.step && self.current(),
+            step == &self.step && self.admitted() && self.current(),
             "binding transport ended"
         );
         self.control

@@ -110,8 +110,9 @@ does not establish that they can parse a new CLI flag or retain background expor
 under rollback. Before a configuration cutover, separately accept the complete
 candidate/recovery/cold startup configuration and its explicit export behavior.
 
-Remaining P2 work: explicit per-target production writer admission, an owned
-configuration cutover to this new mode, and cross-end production write/failure/
+The subsequent [per-target writer policy](telemetry-writer-admission.md) supplies
+separate typed binding/recovery admission; it does not enable this export mode.
+Remaining P2 work: an owned configuration cutover and cross-end production write/failure/
 restart acceptance. First binding intent fences legacy export even on an aborted
 operation, so the cutover must account for that interval; do not silently migrate
 the existing policy, open write gates alone, or delete evidence to regain legacy

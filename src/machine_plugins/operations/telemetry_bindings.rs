@@ -1,7 +1,7 @@
 //! Reader floor for Machine-local telemetry binding authority. The enclosing
 //! Plugin journal owns the process lock. Opening/querying NEVER writes this
-//! namespace, adopts private policy, starts an exporter or replays an intent.
-//! The finite wire command cannot open the independently closed admission gate.
+//! namespace, infers authority from history, starts an exporter or replays an
+//! intent. The finite wire command cannot supply independent host admission.
 
 use super::*;
 use crate::machine_protocol::telemetry_binding::{
@@ -10,6 +10,9 @@ use crate::machine_protocol::telemetry_binding::{
     binding_digest, valid_service,
 };
 use crate::machine_protocol::telemetry_recovery::RecoveryReceipt;
+use crate::telemetry_plugin::writer_admission::{
+    BindingWrites, MachineRecovery, Purpose, WriteScope, WriterAdmission,
+};
 
 pub(super) const FILE: &str = "telemetry-bindings-v1.json";
 const MAX_BINDING_RECORDS: usize = 1024;
@@ -153,14 +156,16 @@ impl Ledger {
 pub(in crate::machine_plugins) struct Bindings {
     path: PathBuf,
     state: parking_lot::Mutex<BindingState>,
+    admission: Option<std::sync::Arc<WriterAdmission>>,
 }
 
 struct BindingState {
     ledger: Option<Ledger>,
     poisoned: bool,
-    // There is intentionally no production setter. Service coordination and
-    // accepted live/cold readers must precede any managed-namespace creation.
+    // Isolated finite-transaction fixtures only. Production uses host policy.
+    #[cfg(test)]
     writer: bool,
+    #[cfg(test)]
     recovery_writer: bool,
     /// Process-local proof of validated reopen, never reconstructed from a
     /// live failed write or a serialized request. Unknown/schema-one stay fenced.
@@ -168,6 +173,31 @@ struct BindingState {
 }
 
 impl Bindings {
+    pub(super) fn open_with_admission(
+        path: &Path,
+        admission: Option<std::sync::Arc<WriterAdmission>>,
+    ) -> Result<Self> {
+        let mut bindings = Self::open(path)?;
+        bindings.admission = admission;
+        Ok(bindings)
+    }
+
+    fn write_scope<P: Purpose>(
+        &self,
+        state: &BindingState,
+        step: &BindingStep,
+    ) -> Option<WriteScope<P>> {
+        #[cfg(test)]
+        if [state.writer, state.recovery_writer, false][P::INDEX] {
+            return Some(WriteScope::fixture());
+        }
+        #[cfg(not(test))]
+        let _ = state;
+        self.admission
+            .as_ref()?
+            .scope::<P>(&step.service_id, &step.machine_id)
+    }
+
     /// Called under the Machine lifecycle lock before each managed emission.
     /// Re-read the owned evidence: a missing/tampered file must not make cached
     /// authority usable, nor may restoring its bytes revive this process.
@@ -210,10 +240,13 @@ impl Bindings {
             .map(|receipt| receipt.request_digest.clone());
         Ok(Self {
             path: path.to_owned(),
+            admission: None,
             state: parking_lot::Mutex::new(BindingState {
                 ledger,
                 poisoned: false,
+                #[cfg(test)]
                 writer: false,
+                #[cfg(test)]
                 recovery_writer: false,
                 reopened_prepared,
             }),

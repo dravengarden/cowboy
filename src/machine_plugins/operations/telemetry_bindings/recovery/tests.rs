@@ -4,6 +4,49 @@ use crate::machine_plugins::PluginExecutionScope;
 use crate::machine_protocol::telemetry_recovery::{fixture, prepared};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[test]
+fn production_recovery_policy_does_not_grant_binding_and_revocation_preserves_audit_reads() {
+    use crate::telemetry_plugin::writer_admission::{MACHINE_POLICY_FILE, tests::policy};
+    for purposes in [[true, false, true], [false, true, false]] {
+        let root = tempfile::tempdir().unwrap();
+        let request = fixture();
+        let path = root.path().join(MACHINE_POLICY_FILE);
+        policy(
+            &path,
+            &request.step.service_id,
+            &request.step.machine_id,
+            purposes,
+        );
+        let journal = retained(root.path(), &request, BindingOutcome::Prepared {});
+        let bindings = &journal.telemetry_bindings;
+        assert!(!bindings.state.lock().recovery_writer);
+        let owner = scope(&request);
+        let observed = bindings.recover(&request, &owner.telemetry_recovery(&request).unwrap());
+        if !purposes[1] {
+            assert_eq!(observed, Err(Failure::ReaderOnly));
+            continue;
+        }
+        assert!(resolved(observed.unwrap()).receipt.is_some());
+        fs::remove_file(&path).unwrap();
+        let evidence = fs::read(&bindings.path).unwrap();
+        assert!(
+            resolved(bindings.query_recovery(&request))
+                .receipt
+                .is_some()
+        );
+        assert!(bindings.ensure_legacy_allowed().is_err());
+        assert_eq!(fs::read(&bindings.path).unwrap(), evidence);
+        drop(journal);
+        let reopened = Journal::open(root.path()).unwrap();
+        assert!(
+            resolved(reopened.telemetry_bindings.query_recovery(&request))
+                .receipt
+                .is_some()
+        );
+        assert!(reopened.telemetry_bindings.ensure_legacy_allowed().is_err());
+    }
+}
+
 fn retained(root: &Path, request: &RecoveryRequest, outcome: BindingOutcome) -> Journal {
     let owner = Journal::open(root).unwrap();
     save(

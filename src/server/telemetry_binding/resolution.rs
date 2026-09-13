@@ -6,12 +6,11 @@ use crate::telemetry_binding::{
     Ledger,
     resolution::{ResolutionAction, ResolutionIntent, ResolutionPermit},
 };
+use crate::telemetry_plugin::writer_admission::{ServiceResolution, WriteScope};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-
-const RESOLUTION_WRITE_ADMISSION: bool = false;
 
 pub(in crate::server) mod surface;
 
@@ -98,12 +97,14 @@ async fn resolve(
     authority: TelemetryResolutionAuthority,
     auth: ProductRequestAuth<'_>,
     observation: Option<&impl Observation>,
+    scope: Option<WriteScope<ServiceResolution>>,
 ) -> Result<Operation> {
-    ensure!(
-        RESOLUTION_WRITE_ADMISSION,
-        "telemetry binding resolution admission is closed"
-    );
-    coordinate(store, intent, authority, auth, observation).await
+    let scope =
+        scope.ok_or_else(|| anyhow::anyhow!("telemetry binding resolution admission is closed"))?;
+    coordinate_current(store, intent, authority, auth, observation, &|| {
+        scope.check_for(&intent.service_id, &intent.machine_id)
+    })
+    .await
 }
 
 fn recorded(ledger: &Ledger, intent: &ResolutionIntent) -> Result<Option<Operation>> {
@@ -123,6 +124,7 @@ fn recorded(ledger: &Ledger, intent: &ResolutionIntent) -> Result<Option<Operati
     Ok(None)
 }
 
+#[cfg(test)]
 async fn coordinate(
     store: &impl Journal,
     intent: &ResolutionIntent,
@@ -130,8 +132,19 @@ async fn coordinate(
     auth: ProductRequestAuth<'_>,
     observer: Option<&impl Observation>,
 ) -> Result<Operation> {
+    coordinate_current(store, intent, authority, auth, observer, &|| true).await
+}
+
+async fn coordinate_current(
+    store: &impl Journal,
+    intent: &ResolutionIntent,
+    authority: TelemetryResolutionAuthority,
+    auth: ProductRequestAuth<'_>,
+    observer: Option<&impl Observation>,
+    admitted: &(impl Fn() -> bool + Sync),
+) -> Result<Operation> {
     ensure!(
-        authority.check(auth, intent).await,
+        admitted() && authority.check(auth, intent).await,
         "binding resolution authorization ended"
     );
     let ledger = store
@@ -152,7 +165,7 @@ async fn coordinate(
     } else {
         Some(observer.ok_or_else(|| anyhow::anyhow!("missing fresh binding observation channel"))?)
     };
-    let current = || observer.is_none_or(Observation::current);
+    let current = || admitted() && observer.is_none_or(Observation::current);
     ensure!(
         current() && authority.check(auth, intent).await,
         "binding resolution admission ended"

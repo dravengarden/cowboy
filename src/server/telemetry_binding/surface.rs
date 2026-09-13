@@ -1,7 +1,7 @@
 //! Ordinary binding confirmation. Core owns target discovery, previews and
 //! one-use dispatch; durable receipt reads never reconstruct authority.
 use super::http::{ApiError, ApiState};
-use super::live::{BINDING_WRITE_ADMISSION, LiveEffects};
+use super::live::LiveEffects;
 use super::resolution::surface::view::OperationView;
 use super::*;
 use crate::machine_protocol::telemetry_binding::{
@@ -11,6 +11,7 @@ use crate::operation_budget::{OperationBudget, TimeSample};
 use crate::plugin_operation::Actor;
 use crate::server::{AuthenticatedProductRequest, operator_approval::OperatorApproval};
 use crate::telemetry_binding::Ledger;
+use crate::telemetry_plugin::writer_admission::BindingWrites;
 use anyhow::Context;
 use axum::{
     Extension, Json, Router,
@@ -178,14 +179,6 @@ fn forward(ledger: &Ledger) -> Option<&Operation> {
 }
 
 impl ApiState {
-    fn binding_admitted(&self) -> bool {
-        #[cfg(test)]
-        if self.fixture_binding_admission {
-            return true;
-        }
-        BINDING_WRITE_ADMISSION
-    }
-
     fn draft(
         &self,
         ledger: Option<&Ledger>,
@@ -264,6 +257,7 @@ impl ApiState {
             self.fences.clone(),
             intent,
         )
+        .map(|effects| effects.admit(self.write_scope::<BindingWrites>(&intent.machine_id)))
     }
 
     async fn complete_binding(
@@ -271,7 +265,10 @@ impl ApiState {
         preview: Preview,
         approval: OperatorApproval,
     ) -> Result<ReceiptView> {
-        ensure!(self.binding_admitted(), "binding admission closed");
+        ensure!(
+            self.write_admitted::<BindingWrites>(Some(&preview.intent.machine_id)),
+            "binding admission closed"
+        );
         let authority = approval
             .bind_telemetry(&preview.intent)?
             .constrain_to_preview(preview.budget);
@@ -361,6 +358,13 @@ async fn choices(
     let mut targets = Vec::new();
     if idle {
         for entry in state.control.connected_plugin_inventory() {
+            if state
+                .admission
+                .as_ref()
+                .is_some_and(|policy| !policy.target_matches(&entry.machine_id))
+            {
+                continue;
+            }
             if owner
                 .as_ref()
                 .is_some_and(|owner| owner != &entry.machine_id)
@@ -412,7 +416,7 @@ async fn choices(
     }
     Ok(Json(ChoicesView {
         schema: 1,
-        confirmation_available: state.binding_admitted(),
+        confirmation_available: state.write_admitted::<BindingWrites>(owner.as_deref()),
         owner_machine_id: owner,
         targets,
         revoke_available: idle
@@ -475,8 +479,12 @@ async fn plan(
     {
         return Err(ApiError::Changed);
     }
-    let view = PlanView::new(&intent, state.binding_admitted(), restores_operation_id)
-        .map_err(|_| ApiError::Changed)?;
+    let view = PlanView::new(
+        &intent,
+        state.write_admitted::<BindingWrites>(Some(&intent.machine_id)),
+        restores_operation_id,
+    )
+    .map_err(|_| ApiError::Changed)?;
     state
         .binding_plans
         .insert(Preview {
@@ -498,13 +506,16 @@ async fn confirm(
     let approval = state
         .approve(verified.as_ref().map(|Extension(v)| v), &headers)
         .await?;
-    if !state.binding_admitted() {
+    if !state.write_admitted::<BindingWrites>(None) {
         return Err(ApiError::BindingAdmissionClosed);
     }
     let preview = state
         .binding_plans
         .consume(approval.actor(), &state.service, &request)
         .map_err(|_| ApiError::Changed)?;
+    if !state.write_admitted::<BindingWrites>(Some(&preview.intent.machine_id)) {
+        return Err(ApiError::BindingAdmissionClosed);
+    }
     // HTTP cancellation cannot put the consumed plan back or cancel bookkeeping.
     tokio::spawn(state.complete_binding(preview, approval))
         .await

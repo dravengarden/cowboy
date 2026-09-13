@@ -231,6 +231,8 @@ struct AppState {
     telemetry_recovery_plans: Arc<telemetry_binding::recovery::surface::Plans>,
     telemetry_binding_plans: Arc<telemetry_binding::surface::Plans>,
     telemetry_binding_fence: crate::telemetry_binding::LegacyFence,
+    telemetry_writer_admission:
+        Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
     plugin_lifecycle_fences: PluginLifecycleFences,
     desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
     web_root: PathBuf,
@@ -857,6 +859,18 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
+    let telemetry_writer_admission = args
+        .telemetry_writer_policy
+        .as_deref()
+        .map(crate::telemetry_plugin::writer_admission::WriterAdmission::load)
+        .transpose()?;
+    anyhow::ensure!(
+        telemetry_writer_admission
+            .as_ref()
+            .is_none_or(|policy| policy.owns_service(&service_id))
+            && (telemetry_writer_admission.is_none() || args.database_url().is_some()),
+        "telemetry writer policy requires its exact durable Service"
+    );
     // Explicit host policy is independent of binding/recovery confirmations.
     // Reject an ambiguous mode even for a programmatically constructed CLI.
     anyhow::ensure!(
@@ -1472,6 +1486,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             telemetry_recovery_plans: Arc::default(),
             telemetry_binding_plans: Arc::default(),
             telemetry_binding_fence,
+            telemetry_writer_admission,
             plugin_lifecycle_fences,
             desired_machine_components,
             web_root: args.web_root,

@@ -105,24 +105,12 @@ impl Plans {
 }
 
 impl ApiState {
-    fn recovery_admitted(&self) -> bool {
-        #[cfg(test)]
-        if self.fixture_recovery_admission {
-            return true;
-        }
-        RECOVERY_WRITE_ADMISSION
-    }
-
     async fn complete_recovery(
         self,
         request: RecoveryRequest,
         budget: OperationBudget,
         approval: OperatorApproval,
     ) -> Result<ReceiptView> {
-        ensure!(
-            self.recovery_admitted(),
-            "Machine recovery admission closed"
-        );
         let ledger = self
             .ledger()
             .await
@@ -133,18 +121,13 @@ impl ApiState {
             .bind_telemetry_recovery(&request, before)?
             .constrain_to_preview(budget);
         let store = self.store.as_ref().context("missing store")?;
-        #[cfg(test)]
-        if self.fixture_recovery_admission {
-            let live = Live::bind(self.control.clone(), &request)?;
-            let observed = coordinate(store, &request, authority, self.auth(), &live).await?;
-            return ReceiptView::new(&request, &observed);
-        }
         let observed = recover_machine(
             store,
             &request,
             authority,
             self.auth(),
             self.control.clone(),
+            self.write_scope::<MachineRecovery>(&request.step.machine_id),
         )
         .await?;
         ReceiptView::new(&request, &observed)
@@ -356,8 +339,12 @@ async fn plan(
     }
     // A Prepared query does NOT prove a validated Machine reopen. Only the
     // Machine can check that process-local proof during its own admission.
-    let view = PlanView::new(&request, before, state.recovery_admitted())
-        .map_err(|_| ApiError::Changed)?;
+    let view = PlanView::new(
+        &request,
+        before,
+        state.write_admitted::<MachineRecovery>(Some(&request.step.machine_id)),
+    )
+    .map_err(|_| ApiError::Changed)?;
     state
         .recovery_plans
         .insert(request, budget)
@@ -375,13 +362,16 @@ async fn confirm(
     let approval = state
         .approve(verified.as_ref().map(|Extension(v)| v), &headers)
         .await?;
-    if !state.recovery_admitted() {
+    if !state.write_admitted::<MachineRecovery>(None) {
         return Err(ApiError::RecoveryAdmissionClosed);
     }
     let (request, budget) = state
         .recovery_plans
         .consume(&approval.actor().into(), &state.service, &operation, &body)
         .map_err(|_| ApiError::Changed)?;
+    if !state.write_admitted::<MachineRecovery>(Some(&request.step.machine_id)) {
+        return Err(ApiError::RecoveryAdmissionClosed);
+    }
     // HTTP cancellation drops an observer, never the admitted task. The spent
     // preview stays spent even if the task is rejected or its result is lost.
     tokio::spawn(state.complete_recovery(request, budget, approval))

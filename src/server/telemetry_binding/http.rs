@@ -5,6 +5,7 @@ use crate::server::{
     AppState, AuthenticatedProductRequest, ProductRequestAuth, operator_approval::OperatorApproval,
 };
 use crate::telemetry_binding::Ledger;
+use crate::telemetry_plugin::writer_admission::{Purpose, WriteScope, WriterAdmission};
 use axum::{
     Json,
     extract::FromRef,
@@ -26,6 +27,7 @@ pub(in crate::server) struct ApiState {
     pub(super) catalog: Arc<crate::plugin_catalog::PluginCatalog>,
     pub(super) fences: crate::server::PluginLifecycleFences,
     pub(super) legacy_fence: LegacyFence,
+    pub(super) admission: Option<Arc<WriterAdmission>>,
     pub(super) hub: crate::core::Hub,
     pub(super) product_auth_enabled: bool,
     pub(super) devices: Arc<crate::client_auth::DeviceAccessSessions>,
@@ -50,6 +52,7 @@ impl FromRef<Arc<AppState>> for ApiState {
             catalog: state.plugin_catalog.clone(),
             fences: state.plugin_lifecycle_fences.clone(),
             legacy_fence: state.telemetry_binding_fence.clone(),
+            admission: state.telemetry_writer_admission.clone(),
             hub: state.hub.clone(),
             product_auth_enabled: state.product_auth_enabled,
             devices: state.device_access.clone(),
@@ -65,6 +68,34 @@ impl FromRef<Arc<AppState>> for ApiState {
 }
 
 impl ApiState {
+    pub(super) fn write_admitted<P: Purpose>(&self, machine: Option<&str>) -> bool {
+        #[cfg(test)]
+        if [
+            self.fixture_binding_admission,
+            self.fixture_recovery_admission,
+            self.fixture_write_admission,
+        ][P::INDEX]
+        {
+            return true;
+        }
+        self.admission
+            .as_ref()
+            .is_some_and(|policy| policy.allows::<P>(&self.service, machine))
+    }
+
+    pub(super) fn write_scope<P: Purpose>(&self, machine: &str) -> Option<WriteScope<P>> {
+        #[cfg(test)]
+        if [
+            self.fixture_binding_admission,
+            self.fixture_recovery_admission,
+            self.fixture_write_admission,
+        ][P::INDEX]
+        {
+            return Some(WriteScope::fixture());
+        }
+        self.admission.as_ref()?.scope::<P>(&self.service, machine)
+    }
+
     pub(super) fn auth(&self) -> ProductRequestAuth<'_> {
         ProductRequestAuth {
             product_auth_enabled: self.product_auth_enabled,
