@@ -3,6 +3,7 @@ use reqwest::{Method, StatusCode};
 
 pub(super) struct Prepared {
     pub root: tempfile::TempDir,
+    pub snapshot: tempfile::TempDir,
     pub fixture: InstallFixture,
     pub http: Http,
     pub evidence: Evidence,
@@ -57,8 +58,11 @@ pub(super) async fn prepare(
     let (service, machine) = evidence.hashes()?;
     report.service_sha256 = Some(service);
     report.machine_sha256 = Some(machine);
+    let snapshot = tempfile::tempdir().map_err(|_| Failure::Setup)?;
+    copy::stopped_fixture(root.path(), snapshot.path())?;
     Ok(Prepared {
         root,
+        snapshot,
         fixture,
         http,
         evidence,

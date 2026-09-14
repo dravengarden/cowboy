@@ -7,6 +7,37 @@ pub(super) fn stopped_fixture(from: &Path, to: &Path) -> Result<(), Failure> {
     copy(from, to).map_err(|_| Failure::Setup)
 }
 
+/// Only owned disposable directories can be restored. CoreSecurity correctly
+/// binds physical paths, so restore unchanged bytes at the original fixture
+/// path instead of rewriting durable authority to permit a relocated copy.
+pub(super) fn restore_stopped_fixture(
+    snapshot: &tempfile::TempDir,
+    original: &tempfile::TempDir,
+) -> Result<(), Failure> {
+    (|| -> Result<()> {
+        let from = snapshot.path().canonicalize()?;
+        let to = original.path().canonicalize()?;
+        ensure!(
+            from != to && !from.starts_with(&to) && !to.starts_with(&from),
+            "disjoint owned fixture directories required"
+        );
+        ensure!(
+            original.path().symlink_metadata()?.is_dir(),
+            "owned fixture directory required"
+        );
+        for entry in std::fs::read_dir(original.path())? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        copy(snapshot.path(), original.path())
+    })()
+    .map_err(|_| Failure::Setup)
+}
+
 fn copy(from: &Path, to: &Path) -> Result<()> {
     ensure!(
         from.is_absolute() && to.is_absolute() && from != to,
@@ -97,4 +128,24 @@ fn stopped_fixture_copy_preserves_only_private_owned_files_and_safe_links() {
     let bad = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("/etc/passwd", bad.path().join("escape")).unwrap();
     assert!(stopped_fixture(bad.path(), tempfile::tempdir().unwrap().path()).is_err());
+}
+
+#[test]
+fn stopped_fixture_restore_keeps_physical_identity_and_independent_baselines() {
+    let original = tempfile::tempdir().unwrap();
+    let snapshot = tempfile::tempdir().unwrap();
+    let identity = original.path().as_os_str().as_encoded_bytes();
+    private_write(&original.path().join("identity"), identity).unwrap();
+    stopped_fixture(original.path(), snapshot.path()).unwrap();
+    for _ in 0..2 {
+        private_write(&original.path().join("reader-only-change"), b"temporary").unwrap();
+        restore_stopped_fixture(&snapshot, &original).unwrap();
+        assert_eq!(
+            std::fs::read(original.path().join("identity")).unwrap(),
+            identity
+        );
+        assert!(!original.path().join("reader-only-change").exists());
+        assert_eq!(std::fs::read_dir(original.path()).unwrap().count(), 1);
+    }
+    assert!(restore_stopped_fixture(&original, &original).is_err());
 }

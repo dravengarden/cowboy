@@ -35,9 +35,12 @@ never fabricates replies and refuses auth/session/export/legacy commands.
 | Disconnect before step delivery | NeedsAttention / UnknownMachineOutcome | No attempt namespace or installation effect |
 | Kill Controller after Applied, before reply delivery | Installing with no Machine receipt | Applied retained |
 
-After both writer processes stop, each of the nine reader pairs independently
-copies the same bounded private fixture, including its stopped SQLite/WAL state,
-and opens that state twice: **45 checks, 90 cold reads**. No reader receives an
+After both writer processes stop, a bounded private snapshot retains their exact
+files, including stopped SQLite/WAL state. Before each of the nine reader pairs,
+restore that snapshot into the original disposable path: CoreSecurity binds its
+physical location, so relocating the database is correctly refused. Never edit
+its markers or database authority to make a relocated copy start. Each pair
+opens its independent restored baseline twice: **45 checks, 90 cold reads**. No reader receives an
 already normalized copy from another reader. The crashed Service operation may
 become NeedsAttention / Interrupted on the first open; its original intent and
 all Machine evidence remain unchanged. Every other operation must be identical

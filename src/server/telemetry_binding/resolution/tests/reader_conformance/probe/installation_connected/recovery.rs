@@ -9,8 +9,8 @@ pub(super) async fn run(
     report: &mut Check,
 ) -> Result<(), Failure> {
     report.stage = Stage::Copy;
-    let root = tempfile::tempdir().map_err(|_| Failure::Setup)?;
-    copy::stopped_fixture(prepared.root.path(), root.path())?;
+    let root = &prepared.root;
+    copy::restore_stopped_fixture(&prepared.snapshot, root)?;
     check(Evidence::read(root.path())? == prepared.evidence)?;
     let mut pair = Pair::prepare(
         root.path(),
@@ -41,7 +41,7 @@ pub(super) async fn run(
             read_only(&pair.proxy.counts()?, cold_read)?;
             report.cold_reads = cold_read;
         }
-        Ok(())
+        Ok(normalized)
     }
     .await;
     if result.is_ok() {
@@ -49,7 +49,9 @@ pub(super) async fn run(
     }
     let cleaned = pair.finish().await;
     report.reader_wire = pair.proxy.snapshot();
-    result.and(cleaned)?;
+    cleaned?;
+    let normalized = result?;
+    check(Evidence::read(root.path())? == normalized)?;
     read_only(&pair.proxy.counts()?, 2)?;
     report.stage = Stage::Complete;
     Ok(())

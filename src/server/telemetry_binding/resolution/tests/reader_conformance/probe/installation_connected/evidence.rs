@@ -242,7 +242,12 @@ impl Evidence {
         let rows = expected.as_array_mut().ok_or(Failure::EvidenceChanged)?;
         check(rows.len() == 1)?;
         rows[0]["phase"] = json!(InstallPhase::NeedsAttention);
-        rows[0]["problem"] = json!(InstallProblem::Interrupted);
+        // Unlike phase/attention_from, the SQL problem column retains a JSON
+        // document (including its string quotes), not an unquoted enum value.
+        rows[0]["problem"] = json!(
+            serde_json::to_string(&InstallProblem::Interrupted)
+                .map_err(|_| Failure::EvidenceChanged)?
+        );
         rows[0]["attention_from"] = json!(InstallPhase::Installing);
         check(
             self.service[0]["updated"]
@@ -280,7 +285,11 @@ fn operation(row: &Value) -> Result<InstallOperation> {
     let op = InstallOperation {
         intent,
         phase: serde_json::from_value(row["phase"].clone())?,
-        problem: serde_json::from_value(row["problem"].clone())?,
+        problem: match &row["problem"] {
+            Value::Null => None,
+            Value::String(document) => Some(serde_json::from_str(document)?),
+            _ => anyhow::bail!("invalid fixture problem column"),
+        },
         attention_from: serde_json::from_value(row["attention_from"].clone())?,
         created_at_ms: row["created"]
             .as_i64()
@@ -307,7 +316,7 @@ fn installation_recovery_allows_only_the_crashed_service_fence() {
     };
     let mut recovered = original.clone();
     recovered.service[0]["phase"] = json!("needs_attention");
-    recovered.service[0]["problem"] = json!("interrupted");
+    recovered.service[0]["problem"] = json!("\"interrupted\"");
     recovered.service[0]["attention_from"] = json!("installing");
     recovered.service[0]["updated"] = json!(2);
     assert!(
@@ -335,4 +344,52 @@ fn installation_recovery_allows_only_the_crashed_service_fence() {
             .recovered_from(&original, Flow::ControllerCrashAfterApplied)
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn installation_evidence_preserves_the_actual_sql_problem_document() {
+    let root = tempfile::tempdir().unwrap();
+    let helper = super::super::super::manifest::ssh_keygen().unwrap();
+    InstallFixture::seed(root.path(), &helper.path)
+        .await
+        .unwrap();
+    let store = crate::store::Store::connect(
+        &database(root.path()),
+        root.path().join("controller/artifacts"),
+    )
+    .await
+    .unwrap();
+    let intent = crate::plugin_operation::installation::machine_fixture("connected-codec-fixture");
+    store.begin_plugin_install(&intent).await.unwrap();
+    store
+        .advance_plugin_install(
+            &intent,
+            InstallPhase::Prepared,
+            InstallPhase::Installing,
+            None,
+        )
+        .await
+        .unwrap();
+    store
+        .advance_plugin_install(
+            &intent,
+            InstallPhase::Installing,
+            InstallPhase::NeedsAttention,
+            Some(InstallProblem::UnknownMachineOutcome),
+        )
+        .await
+        .unwrap();
+    let evidence = Evidence::read(root.path()).unwrap();
+    assert_eq!(
+        evidence.service[0]["problem"],
+        json!("\"unknown_machine_outcome\"")
+    );
+    let operations = evidence.operations().unwrap();
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].intent, intent);
+    assert_eq!(
+        operations[0].problem,
+        Some(InstallProblem::UnknownMachineOutcome)
+    );
+    assert_eq!(operations[0].attention_from, Some(InstallPhase::Installing));
 }
