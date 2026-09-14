@@ -1,7 +1,7 @@
 # Plugin refactor completion ledger
 
 Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
-and current code on 2026-09-14. This is the current exit checklist, not a list of
+and current code on 2026-09-15. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
 
@@ -36,9 +36,9 @@ and accepting a production effect are different milestones.
   immutable Service/principal binding, closed Service/Session keys, exact IDB v2
   writer fencing, transaction-lifetime connections and bounded read-only legacy
   export. Source gates include 16 real-browser outbox cases and eight connection
-  lifetime cases. The initial Controller bridge still permits old Web; immutable
-  handshake acceptance, component activation, the binding-required descendant
-  and compatible recovery roles must be recorded separately. This is not a
+  lifetime cases. The [accepted and activated Controller bridge](releases/product-datasets-and-lifecycle-2026-09-15.md)
+  still permits old Web. Web activation, the binding-required descendant and
+  compatible recovery roles remain separate maintenance exits. This is not a
   general exclusive state lease or completed production migration.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
@@ -60,7 +60,9 @@ and accepting a production effect are different milestones.
   resolution with domain-disjoint IDs, bounded no-store reads and no Machine
   RPC or effect path. Both installation clients share the view; source tests
   include the exact Rust/Web fixture and six real React/browser lifecycle cases.
-  Actual immutable HTTP acceptance and activation are separate milestones.
+  Its actual immutable Controller HTTP acceptance and Controller activation
+  [passed](releases/product-datasets-and-lifecycle-2026-09-15.md); the shared Web
+  consumer is built but not activated with the pending dataset migration.
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
   settlement, bounded managed OTLP export, standing policy and private admission.
   Actual immutable role gates cover 96 reader, 294 writer, 78 startup and 45
@@ -75,7 +77,7 @@ and accepting a production effect are different milestones.
 | P3 / state compatibility | Complete the core browser dataset rollout and compatible recovery floor; general state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
-| P4 / diagnostics | Activate and accept the unified install/uninstall/resolution projection; extend actual graph diagnostics as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
+| P4 / diagnostics | Activate the accepted unified install/uninstall/resolution Web consumer; extend actual graph diagnostics as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
@@ -89,6 +91,11 @@ unconstrained workflow executor to hide these gaps.
 
 ## Production and supported-client acceptance still required
 
+- **Browser dataset and TLS maintenance:** update the owning cold recovery floor,
+  activate dataset-aware Web, then accept/activate the binding-required Controller
+  descendant. The TLS fix is active only in Controller; the built Machine/worker
+  generation still needs independently approved maintenance and supported-session
+  acceptance. Old browser records remain unowned and retained, never auto-replayed.
 - **Core security handoff:** actual Password, device-authorization completion and
   Passkey tests; supported native origin/gesture tests; then the owning committed
   host policy, stopped-Controller adoption and complete compatible recovery
