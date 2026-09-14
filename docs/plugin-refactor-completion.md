@@ -19,7 +19,10 @@ and accepting a production effect are different milestones.
   verified contracts and original per-installation observation leases to the
   existing binding/export executors. An observed invalid installation cannot
   revive an old operation by returning to the same tuple. This is not general
-  graph resolution, a state-dataset lease or new execution authority.
+  graph resolution, a state-dataset lease or new execution authority. Its
+  [Controller release](releases/resolved-telemetry-ports-2026-09-14.md) passed
+  all 45 connected flows and nine Victoria pairs and was activated without
+  restarting the resident Machine, workers or Victoria processes.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

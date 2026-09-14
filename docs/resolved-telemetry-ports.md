@@ -6,6 +6,9 @@ binding and export inputs into distinct, private `ResolvedBinding` and
 results. This is a first live-resolution slice, not an executable graph DSL or
 completion of P0.
 
+The [Controller release record](releases/resolved-telemetry-ports-2026-09-14.md)
+records the accepted immutable role matrix, production activation and limits.
+
 ## What is resolved
 
 - The exact release tuple and contract fingerprint must resolve through the

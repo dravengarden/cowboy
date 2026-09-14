@@ -15,6 +15,10 @@ The [atomic browser outbox slice](atomic-idb-outboxes.md) preserves updated
 peers' mutations with in-transaction deltas and an explicit load handoff. It
 retains the v1 format; general dataset authority and old/new-client writer
 fencing remain P3 exits, not implied by this local concurrency repair.
+The [finite telemetry resolver](resolved-telemetry-ports.md) now ties verified
+contracts and original installation-observation leases to the binding/export
+executors. Its [Controller acceptance](releases/resolved-telemetry-ports-2026-09-14.md)
+does not complete general graph, scope or state-dataset resolution.
 
 状态：整体重设计，2026-09-09；替代本文先前逐项补充的草案。接口、类型和目录拆分均为目标，不是已发布
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
