@@ -1,11 +1,16 @@
 //! A finite, core-owned durable install/upgrade attempt. The HTTP request
 //! observes it; neither a disconnected observer nor restart owns replay rights.
-//! Protocol-seven ACKs remain observations, not durable Machine step receipts.
+//! Retained protocol-seven ACKs remain readable. Fresh execution requires the
+//! exact protocol-nineteen target and durable Machine receipt.
 
 use super::operator_approval::{InstallationAuthority, OperatorApproval};
 use super::*;
 use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
-use crate::machine_protocol::{DesiredPlugin, MachineCommand};
+use crate::machine_protocol::DesiredPlugin;
+use crate::machine_protocol::plugin_install::{
+    InstallLookup, InstallObservation, InstallOutcome, InstallStep, InstallTargetObservation,
+    InstallTargetQuery,
+};
 use crate::plugin_operation::installation::{InstallIntent, InstallPhase, InstallProblem};
 use axum::http::HeaderValue;
 
@@ -13,10 +18,12 @@ mod journal;
 use journal::Progress;
 pub(super) use journal::api_machine_plugin_install_operations;
 
-// Activation requires the accepted reader-first floor (95c0e854 or a compatible
-// descendant) in active, next-transaction recovery AND cold Controller roles.
-// Building this descendant does not establish those host-owned roles.
-pub(super) const DURABLE_INSTALL_ENABLED: bool = true;
+// Reader-first bridge. Pause ALL fresh installs, including the legacy writer:
+// recovery to this revision must never dispatch an old install into a Machine
+// whose new attempt namespace permanently fences legacy mutations. A later
+// descendant may enable this only after actual Controller AND Machine active,
+// next-transaction recovery and cold readers accept the new evidence.
+pub(super) const DURABLE_INSTALL_ENABLED: bool = false;
 
 #[derive(Clone, Copy)]
 enum Disposition {
@@ -69,6 +76,7 @@ impl Drop for InstallationFence {
 enum Outcome {
     Installed,
     NotDispatched,
+    RejectedBeforeStaging,
     AuthenticationPending,
     NeedsReconcile,
 }
@@ -79,6 +87,9 @@ impl Outcome {
             Self::Installed => return StatusCode::NO_CONTENT.into_response(),
             Self::NotDispatched => {
                 "Plugin installation was not sent: confirmation, compatibility, connection or authentication preconditions changed. Refresh before confirming again."
+            }
+            Self::RejectedBeforeStaging => {
+                "Machine durably rejected this installation before staging began. The original attempt will not be replayed. Refresh the target before a new confirmation."
             }
             Self::AuthenticationPending => {
                 "Plugin installed, but Service authentication reconciliation is pending. This does not authorize replaying the installation."
@@ -98,7 +109,10 @@ trait Effects: Sync {
         before_install: bool,
     ) -> impl std::future::Future<Output = bool> + Send;
     fn sync_auth(&self) -> impl std::future::Future<Output = bool> + Send;
-    fn install(&self) -> impl std::future::Future<Output = Result<(), CommandRequestError>> + Send;
+    fn install(
+        &self,
+        step: &InstallStep,
+    ) -> impl std::future::Future<Output = Result<InstallObservation, CommandRequestError>> + Send;
 }
 
 async fn coordinate(
@@ -106,6 +120,8 @@ async fn coordinate(
     fence: &mut InstallationFence,
     progress: &mut Progress<'_>,
 ) -> anyhow::Result<Outcome> {
+    // Legacy records are read-only evidence, not a route back into execution.
+    let step = progress.machine_step()?;
     if !effects.authorized().await {
         return progress
             .abort(fence, InstallProblem::PreconditionsChanged)
@@ -133,32 +149,40 @@ async fn coordinate(
             .abort(fence, InstallProblem::TransportNotSent)
             .await;
     }
-    // Cancellation/panic after this point may leave a remote effect. Only a
-    // proven NotSent transport result can restore the previous local fence.
+    // Cancellation/panic after this point may leave a remote effect. Only
+    // proven NotSent or a committed pre-Staging rejection can release the fence.
     fence.disposition = Disposition::Uncertain;
-    match effects.install().await {
-        Ok(()) => {
-            progress
-                .advance(InstallPhase::MachineAcknowledged, None)
-                .await?
+    match effects.install(&step).await {
+        Ok(InstallObservation {
+            result: InstallLookup::Found { receipt },
+            ..
+        }) => {
+            // Store validates full plan/actor/target binding and atomically
+            // commits the receipt together with its Service phase.
+            progress.machine_receipt(&receipt).await?;
+            match receipt.outcome {
+                InstallOutcome::Applied { .. } => {}
+                InstallOutcome::Rejected { .. } => {
+                    fence.disposition = Disposition::Previous;
+                    return Ok(Outcome::RejectedBeforeStaging);
+                }
+                InstallOutcome::Pending { .. } | InstallOutcome::Unknown { .. } => {
+                    return Ok(Outcome::NeedsReconcile);
+                }
+            }
         }
         Err(error) if error.certainty == CommandFailure::NotSent => {
             return progress
                 .abort(fence, InstallProblem::TransportNotSent)
                 .await;
         }
-        // A generic rejected ACK also cannot prove that activation/auth writes
-        // were rolled back. Machine installation tracking independently fences
-        // interrupted local transitions; no unjournaled inverse is attempted.
-        Err(error) => {
+        // Missing/unavailable evidence and a generic ACK prove neither success
+        // nor absence of effects. Never resend or infer rollback from inventory.
+        Ok(_) | Err(_) => {
             progress
                 .advance(
                     InstallPhase::NeedsAttention,
-                    Some(if error.certainty == CommandFailure::Rejected {
-                        InstallProblem::MachineRejected
-                    } else {
-                        InstallProblem::UnknownMachineOutcome
-                    }),
+                    Some(InstallProblem::UnknownMachineOutcome),
                 )
                 .await?;
             return Ok(Outcome::NeedsReconcile);
@@ -271,12 +295,18 @@ impl Effects for LiveEffects {
                 .is_ok()
     }
 
-    async fn install(&self) -> Result<(), CommandRequestError> {
+    async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
+        if !self.authority.matches_live_step(step) {
+            return Err(CommandRequestError {
+                certainty: CommandFailure::NotSent,
+                detail: "installation confirmation no longer matches the step".into(),
+            });
+        }
         dispatch(
             &self.state.machine_control,
             &self.connection,
             &self.desired,
-            &self.intent.request_id,
+            step,
         )
         .await
     }
@@ -286,17 +316,10 @@ async fn dispatch(
     control: &MachineControl,
     connection: &ConnectionToken,
     desired: &DesiredPlugin,
-    request_id: &str,
-) -> Result<(), CommandRequestError> {
+    step: &InstallStep,
+) -> Result<InstallObservation, CommandRequestError> {
     control
-        .command_on_connection(
-            connection,
-            request_id.to_owned(),
-            MachineCommand::InstallPlugin {
-                request_id: request_id.to_owned(),
-                plugin: Box::new(desired.clone()),
-            },
-        )
+        .plugin_installation_step(connection, step, Some(desired))
         .await
 }
 
@@ -418,10 +441,31 @@ pub(super) async fn api_machine_plugin_install(
         Ok(connection) => connection,
         Err(_) => return Outcome::NotDispatched.response(),
     };
-    let authority = match approval.bind_installation(&machine, &desired, request.operation_id) {
-        Ok(authority) => authority,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    // Pure observation on the original connection; inventory absence is never
+    // a Vacant target. Time spent here consumes the original approval budget.
+    let query = InstallTargetQuery {
+        schema: 1,
+        service_id: state.service_id.clone(),
+        machine_id: machine.clone(),
+        plugin_id: plugin.clone(),
     };
+    let target = match state
+        .machine_control
+        .plugin_installation_target(&connection, &query)
+        .await
+    {
+        Ok(InstallTargetObservation::Observed {
+            admission_enabled: true,
+            target,
+            ..
+        }) => target,
+        _ => return Outcome::NotDispatched.response(),
+    };
+    let authority =
+        match approval.bind_installation(&machine, &desired, request.operation_id, target) {
+            Ok(authority) => authority,
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        };
     let intent = authority.intent().clone();
     let fence =
         match InstallationFence::acquire(&state.plugin_lifecycle_fences, (machine.clone(), plugin))

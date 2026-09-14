@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::machine_protocol::DesiredPlugin;
+use crate::machine_protocol::plugin_install::{InstallStep, InstallTarget};
 use crate::plugin_operation::installation::InstallIntent;
 
 fn target_digest(machine: &str, desired: &DesiredPlugin) -> Result<String> {
@@ -23,10 +24,11 @@ impl OperatorApproval {
         machine: &str,
         desired: &DesiredPlugin,
         operation_id: String,
+        target: InstallTarget,
     ) -> Result<InstallationAuthority> {
         let expires_at_ms = self.received.deadline_ms(Duration::from_mins(5));
         let intent = InstallIntent {
-            schema: 1,
+            schema: 2,
             request_id: format!("plugin-install-{operation_id}"),
             operation_id,
             service_id: self.service.clone(),
@@ -38,6 +40,7 @@ impl OperatorApproval {
             generation_digest: desired.release.artifact_digest.clone(),
             contract_fingerprint: desired.release.contract_fingerprint.clone(),
             envelope_digest: format!("sha256:{}", hex_sha256(&serde_json::to_vec(desired)?)),
+            machine_target: Some(target),
             expires_at_ms,
         };
         intent.validate()?;
@@ -52,6 +55,20 @@ impl OperatorApproval {
 }
 
 impl InstallationAuthority {
+    /// Final synchronous identity/budget check at dispatch; this does not
+    /// replace the continuous credential/connection checks in the coordinator.
+    pub(in crate::server) fn matches_live_step(&self, step: &InstallStep) -> bool {
+        let valid = self.within_budget()
+            && self
+                .intent
+                .machine_step()
+                .is_ok_and(|expected| &expected == step);
+        if !valid {
+            self.revoke();
+        }
+        valid
+    }
+
     pub(in crate::server) fn intent(&self) -> &InstallIntent {
         &self.intent
     }

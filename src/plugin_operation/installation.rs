@@ -1,7 +1,11 @@
 //! Durable evidence for the finite core installer, never a replayable grant.
-//! The protocol-seven response is an observed ACK, not a Machine step receipt.
+//! Schema one retains protocol-seven ACK evidence. Schema two binds exact
+//! Machine installation CAS and typed receipts; neither schema grants replay.
 
 use super::{Actor, bounded, digest};
+use crate::machine_protocol::plugin_install::{
+    InstallOutcome, InstallReceipt, InstallStep, InstallTarget,
+};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -22,8 +26,12 @@ pub(crate) struct InstallIntent {
     pub contract_fingerprint: String,
     /// Hash of the complete trusted DesiredPlugin, not its URL or package data.
     pub envelope_digest: String,
-    /// Correlates the single live dispatch. It cannot query a durable Machine
-    /// receipt, reconstruct a connection, or authorize dispatch after restart.
+    /// Absent only for retained schema-one attempts. Never inferred from an
+    /// empty inventory or populated after a confirmation has been consumed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_target: Option<InstallTarget>,
+    /// Correlates the single live dispatch. The full schema-two step can query
+    /// evidence, but neither identity can authorize dispatch after restart.
     pub request_id: String,
     pub expires_at_ms: i64,
 }
@@ -42,7 +50,10 @@ impl InstallIntent {
             Actor::Admin { account } => account,
         };
         ensure!(
-            self.schema == 1 && valid_operation_id(&self.operation_id),
+            matches!(
+                (self.schema, &self.machine_target),
+                (1, None) | (2, Some(_))
+            ) && valid_operation_id(&self.operation_id),
             "invalid install identity"
         );
         ensure!(
@@ -77,7 +88,35 @@ impl InstallIntent {
             self.expires_at_ms > 0 && self.expires_at_ms <= 9_007_199_254_740_991,
             "invalid install deadline"
         );
+        if let Some(target) = &self.machine_target {
+            target.validate()?;
+        }
         Ok(())
+    }
+
+    pub(crate) fn machine_step(&self) -> Result<InstallStep> {
+        self.validate()?;
+        let expected = self
+            .machine_target
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("legacy installation has no durable Machine step"))?;
+        let step = InstallStep {
+            schema: 1,
+            operation_id: self.operation_id.clone(),
+            service_id: self.service_id.clone(),
+            machine_id: self.machine_id.clone(),
+            plugin_id: self.plugin_id.clone(),
+            plugin_kind: self.plugin_kind,
+            plugin_version: self.plugin_version.clone(),
+            generation_digest: self.generation_digest.clone(),
+            contract_fingerprint: self.contract_fingerprint.clone(),
+            envelope_digest: self.envelope_digest.clone(),
+            expected,
+            expires_at_ms: self.expires_at_ms,
+            plan_digest: crate::machine_protocol::plugin_step::digest(&serde_json::to_vec(self)?),
+        };
+        step.validate()?;
+        Ok(step)
     }
 }
 
@@ -159,11 +198,21 @@ pub(crate) struct InstallOperation {
     pub attention_from: Option<InstallPhase>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    pub machine_receipt: Option<InstallReceipt>,
 }
 
 impl InstallOperation {
     pub(crate) fn validate(&self) -> Result<()> {
         self.intent.validate()?;
+        if let Some(receipt) = &self.machine_receipt {
+            ensure!(
+                receipt.matches(&self.intent.machine_step()?),
+                "install Machine receipt identity mismatch"
+            );
+        }
+        if self.intent.schema == 2 {
+            self.validate_machine_progress()?;
+        }
         ensure!(
             self.created_at_ms > 0
                 && self.created_at_ms <= self.updated_at_ms
@@ -174,14 +223,21 @@ impl InstallOperation {
         ensure!(
             match self.phase {
                 InstallPhase::NeedsAttention => self.problem.is_some(),
-                InstallPhase::Aborted => matches!(
-                    self.problem,
-                    Some(
-                        InstallProblem::PreconditionsChanged
-                            | InstallProblem::AuthenticationSyncFailed
-                            | InstallProblem::TransportNotSent
-                    )
-                ),
+                InstallPhase::Aborted =>
+                    (self.intent.schema == 2
+                        && self.problem == Some(InstallProblem::MachineRejected)
+                        && matches!(
+                            self.machine_receipt.as_ref().map(|r| &r.outcome),
+                            Some(InstallOutcome::Rejected { .. })
+                        ))
+                        || matches!(
+                            self.problem,
+                            Some(
+                                InstallProblem::PreconditionsChanged
+                                    | InstallProblem::AuthenticationSyncFailed
+                                    | InstallProblem::TransportNotSent
+                            )
+                        ),
                 InstallPhase::AuthenticationPending =>
                     self.problem == Some(InstallProblem::AuthenticationSyncFailed),
                 _ => self.problem.is_none(),
@@ -200,6 +256,49 @@ impl InstallOperation {
             "invalid install interruption evidence"
         );
         Ok(())
+    }
+
+    fn validate_machine_progress(&self) -> Result<()> {
+        let outcome = self.machine_receipt.as_ref().map(|r| &r.outcome);
+        ensure!(
+            match self.phase {
+                InstallPhase::MachineAcknowledged
+                | InstallPhase::Completed
+                | InstallPhase::AuthenticationPending =>
+                    matches!(outcome, Some(InstallOutcome::Applied { .. })),
+                InstallPhase::Prepared
+                | InstallPhase::SyncingAuthentication
+                | InstallPhase::Installing => outcome.is_none(),
+                InstallPhase::Aborted =>
+                    outcome.is_none()
+                        || (matches!(outcome, Some(InstallOutcome::Rejected { .. }))
+                            && self.problem == Some(InstallProblem::MachineRejected)),
+                InstallPhase::NeedsAttention => match outcome {
+                    None => self.attention_from != Some(InstallPhase::MachineAcknowledged),
+                    Some(InstallOutcome::Pending { .. } | InstallOutcome::Unknown { .. }) =>
+                        self.attention_from == Some(InstallPhase::Installing)
+                            && self.problem == Some(InstallProblem::UnknownMachineOutcome),
+                    Some(InstallOutcome::Applied { .. }) =>
+                        self.attention_from == Some(InstallPhase::MachineAcknowledged)
+                            && matches!(
+                                self.problem,
+                                Some(InstallProblem::Interrupted | InstallProblem::StorageFailure)
+                            ),
+                    Some(InstallOutcome::Rejected { .. }) => false,
+                },
+            },
+            "install progress lacks matching Machine evidence"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn machine_fixture(id: &str) -> InstallIntent {
+    InstallIntent {
+        schema: 2,
+        machine_target: Some(InstallTarget::Vacant {}),
+        ..fixture(id)
     }
 }
 
@@ -221,6 +320,7 @@ pub(crate) fn fixture(id: &str) -> InstallIntent {
         generation_digest: format!("sha256:{}", "a".repeat(64)),
         contract_fingerprint: format!("sha256:{}", "b".repeat(64)),
         envelope_digest: format!("sha256:{}", "c".repeat(64)),
+        machine_target: None,
         expires_at_ms: chrono::Utc::now().timestamp_millis() + 300_000,
     }
 }

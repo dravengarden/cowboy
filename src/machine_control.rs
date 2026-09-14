@@ -589,6 +589,14 @@ impl MachineControl {
                 accepted,
                 detail,
             } => {
+                // A generic ACK addressed to a different connection or typed
+                // RPC is not an asynchronous login status. Drop its payload
+                // before either waiter completion or UI history projection.
+                if live.pending.get(&request_id).is_some_and(|request| {
+                    !request.connection.same(token) || request.kind != ReplyKind::Command
+                }) {
+                    return;
+                }
                 let result = if accepted {
                     Ok(())
                 } else {

@@ -1,6 +1,10 @@
 //! Actual Controller startup on populated install evidence, including repeat
 //! cold opens. This reuses only the existing isolated process/receipt harness.
 use super::*;
+use crate::machine_protocol::plugin_install::{
+    InstallOutcome, InstallPhase as MachinePhase, InstallReceipt as MachineReceipt,
+    InstallRejection, InstallTarget, InstallUncertainty,
+};
 use crate::plugin_operation::installation::{InstallIntent, InstallPhase, InstallProblem};
 use crate::store::Store;
 use fixtures::{MACHINE, SERVICE};
@@ -13,6 +17,15 @@ pub(super) enum InstallCase {
     ChecksumCorrupt,
     FutureSchema,
     ForeignOwner,
+    MachinePhase(InstallPhase),
+    MachineRejected,
+    MachinePending,
+    MachineUnknown,
+    ReceiptChecksumCorrupt,
+    ReceiptFutureSchema,
+    ReceiptTargetMismatch,
+    ReceiptMissing,
+    MachineTargetMissing,
 }
 
 impl InstallCase {
@@ -21,13 +34,69 @@ impl InstallCase {
             Self::ChecksumCorrupt => Some("invalid install intent integrity"),
             Self::FutureSchema => Some("invalid install identity"),
             Self::ForeignOwner => Some("unfinished install belongs to another Service"),
+            Self::ReceiptChecksumCorrupt => Some("invalid install Machine receipt integrity"),
+            Self::ReceiptFutureSchema | Self::ReceiptTargetMismatch => {
+                Some("install Machine receipt identity mismatch")
+            }
+            Self::ReceiptMissing => Some("install progress lacks matching Machine evidence"),
+            Self::MachineTargetMissing => Some("invalid install identity"),
             _ => None,
         }
     }
 
     pub(super) fn phase(self) -> Option<InstallPhase> {
         match self {
-            Self::Phase(phase) => Some(phase),
+            Self::Phase(phase) | Self::MachinePhase(phase) => Some(phase),
+            Self::MachineRejected => Some(InstallPhase::Aborted),
+            Self::MachinePending | Self::MachineUnknown => Some(InstallPhase::NeedsAttention),
+            Self::ReceiptChecksumCorrupt
+            | Self::ReceiptFutureSchema
+            | Self::ReceiptTargetMismatch
+            | Self::ReceiptMissing => Some(InstallPhase::MachineAcknowledged),
+            Self::MachineTargetMissing => Some(InstallPhase::Prepared),
+            _ => None,
+        }
+    }
+
+    pub(super) fn durable(self) -> bool {
+        !matches!(
+            self,
+            Self::Absent
+                | Self::Phase(_)
+                | Self::ChecksumCorrupt
+                | Self::FutureSchema
+                | Self::ForeignOwner
+        )
+    }
+
+    pub(super) fn outcome(self) -> Option<InstallOutcome> {
+        match self {
+            Self::MachineRejected => Some(InstallOutcome::Rejected {
+                reason: InstallRejection::TargetChanged,
+            }),
+            Self::MachinePending => Some(InstallOutcome::Pending {
+                phase: MachinePhase::Staging,
+            }),
+            Self::MachineUnknown => Some(InstallOutcome::Unknown {
+                phase: MachinePhase::Activating,
+                reason: InstallUncertainty::Interrupted,
+            }),
+            _ if self.durable()
+                && matches!(
+                    self.phase(),
+                    Some(
+                        InstallPhase::MachineAcknowledged
+                            | InstallPhase::Completed
+                            | InstallPhase::AuthenticationPending
+                    )
+                ) =>
+            {
+                Some(InstallOutcome::Applied {
+                    revision: format!("installation-{}", "d".repeat(64))
+                        .try_into()
+                        .expect("fixture revision"),
+                })
+            }
             _ => None,
         }
     }
@@ -53,16 +122,58 @@ fn cases() -> Vec<InstallCase> {
         InstallCase::FutureSchema,
         InstallCase::ForeignOwner,
     ]);
+    result.extend(
+        [
+            InstallPhase::Prepared,
+            InstallPhase::SyncingAuthentication,
+            InstallPhase::Installing,
+            InstallPhase::MachineAcknowledged,
+            InstallPhase::Completed,
+            InstallPhase::AuthenticationPending,
+            InstallPhase::Aborted,
+            InstallPhase::NeedsAttention,
+        ]
+        .map(InstallCase::MachinePhase),
+    );
+    result.extend([
+        InstallCase::MachineRejected,
+        InstallCase::MachinePending,
+        InstallCase::MachineUnknown,
+        InstallCase::ReceiptChecksumCorrupt,
+        InstallCase::ReceiptFutureSchema,
+        InstallCase::ReceiptTargetMismatch,
+        InstallCase::ReceiptMissing,
+        InstallCase::MachineTargetMissing,
+    ]);
     result
 }
 
-pub(super) fn intent() -> InstallIntent {
+pub(super) fn intent(case: InstallCase) -> InstallIntent {
     let mut intent = crate::plugin_operation::installation::fixture("immutable-reader");
     intent.service_id = SERVICE.into();
     intent.machine_id = MACHINE.into();
     intent.actor = crate::plugin_operation::Actor::Product {
         user_id: crate::product_auth::local_product_principal().user_id,
     };
+    if case.durable() {
+        intent.schema = 2;
+        intent.machine_target = Some(match case.phase() {
+            Some(InstallPhase::Prepared | InstallPhase::SyncingAuthentication) => {
+                InstallTarget::Vacant {}
+            }
+            Some(InstallPhase::Installing | InstallPhase::Aborted) => InstallTarget::Removed {
+                revision: format!("installation-{}", "a".repeat(64))
+                    .try_into()
+                    .expect("fixture revision"),
+            },
+            _ => InstallTarget::Installed {
+                revision: format!("installation-{}", "a".repeat(64))
+                    .try_into()
+                    .expect("fixture revision"),
+                generation_digest: format!("sha256:{}", "e".repeat(64)),
+            },
+        });
+    }
     intent
 }
 
@@ -77,13 +188,13 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
     }
     let url = format!("sqlite://{}", database_path(root).display());
     let store = Store::connect(&url, root.join("controller/artifacts")).await?;
-    let mut intent = intent();
+    let mut intent = intent(case);
     if matches!(case, InstallCase::ForeignOwner) {
         intent.service_id = "foreign-service".into();
     }
     store.begin_plugin_install(&intent).await?;
     let phase = case.phase().unwrap_or(InstallPhase::Prepared);
-    if phase == InstallPhase::Aborted {
+    if phase == InstallPhase::Aborted && !matches!(case, InstallCase::MachineRejected) {
         store
             .advance_plugin_install(
                 &intent,
@@ -99,7 +210,10 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
             InstallPhase::Installing,
             InstallPhase::MachineAcknowledged,
         ] {
-            if from == phase || phase == InstallPhase::NeedsAttention {
+            if from == phase
+                || (from == InstallPhase::Installing
+                    && (phase == InstallPhase::NeedsAttention || case.outcome().is_some()))
+            {
                 break;
             }
             store
@@ -107,11 +221,17 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
                 .await?;
             from = next;
         }
-        if phase == InstallPhase::NeedsAttention {
-            store
-                .advance_plugin_install(&intent, from, InstallPhase::Installing, None)
-                .await?;
-            from = InstallPhase::Installing;
+        if let Some(outcome) = case.outcome() {
+            let step = intent.machine_step()?;
+            let receipt = MachineReceipt {
+                request_digest: step.request_digest()?,
+                step,
+                outcome,
+            };
+            from = store
+                .record_plugin_install_receipt(&intent, &receipt)
+                .await?
+                .phase;
         }
         if phase != from {
             let problem = match phase {
@@ -126,6 +246,11 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
                 .await?;
         }
     }
+    corrupt(root, case, &mut intent)?;
+    Ok(())
+}
+
+fn corrupt(root: &Path, case: InstallCase, intent: &mut InstallIntent) -> Result<()> {
     let db = rusqlite::Connection::open(database_path(root))?;
     match case {
         InstallCase::ChecksumCorrupt => {
@@ -134,13 +259,41 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
                 [],
             )?;
         }
-        InstallCase::FutureSchema => {
-            intent.schema = 99;
+        InstallCase::FutureSchema | InstallCase::MachineTargetMissing => {
+            if matches!(case, InstallCase::FutureSchema) {
+                intent.schema = 99;
+            } else {
+                intent.machine_target = None;
+            }
             let document = serde_json::to_string(&intent)?;
             db.execute(
                 "UPDATE plugin_install_operations SET intent = ?1, intent_sha256 = ?2",
                 [&document, &sha256(document.as_bytes())],
             )?;
+        }
+        InstallCase::ReceiptChecksumCorrupt => {
+            db.execute(
+                "UPDATE plugin_install_operations SET machine_receipt_sha256 = ?1",
+                ["f".repeat(64)],
+            )?;
+        }
+        InstallCase::ReceiptMissing => {
+            db.execute("UPDATE plugin_install_operations SET machine_receipt = NULL, machine_receipt_sha256 = NULL", [])?;
+        }
+        InstallCase::ReceiptFutureSchema | InstallCase::ReceiptTargetMismatch => {
+            let document: String = db.query_row(
+                "SELECT machine_receipt FROM plugin_install_operations",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut receipt: MachineReceipt = serde_json::from_str(&document)?;
+            if matches!(case, InstallCase::ReceiptFutureSchema) {
+                receipt.step.schema = 99;
+            } else {
+                receipt.step.expected = InstallTarget::Vacant {};
+            }
+            let document = serde_json::to_string(&receipt)?;
+            db.execute("UPDATE plugin_install_operations SET machine_receipt = ?1, machine_receipt_sha256 = ?2", [&document, &sha256(document.as_bytes())])?;
         }
         _ => {}
     }
@@ -182,7 +335,7 @@ async fn immutable_installation_readers() -> Result<()> {
     let empty = Fixture::build(Case::Absent).await?;
     let helper = manifest::ssh_keygen()?;
     let mut receipt = InstallReceipt {
-        schema: "dravengarden.cowboy.install-reader-conformance/v1",
+        schema: "dravengarden.cowboy.install-reader-conformance/v2",
         source_revision: revision,
         artifacts,
         checks: Vec::new(),
@@ -234,5 +387,45 @@ async fn immutable_installation_readers() -> Result<()> {
         receipt.accepted,
         "immutable install reader matrix failed; inspect bounded receipt"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn all_install_reader_fixtures_exercise_the_exact_startup_contract() -> Result<()> {
+    let empty = Fixture::build(Case::Absent).await?;
+    let helper = std::env::current_exe()?; // Never executed by seed or this test.
+    assert_eq!(cases().len(), 28);
+    for case in cases() {
+        let root = tempfile::tempdir()?;
+        seed(root.path(), &empty, &helper, case).await?;
+        let store = Store::connect(
+            &format!("sqlite://{}", database_path(root.path()).display()),
+            root.path().join("controller/artifacts"),
+        )
+        .await?;
+        let result = store.recover_plugin_installs(SERVICE).await;
+        if let Some(marker) = case.marker() {
+            ensure!(
+                result.unwrap_err().to_string().contains(marker),
+                "fixture rejection mismatch: {case:?}"
+            );
+        } else {
+            let before = result?;
+            ensure!(
+                store.recover_plugin_installs(SERVICE).await? == before,
+                "fixture changed after second startup: {case:?}"
+            );
+            if case.phase().is_some() {
+                let saved = store
+                    .plugin_install_operation(&intent(case).operation_id)
+                    .await?
+                    .expect("seeded evidence");
+                ensure!(
+                    saved.machine_receipt.map(|r| r.outcome) == case.outcome(),
+                    "receipt differs: {case:?}"
+                );
+            }
+        }
+    }
     Ok(())
 }

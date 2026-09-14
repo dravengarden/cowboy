@@ -16,6 +16,7 @@ async fn installation_wire_deadline_keeps_time_spent_before_binding() {
             "machine-test",
             &desired(),
             "original-deadline-fixture-0001".into(),
+            crate::machine_protocol::plugin_install::InstallTarget::Vacant {},
         )
         .unwrap();
     assert_eq!(authority.intent().expires_at_ms, original_wall + 300_000);
@@ -37,6 +38,45 @@ fn desired() -> crate::machine_protocol::DesiredPlugin {
         },
         "package_base64": "e30=", "publisher_public_key": "fixture", "host_bundle_base64": null
     })).unwrap()
+}
+
+#[tokio::test]
+async fn installation_dispatch_cannot_substitute_a_step_or_revive_a_revoked_binding() {
+    use crate::machine_protocol::plugin_install::InstallTarget;
+    for change in ["target", "plan", "deadline", "operation"] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let authority =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap()
+                .bind_installation(
+                    "machine-test",
+                    &desired(),
+                    "dispatch-install-fixture-0001".into(),
+                    InstallTarget::Vacant {},
+                )
+                .unwrap();
+        let original = authority.intent().machine_step().unwrap();
+        assert!(authority.matches_live_step(&original));
+        let mut changed = original.clone();
+        match change {
+            "target" => {
+                changed.expected = InstallTarget::Removed {
+                    revision: format!("installation-{}", "e".repeat(64))
+                        .try_into()
+                        .unwrap(),
+                }
+            }
+            "plan" => changed.plan_digest = format!("sha256:{}", "e".repeat(64)),
+            "deadline" => changed.expires_at_ms += 1,
+            _ => changed.operation_id.push('x'),
+        }
+        assert!(!authority.matches_live_step(&changed), "{change}");
+        assert!(
+            !authority.matches_live_step(&original),
+            "cannot revive {change}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -74,6 +114,7 @@ async fn installation_binds_complete_release_target_original_credential_and_budg
                 "machine-test",
                 &desired,
                 "installation-authority-fixture".into(),
+                crate::machine_protocol::plugin_install::InstallTarget::Vacant {},
             )
             .unwrap();
         assert_eq!(

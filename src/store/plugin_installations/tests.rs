@@ -1,6 +1,8 @@
 use super::*;
 use crate::plugin_operation::installation::fixture;
 
+mod machine_receipts;
+
 async fn advance(store: &Store, intent: &InstallIntent, target: InstallPhase) {
     let path = [
         InstallPhase::Prepared,

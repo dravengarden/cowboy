@@ -1,6 +1,11 @@
 # Durable core installation attempts
 
-Status: 2026-09-14, [accepted and active on Hawk](releases/plugin-install-journal-2026-09-14.md).
+Status: 2026-09-14. The schema-one journal is
+[accepted and active on Hawk](releases/plugin-install-journal-2026-09-14.md).
+The schema-two target/receipt bridge is implemented with **all fresh installation
+admission paused in this source revision**. Its actual reader rollout and writer
+cutover are not yet accepted. Do not confuse the historical schema-one release
+receipt with acceptance of this bridge.
 The finite Service installer records
 install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
 or installation dispatch. Reader revision `95c0e854` pauses new admission. The
@@ -18,6 +23,16 @@ Service, actor, Machine, Plugin kind/version/digest/fingerprint, the SHA-256 of
 the complete trusted envelope, one transport request ID, and the original
 deadline. It contains no package bytes, download URL, credential, error payload,
 connection token or serialized grant.
+
+Schema two additionally binds a closed Machine target: genuinely vacant,
+installed incarnation plus digest, or removed incarnation. Core observes that
+target on the original protocol-19 connection before binding the confirmation;
+it requires Machine admission readiness, never synthesizes vacancy from inventory
+absence, and preserves the confirmation's original deadline through that wait.
+The complete intent, including actor and target, is hashed into the Machine step.
+Schema-one intent bytes remain unchanged and readable; they cannot enter the new
+coordinator or gain a target retrospectively. Fresh execution has no legacy RPC
+fallback. See [Machine attempts](plugin-machine-install-attempts.md).
 
 The existing five-minute monotonic budget and continuous credential, Catalog,
 compatibility and original-connection checks still apply. SQL waiting does not
@@ -41,13 +56,23 @@ Prepared → [SyncingAuthentication] → Installing → MachineAcknowledged
 ```
 
 Any interrupted nonterminal phase can become `NeedsAttention`.
-`Aborted` means no **installation** was dispatched; a preceding Service-auth
-replica sync may have occurred. From `Installing`, only an in-process proven
-not-sent result can take that terminal transition. A generic rejected ACK is
-not proof of rollback. Lost replies, connection changes and ambiguous writes
-remain fenced; no forward replay or inverse is sent.
+For schema one, `Aborted` means no **installation** was dispatched. Schema two
+also permits an exact durable Machine `Rejected` receipt, which proves rejection
+before Staging, not that no command was sent. Both may follow a Service-auth
+replica sync. From `Installing`, only proven not-sent or this matching typed
+rejection can release the slot. Generic ACKs, unavailable or mismatched evidence,
+lost replies, connection changes and ambiguous writes remain fenced; no forward
+replay or inverse is sent.
 
-Machine ACK observation is saved before post-install authentication sync. The
+Schema two atomically saves the full bounded, checksummed Machine receipt and
+Service phase in the same transaction. Only exact `Applied` can enter
+`MachineAcknowledged`, `Completed` or `AuthenticationPending`; Pending/Unknown
+becomes `NeedsAttention`. Receipt CAS requires the identical original intent,
+Installing phase and no existing receipt. Duplicate, uncertain and terminal rows
+cannot be overwritten by this forward writer, even with a later successful
+observation. Recording evidence does not require renewed effect authority.
+
+Machine evidence is saved before post-install authentication sync. The
 reservation is released only after `Completed`, `AuthenticationPending` or
 `Aborted` commits. Failed/ambiguous progress commits cannot authorize the next
 effect or release the reservation. Recording a storage failure never overwrites
@@ -60,8 +85,10 @@ schema, identity mismatch and foreign unfinished Service ownership fail closed.
 Startup neither queries nor writes the Machine, synchronizes credentials,
 restores sessions, clears uncertainty or treats current inventory as proof.
 
-The additive migrations are PostgreSQL 0048 and SQLite 0022. Existing migration
-bytes are unchanged. SQLite retains WAL `synchronous=FULL`; PostgreSQL commits
+The original migrations are PostgreSQL 0048 and SQLite 0022. Additive 0049/0023
+introduce paired nullable receipt/checksum columns, retaining existing intent
+bytes, phases and indexes; no applied migration is edited or table rebuilt.
+SQLite retains WAL `synchronous=FULL`; PostgreSQL commits
 these transactions with `synchronous_commit=on`. All claim paths acquire their
 write locks before reading. The store-copy allowlist includes installation
 evidence. The journal is bounded at 4096 records, retains terminal identities
@@ -71,17 +98,22 @@ evidence automatically.
 ## Reloadable diagnostics
 
 `GET /api/machines/{machine}/plugins/{plugin}/installation-operations` uses the
-existing Operator lifecycle authorization. Its closed v1 projection includes
+existing Operator lifecycle authorization. Its closed v2 projection includes
 the latest 32 attempts, phases, exact release, safe problems, timestamps,
-reader/admission state and reconciliation flag. It excludes actor, envelope,
-request ID, deadline, credentials and raw errors. Protocol-seven operation
-correlation is deliberately **not** advertised as a durable Machine receipt.
+reader/admission state and reconciliation flag. Every row carries its original
+`evidence_schema` and a nullable closed Machine **outcome only**, never the full
+receipt/step. It excludes actor, envelope, plan, target, request ID, deadline,
+credentials and raw errors. Legacy protocol-seven evidence is explicitly marked
+without a durable Machine receipt. The client accepts the old v1 projection
+during Web/Controller rollout and normalizes it to schema-one rows; it never
+promotes an old ACK into Machine evidence.
 
 Core Machine Provider management and the admin telemetry installer expose the
 same Installation history component, outside Plugin-authored surfaces. Expansion,
 reload and manual refresh only GET saved evidence. The client validates bounded
 closed records and rejects unknown fields/states, duplicate IDs, malformed
-digests, invalid dates, bad content types and oversized streamed bodies. Failed
+digests, invalid dates, inconsistent receipt/phase combinations, bad content
+types and oversized streamed bodies. Failed
 reads are unavailable, not an empty history or permission to retry. Historical
 completion is not a claim about the presently active installation.
 
@@ -110,15 +142,19 @@ nix develop -c just plugin-install-reader-conformance /absolute/matrix.json /abs
 Its closed matrix has `schema: 1` and a `controller` object containing `active`,
 `rollback` and `cold` immutable Controller release paths. From clean committed
 source, it starts the actual executables with disposable SQLite storage and
-isolated loopback. All 72 checks must pass: 12 absent/populated/corrupt/foreign
-cases, three roles and two process opens. Duplicate POSTs only observe seeded
-identities; they cannot dispatch. The private create-only v1 receipt contains
+isolated loopback. All 168 checks must pass: 28 absent/schema-one/schema-two/
+corrupt/foreign cases, three roles and two process opens. Exact stored receipts,
+all three target states, rejected/pending/unknown outcomes and missing receipt
+or target rejection are included. Duplicate POSTs only observe seeded identities
+or return reader-only unavailability; they cannot dispatch. The private
+create-only v2 receipt contains
 artifact provenance and closed check results, not raw journal rows or logs.
 PostgreSQL process startup, actual host role selection, production credentials,
-Machine receipts and activation remain separately unchecked.
+actual Machine execution and activation remain separately unchecked.
 
-Remaining P4 work includes Machine-owned install/staging/activation receipts and
-installation CAS, independently authorized recovery (including proven pre-effect
-abandonment), post-effect exact worker verification, and bounded evidence
-archival that preserves unresolved references. This Service journal fixes the
-lost-on-Controller-restart reservation; it does not finish the whole refactor.
+Before writer admission, accept both actual Controller/Machine reader floors and
+connected immutable execution/lost-response/restart gates. A recovery Controller
+must pause legacy admission too: the first Machine attempt permanently fences
+that path. Remaining P4 work also includes independently authorized installation
+recovery, post-effect exact worker verification, and bounded evidence archival
+that preserves unresolved references. This bridge does not finish the refactor.

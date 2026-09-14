@@ -39,12 +39,14 @@ delivery receipts instead. See `docs/telemetry-plugins.md`.
 For Service installation journal changes, run
 `just plugin-install-reader-conformance <matrix.json> <new-receipt.json>`
 against immutable Controller active, next-transaction recovery and cold roles.
-Require all 72 populated/absent/corrupt/foreign-identity checks, including two
-real process opens and saved-ID observation without replay. Bind those roles
+Require all 168 schema-one/schema-two/populated/absent/corrupt/foreign-identity
+checks, including two real process opens, exact Machine receipt preservation and
+saved-ID observation without replay. Bind those roles
 to the actual host profiles and bootstrap closure separately; candidate-only
 fixtures do not establish the production reader floor. Keep new installation
-admission paused until that floor is accepted. This test does not prove durable
-Machine installation receipts, production Operator authority or restoration,
+admission (including the old generic installer) paused until both actual Service
+and Machine floors are accepted. This test does not prove Machine installation
+effects, production Operator authority or restoration,
 and does not authorize installing a Plugin. See `docs/plugin-install-journal.md`.
 
 For Machine installation attempt changes, also run

@@ -11,6 +11,22 @@ pub(super) struct Progress<'a> {
 }
 
 impl<'a> Progress<'a> {
+    pub(super) fn machine_step(&self) -> anyhow::Result<InstallStep> {
+        self.intent.machine_step()
+    }
+
+    pub(super) async fn machine_receipt(
+        &mut self,
+        receipt: &crate::machine_protocol::plugin_install::InstallReceipt,
+    ) -> anyhow::Result<()> {
+        let saved = self
+            .store
+            .record_plugin_install_receipt(self.intent, receipt)
+            .await?;
+        self.phase = saved.phase;
+        Ok(())
+    }
+
     pub(super) fn new(store: &'a Store, intent: &'a InstallIntent) -> Self {
         Self {
             store,
@@ -68,6 +84,10 @@ impl<'a> Progress<'a> {
 
 #[derive(Serialize)]
 pub(super) struct Evidence<'a> {
+    evidence_schema: u16,
+    // Deliberately project only the closed outcome. The complete receipt's
+    // actor-bound plan, target and deadline remain private durable evidence.
+    machine_receipt: Option<&'a InstallOutcome>,
     operation_id: &'a str,
     phase: InstallPhase,
     problem: Option<InstallProblem>,
@@ -82,6 +102,8 @@ pub(super) struct Evidence<'a> {
 impl<'a> From<&'a InstallOperation> for Evidence<'a> {
     fn from(op: &'a InstallOperation) -> Self {
         Self {
+            evidence_schema: op.intent.schema,
+            machine_receipt: op.machine_receipt.as_ref().map(|receipt| &receipt.outcome),
             operation_id: &op.intent.operation_id,
             phase: op.phase,
             problem: op.problem,
@@ -137,10 +159,9 @@ pub(in crate::server) async fn api_machine_plugin_install_operations(
     };
     match store.plugin_install_history(&state.service_id, &machine, &plugin).await {
         Ok(operations) => Json(serde_json::json!({
-            "schema": "dravengarden.cowboy.plugin-install-history/v1",
+            "schema": "dravengarden.cowboy.plugin-install-history/v2",
             "admission_enabled": DURABLE_INSTALL_ENABLED,
             "execution_authorized": false,
-            "machine_receipt_available": false,
             "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
             "operations": operations.iter().map(Evidence::from).collect::<Vec<_>>(),
         })).into_response(),

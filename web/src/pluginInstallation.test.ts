@@ -33,6 +33,99 @@ function fixture() {
   };
 }
 
+function typedFixture() {
+  const { machine_receipt_available: _legacy, ...base } = fixture();
+  return {
+    ...base,
+    schema: "dravengarden.cowboy.plugin-install-history/v2",
+    operations: [{
+      ...base.operations[0],
+      evidence_schema: 2,
+      machine_receipt: null as unknown,
+    }],
+  };
+}
+
+Deno.test("typed history accepts only matching receipt and Service progress; legacy remains explicitly legacy", () => {
+  const applied = {
+    state: "applied",
+    revision: `installation-${"d".repeat(64)}`,
+  };
+  const unknown = {
+    state: "unknown",
+    phase: "activating",
+    reason: "effect_failure",
+  };
+  const pending = { state: "pending", phase: "staging" };
+  const rejected = { state: "rejected", reason: "target_changed" };
+  const input = (changed: Record<string, unknown>) => ({
+    ...typedFixture(),
+    operations: [{ ...typedFixture().operations[0], ...changed }],
+  });
+  for (
+    const changed of [
+      {},
+      { evidence_schema: 1 },
+      {
+        phase: "completed",
+        problem: null,
+        attention_from: null,
+        machine_receipt: applied,
+      },
+      {
+        phase: "aborted",
+        problem: "machine_rejected",
+        attention_from: null,
+        machine_receipt: rejected,
+      },
+      { machine_receipt: pending, problem: "unknown_machine_outcome" },
+      { machine_receipt: unknown, problem: "unknown_machine_outcome" },
+      { machine_receipt: applied, attention_from: "machine_acknowledged" },
+    ]
+  ) {
+    const history = decodeInstallHistory(input(changed));
+    const receipt = history.operations[0].machine_receipt;
+    assert(receipt === null || Object.isFrozen(receipt));
+    assertEquals(history.execution_authorized, false);
+  }
+  for (
+    const changed of [
+      { evidence_schema: 3 },
+      { evidence_schema: 1, machine_receipt: applied },
+      { phase: "completed", problem: null, attention_from: null },
+      {
+        phase: "installing",
+        problem: null,
+        attention_from: null,
+        machine_receipt: applied,
+      },
+      { phase: "aborted", problem: "machine_rejected", attention_from: null },
+      { machine_receipt: applied },
+      { machine_receipt: rejected },
+      { attention_from: "machine_acknowledged" },
+      { machine_receipt: pending },
+      {
+        machine_receipt: unknown,
+        problem: "unknown_machine_outcome",
+        attention_from: "prepared",
+      },
+      {
+        machine_receipt: { ...pending, phase: "projecting_authentication" },
+        problem: "unknown_machine_outcome",
+      },
+      {
+        machine_receipt: { ...unknown, retry: true },
+        problem: "unknown_machine_outcome",
+      },
+      {
+        machine_receipt: { ...applied, revision: "latest" },
+        attention_from: "machine_acknowledged",
+      },
+      { machine_receipt: { state: "restored" } },
+    ]
+  ) assertThrows(() => decodeInstallHistory(input(changed)));
+});
+
 Deno.test("installation evidence is closed, immutable and cannot authorize an effect", () => {
   const history = decodeInstallHistory(fixture());
   assert(Object.isFrozen(history));
@@ -100,7 +193,8 @@ Deno.test("historical completion and authentication pending never imply current 
       }],
     });
     assertEquals(history.execution_authorized, false);
-    assertEquals(history.machine_receipt_available, false);
+    assertEquals(history.operations[0].evidence_schema, 1);
+    assertEquals(history.operations[0].machine_receipt, null);
     assertEquals(history.operations[0].phase, phase);
   }
 });

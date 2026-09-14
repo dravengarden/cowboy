@@ -1,5 +1,5 @@
 use super::*;
-use crate::plugin_operation::installation::fixture;
+use crate::plugin_operation::installation::machine_fixture as fixture;
 
 struct CheckedEffects<'a> {
     store: &'a Store,
@@ -31,7 +31,7 @@ impl Effects for CheckedEffects<'_> {
         );
         self.inner.sync_auth().await
     }
-    async fn install(&self) -> Result<(), CommandRequestError> {
+    async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
         assert_eq!(
             self.store
                 .plugin_install_operation(&self.intent.operation_id)
@@ -41,7 +41,7 @@ impl Effects for CheckedEffects<'_> {
                 .phase,
             InstallPhase::Installing
         );
-        self.inner.install().await
+        self.inner.install(step).await
     }
 }
 
@@ -205,13 +205,14 @@ async fn process_restart_reconstructs_install_fences_alongside_uninstall_fences(
 
 #[tokio::test]
 async fn duplicate_observation_is_exact_and_contains_no_actor_envelope_or_replay_authority() {
-    let intent = fixture("observation");
+    let intent = crate::plugin_operation::installation::fixture("observation");
     let request = PluginInstallRequest {
         operation_id: intent.operation_id.clone(),
         version: intent.plugin_version.clone(),
         digest: intent.generation_digest.clone(),
     };
     let op = crate::plugin_operation::installation::InstallOperation {
+        machine_receipt: None,
         intent: intent.clone(),
         phase: InstallPhase::Completed,
         problem: None,
@@ -257,4 +258,181 @@ async fn duplicate_observation_is_exact_and_contains_no_actor_envelope_or_replay
         .await
         .unwrap();
     assert!(!String::from_utf8_lossy(&bytes).contains("completed"));
+}
+
+#[tokio::test]
+async fn only_exact_applied_or_pre_staging_rejection_can_release_the_installation_fence() {
+    use crate::machine_protocol::plugin_install::{
+        InstallPhase as MachinePhase, InstallRejection, InstallUncertainty,
+    };
+    for outcome in [
+        InstallOutcome::Rejected {
+            reason: InstallRejection::TargetChanged,
+        },
+        InstallOutcome::Pending {
+            phase: MachinePhase::Prepared,
+        },
+        InstallOutcome::Unknown {
+            phase: MachinePhase::Activating,
+            reason: InstallUncertainty::EffectFailure,
+        },
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let intent = fixture("typed-rejection");
+        store.begin_plugin_install(&intent).await.unwrap();
+        let fences = fences(Some(PluginFenceState::Uninstalled));
+        let mut fence = InstallationFence::acquire(&fences, slot()).unwrap();
+        fence.disposition = Disposition::Uncertain;
+        let effects = MockEffects {
+            outcome: Some(outcome.clone()),
+            ..MockEffects::default()
+        };
+        let result =
+            super::super::coordinate(&effects, &mut fence, &mut Progress::new(&store, &intent))
+                .await
+                .unwrap();
+        let rejected = matches!(outcome, InstallOutcome::Rejected { .. });
+        assert_eq!(
+            result,
+            if rejected {
+                Outcome::RejectedBeforeStaging
+            } else {
+                Outcome::NeedsReconcile
+            }
+        );
+        assert_eq!(
+            effects.syncs.load(Ordering::SeqCst),
+            1,
+            "no post-install auth effect"
+        );
+        let op = store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(op.machine_receipt.unwrap().outcome, outcome);
+        assert_eq!(
+            op.phase,
+            if rejected {
+                InstallPhase::Aborted
+            } else {
+                InstallPhase::NeedsAttention
+            }
+        );
+        drop(fence);
+        assert_eq!(
+            fences.read().get(&slot()),
+            Some(&if rejected {
+                PluginFenceState::Uninstalled
+            } else {
+                PluginFenceState::NeedsReconcile
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn unavailable_or_changed_machine_receipt_cannot_complete_or_sync_authentication() {
+    for changed in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let intent = fixture("invalid-receipt");
+        store.begin_plugin_install(&intent).await.unwrap();
+        let fences = fences(None);
+        let mut fence = InstallationFence::acquire(&fences, slot()).unwrap();
+        fence.disposition = Disposition::Uncertain;
+        let effects = MockEffects {
+            unavailable: !changed,
+            changed_receipt: changed,
+            ..MockEffects::default()
+        };
+        let mut progress = Progress::new(&store, &intent);
+        let result = super::super::coordinate(&effects, &mut fence, &mut progress).await;
+        if changed {
+            assert!(result.is_err());
+            progress.storage_failure().await;
+        } else {
+            assert_eq!(result.unwrap(), Outcome::NeedsReconcile);
+        }
+        assert_eq!(effects.syncs.load(Ordering::SeqCst), 1);
+        let op = store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(op.phase, InstallPhase::NeedsAttention);
+        assert!(op.machine_receipt.is_none());
+        drop(fence);
+        assert_eq!(
+            fences.read().get(&slot()),
+            Some(&PluginFenceState::NeedsReconcile)
+        );
+    }
+}
+
+#[tokio::test]
+async fn failed_receipt_commit_keeps_the_previous_phase_and_receipt_atomic() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atomic.sqlite");
+    let store = Store::connect(
+        &format!("sqlite://{}", path.display()),
+        root.path().join("artifacts"),
+    )
+    .await
+    .unwrap();
+    store.migrate().await.unwrap();
+    let intent = fixture("atomic-receipt");
+    store.begin_plugin_install(&intent).await.unwrap();
+    rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TRIGGER refuse_receipt BEFORE UPDATE OF machine_receipt ON plugin_install_operations BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END;").unwrap();
+    let fences = fences(None);
+    let mut fence = InstallationFence::acquire(&fences, slot()).unwrap();
+    fence.disposition = Disposition::Uncertain;
+    let effects = MockEffects::default();
+    assert!(
+        super::super::coordinate(&effects, &mut fence, &mut Progress::new(&store, &intent))
+            .await
+            .is_err()
+    );
+    let op = store
+        .plugin_install_operation(&intent.operation_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(op.phase, InstallPhase::Installing);
+    assert!(op.machine_receipt.is_none());
+    assert_eq!(effects.syncs.load(Ordering::SeqCst), 1);
+    drop(fence);
+    assert_eq!(
+        fences.read().get(&slot()),
+        Some(&PluginFenceState::NeedsReconcile)
+    );
+}
+
+#[tokio::test]
+async fn legacy_intent_cannot_reenter_the_live_coordinator() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let intent = crate::plugin_operation::installation::fixture("legacy-read-only");
+    store.begin_plugin_install(&intent).await.unwrap();
+    let fences = fences(None);
+    let mut fence = InstallationFence::acquire(&fences, slot()).unwrap();
+    fence.disposition = Disposition::Uncertain;
+    let effects = MockEffects::default();
+    assert!(
+        super::super::coordinate(&effects, &mut fence, &mut Progress::new(&store, &intent))
+            .await
+            .is_err()
+    );
+    assert_eq!(effects.installs.load(Ordering::SeqCst), 0);
+    assert_eq!(effects.syncs.load(Ordering::SeqCst), 0);
 }

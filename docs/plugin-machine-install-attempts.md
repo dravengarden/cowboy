@@ -1,8 +1,10 @@
 # Machine installation attempts
 
 Status: implemented reader and finite executor, 2026-09-14; new Machine writer
-admission remains disabled. The existing Service installer still uses its
-protocol-seven dispatch. This document is not a production rollout receipt or
+admission remains disabled. The [Service schema-two bridge](plugin-install-journal.md)
+now binds observed targets and atomically stores exact typed receipts; its fresh
+admission is also paused, without a protocol-seven fallback. The active
+schema-one Service has not been replaced by this bridge. This document is not a production rollout receipt or
 a claim that the P4 installation/recovery exits are complete.
 
 ## One core installation path
@@ -120,5 +122,11 @@ a separate maintenance boundary. Before enabling the writer, accept the
 Service coordinator's persisted target/step/receipt binding, both actual reader
 floors and explicit writer admission. Then accept connected failure/restart and
 lost-response behavior with immutable artifacts. Independently authorized
-post-effect restoration, evidence archival, unified UI diagnostics and supported
+post-effect restoration, evidence archival, unified recovery diagnostics and supported
 native-generation acceptance remain separate exits.
+
+The first Machine-only reader candidate `46dedfa959b5f50ee8d44bf024478c955fd0f6a7`
+passed all 72 checks using its immutable release in all three candidate roles.
+The private receipt SHA-256 is
+`9a6521c7b8b553bda9bc1f131d02fe708a441e819582f05ea739b2b0ac746234`.
+It was not activated and does not establish the actual active/recovery/cold floor.

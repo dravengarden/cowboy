@@ -13,7 +13,7 @@ const labels = {
   machine_acknowledged: "Machine acknowledged; finalization pending",
   completed: "Attempt finished (historical)",
   authentication_pending: "Machine acknowledged; authentication pending",
-  aborted: "No installation dispatched",
+  aborted: "Installation stopped before staging",
   needs_attention: "Reconciliation required — do not repeat installation",
 } satisfies Record<InstallPhase, string>;
 
@@ -72,9 +72,9 @@ export function PluginInstallationHistory(
       {open && (
         <Stack id={id} spacing={1} aria-live="polite">
           <Typography variant="caption" color="text.secondary">
-            Saved attempts, not current installation status. A Machine
-            acknowledgement is not a durable Machine receipt. Authentication may
-            have synchronized even when installation was not dispatched.
+            Saved attempts, not current installation status or replay authority.
+            Legacy acknowledgements are not durable Machine receipts.
+            Authentication may have synchronized before installation stopped.
           </Typography>
           <Button
             size="small"
@@ -113,6 +113,23 @@ export function PluginInstallationHistory(
               </Typography>
               <Typography variant="caption">
                 {operation.operation_id}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {operation.evidence_schema === 1
+                  ? "Legacy Service evidence; no durable Machine receipt"
+                  : operation.machine_receipt
+                  ? `Durable Machine receipt: ${operation.machine_receipt.state}${
+                    operation.machine_receipt.state === "applied"
+                      ? ` · ${operation.machine_receipt.revision}`
+                      : "phase" in operation.machine_receipt
+                      ? ` · ${
+                        operation.machine_receipt.phase.replaceAll("_", " ")
+                      }`
+                      : ` · ${
+                        operation.machine_receipt.reason.replaceAll("_", " ")
+                      }`
+                  }`
+                  : "No durable Machine receipt saved"}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {new Date(operation.updated_at_ms).toISOString()} ·{" "}

@@ -11,7 +11,7 @@ async fn coordinate(effects: &impl Effects, fence: &mut InstallationFence) -> Ou
         .await
         .unwrap();
     store.migrate().await.unwrap();
-    let intent = crate::plugin_operation::installation::fixture("continuation");
+    let intent = crate::plugin_operation::installation::machine_fixture("continuation");
     store.begin_plugin_install(&intent).await.unwrap();
     fence.disposition = Disposition::Uncertain;
     super::coordinate(effects, fence, &mut Progress::new(&store, &intent))
@@ -40,6 +40,9 @@ struct MockEffects {
     started: tokio::sync::Notify,
     gate: Option<Arc<tokio::sync::Semaphore>>,
     panic: bool,
+    outcome: Option<InstallOutcome>,
+    unavailable: bool,
+    changed_receipt: bool,
 }
 
 impl Default for MockEffects {
@@ -55,6 +58,9 @@ impl Default for MockEffects {
             started: tokio::sync::Notify::new(),
             gate: None,
             panic: false,
+            outcome: None,
+            unavailable: false,
+            changed_receipt: false,
         }
     }
 }
@@ -69,7 +75,7 @@ impl Effects for MockEffects {
     async fn sync_auth(&self) -> bool {
         self.syncs.fetch_add(1, Ordering::SeqCst) != self.sync_fails_at
     }
-    async fn install(&self) -> Result<(), CommandRequestError> {
+    async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
         self.installs.fetch_add(1, Ordering::SeqCst);
         self.started.notify_one();
         if let Some(gate) = &self.gate {
@@ -86,7 +92,41 @@ impl Effects for MockEffects {
                 detail: "private Machine error must never enter HTTP output".into(),
             });
         }
-        Ok(())
+        let mut receipt = machine_receipt(step, self.outcome.clone().unwrap_or_else(applied));
+        if self.changed_receipt {
+            receipt.step.plan_digest = format!("sha256:{}", "f".repeat(64));
+        }
+        Ok(InstallObservation {
+            admission_enabled: false,
+            result: if self.unavailable {
+                InstallLookup::Unavailable {
+                    reason: crate::machine_protocol::plugin_install::InstallUnavailable::Storage,
+                }
+            } else {
+                InstallLookup::Found {
+                    receipt: Box::new(receipt),
+                }
+            },
+        })
+    }
+}
+
+fn applied() -> InstallOutcome {
+    InstallOutcome::Applied {
+        revision: format!("installation-{}", "d".repeat(64))
+            .try_into()
+            .unwrap(),
+    }
+}
+
+fn machine_receipt(
+    step: &InstallStep,
+    outcome: InstallOutcome,
+) -> crate::machine_protocol::plugin_install::InstallReceipt {
+    crate::machine_protocol::plugin_install::InstallReceipt {
+        step: step.clone(),
+        request_digest: step.request_digest().unwrap(),
+        outcome,
     }
 }
 
@@ -296,25 +336,34 @@ async fn panic_after_dispatch_keeps_uncertainty_instead_of_reopening_installatio
 #[cfg(feature = "machine-host")]
 #[tokio::test]
 async fn transport_never_moves_installation_to_a_replacement_connection_or_retries_a_lost_ack() {
-    use crate::machine_protocol::MachineEvent;
+    use crate::machine_protocol::{MachineCommand, MachineEvent};
     let root = tempfile::tempdir().unwrap();
     let publisher = crate::machine_auth::MachineIdentity::load_or_create(root.path()).unwrap();
     let desired = crate::machine_plugins::telemetry_release_for_test(&publisher, "1.1.0");
+    let mut step = crate::machine_protocol::plugin_install::fixture();
+    step.plugin_version
+        .clone_from(&desired.release.plugin_version);
+    step.generation_digest
+        .clone_from(&desired.release.artifact_digest);
+    step.contract_fingerprint
+        .clone_from(&desired.release.contract_fingerprint);
+    step.envelope_digest =
+        crate::machine_protocol::plugin_step::digest(&serde_json::to_vec(&desired).unwrap());
     for change in ["before", "lost", "rejected", "applied"] {
         let control = MachineControl::default();
         let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
-        let original = control.install("machine-test".into(), "same-epoch".into(), false, 18, tx);
+        let original = control.install("machine-test".into(), "same-epoch".into(), false, 19, tx);
         let (replacement, mut other_commands) = tokio::sync::mpsc::unbounded_channel();
         if change == "before" {
             control.install(
                 "machine-test".into(),
                 "same-epoch".into(),
                 false,
-                18,
+                19,
                 replacement,
             );
             assert_eq!(
-                dispatch(&control, &original, &desired, "plugin-install-fixture")
+                dispatch(&control, &original, &desired, &step)
                     .await
                     .unwrap_err()
                     .certainty,
@@ -322,20 +371,25 @@ async fn transport_never_moves_installation_to_a_replacement_connection_or_retri
             );
         } else {
             let (result, ()) = tokio::join!(
-                dispatch(&control, &original, &desired, "plugin-install-fixture"),
+                dispatch(&control, &original, &desired, &step),
                 async {
-                    let MachineCommand::InstallPlugin { request_id, plugin } =
-                        commands.recv().await.unwrap()
+                    let MachineCommand::InstallPluginStep {
+                        request_id,
+                        plugin,
+                        step: sent,
+                    } = commands.recv().await.unwrap()
                     else {
                         panic!("only an exact install may be sent");
                     };
                     assert_eq!(*plugin, desired);
+                    assert_eq!(*sent, step);
+                    assert_eq!(request_id, format!("plugin-install-{}", step.operation_id));
                     if change == "lost" {
                         control.install(
                             "machine-test".into(),
                             "same-epoch".into(),
                             false,
-                            18,
+                            19,
                             replacement,
                         );
                     }
@@ -343,18 +397,16 @@ async fn transport_never_moves_installation_to_a_replacement_connection_or_retri
                     // certify the result after its incarnation has been replaced.
                     control.record_remote(
                         &original,
-                        MachineEvent::CommandResult {
-                            request_id,
-                            accepted: change != "rejected",
-                            detail: None,
-                        },
+                        MachineEvent::PluginInstallationStep { request_id, observation: Box::new(InstallObservation { admission_enabled: false, result: InstallLookup::Found { receipt: Box::new(machine_receipt(&step, if change == "rejected" { InstallOutcome::Rejected { reason: crate::machine_protocol::plugin_install::InstallRejection::TargetChanged } } else { applied() })) } }) },
                     );
                 }
             );
             match change {
                 "lost" => assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown),
-                "rejected" => assert_eq!(result.unwrap_err().certainty, CommandFailure::Rejected),
-                _ => result.unwrap(),
+                _ => assert!(matches!(
+                    result.unwrap().result,
+                    InstallLookup::Found { .. }
+                )),
             }
         }
         assert!(commands.try_recv().is_err());

@@ -24,7 +24,30 @@ type MachinePluginKind =
   | "agent_provider"
   | "code_intelligence"
   | "telemetry_backend";
-export interface InstallEvidence {
+const machinePhases = [
+  "prepared",
+  "staging",
+  "activating",
+  "projecting_authentication",
+] as const;
+type MachineInstallPhase = typeof machinePhases[number];
+export type MachineInstallOutcome =
+  | { readonly state: "applied"; readonly revision: string }
+  | {
+    readonly state: "rejected";
+    readonly reason: "expired" | "authorization_ended" | "target_changed";
+  }
+  | { readonly state: "pending"; readonly phase: MachineInstallPhase }
+  | {
+    readonly state: "unknown";
+    readonly phase: MachineInstallPhase;
+    readonly reason:
+      | "interrupted"
+      | "effect_failure"
+      | "authorization_ended"
+      | "expired";
+  };
+interface InstallEvidenceFields {
   readonly operation_id: string;
   readonly phase: InstallPhase;
   readonly problem: InstallProblem | null;
@@ -35,11 +58,19 @@ export interface InstallEvidence {
   readonly created_at_ms: number;
   readonly updated_at_ms: number;
 }
+export type InstallEvidence =
+  & InstallEvidenceFields
+  & (
+    | { readonly evidence_schema: 1; readonly machine_receipt: null }
+    | {
+      readonly evidence_schema: 2;
+      readonly machine_receipt: MachineInstallOutcome | null;
+    }
+  );
 export interface InstallHistory {
-  readonly schema: "dravengarden.cowboy.plugin-install-history/v1";
+  readonly schema: "dravengarden.cowboy.plugin-install-history/v2";
   readonly admission_enabled: boolean;
   readonly execution_authorized: false;
-  readonly machine_receipt_available: false;
   readonly requires_reconciliation: boolean;
   readonly operations: readonly InstallEvidence[];
 }
@@ -88,7 +119,55 @@ function time(value: unknown): number {
   ) invalid();
   return value;
 }
-function evidence(value: unknown): InstallEvidence {
+function machineOutcome(value: unknown): MachineInstallOutcome | null {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || !("state" in value)) invalid();
+  switch (value.state) {
+    case "applied": {
+      const row = object(value, ["state", "revision"]);
+      const revision = text(row.revision, 77);
+      if (!/^installation-[0-9a-f]{64}$/.test(revision)) invalid();
+      return Object.freeze({ state: "applied", revision });
+    }
+    case "rejected": {
+      const row = object(value, ["state", "reason"]);
+      return Object.freeze({
+        state: "rejected",
+        reason: member(
+          ["expired", "authorization_ended", "target_changed"] as const,
+          row.reason,
+        ),
+      });
+    }
+    case "pending": {
+      const row = object(value, ["state", "phase"]);
+      return Object.freeze({
+        state: "pending",
+        phase: member(machinePhases, row.phase),
+      });
+    }
+    case "unknown": {
+      const row = object(value, ["state", "phase", "reason"]);
+      return Object.freeze({
+        state: "unknown",
+        phase: member(machinePhases, row.phase),
+        reason: member(
+          [
+            "interrupted",
+            "effect_failure",
+            "authorization_ended",
+            "expired",
+          ] as const,
+          row.reason,
+        ),
+      });
+    }
+    default:
+      return invalid();
+  }
+}
+
+function evidence(value: unknown, legacy: boolean): InstallEvidence {
   const row = object(value, [
     "operation_id",
     "phase",
@@ -99,7 +178,13 @@ function evidence(value: unknown): InstallEvidence {
     "generation_digest",
     "created_at_ms",
     "updated_at_ms",
+    ...(legacy ? [] : ["evidence_schema", "machine_receipt"]),
   ]);
+  const schema = legacy ? 1 : row.evidence_schema;
+  const receipt = legacy ? null : machineOutcome(row.machine_receipt);
+  if (schema !== 1 && schema !== 2 || schema === 1 && receipt !== null) {
+    invalid();
+  }
   const phase = member(phases, row.phase);
   const problem = row.problem === null ? null : member(problems, row.problem);
   const attention = row.attention_from === null
@@ -130,12 +215,15 @@ function evidence(value: unknown): InstallEvidence {
         "preconditions_changed",
         "authentication_sync_failed",
         "transport_not_sent",
+        ...(schema === 2 && receipt?.state === "rejected"
+          ? ["machine_rejected"]
+          : []),
       ].includes(problem)
     ) invalid();
   } else if (phase === "authentication_pending") {
     if (problem !== "authentication_sync_failed") invalid();
   } else if (phase !== "needs_attention" && problem !== null) invalid();
-  return Object.freeze({
+  const fields: InstallEvidenceFields = {
     operation_id: id,
     phase,
     problem,
@@ -148,35 +236,87 @@ function evidence(value: unknown): InstallEvidence {
     generation_digest: generation,
     created_at_ms: created,
     updated_at_ms: updated,
+  };
+  if (schema === 1) {
+    return Object.freeze({
+      ...fields,
+      evidence_schema: 1,
+      machine_receipt: null,
+    });
+  }
+  if (
+    (receipt?.state === "pending" || receipt?.state === "unknown") &&
+    receipt.phase === "projecting_authentication" &&
+    fields.plugin_kind !== "agent_provider"
+  ) invalid();
+  switch (phase) {
+    case "machine_acknowledged":
+    case "completed":
+    case "authentication_pending":
+      if (receipt?.state !== "applied") invalid();
+      break;
+    case "prepared":
+    case "syncing_authentication":
+    case "installing":
+      if (receipt !== null) invalid();
+      break;
+    case "aborted":
+      if (
+        receipt !== null &&
+        (receipt.state !== "rejected" || problem !== "machine_rejected")
+      ) invalid();
+      break;
+    case "needs_attention":
+      if (receipt === null) {
+        if (attention === "machine_acknowledged") invalid();
+      } else if (receipt.state === "pending" || receipt.state === "unknown") {
+        if (
+          attention !== "installing" || problem !== "unknown_machine_outcome"
+        ) invalid();
+      } else if (receipt.state === "applied") {
+        if (
+          attention !== "machine_acknowledged" ||
+          (problem !== "interrupted" && problem !== "storage_failure")
+        ) invalid();
+      } else invalid();
+  }
+  return Object.freeze({
+    ...fields,
+    evidence_schema: 2,
+    machine_receipt: receipt,
   });
 }
 
 export function decodeInstallHistory(value: unknown): InstallHistory {
+  const legacy = !!value && typeof value === "object" && "schema" in value &&
+    value.schema === "dravengarden.cowboy.plugin-install-history/v1";
   const row = object(value, [
     "schema",
     "admission_enabled",
     "execution_authorized",
-    "machine_receipt_available",
+    ...(legacy ? ["machine_receipt_available"] : []),
     "requires_reconciliation",
     "operations",
   ]);
   if (
-    row.schema !== "dravengarden.cowboy.plugin-install-history/v1" ||
+    (!legacy &&
+      row.schema !== "dravengarden.cowboy.plugin-install-history/v2") ||
     row.execution_authorized !== false ||
-    row.machine_receipt_available !== false ||
+    (legacy && row.machine_receipt_available !== false) ||
     typeof row.admission_enabled !== "boolean" ||
     typeof row.requires_reconciliation !== "boolean" ||
     !Array.isArray(row.operations) || row.operations.length > 32
   ) invalid();
-  const operations = row.operations.map(evidence);
+  const operations = row.operations.map((operation) =>
+    evidence(operation, legacy)
+  );
   if (
     new Set(operations.map((op) => op.operation_id)).size !== operations.length
   ) invalid();
   return Object.freeze({
-    schema: row.schema,
+    schema: "dravengarden.cowboy.plugin-install-history/v2",
     admission_enabled: row.admission_enabled,
     execution_authorized: false,
-    machine_receipt_available: false,
     requires_reconciliation: row.requires_reconciliation,
     operations: Object.freeze(operations),
   });

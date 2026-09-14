@@ -54,6 +54,18 @@ async fn query_replies_use_exact_kind_and_never_enter_event_history() {
         };
         control.record_remote(
             &token,
+            MachineEvent::CommandResult {
+                request_id: request_id.clone(),
+                accepted: true,
+                detail: None,
+            },
+        );
+        assert!(
+            control.live.read().pending.contains_key(&request_id),
+            "generic ACK cannot satisfy a typed receipt request"
+        );
+        control.record_remote(
+            &token,
             MachineEvent::PluginInstallationTarget {
                 request_id: request_id.clone(),
                 observation: Box::new(InstallTargetObservation::Unavailable {

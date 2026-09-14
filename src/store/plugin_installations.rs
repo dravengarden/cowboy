@@ -2,6 +2,7 @@
 //! by `PostgreSQL` and `SQLite`; an existing operation ID never grants execution.
 
 use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
+use crate::machine_protocol::plugin_install::{InstallOutcome, InstallReceipt};
 use crate::plugin_operation::MAX_OPERATIONS;
 use crate::plugin_operation::installation::{
     InstallIntent, InstallOperation, InstallPhase, InstallProblem, MAX_INSTALL_INTENT_BYTES,
@@ -22,10 +23,27 @@ struct Record {
     attention_from: Option<String>,
     created_at_ms: i64,
     updated_at_ms: i64,
+    machine_receipt: Option<String>,
+    machine_receipt_sha256: Option<String>,
 }
 
 impl Record {
     fn decode(self) -> Result<InstallOperation> {
+        let machine_receipt = match (self.machine_receipt, self.machine_receipt_sha256) {
+            (None, None) => None,
+            (Some(document), Some(checksum)) => {
+                ensure!(
+                    document.len() <= 8192
+                        && checksum == format!("{:x}", Sha256::digest(document.as_bytes())),
+                    "invalid install Machine receipt integrity"
+                );
+                Some(
+                    serde_json::from_str(&document)
+                        .map_err(|_| anyhow::anyhow!("invalid install Machine receipt"))?,
+                )
+            }
+            _ => anyhow::bail!("incomplete install Machine receipt"),
+        };
         ensure!(
             self.intent.len() <= MAX_INSTALL_INTENT_BYTES
                 && self.intent_sha256 == format!("{:x}", Sha256::digest(self.intent.as_bytes())),
@@ -59,6 +77,7 @@ impl Record {
             attention_from,
             created_at_ms: self.created_at_ms,
             updated_at_ms: self.updated_at_ms,
+            machine_receipt,
         };
         operation.validate()?;
         Ok(operation)
@@ -75,6 +94,28 @@ macro_rules! dispatch {
 }
 
 impl Store {
+    /// Original forward observation only. Historical recovery needs a fresh,
+    /// independent operation; this cannot overwrite terminal/uncertain state.
+    pub(crate) async fn record_plugin_install_receipt(
+        &self,
+        intent: &InstallIntent,
+        receipt: &InstallReceipt,
+    ) -> Result<InstallOperation> {
+        ensure!(
+            receipt.matches(&intent.machine_step()?),
+            "Machine install receipt target mismatch"
+        );
+        let document = serde_json::to_string(receipt)?;
+        ensure!(
+            document.len() <= 8192,
+            "Machine install receipt exceeds budget"
+        );
+        dispatch!(
+            self,
+            record_plugin_install_receipt(intent, receipt, &document)
+        )
+    }
+
     pub(crate) async fn begin_plugin_install(&self, intent: &InstallIntent) -> Result<()> {
         intent.validate()?;
         let document = serde_json::to_string(intent)?;
@@ -191,11 +232,44 @@ macro_rules! implement_journal {
                 tx.commit().await.context("committing install progress")
             }
 
+            async fn record_plugin_install_receipt(&self, intent: &InstallIntent, receipt: &InstallReceipt, document: &str) -> Result<InstallOperation> {
+                let mut tx = self.pool.begin().await?;
+                sqlx::query($durability).execute(&mut *tx).await?;
+                sqlx::query($lock).execute(&mut *tx).await?;
+                let saved = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations WHERE operation_id = $1")
+                    .bind(&intent.operation_id).fetch_one(&mut *tx).await?.decode()?;
+                ensure!(saved.intent == *intent && saved.phase == InstallPhase::Installing && saved.machine_receipt.is_none(), "install receipt compare-and-swap failed");
+                let (phase, problem) = match receipt.outcome {
+                    InstallOutcome::Applied { .. } => (InstallPhase::MachineAcknowledged, None),
+                    InstallOutcome::Rejected { .. } => (InstallPhase::Aborted, Some(InstallProblem::MachineRejected)),
+                    InstallOutcome::Pending { .. } | InstallOutcome::Unknown { .. } => (InstallPhase::NeedsAttention, Some(InstallProblem::UnknownMachineOutcome)),
+                };
+                let next = InstallOperation {
+                    phase, problem,
+                    attention_from: (phase == InstallPhase::NeedsAttention).then_some(InstallPhase::Installing),
+                    updated_at_ms: chrono::Utc::now().timestamp_millis().max(saved.updated_at_ms),
+                    machine_receipt: Some(receipt.clone()), ..saved
+                };
+                next.validate()?;
+                let changed = sqlx::query(
+                    "UPDATE plugin_install_operations SET phase = $2, problem = $3, attention_from = $4, updated_at_ms = $5, \
+                     machine_receipt = $6, machine_receipt_sha256 = $7 \
+                     WHERE operation_id = $1 AND phase = 'installing' AND machine_receipt IS NULL AND machine_receipt_sha256 IS NULL"
+                ).bind(&intent.operation_id).bind(next.phase.as_str())
+                    .bind(next.problem.map(|p| serde_json::to_string(&p)).transpose()?)
+                    .bind(next.attention_from.map(InstallPhase::as_str)).bind(next.updated_at_ms)
+                    .bind(document).bind(format!("{:x}", Sha256::digest(document.as_bytes())))
+                    .execute(&mut *tx).await?;
+                ensure!(changed.rows_affected() == 1, "install receipt changed");
+                tx.commit().await.context("committing Machine installation receipt")?;
+                Ok(next)
+            }
+
             async fn recover_plugin_installs(&self, service: &str) -> Result<Vec<InstallOperation>> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;
                 sqlx::query($lock).execute(&mut *tx).await?;
-                let rows = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations LIMIT 4097")
+                let rows = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations ORDER BY operation_id ASC LIMIT 4097")
                     .fetch_all(&mut *tx).await?;
                 ensure!(rows.len() <= usize::try_from(MAX_OPERATIONS)?, "install recovery budget exceeded");
                 let mut operations = rows.into_iter().map(Record::decode).collect::<Result<Vec<_>>>()?;
@@ -215,6 +289,7 @@ macro_rules! implement_journal {
                     op.phase = InstallPhase::NeedsAttention;
                     op.problem = Some(InstallProblem::Interrupted);
                     op.updated_at_ms = now.max(op.updated_at_ms);
+                    op.validate()?;
                 }
                 tx.commit().await.context("committing install recovery fences")?;
                 Ok(operations)

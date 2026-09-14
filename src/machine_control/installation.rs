@@ -1,6 +1,5 @@
 //! Installation replies are bound to one live connection, exact request and
 //! distinct reply kind. No missing reply authorizes a resend.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use super::{
     CommandFailure, CommandRequestError, ConnectionToken, MachineCommand, MachineControl,
@@ -96,9 +95,12 @@ impl MachineControl {
                 "installation target or envelope mismatch",
             ));
         }
-        let request_id = self
-            .request_id("install-step")
-            .map_err(|_| fail(CommandFailure::NotSent, "installation identity unavailable"))?;
+        let request_id = if desired.is_some() {
+            format!("plugin-install-{}", step.operation_id)
+        } else {
+            self.request_id("install-query")
+                .map_err(|_| fail(CommandFailure::NotSent, "installation identity unavailable"))?
+        };
         let command = if let Some(plugin) = desired {
             MachineCommand::InstallPluginStep {
                 request_id: request_id.clone(),
