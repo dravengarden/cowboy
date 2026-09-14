@@ -48,7 +48,7 @@ struct ConnectionIdentity {
 }
 
 impl ConnectionToken {
-    fn same(&self, other: &Self) -> bool {
+    pub(crate) fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }
 }

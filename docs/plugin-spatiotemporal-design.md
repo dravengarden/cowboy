@@ -102,6 +102,21 @@ Controller × Machine 的全部九种角色组合。最新
 撤销/恢复后的旧策略隔离、独立本地记录及重启不重放。临时身份与隔离协议接收端不等同真实 Victoria
 或生产配置；实际 Operator 授权、主机策略切换及生产外发/故障/重启验收仍是 P2 退出前提。
 
+[Controller 配置预检](telemetry-policy-preflight.md) 已复用真实启动校验，拒绝无效 writer/background
+策略且不创建 Service 或授予外发权；[2026-09-14 发布](releases/telemetry-policy-preflight-2026-09-14.md)
+已通过最终制品 96/294/78/45 项验收并只激活 Controller。生产 managed 配置仍未切换；发布期间
+3 个 Grok worker 发生 drain/resume，日志指向自动凭据换代；严格零中断核验未通过，不能将恢复就绪
+写成所有 worker 从未重启。其余 10 个 worker、Machine 进程与 Web 保持不变，凭据换代下的
+会话连续性仍需独立验收。
+
+[Provider 凭据同步协调](provider-auth-sync-coordination.md) 将同 Service 代次、同认证连接的
+重叠同步合并为一条在途命令，共享原超时与结果；取消不重发、完成结果不缓存，新连接和新代次
+独立处理。这是核心通信生命周期修复，不改变新凭据换代必须排空并恢复原生会话的 CR-9 契约，
+也不把临时副本测试或 worker 恢复就绪视为生产凭据收敛、无中断验收或 P2 完成。
+[本批发布](releases/provider-auth-sync-2026-09-14.md) 已通过完整质量门禁与不可变制品
+96/294/78/45 项验收，仅激活 Controller；发布前后 170 秒的三次快照中 13 个 worker
+保持原 PID/启动时间，未观察到凭据换代。该窗口不能替代真实换代/原生会话验收，也不覆盖上轮失败记录。
+
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
 [components contract](plugin-components.md)

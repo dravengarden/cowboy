@@ -64,6 +64,7 @@ use tokio_util::io::ReaderStream;
 
 mod operator_approval;
 mod plugin_uninstall;
+mod provider_auth_sync;
 mod telemetry_binding;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
@@ -224,6 +225,7 @@ struct AppState {
     plugin_storage: crate::plugin_storage::PluginStorage,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
+    provider_auth_sync: provider_auth_sync::Coordinator,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
     plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
     plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
@@ -845,10 +847,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let (plugin_catalog, product_authentication, core_security) =
         crate::plugin_activation::prepare_controller_hosts(&args)?;
     if args.check_plugin_hosts {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&plugin_catalog.host_preflight_report()?)?
-        );
+        let mut report = plugin_catalog.host_preflight_report()?;
+        report.telemetry = Some(crate::telemetry_plugin::controller_policy::inspect(&args)?);
+        println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
     plugin_catalog.initialize()?;
@@ -859,35 +860,10 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let product_authentication = Arc::new(product_authentication);
     let service_id = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
-    let telemetry_writer_admission = args
-        .telemetry_writer_policy
-        .as_deref()
-        .map(crate::telemetry_plugin::writer_admission::WriterAdmission::load)
-        .transpose()?;
-    anyhow::ensure!(
-        telemetry_writer_admission
-            .as_ref()
-            .is_none_or(|policy| policy.owns_service(&service_id))
-            && (telemetry_writer_admission.is_none() || args.database_url().is_some()),
-        "telemetry writer policy requires its exact durable Service"
-    );
-    // Explicit host policy is independent of binding/recovery confirmations.
-    // Reject an ambiguous mode even for a programmatically constructed CLI.
-    anyhow::ensure!(
-        args.telemetry_managed_export_policy.is_none() || args.telemetry_plugin_config.is_none(),
-        "managed and legacy telemetry configurations are mutually exclusive"
-    );
-    let managed_export_policy = args
-        .telemetry_managed_export_policy
-        .as_deref()
-        .map(|path| {
-            crate::telemetry_plugin::background_policy::BackgroundPolicy::load(path, &service_id)
-        })
-        .transpose()?;
-    anyhow::ensure!(
-        managed_export_policy.is_none() || args.database_url().is_some(),
-        "managed telemetry export requires the durable Service store"
-    );
+    let crate::telemetry_plugin::controller_policy::ControllerPolicy {
+        writer: telemetry_writer_admission,
+        background: managed_export_policy,
+    } = crate::telemetry_plugin::controller_policy::ControllerPolicy::load(&args, &service_id)?;
     let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
         serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
             &std::fs::read(path).with_context(|| {
@@ -1482,6 +1458,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_storage,
             provider_catalog,
             provider_auth,
+            provider_auth_sync: provider_auth_sync::Coordinator::default(),
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
             plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
@@ -12306,6 +12283,7 @@ async fn sync_provider_auth_to_machine(
     machine_id: &str,
     provider_id: &str,
 ) -> Result<u64, String> {
+    let connection = state.machine_control.operation_connection(machine_id)?;
     let store = state
         .store
         .as_ref()
@@ -12319,20 +12297,10 @@ async fn sync_provider_auth_to_machine(
         .provider_auth
         .seal_for_machine(provider_id, &public_key)
         .map_err(|error| error.to_string())?;
-    let auth_generation = envelope.auth_generation;
-    let request_id = machine_request_id("provider-auth");
     state
-        .machine_control
-        .command_request(
-            machine_id,
-            request_id.clone(),
-            crate::machine_protocol::MachineCommand::ApplyProviderAuth {
-                request_id,
-                envelope: Box::new(envelope),
-            },
-        )
-        .await?;
-    Ok(auth_generation)
+        .provider_auth_sync
+        .apply(&state.machine_control, &connection, envelope)
+        .await
 }
 
 fn failed_provider_auth_projection_ids(
