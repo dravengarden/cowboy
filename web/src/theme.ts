@@ -21,6 +21,7 @@ import {
   syncPhoneStandaloneRootClass,
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
+import { migrateThemeDefaultToSystem } from "./themeDefault";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
 // system/light/dark vocabulary as the shared hook.
@@ -107,6 +108,7 @@ export interface ThemeControls {
 }
 
 export function useThemeMode(): ThemeControls {
+  migrateThemeDefaultToSystem();
   const { choice, resolved, setChoice, cycle } = useSharedThemeMode("cowboy");
   const dark = resolved === "dark";
   const icon = useSyncExternalStore(
