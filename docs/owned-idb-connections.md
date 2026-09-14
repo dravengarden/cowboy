@@ -1,5 +1,10 @@
 # Owned IndexedDB connections
 
+The later [atomic outbox slice](atomic-idb-outboxes.md) adds updated-peer
+mutation-delta transactions and explicit load handoff to this owner. The
+connection/lifetime guarantees below remain; general dataset authority and
+old/new-client lifetime fencing are still separate exits.
+
 The sixteenth spatiotemporal slice gives the browser persistence backend an
 explicit local owner. This is a core implementation component, not an installable
 Plugin, a cross-tab lock, or a durable compensation executor.

@@ -10,6 +10,14 @@ export function verifyIdbOwnerContracts(): void {
     strictWrites: true,
   });
   void record.save({ count: 1 });
+  const outbox = database.outbox<number>("queue");
+  void outbox.save({ base: { version: 0, value: 1 }, pending: [] });
+  // @ts-expect-error Outboxes persist a typed client snapshot, not raw values.
+  void outbox.save(1);
+  // @ts-expect-error Durable outbox writes cannot silently ignore errors.
+  database.outbox<number>("other", { strictWrites: false });
+  // @ts-expect-error A borrowed outbox cannot close the shared database.
+  void outbox.dispose();
   // @ts-expect-error A borrowed store cannot close its provider.
   void record.dispose();
   // @ts-expect-error Record shape is enforced at the write boundary.

@@ -90,6 +90,12 @@ export interface ClientSnapshot<T> {
 export interface LocalPersistence<S> {
   load(): Promise<S | null>;
   save(value: S): Promise<void>;
+  /** Optional synchronous handoff for delta backends. The replicated client
+   * calls this only after incorporating this exact load result, before notifying
+   * observers or writing a corrected snapshot. A resolved read alone does not
+   * mean the caller has observed its pending mutations. No authority is granted.
+   */
+  acceptLoadedSnapshot?(value: S | null): void;
 }
 
 /** A PASSIVE remote backend for the state-based `mirroredStore` tier: a dumb

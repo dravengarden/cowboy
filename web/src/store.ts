@@ -10,7 +10,6 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 import { createConnectionStore } from "@cowboy/app-shell";
 import {
   type ArgsOf,
-  type ClientSnapshot,
   type Mutators,
   replicatedStore,
   type ReplicatedStore,
@@ -2070,9 +2069,9 @@ function registerSync<T, M extends Mutators<T>>(
     // reload we hydrate this BEFORE the socket opens (see connect()), so the
     // last-known title/order paint immediately; the first server patch arrives
     // as a forced resync and overwrites stale base, while any unconfirmed
-    // mutation re-sends. The key is NOT tab-namespaced (no syncBase) so every
-    // tab shares one cache — they all sync to the same server truth anyway.
-    local: syncDatabase.persistence<ClientSnapshot<T>>(`cowboy:sync:${syncState}`),
+    // mutation re-sends. Each transaction merges only this client's mutation
+    // delta into the shared outbox; a peer's pending additions/removals survive.
+    local: syncDatabase.outbox<T>(`cowboy:sync:${syncState}`),
   });
   syncClients.set(syncState, {
     applyPatch: (version, value, confirmed, resync): void => {
@@ -2541,9 +2540,8 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // connect()), so a staged/queued message painted instantly survives the
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
-      local: syncDatabase.persistence<ClientSnapshot<QValue>>(
+      local: syncDatabase.outbox<QValue>(
         `cowboy:sync:queue:${sessionId}`,
-        { strictWrites: true },
       ),
     });
     qClients.set(sessionId, c);

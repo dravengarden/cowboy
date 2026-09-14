@@ -11,6 +11,10 @@ independent post-effect recovery and full capability/native acceptance remain
 explicit exit items.
 The Rust/TS structural linkers now share a complete-report differential gate;
 that acceptance does not promote declared releases or serialized graphs to live authority.
+The [atomic browser outbox slice](atomic-idb-outboxes.md) preserves updated
+peers' mutations with in-transaction deltas and an explicit load handoff. It
+retains the v1 format; general dataset authority and old/new-client writer
+fencing remain P3 exits, not implied by this local concurrency repair.
 
 状态：整体重设计，2026-09-09；替代本文先前逐项补充的草案。接口、类型和目录拆分均为目标，不是已发布
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批

@@ -7,7 +7,12 @@ import {
   createOwnedResourceScope,
   type ScopeSnapshot,
 } from "@cowboy/state-store/scope";
-import type { LocalPersistence } from "@cowboy/state-sync";
+import type { ClientSnapshot, LocalPersistence } from "@cowboy/state-sync";
+import { IdbPersistenceError } from "./errors.ts";
+import { createOutboxPersistence } from "./outbox.ts";
+export { IdbPersistenceError } from "./errors.ts";
+export type { IdbFailureCode } from "./errors.ts";
+import type { IdbFailureCode } from "./errors.ts";
 
 export interface IdbWriteOpts {
   /** Surface failed durability barriers. Ordinary UI caches default to false. */
@@ -37,6 +42,11 @@ export interface IdbPersistenceOwner {
    * S is the caller's storage contract, NOT runtime validation of stored bytes.
    */
   persistence<S>(key: string, opts?: IdbWriteOpts): LocalPersistence<S>;
+  /** Strict, atomic mutation-delta persistence for ONE replicated client.
+   * Updated peers preserve each other's pending mutations. Legacy blind saves
+   * are not fenced, and this does not establish principal/dataset authority.
+   */
+  outbox<T>(key: string): LocalPersistence<ClientSnapshot<T>>;
   /** Best-effort enumeration; unavailable storage yields an empty list. */
   listKeys(): Promise<string[]>;
   readonly lifecycle: IdbSnapshot;
@@ -45,25 +55,6 @@ export interface IdbPersistenceOwner {
    * native request leaves this stable barrier draining, never falsely disposed.
    */
   dispose(): Promise<void>;
-}
-
-export type IdbFailureCode =
-  | "unavailable"
-  | "open_failed"
-  | "open_blocked"
-  | "open_timeout"
-  | "schema_mismatch"
-  | "transaction_failed"
-  | "transaction_aborted"
-  | "request_failed"
-  | "close_failed";
-
-/** Closed, content-free diagnostics: never include keys, values or native text. */
-export class IdbPersistenceError extends Error {
-  constructor(readonly code: IdbFailureCode) {
-    super(`IndexedDB persistence: ${code}`);
-    this.name = "IdbPersistenceError";
-  }
 }
 
 function deferred<T>(): {
@@ -92,6 +83,12 @@ interface Generation {
   detach: () => void;
 }
 
+// Read only the request result/event surface. IDBRequest's writable onerror
+// property otherwise makes its type parameter invariant in TypeScript.
+interface TransactionRequest<R> extends EventTarget {
+  readonly result: R;
+}
+
 export function createIdbPersistenceOwner(
   opts: IdbOwnerOpts = {},
 ): IdbPersistenceOwner {
@@ -105,6 +102,7 @@ export function createIdbPersistenceOwner(
   }
   const scope = createOwnedResourceScope();
   const generations = new Set<Generation>();
+  const recordModes = new Map<string, "value" | "outbox">();
   let current: Generation | undefined;
 
   const finishClose = (gen: Generation): void => {
@@ -240,7 +238,8 @@ export function createIdbPersistenceOwner(
 
   const run = async <R>(
     mode: IDBTransactionMode,
-    make: (store: IDBObjectStore) => IDBRequest<R>,
+    make: (store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R>,
   ): Promise<R> => {
     for (let attempt = 0; attempt < 2; attempt++) {
       const gen = open();
@@ -260,11 +259,39 @@ export function createIdbPersistenceOwner(
       gen.transactions.add(transaction);
       // No await between creating the transaction and enqueuing its request.
       return new Promise<R>((resolve, reject) => {
-        let request: IDBRequest<R> | undefined;
+        let request: TransactionRequest<R> | undefined;
         let result: R;
         let hasResult = false;
         let failure: IdbPersistenceError | undefined;
+        let following = follow;
+        const abortWith = (error: unknown): void => {
+          failure = error instanceof IdbPersistenceError
+            ? error
+            : new IdbPersistenceError("request_failed");
+          try {
+            transaction.abort();
+          } catch { /* retain lease until native terminal event */ }
+        };
         const success = (): void => {
+          if (following) {
+            const next = following;
+            following = undefined;
+            request!.removeEventListener("success", success);
+            request!.removeEventListener("error", error);
+            try {
+              // Enqueue the put synchronously in the get's success callback.
+              // No promise/await may split this read-modify-write transaction.
+              request = next(
+                request!.result,
+                transaction.objectStore(storeName),
+              );
+              request.addEventListener("success", success);
+              request.addEventListener("error", error);
+            } catch (error) {
+              abortWith(error);
+            }
+            return;
+          }
           result = request!.result;
           hasResult = true;
         };
@@ -299,14 +326,11 @@ export function createIdbPersistenceOwner(
           request = make(transaction.objectStore(storeName));
           request.addEventListener("success", success);
           request.addEventListener("error", error);
-        } catch {
-          failure = new IdbPersistenceError("request_failed");
+        } catch (error) {
           // No retries once a transaction exists, even after a clone failure.
           // abort may itself reject an already-committing transaction: its
           // eventual complete/abort still owns the outcome and the lease.
-          try {
-            transaction.abort();
-          } catch { /* retain lease until native terminal event */ }
+          abortWith(error);
         }
       });
     }
@@ -319,6 +343,10 @@ export function createIdbPersistenceOwner(
       writeOpts: IdbWriteOpts = {},
     ): LocalPersistence<S> => {
       scope.assertActive();
+      if (recordModes.get(key) === "outbox") {
+        throw new IdbPersistenceError("record_mode_conflict");
+      }
+      recordModes.set(key, "value");
       const strict = writeOpts.strictWrites ?? false;
       return {
         load: (): Promise<S | null> =>
@@ -339,6 +367,27 @@ export function createIdbPersistenceOwner(
             }
           }),
       };
+    },
+    outbox: <T>(key: string): LocalPersistence<ClientSnapshot<T>> => {
+      scope.assertActive();
+      // Two independent clients must never share one delta baseline. Borrow
+      // exactly once per record in this owner; other tabs own their own handles.
+      if (recordModes.has(key)) {
+        throw new IdbPersistenceError("record_mode_conflict");
+      }
+      recordModes.set(key, "outbox");
+      return createOutboxPersistence<T>({
+        assertActive: () => scope.assertActive(),
+        own: (task) => scope.run(task),
+        load: () => run<unknown>("readonly", (store) => store.get(key)),
+        update: async (merge) => {
+          await run<unknown>(
+            "readwrite",
+            (store) => store.get(key),
+            (stored, store) => store.put(merge(stored), key),
+          );
+        },
+      });
     },
     listKeys: (): Promise<string[]> =>
       scope.run(async () => {

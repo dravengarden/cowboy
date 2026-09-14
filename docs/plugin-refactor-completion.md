@@ -17,6 +17,10 @@ and accepting a production effect are different milestones.
   is not verified live resolution or a grant.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
+- [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
+  pending mutations and confirmations in one transaction, with explicit load
+  handoff and strict durable-send failure. The v1 data format is unchanged;
+  pre-upgrade blind writers and general dataset authority remain unfenced.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.
@@ -43,7 +47,7 @@ and accepting a production effect are different milestones.
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Verified-release/site/state-lease vectors and live-precondition changes, beyond the accepted shared structural link vectors; no serialized authorization |
-| P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; cross-tab writer arbitration for IDB | Old/new readers and writers, exclusive fenced ownership, crash/reopen, version-change and independent workspace/generation coexistence |
+| P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; version-fenced IDB ownership across old/new clients, beyond accepted updated-peer atomic deltas | Old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |

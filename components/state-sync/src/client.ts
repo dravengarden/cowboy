@@ -505,7 +505,11 @@ export function createClient<T, M extends Mutators<T>>(
           const startedStateRevision = stateRevision;
           const startedBaseRevision = baseRevision;
           const snap = await local.load();
-          if (snap === null || !scope.active) {
+          if (!scope.active) {
+            return;
+          }
+          if (snap === null) {
+            local.acceptLoadedSnapshot?.(snap);
             return;
           }
 
@@ -547,6 +551,9 @@ export function createClient<T, M extends Mutators<T>>(
           queue = merged;
           recompute();
           stateRevision += 1;
+          // Establish the exact observed delta baseline before a reentrant
+          // observer can save. Merely resolving the browser read is too early.
+          local.acceptLoadedSnapshot?.(snap);
           notify();
 
           // A concurrent patch/mutation may already have persisted a snapshot that

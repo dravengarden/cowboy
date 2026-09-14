@@ -5,12 +5,15 @@ const browser = Deno.args[0];
 // Closed fixture selector; this runner never opens the deployed application.
 const suite = Deno.args[1] ?? "idb";
 if (
-  suite !== "idb" && suite !== "provider-ui" && suite !== "provider-management"
+  suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
+  suite !== "provider-management"
 ) {
   throw new Error("unknown suite");
 }
 const entry = suite === "idb"
   ? "runIdbBrowserConformance"
+  : suite === "idb-outbox"
+  ? "runIdbOutboxBrowserConformance"
   : suite === "provider-ui"
   ? "runProviderUiBrowserConformance"
   : "runProviderManagementBrowserConformance";
@@ -50,6 +53,17 @@ try {
         return new Response(script, {
           headers: { "Content-Type": "text/javascript" },
         });
+      }
+      if (
+        suite === "idb-outbox" && request.method === "GET" &&
+        url.pathname === "/outbox-peer.js"
+      ) {
+        return new Response(
+          'import { runIdbOutboxPeer } from "/fixture.js"; runIdbOutboxPeer();',
+          {
+            headers: { "Content-Type": "text/javascript" },
+          },
+        );
       }
       if (request.method === "POST" && url.pathname === `/report/${token}`) {
         report.resolve(await request.json());
@@ -119,7 +133,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     typeof result !== "object" || result === null || !("ok" in result) ||
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
-    result.tests.length !== (suite === "idb" ? 8 : 6) ||
+    result.tests.length !==
+      (suite === "idb" ? 8 : suite === "idb-outbox" ? 10 : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);
