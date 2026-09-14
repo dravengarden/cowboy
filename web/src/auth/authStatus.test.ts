@@ -156,6 +156,33 @@ Deno.test("a ready session ignores outages and only tears down on 200 auth chang
   );
 });
 
+Deno.test("a same-label replacement principal tears down but a rename retains the same dataset", () => {
+  const me = { account: "label", user_id: "user-a", role: "operator" as const };
+  for (
+    const replacement of [
+      { ...me, user_id: "user-b" },
+      { account: "label", role: "operator" as const },
+    ]
+  ) {
+    assertEquals(
+      nextReadyStatusAction(me, {
+        view: "ready",
+        me: replacement,
+        registration: closed,
+      }),
+      "teardown",
+    );
+  }
+  assertEquals(
+    nextReadyStatusAction(me, {
+      view: "ready",
+      me: { ...me, account: "renamed" },
+      registration: closed,
+    }),
+    "update",
+  );
+});
+
 Deno.test("logout deletes only HISTORY_CACHE generations", async () => {
   assertEquals(historyCacheName("cowboy-v1405"), "cowboy-v1405-history");
   const deleted: string[] = [];

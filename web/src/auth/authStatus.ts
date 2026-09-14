@@ -1,4 +1,5 @@
 import type { AuthStatusProbe, ProductMe, RegistrationPublicStatus } from "./authApi";
+import { sameProductPrincipal } from "../productSyncIdentity";
 
 export type AuthGateView = "loading" | "ready" | "login" | "activating" | "retry";
 
@@ -57,7 +58,7 @@ export function nextReadyStatusAction(
   decision: AuthGateDecision,
 ): ReadyStatusAction {
   if (decision.view === "ready" && decision.me) {
-    return decision.me.account === current.account ? "update" : "teardown";
+    return sameProductPrincipal(current, decision.me) ? "update" : "teardown";
   }
   if (decision.view === "login") return "teardown";
   return "stay";

@@ -134,7 +134,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "idb" ? 8 : suite === "idb-outbox" ? 10 : 6) ||
+      (suite === "idb" ? 8 : suite === "idb-outbox" ? 16 : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);

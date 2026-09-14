@@ -24,6 +24,7 @@ mod connected;
 mod installation;
 mod installation_connected;
 mod machine_installation;
+mod product_sync;
 mod startup;
 pub(super) use admission::run as writer_admission;
 pub(super) use connected::run as connected_pair;

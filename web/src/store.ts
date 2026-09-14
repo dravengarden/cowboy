@@ -15,7 +15,7 @@ import {
   type ReplicatedStore,
   snapshotPatch,
 } from "@cowboy/state-sync";
-import { createIdbPersistenceOwner } from "@cowboy/state-sync-idb";
+import { PRODUCT_SYNC_SUBPROTOCOL, ProductSyncDatasetChangedError, productSyncDatabase as syncDatabase, type ProductSyncScope, type SyncDataset } from "./productSyncDatabase";
 import { createSyncShutdown } from "./syncShutdown";
 import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
@@ -1669,6 +1669,12 @@ async function probeProductAuth(): Promise<MeHandshake> {
       credentials: "same-origin",
       headers: { accept: "application/json" },
     });
+    if (response.status === 200) {
+      // The cookie may have changed in another tab. Ask the auth owner to
+      // compare immutable principal identity, not just the HTTP success code.
+      globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
+    }
+    await response.body?.cancel();
     return classifyMeHandshake(response.status);
   } catch {
     return classifyMeHandshake("network");
@@ -1706,6 +1712,13 @@ function connect(): void {
     return;
   }
   didHydrate = true;
+  void syncDatabase.legacyRecords().then((keys) => {
+    if (keys.length && !productSessionAbandoned) {
+      notify("Legacy browser records were retained separately and will not be sent. Review local recovery in Settings → Info.", "warning");
+    }
+  }).catch(() => {
+    if (!productSessionAbandoned) notify("Local data inspection failed. Existing browser records have not been deleted.", "warning");
+  });
   // The hydrate is ONLY a cache-paint optimisation (last-known titles/order before
   // the first server byte); the socket must NEVER wait on it. A blocked IndexedDB
   // — e.g. another tab still holding an older DB version right after a deploy
@@ -1729,6 +1742,7 @@ function connect(): void {
       // wins the grace race.
       await Promise.all([
         Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
+        Promise.allSettled([...qClients.values()].map((entry) => entry.hydrate())),
         hydrateCachedQueues(),
       ]);
       // If the 1.5s grace opened the socket before a slow IndexedDB read
@@ -1777,7 +1791,27 @@ function interactiveClientKind(): "browser" | "native_shell" {
     : "browser";
 }
 
+let openingDataset = false;
 function openSocket(): void {
+  if (productSessionAbandoned || productSessionPausedForAuth || openingDataset) return;
+  openingDataset = true;
+  void syncDatabase.connection().then((dataset) => {
+    openingDataset = false;
+    openBoundSocket(dataset);
+  }).catch((error) => {
+    openingDataset = false;
+    if (!productSessionAbandoned && !productSessionPausedForAuth) {
+      if (error instanceof ProductSyncDatasetChangedError) {
+        notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
+        return;
+      }
+      globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
+      scheduleReconnect(conn.connectionLost());
+    }
+  });
+}
+
+function openBoundSocket(dataset: SyncDataset): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
   // A reconnect can be triggered by several independent recovery paths
   // (backoff timer, foreground watchdog, connect guard). Never let them create
@@ -1807,8 +1841,9 @@ function openSocket(): void {
     bootstrap: "lazy",
     client_id: stableInteractiveClientId(),
     client_kind: interactiveClientKind(),
+    dataset: dataset.dataset_id,
   });
-  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?${params.toString()}`);
+  const ws = new WebSocket(`${proto}//${globalThis.location.host}/ws?${params.toString()}`, PRODUCT_SYNC_SUBPROTOCOL);
   socket = ws;
   socketReady = false;
   let openedAt: number | undefined;
@@ -1879,6 +1914,10 @@ function openSocket(): void {
   };
   ws.onopen = (): void => {
     clearTimeout(connectGuard);
+    if (ws.protocol !== PRODUCT_SYNC_SUBPROTOCOL) {
+      ws.close();
+      return;
+    }
     if (socket !== ws) {
       ws.close();
       return;
@@ -1895,7 +1934,7 @@ function openSocket(): void {
     startLiveness(ws);
   };
   ws.onmessage = (e: MessageEvent<string>): void => {
-    if (socket !== ws) return;
+    if (socket !== ws || ws.protocol !== PRODUCT_SYNC_SUBPROTOCOL) return;
     markAlive(); // any frame (incl. the heartbeat) proves the socket is alive
     try {
       const message = JSON.parse(e.data) as Outbound;
@@ -2042,7 +2081,6 @@ interface SyncEntry {
   dispose: () => Promise<void>;
 }
 const syncClients = new Map<string, SyncEntry>();
-const syncDatabase = createIdbPersistenceOwner();
 const closeProductSync = createSyncShutdown(syncDatabase);
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 
@@ -2052,6 +2090,7 @@ const syncBase = newCmid(); // namespaces mutation ids across states + this tab
  *  the session list, so mutate / patch / hydrate all re-render for free. */
 function registerSync<T, M extends Mutators<T>>(
   syncState: string,
+  datasetScope: ProductSyncScope,
   mutators: M,
   initial: T,
   onChange: () => void = commitSessions,
@@ -2071,7 +2110,7 @@ function registerSync<T, M extends Mutators<T>>(
     // as a forced resync and overwrites stale base, while any unconfirmed
     // mutation re-sends. Each transaction merges only this client's mutation
     // delta into the shared outbox; a peer's pending additions/removals survive.
-    local: syncDatabase.outbox<T>(`cowboy:sync:${syncState}`),
+    local: syncDatabase.outbox<T>(datasetScope),
   });
   syncClients.set(syncState, {
     applyPatch: (version, value, confirmed, resync): void => {
@@ -2084,16 +2123,25 @@ function registerSync<T, M extends Mutators<T>>(
     flush: (): Promise<void> => store.flush(),
     dispose: (): Promise<void> => store.dispose(),
   });
+  // Clients created after bootstrap also need an explicit load handoff. A
+  // missing local record is not permission to issue a blind first write.
+  if (didHydrate) {
+    void store.hydrate().catch(() => {
+      if (!productSessionAbandoned) notify("Local state could not be restored; writes remain fenced.", "warning");
+    });
+  }
   return {
     view: (): T => store.get(),
     mutate: (name, args): void => {
-      store.mutate(name, args);
+      void store.mutateDurably(name, args).catch(() => {
+        if (!productSessionAbandoned) notify("Local change could not be durably saved; it was not sent. Check browser storage before retrying.", "warning");
+      });
     },
   };
 }
 
-const titleSync = registerSync<TitleMap, typeof titleMutators>("title", titleMutators, {});
-const orderSync = registerSync<OrderList, typeof orderMutators>("order", orderMutators, []);
+const titleSync = registerSync<TitleMap, typeof titleMutators>("title", { kind: "service", state: "title" }, titleMutators, {});
+const orderSync = registerSync<OrderList, typeof orderMutators>("order", { kind: "service", state: "order" }, orderMutators, []);
 
 export interface MobileReviewTabState {
   readonly path: string;
@@ -2208,6 +2256,7 @@ function mobileReviewClient(sessionId: string) {
   if (!client) {
     client = registerSync(
       `mobile-review:${sessionId}`,
+      { kind: "session", session: sessionId, state: "mobile-review" },
       mobileReviewMutators,
       EMPTY_MOBILE_REVIEW_STATE,
       () => commitMobileReview(sessionId),
@@ -2541,10 +2590,18 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
       local: syncDatabase.outbox<QValue>(
-        `cowboy:sync:queue:${sessionId}`,
+        { kind: "session", session: sessionId, state: "queue" },
       ),
     });
     qClients.set(sessionId, c);
+    if (didHydrate) {
+      const created = c;
+      void created.hydrate().then(() => {
+        if (!productSessionAbandoned && socketReady) created.resend();
+      }).catch(() => {
+        if (!productSessionAbandoned) notify("Local queue could not be restored; check browser storage before sending.", "warning");
+      });
+    }
   }
   return c;
 }
@@ -2556,11 +2613,10 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
  *  hydrate ahead of the resync. Each hydrate restores {base, pending} + renders
  *  via onChange; the queue_resync (force) on connect then corrects stale base. */
 async function hydrateCachedQueues(): Promise<void> {
-  const prefix = "cowboy:sync:queue:";
-  const keys = await syncDatabase.listKeys();
+  const sessions = await syncDatabase.queueSessions();
   if (productSessionAbandoned) return;
   const outcomes = await Promise.allSettled(
-    keys.filter((k) => k.startsWith(prefix)).map((k) => qClient(k.slice(prefix.length)).hydrate()),
+    sessions.map((session) => qClient(session).hydrate()),
   );
   for (const outcome of outcomes) {
     if (outcome.status === "rejected") {

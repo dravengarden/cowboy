@@ -81,8 +81,8 @@ export class FakeTransaction extends TrackedTarget {
       },
       get: (key: IDBValidKey): IDBRequest<unknown> =>
         make(this.database.factory.data.get(key)),
-      getAllKeys: (): IDBRequest<unknown> =>
-        make([...this.database.factory.data.keys()]),
+      getAllKeys: (_query?: unknown, count?: number): IDBRequest<unknown> =>
+        make([...this.database.factory.data.keys()].slice(0, count)),
     } as IDBObjectStore;
   }
 

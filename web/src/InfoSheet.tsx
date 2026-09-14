@@ -45,6 +45,7 @@ import {
 } from "./usageLimits";
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
+import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
 import {
   type ClientRuntimeMetrics,
   readClientRuntimeMetrics,
@@ -944,6 +945,7 @@ export function InfoContent({
         </Stack>
         {!desktop && <Divider />}
         <TelemetryBindingPanel />
+        <ProductSyncDataNotice />
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}

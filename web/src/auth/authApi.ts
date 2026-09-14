@@ -19,6 +19,7 @@ export interface RegistrationPublicStatus {
 
 export interface ProductMe {
   account: string;
+  user_id?: string | null;
   role: ProductRole;
   auth_enabled?: boolean;
   primary_auth_method?: string | null;
@@ -180,6 +181,10 @@ export function productMeFromJson(value: unknown): ProductMe | undefined {
     (me.role !== "owner" && me.role !== "operator" && me.role !== "viewer")
   ) return undefined;
   const next: ProductMe = { account: me.account, role: me.role };
+  if (me.user_id !== undefined) {
+    if (me.user_id !== null && (typeof me.user_id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(me.user_id))) return undefined;
+    next.user_id = me.user_id;
+  }
   if (typeof me.auth_enabled === "boolean") next.auth_enabled = me.auth_enabled;
   if (
     typeof me.primary_auth_method === "string" ||
@@ -411,6 +416,7 @@ export function authStatusFromJson(value: unknown): AuthStatus | undefined {
     );
   }
   const me = productMeFromJson(record.me);
+  if (record.me != null && !me) return undefined;
   if (me) status.me = me;
   return status;
 }

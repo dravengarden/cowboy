@@ -7,6 +7,7 @@ export type IdbFailureCode =
   | "transaction_failed"
   | "transaction_aborted"
   | "request_failed"
+  | "key_limit_exceeded"
   | "close_failed"
   | "snapshot_invalid"
   | "outbox_conflict"

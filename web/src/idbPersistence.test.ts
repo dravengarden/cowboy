@@ -71,6 +71,91 @@ Deno.test("IDB owners isolate close authority even for the same target", async (
   await b.dispose();
 });
 
+Deno.test("IDB owners capture an exact schema floor and reject invalid versions before open", async () => {
+  const factory = new FakeIndexedDb();
+  const options = { factory, schemaVersion: 2 };
+  const owner = createIdbPersistenceOwner(options);
+  options.schemaVersion = 99;
+  await owner.persistence("key", { strictWrites: true }).save(1);
+  assertEquals(factory.targets, [["shared-utils-sync", 2]]);
+  for (
+    const version of [0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1]
+  ) {
+    assertThrows(
+      () => createIdbPersistenceOwner({ factory, schemaVersion: version }),
+      RangeError,
+    );
+  }
+  assertEquals(factory.targets.length, 1);
+  await owner.dispose();
+});
+
+Deno.test("IDB strict key inspection is bounded and never reports failure as empty", async () => {
+  const absent = createIdbPersistenceOwner({ factory: null });
+  assertEquals(await absent.listKeys(), []);
+  await assertRejects(
+    () => absent.listKeys({ strict: true, limit: 3 }),
+    IdbPersistenceError,
+    "unavailable",
+  );
+  await absent.dispose();
+  const factory = new FakeIndexedDb();
+  const owner = createIdbPersistenceOwner({ factory });
+  for (const limit of [0, -1, 1.5, Infinity, 65_537]) {
+    await assertRejects(
+      () => owner.listKeys({ strict: true, limit }),
+      RangeError,
+    );
+  }
+  assertEquals(factory.requests.length, 0);
+  factory.data.set("a", 1);
+  factory.data.set("b", 2);
+  factory.data.set("c", 3);
+  assertEquals(await owner.listKeys({ strict: true, limit: 3 }), [
+    "a",
+    "b",
+    "c",
+  ]);
+  await assertRejects(
+    () => owner.listKeys({ strict: true, limit: 2 }),
+    IdbPersistenceError,
+    "key_limit_exceeded",
+  );
+  assertEquals(await owner.listKeys({ limit: 2 }), []);
+  assertEquals(factory.data.size, 3);
+  await owner.dispose();
+});
+
+Deno.test("transaction-lifetime connections drain leases and preserve the logical record on reopen", async () => {
+  const factory = new FakeIndexedDb();
+  factory.autoTransactions = false;
+  const owner = createIdbPersistenceOwner({
+    factory,
+    connectionLifetime: "transaction",
+  });
+  const record = owner.persistence<number>("key", { strictWrites: true });
+  const a = record.save(1);
+  const b = record.load();
+  await microtasks();
+  const first = factory.databases[0]!;
+  assertEquals(first.transactions.length, 2);
+  first.transactions[0]!.requests[0]!.succeed("key");
+  first.transactions[0]!.complete();
+  await a;
+  assertEquals(first.closeCalls, 0);
+  assertEquals(owner.lifecycle.transactions, 1);
+  first.transactions[1]!.requests[0]!.succeed(undefined);
+  first.transactions[1]!.complete();
+  await b;
+  assertEquals(first.closeCalls, 1);
+  assertEquals(owner.lifecycle.connections, 0);
+  factory.autoTransactions = true;
+  assertEquals(await record.load(), 1);
+  assertEquals(factory.databases.length, 2);
+  assertEquals(owner.lifecycle.connections, 0);
+  await owner.dispose();
+});
+
 Deno.test("IDB closing-connection retry and delayed old events preserve replacement identity", async () => {
   const factory = new FakeIndexedDb();
   const owner = createIdbPersistenceOwner({ factory });

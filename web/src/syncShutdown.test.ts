@@ -141,7 +141,13 @@ Deno.test("product uses one explicit database owner only at permanent sign-out",
   );
   assertEquals(source.includes("idbPersistence<"), false);
   assertEquals(source.includes("idbListKeys("), false);
-  assertEquals(source.match(/createIdbPersistenceOwner\(\)/g)?.length, 1);
+  assertEquals(source.includes("createIdbPersistenceOwner("), false);
+  assertEquals(source.match(/productSyncDatabase as syncDatabase/g)?.length, 1);
+  const owner = await Deno.readTextFile(
+    new URL("./productSyncDatabase.ts", import.meta.url),
+  );
+  assertEquals(owner.match(/createIdbPersistenceOwner\(\{/g)?.length, 1);
+  assertEquals(owner.includes("schemaVersion: 2"), true);
   assertEquals(source.match(/closeProductSync\(\[/g)?.length, 1);
   assertEquals(
     source.includes(

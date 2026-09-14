@@ -47,6 +47,11 @@ idb-browser-conformance BROWSER:
 idb-outbox-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" idb-outbox' conformance "{{BROWSER}}"
 
+# Disposable authenticated HTTP + WebSocket handshakes against exact releases.
+product-sync-controller-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_PRODUCT_SYNC_MATRIX="$1" COWBOY_TEST_PRODUCT_SYNC_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::probe::product_sync::immutable_product_sync -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 # Same isolated browser runner, real React development StrictMode + MUI.
 provider-ui-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" provider-ui' conformance "{{BROWSER}}"

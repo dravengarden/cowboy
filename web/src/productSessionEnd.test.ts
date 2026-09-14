@@ -87,7 +87,23 @@ Deno.test("all controlled auth navigations await local end barriers without impo
   const gate = await Deno.readTextFile(
     new URL("./auth/ProductAuthGate.tsx", import.meta.url),
   );
-  assertEquals(gate.match(/await announceProductSessionEnd\(\)/g)?.length, 3);
+  assertEquals(
+    gate.match(/const ending = announceProductSessionEnd\(\);/g)?.length,
+    3,
+  );
+  assertEquals(
+    gate.match(
+      /await Promise\.all\(\[deleteProductHistoryCache\(\), ending\]\);/g,
+    )?.length,
+    3,
+  );
+  // Each local writer is sealed before any asynchronous cache deletion can yield.
+  assertEquals(
+    gate.match(
+      /const ending = announceProductSessionEnd\(\);\s+await Promise\.all\(\[deleteProductHistoryCache\(\), ending\]\);/g,
+    )?.length,
+    3,
+  );
   assertEquals(gate.includes('from "../store"'), false);
   const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
   assertEquals(

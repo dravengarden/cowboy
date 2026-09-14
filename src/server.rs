@@ -67,6 +67,7 @@ mod plugin_install;
 use plugin_install::api_machine_plugin_install;
 mod plugin_uninstall;
 mod provider_auth_sync;
+mod sync_dataset;
 mod telemetry_binding;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
@@ -2753,6 +2754,7 @@ struct AdminSetPasswordRequest {
 #[derive(Debug, Serialize)]
 struct ProductMe {
     account: String,
+    user_id: Option<String>,
     role: crate::admin::AdminRole,
     #[serde(default)]
     primary_auth_method: Option<String>,
@@ -3929,6 +3931,7 @@ fn missing_store() -> Response {
 fn product_me(hub: &Hub, username: &str) -> ProductMe {
     ProductMe {
         account: username.to_owned(),
+        user_id: None,
         role: permission_policy(hub).role_for(username),
         passkey_count: 0,
         passkey_reauth_enabled: false,
@@ -4004,6 +4007,7 @@ fn product_me_for_user_with_policy(
     policy: &crate::passkey::PasskeyPolicy,
 ) -> ProductMe {
     let mut me = product_me(hub, &user.username);
+    me.user_id = Some(user.id.clone());
     let passkey_refresh_enabled =
         authentication.passkeys.enabled && authentication.passkeys.session_refresh_enabled;
     me.passkey_count = policy.passkey_count;
@@ -4043,7 +4047,9 @@ async fn product_me_for_user(
     session: Option<&crate::store::ProductUserSession>,
 ) -> anyhow::Result<ProductMe> {
     let Some(store) = store else {
-        return Ok(product_me(hub, &user.username));
+        let mut me = product_me(hub, &user.username);
+        me.user_id = Some(user.id.clone());
+        return Ok(me);
     };
     let policy = store
         .user_passkey_policy(&user.id)
@@ -4237,6 +4243,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if matches!(
         path,
         "/api/usage"
+            | "/api/sync/dataset"
             | "/api/usage/logs"
             | "/api/workspaces"
             | "/api/plugins"
@@ -5126,6 +5133,7 @@ async fn api_auth_status(State(state): State<ProductAuthState>, headers: HeaderM
             "providers": [],
             "me": {
                 "account": "local",
+                "user_id": crate::product_auth::local_product_principal().user_id,
                 "role": "owner",
                 "auth_enabled": false,
             },
@@ -6575,6 +6583,7 @@ async fn api_auth_me(
     if !state.product_auth_enabled {
         return Json(serde_json::json!({
             "account": "local",
+            "user_id": crate::product_auth::local_product_principal().user_id,
             "role": "owner",
             "auth_enabled": false,
         }))
@@ -6613,7 +6622,11 @@ async fn api_auth_me(
             Ok(me) => no_store_json(StatusCode::OK, me),
             Err(error) => product_session_policy_unavailable(error),
         },
-        None => no_store_json(StatusCode::OK, product_me(&state.hub, &principal.username)),
+        None => {
+            let mut me = product_me(&state.hub, &principal.username);
+            me.user_id = Some(principal.user_id);
+            no_store_json(StatusCode::OK, me)
+        }
     }
 }
 
@@ -8952,6 +8965,7 @@ async fn serve_axum(
         .route("/healthz", get(healthz))
         .route("/version", get(version))
         .route("/api/metrics", get(api_metrics))
+        .route("/api/sync/dataset", get(sync_dataset::get_dataset))
         .route(
             "/api/observability/batches",
             post(api_observability_batch).layer(DefaultBodyLimit::max(256 * 1024)),
@@ -17267,6 +17281,7 @@ struct WebSocketQuery {
     bootstrap: Option<String>,
     client_id: Option<String>,
     client_kind: Option<String>,
+    dataset: Option<String>,
 }
 
 #[derive(Clone)]
@@ -17389,6 +17404,28 @@ async fn ws_upgrade(
             Ok(capacity) => capacity,
             Err(status) => return status.into_response(),
         };
+    if let Err(status) = sync_dataset::socket_check(
+        &state.service_id,
+        &authenticated.principal,
+        matches!(capacity.client_kind.as_str(), "browser" | "native_shell"),
+        query.dataset.as_deref(),
+    ) {
+        return (
+            status,
+            "Product client or dataset changed; update and reload before reconnecting",
+        )
+            .into_response();
+    }
+    // Negotiation proves this peer actually validated the dataset; a retained
+    // Controller that ignores the query cannot silently admit a new client.
+    let ws = if query.dataset.is_some() {
+        if !sync_dataset::offers_protocol(&headers) {
+            return StatusCode::UPGRADE_REQUIRED.into_response();
+        }
+        ws.protocols([sync_dataset::SUBPROTOCOL])
+    } else {
+        ws
+    };
     let principal = match authorize_ws_upgrade(
         &headers,
         peer,
@@ -19477,6 +19514,7 @@ mod auth_capacity_boundary_tests {
             bootstrap: None,
             client_id: Some("stable-client-0000000000000001".to_owned()),
             client_kind: Some(kind.to_owned()),
+            dataset: None,
         }
     }
 

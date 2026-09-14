@@ -44,6 +44,7 @@ import {
 import { ProductRecentAuthSheet } from "./ProductRecentAuthSheet";
 import { ProductSessionGuard } from "./ProductSessionGuard";
 import { PRODUCT_AUTH_SESSION_EVENT } from "../productAuthEvents";
+import { bindProductSyncPrincipal, sameProductPrincipal } from "../productSyncIdentity";
 import {
   passkeyErrorMessage,
   passkeyFlowCancelled,
@@ -100,8 +101,8 @@ export async function signOutProductSession(options: {
     if (isRecentProductAuthRequired(reason)) throw reason;
     // Logout is best-effort: still drop the socket graph and local history.
   }
-  await deleteProductHistoryCache();
-  await announceProductSessionEnd();
+  const ending = announceProductSessionEnd();
+  await Promise.all([deleteProductHistoryCache(), ending]);
   if (providerLogoutUrl) {
     globalThis.location.assign(providerLogoutUrl);
   } else {
@@ -159,8 +160,9 @@ function ProductControllerUnavailablePage({
           Controller too old or activating
         </Typography>
         <Typography color="text.secondary">
-          This web build needs GET /api/auth/status. The controller is still
-          activating or older than this PWA. /admin remains the break-glass.
+          This web build needs an authenticated, immutable user identity and
+          the product sync dataset protocol. The controller is still activating
+          or older than this PWA. /admin remains the break-glass.
         </Typography>
         <Button variant="contained" onClick={onRetry}>Retry</Button>
       </Stack>
@@ -365,12 +367,16 @@ export function ProductAuthGate({
           return;
         }
         generationRef.current += 1;
-        await deleteProductHistoryCache();
-        await announceProductSessionEnd();
+        const ending = announceProductSessionEnd();
+        await Promise.all([deleteProductHistoryCache(), ending]);
         globalThis.location.reload();
         return;
       }
       if (shouldMountProductApp(decision) && decision.me) {
+        if (!bindProductSyncPrincipal(decision.me.user_id)) {
+          setView("activating");
+          return;
+        }
         attemptsRef.current = 0;
         meRef.current = decision.me;
         setMe(decision.me);
@@ -433,9 +439,14 @@ export function ProductAuthGate({
   }, [view, loadStatus]);
 
   const handleAuthed = useCallback((next: ProductMe): void => {
-    generationRef.current += 1;
+    const generation = ++generationRef.current;
     void (async () => {
       await deleteProductHistoryCache();
+      if (generation !== generationRef.current) return;
+      if (!bindProductSyncPrincipal(next.user_id)) {
+        setView("activating");
+        return;
+      }
       attemptsRef.current = 0;
       meRef.current = next;
       setMe(next);
@@ -452,20 +463,28 @@ export function ProductAuthGate({
   }, []);
 
   const updateMe = useCallback((next: ProductMe): void => {
+    if (meRef.current && !sameProductPrincipal(meRef.current, next)) {
+      void applyDecision({ view: "ready", me: next });
+      return;
+    }
     meRef.current = next;
     setMe(next);
-  }, []);
+  }, [applyDecision]);
 
   useEffect(() => {
     const onSession = (event: Event): void => {
       const next = productMeFromJson((event as CustomEvent).detail);
-      if (!next || next.account !== meRef.current?.account) return;
+      if (!next || !meRef.current) return;
+      if (!sameProductPrincipal(meRef.current, next)) {
+        void applyDecision({ view: "ready", me: next });
+        return;
+      }
       updateMe(next);
     };
     globalThis.addEventListener(PRODUCT_AUTH_SESSION_EVENT, onSession);
     return () =>
       globalThis.removeEventListener(PRODUCT_AUTH_SESSION_EVENT, onSession);
-  }, [updateMe]);
+  }, [updateMe, applyDecision]);
 
   const reauthenticate = useCallback((
     options: RecentProductAuthOptions = {},
@@ -487,13 +506,13 @@ export function ProductAuthGate({
     const pending = recentAuthRef.current;
     if (!pending) return;
     recentAuthRef.current = null;
-    if (meRef.current?.account !== next.account) {
+    if (!meRef.current || !sameProductPrincipal(meRef.current, next)) {
       pending.reject(new Error("Verification returned a different account"));
       setRecentAuthOpen(false);
       generationRef.current += 1;
       void (async () => {
-        await deleteProductHistoryCache();
-        await announceProductSessionEnd();
+        const ending = announceProductSessionEnd();
+        await Promise.all([deleteProductHistoryCache(), ending]);
         globalThis.location.reload();
       })();
       return;

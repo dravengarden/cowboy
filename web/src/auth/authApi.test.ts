@@ -7,6 +7,7 @@ import {
   externalPasskeyApi,
   fetchAuthStatus,
   isHtmlContentType,
+  productMeFromJson,
 } from "./authApi.ts";
 import { classifyAuthStatus, isLoginDecision } from "./authStatus.ts";
 
@@ -14,6 +15,29 @@ type FetchArgs = {
   input: string;
   init?: RequestInit;
 };
+
+Deno.test("product auth exposes immutable user identity and malformed identity never becomes logout", () => {
+  const me = { account: "label", role: "viewer", user_id: "user-a" };
+  assertEquals(productMeFromJson(me)?.user_id, "user-a");
+  const registration = {
+    enabled: false,
+    mode: "disabled",
+    accepts_registration: false,
+  };
+  for (const user_id of [42, "", "user:a", "a".repeat(129)]) {
+    assertEquals(productMeFromJson({ ...me, user_id }), undefined);
+    assertEquals(
+      authStatusFromJson({ registration, me: { ...me, user_id } }),
+      undefined,
+    );
+  }
+  assertEquals(authStatusFromJson({ registration, me: null })?.me, undefined);
+  // Reader compatibility only: the product root still requires user_id before mounting.
+  assertEquals(
+    productMeFromJson({ account: "old", role: "viewer" })?.account,
+    "old",
+  );
+});
 
 function withFetch(
   handler: (args: FetchArgs) => Response | Promise<Response>,

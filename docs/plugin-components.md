@@ -149,6 +149,13 @@ state-sync-idb 1.6.0's atomic outbox deltas. Database schema/record bytes and
 all seven Plugin sources/pins remain unchanged; old blind writers still require
 an upgrade. This core-only slice needs a Web release, not a Catalog transaction.
 
+Scoped release 3.6.0 adds state-sync-idb 1.7.0's exact schema floor, optional
+transaction-lifetime handles and strict bounded inspection. The core
+[product dataset integration](product-sync-datasets.md) binds immutable
+Service/user identity to Web persistence and authenticated socket negotiation;
+its Controller/Web migration and recovery acceptance are independent of the
+unchanged seven Plugin sources, pins and signed Catalog.
+
 Scoped release 3.2.0 adds state-store 2.1.0's owned resource scope, state-sync
 1.4.0's lifetime/barrier fixes, and the state-sync-idb 1.4.0 transitive peer
 update. The same seven Plugin releases and exact 2.9.0 pins remain unchanged;

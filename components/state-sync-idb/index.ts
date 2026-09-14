@@ -7,6 +7,7 @@ export {
 } from "./idb.ts";
 export type {
   IdbFailureCode,
+  IdbListKeysOpts,
   IdbOpts,
   IdbOwnerOpts,
   IdbPersistenceOwner,

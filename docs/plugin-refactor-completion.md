@@ -28,9 +28,18 @@ and accepting a production effect are different milestones.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
   pending mutations and confirmations in one transaction, with explicit load
   handoff and strict durable-send failure. The v1 data format is unchanged;
-  pre-upgrade blind writers and general dataset authority remain unfenced.
+  that release alone does not fence pre-upgrade blind writers or grant general
+  dataset authority.
   The [Web release](releases/atomic-idb-outboxes-2026-09-14.md) passed both
   real-browser suites and activation checks without restarting live workers.
+- [Core product browser datasets](product-sync-datasets.md) now implement
+  immutable Service/principal binding, closed Service/Session keys, exact IDB v2
+  writer fencing, transaction-lifetime connections and bounded read-only legacy
+  export. Source gates include 16 real-browser outbox cases and eight connection
+  lifetime cases. The initial Controller bridge still permits old Web; immutable
+  handshake acceptance, component activation, the binding-required descendant
+  and compatible recovery roles must be recorded separately. This is not a
+  general exclusive state lease or completed production migration.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.
@@ -57,7 +66,7 @@ and accepting a production effect are different milestones.
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Extend the finite telemetry live-resolution path to applicable graph contracts and actual Service/Workspace/Session scope identity, state leases and policy; link exact resolved results to finite domain executors | General verified-release/site/state-lease vectors beyond the telemetry per-installation observation fence and shared structural link vectors; no serialized authorization |
-| P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; version-fenced IDB ownership across old/new clients, beyond accepted updated-peer atomic deltas | Old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
+| P3 / state compatibility | Complete the core browser dataset rollout and compatible recovery floor; general state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |

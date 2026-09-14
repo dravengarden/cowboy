@@ -20,9 +20,18 @@ export interface IdbWriteOpts {
 }
 
 export interface IdbOwnerOpts {
-  /** Retained defaults preserve existing browser data; schema version stays 1. */
+  /** Retained defaults preserve existing browser data. */
   dbName?: string;
   storeName?: string;
+  /** An exact reader/writer floor. Upgrades preserve all existing stores/data.
+   * The owning application must accept the migration and recovery reader floor.
+   */
+  schemaVersion?: number;
+  /** Retain a handle for the owner, or close it at transaction quiescence.
+   * Transaction lifetime avoids idle handles blocking cross-version peers;
+   * it never closes/aborts an admitted transaction or changes an outbox baseline.
+   */
+  connectionLifetime?: "owner" | "transaction";
   /** Logical open deadline, not cancellation of the native request. 1..60000ms. */
   openTimeoutMs?: number;
   /** Injectable browser boundary. Omit for ambient IndexedDB; null disables it. */
@@ -30,6 +39,13 @@ export interface IdbOwnerOpts {
 }
 
 export interface IdbOpts extends IdbOwnerOpts, IdbWriteOpts {}
+
+export interface IdbListKeysOpts {
+  /** Report unavailable/failed reads instead of claiming the dataset is empty. */
+  strict?: boolean;
+  /** Fail closed if more keys exist; never return a misleading partial list. */
+  limit?: number;
+}
 
 export interface IdbSnapshot extends ScopeSnapshot {
   readonly openRequests: number;
@@ -47,8 +63,8 @@ export interface IdbPersistenceOwner {
    * are not fenced, and this does not establish principal/dataset authority.
    */
   outbox<T>(key: string): LocalPersistence<ClientSnapshot<T>>;
-  /** Best-effort enumeration; unavailable storage yields an empty list. */
-  listKeys(): Promise<string[]>;
+  /** Best-effort by default; use strict + limit for recovery/owned datasets. */
+  listKeys(opts?: IdbListKeysOpts): Promise<string[]>;
   readonly lifecycle: IdbSnapshot;
   /** Seal new calls, drain admitted transactions, then close all generations.
    * A native open cannot be cancelled: late handles are closed, and a stuck
@@ -95,7 +111,19 @@ export function createIdbPersistenceOwner(
   // Snapshot configuration before any externally supplied factory can reenter.
   const dbName = opts.dbName ?? "shared-utils-sync";
   const storeName = opts.storeName ?? "clients";
+  const schemaVersion = opts.schemaVersion ?? 1;
+  if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1) {
+    throw new RangeError(
+      "IndexedDB schema version must be a positive safe integer",
+    );
+  }
   const factory = opts.factory;
+  const connectionLifetime = opts.connectionLifetime ?? "owner";
+  if (connectionLifetime !== "owner" && connectionLifetime !== "transaction") {
+    throw new RangeError(
+      "IndexedDB connection lifetime must be owner or transaction",
+    );
+  }
   const timeoutMs = opts.openTimeoutMs ?? 10_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
     throw new RangeError("IndexedDB open deadline must be 1..60000ms");
@@ -173,7 +201,7 @@ export function createIdbPersistenceOwner(
         reject("unavailable");
         return gen;
       }
-      request = browser.open(dbName, 1);
+      request = browser.open(dbName, schemaVersion);
     } catch {
       gen.nativeFinished = true;
       reject("open_failed");
@@ -307,7 +335,10 @@ export function createIdbPersistenceOwner(
           request?.removeEventListener("success", success);
           request?.removeEventListener("error", error);
           gen.transactions.delete(transaction);
-          finishClose(gen);
+          if (
+            connectionLifetime === "transaction" && gen.transactions.size === 0
+          ) retire(gen);
+          else finishClose(gen);
           if (aborted || failure || !hasResult) {
             reject(
               failure ??
@@ -389,12 +420,28 @@ export function createIdbPersistenceOwner(
         },
       });
     },
-    listKeys: (): Promise<string[]> =>
+    listKeys: (opts: IdbListKeysOpts = {}): Promise<string[]> =>
       scope.run(async () => {
+        const { strict = false, limit } = opts;
+        if (
+          limit !== undefined &&
+          (!Number.isInteger(limit) || limit < 1 || limit > 65_536)
+        ) throw new RangeError("IndexedDB key limit must be 1..65536");
         try {
-          const keys = await run("readonly", (store) => store.getAllKeys());
+          const keys = await run(
+            "readonly",
+            (store) =>
+              store.getAllKeys(
+                undefined,
+                limit === undefined ? undefined : limit + 1,
+              ),
+          );
+          if (limit !== undefined && keys.length > limit) {
+            throw new IdbPersistenceError("key_limit_exceeded");
+          }
           return keys.filter((key): key is string => typeof key === "string");
-        } catch {
+        } catch (error) {
+          if (strict) throw error;
           return [];
         }
       }),
