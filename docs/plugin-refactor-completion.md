@@ -21,6 +21,8 @@ and accepting a production effect are different milestones.
   pending mutations and confirmations in one transaction, with explicit load
   handoff and strict durable-send failure. The v1 data format is unchanged;
   pre-upgrade blind writers and general dataset authority remain unfenced.
+  The [Web release](releases/atomic-idb-outboxes-2026-09-14.md) passed both
+  real-browser suites and activation checks without restarting live workers.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.

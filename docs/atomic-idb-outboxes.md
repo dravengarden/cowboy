@@ -4,6 +4,10 @@ This P3 slice fixes shared snapshot overwrite between updated Web peers. It is
 a core state implementation, not an installable Plugin, authorization grant,
 cross-tab lifetime lease or distributed compensation executor.
 
+[Published and activated on Web](releases/atomic-idb-outboxes-2026-09-14.md),
+with the complete source gate and both real-browser suites accepted. Existing
+open clients still need to refresh; no physical-client reload is claimed.
+
 ## The race
 
 The product previously persisted every replicated client's complete
