@@ -22,12 +22,14 @@ const LOG_BYTES: usize = 128 * 1024;
 mod admission;
 mod connected;
 mod installation;
+mod installation_connected;
 mod machine_installation;
 mod startup;
 pub(super) use admission::run as writer_admission;
 pub(super) use connected::run as connected_pair;
 pub(super) use connected::run_victoria as victoria_pair;
 pub(super) use installation::run as installation_reader;
+pub(super) use installation_connected::run as installation_connected;
 pub(super) use machine_installation::run as machine_installation_reader;
 pub(super) use startup::run as background_startup;
 

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 mod delivery;
 mod flows;
-mod http;
+pub(super) mod http;
 mod proxy;
 mod victoria;
 

@@ -60,6 +60,21 @@ corresponding Service coordinator are accepted. See
 `docs/plugin-machine-install-attempts.md`; no production Plugin installation is
 authorized by running these disposable fixtures.
 
+Before enabling a fresh durable installation writer, also run
+`just plugin-install-connected-conformance <matrix.json> <new-receipt.json>`.
+Its supplied active Controller/Machine pair must execute five real isolated
+HTTP flows: install and same-bytes reinstall, lost Applied receipt (the real
+90-second deadline), disconnect after Applied, disconnect before step delivery,
+and Controller crash after Applied. Each of the nine supplied reader pairs
+independently reopens the same stopped result twice (45 checks, 90 cold reads).
+Require exact intent/receipt checksums, new installation incarnation, retained
+unknown fences and no mutation/query on duplicate requests or restart. Recovery
+readers remain allowed to pause fresh installs; never require them to write in
+order to prove readability. This gate uses genuine disposable password login
+and enrolled Machine authentication, not production Operator authority, Agent
+authentication projection, compensation, physical power-loss or native worker
+generation acceptance. No production Plugin installation is authorized.
+
 For managed telemetry binding/recovery reader floors, use the repository-owned
 `just telemetry-reader-conformance <matrix.json> <new-receipt.json>` from clean
 committed source in the pinned Linux shell. It executes immutable Controller

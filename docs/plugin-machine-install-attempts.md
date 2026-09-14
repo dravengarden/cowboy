@@ -7,6 +7,10 @@ admission is also paused, without a protocol-seven fallback. The bridge has now
 [replaced the active Service and Machine readers on Hawk](releases/plugin-install-receipt-readers-2026-09-14.md),
 including accepted actual next-recovery and cold roles. This is reader-floor
 acceptance, not connected installation execution or completion of P4 recovery.
+The current descendant enables its code switch as a writer candidate; the
+standing `--plugin-operation-admission` and original connection-bound authority
+remain mandatory. Its [connected acceptance gate](plugin-install-connected-conformance.md)
+must pass before activation; the running reader remains writer-disabled.
 
 ## One core installation path
 

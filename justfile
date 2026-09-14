@@ -309,6 +309,13 @@ plugin-install-reader-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_READER_MATRIX="$1" COWBOY_TEST_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation::immutable_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
+# Real active writer pair; nine reader pairs independently reopen each stopped
+# result twice. Recovery readers are NOT asked to admit fresh installation.
+# No production credentials, Plugin installation, policy, export or sessions.
+plugin-install-connected-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_CONNECTED_MATRIX="$1" COWBOY_TEST_INSTALL_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation_connected::immutable_connected_installation -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 # Separate telemetry evidence and policy floors remain mandatory.
 telemetry-reader-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run

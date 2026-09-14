@@ -2,14 +2,14 @@ use super::*;
 use reqwest::{Client, Method, StatusCode, header};
 use serde_json::{Value, json};
 
-pub(super) struct Http {
+pub(in super::super) struct Http {
     base: String,
     client: Client,
     cookie: Option<String>,
     last: parking_lot::Mutex<Option<HttpObservation>>,
 }
 
-pub(super) struct Reply {
+pub(in super::super) struct Reply {
     pub status: StatusCode,
     pub value: Value,
     cookie: Option<String>,
@@ -27,6 +27,10 @@ impl Reply {
 
 impl Http {
     pub fn new(address: std::net::SocketAddr) -> Result<Self, Failure> {
+        Self::with_timeout(address, Duration::from_secs(60))
+    }
+
+    pub fn with_timeout(address: std::net::SocketAddr, timeout: Duration) -> Result<Self, Failure> {
         Ok(Self {
             base: format!("http://{address}"),
             cookie: None,
@@ -35,10 +39,18 @@ impl Http {
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_secs(1))
-                .timeout(Duration::from_secs(60))
+                .timeout(timeout)
                 .build()
                 .map_err(|_| Failure::Setup)?,
         })
+    }
+
+    /// Carry the real fixture cookie across a stopped-state copy and new port.
+    /// A login response is the only source; it never enters a receipt or log.
+    pub fn at(&self, address: std::net::SocketAddr) -> Result<Self, Failure> {
+        let mut next = Self::new(address)?;
+        next.cookie = Some(self.cookie.clone().ok_or(Failure::Setup)?);
+        Ok(next)
     }
 
     pub async fn call(

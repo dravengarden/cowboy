@@ -7,6 +7,10 @@ The schema-two target/receipt bridge's actual Service/Machine reader floor is no
 with **all fresh Service installation admission paused** and Machine attempt
 writing disabled. Connected installation execution and writer cutover are not
 yet accepted; the reader release is not that evidence.
+The current descendant is a **writer candidate**, with both code switches
+enabled for the [connected immutable acceptance gate](plugin-install-connected-conformance.md).
+That source change does not enable the running reader release or establish
+writer deployment acceptance.
 The finite Service installer records
 install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
 or installation dispatch. Reader revision `95c0e854` pauses new admission. The

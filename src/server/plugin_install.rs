@@ -18,12 +18,12 @@ mod journal;
 use journal::Progress;
 pub(super) use journal::api_machine_plugin_install_operations;
 
-// Reader-first bridge. Pause ALL fresh installs, including the legacy writer:
-// recovery to this revision must never dispatch an old install into a Machine
-// whose new attempt namespace permanently fences legacy mutations. A later
-// descendant may enable this only after actual Controller AND Machine active,
-// next-transaction recovery and cold readers accept the new evidence.
-pub(super) const DURABLE_INSTALL_ENABLED: bool = false;
+// The 2026-09-14 reader floor is active in both lanes, next recovery and cold
+// bootstrap (docs/releases/plugin-install-receipt-readers-2026-09-14.md).
+// Fresh execution still needs the original Operator confirmation, protocol-19
+// connection, exact observed target and independently enabled Machine writer.
+// Release acceptance also requires the connected writer/recovery matrix.
+pub(super) const DURABLE_INSTALL_ENABLED: bool = true;
 
 #[derive(Clone, Copy)]
 enum Disposition {

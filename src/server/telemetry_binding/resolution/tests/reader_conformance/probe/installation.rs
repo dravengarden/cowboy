@@ -28,13 +28,13 @@ pub(in super::super) async fn run(
     running.finish().await.and(result)
 }
 
-fn snapshot(root: &Path) -> Result<serde_json::Value, Failure> {
+pub(super) fn snapshot(root: &Path) -> Result<serde_json::Value, Failure> {
     let db = rusqlite::Connection::open_with_flags(
         database_path(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .map_err(|_| Failure::EvidenceChanged)?;
-    let mut statement = db.prepare("SELECT intent, intent_sha256, phase, problem, attention_from, created_at_ms, updated_at_ms, machine_receipt, machine_receipt_sha256 FROM plugin_install_operations")
+    let mut statement = db.prepare("SELECT intent, intent_sha256, phase, problem, attention_from, created_at_ms, updated_at_ms, machine_receipt, machine_receipt_sha256 FROM plugin_install_operations ORDER BY operation_id ASC")
         .map_err(|_| Failure::EvidenceChanged)?;
     let rows = statement.query_map([], |row| Ok(serde_json::json!({
         "intent": row.get::<_, String>(0)?, "checksum": row.get::<_, String>(1)?,

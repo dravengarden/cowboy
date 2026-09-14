@@ -5,10 +5,10 @@ use crate::machine_protocol::plugin_install::{InstallLookup, InstallObservation,
 use crate::machine_protocol::{DesiredPlugin, MachineEvent};
 use std::sync::Arc;
 
-// Reader first: protocol negotiation and the existing uninstall admission flag
-// alone must not enable a new durable installation namespace. Activation needs
-// accepted active, next-transaction recovery and cold Machine readers.
-pub(super) const WRITER_ENABLED: bool = false;
+// The accepted 2026-09-14 reader floor precedes this writer candidate. Protocol
+// negotiation alone is not authority: --plugin-operation-admission plus the
+// original connection-bound lease and exact target are still mandatory.
+pub(super) const WRITER_ENABLED: bool = true;
 
 pub(super) fn install(
     request_id: String,
