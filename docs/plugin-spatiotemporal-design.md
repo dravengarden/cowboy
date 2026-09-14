@@ -1,5 +1,11 @@
 # Cowboy：跨 Service / Machine 的时空可组合架构
 
+Current exit status is consolidated in the [completion ledger](plugin-refactor-completion.md).
+The historical slices below are evidence of individual steps, not whole-refactor completion.
+The [install/upgrade continuation repair](plugin-install-continuation.md) closes live
+ownership and authorization gaps; durable installation and independent post-effect
+recovery remain explicit exit items.
+
 状态：整体重设计，2026-09-09；替代本文先前逐项补充的草案。接口、类型和目录拆分均为目标，不是已发布
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
 [只读组合检查器](plugin-composition-checker.md)

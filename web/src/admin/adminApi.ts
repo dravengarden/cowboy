@@ -145,9 +145,14 @@ async function readJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const adminApi = {
   pluginMachines: () => readJson<PluginMachine[]>("/api/machines"),
-  installPlugin: (machine: string, plugin: PluginRelease) => readJson(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin.plugin_id)}/install`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: plugin.plugin_version, digest: plugin.artifact_digest }),
-  }),
+  installPlugin: async (machine: string, plugin: PluginRelease) => {
+    if (plugin.release_state !== "ready" || !plugin.artifact_digest) {
+      throw new Error("Select an exact signed Plugin release before installation");
+    }
+    return await readJson(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin.plugin_id)}`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: plugin.plugin_version, digest: plugin.artifact_digest }),
+    });
+  },
   planPluginRemoval: (machine: string, plugin: string) => readJson<PluginRemovalPlan>(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin)}/uninstall-plan`, { method: "POST" }),
   removePlugin: (plan: PluginRemovalPlan) => readJson(`/api/machines/${encodeURIComponent(plan.machine_id)}/plugins/${encodeURIComponent(plan.plugin_id)}/uninstall`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan_id: plan.plan_id, confirm_active_sessions: false }),

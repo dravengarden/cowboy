@@ -1,0 +1,74 @@
+# Plugin refactor completion ledger
+
+Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
+and current code on 2026-09-14. This is the current exit checklist, not a list of
+all historical slices. Passing a test, publishing a reader, enabling a policy
+and accepting a production effect are different milestones.
+
+## Implemented and accepted in automated gates
+
+- One immutable signed Plugin lifecycle and dependency-closure release matrix;
+  six independent Agent sources plus Zed, with no installable internal runtimes.
+- Core-owned communication, installation, security/native/Web host boundaries;
+  isolated Provider accounts, exact session/workspace generations and sidecars.
+- Generated closed composition wire types and bounded, read-only structural
+  checker; separate ownership and capability-wait graphs. It is not a grant.
+- Typed Provider authoring, owned UI effects, state-store/resource scopes,
+  subscription/task drain and explicit IDB connection/transaction ownership.
+- Service uninstall journal, Machine uninstall receipts, installation-incarnation
+  CAS, execution leases, continuous Operator checks, read-only recovery and a
+  separately confirmed abort of a proven pre-effect Service interruption.
+- Core local-security ownership implementation and crash-recoverable adoption,
+  without moving credentials or changing historical SQL bytes.
+- Finite Victoria binding/revoke/restore, independently authorized recovery and
+  settlement, bounded managed OTLP export, standing policy and private admission.
+  Actual immutable role gates cover 96 reader, 294 writer, 78 startup and 45
+  connected-flow cases; [real Victoria acceptance](releases/telemetry-victoria-conformance-2026-09-14.md)
+  adds nine database-backed role pairs and reopen/no-replay checks.
+
+## Code work still required
+
+| Exit | Remaining implementation | Required evidence |
+| --- | --- | --- |
+| P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Shared Rust/TS link vectors, no serialized authorization, ambiguity/cycle/fingerprint refusal and live-precondition changes |
+| P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; cross-tab writer arbitration for IDB | Old/new readers and writers, exclusive fenced ownership, crash/reopen, version-change and independent workspace/generation coexistence |
+| P4 / installation | Durable install/upgrade operations alongside uninstall, including staging/activation receipt correlation and cross-restart uncertainty | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
+| P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
+| P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |
+
+The [install continuation repair](plugin-install-continuation.md) closes live
+HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
+does not check off the durable-install row above. Likewise, local disposal does
+not implement cross-site rollback, and a read-only composition is not an
+authorized generic DAG. Do not add a parallel Plugin lifecycle or expose an
+unconstrained workflow executor to hide these gaps.
+
+## Production and supported-client acceptance still required
+
+- **Core security handoff:** actual Password, device-authorization completion and
+  Passkey tests; supported native origin/gesture tests; then the owning committed
+  host policy, stopped-Controller adoption and complete compatible recovery
+  configuration. Removing generated local-auth pins or authority markers is not
+  acceptance. Retire old public SDK/native entries only after these checks.
+- **Managed Victoria cutover:** actual Operator confirmation, both independently
+  owned writer policies, complete standing export policy and private destination
+  authentication/TLS, followed by real ingestion/query and controlled failure /
+  restart acceptance. The first managed intent permanently fences legacy export,
+  including rejected/aborted attempts; account for that interval explicitly.
+- **Session/generation acceptance:** verify retained and upgraded native sessions
+  and multiple workspace/runtime generations on their supported platforms.
+  Preserved worker PIDs in a bounded deployment window do not prove an actual
+  generation swap or native resume. No forced rebind, login or worker restart is
+  authorized merely by a Controller/Web release.
+
+These checks require real account/device participation and, for the Machine or
+host-policy change, the separate maintenance boundary. Synthetic fixture keys,
+isolated databases and an agent's filesystem access cannot substitute for them.
+The physical iPhone pasted-image caret issue in `web/src/mdlive/PITFALLS.md` #69
+also remains unsolved; it is not a Plugin-refactor completion claim.
+
+## Completion rule
+
+Do not report the whole refactor complete until the code exits and the production
+and supported-client exits above have recorded evidence. Preserve the distinction
+between implemented, verified, published, activated and actually accepted.

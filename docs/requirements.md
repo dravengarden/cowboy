@@ -306,6 +306,14 @@ silently adopting replacement runtime bytes.
 Publishing a Plugin release does not install it. Installing it on one Machine
 does not install it on another Machine.
 
+The [core install continuation](plugin-install-continuation.md) requires an exact
+version/digest and binds the current Operator confirmation to the complete
+resolved envelope and original Machine connection. An admitted attempt outlives
+its HTTP observer and checks authority at effect boundaries. An ambiguous or
+generic rejected install ACK retains a live reconciliation fence, never a blind
+retry or inverse. This remains a process-local Service attempt; durable install
+intent and cross-restart recovery are not implemented by this repair.
+
 Install and uninstall serialize per `(machine_id, provider_id)`. Installation
 validates any current Service auth envelope before changing activation and
 restores the previous runtime and auth links if the commit fails. Reusing a

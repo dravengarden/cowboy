@@ -2,6 +2,7 @@ use super::*;
 use crate::plugin_operation::fixture;
 use crate::store::{ProductApiToken, ProductUser, ProductUserSession};
 
+mod installation;
 mod telemetry_recovery;
 
 #[tokio::test]

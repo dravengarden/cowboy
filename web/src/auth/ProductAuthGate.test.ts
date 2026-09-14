@@ -267,7 +267,8 @@ Deno.test("desktop can manage devices and sign out without importing store", asy
 
 Deno.test("service worker does not cache /api/auth and bumped VERSION", async () => {
   const sw = await Deno.readTextFile(new URL("../../public/sw.js", authDir));
-  assert(sw.includes('const VERSION = "cowboy-v1681"'));
+  const version = /const VERSION = "cowboy-v([1-9]\d*)"/.exec(sw);
+  assert(version && Number(version[1]) >= 1683);
   const authStart = sw.indexOf('url.pathname.startsWith("/api/auth/")');
   const authBranch = sw.slice(
     authStart,

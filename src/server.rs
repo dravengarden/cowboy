@@ -63,6 +63,8 @@ use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
 mod operator_approval;
+mod plugin_install;
+use plugin_install::api_machine_plugin_install;
 mod plugin_uninstall;
 mod provider_auth_sync;
 mod telemetry_binding;
@@ -11262,11 +11264,10 @@ async fn api_machine_provider_inventory_compat(
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PluginInstallRequest {
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    digest: Option<String>,
+    version: String,
+    digest: String,
 }
 
 async fn plugin_install_compatibility(
@@ -11399,120 +11400,6 @@ fn plugin_compatibility_response(
         })),
     )
         .into_response()
-}
-
-async fn api_machine_plugin_install(
-    State(state): State<Arc<AppState>>,
-    Path((machine_id, provider_id)): Path<(String, String)>,
-    Json(request): Json<PluginInstallRequest>,
-) -> Response {
-    let desired = match state.plugin_catalog.resolve(
-        &provider_id,
-        request.version.as_deref(),
-        request.digest.as_deref(),
-    ) {
-        Ok(desired) => desired,
-        Err(error) => return (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
-    };
-    match plugin_install_compatibility(&state, &machine_id, &desired).await {
-        Ok(None) => {}
-        Ok(Some(problem)) => return plugin_compatibility_response(problem),
-        Err(error) => return (StatusCode::CONFLICT, error).into_response(),
-    }
-    let is_agent_plugin =
-        desired.release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider;
-    if is_agent_plugin {
-        match agent_plugin_install_compatibility(&state, &machine_id, &desired).await {
-            Ok(None) => {}
-            Ok(Some(problem)) => return provider_compatibility_response(problem),
-            Err(error) => return (StatusCode::CONFLICT, error).into_response(),
-        }
-    }
-    let fence = (machine_id.clone(), provider_id.clone());
-    let previous_fence = {
-        let mut fences = state.plugin_lifecycle_fences.write();
-        match fences.get(&fence).copied() {
-            Some(
-                PluginFenceState::Installing
-                | PluginFenceState::Uninstalling
-                | PluginFenceState::NeedsReconcile,
-            ) => {
-                return (
-                    StatusCode::CONFLICT,
-                    "another Provider lifecycle operation is already in progress",
-                )
-                    .into_response();
-            }
-            previous => {
-                fences.insert(fence.clone(), PluginFenceState::Installing);
-                previous
-            }
-        }
-    };
-    // A replica can be stored before the Provider exists. Synchronize it first
-    // so Machine activation validates and materializes the current Service
-    // generation in the same local lifecycle transaction. An upgrade whose
-    // old package cannot materialize the new authentication contract may
-    // already hold that exact sealed replica; retrying the pre-sync would
-    // deadlock the upgrade before the compatible package can be activated.
-    let authentication = is_agent_plugin
-        .then(|| state.provider_auth.status(&provider_id))
-        .flatten();
-    let installed = current_machine_plugin(&state, &machine_id, &provider_id)
-        .await
-        .ok();
-    if provider_auth_sync_required_before_install(authentication.as_ref(), installed.as_ref())
-        && let Err(error) = sync_provider_auth_to_machine(&state, &machine_id, &provider_id).await
-    {
-        let mut fences = state.plugin_lifecycle_fences.write();
-        if previous_fence == Some(PluginFenceState::Uninstalled) {
-            fences.insert(fence, PluginFenceState::Uninstalled);
-        } else {
-            fences.remove(&fence);
-        }
-        return (
-            StatusCode::CONFLICT,
-            format!("Service authentication sync failed before Provider installation: {error}"),
-        )
-            .into_response();
-    }
-    let request_id = machine_request_id("provider-install");
-    let command = crate::machine_protocol::MachineCommand::InstallPlugin {
-        request_id: request_id.clone(),
-        plugin: Box::new(desired),
-    };
-    if let Err(error) = state
-        .machine_control
-        .command_request(&machine_id, request_id, command)
-        .await
-    {
-        let mut fences = state.plugin_lifecycle_fences.write();
-        if previous_fence == Some(PluginFenceState::Uninstalled) {
-            fences.insert(fence, PluginFenceState::Uninstalled);
-        } else {
-            fences.remove(&fence);
-        }
-        return (StatusCode::CONFLICT, error).into_response();
-    }
-    // Re-read after activation to close a concurrent refresh/logout window. A
-    // failure leaves a valid installed generation unschedulable until normal
-    // reconciliation catches up; it never launches with stale credentials.
-    let auth_sync = if is_agent_plugin && state.provider_auth.status(&provider_id).is_some() {
-        sync_provider_auth_to_machine(&state, &machine_id, &provider_id)
-            .await
-            .map(|_| ())
-    } else {
-        Ok(())
-    };
-    state.plugin_lifecycle_fences.write().remove(&fence);
-    if let Err(error) = auth_sync {
-        return (
-            StatusCode::CONFLICT,
-            format!("Provider installed but Service authentication sync failed: {error}"),
-        )
-            .into_response();
-    }
-    StatusCode::NO_CONTENT.into_response()
 }
 
 fn provider_auth_sync_required_before_install(
@@ -12284,6 +12171,18 @@ async fn sync_provider_auth_to_machine(
     provider_id: &str,
 ) -> Result<u64, String> {
     let connection = state.machine_control.operation_connection(machine_id)?;
+    let envelope = provider_auth_envelope_for_machine(state, machine_id, provider_id).await?;
+    state
+        .provider_auth_sync
+        .apply(&state.machine_control, &connection, envelope)
+        .await
+}
+
+async fn provider_auth_envelope_for_machine(
+    state: &Arc<AppState>,
+    machine_id: &str,
+    provider_id: &str,
+) -> Result<crate::machine_protocol::SealedProviderAuth, String> {
     let store = state
         .store
         .as_ref()
@@ -12293,14 +12192,10 @@ async fn sync_provider_auth_to_machine(
         .await
         .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("Machine {machine_id:?} has no enrolled encryption key"))?;
-    let envelope = state
+    state
         .provider_auth
         .seal_for_machine(provider_id, &public_key)
-        .map_err(|error| error.to_string())?;
-    state
-        .provider_auth_sync
-        .apply(&state.machine_control, &connection, envelope)
-        .await
+        .map_err(|error| error.to_string())
 }
 
 fn failed_provider_auth_projection_ids(

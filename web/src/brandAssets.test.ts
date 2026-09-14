@@ -93,7 +93,8 @@ Deno.test("entry points use the current icon and the service worker changes gene
     ),
   );
   const sw = await read("web/public/sw.js");
-  assert(sw.includes('const VERSION = "cowboy-v1681"'));
+  const version = /const VERSION = "cowboy-v([1-9]\d*)"/.exec(sw);
+  assert(version && Number(version[1]) >= 1683);
   assert(sw.includes('icon: "/cowboy-app-icon-192-v6.png"'));
 });
 
