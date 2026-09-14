@@ -99,6 +99,19 @@ Operator, current binding and delivery remain explicitly unchecked. Do not print
 private policy/environment or mistake this preflight for full production
 startup or cutover acceptance. See `docs/telemetry-policy-preflight.md`.
 
+The corresponding Machine configuration-only check is
+`cowboy-machine --state-dir <absolute-state-dir> --check-telemetry-writer-policy`,
+using the exact immutable candidate as the actual Machine owner. Require schema
+`dravengarden.cowboy.machine-telemetry-writer-preflight/v1` and the expected
+closed writer state/purpose declarations. It neither opens the resident journal
+nor reads Provider/enrollment/destination state or contacts the Controller.
+Effective enrolled ownership, installation, binding, Operator and delivery remain
+explicitly unchecked; declarations are not writer grants. Do not print private
+policy/environment, treat an older binary's missing diagnostic as acceptance,
+or activate/restart Machine merely to run this read-only check. See
+`docs/machine-telemetry-writer-preflight.md`; production maintenance and cutover
+remain separate boundaries.
+
 Before changing a Provider, read
 [`docs/requirements.md`](../../../docs/requirements.md) and
 [`docs/plugin-packages.md`](../../../docs/plugin-packages.md) completely.

@@ -117,6 +117,10 @@ Controller × Machine 的全部九种角色组合。最新
 96/294/78/45 项验收，仅激活 Controller；发布前后 170 秒的三次快照中 13 个 worker
 保持原 PID/启动时间，未观察到凭据换代。该窗口不能替代真实换代/原生会话验收，也不覆盖上轮失败记录。
 
+[Machine writer 配置预检](machine-telemetry-writer-preflight.md) 补齐核心只读诊断，并把无效策略拒绝
+前置到组件、账本及 Provider 身份初始化之前。报告只含配置声明，不从 CLI 或策略自报身份推断真实
+enrolled owner，不打开安装、绑定或私有目的地；构建/发布该候选也不等于激活 Machine 或完成 P2。
+
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
 [components contract](plugin-components.md)

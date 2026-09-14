@@ -5,6 +5,11 @@ Controller telemetry writer and managed-background policies. Previously this
 command returned before their startup validators, so a successful host check
 could hide malformed, foreign or unsafe telemetry configuration.
 
+The separate [Machine writer-policy diagnostic](machine-telemetry-writer-preflight.md)
+checks local writer configuration without opening its journal or Provider state.
+Its narrower report explicitly leaves effective runtime/enrolled ownership
+unchecked; do not substitute one host's preflight for the other.
+
 The
 [2026-09-14 Controller release](releases/telemetry-policy-preflight-2026-09-14.md)
 records actual owner preflight, immutable role acceptance and activation,

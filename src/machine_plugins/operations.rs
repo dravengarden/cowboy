@@ -56,6 +56,11 @@ impl Drop for OwnerLock {
 
 impl Journal {
     pub(super) fn open(state_dir: &Path) -> Result<Self> {
+        // Configuration rejection must not create a journal, acquire its
+        // owner, adopt installation state or inspect durable binding evidence.
+        let writer = crate::telemetry_plugin::writer_admission::WriterAdmission::load_optional(
+            &state_dir.join(crate::telemetry_plugin::writer_admission::MACHINE_POLICY_FILE),
+        )?;
         let root = state_dir.join("plugin-operations");
         fs::create_dir_all(&root)?;
         ensure!(
@@ -131,9 +136,7 @@ impl Journal {
             installations: installations::Installations::open(root.join(installations::DIRECTORY))?,
             telemetry_bindings: telemetry_bindings::Bindings::open_with_admission(
                 &root.join(telemetry_bindings::FILE),
-                crate::telemetry_plugin::writer_admission::WriterAdmission::load_optional(
-                    &state_dir.join(crate::telemetry_plugin::writer_admission::MACHINE_POLICY_FILE),
-                )?,
+                writer,
             )?,
             root,
             _owner: owner,
