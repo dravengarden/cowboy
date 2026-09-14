@@ -32,6 +32,9 @@ const formatActionsSource = await Deno.readTextFile(
 const editorSource = await Deno.readTextFile(
   new URL("../ComposerEditor.tsx", import.meta.url),
 );
+const composerFocusSource = await Deno.readTextFile(
+  new URL("./mobileComposerFocus.ts", import.meta.url),
+);
 const codePointerDown = appSource.lastIndexOf(
   "openCodeTap.onPointerDown",
 );
@@ -47,6 +50,21 @@ const mobileCodeSource = appSource.slice(
   mobileCodeStart,
   mobileCodeEnd,
 );
+
+Deno.test("spatial swipe latches keyboard dismissal without waiting for settle", () => {
+  const helperStart = composerFocusSource.indexOf(
+    "export function dismissMobileSoftwareKeyboardForSwipe",
+  );
+  const helperEnd = composerFocusSource.indexOf(
+    "export function beginMobileEditorFocusTransfer",
+    helperStart,
+  );
+  const helper = composerFocusSource.slice(helperStart, helperEnd);
+  assertEquals(helperStart >= 0 && helperEnd > helperStart, true);
+  assertEquals(helper.includes("noteMobileKeyboardDismissed();"), true);
+  assertEquals(helper.includes("dismissMobileSoftwareKeyboard();"), true);
+  assertEquals(helper.includes("releaseMobileComposerFocus();"), true);
+});
 
 Deno.test("mobile composer promotion requires a visible keyboard and real editor focus", () => {
   assertEquals(

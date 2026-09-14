@@ -69,6 +69,24 @@ Deno.test("mobile drawer keeps clipping and shadows off the heavy surface", () =
   assert(widthAt >= 0 && translateAt > widthAt);
 });
 
+Deno.test("spatial drawer swipe dismisses the software keyboard on claim", () => {
+  assert(drawerSource.includes("dismissMobileSoftwareKeyboardForSwipe"));
+  const lockAt = drawerSource.indexOf("gesture.locked = true");
+  const renderAt = drawerSource.indexOf("render(offset, true)");
+  const claimDismissAt = drawerSource.indexOf(
+    "if (claimed) dismissMobileSoftwareKeyboardForSwipe()",
+  );
+  assert(lockAt >= 0 && renderAt > lockAt && claimDismissAt > renderAt);
+  const settleStart = drawerSource.indexOf(
+    "const settle: MobileSpatialDrawerSettle",
+  );
+  const settleOpen = drawerSource.indexOf(
+    "if (open) {\n      gestureTarget.setAttribute(\"data-mobile-drawer-open\", \"true\");\n      dismissMobileSoftwareKeyboardForSwipe();\n    }",
+    settleStart,
+  );
+  assert(settleStart >= 0 && settleOpen > settleStart);
+});
+
 Deno.test("finger swipe fires a navigation haptic at the commit threshold", () => {
   assertEquals(drawerSource.includes("prepareNavigationHaptic()"), true);
   assertEquals(drawerSource.includes("navigationHaptic()"), true);

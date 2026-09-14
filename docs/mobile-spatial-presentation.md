@@ -77,6 +77,12 @@ gesture root (shell)
    compositor tiles inside the peek's `translate3d`. Moving a button,
    adding a switch, or restyling the Review header is in this class even
    when the gesture math is untouched.
+10. **A claimed horizontal swipe dismisses the software keyboard.** The
+    keyboard is a viewport overlay and does not travel with `translate3d`.
+    After the first tracking transform, blur inside that same `touchmove`
+    when the Agent→Code pager locks or a spatial drawer is claimed. Do not
+    wait for settle/`inert`, and do not defer the blur to rAF — iOS only
+    treats it as the originating gesture in that event.
 
 ### 2.1 Surfaces that inherit the swipe compositor
 

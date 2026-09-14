@@ -85,6 +85,24 @@ Deno.test("product pages keep an opaque backing store during the pager transform
   assert(review.includes('overflow: "hidden"'));
 });
 
+Deno.test("Agent to Code pager swipe dismisses the software keyboard on claim", () => {
+  assert(pagerSource.includes("dismissMobileSoftwareKeyboardForSwipe"));
+  const lockAt = pagerSource.indexOf("gesture.locked = true");
+  const renderAt = pagerSource.indexOf(
+    "pagerOffset(gesture.product, deltaX, gesture.width)",
+  );
+  const dismissAt = pagerSource.indexOf(
+    "if (claimed && gesture.product === \"agent\")",
+  );
+  const dismissCallAt = pagerSource.indexOf(
+    "dismissMobileSoftwareKeyboardForSwipe()",
+    dismissAt,
+  );
+  assert(lockAt >= 0 && renderAt > lockAt);
+  assert(dismissAt > renderAt && dismissCallAt > dismissAt);
+  assert(pagerSource.includes('if (next === "review") dismissMobileSoftwareKeyboardForSwipe()'));
+});
+
 Deno.test("vertical transcript pans release horizontal recognizers", () => {
   assertEquals(obsidianDrawerAbandonsToScroll(10, 11), true);
   assertEquals(obsidianDrawerAbandonsToScroll(7, 13), true);

@@ -166,6 +166,11 @@ Deno.test("jank-free swipe is a core Mobile requirement, not polish", () => {
     spatialContract.includes("Visible-line persistence is post-scroll work"),
   );
   assert(spatialContract.includes("must not synchronously read"));
+  assert(
+    spatialContract.includes(
+      "A claimed horizontal swipe dismisses the software keyboard",
+    ),
+  );
 });
 
 Deno.test("product pager first tracking frames only write transform", () => {

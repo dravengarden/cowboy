@@ -82,6 +82,21 @@ export function isMobileKeyboardDismissed(): boolean {
   return mobileKeyboardDismissed;
 }
 
+/**
+ * Release first-responder when a Mobile spatial swipe is claimed or the
+ * product pager settles onto Code. The software keyboard is a viewport
+ * overlay and does not travel with `translate3d`, so leaving it up covers
+ * Sessions and Code. Call after the first tracking transform so this
+ * frame still writes `translate3d` first; keep the blur inside the same
+ * `touchmove` so iOS treats it as the originating gesture.
+ */
+export function dismissMobileSoftwareKeyboardForSwipe(): boolean {
+  noteMobileKeyboardDismissed();
+  const dismissed = dismissMobileSoftwareKeyboard();
+  const released = releaseMobileComposerFocus();
+  return dismissed || released;
+}
+
 /** Compact ↔ fullscreen remounts the editor. A one-frame visualViewport
  *  close must not blur the surviving first-responder. */
 let mobileEditorFocusTransferUntil = 0;

@@ -29,6 +29,7 @@ import {
   hasVerticalScroller,
   inputOverlayOwnsDrawerGesture,
 } from "./touchGestures";
+import { dismissMobileSoftwareKeyboardForSwipe } from "./composer/mobileComposerFocus";
 
 export type MobileSpatialDrawerSide = "left" | "right";
 export type MobileSpatialDrawerSettle = (
@@ -300,7 +301,10 @@ export function bindMobileSpatialDrawer({
     // closing a right drawer uses the same direction as Review -> Agent. Keep
     // the drawer marked open through its complete close animation so the
     // outer product pager can never steal either gesture.
-    if (open) gestureTarget.setAttribute("data-mobile-drawer-open", "true");
+    if (open) {
+      gestureTarget.setAttribute("data-mobile-drawer-open", "true");
+      dismissMobileSoftwareKeyboardForSwipe();
+    }
     const releaseOffset = currentOffset;
     const width = cachedWidth ?? drawerWidth();
     // Read geometry before invalidating styles. CodeMirror makes a forced
@@ -458,6 +462,7 @@ export function bindMobileSpatialDrawer({
       (opening && swipe.direction !== "right") ||
       (!opening && swipe.direction !== "left")
     ) return;
+    const claimed = !gesture.locked;
     if (!gesture.locked) {
       gesture.locked = true;
       publishProgress(gesture.startOffset + normalizedDelta);
@@ -485,6 +490,7 @@ export function bindMobileSpatialDrawer({
     }
     commit = nextCommit;
     render(offset, true);
+    if (claimed) dismissMobileSoftwareKeyboardForSwipe();
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
       navigationHaptic();

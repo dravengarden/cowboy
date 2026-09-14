@@ -50,6 +50,7 @@ import {
   type MobileProduct,
 } from "../appPagerMotion";
 import { ReviewApp } from "../review/ReviewApp";
+import { dismissMobileSoftwareKeyboardForSwipe } from "../../composer/mobileComposerFocus";
 
 const PRODUCT_STORAGE_KEY = "cowboy:mobile-product";
 const VELOCITY_COMMIT_PX_PER_MS = OBSIDIAN_DRAWER_FLICK_PX_PER_MS;
@@ -249,6 +250,7 @@ export function MobileProductShell({
       const changed = next !== productRef.current;
       productRef.current = next;
       globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
+      if (next === "review") dismissMobileSoftwareKeyboardForSwipe();
       if (changed) navigationHaptic();
       settleTimer = globalThis.setTimeout(() => {
         agentPage.style.removeProperty("transition");
@@ -343,6 +345,7 @@ export function MobileProductShell({
           gesture.dominance,
         );
       if (!swipe || !pagerDirectionAllowed(gesture.product, deltaX)) return;
+      const claimed = !gesture.locked;
       if (!gesture.locked) {
         gesture.locked = true;
         agentPage.style.transition = "none";
@@ -360,6 +363,12 @@ export function MobileProductShell({
         pagerOffset(gesture.product, deltaX, gesture.width),
         gesture.width,
       );
+      // The keyboard is a viewport overlay. Dismiss it on the Agent → Code
+      // claim, after the first tracking transform, so Code is not covered
+      // for the rest of the swipe.
+      if (claimed && gesture.product === "agent") {
+        dismissMobileSoftwareKeyboardForSwipe();
+      }
       if (bookkeepingFrame === 0 && !directManipulationActive) {
         bookkeepingFrame = globalThis.requestAnimationFrame(() => {
           bookkeepingFrame = 0;
