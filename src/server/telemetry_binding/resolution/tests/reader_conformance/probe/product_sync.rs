@@ -29,6 +29,7 @@ struct Check {
     cold_read: u8,
     accepted: bool,
     failure: Option<Failure>,
+    stage: &'static str,
 }
 
 #[derive(Serialize)]
@@ -114,6 +115,10 @@ async fn login(
         .await
         .map_err(|_| Failure::WrongObservation)?;
     if response.status() != StatusCode::OK {
+        eprintln!(
+            "product-sync fixture login status: {}",
+            response.status().as_u16()
+        );
         return Err(Failure::WrongObservation);
     }
     let cookie = response
@@ -212,6 +217,7 @@ async fn exercise(
     password: &str,
     mode: Mode,
     previous: &mut Option<String>,
+    stage: &mut &'static str,
 ) -> Result<(), Failure> {
     let client = Client::builder()
         .no_proxy()
@@ -220,12 +226,17 @@ async fn exercise(
         .build()
         .map_err(|_| Failure::Setup)?;
     let base = format!("http://{address}");
+    *stage = "operator_login";
     let (operator, operator_me) = login(&client, &base, "dataset-operator", password).await?;
+    *stage = "viewer_login";
     let (viewer, viewer_me) = login(&client, &base, "dataset-viewer", password).await?;
+    *stage = "roles";
     check(operator_me["role"] == "operator" && viewer_me["role"] == "viewer")?;
+    *stage = "descriptor_status";
     let response = get(&client, &base, "/api/sync/dataset", Some(&operator)).await?;
     if mode == Mode::Legacy {
         check(response.status() == StatusCode::NOT_FOUND)?;
+        *stage = "legacy_new_socket";
         socket(
             &base,
             &operator,
@@ -235,6 +246,7 @@ async fn exercise(
             "browser",
         )
         .await?;
+        *stage = "legacy_old_socket";
         return socket(&base, &operator, None, false, 101, "browser").await;
     }
     check(
@@ -245,6 +257,7 @@ async fn exercise(
                 .is_some_and(|v| v == "no-store"),
     )?;
     let descriptor = body(response).await?;
+    *stage = "descriptor_identity";
     let dataset = descriptor["dataset_id"]
         .as_str()
         .ok_or(Failure::WrongObservation)?;
@@ -260,6 +273,7 @@ async fn exercise(
         check(old == dataset)?;
     }
     *previous = Some(dataset.into());
+    *stage = "anonymous_refusal";
     check(
         get(&client, &base, "/api/sync/dataset", None)
             .await?
@@ -272,12 +286,16 @@ async fn exercise(
         .ok_or(Failure::WrongObservation)?;
     check(own_viewer != dataset)?;
     for kind in ["browser", "native_shell"] {
+        *stage = "owned_socket";
         socket(&base, &operator, Some(dataset), true, 101, kind).await?;
         socket(&base, &viewer, Some(own_viewer), true, 101, kind).await?;
+        *stage = "foreign_socket_refusal";
         socket(&base, &viewer, Some(dataset), true, 409, kind).await?;
         socket(&base, &operator, Some(own_viewer), true, 409, kind).await?;
         socket(&base, &operator, Some("dataset-untrusted"), true, 409, kind).await?;
+        *stage = "protocol_refusal";
         socket(&base, &operator, Some(dataset), false, 426, kind).await?;
+        *stage = "missing_dataset";
         socket(
             &base,
             &operator,
@@ -289,8 +307,10 @@ async fn exercise(
         .await?;
     }
     // Cookie clients cannot bypass browser compatibility by claiming a CLI.
+    *stage = "cookie_cli_refusal";
     socket(&base, &operator, None, false, 400, "cli").await?;
     // Dataset selection is not a role or effect grant.
+    *stage = "viewer_effect_refusal";
     check(
         get(&client, &base, "/api/sync/dataset", Some(&viewer))
             .await?
@@ -346,23 +366,31 @@ async fn immutable_product_sync() -> Result<()> {
                 .arg(root.path().join("core-security.json"));
             let mut running = Running::spawn(&mut command)
                 .map_err(|_| anyhow::anyhow!("fixture spawn failed"))?;
+            let mut stage = "startup";
             let result = async {
                 tokio::time::timeout(DEADLINE, controller(&mut running, address, &fixture))
                     .await
                     .map_err(|_| Failure::Timeout)??;
-                exercise(address, &password, mode, &mut previous).await
+                exercise(address, &password, mode, &mut previous, &mut stage).await
             }
             .await;
             let cleanup = running.terminate().await;
             let result = result.and(cleanup);
+            if result.is_ok() {
+                stage = "complete";
+            }
             receipt.accepted &= result.is_ok();
-            eprintln!("product-sync {:?}/{cold_read}: {result:?}", artifact.role);
+            eprintln!(
+                "product-sync {:?}/{cold_read}/{stage}: {result:?}",
+                artifact.role
+            );
             receipt.checks.push(Check {
                 role: artifact.role,
                 mode,
                 cold_read,
                 accepted: result.is_ok(),
                 failure: result.err(),
+                stage,
             });
         }
     }
