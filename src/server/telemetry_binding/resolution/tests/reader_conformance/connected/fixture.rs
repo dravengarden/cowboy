@@ -136,50 +136,7 @@ impl ConnectedFixture {
                 "logs":lane,"metrics":destination.map(|_| &lane),"traces":destination.map(|_| &lane),
             }))?,
         )?;
-        let identity = crate::machine_auth::MachineIdentity::load_or_create(&machine_root)?;
-        let store = Store::connect(
-            &format!(
-                "sqlite://{}",
-                root.join("controller/store.sqlite3").display()
-            ),
-            root.join("controller/artifacts"),
-        )
-        .await?;
-        let enrollment = store
-            .create_machine_enrollment(MACHINE, "Isolated connected Machine", 60)
-            .await?;
-        store
-            .consume_machine_enrollment(
-                &enrollment,
-                identity.public_key(),
-                machine.encryption_public_key(),
-            )
-            .await?;
-        let password = crate::client_auth::new_code_verifier()?;
-        let now = chrono::Utc::now().timestamp_millis();
-        store
-            .insert_user(&ProductUser {
-                id: "c".repeat(32),
-                username: ACCOUNT.into(),
-                password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.into(),
-                password_hash: crate::product_auth::hash_password(&password)?,
-                created_at_ms: now,
-                updated_at_ms: now,
-                disabled_at_ms: None,
-            })
-            .await?;
-        store
-            .put_setting(
-                crate::admin::PERMISSIONS_SETTING,
-                &json!({"default_role":"operator","grants":[]}),
-            )
-            .await?;
-        probe::private_write(
-            &root.join("core-security.json"),
-            &serde_json::to_vec(&json!({
-                "schema":"dravengarden.cowboy.core-security/v1","passkeys":{"namespace_id":"passkey","source":"fresh"}
-            }))?,
-        )?;
+        let password = seed_operator(root, &machine).await?;
         let (controller_policy, machine_policy) = flow.policies();
         controller_policy.write(&root.join("controller-writer.json"))?;
         machine_policy.write(&machine_root.join("telemetry-writer-policy.json"))?;
@@ -192,6 +149,59 @@ impl ConnectedFixture {
             controller_binding: controller_policy.startup_binding(),
         })
     }
+}
+
+/// Real disposable enrollment and password login, shared by finite-purpose tests.
+pub(in super::super) async fn seed_operator(
+    root: &Path,
+    machine: &MachinePluginStore,
+) -> Result<String> {
+    let machine_root = root.join("machine");
+    let identity = crate::machine_auth::MachineIdentity::load_or_create(&machine_root)?;
+    let store = Store::connect(
+        &format!(
+            "sqlite://{}",
+            root.join("controller/store.sqlite3").display()
+        ),
+        root.join("controller/artifacts"),
+    )
+    .await?;
+    let enrollment = store
+        .create_machine_enrollment(MACHINE, "Isolated connected Machine", 60)
+        .await?;
+    store
+        .consume_machine_enrollment(
+            &enrollment,
+            identity.public_key(),
+            machine.encryption_public_key(),
+        )
+        .await?;
+    let password = crate::client_auth::new_code_verifier()?;
+    let now = chrono::Utc::now().timestamp_millis();
+    store
+        .insert_user(&ProductUser {
+            id: "c".repeat(32),
+            username: ACCOUNT.into(),
+            password_algo: crate::product_auth::PASSWORD_ALGO_ARGON2ID.into(),
+            password_hash: crate::product_auth::hash_password(&password)?,
+            created_at_ms: now,
+            updated_at_ms: now,
+            disabled_at_ms: None,
+        })
+        .await?;
+    store
+        .put_setting(
+            crate::admin::PERMISSIONS_SETTING,
+            &json!({"default_role":"operator","grants":[]}),
+        )
+        .await?;
+    probe::private_write(
+        &root.join("core-security.json"),
+        &serde_json::to_vec(&json!({
+            "schema":"dravengarden.cowboy.core-security/v1","passkeys":{"namespace_id":"passkey","source":"fresh"}
+        }))?,
+    )?;
+    Ok(password)
 }
 
 #[tokio::test]

@@ -1,5 +1,9 @@
 # Durable core installation release: 2026-09-14
 
+This records the earlier schema-one milestone. The current deployment is the
+[reader-only typed receipt bridge](plugin-install-receipt-readers-2026-09-14.md),
+which pauses fresh installation admission pending its own writer acceptance.
+
 The Service installation writer and Web source
 `6d072bab04a245486834ad2d81e1b7c62affd719` are published to remote `main`
 and active on Hawk. Reader `95c0e8546f179afc368b55186eb66bc63ae4dd03`

@@ -1,11 +1,12 @@
 # Durable core installation attempts
 
-Status: 2026-09-14. The schema-one journal is
-[accepted and active on Hawk](releases/plugin-install-journal-2026-09-14.md).
-The schema-two target/receipt bridge is implemented with **all fresh installation
-admission paused in this source revision**. Its actual reader rollout and writer
-cutover are not yet accepted. Do not confuse the historical schema-one release
-receipt with acceptance of this bridge.
+Status: 2026-09-14. The historical schema-one writer milestone is
+[recorded separately](releases/plugin-install-journal-2026-09-14.md).
+The schema-two target/receipt bridge's actual Service/Machine reader floor is now
+[accepted and active on Hawk](releases/plugin-install-receipt-readers-2026-09-14.md),
+with **all fresh Service installation admission paused** and Machine attempt
+writing disabled. Connected installation execution and writer cutover are not
+yet accepted; the reader release is not that evidence.
 The finite Service installer records
 install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
 or installation dispatch. Reader revision `95c0e854` pauses new admission. The

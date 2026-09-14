@@ -4,7 +4,7 @@ use super::*;
 use futures::{StreamExt as _, stream};
 
 mod fixture;
-pub(super) use fixture::{ConnectedFixture, Evidence};
+pub(super) use fixture::{ConnectedFixture, Evidence, seed_operator};
 mod delivery;
 pub(super) use delivery::{
     Ack, DatabaseHttp, DatabaseMediaType, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport,

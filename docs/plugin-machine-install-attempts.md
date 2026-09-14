@@ -3,9 +3,10 @@
 Status: implemented reader and finite executor, 2026-09-14; new Machine writer
 admission remains disabled. The [Service schema-two bridge](plugin-install-journal.md)
 now binds observed targets and atomically stores exact typed receipts; its fresh
-admission is also paused, without a protocol-seven fallback. The active
-schema-one Service has not been replaced by this bridge. This document is not a production rollout receipt or
-a claim that the P4 installation/recovery exits are complete.
+admission is also paused, without a protocol-seven fallback. The bridge has now
+[replaced the active Service and Machine readers on Hawk](releases/plugin-install-receipt-readers-2026-09-14.md),
+including accepted actual next-recovery and cold roles. This is reader-floor
+acceptance, not connected installation execution or completion of P4 recovery.
 
 ## One core installation path
 

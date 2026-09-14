@@ -9,6 +9,7 @@ mod fixtures;
 // Reuse the isolated immutable-process harness for the core install journal;
 // production installation does not depend on the telemetry domain.
 mod installation;
+mod installation_connected;
 mod machine_installation;
 mod manifest;
 mod probe;
