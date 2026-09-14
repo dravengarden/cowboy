@@ -74,6 +74,11 @@ Each pair must:
    sample timestamp; query the trace by ID through the actual Jaeger API and
    check span identity, operation, start time and duration. Empty HTTP 200s or
    successful intake alone do not satisfy these checks.
+   The fixture independently requires counter `1`, histogram count `1`, sum
+   `0.125`, its exact buckets and finite dimensions. VictoriaMetrics' native
+   `scope.name` / `scope.version` and aggregate service labels must have exact
+   values; missing, extra or changed labels and duplicate samples fail. The
+   expected 18 series are not inferred solely from whatever values were sent.
 5. Gracefully stop all three database processes, reopen their same private
    stores and repeat the queries. Then restart the Controller and Machine;
    durable binding/cookie reads remain valid and the old local files/queues

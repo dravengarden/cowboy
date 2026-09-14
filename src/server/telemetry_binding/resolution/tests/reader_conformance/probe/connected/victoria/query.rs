@@ -42,6 +42,30 @@ fn labels(
         .collect()
 }
 
+fn fixture_labels(
+    attributes: &[opentelemetry_proto::tonic::common::v1::KeyValue],
+    dimension: (&str, &str),
+) -> Result<BTreeMap<String, String>, Failure> {
+    // Independent fixture contract: do not accept arbitrary labels or values
+    // merely because the Controller forwarded them to the database.
+    let mut expected: BTreeMap<_, _> = [("platform", "ios"), ("surface", "mobile"), dimension]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    check(attributes.len() == expected.len() && labels(attributes)? == expected)?;
+    // VictoriaMetrics v1.148.0 promotes native OTel scope metadata with these
+    // literal names (lib/protoparser/opentelemetry/pb/pb.go).
+    expected.extend(
+        [
+            ("service.name", "cowboy-client-aggregate"),
+            ("scope.name", "cowboy.client.aggregate"),
+            ("scope.version", "1"),
+        ]
+        .map(|(key, value)| (key.to_owned(), value.to_owned())),
+    );
+    Ok(expected)
+}
+
 impl Expected {
     pub fn decode(requests: &[(Signal, Vec<u8>)]) -> Result<Self, Failure> {
         let mut logs = Vec::new();
@@ -75,28 +99,53 @@ impl Expected {
                         };
                         match metric.data {
                             Some(Data::Sum(sum)) => {
-                                check(sum.aggregation_temporality == 2 && sum.is_monotonic)?;
+                                check(
+                                    metric.name == "cowboy.client.websocket.reconnects"
+                                        && metric.unit == "{event}"
+                                        && sum.aggregation_temporality == 2
+                                        && sum.is_monotonic
+                                        && sum.data_points.len() == 1,
+                                )?;
                                 for point in sum.data_points {
                                     let value = match point.value {
                                         Some(number_data_point::Value::AsDouble(value)) => value,
                                         _ => return Err(Failure::Setup),
                                     };
+                                    check(value == 1.0)?;
                                     samples.push(Sample {
                                         name: metric.name.clone(),
-                                        labels: labels(&point.attributes)?,
+                                        labels: fixture_labels(
+                                            &point.attributes,
+                                            ("reason", "online"),
+                                        )?,
                                         value,
                                         timestamp: point.time_unix_nano / 1_000_000,
                                     });
                                 }
                             }
                             Some(Data::Histogram(histogram)) => {
-                                check(histogram.aggregation_temporality == 2)?;
+                                check(
+                                    metric.name == "cowboy.client.websocket.connect.duration"
+                                        && metric.unit == "s"
+                                        && histogram.aggregation_temporality == 2
+                                        && histogram.data_points.len() == 1,
+                                )?;
                                 for point in histogram.data_points {
                                     check(
-                                        point.bucket_counts.len()
-                                            == point.explicit_bounds.len() + 1,
+                                        point.count == 1
+                                            && point.sum == Some(0.125)
+                                            && point.explicit_bounds
+                                                == [
+                                                    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+                                                    2.5, 5.0, 10.0, 30.0, 60.0, 120.0,
+                                                ]
+                                            && point.bucket_counts
+                                                == [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
                                     )?;
-                                    let labels = labels(&point.attributes)?;
+                                    let labels = fixture_labels(
+                                        &point.attributes,
+                                        ("connection", "initial"),
+                                    )?;
                                     let timestamp = point.time_unix_nano / 1_000_000;
                                     let count = f64::from(
                                         u32::try_from(point.count).map_err(|_| Failure::Setup)?,
@@ -141,7 +190,7 @@ impl Expected {
                 }
             }
         }
-        check(logs.len() == 1 && spans.len() == 1 && samples.len() > 3)?;
+        check(logs.len() == 1 && spans.len() == 1 && samples.len() == 18)?;
         let log = logs.remove(0);
         let span = spans.remove(0);
         check(
@@ -191,18 +240,7 @@ impl Expected {
                         && sample.labels.iter().all(|(key, value)| {
                             metric.get(key).is_some_and(|actual| actual == value)
                         })
-                        && metric.keys().all(|key| {
-                            sample.labels.contains_key(key)
-                                || [
-                                    "__name__",
-                                    "service.name",
-                                    "cowboy.platform",
-                                    "cowboy.surface",
-                                    "otel_scope_name",
-                                    "otel_scope_version",
-                                ]
-                                .contains(&key.as_str())
-                        })
+                        && metric.len() == sample.labels.len() + 1
                         && row["values"].as_array().is_some_and(|values| {
                             values.len() == 1 && values[0].as_f64() == Some(sample.value)
                         })
@@ -292,28 +330,7 @@ impl Expected {
 
 #[test]
 fn database_queries_refuse_success_status_without_exact_signal_values() {
-    let mut requests = fresh_fixtures().unwrap();
-    // The Controller is responsible for cumulative conversion. Model that
-    // declared wire form here solely to exercise query-oracle rejection.
-    for (signal, bytes) in &mut requests {
-        let mut request = Request::decode(*signal, bytes).unwrap();
-        if let Request::Metrics(metrics) = &mut request {
-            for metric in metrics
-                .resource_metrics
-                .iter_mut()
-                .flat_map(|r| &mut r.scope_metrics)
-                .flat_map(|s| &mut s.metrics)
-            {
-                use opentelemetry_proto::tonic::metrics::v1::metric::Data;
-                match &mut metric.data {
-                    Some(Data::Sum(sum)) => sum.aggregation_temporality = 2,
-                    Some(Data::Histogram(histogram)) => histogram.aggregation_temporality = 2,
-                    _ => panic!("fixture metric kind"),
-                }
-            }
-        }
-        *bytes = request.export().decode().unwrap().0;
-    }
+    let requests = forwarded_fixture();
     let expected = Expected::decode(&requests).unwrap();
     assert!(!expected.logs_match(&[]));
     assert!(!expected.trace_matches(&json!({"data":[],"errors":null})));
@@ -338,7 +355,61 @@ fn database_queries_refuse_success_status_without_exact_signal_values() {
     let mut changed = rows.clone();
     changed[0]["metric"]["session_id"] = "forbidden".into();
     assert!(!expected.metrics_match(&changed));
+    for key in ["service.name", "scope.name", "scope.version", "platform"] {
+        let mut changed = rows.clone();
+        changed[0]["metric"].as_object_mut().unwrap().remove(key);
+        assert!(!expected.metrics_match(&changed));
+        changed[0]["metric"][key] = "wrong".into();
+        assert!(!expected.metrics_match(&changed));
+    }
     let mut changed = rows.clone();
     changed.push(rows[0].clone());
     assert!(!expected.metrics_match(&changed));
+}
+
+fn forwarded_fixture() -> Vec<(Signal, Vec<u8>)> {
+    let mut aggregate = crate::otlp::Aggregator::default();
+    fresh_fixtures()
+        .unwrap()
+        .into_iter()
+        .map(|(signal, bytes)| {
+            let mut request = Request::decode(signal, &bytes).unwrap();
+            request.sanitize("isolated-query-test").unwrap();
+            aggregate.aggregate(&mut request).unwrap();
+            (signal, request.export().decode().unwrap().0)
+        })
+        .collect()
+}
+
+#[test]
+fn query_oracle_rejects_changed_or_duplicate_fixture_metrics() {
+    use opentelemetry_proto::tonic::metrics::v1::{metric::Data, number_data_point::Value};
+    let original = forwarded_fixture();
+    assert!(Expected::decode(&original).is_ok());
+    for histogram in [false, true] {
+        let mut changed = original.clone();
+        let mut altered = false;
+        for (signal, bytes) in &mut changed {
+            let mut request = Request::decode(*signal, bytes).unwrap();
+            if let Request::Metrics(metrics) = &mut request {
+                let data = &mut metrics.resource_metrics[0].scope_metrics[0].metrics[0].data;
+                match data {
+                    Some(Data::Sum(sum)) if !histogram => {
+                        sum.data_points[0].value = Some(Value::AsDouble(2.0));
+                        altered = true;
+                    }
+                    Some(Data::Histogram(histogram_data)) if histogram => {
+                        histogram_data.data_points[0].count = 2;
+                        altered = true;
+                    }
+                    _ => {}
+                }
+            }
+            *bytes = request.export().decode().unwrap().0;
+        }
+        assert!(altered && Expected::decode(&changed).is_err());
+    }
+    let mut duplicate = original.clone();
+    duplicate.push(original.last().unwrap().clone());
+    assert!(Expected::decode(&duplicate).is_err());
 }
