@@ -2373,3 +2373,17 @@ Desktop Vim + IME checks:
     acknowledged options determine the selected recommendation. Default preset
     describes the recommendation, not the current session. This changes settings
     presentation only; editor focus, IME, and caret behavior stay untouched.
+
+105. **Live session updates must not detach Composer geometry refs.** Inline
+    callback refs in `App.tsx` changed identity on every parent render. React
+    detached and reattached those refs even though the AppBar and Composer DOM
+    nodes survived. Each false detach reset `useFloatingComposerGeometry`'s
+    observer and disclosure hold, published zero/incomplete stack heights, and
+    forced synchronous layout before restoring the same nodes. This makes a
+    disclosure more expensive when session updates coincide with its animation.
+    Keep both attachment callbacks stable with `useCallback`, including their
+    drawer-follower ref assignments. Real surface changes and unmounts still
+    detach normally. Do not change CodeMirror, image previews, native scroll
+    layers, keyboard focus, or animation timing to compensate for this lifecycle
+    error. The isolated iPad Simulator comparison and its limits are recorded in
+    [the performance note](../../../docs/pending-disclosure-performance.md).

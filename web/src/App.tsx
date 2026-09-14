@@ -2005,6 +2005,17 @@ export function App({
         surfaceRef: columnRef,
         navbarAtBottom,
     });
+    // React detaches and reattaches a changed callback ref even when the DOM
+    // node survives. Streamed session updates must not reset the geometry
+    // observer, clear its disclosure hold, or publish a temporary zero height.
+    const attachAppBar = useCallback((element: HTMLElement | null): void => {
+        appBarRef(element);
+        mobileNavFollowRef.current = mobile && navbarAtBottom ? element : null;
+    }, [appBarRef, mobile, navbarAtBottom]);
+    const attachComposer = useCallback((element: HTMLDivElement | null): void => {
+        composerRef(element);
+        mobileComposerFollowRef.current = mobile ? element : null;
+    }, [composerRef, mobile]);
     const activeId = useActiveSessionId();
     const errorOpen = shouldShowSessionErrorSnackbar(
         lastError,
@@ -3141,12 +3152,7 @@ export function App({
                     data-mobile-session-nav={navbarAtBottom ? "true" : undefined}
                     data-mobile-drawer-follow={mobile && navbarAtBottom ? "true" : undefined}
                     data-detent-sheet-chrome="true"
-                    ref={(element): void => {
-                        appBarRef(element);
-                        mobileNavFollowRef.current = mobile && navbarAtBottom
-                            ? element
-                            : null;
-                    }}
+                    ref={attachAppBar}
                     position="static"
                     // `color="transparent"` + an explicit theme surface, NOT
                     // `color="default"`: MUI's "default" AppBar resolves to a
@@ -3607,15 +3613,7 @@ export function App({
                             2 (the very bottom, after the spacer). position:relative + zIndex
                             lifts the frosted composer above the absolute transcript layer. */}
                         <Box
-                            ref={(element): void => {
-                                const node = element instanceof HTMLDivElement
-                                    ? element
-                                    : null;
-                                composerRef(node);
-                                mobileComposerFollowRef.current = mobile
-                                    ? node
-                                    : null;
-                            }}
+                            ref={attachComposer}
                             data-mobile-session-footer={mobile ? "true" : undefined}
                             data-mobile-drawer-follow={mobile ? "true" : undefined}
                             sx={{
