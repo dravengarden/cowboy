@@ -113,6 +113,9 @@ Controller × Machine 的全部九种角色组合。最新
 重叠同步合并为一条在途命令，共享原超时与结果；取消不重发、完成结果不缓存，新连接和新代次
 独立处理。这是核心通信生命周期修复，不改变新凭据换代必须排空并恢复原生会话的 CR-9 契约，
 也不把临时副本测试或 worker 恢复就绪视为生产凭据收敛、无中断验收或 P2 完成。
+[本批发布](releases/provider-auth-sync-2026-09-14.md) 已通过完整质量门禁与不可变制品
+96/294/78/45 项验收，仅激活 Controller；发布前后 170 秒的三次快照中 13 个 worker
+保持原 PID/启动时间，未观察到凭据换代。该窗口不能替代真实换代/原生会话验收，也不覆盖上轮失败记录。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

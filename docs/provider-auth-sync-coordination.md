@@ -73,3 +73,6 @@ Production authentication, policy and credentials are not test inputs. This
 change does not complete the managed telemetry cutover or the later Plugin DAG
 phases, and it does not rewrite the failed all-worker continuity observation in
 the [previous Controller release](releases/telemetry-policy-preflight-2026-09-14.md).
+The [release acceptance](releases/provider-auth-sync-2026-09-14.md) records this
+implementation's immutable gates, Controller activation and separate bounded
+worker observation.
