@@ -311,8 +311,11 @@ version/digest and binds the current Operator confirmation to the complete
 resolved envelope and original Machine connection. An admitted attempt outlives
 its HTTP observer and checks authority at effect boundaries. An ambiguous or
 generic rejected install ACK retains a live reconciliation fence, never a blind
-retry or inverse. This remains a process-local Service attempt; durable install
-intent and cross-restart recovery are not implemented by this repair.
+retry or inverse. The subsequent [Service installation journal](plugin-install-journal.md)
+adds an exact operation ID, durable intent/progress and restart fence recovery
+to that same executor, behind an active/recovery/cold-reader rollout. Machine
+install receipts and independently confirmed restoration remain separate work;
+a generic ACK and current inventory cannot establish a historical unknown effect.
 
 Install and uninstall serialize per `(machine_id, provider_id)`. Installation
 validates any current Service auth envelope before changing activation and

@@ -7,8 +7,8 @@ fn desired() -> crate::machine_protocol::DesiredPlugin {
         "release": {
             "release_schema": 1, "plugin_id": "victoria", "plugin_version": "1.1.0",
             "plugin_kind": "telemetry_backend", "package_digest": "sha256:fixture-package",
-            "artifact_digest": "sha256:fixture-release", "artifact_url": "https://example.invalid/plugin",
-            "publisher": "fixture", "contract_fingerprint": "sha256:fixture-contract",
+            "artifact_digest": format!("sha256:{}", "a".repeat(64)), "artifact_url": "https://example.invalid/plugin",
+            "publisher": "fixture", "contract_fingerprint": format!("sha256:{}", "b".repeat(64)),
             "component_release": "2.9.0", "host_bundle_digest": null, "signature": "fixture",
             "supported_platforms": [], "runtime_artifacts": []
         },
@@ -47,8 +47,23 @@ async fn installation_binds_complete_release_target_original_credential_and_budg
             );
         }
         let authority = approval
-            .bind_installation("machine-test", &desired)
+            .bind_installation(
+                "machine-test",
+                &desired,
+                "installation-authority-fixture".into(),
+            )
             .unwrap();
+        assert_eq!(
+            authority.intent().request_id,
+            "plugin-install-installation-authority-fixture"
+        );
+        assert_eq!(
+            authority.intent().envelope_digest,
+            format!(
+                "sha256:{}",
+                hex_sha256(&serde_json::to_vec(&desired).unwrap())
+            )
+        );
         let mut changed = desired.clone();
         match change {
             "version" => changed.release.plugin_version = "9.0.0".into(),

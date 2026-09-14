@@ -20,6 +20,11 @@ and accepting a production effect are different milestones.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.
+- [Durable Service installation attempts](plugin-install-journal.md), including
+  exact operation identity, original confirmation/connection, prior-committed
+  effect phases, install/uninstall claim exclusion and restart fences; closed,
+  reloadable history is shared by the two installation clients. Writer admission
+  remains a separate active/recovery/cold-reader rollout boundary.
 - Core local-security ownership implementation and crash-recoverable adoption,
   without moving credentials or changing historical SQL bytes.
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
@@ -34,14 +39,15 @@ and accepting a production effect are different milestones.
 | --- | --- | --- |
 | P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Verified-release/site/state-lease vectors and live-precondition changes, beyond the accepted shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; cross-tab writer arbitration for IDB | Old/new readers and writers, exclusive fenced ownership, crash/reopen, version-change and independent workspace/generation coexistence |
-| P4 / installation | Durable install/upgrade operations alongside uninstall, including staging/activation receipt correlation and cross-restart uncertainty | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
+| P4 / installation | Machine-owned install/upgrade staging/activation receipts and installation CAS, building on the Service journal; accept actual reader floors before writer admission | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
 is [published and activated on Controller/Web](releases/plugin-install-continuation-2026-09-14.md),
-but does not check off the durable-install row above. Likewise, local disposal does
+and the subsequent Service installation journal adds restart protection, but
+neither completes Machine install receipts or the recovery row above. Local disposal does
 not implement cross-site rollback, and a read-only composition is not an
 authorized generic DAG. Do not add a parallel Plugin lifecycle or expose an
 unconstrained workflow executor to hide these gaps.

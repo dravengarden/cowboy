@@ -46,6 +46,7 @@ import {
 } from "./adminApi";
 import { AdminPasskeyLock, AdminPasskeysCard } from "./AdminPasskeys";
 import { genericPluginCompatibilityProblem } from "@cowboy/provider-ui";
+import { PluginInstallationHistory } from "../PluginInstallationHistory.tsx";
 
 export type AdminRoute =
   | "/admin"
@@ -442,6 +443,7 @@ function ReleasesPage(): React.JSX.Element {
                   const problem = machine ? genericPluginCompatibilityProblem(plugin, machine) : undefined;
                   const installed = machine?.plugins.find((item) => item.plugin_id === plugin.plugin_id && item.generation_digest === plugin.artifact_digest && item.state === "active");
                   return <Stack spacing={1}>
+                    {machine && <PluginInstallationHistory key={`${machine.id}:${plugin.plugin_id}`} machine={machine.id} plugin={plugin.plugin_id} />}
                     {problem && <Typography variant="caption" color="text.secondary">{problem.detail}</Typography>}
                     <Button disabled={busy || !machine || machine.status !== "online" || Boolean(problem) || plugin.release_state !== "ready" || !plugin.artifact_digest || Boolean(installed)} onClick={() => {
                       setBusy(true);

@@ -1,5 +1,6 @@
 import {
   assertEquals,
+  assertMatch,
   assertRejects,
   assertStringIncludes,
 } from "jsr:@std/assert";
@@ -31,7 +32,10 @@ Deno.test("admin install uses the registered generic Plugin route and exact rele
     assertEquals(init?.method, "POST");
     assertEquals(init?.credentials, "same-origin");
     assertEquals(init?.cache, "no-store");
-    assertEquals(JSON.parse(String(init?.body)), {
+    const body = JSON.parse(String(init?.body));
+    assertMatch(body.operation_id, /^installation-[0-9a-f-]{36}$/);
+    assertEquals(body, {
+      operation_id: body.operation_id,
       version: release.plugin_version,
       digest: release.artifact_digest,
     });

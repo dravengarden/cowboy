@@ -1,4 +1,5 @@
 import type { MachinePluginInventory, PluginCompatibilityRequirements, PluginContractInventory } from "@cowboy/provider-ui";
+import { createPluginInstallRequest } from "../pluginInstallation.ts";
 
 export type AdminRole = "owner" | "operator" | "viewer";
 export type RegistrationMode = "disabled" | "token" | "open";
@@ -150,7 +151,7 @@ export const adminApi = {
       throw new Error("Select an exact signed Plugin release before installation");
     }
     return await readJson(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin.plugin_id)}`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: plugin.plugin_version, digest: plugin.artifact_digest }),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(createPluginInstallRequest(plugin.plugin_version, plugin.artifact_digest)),
     });
   },
   planPluginRemoval: (machine: string, plugin: string) => readJson<PluginRemovalPlan>(`/api/machines/${encodeURIComponent(machine)}/plugins/${encodeURIComponent(plugin)}/uninstall-plan`, { method: "POST" }),

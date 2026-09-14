@@ -73,6 +73,8 @@ import {
 import { isNativeShell } from "./nativeShell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { ConfirmSheet } from "./Sheet";
+import { createPluginInstallRequest } from "./pluginInstallation.ts";
+import { PluginInstallationHistory } from "./PluginInstallationHistory.tsx";
 
 interface ProviderMachine {
   id: string;
@@ -650,10 +652,7 @@ function ProviderManagement(
             {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                version: entry.provider_version,
-                digest: entry.artifact_digest,
-              }),
+              body: JSON.stringify(createPluginInstallRequest(entry.provider_version, entry.artifact_digest)),
             },
           );
           await expectSuccess(response, "Provider installation failed");
@@ -1249,6 +1248,7 @@ function ProviderManagement(
                       />
                     )
                     : null}
+                  {scope === "machine" && <PluginInstallationHistory machine={machine.id} plugin={entry.provider_id} />}
                 </Stack>
               </Paper>
             </ProviderManagementCard>

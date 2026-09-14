@@ -1,11 +1,21 @@
-//! A finite, core-owned install/upgrade attempt. The HTTP request observes the
-//! attempt; it does not own its lifetime. This closes the legacy live-operation
-//! gaps, but does not turn protocol-seven ACKs into durable install receipts.
+//! A finite, core-owned durable install/upgrade attempt. The HTTP request
+//! observes it; neither a disconnected observer nor restart owns replay rights.
+//! Protocol-seven ACKs remain observations, not durable Machine step receipts.
 
 use super::operator_approval::{InstallationAuthority, OperatorApproval};
 use super::*;
 use crate::machine_control::{CommandFailure, CommandRequestError, ConnectionToken};
 use crate::machine_protocol::{DesiredPlugin, MachineCommand};
+use crate::plugin_operation::installation::{InstallIntent, InstallPhase, InstallProblem};
+use axum::http::HeaderValue;
+
+mod journal;
+use journal::Progress;
+pub(super) use journal::api_machine_plugin_install_operations;
+
+// Reader-first rollout: active, next-transaction recovery AND cold Controller
+// must understand install evidence before this descendant admits writes.
+pub(super) const DURABLE_INSTALL_ENABLED: bool = false;
 
 #[derive(Clone, Copy)]
 enum Disposition {
@@ -90,38 +100,84 @@ trait Effects: Sync {
     fn install(&self) -> impl std::future::Future<Output = Result<(), CommandRequestError>> + Send;
 }
 
-async fn coordinate(effects: &impl Effects, fence: &mut InstallationFence) -> Outcome {
+async fn coordinate(
+    effects: &impl Effects,
+    fence: &mut InstallationFence,
+    progress: &mut Progress<'_>,
+) -> anyhow::Result<Outcome> {
     if !effects.authorized().await {
-        return Outcome::NotDispatched;
+        return progress
+            .abort(fence, InstallProblem::PreconditionsChanged)
+            .await;
     }
-    if effects.needs_auth_sync(true).await
-        && (!effects.authorized().await || !effects.sync_auth().await)
-    {
-        return Outcome::NotDispatched;
+    if effects.needs_auth_sync(true).await {
+        progress
+            .advance(InstallPhase::SyncingAuthentication, None)
+            .await?;
+        if !effects.authorized().await {
+            return progress
+                .abort(fence, InstallProblem::PreconditionsChanged)
+                .await;
+        }
+        if !effects.sync_auth().await {
+            return progress
+                .abort(fence, InstallProblem::AuthenticationSyncFailed)
+                .await;
+        }
     }
+    progress.advance(InstallPhase::Installing, None).await?;
+    // A journal commit can wait on storage. Recheck after it, at enqueue.
     if !effects.authorized().await {
-        return Outcome::NotDispatched;
+        return progress
+            .abort(fence, InstallProblem::TransportNotSent)
+            .await;
     }
     // Cancellation/panic after this point may leave a remote effect. Only a
     // proven NotSent transport result can restore the previous local fence.
     fence.disposition = Disposition::Uncertain;
     match effects.install().await {
-        Ok(()) => fence.disposition = Disposition::Installed,
+        Ok(()) => {
+            progress
+                .advance(InstallPhase::MachineAcknowledged, None)
+                .await?
+        }
         Err(error) if error.certainty == CommandFailure::NotSent => {
-            fence.disposition = Disposition::Previous;
-            return Outcome::NotDispatched;
+            return progress
+                .abort(fence, InstallProblem::TransportNotSent)
+                .await;
         }
         // A generic rejected ACK also cannot prove that activation/auth writes
         // were rolled back. Machine installation tracking independently fences
         // interrupted local transitions; no unjournaled inverse is attempted.
-        Err(_) => return Outcome::NeedsReconcile,
+        Err(error) => {
+            progress
+                .advance(
+                    InstallPhase::NeedsAttention,
+                    Some(if error.certainty == CommandFailure::Rejected {
+                        InstallProblem::MachineRejected
+                    } else {
+                        InstallProblem::UnknownMachineOutcome
+                    }),
+                )
+                .await?;
+            return Ok(Outcome::NeedsReconcile);
+        }
     }
     if effects.needs_auth_sync(false).await
         && (!effects.authorized().await || !effects.sync_auth().await)
     {
-        return Outcome::AuthenticationPending;
+        progress
+            .advance(
+                InstallPhase::AuthenticationPending,
+                Some(InstallProblem::AuthenticationSyncFailed),
+            )
+            .await?;
+        fence.disposition = Disposition::Installed;
+        return Ok(Outcome::AuthenticationPending);
     }
-    Outcome::Installed
+    progress.advance(InstallPhase::Completed, None).await?;
+    fence.disposition = Disposition::Installed;
+    Ok(Outcome::Installed)
 }
 
 struct LiveEffects {
@@ -130,6 +186,7 @@ struct LiveEffects {
     desired: DesiredPlugin,
     connection: ConnectionToken,
     authority: InstallationAuthority,
+    intent: InstallIntent,
 }
 
 impl Effects for LiveEffects {
@@ -137,6 +194,7 @@ impl Effects for LiveEffects {
         let state = &self.state;
         let release = &self.desired.release;
         let valid = self.authority.within_budget()
+            && self.authority.intent() == &self.intent
             && state.machine_control.is_current(&self.connection)
             && state
                 .plugin_catalog
@@ -213,7 +271,13 @@ impl Effects for LiveEffects {
     }
 
     async fn install(&self) -> Result<(), CommandRequestError> {
-        dispatch(&self.state.machine_control, &self.connection, &self.desired).await
+        dispatch(
+            &self.state.machine_control,
+            &self.connection,
+            &self.desired,
+            &self.intent.request_id,
+        )
+        .await
     }
 }
 
@@ -221,14 +285,14 @@ async fn dispatch(
     control: &MachineControl,
     connection: &ConnectionToken,
     desired: &DesiredPlugin,
+    request_id: &str,
 ) -> Result<(), CommandRequestError> {
-    let request_id = machine_request_id("plugin-install");
     control
         .command_on_connection(
             connection,
-            request_id.clone(),
+            request_id.to_owned(),
             MachineCommand::InstallPlugin {
-                request_id,
+                request_id: request_id.to_owned(),
                 plugin: Box::new(desired.clone()),
             },
         )
@@ -251,7 +315,34 @@ async fn run_admitted(effects: LiveEffects, mut fence: InstallationFence) -> Res
             Ok(None) => {}
         }
     }
-    coordinate(&effects, &mut fence).await.response()
+    let Some(store) = effects.state.store.as_ref() else {
+        return Outcome::NotDispatched.response();
+    };
+    if !effects.authorized().await {
+        return Outcome::NotDispatched.response();
+    }
+    // Even COMMIT failure may be ambiguous. From here, only a durable terminal
+    // transition can release this process's reservation.
+    fence.disposition = Disposition::Uncertain;
+    let result = if store.begin_plugin_install(&effects.intent).await.is_ok() {
+        let mut progress = Progress::new(store, &effects.intent);
+        match coordinate(&effects, &mut fence, &mut progress).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                progress.storage_failure().await;
+                Outcome::NeedsReconcile
+            }
+        }
+    } else {
+        Outcome::NeedsReconcile
+    };
+    let mut response = result.response();
+    if let Ok(id) = HeaderValue::from_str(&effects.intent.operation_id) {
+        response
+            .headers_mut()
+            .insert("x-cowboy-plugin-operation", id);
+    }
+    response
 }
 
 async fn observe(
@@ -270,6 +361,16 @@ pub(super) async fn api_machine_plugin_install(
     headers: HeaderMap,
     Json(request): Json<PluginInstallRequest>,
 ) -> Response {
+    if !DURABLE_INSTALL_ENABLED {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Plugin installation is paused while its durable recovery reader floor is activated",
+        )
+            .into_response();
+    }
+    if !crate::plugin_operation::installation::valid_operation_id(&request.operation_id) {
+        return (StatusCode::BAD_REQUEST, "Invalid Plugin operation identity").into_response();
+    }
     let approval = match OperatorApproval::capture(
         ProductRequestAuth::from(state.as_ref()),
         &state.service_id,
@@ -279,6 +380,25 @@ pub(super) async fn api_machine_plugin_install(
         Ok(approval) => approval,
         Err(status) => return status.into_response(),
     };
+    let Some(store) = state.store.as_ref() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    // A repeated identity is observation only, even after expiry, Catalog change,
+    // reconnect or process restart. It never creates a replacement grant.
+    match store.plugin_install_operation(&request.operation_id).await {
+        Ok(Some(operation)) => {
+            return journal::duplicate_response(
+                &operation,
+                &state.service_id,
+                approval.actor(),
+                &machine,
+                &plugin,
+                &request,
+            );
+        }
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Ok(None) => {}
+    }
     let desired =
         match state
             .plugin_catalog
@@ -297,10 +417,11 @@ pub(super) async fn api_machine_plugin_install(
         Ok(connection) => connection,
         Err(_) => return Outcome::NotDispatched.response(),
     };
-    let authority = match approval.bind_installation(&machine, &desired) {
+    let authority = match approval.bind_installation(&machine, &desired, request.operation_id) {
         Ok(authority) => authority,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
+    let intent = authority.intent().clone();
     let fence =
         match InstallationFence::acquire(&state.plugin_lifecycle_fences, (machine.clone(), plugin))
         {
@@ -320,6 +441,7 @@ pub(super) async fn api_machine_plugin_install(
             desired,
             connection,
             authority,
+            intent,
         },
         fence,
     ))

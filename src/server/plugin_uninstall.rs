@@ -64,6 +64,12 @@ pub(super) async fn recover_fences(
 ) -> Result<PluginLifecycleFences> {
     let mut fences = HashMap::new();
     if let Some(store) = store {
+        for operation in store.recover_plugin_installs(service).await? {
+            fences.insert(
+                (operation.intent.machine_id, operation.intent.plugin_id),
+                PluginFenceState::NeedsReconcile,
+            );
+        }
         for operation in store.recover_plugin_uninstalls(service).await? {
             fences.insert(
                 (operation.intent.machine_id, operation.intent.plugin_id),
@@ -74,6 +80,7 @@ pub(super) async fn recover_fences(
     tracing::info!(
         admission_enabled = DURABLE_UNINSTALL_ENABLED,
         installation_cas_enabled = INSTALLATION_CAS_ENABLED,
+        install_admission_enabled = super::plugin_install::DURABLE_INSTALL_ENABLED,
         fenced_slots = fences.len(),
         "Plugin uninstall journal recovered"
     );

@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 mod admission;
 mod connected;
 mod fixtures;
+// Reuse the isolated immutable-process harness for the core install journal;
+// production installation does not depend on the telemetry domain.
+mod installation;
 mod manifest;
 mod probe;
 mod startup;

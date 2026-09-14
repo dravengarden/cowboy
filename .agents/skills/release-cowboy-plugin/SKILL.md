@@ -36,6 +36,17 @@ Machine-private `telemetry.json` policy are both required. Do not read or
 publish the private endpoint/token policy as release evidence; check bounded
 delivery receipts instead. See `docs/telemetry-plugins.md`.
 
+For Service installation journal changes, run
+`just plugin-install-reader-conformance <matrix.json> <new-receipt.json>`
+against immutable Controller active, next-transaction recovery and cold roles.
+Require all 72 populated/absent/corrupt/foreign-identity checks, including two
+real process opens and saved-ID observation without replay. Bind those roles
+to the actual host profiles and bootstrap closure separately; candidate-only
+fixtures do not establish the production reader floor. Keep new installation
+admission paused until that floor is accepted. This test does not prove durable
+Machine installation receipts, production Operator authority or restoration,
+and does not authorize installing a Plugin. See `docs/plugin-install-journal.md`.
+
 For managed telemetry binding/recovery reader floors, use the repository-owned
 `just telemetry-reader-conformance <matrix.json> <new-receipt.json>` from clean
 committed source in the pinned Linux shell. It executes immutable Controller

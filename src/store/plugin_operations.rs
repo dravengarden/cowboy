@@ -249,7 +249,9 @@ macro_rules! implement_journal {
                     "INSERT INTO plugin_uninstall_operations \
                      (operation_id, service_id, machine_id, plugin_id, intent, intent_sha256, phase, created_at_ms, updated_at_ms) \
                      SELECT $1, $2, $3, $4, $5, $6, 'prepared', $7, $7 \
-                     WHERE (SELECT COUNT(*) FROM plugin_uninstall_operations) < $8",
+                     WHERE (SELECT COUNT(*) FROM plugin_uninstall_operations) < $8 \
+                       AND NOT EXISTS (SELECT 1 FROM plugin_install_operations \
+                         WHERE machine_id = $3 AND plugin_id = $4 AND phase NOT IN ('completed', 'authentication_pending', 'aborted'))",
                 )
                 .bind(&intent.operation_id).bind(&intent.service_id).bind(&intent.machine_id).bind(&intent.plugin_id)
                 .bind(document).bind(format!("{:x}", sha2::Sha256::digest(document.as_bytes())))
@@ -342,7 +344,7 @@ macro_rules! implement_journal {
 implement_journal!(
     PostgresStorage,
     "SET LOCAL synchronous_commit = on",
-    "LOCK TABLE plugin_uninstall_operations IN SHARE ROW EXCLUSIVE MODE",
+    "LOCK TABLE plugin_uninstall_operations, plugin_install_operations IN SHARE ROW EXCLUSIVE MODE",
     "UPDATE sessions SET deleted_at = to_timestamp($2::bigint::double precision / 1000), purge_after_at = to_timestamp($3::bigint::double precision / 1000) \
      WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at IS NULL"
 );

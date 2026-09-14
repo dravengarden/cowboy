@@ -5,6 +5,7 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod installation;
 pub(crate) mod resolution;
 
 pub(crate) const MAX_OPERATIONS: i64 = 4096;

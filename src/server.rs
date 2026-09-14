@@ -9072,6 +9072,10 @@ async fn serve_axum(
             get(api_machine_plugin_operations),
         )
         .route(
+            "/api/machines/{id}/plugins/{provider_id}/installation-operations",
+            get(plugin_install::api_machine_plugin_install_operations),
+        )
+        .route(
             "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",
             get(api_machine_plugin_operation_receipt),
         )
@@ -11266,6 +11270,7 @@ async fn api_machine_provider_inventory_compat(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PluginInstallRequest {
+    operation_id: String,
     version: String,
     digest: String,
 }
@@ -20564,6 +20569,7 @@ mod product_auth_api_tests {
             "/api/logs/log-123",
             "/api/observability/incidents",
             "/api/machines/m-123/plugins/victoria/operations/op-123/machine-receipt",
+            "/api/machines/m-123/plugins/victoria/installation-operations",
             "/api/machines/m-123/plugins/victoria/operations/op-123/recovery-assessment",
         ] {
             assert_eq!(

@@ -300,6 +300,11 @@ catalog-reader-conformance BRIDGE BASELINE CANDIDATE SDK LEGACY_PACKAGE RECEIPT 
 
 # Populated Service/Machine journals against every supplied immutable active,
 # rollback and cold reader. Clean source, no external network or live state.
+plugin-install-reader-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_INSTALL_READER_MATRIX="$1" COWBOY_TEST_INSTALL_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::installation::immutable_installation_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
+# Separate telemetry evidence and policy floors remain mandatory.
 telemetry-reader-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_READER_MATRIX="$1" COWBOY_TEST_TELEMETRY_READER_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::immutable_telemetry_readers -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"

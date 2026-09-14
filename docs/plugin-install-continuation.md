@@ -3,6 +3,12 @@
 Status: 2026-09-14. This repairs the existing install path; it is not the durable
 P4 lifecycle coordinator or permission for a Machine/policy cutover.
 
+The subsequent [Service installation journal](plugin-install-journal.md) now
+extends this same executor with durable intent, progress and restart fences.
+Its request also requires an operation ID, and a terminal commit now precedes
+reservation release. The process-local-only description below records the
+original repair boundary, not the current reader-first implementation.
+
 Both supported Plugin/Provider HTTP routes delegate to one core coordinator.
 The request must name an exact Catalog version and composite artifact digest;
 omitted/null identities and unknown fields fail closed. The browser cannot

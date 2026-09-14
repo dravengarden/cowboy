@@ -37,6 +37,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 mod copy;
 mod core_security;
 pub(crate) use core_security::HandoffPoint;
+mod plugin_installations;
 mod plugin_operations;
 mod sqlite;
 mod telemetry_bindings;

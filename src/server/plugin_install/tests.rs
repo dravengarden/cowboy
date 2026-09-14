@@ -1,6 +1,24 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+mod journal;
+
+// Preserve the original continuation/transport tests while exercising the
+// actual durable coordinator, not a parallel in-memory implementation.
+async fn coordinate(effects: &impl Effects, fence: &mut InstallationFence) -> Outcome {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let intent = crate::plugin_operation::installation::fixture("continuation");
+    store.begin_plugin_install(&intent).await.unwrap();
+    fence.disposition = Disposition::Uncertain;
+    super::coordinate(effects, fence, &mut Progress::new(&store, &intent))
+        .await
+        .unwrap()
+}
+
 fn slot() -> (String, String) {
     ("machine-test".into(), "victoria".into())
 }
@@ -85,7 +103,7 @@ fn exact_release_is_required_and_unrecognized_install_fields_are_rejected() {
     }
     assert!(
         serde_json::from_str::<PluginInstallRequest>(
-            r#"{"version":"1.0.0","digest":"sha256:abc"}"#
+            r#"{"operation_id":"installation-fixture","version":"1.0.0","digest":"sha256:abc"}"#
         )
         .is_ok()
     );
@@ -296,40 +314,43 @@ async fn transport_never_moves_installation_to_a_replacement_connection_or_retri
                 replacement,
             );
             assert_eq!(
-                dispatch(&control, &original, &desired)
+                dispatch(&control, &original, &desired, "plugin-install-fixture")
                     .await
                     .unwrap_err()
                     .certainty,
                 CommandFailure::NotSent
             );
         } else {
-            let (result, ()) = tokio::join!(dispatch(&control, &original, &desired), async {
-                let MachineCommand::InstallPlugin { request_id, plugin } =
-                    commands.recv().await.unwrap()
-                else {
-                    panic!("only an exact install may be sent");
-                };
-                assert_eq!(*plugin, desired);
-                if change == "lost" {
-                    control.install(
-                        "machine-test".into(),
-                        "same-epoch".into(),
-                        false,
-                        18,
-                        replacement,
+            let (result, ()) = tokio::join!(
+                dispatch(&control, &original, &desired, "plugin-install-fixture"),
+                async {
+                    let MachineCommand::InstallPlugin { request_id, plugin } =
+                        commands.recv().await.unwrap()
+                    else {
+                        panic!("only an exact install may be sent");
+                    };
+                    assert_eq!(*plugin, desired);
+                    if change == "lost" {
+                        control.install(
+                            "machine-test".into(),
+                            "same-epoch".into(),
+                            false,
+                            18,
+                            replacement,
+                        );
+                    }
+                    // Even a late successful reply from the old connection cannot
+                    // certify the result after its incarnation has been replaced.
+                    control.record_remote(
+                        &original,
+                        MachineEvent::CommandResult {
+                            request_id,
+                            accepted: change != "rejected",
+                            detail: None,
+                        },
                     );
                 }
-                // Even a late successful reply from the old connection cannot
-                // certify the result after its incarnation has been replaced.
-                control.record_remote(
-                    &original,
-                    MachineEvent::CommandResult {
-                        request_id,
-                        accepted: change != "rejected",
-                        detail: None,
-                    },
-                );
-            });
+            );
             match change {
                 "lost" => assert_eq!(result.unwrap_err().certainty, CommandFailure::Unknown),
                 "rejected" => assert_eq!(result.unwrap_err().certainty, CommandFailure::Rejected),
