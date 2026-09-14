@@ -1,6 +1,8 @@
 use super::*;
 use crate::machine_plugins::PluginExecutionScope;
-use crate::machine_protocol::telemetry_binding::{BindingInstallation, fixture};
+#[cfg(feature = "full")]
+use crate::machine_protocol::telemetry_binding::BindingInstallation;
+use crate::machine_protocol::telemetry_binding::fixture;
 use std::cell::Cell;
 use std::os::unix::fs::MetadataExt as _;
 use std::sync::Arc;

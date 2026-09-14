@@ -401,6 +401,9 @@ test:
     # The invoking Codex Plugin exports its own signed package path. Cowboy's
     # unit tests exercise embedded fixtures and must not inherit that runtime.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --all-targets --all-features --locked
+    # The standalone Machine ships without Controller modules. Compile and run
+    # its test slice too; cargo check alone does not cover cfg(test) boundaries.
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 

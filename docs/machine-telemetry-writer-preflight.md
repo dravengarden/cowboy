@@ -99,6 +99,9 @@ FIFO refusal. A held real journal, invalid unrelated private state, an enrollmen
 fixture and a listening loopback Controller remain untouched; snapshots compare
 contents, ownership, modes, inode, mtime and ctime (not atime). Two tests first
 reproduced the journal/Provider initialization side effects before the fix.
+The ordinary quality gate also runs the standalone `machine-host` library tests,
+not just all-features tests and a binary-only feature check. Two Controller-only
+test helpers now have their correct feature guards; no lint was suppressed.
 
 This prerequisite does not complete P2, authorize a production writer-policy
 cutover, accept Operator authority or prove connected delivery. Retain the
