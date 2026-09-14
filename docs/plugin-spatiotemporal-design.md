@@ -121,8 +121,12 @@ Controller × Machine 的全部九种角色组合。最新
 前置到组件、账本及 Provider 身份初始化之前。报告只含配置声明，不从 CLI 或策略自报身份推断真实
 enrolled owner，不打开安装、绑定或私有目的地；构建/发布该候选也不等于激活 Machine 或完成 P2。
 [本批候选验收](releases/machine-writer-preflight-2026-09-14.md) 已完成完整门禁、31 项命令检查及
-96/294 项不可变 reader/writer 验收，尚未激活 Machine。完整候选携带的 worker generation 与线上
-不同（先前 Cargo 测试依赖进入整文件哈希），须保留独立维护边界，不能宣称零会话影响更新。
+96/294 项不可变 reader/writer 验收，当时尚未激活 Machine。随后用户明确授权
+[Machine 维护部署](releases/machine-writer-preflight-activation-2026-09-14.md)：最新 main 制品补齐
+31/96/294/78/45 项验收并成功激活；Controller、Web 与生产 managed 策略未变。335 秒的三次
+快照中 13 个 worker 保留原 PID/启动时间，12 个可核对的原生会话标识哈希一致，1 个缺少日志证据。
+新 desired generation 已在线，但本窗口没有观察到 worker 换入新代次；不把进程保留等同全部
+换代、原生恢复或后续用户 turn 验收。生产策略切换与 P2 退出仍是独立边界。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

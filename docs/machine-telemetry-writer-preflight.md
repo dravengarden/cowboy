@@ -1,8 +1,11 @@
 # Machine telemetry writer-policy preflight
 
 The [2026-09-14 candidate record](releases/machine-writer-preflight-2026-09-14.md)
-records source publication, immutable checks and the separate, unperformed
-Machine activation boundary.
+records initial publication and immutable checks. The separately authorized
+[Machine activation](releases/machine-writer-preflight-activation-2026-09-14.md)
+subsequently deployed the exact accepted release on Hawk. Managed production
+policies remain unconfigured; retained workers are not evidence of completed
+generation drain or new-generation native-session acceptance.
 
 The Machine core provides a configuration-only diagnostic:
 
