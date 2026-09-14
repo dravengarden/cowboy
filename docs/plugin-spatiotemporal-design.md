@@ -4,9 +4,11 @@ Current exit status is consolidated in the [completion ledger](plugin-refactor-c
 The historical slices below are evidence of individual steps, not whole-refactor completion.
 The [install/upgrade continuation repair](plugin-install-continuation.md) closes live
 ownership and authorization gaps. The subsequent [Service install journal](plugin-install-journal.md)
-adds persistent intent/progress, restart fences and reloadable history; actual
-reader-floor admission, Machine install receipts and independent post-effect
-recovery remain explicit exit items.
+adds persistent intent/progress, restart fences and reloadable history.
+The [protocol-19 installation writer](releases/plugin-install-writers-2026-09-14.md)
+now has accepted reader floors, connected receipt/restart tests and activation;
+independent post-effect recovery and full capability/native acceptance remain
+explicit exit items.
 The Rust/TS structural linkers now share a complete-report differential gate;
 that acceptance does not promote declared releases or serialized graphs to live authority.
 

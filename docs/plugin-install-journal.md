@@ -1,23 +1,18 @@
 # Durable core installation attempts
 
-Status: 2026-09-14. The historical schema-one writer milestone is
-[recorded separately](releases/plugin-install-journal-2026-09-14.md).
-The schema-two target/receipt bridge's actual Service/Machine reader floor is now
-[accepted and active on Hawk](releases/plugin-install-receipt-readers-2026-09-14.md),
-with **all fresh Service installation admission paused** and Machine attempt
-writing disabled. Connected installation execution and writer cutover are not
-yet accepted; the reader release is not that evidence.
-The current descendant is a **writer candidate**, with both code switches
-enabled for the [connected immutable acceptance gate](plugin-install-connected-conformance.md).
-That source change does not enable the running reader release or establish
-writer deployment acceptance.
-The finite Service installer records
-install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
-or installation dispatch. Reader revision `95c0e854` pauses new admission. The
-writer-enabled descendant `6d072bab` was activated after the active,
-next-transaction recovery and cold Controller readers were accepted; building or
-testing it does not establish those host roles. This is not Machine maintenance
-or a new Plugin lifecycle.
+Status: 2026-09-14. The schema-two target/receipt writer is
+[published and active on Controller and Machine](releases/plugin-install-writers-2026-09-14.md)
+after the [actual reader floor](releases/plugin-install-receipt-readers-2026-09-14.md)
+was accepted. Its connected installation gate passed twice, followed by 240
+post-activation actual-reader checks. Paused recovery readers may still return
+503 for a fresh install; current writer admission is not a replay grant.
+
+The finite Service installer records install and upgrade attempts in
+PostgreSQL/SQLite before any authentication sync or installation dispatch.
+The historical schema-one writer milestone is
+[recorded separately](releases/plugin-install-journal-2026-09-14.md). This remains
+one core lifecycle; production Plugin installation, native-generation restoration
+and independently authorized compensation were not performed by this release.
 
 ## Identity and authority
 

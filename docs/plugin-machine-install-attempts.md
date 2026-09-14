@@ -1,16 +1,14 @@
 # Machine installation attempts
 
-Status: implemented reader and finite executor, 2026-09-14; new Machine writer
-admission remains disabled. The [Service schema-two bridge](plugin-install-journal.md)
-now binds observed targets and atomically stores exact typed receipts; its fresh
-admission is also paused, without a protocol-seven fallback. The bridge has now
-[replaced the active Service and Machine readers on Hawk](releases/plugin-install-receipt-readers-2026-09-14.md),
-including accepted actual next-recovery and cold roles. This is reader-floor
-acceptance, not connected installation execution or completion of P4 recovery.
-The current descendant enables its code switch as a writer candidate; the
-standing `--plugin-operation-admission` and original connection-bound authority
-remain mandatory. Its [connected acceptance gate](plugin-install-connected-conformance.md)
-must pass before activation; the running reader remains writer-disabled.
+Status: reader and finite protocol-19 writer
+[published and activated on Hawk](releases/plugin-install-writers-2026-09-14.md),
+2026-09-14, after both lanes' actual recovery/cold reader floors were accepted.
+The [Service schema-two bridge](plugin-install-journal.md) binds observed targets
+and atomically stores exact receipts, without a protocol-seven fallback.
+`--plugin-operation-admission` and original connection-bound authority remain
+mandatory. The [connected gate](plugin-install-connected-conformance.md) passed
+twice; the actual post-activation readers passed another 240 checks. This does
+not complete independent P4 recovery or authorize a production Plugin install.
 
 ## One core installation path
 

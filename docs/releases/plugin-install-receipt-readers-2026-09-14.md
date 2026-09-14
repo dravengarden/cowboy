@@ -1,15 +1,19 @@
 # Typed installation receipt readers: 2026-09-14
 
+Historical reader-only milestone. The subsequent
+[writer activation](plugin-install-writers-2026-09-14.md) supersedes the
+Controller/Machine admission status below; Web and cold bootstrap remain unchanged.
+
 Controller, Machine and Web reader source
-`b86032f63621a5bdf9679c10f02645344eb89a59` is published and active on Hawk.
+`b86032f63621a5bdf9679c10f02645344eb89a59` was published and activated on Hawk.
 Its runtime bridge is `2f7fa2375b753d7503a1102dd415304ad21a9199`; the descendant
 changes only the telemetry conformance harness to retain protocols 18 and 19.
 The component activator requires fresh main ancestry, so the regular component
 artifacts were rebuilt from that descendant before activation. Cold bootstrap
 continues to use the accepted runtime revision.
 
-All fresh Service installations, including the old generic path, are paused.
-Machine protocol-19 attempt writing is also disabled. This accepts the actual
+At this milestone all fresh Service installations, including the old generic
+path, were paused. Machine protocol-19 attempt writing was also disabled. This accepted the actual
 reader floor, **not** connected installation execution, writer cutover, independent
 restoration or the [whole refactor](../plugin-refactor-completion.md).
 

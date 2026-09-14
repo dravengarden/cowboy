@@ -25,9 +25,11 @@ and accepting a production effect are different milestones.
   effect phases, install/uninstall claim exclusion and restart fences; closed,
   reloadable history is shared by the two installation clients. The
   [historical schema-one writer milestone](releases/plugin-install-journal-2026-09-14.md)
-  is now superseded by the [accepted Service/Machine receipt reader floor](releases/plugin-install-receipt-readers-2026-09-14.md).
-  Fresh installation writing remains paused; no production Plugin installation
-  or native-generation swap is claimed.
+  is now superseded by the [accepted Service/Machine receipt reader floor](releases/plugin-install-receipt-readers-2026-09-14.md)
+  and [activated protocol-19 writer](releases/plugin-install-writers-2026-09-14.md).
+  Two complete 45-case connected installation runs and another 240 actual-role
+  reader checks passed. No production Plugin installation or native-generation
+  swap is claimed.
 - Core local-security ownership implementation and crash-recoverable adoption,
   without moving credentials or changing historical SQL bytes.
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
@@ -42,16 +44,16 @@ and accepting a production effect are different milestones.
 | --- | --- | --- |
 | P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Verified-release/site/state-lease vectors and live-precondition changes, beyond the accepted shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; cross-tab writer arbitration for IDB | Old/new readers and writers, exclusive fenced ownership, crash/reopen, version-change and independent workspace/generation coexistence |
-| P4 / installation | [Machine attempt reader/executor](plugin-machine-install-attempts.md) and [Service target/step/receipt bridge](plugin-install-journal.md) have an accepted actual reader floor with fresh writes disabled; the descendant writer candidate adds [connected immutable acceptance](plugin-install-connected-conformance.md), still requiring a passing artifact receipt and activation | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
+| P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
 is [published and activated on Controller/Web](releases/plugin-install-continuation-2026-09-14.md),
-and the subsequent Service installation journal adds restart protection, but
-neither accepts connected execution of the new Machine/Service receipt bridge or
-the recovery row above. Its reader-only rollout is accepted separately. Local disposal does
+and the subsequent Service installation journal adds restart protection.
+The Machine/Service receipt writer now has its own connected acceptance and
+activation evidence; none of these closes the independent recovery row above. Local disposal does
 not implement cross-site rollback, and a read-only composition is not an
 authorized generic DAG. Do not add a parallel Plugin lifecycle or expose an
 unconstrained workflow executor to hide these gaps.
