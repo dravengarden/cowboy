@@ -236,11 +236,11 @@ fn inspect(
             record.configured = false;
         }
         MachineFrame::Welcome {
-            protocol: 18,
+            protocol,
             desired_components,
             ..
-        } if !downstream && desired_components.is_empty() => {
-            counts.protocol = Some(18);
+        } if !downstream && matches!(protocol, 18 | 19) && desired_components.is_empty() => {
+            counts.protocol = Some(protocol);
             counts.connections += 1;
         }
         MachineFrame::Command { command } if !downstream => match command {
@@ -369,6 +369,39 @@ fn inspect(
         _ => return Err(Failure::UnexpectedHandshake),
     }
     Ok(Action::Forward)
+}
+
+#[test]
+fn telemetry_relay_keeps_known_recovery_protocols_and_records_actual_negotiation() {
+    for protocol in [17, 18, 19, 20] {
+        let message = Message::Text(
+            serde_json::to_string(&MachineFrame::Welcome {
+                protocol,
+                controller_epoch: 1,
+                heartbeat_interval_ms: 1000,
+                desired_components: Vec::new(),
+            })
+            .unwrap()
+            .into(),
+        );
+        let mut record = Record::default();
+        let expected = matches!(protocol, 18 | 19);
+        assert_eq!(
+            inspect(&message, false, Flow::BindingRoundTrip, &mut record).is_ok(),
+            expected
+        );
+        assert_eq!(record.counts.protocol, expected.then_some(protocol));
+        assert_eq!(record.counts.connections, u32::from(expected));
+        assert!(
+            inspect(
+                &message,
+                true,
+                Flow::BindingRoundTrip,
+                &mut Record::default()
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]

@@ -97,7 +97,7 @@ activating new runtime artifacts merely to update their source-manifest revision
 For authenticated cross-process telemetry acceptance, run
 `just telemetry-connected-conformance <matrix.json> <new-receipt.json>` across
 all nine Controller/Machine role pairs. Require actual fixture password login,
-enrolled protocol-18 connections, one-use previews, select/revoke/restore,
+enrolled protocol-18/19 connections, one-use previews, select/revoke/restore,
 lost-ACK observation without resend, independent recovery/Service resolution,
 and durable reads after both processes restart. Require all five flows (45 role
 results), including managed OTLP intake/queue/RPC/HTTP delivery through the real
