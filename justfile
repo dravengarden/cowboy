@@ -368,12 +368,14 @@ composition-generate:
     deno run --allow-read --allow-write=src/composition,contracts --allow-run tools/generate-composition-contract.ts --write
 
 composition-check:
-    deno fmt --check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts contracts
-    deno check tools/generate-composition-contract.ts
+    deno fmt --check tools/generate-composition-contract.ts tools/generate-composition-contract_test.ts tools/composition-link-conformance.ts contracts
+    deno check tools/generate-composition-contract.ts tools/composition-link-conformance.ts
     deno test --allow-read --allow-write --allow-run tools/generate-composition-contract_test.ts
     deno run --allow-read --allow-run tools/generate-composition-contract.ts
-    deno test --allow-read contracts/composition.test.ts
+    deno test --allow-read contracts/composition.test.ts contracts/composition-check.test.ts
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --lib composition::
+    cargo build --locked --bin cowboy
+    deno run --allow-read --allow-write --allow-run=target/debug/cowboy tools/composition-link-conformance.ts target/debug/cowboy
 
 fmt:
     cargo fmt --check

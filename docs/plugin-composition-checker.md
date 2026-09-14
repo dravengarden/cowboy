@@ -71,8 +71,26 @@ dependency diagnostic, **not rollback or proof that an effect is reversible**.
 
 `just composition-generate` refreshes both generated files. `composition-check`
 and the complete `just check` gate reject stale output and run shared wire
-acceptance vectors in Rust/TS. Graph semantics currently run in Rust only; a TS
-decoder success is not a graph-validation success.
+acceptance vectors in Rust/TS. TypeScript now also implements the structural
+linker in `contracts/composition-check.ts`. `decodeComposition` still checks
+only the wire; call `checkComposition` to check graph semantics. Neither is an
+authorization or proof that a declared release exists.
+
+The same gate builds the actual Rust CLI and compares it with the TS linker on
+86 synthetic inputs: 30 accepted structures and 56 exact closed refusals. It
+compares every report field, including proposal digest, dependency/reverse
+ordering, site projections and remote edges. Cases cover generation/release
+conflicts, one/optional/many ambiguity, ownership/capability cycles, global port
+budget, a maximum 256-node chain, ASCII rather than locale-sensitive ordering,
+and reversed nested JSON property order. The CLI children have an empty inherited
+environment, a five-second deadline and only a gate-owned temporary input file;
+this gate does not contact a Machine or open production state.
+
+The TS result carries a module-private nominal brand and is deeply frozen.
+Serialized reports lose that brand, fail proposal decoding and cannot obtain
+execution authority. Hashing uses native Web Crypto SHA-256 in a secure browser
+context or Deno; the module imports no filesystem, framework or transport API.
+No Plugin SDK, signed package or wire fingerprint changes in this addition.
 
 Contract fingerprint v1 hashes `cowboy.closed-contract.v1\n` followed by compact
 JSON with recursively sorted object keys and unchanged array order. It includes

@@ -5,6 +5,8 @@ The historical slices below are evidence of individual steps, not whole-refactor
 The [install/upgrade continuation repair](plugin-install-continuation.md) closes live
 ownership and authorization gaps; durable installation and independent post-effect
 recovery remain explicit exit items.
+The Rust/TS structural linkers now share a complete-report differential gate;
+that acceptance does not promote declared releases or serialized graphs to live authority.
 
 状态：整体重设计，2026-09-09；替代本文先前逐项补充的草案。接口、类型和目录拆分均为目标，不是已发布
 SDK。设计审计基线为 `05756e67bdf6d80e8a790a160954158e1f9f109c`；第一批
