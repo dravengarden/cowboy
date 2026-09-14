@@ -7,7 +7,8 @@ mod fixture;
 pub(super) use fixture::{ConnectedFixture, Evidence};
 mod delivery;
 pub(super) use delivery::{
-    Ack, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport, ResponseMode, WireExport,
+    Ack, DatabaseHttp, DatabaseMediaType, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport,
+    ResponseMode, WireExport,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]

@@ -1,7 +1,7 @@
 use super::super::connected::{
-    Ack, ConnectedFixture, DeliveryReport, DeliveryRound, DeliveryStep, Evidence, Flow, HttpExport,
-    HttpObservation, HttpResult, Outcome, RelayRejection, ResponseMode, Stage, WireCounts,
-    WireExport,
+    Ack, ConnectedFixture, DatabaseHttp, DatabaseMediaType, DeliveryReport, DeliveryRound,
+    DeliveryStep, Evidence, Flow, HttpExport, HttpObservation, HttpResult, Outcome, RelayRejection,
+    ResponseMode, Stage, WireCounts, WireExport,
 };
 use super::*;
 use serde_json::{Value, json};

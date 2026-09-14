@@ -104,6 +104,24 @@ pub(in super::super) struct HttpExport {
     pub payload_sha256: String,
     pub items: usize,
     pub response: ResponseMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<DatabaseHttp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(in super::super) struct DatabaseHttp {
+    pub status: u16,
+    pub content_type: DatabaseMediaType,
+    pub body_bytes: usize,
+    pub body_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum DatabaseMediaType {
+    Absent,
+    Protobuf,
+    Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

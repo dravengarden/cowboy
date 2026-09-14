@@ -34,8 +34,8 @@ storage-directory input. Compile before entering the non-root private network
 namespace; the test requires loopback to be its only interface. Every pair
 starts three new database processes with new disposable storage and cleared
 environments. Their fixed test profile uses literal loopback addresses,
-one-day retention, 128 MiB cache budgets and two Go execution threads per
-process. VictoriaMetrics keeps native OTel metric naming rather than enabling
+one-day retention, 128 MiB cache budgets and `GOMAXPROCS=2` per process.
+VictoriaMetrics keeps native OTel metric naming rather than enabling
 Prometheus renaming. These options are test configuration, not acceptance of
 all production flags or a total process-memory limit.
 
@@ -96,7 +96,8 @@ arbitrary future API or naming changes.
 The private atomic create-only receipt distinguishes this database purpose
 from protocol-receiver acceptance. It includes clean harness source, all
 immutable executable hashes, nine role outcomes, correlated payload-free
-transport observations, two semantic query results per pair, database reopen
+transport observations, closed actual database HTTP status/media-type/body-hash
+observations, two semantic query results per pair, database reopen
 and host-restart/no-replay results. Fixture payloads needed for comparison stay
 bounded in memory; raw query responses, logs, credentials, endpoints and
 telemetry are not serialized into the receipt. Failed checks exit nonzero and
