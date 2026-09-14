@@ -5,6 +5,8 @@ use reqwest::{Client, StatusCode, header};
 use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 
+mod lifecycle;
+
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Mode {
@@ -20,6 +22,8 @@ struct Input {
     /// In active, next-transaction recovery, cold order. A legacy reader must
     /// fail the new client's negotiation, not be labeled dataset-compatible.
     modes: [Mode; 3],
+    #[serde(default)]
+    lifecycle_history: [bool; 3],
 }
 
 #[derive(Serialize)]
@@ -30,6 +34,7 @@ struct Check {
     accepted: bool,
     failure: Option<Failure>,
     stage: &'static str,
+    lifecycle_history_checked: bool,
 }
 
 #[derive(Serialize)]
@@ -352,11 +357,19 @@ async fn immutable_product_sync() -> Result<()> {
         ],
     };
     let helper = manifest::ssh_keygen()?;
-    for (artifact, mode) in receipt.artifacts.iter().zip(input.modes) {
+    for ((artifact, mode), history) in receipt
+        .artifacts
+        .iter()
+        .zip(input.modes)
+        .zip(input.lifecycle_history)
+    {
         let root = tempfile::tempdir()?;
         let fixture = Fixture::build(Case::Absent).await?;
         seed(root.path(), &fixture, &helper.path).await?;
         let password = seed_users(root.path()).await?;
+        if history {
+            lifecycle::seed(root.path()).await?;
+        }
         let mut previous = None;
         for cold_read in 1..=2 {
             let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -375,7 +388,12 @@ async fn immutable_product_sync() -> Result<()> {
                 tokio::time::timeout(DEADLINE, controller(&mut running, address, &fixture))
                     .await
                     .map_err(|_| Failure::Timeout)??;
-                exercise(address, &password, mode, &mut previous, &mut stage).await
+                exercise(address, &password, mode, &mut previous, &mut stage).await?;
+                if history {
+                    stage = "lifecycle_history";
+                    lifecycle::exercise(address, &password, root.path()).await?;
+                }
+                Ok(())
             }
             .await;
             let cleanup = running.terminate().await;
@@ -395,6 +413,7 @@ async fn immutable_product_sync() -> Result<()> {
                 accepted: result.is_ok(),
                 failure: result.err(),
                 stage,
+                lifecycle_history_checked: history,
             });
         }
     }

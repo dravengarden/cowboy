@@ -15,7 +15,7 @@ use super::operator_approval::{OperatorApproval, UninstallAuthority};
 
 // Journal-aware reader floor 00e2b69b was activated before this descendant.
 // Its rollback path keeps evidence/fences and pauses new uninstall admission.
-const DURABLE_UNINSTALL_ENABLED: bool = true;
+pub(super) const DURABLE_UNINSTALL_ENABLED: bool = true;
 // Schema-two reader floor 6a420ff5 and Hawk's cold bootstrap are accepted.
 const INSTALLATION_CAS_ENABLED: bool = true;
 
@@ -737,21 +737,31 @@ pub(super) async fn api_machine_plugin_operations(
     let Some(store) = state.store.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match store.plugin_uninstall_history(&state.service_id, &machine, &plugin).await {
-        Ok(operations) => Json(serde_json::json!({
-            "admission_enabled": DURABLE_UNINSTALL_ENABLED,
-            "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
-            "operations": operations.into_iter().map(|op| serde_json::json!({
-                "operation_id": op.intent.operation_id, "phase": op.phase, "problem": op.problem,
-                "resolution_candidates": resolution::candidates(&op),
-                "attention_from": op.attention_from,
-                "cause": op.cause,
-                "plugin_version": op.intent.plugin_version, "generation_digest": op.intent.generation_digest,
-                "affected_session_count": op.intent.session_ids.len(), "purge_after_ms": op.intent.purge_after_ms,
-                "created_at_ms": op.created_at_ms, "updated_at_ms": op.updated_at_ms,
-            })).collect::<Vec<_>>(),
-        })).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Plugin operation evidence is unavailable").into_response(),
+    match store
+        .plugin_uninstall_history(&state.service_id, &machine, &plugin)
+        .await
+    {
+        Ok(operations) => no_store_json(
+            StatusCode::OK,
+            serde_json::json!({
+                "admission_enabled": DURABLE_UNINSTALL_ENABLED,
+                "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
+                "operations": operations.into_iter().map(|op| serde_json::json!({
+                    "operation_id": op.intent.operation_id, "phase": op.phase, "problem": op.problem,
+                    "resolution_candidates": resolution::candidates(&op),
+                    "attention_from": op.attention_from,
+                    "cause": op.cause,
+                    "plugin_version": op.intent.plugin_version, "generation_digest": op.intent.generation_digest,
+                    "affected_session_count": op.intent.session_ids.len(), "purge_after_ms": op.intent.purge_after_ms,
+                    "created_at_ms": op.created_at_ms, "updated_at_ms": op.updated_at_ms,
+                })).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Plugin operation evidence is unavailable",
+        )
+            .into_response(),
     }
 }
 

@@ -83,7 +83,7 @@ impl<'a> Progress<'a> {
 }
 
 #[derive(Serialize)]
-pub(super) struct Evidence<'a> {
+pub(in crate::server) struct Evidence<'a> {
     evidence_schema: u16,
     // Deliberately project only the closed outcome. The complete receipt's
     // actor-bound plan, target and deadline remain private durable evidence.
@@ -157,14 +157,24 @@ pub(in crate::server) async fn api_machine_plugin_install_operations(
     let Some(store) = state.store.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    match store.plugin_install_history(&state.service_id, &machine, &plugin).await {
-        Ok(operations) => Json(serde_json::json!({
-            "schema": "dravengarden.cowboy.plugin-install-history/v2",
-            "admission_enabled": DURABLE_INSTALL_ENABLED,
-            "execution_authorized": false,
-            "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
-            "operations": operations.iter().map(Evidence::from).collect::<Vec<_>>(),
-        })).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Plugin installation evidence is unavailable").into_response(),
+    match store
+        .plugin_install_history(&state.service_id, &machine, &plugin)
+        .await
+    {
+        Ok(operations) => no_store_json(
+            StatusCode::OK,
+            serde_json::json!({
+                "schema": "dravengarden.cowboy.plugin-install-history/v2",
+                "admission_enabled": DURABLE_INSTALL_ENABLED,
+                "execution_authorized": false,
+                "requires_reconciliation": state.plugin_lifecycle_fences.read().get(&(machine, plugin)) == Some(&PluginFenceState::NeedsReconcile),
+                "operations": operations.iter().map(Evidence::from).collect::<Vec<_>>(),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Plugin installation evidence is unavailable",
+        )
+            .into_response(),
     }
 }

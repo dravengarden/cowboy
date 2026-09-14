@@ -65,6 +65,7 @@ use tokio_util::io::ReaderStream;
 mod operator_approval;
 mod plugin_install;
 use plugin_install::api_machine_plugin_install;
+mod plugin_history;
 mod plugin_uninstall;
 mod provider_auth_sync;
 mod sync_dataset;
@@ -9088,6 +9089,10 @@ async fn serve_axum(
         .route(
             "/api/machines/{id}/plugins/{provider_id}/installation-operations",
             get(plugin_install::api_machine_plugin_install_operations),
+        )
+        .route(
+            "/api/machines/{id}/plugins/{provider_id}/lifecycle-history",
+            get(plugin_history::get_history),
         )
         .route(
             "/api/machines/{id}/plugins/{provider_id}/operations/{operation_id}/machine-receipt",

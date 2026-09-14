@@ -44,7 +44,8 @@ tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 # SQLx already selects rustls' ring provider. Keep Reqwest provider-neutral so
 # the build does not compile AWS-LC alongside ring for the same TLS stack.
 reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls-no-provider", "stream"] }
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# GHSA-2mjx-qc3c-rqvc: older 0.23 handshakes can cross encryption boundaries.
+rustls = { version = "0.23.45", default-features = false, features = ["ring"] }
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
   "postgres",

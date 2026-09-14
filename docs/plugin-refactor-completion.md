@@ -55,6 +55,12 @@ and accepting a production effect are different milestones.
   swap is claimed.
 - Core local-security ownership implementation and crash-recoverable adoption,
   without moving credentials or changing historical SQL bytes.
+- [Unified core lifecycle history](plugin-lifecycle-history.md) projects the
+  actual install/uninstall journals and independently confirmed pre-effect
+  resolution with domain-disjoint IDs, bounded no-store reads and no Machine
+  RPC or effect path. Both installation clients share the view; source tests
+  include the exact Rust/Web fixture and six real React/browser lifecycle cases.
+  Actual immutable HTTP acceptance and activation are separate milestones.
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
   settlement, bounded managed OTLP export, standing policy and private admission.
   Actual immutable role gates cover 96 reader, 294 writer, 78 startup and 45
@@ -69,7 +75,7 @@ and accepting a production effect are different milestones.
 | P3 / state compatibility | Complete the core browser dataset rollout and compatible recovery floor; general state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
-| P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |
+| P4 / diagnostics | Activate and accept the unified install/uninstall/resolution projection; extend actual graph diagnostics as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It

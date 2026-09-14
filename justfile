@@ -47,6 +47,10 @@ idb-browser-conformance BROWSER:
 idb-outbox-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" idb-outbox' conformance "{{BROWSER}}"
 
+# Real core lifecycle history UI, synthetic evidence only; never a live account.
+plugin-lifecycle-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" plugin-lifecycle' conformance "{{BROWSER}}"
+
 # Disposable authenticated HTTP + WebSocket handshakes against exact releases.
 product-sync-controller-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run

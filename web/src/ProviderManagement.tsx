@@ -74,7 +74,7 @@ import { isNativeShell } from "./nativeShell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { ConfirmSheet } from "./Sheet";
 import { createPluginInstallRequest } from "./pluginInstallation.ts";
-import { PluginInstallationHistory } from "./PluginInstallationHistory.tsx";
+import { PluginLifecycleHistory } from "./PluginLifecycleHistory.tsx";
 
 interface ProviderMachine {
   id: string;
@@ -1248,7 +1248,7 @@ function ProviderManagement(
                       />
                     )
                     : null}
-                  {scope === "machine" && <PluginInstallationHistory machine={machine.id} plugin={entry.provider_id} />}
+                  {scope === "machine" && <PluginLifecycleHistory machine={machine.id} plugin={entry.provider_id} />}
                 </Stack>
               </Paper>
             </ProviderManagementCard>

@@ -1,0 +1,57 @@
+{
+  "schema": "dravengarden.cowboy.plugin-lifecycle-history/v1",
+  "machine_id": "hawk",
+  "plugin_id": "victoria",
+  "execution_authorized": false,
+  "observation": "independent_durable_reads",
+  "window": "latest_per_kind",
+  "limit_per_kind": 32,
+  "admission": { "install": true, "uninstall": true },
+  "requires_reconciliation": false,
+  "entries": [
+    {
+      "kind": "install",
+      "operation": {
+        "evidence_schema": 2,
+        "operation_id": "operation-shared-fixture",
+        "phase": "completed",
+        "problem": null,
+        "attention_from": null,
+        "plugin_kind": "telemetry_backend",
+        "plugin_version": "1.1.0",
+        "generation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "created_at_ms": 1,
+        "updated_at_ms": 3,
+        "machine_receipt": {
+          "state": "applied",
+          "revision": "installation-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    },
+    {
+      "kind": "uninstall",
+      "operation": {
+        "evidence_schema": 2,
+        "operation_id": "operation-shared-fixture",
+        "phase": "aborted",
+        "problem": "interrupted",
+        "cause": null,
+        "attention_from": "prepared",
+        "plugin_version": "1.1.0",
+        "generation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "affected_session_count": 2,
+        "purge_after_ms": 4,
+        "created_at_ms": 1,
+        "updated_at_ms": 3
+      },
+      "resolution": {
+        "resolution_id": "resolution-separate-fixture",
+        "action": "abort_before_effects",
+        "resolved_at_ms": 3,
+        "plugin_mutation_performed": false,
+        "session_mutation_performed": false,
+        "worker_restoration_performed": false
+      }
+    }
+  ]
+}

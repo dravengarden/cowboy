@@ -118,6 +118,9 @@ login, checks no-store identity and role boundaries, and exercises real browser
 and native-shell-class WebSocket handshakes. No production account or actual
 native client participates. Use the separate 8-case IDB and 16-case outbox
 real-browser gates for storage; neither test substitutes for the other.
+Optional `lifecycle_history` flags additionally exercise the
+[core durable history](plugin-lifecycle-history.md) against selected actual
+readers. They default to false; absence is not history-projection acceptance.
 
 Component registry 3.6.0 appends state-sync-idb 1.7.0 only. All seven Plugin
 sources, versions and 2.9.0 pins remain unchanged; no Catalog publication or

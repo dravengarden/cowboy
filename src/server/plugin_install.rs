@@ -14,7 +14,7 @@ use crate::machine_protocol::plugin_install::{
 use crate::plugin_operation::installation::{InstallIntent, InstallPhase, InstallProblem};
 use axum::http::HeaderValue;
 
-mod journal;
+pub(super) mod journal;
 use journal::Progress;
 pub(super) use journal::api_machine_plugin_install_operations;
 

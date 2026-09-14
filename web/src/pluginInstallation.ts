@@ -167,7 +167,10 @@ function machineOutcome(value: unknown): MachineInstallOutcome | null {
   }
 }
 
-function evidence(value: unknown, legacy: boolean): InstallEvidence {
+export function decodeInstallEvidence(
+  value: unknown,
+  legacy = false,
+): InstallEvidence {
   const row = object(value, [
     "operation_id",
     "phase",
@@ -308,7 +311,7 @@ export function decodeInstallHistory(value: unknown): InstallHistory {
     !Array.isArray(row.operations) || row.operations.length > 32
   ) invalid();
   const operations = row.operations.map((operation) =>
-    evidence(operation, legacy)
+    decodeInstallEvidence(operation, legacy)
   );
   if (
     new Set(operations.map((op) => op.operation_id)).size !== operations.length

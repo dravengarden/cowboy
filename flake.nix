@@ -89,6 +89,7 @@
           ./tests/fixtures/telemetry-resolution-surface.json
           ./tests/fixtures/telemetry-recovery-surface.json
           ./tests/fixtures/telemetry-binding-surface.json
+          ./tests/fixtures/plugin-lifecycle-history.json
         ] ++ plugin-contract-files ++ plugin-host-files);
       };
 
@@ -233,7 +234,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-pzTrctQxuogyxYqgfmLCZi0Aw5msCk6WrgTTYwLrFHo=";
+        hash = "sha256-XLJ/dn7rhomu2ds+l6Fhc2+mLd01moQFkwXR64I0Djc=";
         preBuild = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
