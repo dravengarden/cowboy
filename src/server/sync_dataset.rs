@@ -5,10 +5,6 @@
 use super::*;
 
 pub(super) const SUBPROTOCOL: &str = "cowboy-sync-v1";
-// The bridge may serve old Web until the accepted dataset-aware Web is active.
-// Enable its successor only after that component activation; never infer an
-// old browser's data identity from the cookie it happens to present now.
-pub(super) const REQUIRE_BOUND_BROWSER: bool = false;
 
 #[derive(Serialize)]
 pub(super) struct Descriptor {
@@ -70,7 +66,10 @@ pub(super) fn socket_check(
     match supplied {
         Some(value) if matches(service, principal, value) => Ok(()),
         Some(_) => Err(StatusCode::CONFLICT),
-        None if browser && REQUIRE_BOUND_BROWSER => Err(StatusCode::UPGRADE_REQUIRED),
+        // The dataset-aware Web and compatible recovery floor are release
+        // prerequisites. Never infer an old browser's data identity from the
+        // cookie it happens to present now, or reopen that path with a toggle.
+        None if browser => Err(StatusCode::UPGRADE_REQUIRED),
         None => Ok(()),
     }
 }
@@ -118,11 +117,7 @@ mod tests {
         assert_eq!(socket_check("service", &principal, false, None), Ok(()));
         assert_eq!(
             socket_check("service", &principal, true, None),
-            if REQUIRE_BOUND_BROWSER {
-                Err(StatusCode::UPGRADE_REQUIRED)
-            } else {
-                Ok(())
-            }
+            Err(StatusCode::UPGRADE_REQUIRED)
         );
         assert!(!principal.can_reorder());
         assert_eq!(
