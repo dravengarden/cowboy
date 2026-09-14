@@ -64,6 +64,7 @@ use tokio_util::io::ReaderStream;
 
 mod operator_approval;
 mod plugin_uninstall;
+mod provider_auth_sync;
 mod telemetry_binding;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
@@ -224,6 +225,7 @@ struct AppState {
     plugin_storage: crate::plugin_storage::PluginStorage,
     provider_catalog: Arc<crate::provider_catalog::ProviderCatalog>,
     provider_auth: Arc<crate::provider_service::ProviderAuthService>,
+    provider_auth_sync: provider_auth_sync::Coordinator,
     provider_auth_executors: parking_lot::Mutex<HashMap<String, ProviderAuthExecutor>>,
     plugin_uninstall_plans: parking_lot::Mutex<HashMap<String, PluginUninstallPlan>>,
     plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans,
@@ -1456,6 +1458,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_storage,
             provider_catalog,
             provider_auth,
+            provider_auth_sync: provider_auth_sync::Coordinator::default(),
             provider_auth_executors: parking_lot::Mutex::new(HashMap::new()),
             plugin_uninstall_plans: parking_lot::Mutex::new(HashMap::new()),
             plugin_resolution_plans: plugin_uninstall::resolution::ResolutionPlans::default(),
@@ -12280,6 +12283,7 @@ async fn sync_provider_auth_to_machine(
     machine_id: &str,
     provider_id: &str,
 ) -> Result<u64, String> {
+    let connection = state.machine_control.operation_connection(machine_id)?;
     let store = state
         .store
         .as_ref()
@@ -12293,20 +12297,10 @@ async fn sync_provider_auth_to_machine(
         .provider_auth
         .seal_for_machine(provider_id, &public_key)
         .map_err(|error| error.to_string())?;
-    let auth_generation = envelope.auth_generation;
-    let request_id = machine_request_id("provider-auth");
     state
-        .machine_control
-        .command_request(
-            machine_id,
-            request_id.clone(),
-            crate::machine_protocol::MachineCommand::ApplyProviderAuth {
-                request_id,
-                envelope: Box::new(envelope),
-            },
-        )
-        .await?;
-    Ok(auth_generation)
+        .provider_auth_sync
+        .apply(&state.machine_control, &connection, envelope)
+        .await
 }
 
 fn failed_provider_auth_projection_ids(

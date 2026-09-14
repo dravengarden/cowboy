@@ -66,6 +66,7 @@ primary phone/desktop product path.
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
 - [`plugin-packages.md`](plugin-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
+- [`provider-auth-sync-coordination.md`](provider-auth-sync-coordination.md) — Bounded same-generation reconciliation on one authenticated connection, cancellation and late-receipt fencing
 
 ### Integrations
 

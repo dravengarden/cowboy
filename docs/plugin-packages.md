@@ -628,6 +628,14 @@ current generation after enrollment. Installing a Provider on a Machine that
 already has the sealed replica automatically materializes it; no second login
 is shown.
 
+Overlapping synchronization of the same Service generation on the same exact
+Machine connection shares one pending command and its original deadline.
+Completed results are not cached, new generations and connections remain
+independent, and cancellation or stale receipts never grant success or resend.
+See [reconciliation coordination](provider-auth-sync-coordination.md) for its
+bounded lifetime and acceptance limits. This does not disable the required
+new-generation worker drain/resume behavior above.
+
 The Service owns auth `signed_out`, `authenticating`, `ready`, `expired`, or
 `error`, plus aggregate distribution `none`, `pending`, `current`, `partial`,
 `failed`, or `revoking`. Machine diagnostics separate replica `pending`,
