@@ -235,7 +235,9 @@ async fn exercise(
     *stage = "descriptor_status";
     let response = get(&client, &base, "/api/sync/dataset", Some(&operator)).await?;
     if mode == Mode::Legacy {
-        check(response.status() == StatusCode::NOT_FOUND)?;
+        // These retained Controllers classify unknown API routes as admin-only;
+        // a Product cookie must get 401, not bypass the fallback to reach 404.
+        check(response.status() == StatusCode::UNAUTHORIZED)?;
         *stage = "legacy_new_socket";
         socket(
             &base,
@@ -318,7 +320,9 @@ async fn exercise(
             == StatusCode::OK,
     )?;
     let denied = client
-        .post(format!("{base}/api/plugins/catalog/refresh"))
+        .post(format!(
+            "{base}/api/machines/{MACHINE}/plugins/victoria/install"
+        ))
         .header(header::ORIGIN, &base)
         .header(header::COOKIE, &viewer)
         .send()
