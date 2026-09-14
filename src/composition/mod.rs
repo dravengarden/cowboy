@@ -1,12 +1,17 @@
 //! Read-only, deterministic structural linking across Service/Machine sites.
 //!
-//! Nothing here reads a Catalog, credentials, policy, inventory or session state.
+//! The structural checker reads no Catalog, credentials, policy or live state.
 //! Input releases and ports are UNTRUSTED claims. A checked proposal is not an
 //! AuthorizedPlan/VerifiedRelease; no installer or executor accepts it. Runtime
 //! integration must resolve verified packages, authority, fences and leases.
+//! `telemetry` resolves the existing finite domain's actual runtime inputs;
+//! it never consumes a structural proposal/report as execution authority.
 
 mod json;
 mod wire;
+
+#[cfg(feature = "full")]
+pub(crate) mod telemetry;
 
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};

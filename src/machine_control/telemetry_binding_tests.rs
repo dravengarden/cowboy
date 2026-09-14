@@ -40,7 +40,7 @@ async fn telemetry_binding_commit_requires_protocol_fifteen_and_namespace_cas() 
         for step in [fixture(), execution_fixture()] {
             assert_eq!(
                 control
-                    .commit_telemetry_binding(&connection, &step)
+                    .commit_telemetry_binding(&connection, &step, None)
                     .await
                     .unwrap_err()
                     .certainty,
@@ -62,7 +62,7 @@ async fn telemetry_binding_commit_requires_protocol_fifteen_and_namespace_cas() 
     let (connection, mut commands) = connect(&control, 15);
     assert_eq!(
         control
-            .commit_telemetry_binding(&connection, &fixture())
+            .commit_telemetry_binding(&connection, &fixture(), None)
             .await
             .unwrap_err()
             .certainty,
@@ -70,7 +70,7 @@ async fn telemetry_binding_commit_requires_protocol_fifteen_and_namespace_cas() 
     );
     assert_eq!(
         control
-            .commit_telemetry_binding(&connection, &execution_fixture())
+            .commit_telemetry_binding(&connection, &execution_fixture(), None)
             .await
             .unwrap_err()
             .certainty,
@@ -92,7 +92,7 @@ async fn telemetry_binding_commit_replies_cannot_substitute_query_or_command_res
         policy_epoch: "1".to_owned().try_into().unwrap(),
     };
     for forged in [false, true] {
-        let commit = control.commit_telemetry_binding(&connection, &step);
+        let commit = control.commit_telemetry_binding(&connection, &step, None);
         let reply = async {
             let MachineCommand::CommitTelemetryBinding {
                 request_id,
@@ -153,7 +153,7 @@ async fn telemetry_binding_commit_late_reply_never_crosses_a_connection_incarnat
     step.change = BindingChange::Revoke {
         policy_epoch: "1".to_owned().try_into().unwrap(),
     };
-    let commit = control.commit_telemetry_binding(&connection, &step);
+    let commit = control.commit_telemetry_binding(&connection, &step, None);
     let replace = async {
         let MachineCommand::CommitTelemetryBinding { request_id, .. } =
             commands.recv().await.unwrap()
@@ -176,7 +176,7 @@ async fn telemetry_binding_commit_late_reply_never_crosses_a_connection_incarnat
     assert!(control.live.read().pending.is_empty());
     assert_eq!(
         control
-            .commit_telemetry_binding(&connection, &step)
+            .commit_telemetry_binding(&connection, &step, None)
             .await
             .unwrap_err()
             .certainty,
@@ -196,7 +196,7 @@ async fn telemetry_binding_commit_storage_failure_is_not_proof_of_no_effect() {
     step.change = BindingChange::Revoke {
         policy_epoch: "1".to_owned().try_into().unwrap(),
     };
-    let commit = control.commit_telemetry_binding(&connection, &step);
+    let commit = control.commit_telemetry_binding(&connection, &step, None);
     let reply = async {
         let MachineCommand::CommitTelemetryBinding { request_id, .. } =
             commands.recv().await.unwrap()

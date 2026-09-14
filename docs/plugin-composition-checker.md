@@ -112,6 +112,12 @@ verified packages, current enrollment, grants, policy epochs and live leases.
 
 ## Still to implement
 
+The [finite telemetry resolver](resolved-telemetry-ports.md) now feeds exact
+verified releases and original installation-observation leases into the existing
+managed binding/export executors. It takes those domains' real typed requests,
+not this checker's untrusted proposal/report. General graph/scope/state-lease
+resolution is still outstanding.
+
 This completes a runnable structural foundation, not the entire P0–P4 design.
 The subsequent [runtime binding slice](plugin-runtime-bindings.md) fences Core
 RPCs to authenticated connection incarnations and connects the existing telemetry

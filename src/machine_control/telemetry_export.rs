@@ -2,7 +2,7 @@
 //! result-history retention of telemetry payloads.
 use super::{
     CommandFailure, CommandRequestError, ConnectionToken, MachineCommand, MachineControl, Reply,
-    ReplyKind, RequestBinding,
+    ReplyKind, RequestBinding, TelemetryInstallationLease,
 };
 use crate::machine_protocol::telemetry_export::{ATTEMPT_BUDGET, ExportAttempt, ExportReceipt};
 
@@ -12,6 +12,7 @@ impl MachineControl {
         &self,
         token: &ConnectionToken,
         attempt: &ExportAttempt,
+        lease: &TelemetryInstallationLease,
     ) -> bool {
         let live = self.live.read();
         attempt.validate().is_ok()
@@ -21,9 +22,11 @@ impl MachineControl {
                     && c.protocol
                         >= crate::machine_protocol::TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION
             })
-            && attempt.binding.selection.as_ref().is_some_and(|target| {
-                live.telemetry_installation_matches(&token.0.machine_id, target)
-            })
+            && attempt
+                .binding
+                .selection
+                .as_ref()
+                .is_some_and(|target| lease.matches(&live, token, target))
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -31,6 +34,7 @@ impl MachineControl {
         &self,
         token: &ConnectionToken,
         attempt: &ExportAttempt,
+        lease: &TelemetryInstallationLease,
     ) -> Result<ExportReceipt, CommandRequestError> {
         let fail = |certainty, detail: &str| CommandRequestError {
             certainty,
@@ -51,7 +55,7 @@ impl MachineControl {
                     attempt: Box::new(attempt.clone()),
                 },
                 ReplyKind::TelemetryExport,
-                Some(RequestBinding::TelemetryExport(token, attempt)),
+                Some(RequestBinding::TelemetryExport(token, attempt, lease)),
             )
             .map_err(|_| {
                 fail(
@@ -121,10 +125,13 @@ mod tests {
         for protocol in 1..16 {
             let control = MachineControl::default();
             let (token, mut commands) = connect(&control, protocol);
-            assert!(!control.telemetry_export_target_current(&token, &fixture()));
+            let lease = control
+                .lease_telemetry_installation(&token, fixture().binding.selection.as_ref().unwrap())
+                .unwrap();
+            assert!(!control.telemetry_export_target_current(&token, &fixture(), &lease));
             assert_eq!(
                 control
-                    .export_bound_telemetry(&token, &fixture())
+                    .export_bound_telemetry(&token, &fixture(), &lease)
                     .await
                     .unwrap_err()
                     .certainty,
@@ -135,7 +142,10 @@ mod tests {
         let control = MachineControl::default();
         let (token, mut commands) = connect(&control, 16);
         let request = fixture();
-        let send = control.export_bound_telemetry(&token, &request);
+        let lease = control
+            .lease_telemetry_installation(&token, request.binding.selection.as_ref().unwrap())
+            .unwrap();
+        let send = control.export_bound_telemetry(&token, &request, &lease);
         let replace = async {
             let MachineCommand::ExportBoundTelemetry { request_id, .. } =
                 commands.recv().await.unwrap()
@@ -163,7 +173,7 @@ mod tests {
         assert!(control.live.read().pending.is_empty());
         assert_eq!(
             control
-                .export_bound_telemetry(&token, &request)
+                .export_bound_telemetry(&token, &request, &lease)
                 .await
                 .unwrap_err()
                 .certainty,
@@ -177,7 +187,10 @@ mod tests {
             let control = MachineControl::default();
             let (token, mut commands) = connect(&control, 16);
             let request = fixture();
-            let send = control.export_bound_telemetry(&token, &request);
+            let lease = control
+                .lease_telemetry_installation(&token, request.binding.selection.as_ref().unwrap())
+                .unwrap();
+            let send = control.export_bound_telemetry(&token, &request, &lease);
             let respond = async {
                 let MachineCommand::ExportBoundTelemetry {
                     request_id,

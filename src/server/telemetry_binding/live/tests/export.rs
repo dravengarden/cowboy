@@ -8,6 +8,60 @@ use axum::http::StatusCode;
 
 mod background;
 
+#[tokio::test]
+async fn resolved_export_does_not_revive_after_observed_inventory_aba() {
+    let f = Fixture::new(true, false).await;
+    let destination = Destination::new(StatusCode::OK, false).await;
+    configure(&f, &destination.endpoint);
+    f.coordinate(&f.select()).await;
+    let approval = Approval::new();
+    for changed in composition::disruptions(&f.installed) {
+        let export = scope(&f, attempt(&f, 0), &approval).unwrap();
+        f.publish(changed);
+        f.publish(vec![f.installed.clone()]);
+        assert!(export.execute(&f.store, approval.auth()).await.is_err());
+    }
+    assert!(destination.requests.lock().is_empty());
+}
+
+#[tokio::test]
+async fn resolved_export_requires_its_verified_otlp_contract_and_original_input() {
+    use crate::composition::telemetry::ResolvedExport;
+    use crate::machine_control::CommandFailure;
+    let legacy = Fixture::setup_release(true, false, false, None, "1.0.0").await;
+    assert!(legacy.bind(&legacy.select()).unwrap().current());
+    assert!(
+        ResolvedExport::resolve(&legacy.catalog, &legacy.control, attempt(&legacy, 0)).is_err()
+    );
+
+    let f = Fixture::new(true, false).await;
+    for index in 0..3 {
+        let request = attempt(&f, index);
+        let resolved = ResolvedExport::resolve(&f.catalog, &f.control, request.clone()).unwrap();
+        assert_eq!(resolved.attempt(), &request);
+        let mut caller_copy = request;
+        caller_copy.attempt_id = "different-attempt".into();
+        caller_copy.payload.protobuf.clear();
+        assert_ne!(resolved.attempt(), &caller_copy);
+        let lease = f
+            .control
+            .lease_telemetry_installation(&f.connection, resolved.installation())
+            .unwrap();
+        f.publish(vec![]);
+        f.publish(vec![f.installed.clone()]);
+        assert_eq!(
+            f.control
+                .export_bound_telemetry(&f.connection, resolved.attempt(), &lease)
+                .await
+                .unwrap_err()
+                .certainty,
+            CommandFailure::NotSent
+        );
+    }
+    assert_eq!(f.sends.load(Ordering::Relaxed), 0);
+    assert_eq!(f.queries.load(Ordering::Relaxed), 0);
+}
+
 struct Approval {
     hub: crate::core::Hub,
     devices: crate::client_auth::DeviceAccessSessions,

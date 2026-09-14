@@ -96,6 +96,16 @@ pub(crate) struct VerifiedTelemetryRelease {
 }
 
 impl VerifiedTelemetryRelease {
+    pub(crate) fn matches_installation(
+        &self,
+        installation: &crate::machine_protocol::telemetry_binding::BindingInstallation,
+    ) -> bool {
+        installation.plugin_id == self.contract.id
+            && installation.plugin_version == self.contract.version
+            && String::from(installation.generation_digest.clone()) == self.generation_digest
+            && String::from(installation.contract_fingerprint.clone()) == self.contract_fingerprint
+    }
+
     pub(crate) fn matches_inventory(
         &self,
         plugin: &crate::machine_protocol::PluginInventory,

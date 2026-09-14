@@ -17,6 +17,9 @@ use tokio::sync::{mpsc, oneshot};
 mod installation;
 mod telemetry_export;
 mod telemetry_recovery;
+mod telemetry_resolution;
+
+pub(crate) use telemetry_resolution::TelemetryInstallationLease;
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
@@ -90,10 +93,15 @@ enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
     Connection(&'a ConnectionToken),
     Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
-    Telemetry(&'a ConnectionToken, &'a BindingStep),
+    Telemetry(
+        &'a ConnectionToken,
+        &'a BindingStep,
+        Option<&'a TelemetryInstallationLease>,
+    ),
     TelemetryExport(
         &'a ConnectionToken,
         &'a crate::machine_protocol::telemetry_export::ExportAttempt,
+        &'a TelemetryInstallationLease,
     ),
 }
 
@@ -234,6 +242,20 @@ struct PluginInventorySnapshot {
     plugins: Vec<PluginInventory>,
     // Local observation fence, NOT a durable Machine installation generation.
     revision: Arc<()>,
+    // Finite resolved ports depend on their installation slot, not unrelated
+    // Plugin upgrades or the arrival order of inventory entries.
+    slot_revisions: HashMap<String, Arc<()>>,
+}
+
+fn unique_plugins(plugins: &[PluginInventory]) -> HashMap<&str, Option<&PluginInventory>> {
+    let mut slots = HashMap::new();
+    for plugin in plugins {
+        slots
+            .entry(plugin.plugin_id.as_str())
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some(plugin));
+    }
+    slots
 }
 
 fn same_installation(left: &PluginInventory, right: &PluginInventory) -> bool {
@@ -256,14 +278,20 @@ struct LiveState {
 }
 
 impl LiveState {
-    fn telemetry_target_matches(&self, machine: &str, step: &BindingStep) -> bool {
+    fn telemetry_target_matches(
+        &self,
+        connection: &ConnectionToken,
+        step: &BindingStep,
+        lease: Option<&TelemetryInstallationLease>,
+    ) -> bool {
         let Ok(after) = step.after() else {
             return false;
         };
-        let Some(target) = after.selection else {
-            return true;
-        };
-        self.telemetry_installation_matches(machine, &target)
+        match (after.selection.as_ref(), lease) {
+            (None, None) => true, // Revocation never requires the removed Plugin.
+            (Some(target), Some(lease)) => lease.matches(self, connection, target),
+            _ => false,
+        }
     }
 
     fn telemetry_installation_matches(
@@ -357,7 +385,28 @@ impl LiveState {
     }
 
     fn observe_plugins(&mut self, machine_id: &str, plugins: &[PluginInventory]) {
-        let unchanged = self.plugin_inventory.get(machine_id).filter(|previous| {
+        let previous = self.plugin_inventory.get(machine_id);
+        let old_slots = previous
+            .map(|old| unique_plugins(&old.plugins))
+            .unwrap_or_default();
+        let slot_revisions = unique_plugins(plugins)
+            .into_iter()
+            .map(|(id, plugin)| {
+                let retained = plugin.and_then(|plugin| {
+                    old_slots
+                        .get(id)
+                        .copied()
+                        .flatten()
+                        .filter(|old| same_installation(old, plugin))
+                        .and_then(|_| previous?.slot_revisions.get(id))
+                });
+                (
+                    id.to_owned(),
+                    retained.map_or_else(|| Arc::new(()), Arc::clone),
+                )
+            })
+            .collect();
+        let unchanged = previous.filter(|previous| {
             previous.plugins.len() == plugins.len()
                 && previous
                     .plugins
@@ -371,6 +420,7 @@ impl LiveState {
             PluginInventorySnapshot {
                 plugins: plugins.to_vec(),
                 revision,
+                slot_revisions,
             },
         );
     }
@@ -652,24 +702,24 @@ impl MachineControl {
         if let Some(
             RequestBinding::Connection(token)
             | RequestBinding::Reactivate(token, _)
-            | RequestBinding::Telemetry(token, _)
-            | RequestBinding::TelemetryExport(token, _),
+            | RequestBinding::Telemetry(token, _, _)
+            | RequestBinding::TelemetryExport(token, _, _),
         ) = binding
             && !connection.token.same(token)
         {
             return Err("Machine operation connection is no longer current".to_owned());
         }
-        if let Some(RequestBinding::Telemetry(_, step)) = binding
-            && !live.telemetry_target_matches(machine_id, step)
+        if let Some(RequestBinding::Telemetry(token, step, lease)) = binding
+            && !live.telemetry_target_matches(token, step, lease)
         {
             return Err("Telemetry binding installation changed before dispatch".to_owned());
         }
-        if let Some(RequestBinding::TelemetryExport(_, attempt)) = binding
+        if let Some(RequestBinding::TelemetryExport(token, attempt, lease)) = binding
             && !attempt
                 .binding
                 .selection
                 .as_ref()
-                .is_some_and(|target| live.telemetry_installation_matches(machine_id, target))
+                .is_some_and(|target| lease.matches(&live, token, target))
         {
             return Err("Managed telemetry installation changed before dispatch".to_owned());
         }
@@ -1024,6 +1074,7 @@ impl MachineControl {
         &self,
         token: &ConnectionToken,
         step: &BindingStep,
+        lease: Option<&TelemetryInstallationLease>,
     ) -> bool {
         let live = self.live.read();
         step.validate_commit().is_ok()
@@ -1033,13 +1084,14 @@ impl MachineControl {
                     && c.protocol
                         >= crate::machine_protocol::TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
             })
-            && live.telemetry_target_matches(&token.0.machine_id, step)
+            && live.telemetry_target_matches(token, step, lease)
     }
 
     pub(crate) async fn commit_telemetry_binding(
         &self,
         token: &ConnectionToken,
         step: &BindingStep,
+        lease: Option<&TelemetryInstallationLease>,
     ) -> Result<BindingObservation, CommandRequestError> {
         let failure = |certainty, detail: &str| CommandRequestError {
             certainty,
@@ -1066,7 +1118,7 @@ impl MachineControl {
                     step: Box::new(step.clone()),
                 },
                 ReplyKind::TelemetryBindingCommit,
-                Some(RequestBinding::Telemetry(token, step)),
+                Some(RequestBinding::Telemetry(token, step, lease)),
             )
             .map_err(|_| {
                 failure(

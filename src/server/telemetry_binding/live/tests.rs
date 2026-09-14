@@ -53,11 +53,21 @@ impl Fixture {
         interrupted: bool,
         admission: Option<[bool; 3]>,
     ) -> Self {
+        Self::setup_release(writer, lose_ack, interrupted, admission, "1.1.0").await
+    }
+
+    async fn setup_release(
+        writer: bool,
+        lose_ack: bool,
+        interrupted: bool,
+        admission: Option<[bool; 3]>,
+        version: &str,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let publisher =
             crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
                 .unwrap();
-        let desired = crate::machine_plugins::telemetry_release_for_test(&publisher, "1.1.0");
+        let desired = crate::machine_plugins::telemetry_release_for_test(&publisher, version);
         let machine_root = root.path().join("machine");
         if let Some(purposes) = admission {
             fs::create_dir_all(&machine_root).unwrap();
@@ -336,6 +346,7 @@ impl Fixture {
 }
 
 mod admission;
+mod composition;
 mod export;
 mod recovery;
 mod resolution;

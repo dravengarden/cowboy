@@ -17,11 +17,7 @@ async fn signed_machine_resolution_queries_once_without_dispatch_policy_adoption
     let before = super::super::super::advance(&f.store, &before, Progress::Dispatching)
         .await
         .unwrap();
-    let observation = f
-        .control
-        .commit_telemetry_binding(&f.connection, &step)
-        .await
-        .unwrap();
+    let observation = f.bind(&intent).unwrap().dispatch(&step).await.unwrap();
     assert!(
         matches!(observation, BindingObservation::Observed { ref snapshot }
         if matches!(snapshot.receipt.as_ref().unwrap().outcome, BindingOutcome::Applied { .. }))

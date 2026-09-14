@@ -15,6 +15,11 @@ and accepting a production effect are different milestones.
   checkers in Rust and TypeScript; combined ownership/capability cycle checks
   and an 86-case real-CLI differential gate compare complete link reports. This
   is not verified live resolution or a grant.
+- [Finite live telemetry resolution](resolved-telemetry-ports.md) links exact
+  verified contracts and original per-installation observation leases to the
+  existing binding/export executors. An observed invalid installation cannot
+  revive an old operation by returning to the same tuple. This is not general
+  graph resolution, a state-dataset lease or new execution authority.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -48,7 +53,7 @@ and accepting a production effect are different milestones.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Verified-release/site/state-lease vectors and live-precondition changes, beyond the accepted shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend the finite telemetry live-resolution path to applicable graph contracts and actual Service/Workspace/Session scope identity, state leases and policy; link exact resolved results to finite domain executors | General verified-release/site/state-lease vectors beyond the telemetry per-installation observation fence and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; version-fenced IDB ownership across old/new clients, beyond accepted updated-peer atomic deltas | Old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |

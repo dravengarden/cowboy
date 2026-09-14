@@ -1,5 +1,10 @@
 # Connection-scoped runtime bindings
 
+For the later managed binding/export path, see
+[finite live telemetry resolution](resolved-telemetry-ports.md): it retains a
+per-installation observation lease through atomic enqueue. The historical
+whole-inventory binding below continues to serve the legacy exporter unchanged.
+
 Second implementation slice of the [spatiotemporal design](plugin-spatiotemporal-design.md).
 This strengthens existing Core communication and the actual Service → Machine
 telemetry path. It does not execute composition proposals or introduce a second
