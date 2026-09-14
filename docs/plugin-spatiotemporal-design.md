@@ -102,6 +102,12 @@ Controller × Machine 的全部九种角色组合。最新
 撤销/恢复后的旧策略隔离、独立本地记录及重启不重放。临时身份与隔离协议接收端不等同真实 Victoria
 或生产配置；实际 Operator 授权、主机策略切换及生产外发/故障/重启验收仍是 P2 退出前提。
 
+后续 [真实 Victoria 数据库验收](releases/telemetry-victoria-conformance-2026-09-14.md)
+已补齐同版不可变 Logs/Metrics/Traces 程序的隔离验证：九种 Controller/Machine 角色组合全部通过，
+18 轮实际查询验证关联 log/span、18 条精确指标序列和数据库重启后的相同结果；Cowboy 重启不重放。
+保留原有 45 流程故障验收，并修正夹具的空响应头、native scope 标签和 trace 索引等待窗口。
+该批不操作线上数据库、不激活生产策略；真实 Operator 确认、完整生产配置和 managed 切换仍未完成。
+
 [Controller 配置预检](telemetry-policy-preflight.md) 已复用真实启动校验，拒绝无效 writer/background
 策略且不创建 Service 或授予外发权；[2026-09-14 发布](releases/telemetry-policy-preflight-2026-09-14.md)
 已通过最终制品 96/294/78/45 项验收并只激活 Controller。生产 managed 配置仍未切换；发布期间
