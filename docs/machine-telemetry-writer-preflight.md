@@ -1,5 +1,9 @@
 # Machine telemetry writer-policy preflight
 
+The [2026-09-14 candidate record](releases/machine-writer-preflight-2026-09-14.md)
+records source publication, immutable checks and the separate, unperformed
+Machine activation boundary.
+
 The Machine core provides a configuration-only diagnostic:
 
 ```bash

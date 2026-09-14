@@ -120,6 +120,9 @@ Controller × Machine 的全部九种角色组合。最新
 [Machine writer 配置预检](machine-telemetry-writer-preflight.md) 补齐核心只读诊断，并把无效策略拒绝
 前置到组件、账本及 Provider 身份初始化之前。报告只含配置声明，不从 CLI 或策略自报身份推断真实
 enrolled owner，不打开安装、绑定或私有目的地；构建/发布该候选也不等于激活 Machine 或完成 P2。
+[本批候选验收](releases/machine-writer-preflight-2026-09-14.md) 已完成完整门禁、31 项命令检查及
+96/294 项不可变 reader/writer 验收，尚未激活 Machine。完整候选携带的 worker generation 与线上
+不同（先前 Cargo 测试依赖进入整文件哈希），须保留独立维护边界，不能宣称零会话影响更新。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和
