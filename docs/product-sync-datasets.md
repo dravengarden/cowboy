@@ -99,10 +99,11 @@ source gate. The historical Controller bridge supports both missing-dataset old
 Web and exact new Web, but always rejects an incorrect supplied dataset. Its
 `REQUIRE_BOUND_BROWSER=false` was explicitly **not** completed old-client fencing.
 Hawk's dataset-aware Web and compatible cold floor were activated on 2026-09-15.
-The current source removes that compatibility switch: browser/native-shell
-clients without a dataset always receive 426, while CLI clients retain their
-independent authentication/class boundary. Accept and activate this descendant
-separately before claiming live enforcement. Stale PWAs need a hard reload;
+The [subsequent bound release](releases/dataset-bound-maintenance-2026-09-15.md)
+removed that compatibility switch and is active: browser/native-shell clients
+without a dataset receive 426, while CLI clients retain their independent
+authentication/class boundary. The actual next-transaction recovery and cold
+Controller also passed the bound-mode checks. Stale PWAs need a hard reload;
 a WebSocket reconnect cannot load new JavaScript.
 
 Retain dataset-aware Web and Controller artifacts for recovery. Do not lower

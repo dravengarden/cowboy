@@ -36,10 +36,11 @@ and accepting a production effect are different milestones.
   immutable Service/principal binding, closed Service/Session keys, exact IDB v2
   writer fencing, transaction-lifetime connections and bounded read-only legacy
   export. Source gates include 16 real-browser outbox cases and eight connection
-  lifetime cases. The [accepted and activated Controller bridge](releases/product-datasets-and-lifecycle-2026-09-15.md)
-  still permits old Web. Web activation, the binding-required descendant and
-  compatible recovery roles remain separate maintenance exits. This is not a
-  general exclusive state lease or completed production migration.
+  lifetime cases. The historical [Controller bridge](releases/product-datasets-and-lifecycle-2026-09-15.md)
+  is superseded by the [activated Web, bound Controller and compatible cold floor](releases/dataset-bound-maintenance-2026-09-15.md).
+  Actual active/next-recovery/cold Controllers all pass bound-mode acceptance.
+  This closes the finite deployment sequence, not general exclusive state
+  leases, physical-device acceptance or adoption of unowned browser records.
 - Service uninstall journal, Machine uninstall receipts, installation-incarnation
   CAS, execution leases, continuous Operator checks, read-only recovery and a
   separately confirmed abort of a proven pre-effect Service interruption.
@@ -62,7 +63,7 @@ and accepting a production effect are different milestones.
   include the exact Rust/Web fixture and six real React/browser lifecycle cases.
   Its actual immutable Controller HTTP acceptance and Controller activation
   [passed](releases/product-datasets-and-lifecycle-2026-09-15.md); the shared Web
-  consumer is built but not activated with the pending dataset migration.
+  consumer is now [activated with the dataset release](releases/dataset-bound-maintenance-2026-09-15.md).
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
   settlement, bounded managed OTLP export, standing policy and private admission.
   Actual immutable role gates cover 96 reader, 294 writer, 78 startup and 45
@@ -74,10 +75,10 @@ and accepting a production effect are different milestones.
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Extend the finite telemetry live-resolution path to applicable graph contracts and actual Service/Workspace/Session scope identity, state leases and policy; link exact resolved results to finite domain executors | General verified-release/site/state-lease vectors beyond the telemetry per-installation observation fence and shared structural link vectors; no serialized authorization |
-| P3 / state compatibility | Complete the core browser dataset rollout and compatible recovery floor; general state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
+| P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
-| P4 / diagnostics | Activate the accepted unified install/uninstall/resolution Web consumer; extend actual graph diagnostics as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
+| P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
@@ -91,10 +92,13 @@ unconstrained workflow executor to hide these gaps.
 
 ## Production and supported-client acceptance still required
 
-- **Browser dataset and TLS maintenance:** update the owning cold recovery floor,
-  activate dataset-aware Web, then accept/activate the binding-required Controller
-  descendant. The TLS fix is active only in Controller; the built Machine/worker
-  generation still needs independently approved maintenance and supported-session
+- **Supported browser and retained-worker acceptance:** dataset-aware Web, bound
+  Controller, compatible cold recovery and independently authorized Machine
+  maintenance are [activated](releases/dataset-bound-maintenance-2026-09-15.md).
+  The TLS floor is active in Controller and resident Machine, but retained worker
+  generations were not force-replaced; their native-generation acceptance and
+  actual supported-device reload/storage checks remain. One independent client
+  context reset crossed the observation window and is not native-continuity
   acceptance. Old browser records remain unowned and retained, never auto-replayed.
 - **Core security handoff:** actual Password, device-authorization completion and
   Passkey tests; supported native origin/gesture tests; then the owning committed
