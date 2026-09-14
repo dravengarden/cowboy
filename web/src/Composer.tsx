@@ -170,6 +170,8 @@ import {
   mobilePendingRowMinHeight,
 } from "./mobileComposerPrimitives";
 import {
+  mobileComposerHairlineColor,
+  mobileComposerOutlineColor,
   mobileFocusedComposerFill,
   mobileFocusedComposerSurfaceSx,
 } from "./mobileComposerSurface";
@@ -2267,7 +2269,7 @@ export function ComposerWorkspace({
                 opacity: 1,
                 transform: "translateY(0)",
                 pointerEvents: "auto",
-                borderTopColor: (t) => alpha(t.palette.divider, 0.42),
+                borderTopColor: mobileComposerHairlineColor,
                 transition:
                   `max-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, opacity 110ms ease 55ms, transform ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, border-color 120ms ease`,
               },
@@ -5573,7 +5575,7 @@ function PendingRow({
             ...(desktop ? { p: 0.75 } : {
               borderRadius: mobileComposerPanelFrameSx.borderRadius,
               bgcolor: "transparent",
-              borderColor: (theme) => alpha(theme.palette.primary.main, 0.42),
+              borderColor: mobileComposerOutlineColor,
               transition:
                 `border-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, background-color ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}, box-shadow ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
               // Match the primary card: visualViewport is the keyboard authority.

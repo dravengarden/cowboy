@@ -1,6 +1,11 @@
 import type { MouseEventHandler, PointerEventHandler, ReactNode } from "react";
-import { alpha, Box, IconButton, Stack, Tooltip } from "@mui/material";
+import { Box, IconButton, Stack, Tooltip } from "@mui/material";
 import { mobileComposerPanelFrameSx } from "./mobileComposerPrimitives";
+import {
+  mobileComposerHairlineColor,
+  mobileComposerOutlineColor,
+  mobileComposerOutlineGlow,
+} from "./mobileComposerSurface";
 import { NetworkIconButton } from "./NetworkActionFeedback";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
@@ -43,16 +48,18 @@ export function MobileComposerAccessoryDock({
         // while embedded/inline compose still had no gap at all.
         mb: 0,
         ...(embedded
-          ? { borderTop: 1, borderColor: "divider", overflow: "hidden" }
-          : mobileComposerPanelFrameSx),
-        borderColor: (theme) => alpha(theme.palette.divider, 0.5),
+          ? {
+            borderTop: 1,
+            overflow: "hidden",
+            borderColor: mobileComposerHairlineColor,
+            boxShadow: "none",
+          }
+          : {
+            ...mobileComposerPanelFrameSx,
+            borderColor: mobileComposerOutlineColor,
+            boxShadow: mobileComposerOutlineGlow,
+          }),
         bgcolor: "background.paper",
-        boxShadow: embedded
-          ? "none"
-          : (theme) =>
-            theme.palette.mode === "dark"
-              ? "0 8px 26px rgba(0, 0, 0, 0.22)"
-              : "0 8px 24px rgba(57, 42, 92, 0.08)",
         userSelect: "none",
         WebkitUserSelect: "none",
         animation: embedded
@@ -73,7 +80,7 @@ export function MobileComposerAccessoryDock({
           minWidth: 0,
           pl: 0.5,
           borderBottom: 1,
-          borderColor: (theme) => alpha(theme.palette.divider, 0.34),
+          borderColor: mobileComposerHairlineColor,
         }}
       >
         <Stack
@@ -212,7 +219,7 @@ export function MobileComposerFixedActionSlot({
         // The compact fullscreen control floats alone over the editor and needs
         // no rail separator. Expanded two-track docks retain aligned dividers.
         borderLeft: overlay ? 0 : 1,
-        borderColor: (theme) => alpha(theme.palette.divider, 0.22),
+        borderColor: mobileComposerHairlineColor,
         ...(overlay && {
           position: "absolute",
           top: 2,
