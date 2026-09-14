@@ -18,6 +18,15 @@ impl TimeSample {
         }
     }
 
+    /// Carry the original receipt-time cap across a site boundary. Computing a
+    /// new wall deadline after validation/queueing would give the remote site
+    /// more time than the originating confirmation retained.
+    #[cfg(feature = "full")]
+    pub(crate) fn deadline_ms(self, cap: Duration) -> i64 {
+        self.wall_ms
+            .saturating_add(i64::try_from(cap.as_millis()).unwrap_or(i64::MAX))
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(monotonic: Instant, wall_ms: i64) -> Self {
         Self { monotonic, wall_ms }

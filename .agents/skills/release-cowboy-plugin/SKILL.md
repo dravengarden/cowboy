@@ -47,6 +47,17 @@ admission paused until that floor is accepted. This test does not prove durable
 Machine installation receipts, production Operator authority or restoration,
 and does not authorize installing a Plugin. See `docs/plugin-install-journal.md`.
 
+For Machine installation attempt changes, also run
+`just plugin-machine-install-reader-conformance <matrix.json> <new-receipt.json>`.
+Require all 72 checks across immutable Machine active, next-transaction recovery
+and cold roles, including two opens, exact historical/changed-identity queries,
+pending-slot fences and missing/corrupt authority rejection. This is a reader
+codec gate, not installation-effect or restored-generation acceptance. Keep
+Machine attempt admission disabled until the actual host reader floor and the
+corresponding Service coordinator are accepted. See
+`docs/plugin-machine-install-attempts.md`; no production Plugin installation is
+authorized by running these disposable fixtures.
+
 For managed telemetry binding/recovery reader floors, use the repository-owned
 `just telemetry-reader-conformance <matrix.json> <new-receipt.json>` from clean
 committed source in the pinned Linux shell. It executes immutable Controller

@@ -26,6 +26,7 @@ use crate::machine_protocol::{
     MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
 };
 
+mod installation;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
 pub(crate) mod telemetry_recovery;
@@ -1885,15 +1886,64 @@ fn handle_machine_command(
                 });
             });
         }
+        MachineCommand::ObservePluginInstallation { request_id, query } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .installation_target(
+                        &query,
+                        service_id.as_deref(),
+                        &machine_id,
+                        installation::WRITER_ENABLED && plugin_operation_admission,
+                    )
+                    .await;
+                let _ = events.send(MachineEvent::PluginInstallationTarget {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
+        MachineCommand::QueryPluginInstallStep { request_id, step } => {
+            tokio::spawn(async move {
+                let observation = providers
+                    .query_installation_step(
+                        &step,
+                        service_id.as_deref(),
+                        &machine_id,
+                        installation::WRITER_ENABLED && plugin_operation_admission,
+                    )
+                    .await;
+                let _ = events.send(MachineEvent::PluginInstallationStep {
+                    request_id,
+                    observation: Box::new(observation),
+                });
+            });
+        }
+        MachineCommand::InstallPluginStep {
+            request_id,
+            step,
+            plugin,
+        } => {
+            installation::install(
+                request_id,
+                *step,
+                *plugin,
+                providers,
+                execution,
+                installation::WRITER_ENABLED && plugin_operation_admission,
+                events,
+            );
+        }
         MachineCommand::InstallPlugin { request_id, plugin } => {
             tokio::spawn(async move {
                 let result = providers.install(&plugin).await;
                 let accepted = result.is_ok();
                 let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
+                if let Ok(plugins) = providers.inventory() {
+                    let _ = events.send(MachineEvent::PluginInventory {
+                        plugins,
+                        observed_at_ms: unix_ms(),
+                    });
+                }
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,

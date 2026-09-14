@@ -7,8 +7,11 @@
 
 #![warn(clippy::pedantic)]
 
+mod installation;
 mod operations;
 mod telemetry;
+use crate::machine_protocol::plugin_install::InstallPhase;
+use installation::InstallGuard;
 
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
@@ -289,7 +292,9 @@ impl MachinePluginStore {
                 continue;
             }
             let plugin = entry.file_name().to_string_lossy().into_owned();
-            if self.operations.installations.tracked(&plugin) {
+            if self.operations.installations.tracked(&plugin)
+                || self.operations.install_attempts.tracked(&plugin)
+            {
                 continue;
             }
             if let Some(active) = self.inventory_one_untracked(&plugin)? {
@@ -368,12 +373,11 @@ impl MachinePluginStore {
 
     pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
         let _lifecycle = self.lifecycle.lock().await;
-        self.operations.installations.ensure_writable()?;
+        self.install_inner(desired, &mut InstallGuard::Legacy).await
+    }
+
+    fn verified_install_package(&self, desired: &DesiredPlugin) -> Result<PluginPackage> {
         let plugin_package = self.checked_install_package(desired)?;
-        self.operations
-            .ensure_unfenced(&plugin_package.manifest.id)?;
-        let (host_bundle, host_bundle_bytes) =
-            desired_plugin_host_bundle(desired, &plugin_package)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
             &desired.publisher_public_key,
             PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
@@ -381,6 +385,20 @@ impl MachinePluginStore {
             &desired.release.signature,
         )?;
         ensure!(signature_valid, "Plugin publisher signature is invalid");
+        desired_plugin_host_bundle(desired, &plugin_package)?;
+        Ok(plugin_package)
+    }
+
+    async fn install_inner(
+        &self,
+        desired: &DesiredPlugin,
+        guard: &mut InstallGuard<'_>,
+    ) -> Result<PluginInventory> {
+        guard.validate_for(self, desired)?;
+        let plugin_package = self.verified_install_package(desired)?;
+        let (host_bundle, host_bundle_bytes) =
+            desired_plugin_host_bundle(desired, &plugin_package)?;
+        guard.phase(InstallPhase::Staging)?;
         self.pin_publisher(
             &plugin_package.manifest.publisher,
             &desired.publisher_public_key,
@@ -395,14 +413,33 @@ impl MachinePluginStore {
                     desired,
                     host_bundle.as_ref(),
                     host_bundle_bytes.as_deref(),
+                    guard,
                 )
                 .await;
         }
+        self.install_agent_plugin(
+            &plugin_package,
+            desired,
+            host_bundle.as_ref(),
+            host_bundle_bytes.as_deref(),
+            guard,
+        )
+        .await
+    }
+
+    async fn install_agent_plugin(
+        &self,
+        plugin_package: &PluginPackage,
+        desired: &DesiredPlugin,
+        host_bundle: Option<&PluginHostBundle>,
+        host_bundle_bytes: Option<&[u8]>,
+        guard: &mut InstallGuard<'_>,
+    ) -> Result<PluginInventory> {
         let package = plugin_package
             .agent_provider()
             .context("Machine Agent installer received a non-Agent Plugin")?
             .clone();
-        let provider_release = desired.release.agent_provider_binding(&plugin_package)?;
+        let provider_release = desired.release.agent_provider_binding(plugin_package)?;
         let payload = matching_payload(&package, &self.platform, &self.architecture)?;
         let runtime_artifacts =
             matching_runtime_artifacts(&provider_release, &self.platform, &self.architecture)?;
@@ -439,32 +476,44 @@ impl MachinePluginStore {
             desired.publisher_public_key.as_bytes(),
             0o600,
         )?;
-        stage_plugin_host_bundle(&content, host_bundle.as_ref(), host_bundle_bytes.as_deref())?;
+        stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
 
-        let runtime = stage_provider_runtime(&content, runtime_artifacts).await?;
+        let runtime = guard
+            .bounded(stage_provider_runtime(&content, runtime_artifacts, guard))
+            .await?;
         let launch_command = runtime
             .commands
             .get(&payload.launch_command)
             .context("staged Provider runtime does not export its launch command")?;
         let launch_command = content.join(&launch_command.executable);
         ensure_within(&content, &launch_command)?;
-        probe_provider_runtime(&package.manifest.runtime, &launch_command).await?;
+        guard
+            .bounded(probe_provider_runtime(
+                &package.manifest.runtime,
+                &launch_command,
+            ))
+            .await?;
+        guard.flush_staging(&content)?;
+        guard.before_activation(self)?;
         let pending =
             self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
+        guard.check()?;
         let activation = Self::activate(&plugin_root, &generation_name)?;
         // A sealed Service replica may predate installation. Materialize it as
         // part of activation so installation never asks for another login.
-        if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth)
-            && let Err(error) = self.commit_prepared_auth(envelope, Some(&package), prepared)
-        {
-            if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation) {
-                bail!(
-                    "Provider authentication activation failed: {error:#}; restoring the previous Provider generation also failed: {rollback_error:#}"
-                );
+        if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth) {
+            guard.phase(InstallPhase::ProjectingAuthentication)?;
+            if let Err(error) = self.commit_prepared_auth(envelope, Some(&package), prepared) {
+                guard.check()?;
+                if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation) {
+                    bail!(
+                        "Provider authentication activation failed: {error:#}; restoring the previous Provider generation also failed: {rollback_error:#}"
+                    );
+                }
+                return Err(error.context(
+                    "Provider authentication activation failed; previous generation restored",
+                ));
             }
-            return Err(error.context(
-                "Provider authentication activation failed; previous generation restored",
-            ));
         }
         self.finish_installation(&package.manifest.id, pending)?;
         self.inventory_one(&package.manifest.id)?
@@ -477,6 +526,7 @@ impl MachinePluginStore {
         desired: &DesiredPlugin,
         host_bundle: Option<&PluginHostBundle>,
         host_bundle_bytes: Option<&[u8]>,
+        guard: &mut InstallGuard<'_>,
     ) -> Result<PluginInventory> {
         let artifacts = matching_plugin_runtime_artifacts(
             &desired.release.runtime_artifacts,
@@ -515,12 +565,14 @@ impl MachinePluginStore {
             0o600,
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
-        stage_provider_runtime(&content, &runtime_artifacts).await?;
+        guard
+            .bounded(stage_provider_runtime(&content, &runtime_artifacts, guard))
+            .await?;
         if matches!(package.payload, PluginPayload::CodeIntelligence(_))
             && let Some(plan) =
                 self.code_launch_plan(package, &desired.release.artifact_digest, &content)?
         {
-            probe_code_runtime(&plan).await?;
+            guard.bounded(probe_code_runtime(&plan)).await?;
         }
         let inventory = PluginInventory {
             plugin_id: package.manifest.id.clone(),
@@ -542,8 +594,11 @@ impl MachinePluginStore {
             &serde_json::to_vec(&inventory)?,
             0o600,
         )?;
+        guard.flush_staging(&content)?;
+        guard.before_activation(self)?;
         let pending =
             self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
+        guard.check()?;
         if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
             self.activate_code_generation(package, &generation_name)?;
         } else {
@@ -3189,7 +3244,9 @@ fn matching_runtime_artifacts<'a>(
 async fn stage_provider_runtime(
     content: &Path,
     artifacts: &PlatformRuntimeArtifacts,
+    guard: &InstallGuard<'_>,
 ) -> Result<InstalledRuntimeMetadata> {
+    guard.check()?;
     let active = content.join("runtime");
     if active.exists() {
         let metadata = read_installed_runtime(content)
@@ -3212,7 +3269,8 @@ async fn stage_provider_runtime(
         let client = reqwest::Client::new();
         let mut commands = BTreeMap::new();
         for artifact in &artifacts.components {
-            let staged = stage_runtime_component(&client, &temporary, artifact).await?;
+            guard.check()?;
+            let staged = stage_runtime_component(&client, &temporary, artifact, guard).await?;
             let executable = staged
                 .executable
                 .strip_prefix(&temporary)
@@ -3243,6 +3301,7 @@ async fn stage_provider_runtime(
             schema_version: 2,
             commands,
         };
+        guard.check()?;
         atomic_write(
             &temporary.join("metadata.json"),
             &serde_json::to_vec(&metadata)?,
@@ -3426,7 +3485,9 @@ async fn stage_runtime_component(
     client: &reqwest::Client,
     runtime_root: &Path,
     artifact: &ReleasedPrivateComponent,
+    guard: &InstallGuard<'_>,
 ) -> Result<StagedRuntimeComponent> {
+    guard.check()?;
     let url = reqwest::Url::parse(&artifact.artifact_url)?;
     let loopback = matches!(url.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
     ensure!(
@@ -3450,6 +3511,7 @@ async fn stage_runtime_component(
     let mut bytes = Vec::with_capacity(capacity);
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
+        guard.check()?;
         let chunk = chunk.context("downloading Provider runtime artifact")?;
         let next_size = bytes
             .len()
@@ -3466,6 +3528,7 @@ async fn stage_runtime_component(
         digest == artifact.artifact_digest.to_ascii_lowercase(),
         "Provider runtime artifact digest mismatch"
     );
+    guard.check()?;
     let component_root = runtime_root.join(format!("{}-{}", artifact.kind.as_str(), artifact.slot));
     fs::create_dir_all(&component_root)?;
     let (executable, stored_artifact) = match artifact.artifact_format {
@@ -4217,9 +4280,9 @@ mod tests {
         };
         assert_eq!(receipt.outcome, StepOutcome::Applied {});
         assert!(store.inventory().unwrap().is_empty());
+        installation::tests::assert_retained_lifecycle(store, desired).await;
     }
 
-    #[cfg(feature = "full")]
     pub(super) fn telemetry_release(
         publisher: &crate::machine_auth::MachineIdentity,
         version: &str,
@@ -5448,7 +5511,9 @@ mod tests {
             }],
         };
 
-        let error = stage_provider_runtime(&root, &artifacts).await.unwrap_err();
+        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("must use HTTPS"));
         assert!(fs::read_dir(&root).unwrap().all(|entry| {
             !entry

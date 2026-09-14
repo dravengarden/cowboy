@@ -8,6 +8,7 @@ use crate::machine_protocol::plugin_step::{
     StepUncertainty, UninstallStep, digest,
 };
 
+pub(super) mod install_attempts;
 pub(super) mod installations;
 pub(crate) mod lease;
 mod telemetry_bindings;
@@ -40,6 +41,7 @@ pub(super) struct Journal {
     _owner: OwnerLock,
     state: parking_lot::Mutex<JournalState>,
     pub(super) installations: installations::Installations,
+    pub(super) install_attempts: install_attempts::Attempts,
     pub(in crate::machine_plugins) telemetry_bindings: telemetry_bindings::Bindings,
 }
 
@@ -87,6 +89,7 @@ impl Journal {
             let name = name.to_str().context("invalid Machine journal entry")?;
             if name == "owner.lock"
                 || name == installations::DIRECTORY
+                || name == install_attempts::DIRECTORY
                 || name == telemetry_bindings::FILE
                 || (name.starts_with('.') && name.ends_with(".partial"))
             {
@@ -132,8 +135,14 @@ impl Journal {
                 "duplicate Machine step"
             );
         }
+        let installations =
+            installations::Installations::open(root.join(installations::DIRECTORY))?;
+        let install_attempts =
+            install_attempts::Attempts::open(root.join(install_attempts::DIRECTORY))?;
+        install_attempts.validate_installations(&installations)?;
         Ok(Self {
-            installations: installations::Installations::open(root.join(installations::DIRECTORY))?,
+            installations,
+            install_attempts,
             telemetry_bindings: telemetry_bindings::Bindings::open_with_admission(
                 &root.join(telemetry_bindings::FILE),
                 writer,
@@ -186,6 +195,7 @@ impl Journal {
     }
 
     pub(super) fn ensure_unfenced(&self, plugin: &str) -> Result<()> {
+        self.install_attempts.ensure_unfenced(plugin)?;
         self.installations.ensure_unfenced(plugin)?;
         let state = self.state.lock();
         ensure!(
@@ -200,6 +210,7 @@ impl Journal {
     }
 
     pub(super) fn ensure_legacy_allowed(&self, plugin: &str) -> Result<()> {
+        self.install_attempts.ensure_legacy_allowed()?;
         ensure!(
             !self.installations.requires_cas(),
             "Plugin lifecycle requires installation CAS"
@@ -355,7 +366,7 @@ impl MachinePluginStore {
 
     // Unlike the legacy inventory helper, malformed/dangling links and regular
     // files must not be mistaken for an absent installation during recovery.
-    fn recovery_active_digest(&self, plugin: &str) -> Result<Option<String>> {
+    pub(super) fn recovery_active_digest(&self, plugin: &str) -> Result<Option<String>> {
         let root = self.plugin_root(plugin);
         match root.symlink_metadata() {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -454,12 +465,7 @@ impl MachinePluginStore {
         if !self.operations.installations.admits(step) {
             return unavailable(StepUnavailable::ReaderOnly);
         }
-        if self
-            .operations
-            .installations
-            .ensure_unfenced(&step.plugin_id)
-            .is_err()
-        {
+        if self.operations.ensure_unfenced(&step.plugin_id).is_err() {
             return match self.operations.query(step) {
                 StepLookup::NotFound {} => unavailable(StepUnavailable::SlotFenced),
                 found => found,

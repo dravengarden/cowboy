@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod installation_revision;
+pub mod plugin_install;
 pub mod plugin_recovery;
 pub mod plugin_step;
 pub mod telemetry_binding;
@@ -16,7 +17,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 18;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 19;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -37,6 +38,9 @@ pub const TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION: u16 = 16;
 pub const TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION: u16 = 17;
 /// Read-only audit discovery by the complete original binding step.
 pub const TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION: u16 = 18;
+/// Closed installation target CAS, durable attempts and original-connection
+/// leases. Negotiation is not independent Machine writer admission.
+pub const PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION: u16 = 19;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -696,6 +700,19 @@ pub enum MachineCommand {
         request_id: String,
         plugin: Box<DesiredPlugin>,
     },
+    ObservePluginInstallation {
+        request_id: String,
+        query: Box<plugin_install::InstallTargetQuery>,
+    },
+    InstallPluginStep {
+        request_id: String,
+        step: Box<plugin_install::InstallStep>,
+        plugin: Box<DesiredPlugin>,
+    },
+    QueryPluginInstallStep {
+        request_id: String,
+        step: Box<plugin_install::InstallStep>,
+    },
     UninstallPlugin {
         request_id: String,
         plugin_id: String,
@@ -806,6 +823,9 @@ impl MachineCommand {
                     TELEMETRY_BINDING_COMMIT_PROTOCOL_VERSION
                 }
             }
+            Self::ObservePluginInstallation { .. }
+            | Self::InstallPluginStep { .. }
+            | Self::QueryPluginInstallStep { .. } => PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION,
             Self::QueryPluginUninstallRecovery { .. } => {
                 PLUGIN_RECOVERY_OBSERVATION_PROTOCOL_VERSION
             }
@@ -1037,6 +1057,14 @@ pub enum MachineEvent {
     PluginUninstallStep {
         request_id: String,
         observation: Box<plugin_step::StepObservation>,
+    },
+    PluginInstallationTarget {
+        request_id: String,
+        observation: Box<plugin_install::InstallTargetObservation>,
+    },
+    PluginInstallationStep {
+        request_id: String,
+        observation: Box<plugin_install::InstallObservation>,
     },
     PluginUninstallRecovery {
         request_id: String,

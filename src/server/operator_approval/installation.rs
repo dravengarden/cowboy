@@ -24,7 +24,7 @@ impl OperatorApproval {
         desired: &DesiredPlugin,
         operation_id: String,
     ) -> Result<InstallationAuthority> {
-        let expires_at_ms = auth_now_ms().saturating_add(300_000);
+        let expires_at_ms = self.received.deadline_ms(Duration::from_mins(5));
         let intent = InstallIntent {
             schema: 1,
             request_id: format!("plugin-install-{operation_id}"),

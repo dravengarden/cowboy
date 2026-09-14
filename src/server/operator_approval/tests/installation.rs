@@ -1,5 +1,28 @@
 use super::*;
 
+#[tokio::test]
+async fn installation_wire_deadline_keeps_time_spent_before_binding() {
+    let h = Harness::new().await;
+    let (headers, verified) = h.cookie().await;
+    let mut approval =
+        OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers).unwrap();
+    let original_wall = auth_now_ms() - 240_000;
+    approval.received = TimeSample::for_test(
+        std::time::Instant::now() - Duration::from_secs(240),
+        original_wall,
+    );
+    let authority = approval
+        .bind_installation(
+            "machine-test",
+            &desired(),
+            "original-deadline-fixture-0001".into(),
+        )
+        .unwrap();
+    assert_eq!(authority.intent().expires_at_ms, original_wall + 300_000);
+    assert!(authority.within_budget());
+    assert!(authority.intent().expires_at_ms <= auth_now_ms() + 60_000);
+}
+
 fn desired() -> crate::machine_protocol::DesiredPlugin {
     // This fixture tests confirmation binding, not package/signature admission.
     // It deliberately needs no Machine-host module in the Controller test slice.

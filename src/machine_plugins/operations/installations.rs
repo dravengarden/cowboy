@@ -263,6 +263,42 @@ impl Installations {
         self.state.lock().present
     }
 
+    pub(in crate::machine_plugins) fn writer_enabled(&self) -> bool {
+        let state = self.state.lock();
+        state.present && state.writer && !state.poisoned
+    }
+
+    /// A vacant slot is distinct from an untracked active link. This is called
+    /// only with the store lifecycle lock and a freshly validated link read.
+    pub(in crate::machine_plugins) fn install_target(
+        &self,
+        plugin: &str,
+        active: Result<Option<String>>,
+    ) -> Result<crate::machine_protocol::plugin_install::InstallTarget> {
+        use crate::machine_protocol::plugin_install::InstallTarget;
+        let active = active?;
+        let state = self.state.lock();
+        ensure!(
+            state.present && !state.poisoned,
+            "untracked installation authority"
+        );
+        match state.slots.get(plugin) {
+            None if active.is_none() => Ok(InstallTarget::Vacant {}),
+            Some(t) if t.outcome == (Outcome::Stable {}) && active == t.generation_digest => {
+                Ok(match &t.generation_digest {
+                    Some(generation_digest) => InstallTarget::Installed {
+                        revision: t.revision.clone(),
+                        generation_digest: generation_digest.clone(),
+                    },
+                    None => InstallTarget::Removed {
+                        revision: t.revision.clone(),
+                    },
+                })
+            }
+            _ => bail!("installation target is unavailable or requires reconciliation"),
+        }
+    }
+
     pub(in crate::machine_plugins) fn ensure_writable(&self) -> Result<()> {
         let state = self.state.lock();
         ensure!(

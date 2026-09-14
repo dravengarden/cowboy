@@ -22,11 +22,13 @@ const LOG_BYTES: usize = 128 * 1024;
 mod admission;
 mod connected;
 mod installation;
+mod machine_installation;
 mod startup;
 pub(super) use admission::run as writer_admission;
 pub(super) use connected::run as connected_pair;
 pub(super) use connected::run_victoria as victoria_pair;
 pub(super) use installation::run as installation_reader;
+pub(super) use machine_installation::run as machine_installation_reader;
 pub(super) use startup::run as background_startup;
 
 pub(super) fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -410,6 +412,15 @@ async fn connect_machine(
     listener: TcpListener,
     root: &Path,
 ) -> Result<(Socket, u16), Failure> {
+    connect_machine_at(running, listener, root, 17).await
+}
+
+async fn connect_machine_at(
+    running: &mut Running,
+    listener: TcpListener,
+    root: &Path,
+    floor: u16,
+) -> Result<(Socket, u16), Failure> {
     let stream = tokio::select! {
         connection = listener.accept() => connection.map_err(|_| Failure::WrongProtocol)?.0,
         _ = running.child.wait() => return Err(Failure::ExitedBeforeReady),
@@ -435,13 +446,19 @@ async fn connect_machine(
         return Err(Failure::UnexpectedHandshake);
     };
     if hello.machine_id != MACHINE
-        || hello.min_protocol > 17
-        || hello.max_protocol < 17
+        || hello.min_protocol > floor
+        || hello.max_protocol < floor
         || !hello.plugins.is_empty()
     {
         return Err(Failure::WrongProtocol);
     }
-    let protocol = if hello.max_protocol >= 18 { 18 } else { 17 };
+    let protocol = if floor >= 19 {
+        floor
+    } else if hello.max_protocol >= 18 {
+        18
+    } else {
+        17
+    };
     let public = std::fs::read_to_string(root.join("machine/identity_ed25519.pub"))
         .map_err(|_| Failure::ChallengeSignature)?;
     let proof = crate::machine_protocol::challenge_proof_v3(

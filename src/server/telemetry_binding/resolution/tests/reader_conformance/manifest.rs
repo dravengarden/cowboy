@@ -39,6 +39,13 @@ pub(super) struct ControllerMatrix {
     controller: Readers,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MachineMatrix {
+    schema: u16,
+    machine: Readers,
+}
+
 #[derive(Serialize)]
 pub(super) struct Artifact {
     pub lane: Lane,
@@ -125,6 +132,13 @@ impl ControllerMatrix {
     pub(super) fn resolve(self) -> Result<Vec<Artifact>> {
         ensure!(self.schema == 1, "unsupported matrix schema");
         resolve([(Lane::Controller, self.controller)])
+    }
+}
+
+impl MachineMatrix {
+    pub(super) fn resolve(self) -> Result<Vec<Artifact>> {
+        ensure!(self.schema == 1, "unsupported matrix schema");
+        resolve([(Lane::Machine, self.machine)])
     }
 }
 

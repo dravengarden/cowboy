@@ -14,6 +14,7 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+mod installation;
 mod telemetry_export;
 mod telemetry_recovery;
 
@@ -126,6 +127,8 @@ enum ReplyKind {
     Command,
     PluginHost,
     PluginStep,
+    InstallationTarget,
+    InstallationStep,
     PluginRecovery,
     TelemetryBinding,
     TelemetryBindingCommit,
@@ -142,6 +145,8 @@ pub(crate) enum PluginUninstallTransport {
 }
 
 enum Reply {
+    InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
+    InstallationStep(Box<crate::machine_protocol::plugin_install::InstallObservation>),
     PluginStep(Box<StepObservation>),
     PluginRecovery(Box<RecoveryObservation>),
     TelemetryBinding(Box<BindingObservation>),
@@ -165,6 +170,8 @@ enum Reply {
 impl Reply {
     const fn kind(&self) -> ReplyKind {
         match self {
+            Self::InstallationTarget(_) => ReplyKind::InstallationTarget,
+            Self::InstallationStep(_) => ReplyKind::InstallationStep,
             Self::PluginStep(_) => ReplyKind::PluginStep,
             Self::PluginRecovery(_) => ReplyKind::PluginRecovery,
             Self::TelemetryBinding(_) => ReplyKind::TelemetryBinding,
@@ -525,6 +532,18 @@ impl MachineControl {
                 observation,
             } => {
                 live.complete(token, &request_id, Reply::PluginRecovery(observation));
+            }
+            MachineEvent::PluginInstallationTarget {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::InstallationTarget(observation));
+            }
+            MachineEvent::PluginInstallationStep {
+                request_id,
+                observation,
+            } => {
+                live.complete(token, &request_id, Reply::InstallationStep(observation));
             }
             MachineEvent::PluginUninstallStep {
                 request_id,
