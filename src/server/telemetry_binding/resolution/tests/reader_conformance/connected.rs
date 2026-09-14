@@ -120,6 +120,8 @@ pub(super) struct Outcome {
     pub machine_after_sha256: Option<String>,
     pub failure: Option<Failure>,
     pub delivery: Option<DeliveryReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victoria: Option<super::victoria::DatabaseReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]

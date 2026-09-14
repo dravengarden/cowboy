@@ -13,6 +13,9 @@ The initial
 records the first four flows and failed harness attempts. The subsequent
 [45-result managed-delivery acceptance](releases/telemetry-managed-delivery-conformance-2026-09-13.md)
 adds the fifth flow and fresh actual-role/production-continuity evidence.
+The separate [Victoria database gate](telemetry-victoria-conformance.md) adds
+real isolated database ingestion/query/reopen checks; this protocol receiver
+remains required for the full 45-flow fault contract.
 
 The closed schema-one matrix is the same as the reader/writer matrix:
 `controller` and `machine`, each with `active`, `rollback` and `cold` absolute

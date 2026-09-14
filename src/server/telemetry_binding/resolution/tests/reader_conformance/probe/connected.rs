@@ -10,6 +10,7 @@ mod delivery;
 mod flows;
 mod http;
 mod proxy;
+mod victoria;
 
 struct Background {
     path: PathBuf,
@@ -27,6 +28,7 @@ struct Pair<'a> {
     proxy: proxy::Proxy,
     http: http::Http,
     destination: Option<delivery::Destination>,
+    databases: Option<victoria::Databases>,
     background: Option<Background>,
 }
 
@@ -184,6 +186,9 @@ impl Pair<'_> {
         if let Some(destination) = self.destination.as_mut() {
             result = result.and(destination.finish().await);
         }
+        if let Some(databases) = self.databases.as_mut() {
+            result = result.and(databases.finish().await);
+        }
         result
     }
 }
@@ -203,7 +208,29 @@ pub(in super::super) async fn run(
     ssh_keygen: &Path,
 ) -> Outcome {
     let mut outcome = Outcome::default();
-    let result = prepare(controller, machine, flow, ssh_keygen, &mut outcome).await;
+    let result = prepare(controller, machine, flow, ssh_keygen, None, &mut outcome).await;
+    if let Err(failure) = result {
+        outcome.failure = Some(failure);
+    }
+    outcome
+}
+
+pub(in super::super) async fn run_victoria(
+    controller: &Artifact,
+    machine: &Artifact,
+    ssh_keygen: &Path,
+    databases: &[super::super::victoria::DatabaseArtifact],
+) -> Outcome {
+    let mut outcome = Outcome::default();
+    let result = prepare(
+        controller,
+        machine,
+        Flow::ManagedDelivery,
+        ssh_keygen,
+        Some(databases),
+        &mut outcome,
+    )
+    .await;
     if let Err(failure) = result {
         outcome.failure = Some(failure);
     }
@@ -215,10 +242,17 @@ async fn prepare(
     machine: &Artifact,
     flow: Flow,
     ssh_keygen: &Path,
+    database_artifacts: Option<&[super::super::victoria::DatabaseArtifact]>,
     outcome: &mut Outcome,
 ) -> Result<(), Failure> {
     let root = tempfile::tempdir().map_err(|_| Failure::Setup)?;
-    let destination = if flow == Flow::ManagedDelivery {
+    let databases = match database_artifacts {
+        Some(artifacts) => Some(victoria::Databases::start(root.path(), artifacts).await?),
+        None => None,
+    };
+    let destination = if let Some(databases) = &databases {
+        Some(delivery::Destination::forwarding(databases.addresses()).await?)
+    } else if flow == Flow::ManagedDelivery {
         Some(delivery::Destination::start().await?)
     } else {
         None
@@ -259,6 +293,7 @@ async fn prepare(
         proxy,
         http,
         destination,
+        databases,
         background: None,
     };
     drop(listener);
@@ -279,7 +314,14 @@ async fn prepare(
         before.matches(pair.root)?;
         if flow == Flow::ManagedDelivery {
             let report = outcome.delivery.insert(DeliveryReport::default());
-            delivery::exercise(&mut pair, &mut outcome.stage, report).await?;
+            if database_artifacts.is_some() {
+                let database_report = outcome
+                    .victoria
+                    .insert(super::super::victoria::DatabaseReport::default());
+                victoria::exercise(&mut pair, &mut outcome.stage, report, database_report).await?;
+            } else {
+                delivery::exercise(&mut pair, &mut outcome.stage, report).await?;
+            }
         } else {
             flows::exercise(&mut pair, flow, &mut outcome.stage).await?;
             let client = pair.http.recording_client()?;

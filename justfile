@@ -323,6 +323,12 @@ telemetry-connected-conformance MATRIX RECEIPT:
     cargo test --locked --all-features --lib --no-run
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_CONNECTED_MATRIX="$1" COWBOY_TEST_TELEMETRY_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::connected::immutable_connected_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
 
+# Real disposable Victoria databases; no caller-supplied endpoint, credential or
+# state path. Separate from the mandatory 45-flow protocol/fault receiver gate.
+telemetry-victoria-conformance MATRIX DATABASES RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_TELEMETRY_VICTORIA_MATRIX="$1" COWBOY_TEST_TELEMETRY_VICTORIA_DATABASES="$2" COWBOY_TEST_TELEMETRY_VICTORIA_RECEIPT="$3"; exec cargo test --offline --locked --all-features --lib server::telemetry_binding::resolution::tests::reader_conformance::victoria::immutable_victoria_telemetry -- --ignored --exact --nocapture' conformance "{{MATRIX}}" "{{DATABASES}}" "{{RECEIPT}}"
+
 # Deployment preflight: every embedded Agent Provider version must have an
 # exact signed publication receipt and immutable artifact set in the target
 # Service Catalog before a Controller carrying those manifests is activated.

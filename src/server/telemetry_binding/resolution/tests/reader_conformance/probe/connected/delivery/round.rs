@@ -35,7 +35,15 @@ pub(super) async fn run(
     step: DeliveryStep,
     report: &mut DeliveryReport,
 ) -> Result<(), Failure> {
-    let mut fixtures = crate::otlp::client_fixtures();
+    run_fixtures(pair, step, report, crate::otlp::client_fixtures()).await
+}
+
+pub(in super::super) async fn run_fixtures(
+    pair: &Pair<'_>,
+    step: DeliveryStep,
+    report: &mut DeliveryReport,
+    mut fixtures: Vec<(Signal, Vec<u8>)>,
+) -> Result<(), Failure> {
     if step.ack() != Ack::Forward {
         fixtures.retain(|(s, _)| *s == Signal::Logs);
         check(fixtures.len() == 1)?;

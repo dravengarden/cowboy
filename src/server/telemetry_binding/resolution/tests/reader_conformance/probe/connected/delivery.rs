@@ -3,7 +3,7 @@ use super::*;
 use crate::otlp::Signal;
 
 mod receiver;
-mod round;
+pub(super) mod round;
 mod wire;
 pub(super) use receiver::Destination;
 pub(super) use wire::Wire;
@@ -95,7 +95,7 @@ pub(super) async fn exercise(
     )
 }
 
-async fn activate(
+pub(super) async fn activate(
     pair: &mut Pair<'_>,
     report: &mut DeliveryReport,
     metrics_only: bool,
@@ -124,7 +124,10 @@ async fn activate(
     Ok((path, snapshot))
 }
 
-async fn reopen_without_replay(pair: &mut Pair<'_>, machine: bool) -> Result<(), Failure> {
+pub(super) async fn reopen_without_replay(
+    pair: &mut Pair<'_>,
+    machine: bool,
+) -> Result<(), Failure> {
     let destination = pair.destination.as_ref().ok_or(Failure::Setup)?;
     let records = destination.records()?;
     let exports = pair.proxy.export_snapshot();

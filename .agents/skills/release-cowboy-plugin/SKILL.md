@@ -88,6 +88,18 @@ credentials, a real Victoria database, external delivery or complete owned
 configuration. See `docs/telemetry-connected-conformance.md`; it does not by
 itself authorize production policy cutover or complete P2.
 
+For real database ingestion/query acceptance, additionally run
+`just telemetry-victoria-conformance <matrix.json> <databases.json> <new-receipt.json>`.
+Require every role pair against explicit immutable VictoriaLogs/Metrics/Traces
+executables, actual correlated log/trace identities and cumulative metric
+values, same-store graceful database reopen and no replay after Cowboy restart.
+This gate permits only disposable storage and isolated loopback; never add a
+production URL, credential or existing data-directory input. Keep the 45-flow
+protocol/fault gate separate. Bind database versions to the intended target
+independently; a supplied triple, synthetic Operator and graceful reopen do not
+accept actual host policy, production authentication, crash durability or P2
+cutover. See `docs/telemetry-victoria-conformance.md`.
+
 Before accepting intended Controller telemetry configuration, run its actual
 `serve --check-plugin-hosts` as the Service owner with the intended arguments and
 environment. Require `telemetry.schema` to equal
