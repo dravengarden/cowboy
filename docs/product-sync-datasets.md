@@ -95,12 +95,15 @@ its own URLs/timers. It never closes the shared dataset owner.
 ## Rollout and recovery
 
 Controller/Web order and recovery compatibility are separate from a passing
-source gate. The initial Controller bridge supports both missing-dataset old
+source gate. The historical Controller bridge supports both missing-dataset old
 Web and exact new Web, but always rejects an incorrect supplied dataset. Its
-`REQUIRE_BOUND_BROWSER=false` is explicitly **not** completed old-client fencing.
-After the accepted dataset-aware Web is active, a separately gated descendant
-must require binding for browser/native-shell clients. Stale PWAs then need a
-hard reload; a WebSocket reconnect cannot load new JavaScript.
+`REQUIRE_BOUND_BROWSER=false` was explicitly **not** completed old-client fencing.
+Hawk's dataset-aware Web and compatible cold floor were activated on 2026-09-15.
+The current source removes that compatibility switch: browser/native-shell
+clients without a dataset always receive 426, while CLI clients retain their
+independent authentication/class boundary. Accept and activate this descendant
+separately before claiming live enforcement. Stale PWAs need a hard reload;
+a WebSocket reconnect cannot load new JavaScript.
 
 Retain dataset-aware Web and Controller artifacts for recovery. Do not lower
 the IDB version, delete records or reactivate an old blind writer to make a
@@ -108,6 +111,9 @@ rollback appear successful. A legacy Controller's refusal of the new client is
 safe refusal, not usable dataset compatibility. Accept the actual active,
 next-transaction recovery and cold roles separately; an ordinary component
 release does not authorize a host policy or resident Machine maintenance change.
+The first Web cutover must specify accepted dataset-aware Web recovery through
+the machine-owned transaction; restoring only an old bundle cannot undo an IDB
+upgrade. Subsequent Web transactions may use their now-compatible predecessor.
 
 Run `just product-sync-controller-conformance <matrix> <new-receipt>` from clean
 committed source in the pinned shell. Its closed input contains `readers` (the
