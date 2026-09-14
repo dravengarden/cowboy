@@ -1,10 +1,12 @@
 # Durable core installation attempts
 
-Status: 2026-09-14, reader-first rollout. The finite Service installer now records
+Status: 2026-09-14, reader-first rollout. The finite Service installer records
 install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
-or installation dispatch. New admission stays paused until the active,
-next-transaction recovery and cold Controller readers are accepted. This is not
-Machine maintenance or a new Plugin lifecycle.
+or installation dispatch. Reader revision `95c0e854` pauses new admission. Its
+writer-enabled descendant may be activated only after the active,
+next-transaction recovery and cold Controller readers are accepted; building or
+testing it does not establish those host roles. This is not Machine maintenance
+or a new Plugin lifecycle.
 
 ## Identity and authority
 

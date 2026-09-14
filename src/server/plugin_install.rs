@@ -13,9 +13,10 @@ mod journal;
 use journal::Progress;
 pub(super) use journal::api_machine_plugin_install_operations;
 
-// Reader-first rollout: active, next-transaction recovery AND cold Controller
-// must understand install evidence before this descendant admits writes.
-pub(super) const DURABLE_INSTALL_ENABLED: bool = false;
+// Activation requires the accepted reader-first floor (95c0e854 or a compatible
+// descendant) in active, next-transaction recovery AND cold Controller roles.
+// Building this descendant does not establish those host-owned roles.
+pub(super) const DURABLE_INSTALL_ENABLED: bool = true;
 
 #[derive(Clone, Copy)]
 enum Disposition {
