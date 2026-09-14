@@ -23,8 +23,9 @@ and accepting a production effect are different milestones.
 - [Durable Service installation attempts](plugin-install-journal.md), including
   exact operation identity, original confirmation/connection, prior-committed
   effect phases, install/uninstall claim exclusion and restart fences; closed,
-  reloadable history is shared by the two installation clients. Writer admission
-  remains a separate active/recovery/cold-reader rollout boundary.
+  reloadable history is shared by the two installation clients. The
+  [active/recovery/cold-reader rollout and writer admission are accepted on Hawk](releases/plugin-install-journal-2026-09-14.md),
+  without a production Plugin installation or a Machine generation change.
 - Core local-security ownership implementation and crash-recoverable adoption,
   without moving credentials or changing historical SQL bytes.
 - Finite Victoria binding/revoke/restore, independently authorized recovery and
@@ -39,7 +40,7 @@ and accepting a production effect are different milestones.
 | --- | --- | --- |
 | P0 / typed resolution | Resolve applicable composition contracts against verified releases and actual enrolled sites, state leases and policy; link that exact resolved result to a finite domain executor | Verified-release/site/state-lease vectors and live-precondition changes, beyond the accepted shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond existing core-security and telemetry namespaces; cross-tab writer arbitration for IDB | Old/new readers and writers, exclusive fenced ownership, crash/reopen, version-change and independent workspace/generation coexistence |
-| P4 / installation | Machine-owned install/upgrade staging/activation receipts and installation CAS, building on the Service journal; accept actual reader floors before writer admission | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
+| P4 / installation | Machine-owned install/upgrade staging/activation receipts and installation CAS, building on the active Service journal and requiring its own reader/admission rollout | Each supported Plugin lifecycle, cancellation/crash at each boundary, same-ID deduplication and changed-input refusal across actual readers |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | One typed projection of these real operation instances and their independent recovery actions | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate |
 

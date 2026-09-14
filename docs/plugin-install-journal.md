@@ -1,10 +1,11 @@
 # Durable core installation attempts
 
-Status: 2026-09-14, reader-first rollout. The finite Service installer records
+Status: 2026-09-14, [accepted and active on Hawk](releases/plugin-install-journal-2026-09-14.md).
+The finite Service installer records
 install and upgrade attempts in PostgreSQL/SQLite before any authentication sync
-or installation dispatch. Reader revision `95c0e854` pauses new admission. Its
-writer-enabled descendant may be activated only after the active,
-next-transaction recovery and cold Controller readers are accepted; building or
+or installation dispatch. Reader revision `95c0e854` pauses new admission. The
+writer-enabled descendant `6d072bab` was activated after the active,
+next-transaction recovery and cold Controller readers were accepted; building or
 testing it does not establish those host roles. This is not Machine maintenance
 or a new Plugin lifecycle.
 
