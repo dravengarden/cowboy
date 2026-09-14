@@ -159,7 +159,12 @@ impl Databases {
             .send()
             .await
             .map_err(|_| Failure::ConnectionClosed)?;
-        check(response.status() == reqwest::StatusCode::OK)?;
+        if response.status() != reqwest::StatusCode::OK {
+            return Err(Failure::DatabaseQueryHttp {
+                signal: self.entries[index].signal,
+                status: response.status().as_u16(),
+            });
+        }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| Failure::FrameDecode)? {
             check(bytes.len() + chunk.len() <= 64 * 1024)?;

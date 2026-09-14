@@ -197,7 +197,8 @@ impl Expected {
             log.trace_id == span.trace_id
                 && log.span_id == span.span_id
                 && span.trace_id.len() == 16
-                && span.span_id.len() == 8,
+                && span.span_id.len() == 8
+                && span.end_time_unix_nano >= span.start_time_unix_nano,
         )?;
         Ok(Self { log, span, samples })
     }
@@ -317,12 +318,15 @@ impl Expected {
     ) -> Result<QueryRound, Failure> {
         let started = std::time::Instant::now();
         let mut last = Failure::Timeout;
-        while started.elapsed() < Duration::from_secs(12) {
+        // VictoriaTraces 0.9.3's default insert.indexFlushInterval is 20s.
+        // Retain that real profile: an accepted span need not yet be visible
+        // through the Jaeger trace-ID index. Never turn a timeout into success.
+        while started.elapsed() < Duration::from_secs(35) {
             match self.once(databases, restarted).await {
                 Ok(result) => return Ok(result),
                 Err(failure) => last = failure,
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
         Err(last)
     }
@@ -412,4 +416,60 @@ fn query_oracle_rejects_changed_or_duplicate_fixture_metrics() {
     let mut duplicate = original.clone();
     duplicate.push(original.last().unwrap().clone());
     assert!(Expected::decode(&duplicate).is_err());
+}
+
+#[test]
+fn log_and_trace_queries_require_exact_correlated_records() {
+    use opentelemetry_proto::tonic::common::v1::any_value::Value as AnyValue;
+    let expected = Expected::decode(&forwarded_fixture()).unwrap();
+    let Some(AnyValue::StringValue(body)) = expected
+        .log
+        .body
+        .as_ref()
+        .and_then(|body| body.value.as_ref())
+    else {
+        panic!("fixture text log");
+    };
+    let timestamp =
+        chrono::DateTime::from_timestamp_nanos(i64::try_from(expected.log.time_unix_nano).unwrap())
+            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let log = json!({
+        "_msg":body,"_time":timestamp,
+        "trace_id":hex(&expected.log.trace_id),"span_id":hex(&expected.log.span_id),
+    });
+    assert!(expected.logs_match(std::slice::from_ref(&log)));
+    for key in ["_msg", "_time", "trace_id", "span_id"] {
+        let mut changed = log.clone();
+        changed[key] = "wrong".into();
+        assert!(!expected.logs_match(&[changed]));
+    }
+    assert!(!expected.logs_match(&[log.clone(), log]));
+    let trace_id = hex(&expected.span.trace_id);
+    let trace = json!({"errors":null,"data":[{"traceID":trace_id,"spans":[{
+        "traceID":trace_id,"spanID":hex(&expected.span.span_id),
+        "operationName":expected.span.name,
+        "startTime":expected.span.start_time_unix_nano / 1000,
+        "duration":(expected.span.end_time_unix_nano - expected.span.start_time_unix_nano) / 1000,
+    }]}]});
+    assert!(expected.trace_matches(&trace));
+    for key in [
+        "traceID",
+        "spanID",
+        "operationName",
+        "startTime",
+        "duration",
+    ] {
+        let mut changed = trace.clone();
+        changed["data"][0]["spans"][0][key] = Value::Null;
+        assert!(!expected.trace_matches(&changed));
+    }
+    let mut changed = trace.clone();
+    changed["errors"] = json!([{"code":500}]);
+    assert!(!expected.trace_matches(&changed));
+    let mut changed = trace.clone();
+    changed["data"][0]["spans"]
+        .as_array_mut()
+        .unwrap()
+        .push(trace["data"][0]["spans"][0].clone());
+    assert!(!expected.trace_matches(&changed));
 }

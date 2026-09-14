@@ -37,6 +37,10 @@ enum Failure {
     DatabaseLogQuery,
     DatabaseMetricQuery,
     DatabaseTraceQuery,
+    DatabaseQueryHttp {
+        signal: crate::otlp::Signal,
+        status: u16,
+    },
     Cleanup,
 }
 

@@ -87,7 +87,10 @@ Each pair must:
 Local-file growth, deduplication, lane failures, rejected items, queue drops,
 unchanged binding journals and original private policy ownership are checked
 through the shared connected harness. Database visibility is polled within a
-bounded window; absent or mismatched results fail, not skip.
+35-second window per query round; absent or mismatched results fail, not skip.
+This preserves VictoriaTraces 0.9.3's default 20-second trace-ID index flush
+interval instead of forcing a flush or changing the database to hide its
+normal delayed query visibility.
 
 The query contracts are the official
 [VictoriaLogs HTTP API](https://docs.victoriametrics.com/victorialogs/querying/),
@@ -95,6 +98,9 @@ The query contracts are the official
 and [VictoriaTraces Jaeger API](https://docs.victoriametrics.com/victoriatraces/querying/).
 This narrow acceptance covers the supplied versions and fixed profile, not
 arbitrary future API or naming changes.
+The pinned implementations also define the
+[native metric scope labels](https://github.com/VictoriaMetrics/VictoriaMetrics/blob/v1.148.0/lib/protoparser/opentelemetry/pb/pb.go)
+and [delayed trace-ID indexing](https://github.com/VictoriaMetrics/VictoriaTraces/blob/v0.9.3/app/vtinsert/insertutil/index_helper.go).
 
 ## Receipt and production boundary
 
