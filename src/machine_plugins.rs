@@ -233,9 +233,15 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod startup_tests;
+
 impl MachinePluginStore {
     pub fn new(state_dir: &Path, platform: Platform, architecture: String) -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        // Validate writer policy and acquire the existing journal owner before
+        // migrating Plugin directories or creating/touching Provider identity.
+        let operations = operations::Journal::open(state_dir)?;
         let root = state_dir.join("plugins");
         let legacy_root = state_dir.join("providers");
         if legacy_root.is_dir() && !root.exists() {
@@ -254,7 +260,6 @@ impl MachinePluginStore {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
         }
         let encryption = MachineEncryptionIdentity::load_or_create(&auth_root.join("identity"))?;
-        let operations = operations::Journal::open(state_dir)?;
         Ok(Self {
             root,
             auth_root,

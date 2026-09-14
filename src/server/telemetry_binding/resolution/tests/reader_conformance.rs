@@ -9,6 +9,7 @@ mod fixtures;
 mod manifest;
 mod probe;
 mod startup;
+mod victoria;
 
 use fixtures::{Case, Fixture};
 use manifest::{Artifact, Lane, Matrix, Role};
@@ -33,6 +34,13 @@ enum Failure {
     EvidenceChanged,
     WrongExportState,
     LocalRecording,
+    DatabaseLogQuery,
+    DatabaseMetricQuery,
+    DatabaseTraceQuery,
+    DatabaseQueryHttp {
+        signal: crate::otlp::Signal,
+        status: u16,
+    },
     Cleanup,
 }
 

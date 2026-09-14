@@ -13,6 +13,9 @@ use std::sync::{
 #[cfg(feature = "machine-host")]
 pub(crate) const MACHINE_POLICY_FILE: &str = "telemetry-writer-policy.json";
 
+#[cfg(feature = "machine-host")]
+pub(crate) mod preflight;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Configuration {
@@ -24,6 +27,7 @@ struct Configuration {
 }
 
 #[derive(Deserialize)]
+#[cfg_attr(feature = "machine-host", derive(Debug, Clone, serde::Serialize))]
 #[serde(deny_unknown_fields)]
 struct Purposes {
     binding: bool,

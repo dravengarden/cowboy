@@ -102,6 +102,12 @@ Controller × Machine 的全部九种角色组合。最新
 撤销/恢复后的旧策略隔离、独立本地记录及重启不重放。临时身份与隔离协议接收端不等同真实 Victoria
 或生产配置；实际 Operator 授权、主机策略切换及生产外发/故障/重启验收仍是 P2 退出前提。
 
+后续 [真实 Victoria 数据库验收](releases/telemetry-victoria-conformance-2026-09-14.md)
+已补齐同版不可变 Logs/Metrics/Traces 程序的隔离验证：九种 Controller/Machine 角色组合全部通过，
+18 轮实际查询验证关联 log/span、18 条精确指标序列和数据库重启后的相同结果；Cowboy 重启不重放。
+保留原有 45 流程故障验收，并修正夹具的空响应头、native scope 标签和 trace 索引等待窗口。
+该批不操作线上数据库、不激活生产策略；真实 Operator 确认、完整生产配置和 managed 切换仍未完成。
+
 [Controller 配置预检](telemetry-policy-preflight.md) 已复用真实启动校验，拒绝无效 writer/background
 策略且不创建 Service 或授予外发权；[2026-09-14 发布](releases/telemetry-policy-preflight-2026-09-14.md)
 已通过最终制品 96/294/78/45 项验收并只激活 Controller。生产 managed 配置仍未切换；发布期间
@@ -116,6 +122,17 @@ Controller × Machine 的全部九种角色组合。最新
 [本批发布](releases/provider-auth-sync-2026-09-14.md) 已通过完整质量门禁与不可变制品
 96/294/78/45 项验收，仅激活 Controller；发布前后 170 秒的三次快照中 13 个 worker
 保持原 PID/启动时间，未观察到凭据换代。该窗口不能替代真实换代/原生会话验收，也不覆盖上轮失败记录。
+
+[Machine writer 配置预检](machine-telemetry-writer-preflight.md) 补齐核心只读诊断，并把无效策略拒绝
+前置到组件、账本及 Provider 身份初始化之前。报告只含配置声明，不从 CLI 或策略自报身份推断真实
+enrolled owner，不打开安装、绑定或私有目的地；构建/发布该候选也不等于激活 Machine 或完成 P2。
+[本批候选验收](releases/machine-writer-preflight-2026-09-14.md) 已完成完整门禁、31 项命令检查及
+96/294 项不可变 reader/writer 验收，当时尚未激活 Machine。随后用户明确授权
+[Machine 维护部署](releases/machine-writer-preflight-activation-2026-09-14.md)：最新 main 制品补齐
+31/96/294/78/45 项验收并成功激活；Controller、Web 与生产 managed 策略未变。335 秒的三次
+快照中 13 个 worker 保留原 PID/启动时间，12 个可核对的原生会话标识哈希一致，1 个缺少日志证据。
+新 desired generation 已在线，但本窗口没有观察到 worker 换入新代次；不把进程保留等同全部
+换代、原生恢复或后续用户 turn 验收。生产策略切换与 P2 退出仍是独立边界。
 
 本文统一定义核心、组件库、Plugin、跨端组合、状态与 effect。现行
 [requirements](requirements.md)、[package contract](plugin-packages.md) 和

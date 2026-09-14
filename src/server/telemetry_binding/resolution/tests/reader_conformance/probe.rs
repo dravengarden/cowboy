@@ -24,6 +24,7 @@ mod connected;
 mod startup;
 pub(super) use admission::run as writer_admission;
 pub(super) use connected::run as connected_pair;
+pub(super) use connected::run_victoria as victoria_pair;
 pub(super) use startup::run as background_startup;
 
 pub(super) fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -131,6 +132,19 @@ struct Running {
 }
 
 impl Running {
+    async fn terminate(&mut self) -> Result<(), Failure> {
+        rustix::process::kill_process_group(self.pid, rustix::process::Signal::TERM)
+            .map_err(|_| Failure::Cleanup)?;
+        let status = tokio::time::timeout(Duration::from_secs(6), self.child.wait())
+            .await
+            .map_err(|_| Failure::Cleanup)?
+            .map_err(|_| Failure::Cleanup)?;
+        if !status.success() {
+            return Err(Failure::Cleanup);
+        }
+        self.finish().await
+    }
+
     fn spawn(command: &mut tokio::process::Command) -> Result<Self, Failure> {
         let mut child = command.spawn().map_err(|_| Failure::Spawn)?;
         let pid = rustix::process::Pid::from_raw(

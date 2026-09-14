@@ -102,6 +102,13 @@ the normal startup validators. It does not connect to the store, activate
 admission or prove Machine readiness; require its nested telemetry report rather
 than treating an older host-only preflight as policy acceptance.
 
+The Machine's [writer-policy diagnostic](machine-telemetry-writer-preflight.md)
+provides a separate `--check-telemetry-writer-policy` mode without opening Machine
+state or connecting. It checks only the policy file and its declarations, not
+effective enrolled ownership, binding, destination or readiness. Normal startup
+now rejects an initially invalid policy before component/journal/Provider
+initialization; the actual journal independently reloads its activation snapshot.
+
 Tests use real private policy files and production constructors, independent
 from fixture writer booleans. Coverage includes all purpose combinations,
 foreign owners, closed schema, replacement/revocation, private file failures,

@@ -30,6 +30,9 @@ pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
 pub(crate) mod telemetry_recovery;
 
+#[cfg(test)]
+mod preflight_tests;
+
 struct LoginSession {
     cancel: tokio::sync::watch::Sender<bool>,
     input: tokio::sync::mpsc::UnboundedSender<String>,
@@ -152,7 +155,7 @@ pub struct Args {
     #[arg(
         long,
         env = "COWBOY_MACHINE_CONTROLLER_URL",
-        required_unless_present = "provider_usage_status"
+        required_unless_present_any = ["provider_usage_status", "check_telemetry_writer_policy"]
     )]
     controller_url: Option<String>,
     /// Stable identity of the Cowboy Service that owns this local namespace.
@@ -176,6 +179,11 @@ pub struct Args {
     /// opens the SQLite spool read-only and does not contact the controller.
     #[arg(long, default_value_t = false)]
     provider_usage_status: bool,
+    /// Validate the local telemetry writer policy and print a closed JSON
+    /// report without opening Machine state or contacting the controller.
+    /// This does not check runtime identity, destination policy or readiness.
+    #[arg(long, conflicts_with = "provider_usage_status")]
+    check_telemetry_writer_policy: bool,
     /// Machine-local ingestion socket for provider gateways.
     #[arg(
         long,
@@ -261,11 +269,27 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
         .init();
     let args =
         Args::parse_from(std::iter::once(command_name.to_owned()).chain(std::env::args().skip(1)));
+    run_args(args).await
+}
+
+async fn run_args(args: Args) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !(args.check_telemetry_writer_policy && args.provider_usage_status),
+        "Machine diagnostic modes are mutually exclusive"
+    );
     if args.provider_usage_status {
         let status = crate::provider_usage_spool::ProviderUsageSpool::read_status(
             &args.state_dir.join("provider-usage.sqlite3"),
         )?;
         println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+    // Reject an initially invalid policy before ComponentStore or PluginStore
+    // can create state. Actual journal startup independently reloads it; this
+    // inspection is not an activation or an atomic configuration transaction.
+    let preflight = crate::telemetry_plugin::writer_admission::preflight::inspect(&args.state_dir)?;
+    if args.check_telemetry_writer_policy {
+        println!("{}", serde_json::to_string_pretty(&preflight)?);
         return Ok(());
     }
     let runtime_socket = args.socket.clone();
@@ -321,7 +345,7 @@ pub async fn run(command_name: &'static str) -> anyhow::Result<()> {
     };
     let controller_url = args
         .controller_url
-        .context("--controller-url is required unless --provider-usage-status is used")?;
+        .context("--controller-url is required outside Machine diagnostic modes")?;
     validate_controller_url(&controller_url)?;
     if let Some(service_id) = args.service_id.as_deref() {
         anyhow::ensure!(

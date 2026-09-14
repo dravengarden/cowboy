@@ -7,7 +7,8 @@ mod fixture;
 pub(super) use fixture::{ConnectedFixture, Evidence};
 mod delivery;
 pub(super) use delivery::{
-    Ack, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport, ResponseMode, WireExport,
+    Ack, DatabaseHttp, DatabaseMediaType, DeliveryReport, DeliveryRound, DeliveryStep, HttpExport,
+    ResponseMode, WireExport,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -120,6 +121,8 @@ pub(super) struct Outcome {
     pub machine_after_sha256: Option<String>,
     pub failure: Option<Failure>,
     pub delivery: Option<DeliveryReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub victoria: Option<super::victoria::DatabaseReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]

@@ -25,7 +25,7 @@ struct LedgerFile {
     evidence_digest: BindingDigest,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "full"))]
 impl MachinePluginStore {
     /// Re-checksummed negative fixtures must use the real wire field order.
     pub(crate) fn rewrite_binding_fixture(
