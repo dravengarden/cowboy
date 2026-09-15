@@ -105,6 +105,8 @@ Desktop keeps them visible by default. Journal absence does not indicate whether
 separately configured export is running. Collapsing diagnostics disposes the
 observer/preview, not a submitted operation. This fixture has no production
 account, private backend or physical iPhone download acceptance.
+The [About recovery release](releases/about-recovery-2026-09-15.md) records the
+Web-only activation and verification.
 
 ## Rollout and recovery
 
