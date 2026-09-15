@@ -108,6 +108,8 @@ in the
 and synthetic transport replies, not a production login or native-generation
 acceptance.
 
-The [Controller release](releases/plugin-code-read-scopes-2026-09-15.md) passed
-the complete pinned gate, was published and activated, and retained all 15
-observed workers, Machine and Victoria during the bounded deployment window.
+The [initial diff/Zed Controller release](releases/plugin-code-read-scopes-2026-09-15.md)
+passed the complete gate and retained its 15 observed workers. The subsequent
+[buffered-reader release](releases/plugin-buffered-code-reads-2026-09-15.md)
+passed the expanded gate, is published and activated, and retained all 16
+observed workers, Machine and Victoria in its own bounded deployment window.

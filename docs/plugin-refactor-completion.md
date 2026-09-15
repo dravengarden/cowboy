@@ -47,13 +47,13 @@ and accepting a production effect are different milestones.
   include Service/Machine/workspace/path. Per-entry diff cursor identities
   prevent equal-content aliases and unsafe UTF-8 slicing. Core Code requests
   serialize the existing closed Rust operations with unchanged wire shapes.
-  This does not fence all Code effects, supply continuous Workspace or filesystem identity, grant
-  state authority or accept a native generation. Its
-  [Controller release](releases/plugin-code-read-scopes-2026-09-15.md) passed the
-  complete gate and is active with all 15 observed workers retained. The
-  subsequent unified buffered-response and closed-request source slice adds six
-  response-boundary tests and fourteen wire vectors; its activation is recorded
-  separately, not inferred from the earlier diff/Zed deployment.
+  This does not fence all Code effects, supply continuous Workspace or filesystem
+  identity, grant state authority or accept a native generation. The
+  [initial diff/Zed release](releases/plugin-code-read-scopes-2026-09-15.md)
+  passed the complete gate and retained its 15 observed workers. The expanded
+  [buffered-reader Controller release](releases/plugin-buffered-code-reads-2026-09-15.md)
+  adds six response-boundary tests and fourteen wire vectors, passed the complete
+  gate, and is published and activated with all 16 observed workers retained.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
