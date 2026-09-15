@@ -604,6 +604,10 @@
           python3
           util-linux
           iproute2
+          # `assert_process_stopped` reads process state with `ps`. A host that
+          # happens to have procps on PATH hid this; the pinned shell must
+          # declare it or four owned-runtime teardown tests abort on ENOENT.
+          procps
           # Ephemeral, socket-only database for the PostgreSQL contract gate.
           # This is a developer/test dependency, not a Controller runtime input.
           (lib.getBin postgresql)

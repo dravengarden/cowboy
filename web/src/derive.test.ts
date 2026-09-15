@@ -610,3 +610,75 @@ Deno.test("runtime prompt echoes do not retire the current plan", () => {
     throw new Error("a runtime injection must not count as a new user turn");
   }
 });
+
+function agentChunk(seq: number, text: string): Envelope {
+  return {
+    session_id: "s1",
+    seq,
+    kind: "update",
+    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+  };
+}
+
+function assistantTexts(items: ReturnType<typeof derive>): string[] {
+  return items.filter((item) => item.kind === "message" && item.role === "assistant")
+    .map((item) =>
+      item.kind === "message"
+        ? item.chunks.map((chunk) => chunk.type === "text" ? chunk.text : "").join("")
+        : ""
+    );
+}
+
+Deno.test("an unpainted status edge does not break a streamed message in two", () => {
+  for (const status of ["starting", "running", "busy", "exited"] as const) {
+    const texts = assistantTexts(derive([
+      agentChunk(1, "`canc"),
+      { session_id: "s1", seq: 2, kind: "lifecycle", status, detail: null },
+      agentChunk(3, "elSchedule`"),
+    ]));
+    if (texts.length !== 1 || texts[0] !== "`cancelSchedule`") {
+      throw new Error(`${status} split one message into ${JSON.stringify(texts)}`);
+    }
+  }
+});
+
+Deno.test("resolving a permission does not break the message that follows its card", () => {
+  const texts = assistantTexts(derive([
+    { session_id: "s1", seq: 1, kind: "permission_request", request_id: "r1", tool_call: {}, options: [] },
+    { session_id: "s1", seq: 2, kind: "permission_resolved", request_id: "r1", option_id: "allow" },
+    agentChunk(3, "run"),
+    { session_id: "s1", seq: 4, kind: "permission_resolved", request_id: "r1", option_id: "allow" },
+    agentChunk(5, "ning"),
+  ]));
+  if (texts.length !== 1 || texts[0] !== "running") {
+    throw new Error(`expected one bubble, got ${JSON.stringify(texts)}`);
+  }
+});
+
+Deno.test("a visible boundary still separates two messages", () => {
+  const boundaries: Envelope[][] = [
+    [{ session_id: "s1", seq: 2, kind: "turn_end", stop_reason: "end_turn" }],
+    [{ session_id: "s1", seq: 2, kind: "lifecycle", status: "crashed", detail: null }],
+    [{ session_id: "s1", seq: 2, kind: "lifecycle", status: "interrupted", detail: null }],
+    [{
+      session_id: "s1",
+      seq: 2,
+      kind: "permission_request",
+      request_id: "r1",
+      tool_call: {},
+      options: [],
+    }],
+  ];
+  for (const boundary of boundaries) {
+    const texts = assistantTexts(derive([
+      agentChunk(1, "first"),
+      ...boundary,
+      agentChunk(3, "second"),
+    ]));
+    if (texts.length !== 2 || texts[0] !== "first" || texts[1] !== "second") {
+      throw new Error(
+        `${boundary[0]?.kind} must keep two bubbles, got ${JSON.stringify(texts)}`,
+      );
+    }
+  }
+});
