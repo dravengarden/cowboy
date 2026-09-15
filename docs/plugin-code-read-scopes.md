@@ -217,3 +217,8 @@ The [file-page Controller release](releases/plugin-file-page-scopes-2026-09-15.m
 passed both complete gates, is published and activated, and retained its 16
 observed workers. Its independent immutable core adapter passed seven disposable
 process cases; a running remote adapter upgrade remains separate.
+The [Zed operation Controller release](releases/plugin-zed-operation-scopes-2026-09-15.md)
+passed the complete gate and exact 72-release reads by candidate, predecessor
+and cold Controllers. It is published and activated with its 12 observed workers
+retained; cross-request buffer recovery and native-generation acceptance remain
+separate.

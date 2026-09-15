@@ -84,6 +84,10 @@ and accepting a production effect are different milestones.
   Sixteen new source tests cover these boundaries. This is not native-generation
   ownership, cross-request buffer release, compensation or post-effect recovery;
   see [the precise remaining lease gap](plugin-code-read-scopes.md#zed-operation-connection-lifetime).
+  The [Controller release](releases/plugin-zed-operation-scopes-2026-09-15.md)
+  passed the complete gate and matching 72-release reads by actual candidate,
+  predecessor and cold binaries. It is published and activated with all 12
+  observed workers, Machine and Victoria retained in its deployment window.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
