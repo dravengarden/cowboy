@@ -31,6 +31,8 @@ mod client_auth;
 mod client_auth_client;
 #[cfg(any(feature = "full", feature = "code-adapter"))]
 pub mod code_adapter;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod code_buffer_read;
 #[cfg(feature = "full")]
 mod code_cache;
 #[cfg(any(feature = "full", feature = "code-adapter"))]

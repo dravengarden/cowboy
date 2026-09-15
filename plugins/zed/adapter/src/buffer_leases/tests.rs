@@ -1,6 +1,8 @@
 use super::*;
 use crate::{BufferState, Request, ensure_worktree, respond};
 
+mod reads;
+
 #[tokio::test]
 async fn disconnected_observer_does_not_lose_the_native_open_record() {
     use tokio::io::AsyncWriteExt as _;

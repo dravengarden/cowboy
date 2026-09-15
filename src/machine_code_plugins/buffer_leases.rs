@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 use super::{CodeTarget, RunningCodeRuntime, WorktreeRoute, exchange};
+use crate::code_buffer_read;
 
 const MAX_LEASES: usize = 1_024;
 const PREPARE_TTL: Duration = Duration::from_secs(30);
@@ -44,10 +45,24 @@ impl LeaseRef {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum Command {
     BufferLeaseSupport {},
-    PrepareBuffer { worktree: String, path: String },
-    OpenBufferLease { lease: LeaseRef },
-    ReleaseBufferLease { lease: LeaseRef },
-    QueryBufferLease { lease: LeaseRef },
+    BufferLeaseReadSupport {},
+    PrepareBuffer {
+        worktree: String,
+        path: String,
+    },
+    OpenBufferLease {
+        lease: LeaseRef,
+    },
+    ReleaseBufferLease {
+        lease: LeaseRef,
+    },
+    QueryBufferLease {
+        lease: LeaseRef,
+    },
+    ReadBufferLease {
+        lease: LeaseRef,
+        request: code_buffer_read::Request,
+    },
 }
 
 impl Command {
@@ -56,10 +71,12 @@ impl Command {
             payload["type"].as_str(),
             Some(
                 "bufferLeaseSupport"
+                    | "bufferLeaseReadSupport"
                     | "prepareBuffer"
                     | "openBufferLease"
                     | "releaseBufferLease"
                     | "queryBufferLease"
+                    | "readBufferLease"
             )
         ) {
             return Ok(None);
@@ -67,14 +84,15 @@ impl Command {
         let value: Self =
             serde_json::from_value(payload.clone()).context("invalid owned buffer command")?;
         match &value {
-            Self::BufferLeaseSupport {} => {}
+            Self::BufferLeaseSupport {} | Self::BufferLeaseReadSupport {} => {}
             Self::PrepareBuffer { worktree, path } => ensure!(
                 worktree.len() <= 4_096 && path.len() <= 4_096,
                 "buffer path exceeds byte limit"
             ),
             Self::OpenBufferLease { lease }
             | Self::ReleaseBufferLease { lease }
-            | Self::QueryBufferLease { lease } => lease.validate()?,
+            | Self::QueryBufferLease { lease }
+            | Self::ReadBufferLease { lease, .. } => lease.validate()?,
         }
         Ok(Some(value))
     }
@@ -87,8 +105,11 @@ impl Command {
         match self {
             Self::OpenBufferLease { lease }
             | Self::ReleaseBufferLease { lease }
-            | Self::QueryBufferLease { lease } => Ok(lease),
-            Self::BufferLeaseSupport {} | Self::PrepareBuffer { .. } => {
+            | Self::QueryBufferLease { lease }
+            | Self::ReadBufferLease { lease, .. } => Ok(lease),
+            Self::BufferLeaseSupport {}
+            | Self::BufferLeaseReadSupport {}
+            | Self::PrepareBuffer { .. } => {
                 anyhow::bail!("buffer reference has not been prepared")
             }
         }
@@ -280,13 +301,19 @@ impl Routes {
             // this pathless request before it could reach a Plugin socket.
             return Ok(serde_json::json!({"type":"bufferLeaseSupport", "api_version":1}));
         }
+        if matches!(command, Command::BufferLeaseReadSupport {}) {
+            return Ok(serde_json::json!({"type":"bufferLeaseReadSupport", "api_version":1}));
+        }
         self.reap_prepared().await;
         let key = (plugin_id.to_owned(), command.lease()?.clone());
         let (runtime, route) = {
             let mut registry = self.registry.lock().await;
             if registry.released.contains(&key) {
                 ensure!(
-                    !matches!(command, Command::OpenBufferLease { .. }),
+                    !matches!(
+                        command,
+                        Command::OpenBufferLease { .. } | Command::ReadBufferLease { .. }
+                    ),
                     "native buffer lease was released"
                 );
                 return Ok(
@@ -300,6 +327,10 @@ impl Routes {
             if matches!(command, Command::OpenBufferLease { .. }) {
                 entry.until = None;
             }
+            ensure!(
+                !matches!(command, Command::ReadBufferLease { .. }) || entry.until.is_none(),
+                "native buffer has not been opened"
+            );
             (Arc::clone(&entry.runtime), Arc::clone(&entry.route))
         };
         // Serialize with original worktree operations, but never consult its
@@ -310,6 +341,11 @@ impl Routes {
             "original buffer runtime exited; outcome unavailable"
         );
         let response = exchange(&runtime.socket, payload).await?;
+        if let Command::ReadBufferLease { request, .. } = command {
+            code_buffer_read::Reply::parse(&response, &key.1, request)?;
+            // A read never changes effect state, expiry, or routing ownership.
+            return Ok(response);
+        }
         let reply = Reply::parse(&response)?;
         ensure!(
             reply.lease == key.1,

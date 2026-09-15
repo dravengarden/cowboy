@@ -5495,6 +5495,17 @@ mod tests {
         fs::remove_file(worktree.join("owned.txt")).unwrap();
         fs::rename(&worktree, root.join("moved-worktree")).unwrap();
         for (index, lease) in owned.into_iter().enumerate() {
+            // The two independently built codecs and real server must agree,
+            // even after uninstall and disappearance of both original paths.
+            for kind in ["language", "symbols"] {
+                let read = serde_json::json!({"type":"readBufferLease", "lease":lease, "request":{"kind":kind}});
+                let observed = store.code_request("zed", &read, None).await.unwrap();
+                assert_eq!(observed["type"], "bufferLeaseRead");
+                assert_eq!(observed["lease"], lease);
+                assert_eq!(observed["result"]["kind"], kind);
+                assert!(observed["opened_version"].is_array());
+                assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+            }
             let close = serde_json::json!({"type":"releaseBufferLease", "lease":lease});
             assert_eq!(
                 store.code_request("zed", &close, None).await.unwrap()["state"],

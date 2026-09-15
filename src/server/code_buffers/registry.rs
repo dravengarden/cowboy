@@ -245,10 +245,10 @@ impl Owners {
 
     /// The task owner, not the observer, retains this admitted continuation.
     /// The owner bounds the entire task, including authorization/queue time.
-    pub(super) fn spawn(
+    pub(super) fn spawn<T: Send + 'static>(
         &self,
-        future: impl std::future::Future<Output = Result<Snapshot, StatusCode>> + Send + 'static,
-    ) -> Result<oneshot::Receiver<Result<Snapshot, StatusCode>>, StatusCode> {
+        future: impl std::future::Future<Output = Result<T, StatusCode>> + Send + 'static,
+    ) -> Result<oneshot::Receiver<Result<T, StatusCode>>, StatusCode> {
         let mut tasks = self.tasks.lock();
         if self.closed.load(Ordering::Acquire) {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
@@ -264,10 +264,59 @@ impl Owners {
         Ok(receiver)
     }
 
+    pub(super) fn admit_read(
+        self: &Arc<Self>,
+        user: &str,
+        id: &str,
+    ) -> Result<ReadJob, StatusCode> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        let mut slots = self.slots.lock();
+        slots.expire();
+        let entry = slots
+            .active
+            .get_mut(id)
+            .filter(|entry| entry.binding.user == user)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        if entry.busy || entry.state != LeaseState::Open || entry.release_attempted {
+            return Err(StatusCode::CONFLICT);
+        }
+        let permit = self
+            .job_capacity
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        entry.busy = true;
+        Ok(ReadJob {
+            owners: Arc::clone(self),
+            id: id.to_owned(),
+            binding: entry.binding.clone(),
+            _permit: permit,
+        })
+    }
+
     pub(in crate::server) async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
         let mut tasks = std::mem::take(&mut *self.tasks.lock());
         tasks.shutdown().await;
+    }
+}
+
+// A borrow, never an effect transition. Releasing the borrow after success,
+// error, cancellation or deadline leaves the last native observation intact.
+pub(super) struct ReadJob {
+    owners: Arc<Owners>,
+    id: String,
+    pub binding: Binding,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for ReadJob {
+    fn drop(&mut self) {
+        if let Some(entry) = self.owners.slots.lock().active.get_mut(&self.id) {
+            entry.busy = false;
+        }
     }
 }
 

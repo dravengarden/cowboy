@@ -1,7 +1,7 @@
 # Plugin refactor completion ledger
 
 Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
-and current code on 2026-09-15. This is the current exit checklist, not a list of
+and current code on 2026-09-16. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
 
@@ -114,8 +114,17 @@ and accepting a production effect are different milestones.
   The separately activated Controller `0fded719` includes this implementation;
   the publication task retained all 13 observed workers and changed no installed
   Plugin or component. Authenticated Catalog API/native acceptance remains
-  unchecked. Later main adds a separate Claude Code `3.1.23` release requirement;
-  the earlier six-release coverage is not acceptance of that newer package.
+  unchecked. The later [Claude Code `3.1.23` publication](releases/claude-stream-recovery-2026-09-15.md)
+  now has its own Linux/Mac and 79-release reader/adoption evidence; neither
+  publication installs it into retained sessions.
+- [Owned buffer observations](plugin-owned-buffer-reads.md) add closed diagnostics
+  and symbol reads borrowing the original core/native owner, with fresh original
+  credential, Session and connection checks and bounded typed result validation.
+  Reads never re-resolve the source path or change effect evidence. Zed `1.4.0`
+  propagates native language transport failures rather than returning false empty
+  success. Hover/navigation still need actual content/anchor version semantics;
+  the open vector is only a lower bound. Review integration, Machine/Plugin
+  activation and independent post-effect recovery are not implied by this API.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

@@ -243,8 +243,61 @@ async fn shutdown_cancels_owned_jobs_without_erasing_their_possible_effect() {
         Err(StatusCode::SERVICE_UNAVAILABLE)
     ));
     assert!(matches!(
-        owners.spawn(async { unreachable!() }),
+        owners.spawn::<Snapshot>(async { unreachable!() }),
         Err(StatusCode::SERVICE_UNAVAILABLE)
+    ));
+}
+
+#[test]
+fn reads_borrow_only_confirmed_original_owners_without_rearming_effects() {
+    let fixture = Fixture::new();
+    let owners = &fixture.context.code_buffers;
+    let prepared = insert(&fixture, 1);
+    let id = &prepared.resource_id;
+    assert!(matches!(
+        owners.admit_read("local", id),
+        Err(StatusCode::CONFLICT)
+    ));
+    let open = job(owners, id, Action::Open);
+    open.begin().unwrap();
+    drop(open);
+    assert!(matches!(
+        owners.admit_read("local", id),
+        Err(StatusCode::CONFLICT)
+    ));
+    job(owners, id, Action::Query)
+        .finish(LeaseState::Open)
+        .unwrap();
+    assert!(matches!(
+        owners.admit_read("foreign", id),
+        Err(StatusCode::NOT_FOUND)
+    ));
+    let read = owners.admit_read("local", id).unwrap();
+    assert!(matches!(
+        owners.admit_read("local", id),
+        Err(StatusCode::CONFLICT)
+    ));
+    assert!(saved(owners, id, Action::Release).pending);
+    assert_eq!(owners.job_capacity.available_permits(), MAX_JOBS - 1);
+    drop(read);
+    assert_eq!(owners.job_capacity.available_permits(), MAX_JOBS);
+    assert_eq!(saved(owners, id, Action::Open).state, LeaseState::Open);
+    let release = job(owners, id, Action::Release);
+    release.begin().unwrap();
+    drop(release);
+    job(owners, id, Action::Query)
+        .finish(LeaseState::Open)
+        .unwrap();
+    assert!(matches!(
+        owners.admit_read("local", id),
+        Err(StatusCode::CONFLICT)
+    ));
+    job(owners, id, Action::Query)
+        .finish(LeaseState::Released)
+        .unwrap();
+    assert!(matches!(
+        owners.admit_read("local", id),
+        Err(StatusCode::NOT_FOUND)
     ));
 }
 

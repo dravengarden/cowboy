@@ -6,6 +6,9 @@ Controller/Web buffer API is **not yet switched**. This is a prerequisite for
 cross-request ownership, not its production acceptance or a generic DAG executor.
 The additive [Controller owner API](plugin-controller-buffer-owners.md) now
 consumes these references; ordinary Review language/buffer calls remain legacy.
+The subsequent [Zed 1.4.0 observation candidate](plugin-owned-buffer-reads.md)
+adds original-owner diagnostics and symbols without changing these lease-state
+semantics or upgrading a production installation.
 
 ## Why a new reference is needed
 

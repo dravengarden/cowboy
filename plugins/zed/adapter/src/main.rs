@@ -88,6 +88,10 @@ enum Request {
     QueryBufferLease {
         lease: buffer_leases::LeaseRef,
     },
+    ReadBufferLease {
+        lease: buffer_leases::LeaseRef,
+        request: buffer_leases::ReadRequest,
+    },
     BufferLanguage {
         worktree: PathBuf,
         path: PathBuf,
@@ -139,6 +143,12 @@ enum Response {
         api_version: u8,
         lease: buffer_leases::LeaseRef,
         state: buffer_leases::LeaseState,
+    },
+    BufferLeaseRead {
+        api_version: u8,
+        lease: buffer_leases::LeaseRef,
+        opened_version: Vec<BufferVersionEntry>,
+        result: buffer_leases::ReadOutput,
     },
     BufferLanguage {
         api_version: u8,
@@ -748,8 +758,7 @@ impl ZedRuntime {
         let (diagnostics, inlay_hints, semantic_tokens) =
             tokio::join!(diagnostics_request, inlay_request, semantic_request);
 
-        let diagnostics = diagnostics
-            .unwrap_or_default()
+        let diagnostics = diagnostics?
             .into_iter()
             .filter_map(|response| match response.response? {
                 proto::lsp_response::Response::GetDocumentDiagnosticsResponse(value) => Some(value),
@@ -769,8 +778,7 @@ impl ZedRuntime {
             .take(MAX_DIAGNOSTICS)
             .collect();
 
-        let inlay_hints = inlay_hints
-            .unwrap_or_default()
+        let inlay_hints = inlay_hints?
             .into_iter()
             .filter_map(|response| match response.response? {
                 proto::lsp_response::Response::InlayHintsResponse(value) => Some(value),
@@ -781,8 +789,7 @@ impl ZedRuntime {
             .take(MAX_INLAY_HINTS)
             .collect();
 
-        let semantic_tokens = semantic_tokens
-            .unwrap_or_default()
+        let semantic_tokens = semantic_tokens?
             .into_iter()
             .filter_map(|response| match response.response? {
                 proto::lsp_response::Response::SemanticTokensResponse(value) => Some(value),
@@ -1233,34 +1240,7 @@ async fn respond(
         Request::OpenWorktree { path, trusted } => {
             ensure_worktree(path, trusted, true, worktrees, zed).await?
         }
-        Request::CloseWorktree { path } => {
-            let path = tokio::fs::canonicalize(path).await?;
-            let mut all = worktrees.write().await;
-            let Some(lease) = all.get_mut(&path) else {
-                bail!("worktree is not open");
-            };
-            lease.leases = lease.leases.saturating_sub(1);
-            let remote_id = lease.remote_id;
-            let response = Response::Worktree {
-                api_version: ADAPTER_VERSION,
-                path: path.clone(),
-                state: lease.state,
-                leases: lease.leases,
-            };
-            let has_buffers = buffers
-                .active
-                .read()
-                .await
-                .keys()
-                .any(|(root, _)| root == &path);
-            if lease.leases == 0 && !has_buffers {
-                all.remove(&path);
-                if let Some(zed) = zed {
-                    zed.remove_worktree(remote_id)?;
-                }
-            }
-            response
-        }
+        Request::CloseWorktree { path } => close_worktree(path, worktrees, buffers, zed).await?,
         Request::OpenBuffer {
             worktree,
             path,
@@ -1296,6 +1276,14 @@ async fn respond(
                 .await?
         }
         Request::QueryBufferLease { lease } => buffers.leases.lock().await.query(lease)?,
+        Request::ReadBufferLease { lease, request } => {
+            buffers
+                .leases
+                .lock()
+                .await
+                .read(lease, request, buffers, zed)
+                .await?
+        }
         Request::BufferLanguage { worktree, path } => {
             buffer_language(worktree, path, buffers, zed).await?
         }
@@ -1316,6 +1304,40 @@ async fn respond(
             buffer_symbols(worktree, path, buffers, zed).await?
         }
     })
+}
+
+async fn close_worktree(
+    path: PathBuf,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let path = tokio::fs::canonicalize(path).await?;
+    let mut all = worktrees.write().await;
+    let Some(lease) = all.get_mut(&path) else {
+        bail!("worktree is not open");
+    };
+    lease.leases = lease.leases.saturating_sub(1);
+    let remote_id = lease.remote_id;
+    let response = Response::Worktree {
+        api_version: ADAPTER_VERSION,
+        path: path.clone(),
+        state: lease.state,
+        leases: lease.leases,
+    };
+    let has_buffers = buffers
+        .active
+        .read()
+        .await
+        .keys()
+        .any(|(root, _)| root == &path);
+    if lease.leases == 0 && !has_buffers {
+        all.remove(&path);
+        if let Some(zed) = zed {
+            zed.remove_worktree(remote_id)?;
+        }
+    }
+    Ok(response)
 }
 
 async fn buffer_language(

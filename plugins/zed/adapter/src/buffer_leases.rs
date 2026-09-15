@@ -11,6 +11,32 @@ use serde::{Deserialize, Serialize};
 
 use super::{BufferOwner, Buffers, Response, WorktreeState, Worktrees, Zed};
 
+// Kept private to the independently built Plugin. Core independently validates
+// the entire reply; the real-runtime conformance gate checks these two codecs.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub(super) enum ReadRequest {
+    Language {},
+    Symbols {},
+}
+
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub(super) enum ReadOutput {
+    Language {
+        diagnostics: Vec<super::LanguageDiagnostic>,
+        inlay_hints: Vec<super::LanguageInlayHint>,
+        semantic_tokens: Vec<u32>,
+    },
+    Symbols {
+        symbols: Vec<super::LanguageDocumentSymbol>,
+    },
+}
+
 const MAX_LEASES: usize = 1_024;
 const MAX_PATH_BYTES: usize = 4_096;
 const PREPARE_TTL: Duration = Duration::from_secs(30);
@@ -230,6 +256,57 @@ impl Registry {
         }
         self.slots.remove(&id);
         Ok(reply(lease, LeaseState::Released))
+    }
+
+    pub(super) async fn read(
+        &mut self,
+        lease: LeaseRef,
+        request: ReadRequest,
+        buffers: &Buffers,
+        zed: Option<&Zed>,
+    ) -> Result<Response> {
+        let id = self.resolve(&lease)?;
+        let slot = self
+            .slots
+            .get(&id)
+            .context("buffer lease has been released")?;
+        ensure!(slot.state == Phase::Open, "buffer lease is not open");
+        // No canonicalize, file read, worktree re-resolution or fallback. Both
+        // owner locks survive the query so a legacy close cannot race it either.
+        let active = buffers.active.read().await;
+        let buffer = active
+            .get(&(slot.worktree.clone(), slot.path.clone()))
+            .filter(|buffer| buffer.lease_ids.contains(&BufferOwner::Owned(id)))
+            .context("original buffer owner is unavailable")?;
+        let result = match request {
+            ReadRequest::Language {} => {
+                let (diagnostics, inlay_hints, semantic_tokens) = if let Some(zed) = zed {
+                    zed.language(buffer.remote_id, &buffer.version).await?
+                } else {
+                    (Vec::new(), Vec::new(), Vec::new())
+                };
+                ReadOutput::Language {
+                    diagnostics,
+                    inlay_hints,
+                    semantic_tokens,
+                }
+            }
+            ReadRequest::Symbols {} => ReadOutput::Symbols {
+                symbols: if let Some(zed) = zed {
+                    zed.document_symbols(buffer.remote_id, &buffer.version)
+                        .await?
+                } else {
+                    Vec::new()
+                },
+            },
+        };
+        Ok(Response::BufferLeaseRead {
+            api_version: 1,
+            lease,
+            // This is the request's lower bound, not a current content version.
+            opened_version: buffer.version.clone(),
+            result,
+        })
     }
 }
 

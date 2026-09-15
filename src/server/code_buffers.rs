@@ -7,6 +7,7 @@ use operator_approval::OperatorApproval;
 use registry::{Admission, Binding, Snapshot};
 use remote::Action;
 
+mod reads;
 mod registry;
 mod remote;
 pub(super) use registry::Owners;
@@ -73,6 +74,10 @@ fn router() -> Router<Context> {
                 .put(open)
                 .delete(release)
                 .layer(DefaultBodyLimit::max(128)),
+        )
+        .route(
+            "/api/code/buffers/{id}/read",
+            post(reads::read).layer(DefaultBodyLimit::max(128)),
         )
 }
 

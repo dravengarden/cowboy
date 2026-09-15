@@ -1,10 +1,14 @@
 # Controller-owned buffer continuations
 
-Status: [verified, unactivated Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md),
-blocked on six upstream Agent publications. The ordinary Review buffer and
-language APIs remain legacy; this is not the Web cutover or production
+Status: the [original candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
+is included in the separately activated Controller `0fded719`; the
+[six Agent publications](releases/agent-publication-2026-09-15.md) closed its
+original prerequisite. The ordinary Review buffer and language APIs remain
+legacy; this is not the Web cutover or production
 Machine/Zed acceptance. It consumes the independently verified
 [Machine/native candidate](plugin-native-buffer-leases.md).
+The additive [owned observation API](plugin-owned-buffer-reads.md) now implements
+diagnostic and symbol reads; its rollout remains separately recorded.
 
 ## Fixed core ownership
 
@@ -104,8 +108,10 @@ Controller activation can expose this additive API without changing the old
 Review consumer or activating new Machine/Plugin bytes. No database schema,
 Catalog format, installation, telemetry policy, Worker generation or native ABI
 changes here. Machine maintenance and signed Zed publication/installation remain
-independent. Before switching Review, bind language/hover/navigation reads to
-this lifetime, implement pending/unknown observation and explicit release in the
+independent. Diagnostic and symbol reads now have an
+[additive owned interface](plugin-owned-buffer-reads.md). Before switching Review,
+resolve hover/navigation content-coordinate ownership, implement
+pending/unknown observation and explicit release in the
 client, and accept the actual Machine/Code generation. There is no heartbeat,
 automatic abandoned-browser cleanup, Controller-restart restoration, continuous
 principal/workspace writer fence or generic DAG recovery claim in this slice.

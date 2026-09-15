@@ -5,6 +5,7 @@ use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::code_buffer_read;
 use crate::machine_control::{ConnectionToken, MachineControl};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -126,4 +127,36 @@ pub(super) async fn request(
         "unexpected buffer state"
     );
     Ok(reply.state)
+}
+
+pub(super) async fn read_support(
+    control: &MachineControl,
+    connection: &ConnectionToken,
+) -> Result<()> {
+    let value = control
+        .adapter_request_on_connection(connection, "zed", json!({"type":"bufferLeaseReadSupport"}))
+        .await
+        .map_err(anyhow::Error::msg)?;
+    ensure!(
+        value == json!({"type":"bufferLeaseReadSupport", "api_version":1}),
+        "owned buffer reads unavailable"
+    );
+    Ok(())
+}
+
+pub(super) async fn read(
+    control: &MachineControl,
+    connection: &ConnectionToken,
+    lease: &NativeRef,
+    request: code_buffer_read::Request,
+) -> Result<code_buffer_read::Reply<NativeRef>> {
+    let value = control
+        .adapter_request_on_connection(
+            connection,
+            "zed",
+            json!({"type":"readBufferLease", "lease":lease, "request":request}),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+    code_buffer_read::Reply::parse(&value, lease, request)
 }

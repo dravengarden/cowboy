@@ -12,6 +12,10 @@ pub(super) struct Fixture {
 }
 
 pub(super) fn create(hub: &Hub, machine: &str) {
+    create_owned(hub, machine, "local");
+}
+
+pub(super) fn create_owned(hub: &Hub, machine: &str, user: &str) {
     hub.create_session(SessionRegistration {
         id: "session".into(),
         provider: "codex".into(),
@@ -27,12 +31,12 @@ pub(super) fn create(hub: &Hub, machine: &str) {
         title: "fixture".into(),
         origin: SessionOrigin::default(),
         system: false,
-        owner_user_id: Some("local".into()),
+        owner_user_id: Some(user.into()),
         owner_username: None,
     });
 }
 
-fn authenticated() -> AuthenticatedProductRequest {
+pub(super) fn authenticated() -> AuthenticatedProductRequest {
     AuthenticatedProductRequest {
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
@@ -48,7 +52,7 @@ fn native_reply(id: u64, state: &str) -> Value {
     json!({"type":"bufferLease", "api_version":1, "lease":native(id), "state":state})
 }
 
-fn payload(command: &MachineCommand) -> &Value {
+pub(super) fn payload(command: &MachineCommand) -> &Value {
     let MachineCommand::AdapterRequest {
         adapter, payload, ..
     } = command
@@ -59,7 +63,12 @@ fn payload(command: &MachineCommand) -> &Value {
     payload
 }
 
-fn reply(context: &Context, connection: &ConnectionToken, command: MachineCommand, value: Value) {
+pub(super) fn reply(
+    context: &Context,
+    connection: &ConnectionToken,
+    command: MachineCommand,
+    value: Value,
+) {
     let MachineCommand::AdapterRequest { request_id, .. } = command else {
         panic!("expected adapter command");
     };
@@ -141,7 +150,12 @@ impl Fixture {
         result.unwrap()
     }
 
-    async fn operation(&mut self, resource: &str, action: Action, observed: &str) -> Response {
+    pub(super) async fn operation(
+        &mut self,
+        resource: &str,
+        action: Action,
+        observed: &str,
+    ) -> Response {
         let context = self.context.clone();
         let commands = &mut self.commands;
         let connection = &self.connection;
@@ -169,7 +183,7 @@ impl Fixture {
     }
 }
 
-async fn json_response(response: Response) -> Value {
+pub(super) async fn json_response(response: Response) -> Value {
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
         .await
@@ -616,7 +630,11 @@ fn request_schemas_and_product_route_ownership_are_closed() {
     assert!(serde_json::from_value::<Empty>(json!({})).is_ok());
     assert!(serde_json::from_value::<Empty>(json!({"path":"retarget"})).is_err());
     for method in [Method::GET, Method::POST, Method::PUT, Method::DELETE] {
-        for path in ["/api/code/buffers", "/api/code/buffers/resource"] {
+        for path in [
+            "/api/code/buffers",
+            "/api/code/buffers/resource",
+            "/api/code/buffers/resource/read",
+        ] {
             assert_eq!(classify_route(&method, path), RouteAuth::ProductOperator);
         }
     }
@@ -678,6 +696,29 @@ async fn http_routes_reject_retargeting_and_unbounded_bodies_without_native_call
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+    for (body, status) in [
+        (
+            json!({"kind":"language", "path":"retarget"}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"kind":"hover", "offset":0}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            json!({"kind":"symbols", "path":"x".repeat(256)}),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (json!({"kind":"language"}), StatusCode::NOT_FOUND),
+    ] {
+        let response = client
+            .post(format!("{base}/api/code/buffers/unknown/read"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
     }
     assert!(fixture.commands.try_recv().is_err());
 }

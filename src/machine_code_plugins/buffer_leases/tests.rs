@@ -27,6 +27,93 @@ async fn support_is_a_core_probe_not_a_native_health_or_installation_claim() {
 }
 
 #[tokio::test]
+async fn read_support_and_invalid_requests_never_select_a_plugin() {
+    let host = CodeRuntimeHost::default();
+    let probe = json!({"type":"bufferLeaseReadSupport"});
+    assert_eq!(
+        host.request("fixture-code", &probe, || panic!("selected a Plugin"))
+            .await
+            .unwrap(),
+        json!({"type":"bufferLeaseReadSupport","api_version":1})
+    );
+    assert!(crate::machine_code_plugins::request_worktree(&probe).is_err());
+    for value in [
+        json!({"type":"bufferLeaseReadSupport","extra":true}),
+        json!({"type":"readBufferLease","lease":{"instance":"a".repeat(32),"id":"0000000000000001"},"request":{"kind":"language","path":"other"}}),
+        json!({"type":"readBufferLease","lease":{"instance":"a".repeat(32),"id":"0000000000000001"},"request":{"kind":"hover","offset":0}}),
+    ] {
+        assert!(
+            host.request("fixture-code", &value, || panic!("selected a Plugin"))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(host.live_generation_count().await, 0);
+}
+
+#[tokio::test]
+async fn reads_retain_exact_generation_and_do_not_need_a_filesystem_path() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let host = CodeRuntimeHost::default();
+    let old = prepare(&host, &root.0, "old").await;
+    let read = |lease: &Value| json!({"type":"readBufferLease","lease":lease,"request":{"kind":"language"}});
+    assert!(
+        host.request("fixture-code", &read(&old), || panic!("selected a Plugin"))
+            .await
+            .is_err()
+    );
+    request(&host, &old, "openBufferLease").await.unwrap();
+    let other = root.0.join("other");
+    std::fs::create_dir(&other).unwrap();
+    let new = prepare(&host, &other, "new").await;
+    request(&host, &new, "openBufferLease").await.unwrap();
+    std::fs::rename(&other, root.0.join("moved")).unwrap();
+    for (lease, generation) in [(&old, "old"), (&new, "new")] {
+        let observed = host
+            .request("fixture-code", &read(lease), || {
+                panic!("reselected a Plugin")
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            observed["result"]["diagnostics"][0]["message"],
+            format!("generation-{generation}")
+        );
+    }
+    request(&host, &old, "releaseBufferLease").await.unwrap();
+    assert!(
+        host.request("fixture-code", &read(&old), || panic!(
+            "reselected a Plugin"
+        ))
+        .await
+        .is_err()
+    );
+    request(&host, &new, "releaseBufferLease").await.unwrap();
+    assert_eq!(host.live_generation_count().await, 0);
+}
+
+#[tokio::test]
+async fn wrong_read_owner_does_not_retire_the_original_runtime() {
+    let root = PrivateRuntimeDirectory::create().unwrap();
+    let host = CodeRuntimeHost::default();
+    let lease = prepare(&host, &root.0, "bad-read").await;
+    request(&host, &lease, "openBufferLease").await.unwrap();
+    let read = json!({"type":"readBufferLease","lease":lease,"request":{"kind":"symbols"}});
+    assert!(
+        host.request("fixture-code", &read, || panic!("reselected a Plugin"))
+            .await
+            .is_err()
+    );
+    assert_eq!(host.live_generation_count().await, 1);
+    assert_eq!(
+        request(&host, &lease, "queryBufferLease").await.unwrap()["state"],
+        "open"
+    );
+    request(&host, &lease, "releaseBufferLease").await.unwrap();
+    assert_eq!(host.live_generation_count().await, 0);
+}
+
+#[tokio::test]
 async fn failed_preparation_releases_an_unleased_runtime_and_capacity() {
     let root = PrivateRuntimeDirectory::create().unwrap();
     let host = CodeRuntimeHost::default();

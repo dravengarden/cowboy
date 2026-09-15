@@ -549,7 +549,11 @@ mod tests {
             let kind = request["type"].as_str().unwrap();
             if matches!(
                 kind,
-                "prepareBuffer" | "openBufferLease" | "queryBufferLease" | "releaseBufferLease"
+                "prepareBuffer"
+                    | "openBufferLease"
+                    | "queryBufferLease"
+                    | "releaseBufferLease"
+                    | "readBufferLease"
             ) {
                 let lease = if kind == "prepareBuffer" {
                     next_lease += 1;
@@ -560,6 +564,23 @@ mod tests {
                     request["lease"].clone()
                 };
                 let id = lease["id"].as_str().unwrap();
+                if kind == "readBufferLease" {
+                    assert_eq!(owned[id], "open", "read of a non-open fixture buffer");
+                    let result = if request["request"]["kind"] == "symbols" {
+                        json!({"kind":"symbols","symbols":[]})
+                    } else {
+                        json!({"kind":"language","diagnostics":[{
+                            "start":{"row":0,"column":0}, "end":{"row":0,"column":1},
+                            "severity":1,"source":null,"message":generation}],
+                            "inlayHints":[],"semanticTokens":[]})
+                    };
+                    let mut response = json!({"type":"bufferLeaseRead","api_version":1,"lease":lease,"opened_version":[],"result":result});
+                    if generation == "generation-bad-read" {
+                        response["lease"]["instance"] = json!("f".repeat(32));
+                    }
+                    let _ = writeln!(stream, "{response}");
+                    continue;
+                }
                 if kind == "prepareBuffer" && generation == "generation-pause-prepare" {
                     fs::write(home.join("prepare-requested"), "ready").unwrap();
                     for _ in 0..500 {
