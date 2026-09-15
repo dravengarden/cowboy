@@ -2387,3 +2387,20 @@ Desktop Vim + IME checks:
     layers, keyboard focus, or animation timing to compensate for this lifecycle
     error. The isolated iPad Simulator comparison and its limits are recorded in
     [the performance note](../../../docs/pending-disclosure-performance.md).
+
+106. **Native keyboard predictions must not become persistent viewport height.**
+    The notification-driven avoider wrote the predicted keyboard overlap into
+    `WKWebView.frame`, then sampled `keyboardLayoutGuide` for only two seconds.
+    A guide shorter than 80 points was discarded, retaining the previous frame.
+    A stale/over-tall prediction could therefore survive indefinitely, leaving
+    a large blank band outside the WebView. Replaying a 480-point prediction
+    against a collapsed guide on the iPad Simulator reproduced that persistent
+    over-shrink. On iOS 17+, constrain the WebView's bottom directly to the
+    parent's keyboard guide, with `usesBottomSafeArea = NO` and
+    `followsUndockedKeyboard = NO`. UIKit continuously owns docked keyboard
+    geometry; floating/undocked keyboards overlay the page, and dismissal
+    restores the full parent height. Never run the legacy frame writer or its
+    settling timers alongside those constraints. iOS 15/16 retain the existing
+    compatibility path. This keeps the Obsidian/Capacitor native-resize model;
+    Web keyboard padding, text input, IME, selection and caret ownership stay
+    unchanged. See [Simulator evidence](../../../docs/ios-simulator.md#keyboard-viewport-ownership).

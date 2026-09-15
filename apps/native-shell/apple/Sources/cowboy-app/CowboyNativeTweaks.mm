@@ -460,6 +460,8 @@ static void cowboyLoadProviderImages(
 // gone.
 static __weak WKWebView *gCowboyWebView = nil;
 
+static void cowboyInstallKeyboardLayoutGuide(void);
+
 // WKWebView wraps the document in a UIScrollView. Safari/PWA delivers touches
 // to an overflow:hidden page almost directly; the app's root scrollView still
 // delays and can cancel JS touches while it decides whether to pan. Cowboy
@@ -934,6 +936,12 @@ __attribute__((constructor)) static void cowboyInstallHapticBridge(void) {
                 // thin shell creates one main web view; the latest assignment wins.
                 gCowboyWebView = cowboyWv;
                 cowboyScheduleDocumentScrollView(cowboyWv);
+                // Wry attaches the view after its initializer returns. Bind the
+                // keyboard only once that parent exists; frame notifications
+                // also retry this for a later attachment.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    cowboyInstallKeyboardLayoutGuide();
+                });
 #if DEBUG && TARGET_OS_SIMULATOR
                 // Opt into Safari inspection and install the headless simulator
                 // eval bridge. Both are DEBUG-only: release/device distribution
@@ -1031,12 +1039,17 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 // for the keyboard, so only the native owner can shrink the viewport.
 // See work-items/archive/2026/07/cowboy-native-keyboard-ime.
 @interface CowboyKeyboardAvoider : NSObject
++ (instancetype)shared;
+- (BOOL)installLayoutGuideAvoidance;
 @end
 
 @implementation CowboyKeyboardAvoider {
     NSUInteger _settleGeneration;
     BOOL _keyboardVisible;
     UIDeviceOrientation _lastDeviceOrientation;
+    __weak WKWebView *_layoutGuideWebView;
+    __weak UIView *_layoutGuideParent;
+    NSArray<NSLayoutConstraint *> *_layoutGuideConstraints;
 }
 
 + (instancetype)shared {
@@ -1082,6 +1095,42 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
                  object:nil];
     }
     return self;
+}
+
+// UIKit owns the keyboard's actual layout, including delayed third-party
+// resizing, rotation and floating keyboards. On iOS 17+ its guide can reach the
+// parent's bottom when dismissed, so it can own the WebView's height directly
+// without leaving an extra safe-area strip. Do not combine these constraints
+// with predicted notification frames or a finite settling timer.
+- (BOOL)installLayoutGuideAvoidance {
+    if (@available(iOS 17.0, *)) {
+        WKWebView *wv = gCowboyWebView;
+        UIView *parent = wv.superview;
+        if (wv == nil || parent == nil || wv.window == nil) return NO;
+        if (_layoutGuideWebView == wv && _layoutGuideParent == parent) return YES;
+        if (_layoutGuideConstraints != nil) {
+            [NSLayoutConstraint deactivateConstraints:_layoutGuideConstraints];
+        }
+        UIKeyboardLayoutGuide *guide = parent.keyboardLayoutGuide;
+        // Undocked/floating keyboards overlay the page. Only a docked keyboard
+        // may shorten the whole viewport; UIKit owns that classification.
+        guide.followsUndockedKeyboard = NO;
+        guide.usesBottomSafeArea = NO;
+        wv.translatesAutoresizingMaskIntoConstraints = NO;
+        _layoutGuideConstraints = @[
+            [wv.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor],
+            [wv.trailingAnchor constraintEqualToAnchor:parent.trailingAnchor],
+            [wv.topAnchor constraintEqualToAnchor:parent.topAnchor],
+            [wv.bottomAnchor constraintEqualToAnchor:guide.topAnchor],
+        ];
+        _layoutGuideWebView = wv;
+        _layoutGuideParent = parent;
+        ++_settleGeneration;
+        [NSLayoutConstraint activateConstraints:_layoutGuideConstraints];
+        [parent setNeedsLayout];
+        return YES;
+    }
+    return NO;
 }
 
 // Trim the web view to `full.height − overlap` (overlap 0 == full), animated with
@@ -1173,6 +1222,7 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 // an early over-tall prediction cannot leave a gray strip above the real keyboard.
 - (void)applySettledLayoutGuide:(NSUInteger)generation {
     if (generation != _settleGeneration || !_keyboardVisible) return;
+    if ([self installLayoutGuideAvoidance]) return;
     WKWebView *wv = gCowboyWebView;
     UIView *parent = wv.superview;
     if (wv == nil || parent == nil || wv.window == nil) return;
@@ -1230,6 +1280,7 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 
 - (void)onDeviceOrientationDidChange:(NSNotification *)note {
     (void)note;
+    if ([self installLayoutGuideAvoidance]) return;
     UIDeviceOrientation orientation = UIDevice.currentDevice.orientation;
     if (!UIDeviceOrientationIsPortrait(orientation) &&
         !UIDeviceOrientationIsLandscape(orientation)) {
@@ -1254,6 +1305,7 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 }
 
 - (void)onKeyboardWillChangeFrame:(NSNotification *)note {
+    if ([self installLayoutGuideAvoidance]) return;
     _keyboardVisible = YES;
     [self applyFromNote:note];
     [self scheduleSettledCorrections];
@@ -1263,12 +1315,14 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 // first-open gap (BUG 2). Idempotent with WillChangeFrame for the system keyboard
 // (same settled frame → same overlap → no visible change).
 - (void)onKeyboardDidShow:(NSNotification *)note {
+    if ([self installLayoutGuideAvoidance]) return;
     _keyboardVisible = YES;
     [self applyFromNote:note];
     [self scheduleSettledCorrections];
 }
 
 - (void)onKeyboardWillHide:(NSNotification *)note {
+    if ([self installLayoutGuideAvoidance]) return;
     _keyboardVisible = NO;
     ++_settleGeneration;
     [self applyOverlap:0 userInfo:note.userInfo];
@@ -1292,6 +1346,12 @@ __attribute__((constructor)) static void cowboyInstallLifecycleBridge(void) {
 // (=0); the empty-area Paste cause is in wry's WKWebView creation — see the new
 // text-interaction tweak below.
 #define COWBOY_AB_DISABLE_KB_AVOIDER 0
+
+static void cowboyInstallKeyboardLayoutGuide(void) {
+#if !COWBOY_AB_DISABLE_KB_AVOIDER
+    [[CowboyKeyboardAvoider shared] installLayoutGuideAvoidance];
+#endif
+}
 
 __attribute__((constructor)) static void cowboyInstallKeyboardAvoider(void) {
 #if COWBOY_AB_DISABLE_KB_AVOIDER

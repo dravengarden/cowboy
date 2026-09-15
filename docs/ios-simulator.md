@@ -86,3 +86,51 @@ The physical-iPhone image-adjacent caret issue remains open (PITFALLS #69).
 Simulator HID Return can update CM6 and draw a CSS caret on an empty line whose
 Range height is zero; an iPhone may leave its UIKit caret at the prior measurable
 text. A Simulator screenshot is not acceptance for that bug.
+
+## Keyboard viewport ownership
+
+On iOS 17+, the native shell constrains the main WebView to its parent's
+`keyboardLayoutGuide.topAnchor`. `usesBottomSafeArea = false` restores the full
+parent height when the keyboard closes; `followsUndockedKeyboard = false`
+leaves floating/undocked keyboards as overlays. These are UIKit's
+[keyboard guide behaviors](https://developer.apple.com/videos/play/wwdc2023/10281/),
+not extra Web padding. The iOS 15/16 compatibility path still handles keyboard
+notifications and samples the guide.
+
+The former path first assigned a predicted notification overlap to
+`WKWebView.frame`, then reconciled for two seconds. Each sample discarded a
+guide shorter than 80 points. A stale prediction could therefore survive a
+collapsed guide and leave a persistent gap, even after the sample window ended.
+Direct layout constraints remove both the predicted height and that deadline
+from the iOS 17+ path.
+
+### 2026-09-15 regression evidence
+
+An isolated iPad Pro 11-inch Simulator on iOS 26.5 loaded Cowboy's production
+Composer and keyboard hooks in an in-flow Web fixture. A disposable native
+host compiled the actual `CowboyNativeTweaks.mm`; it recorded the parent,
+WebView, keyboard guide, native scroll insets and DOM geometry independently.
+No account or production session was opened by this fixture.
+
+The fault injection replayed a 480-point prediction directly into the avoider
+while UIKit's real guide was collapsed. It deliberately left UIKit's actual
+layout untouched, distinguishing a notification prediction from the real
+keyboard. After the two-second settling window:
+
+| Case | Parent height | WebView height | Unclaimed bottom area |
+| --- | ---: | ---: | ---: |
+| Previous avoider, stale prediction | 1210 | 730 | 480 |
+| Guide constraints, same prediction | 1210 | 1210 | 0 |
+| Guide constraints, system keyboard open | 1210 | 870 | 0 above keyboard |
+| Guide constraints, keyboard dismissed | 1210 | 1210 | 0 |
+
+All dimensions are UIKit points. The system keyboard's guide occupied the
+bottom 340 points, native scroll insets remained zero, and the Web fixture
+published no `--kb-inset`. This demonstrates the native over-shrink and its
+repair, without substituting a CSS compensation.
+
+The screenshot's physical WeType prediction/guide sequence was not captured.
+This is a reproduced failure mode in the owning code, not physical-device
+acceptance for WeType, split keyboards, image paste or PITFALLS #69. Verify the
+reported workflow after updating the native App from SideStore; a Web update
+cannot replace the native avoider.
