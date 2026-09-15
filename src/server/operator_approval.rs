@@ -46,73 +46,88 @@ impl OperatorApproval {
         let received = TimeSample::now();
         // Preserve middleware precedence once; later checks never switch to a
         // second cookie, a new login, another actor, or local-auth fallback.
-        let (actor, credential) = if let Ok(principal) =
-            require_admin_role(auth.hub, headers, AdminRole::Operator)
-        {
-            let token = crate::admin::cookie_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
-            (
-                Actor::Admin {
-                    account: principal.account,
-                },
-                Credential::Admin {
-                    token_hash: hex_sha256(token.as_bytes()),
-                },
-            )
-        } else {
-            let verified = authenticated.ok_or(StatusCode::UNAUTHORIZED)?;
-            if !verified.principal.role.at_least(AdminRole::Operator) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            let credential = if !auth.product_auth_enabled {
-                if verified.principal != crate::product_auth::local_product_principal() {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
-                Credential::Local
-            } else if let Some(token) = crate::product_auth::bearer_token(headers) {
-                let token_hash = hex_sha256(token.as_bytes());
-                if let Some(identity) = &verified.device_identity {
-                    // Existing automation scopes do not authorize Plugin writes.
-                    if identity.is_automation() || identity.user_id != verified.principal.user_id {
-                        return Err(StatusCode::FORBIDDEN);
-                    }
-                    Credential::Device {
-                        token_hash,
-                        identity: identity.clone(),
-                    }
-                } else {
-                    if verified.cookie_session.is_some() {
-                        return Err(StatusCode::UNAUTHORIZED);
-                    }
-                    Credential::PersonalToken { token_hash }
-                }
+        let (actor, credential) =
+            if let Ok(principal) = require_admin_role(auth.hub, headers, AdminRole::Operator) {
+                let token = crate::admin::cookie_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+                (
+                    Actor::Admin {
+                        account: principal.account,
+                    },
+                    Credential::Admin {
+                        token_hash: hex_sha256(token.as_bytes()),
+                    },
+                )
             } else {
-                let session = verified
-                    .cookie_session
-                    .as_ref()
-                    .ok_or(StatusCode::UNAUTHORIZED)?;
-                let token = crate::product_auth::user_cookie_token(headers)
-                    .ok_or(StatusCode::UNAUTHORIZED)?;
-                if session.token_hash != hex_sha256(token.as_bytes())
-                    || session.user_id != verified.principal.user_id
-                    || verified.device_identity.is_some()
-                {
-                    return Err(StatusCode::UNAUTHORIZED);
-                }
-                Credential::Cookie {
-                    token_hash: session.token_hash.clone(),
-                    session_id: session.session_id.clone(),
-                }
+                let mut approval = Self::capture_product(auth, service, authenticated, headers)?;
+                approval.received = received;
+                return Ok(approval);
             };
-            (
-                Actor::Product {
-                    user_id: verified.principal.user_id.clone(),
-                },
-                credential,
-            )
-        };
         Ok(Self {
             service: service.to_owned(),
             actor,
+            credential,
+            received,
+        })
+    }
+
+    /// Product-only continuations must not inherit the separate admin-cookie
+    /// precedence used by Plugin administration.
+    pub(super) fn capture_product(
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        authenticated: Option<&AuthenticatedProductRequest>,
+        headers: &HeaderMap,
+    ) -> Result<Self, StatusCode> {
+        let received = TimeSample::now();
+        let verified = authenticated.ok_or(StatusCode::UNAUTHORIZED)?;
+        if !verified.principal.role.at_least(AdminRole::Operator) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        let credential = if !auth.product_auth_enabled {
+            if verified.principal != crate::product_auth::local_product_principal() {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Credential::Local
+        } else if let Some(token) = crate::product_auth::bearer_token(headers) {
+            let token_hash = hex_sha256(token.as_bytes());
+            if let Some(identity) = &verified.device_identity {
+                // Existing automation scopes do not authorize Plugin writes.
+                if identity.is_automation() || identity.user_id != verified.principal.user_id {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+                Credential::Device {
+                    token_hash,
+                    identity: identity.clone(),
+                }
+            } else {
+                if verified.cookie_session.is_some() {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                Credential::PersonalToken { token_hash }
+            }
+        } else {
+            let session = verified
+                .cookie_session
+                .as_ref()
+                .ok_or(StatusCode::UNAUTHORIZED)?;
+            let token =
+                crate::product_auth::user_cookie_token(headers).ok_or(StatusCode::UNAUTHORIZED)?;
+            if session.token_hash != hex_sha256(token.as_bytes())
+                || session.user_id != verified.principal.user_id
+                || verified.device_identity.is_some()
+            {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+            Credential::Cookie {
+                token_hash: session.token_hash.clone(),
+                session_id: session.session_id.clone(),
+            }
+        };
+        Ok(Self {
+            service: service.to_owned(),
+            actor: Actor::Product {
+                user_id: verified.principal.user_id.clone(),
+            },
             credential,
             received,
         })
@@ -189,17 +204,28 @@ impl OperatorApproval {
     }
 
     pub(super) async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
+        if let Credential::Admin { token_hash } = &self.credential {
+            return admin_identities(auth.hub)
+                .principal_by_token_hash(token_hash, auth_now_ms())
+                .filter(|p| p.role.at_least(AdminRole::Operator))
+                .map(|p| Actor::Admin { account: p.account });
+        }
+        self.current_product_operator(auth)
+            .await
+            .map(|principal| Actor::Product {
+                user_id: principal.user_id,
+            })
+    }
+
+    pub(super) async fn current_product_operator(
+        &self,
+        auth: ProductRequestAuth<'_>,
+    ) -> Option<ProductPrincipal> {
         match &self.credential {
-            Credential::Admin { token_hash } => {
-                return admin_identities(auth.hub)
-                    .principal_by_token_hash(token_hash, auth_now_ms())
-                    .filter(|p| p.role.at_least(AdminRole::Operator))
-                    .map(|p| Actor::Admin { account: p.account });
-            }
+            Credential::Admin { .. } => return None,
             Credential::Local => {
-                return (!auth.product_auth_enabled).then(|| Actor::Product {
-                    user_id: crate::product_auth::local_product_principal().user_id,
-                });
+                return (!auth.product_auth_enabled)
+                    .then(crate::product_auth::local_product_principal);
             }
             _ => {}
         }
@@ -264,11 +290,7 @@ impl OperatorApproval {
             Credential::Local | Credential::Admin { .. } => return None,
         };
         let principal = product_principal(auth.hub, &user);
-        (user_id == user.id && principal.role.at_least(AdminRole::Operator)).then_some(
-            Actor::Product {
-                user_id: principal.user_id,
-            },
-        )
+        (user_id == user.id && principal.role.at_least(AdminRole::Operator)).then_some(principal)
     }
 }
 

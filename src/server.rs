@@ -65,6 +65,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod code_buffers;
 mod code_reads;
 mod operator_approval;
 mod plugin_install;
@@ -251,6 +252,7 @@ struct AppState {
     diff_snapshots: DiffSnapshotCache,
     file_cursors: code_reads::file_pages::PageCursors,
     code_cache: crate::code_cache::CodeCache,
+    code_buffers: Arc<code_buffers::Owners>,
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
     web_push: Arc<WebPushService>,
@@ -1493,6 +1495,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             diff_snapshots: DiffSnapshotCache::default(),
             file_cursors: code_reads::file_pages::PageCursors::default(),
             code_cache,
+            code_buffers: Arc::default(),
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
             web_push,
@@ -4172,6 +4175,9 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     }
     if path == "/api/telemetry/binding" || path.starts_with("/api/telemetry/binding/") {
         return RouteAuth::ProductOrAdminOperator;
+    }
+    if path == "/api/code/buffers" || path.starts_with("/api/code/buffers/") {
+        return RouteAuth::ProductOperator;
     }
     if path == "/ws" {
         return RouteAuth::Product;
@@ -8979,6 +8985,7 @@ async fn serve_axum(
     };
 
     let app = Router::new()
+        .merge(code_buffers::routes(&state))
         .merge(telemetry_binding::resolution::surface::routes())
         .merge(telemetry_binding::recovery::surface::routes())
         .merge(telemetry_binding::surface::routes())
@@ -9222,7 +9229,7 @@ async fn serve_axum(
         // fallback for client-side routes.
         .fallback(static_handler)
         .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, enforce_product_api))
+        .layer(middleware::from_fn_with_state(state.clone(), enforce_product_api))
         .merge(product_auth_router(auth_state))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
@@ -9232,13 +9239,16 @@ async fn serve_axum(
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(addr = %bind, "WS/HTTP listening");
 
-    axum::serve(
+    let code_buffers = Arc::clone(&state.code_buffers);
+    let result = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal(shutdown_tx))
     .await
-    .context("axum serve")?;
+    .context("axum serve");
+    code_buffers.shutdown().await;
+    result?;
     Ok(())
 }
 

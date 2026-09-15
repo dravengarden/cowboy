@@ -163,6 +163,12 @@ Machine capability-floor acceptance, the Controller/Web consumer and separate
 Machine/Code Plugin activation are still required; Controller activation alone
 cannot close this gap.
 
+The additive [Controller buffer-owner API](plugin-controller-buffer-owners.md)
+now retains that original principal/Session/connection and admits bounded
+continuations independently of their HTTP observers. It does not replace the
+legacy endpoints described above or bind their language reads to a resource.
+Native rollout and the actual Review consumer switch remain separate.
+
 ## Evidence and remaining work
 
 Two regression tests failed before the repair: equal-content files returned the

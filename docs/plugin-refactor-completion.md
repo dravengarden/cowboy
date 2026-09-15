@@ -97,6 +97,14 @@ and accepting a production effect are different milestones.
   includes 29 new tests, complete gates, immutable builds and real temporary
   signed Zed install/uninstall/path-removal drain. Production core-probe acceptance, client
   integration and separate Machine/Code Plugin activation remain required.
+- [Controller buffer ownership](plugin-controller-buffer-owners.md) adds a
+  product-only, bounded prepare/open/query/release API over those references.
+  It retains the original Session incarnation and authenticated Machine
+  connection; observer cancellation cannot cancel an admitted mutation, and
+  ambiguous effects never replay or expire. Cleanup requires the original
+  resource user but not a still-existing Session/path. Ordinary Review language
+  reads and buffer calls remain legacy; native-generation rollout, abandoned
+  browser cleanup, restart restoration and independent recovery remain open.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

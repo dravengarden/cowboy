@@ -86,6 +86,10 @@ impl SessionCodeScope {
     pub(crate) fn cwd(&self) -> &str {
         &self.cwd
     }
+
+    pub(crate) fn owner_user_id(&self) -> Option<&str> {
+        self.owner_user_id.as_deref()
+    }
 }
 
 impl Hub {

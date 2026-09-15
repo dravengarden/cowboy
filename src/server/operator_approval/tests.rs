@@ -653,6 +653,25 @@ async fn admin_continuation_keeps_credential_precedence_and_current_role() {
             crate::admin::ADMIN_IDENTITIES_SETTING.into(),
             serde_json::to_value(&identities).unwrap(),
         );
+        let product_only = OperatorApproval::capture_product(
+            h.context(),
+            "service-test",
+            Some(&verified),
+            &headers,
+        )
+        .unwrap();
+        assert_eq!(
+            product_only
+                .current_product_operator(h.context())
+                .await
+                .unwrap()
+                .user_id,
+            h.user.id
+        );
+        assert!(
+            OperatorApproval::capture_product(h.context(), "service-test", None, &headers).is_err(),
+            "an admin cookie cannot mint product buffer ownership"
+        );
         let (authority, intent) = h.bind(&headers, &verified);
         assert!(matches!(intent.actor, Actor::Admin { .. }));
         assert!(authority.check(h.context(), "service-test", &intent).await);
@@ -670,6 +689,41 @@ async fn admin_continuation_keeps_credential_precedence_and_current_role() {
             "{change}"
         );
     }
+}
+
+#[tokio::test]
+async fn product_only_continuation_exposes_current_role_and_rechecks_original_cookie() {
+    let h = Harness::new().await;
+    let (headers, verified) = h.cookie().await;
+    let approval =
+        OperatorApproval::capture_product(h.context(), "service-test", Some(&verified), &headers)
+            .unwrap();
+    h.role(AdminRole::Owner);
+    assert!(
+        approval
+            .current_product_operator(h.context())
+            .await
+            .unwrap()
+            .can_mutate(Some("other-user"))
+    );
+    h.role(AdminRole::Operator);
+    assert!(
+        !approval
+            .current_product_operator(h.context())
+            .await
+            .unwrap()
+            .can_mutate(Some("other-user"))
+    );
+    h.store
+        .revoke_user_session_for_user(&h.user.id, "session-approval", "logout", auth_now_ms())
+        .await
+        .unwrap();
+    assert!(
+        approval
+            .current_product_operator(h.context())
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]

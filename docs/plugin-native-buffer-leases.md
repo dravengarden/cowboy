@@ -4,6 +4,8 @@ Status: [verified Machine/Zed candidate](releases/plugin-native-buffer-leases-20
 not published or activated as a Plugin. The ordinary
 Controller/Web buffer API is **not yet switched**. This is a prerequisite for
 cross-request ownership, not its production acceptance or a generic DAG executor.
+The additive [Controller owner API](plugin-controller-buffer-owners.md) now
+consumes these references; ordinary Review language/buffer calls remain legacy.
 
 ## Why a new reference is needed
 
@@ -111,10 +113,11 @@ Health is not Machine capability negotiation. The new core-only, pathless
 older Machine's generic dispatcher rejects the absent worktree instead of
 forwarding this probe to a native Plugin. A future consumer must validate that
 reply on its original authenticated Machine connection; it proves host support,
-not installation or execution authority. Then it must accept the exact Code
-generation and add core original-principal/Session ownership with an admitted
-continuation, wire cancellation and stale-owner release, and switch the Web
-consumer. Language/hover/navigation reads also need that resource lifetime.
+not installation or execution authority. The additive Controller owner API now
+checks this reply, retains original-principal/Session ownership and admits
+bounded continuations with stale-owner release. Actual Machine/Code generation
+acceptance and the Web switch remain separate. Language/hover/navigation reads
+also need that resource lifetime.
 The legacy HTTP API remains unchanged in this candidate and retains its known
 cross-request limitations. Never enable the new consumer merely because an
 adapter health response advertises this optional API, or restore a handle after
