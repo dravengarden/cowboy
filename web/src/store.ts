@@ -108,6 +108,7 @@ import {
 import { mergeCanonicalTimeline, snapshotJoinGap } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
+import { shouldAnnounceLegacyRecords } from "./legacyRecordsNotice";
 import {
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
@@ -1721,7 +1722,7 @@ function connect(): void {
   didHydrate = true;
   openSocket();
   void syncDatabase.legacyRecords().then((keys) => {
-    if (keys.length && !productSessionAbandoned) {
+    if (!productSessionAbandoned && shouldAnnounceLegacyRecords(keys)) {
       notify("Legacy browser records were retained separately and will not be sent. Review local recovery in Settings → Info.", "warning");
     }
   }).catch(() => {
