@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.16",
+  "version": "3.1.17",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -43,6 +43,43 @@
     },
     "accessible_label": "Claude Code is working"
   },
+  "configuration_presets": [
+    {
+      "id": "account-default",
+      "name": "Default",
+      "detail": "Account default model and effort",
+      "is_default": true,
+      "values": { "model": "default", "effort": "default" }
+    },
+    {
+      "id": "sonnet-medium",
+      "name": "Sonnet · Medium",
+      "detail": "Sonnet 5 · Medium effort",
+      "is_default": false,
+      "values": { "model": "sonnet", "effort": "medium" }
+    },
+    {
+      "id": "opus-high",
+      "name": "Opus · High",
+      "detail": "Opus 5 (1M context) · High effort",
+      "is_default": false,
+      "values": { "model": "opus[1m]", "effort": "high" }
+    },
+    {
+      "id": "fable-high",
+      "name": "Fable · High",
+      "detail": "Fable 5 (1M context) · High effort",
+      "is_default": false,
+      "values": { "model": "claude-fable-5[1m]", "effort": "high" }
+    },
+    {
+      "id": "fable-max",
+      "name": "Fable · Max",
+      "detail": "Fable 5 (1M context) · Max effort",
+      "is_default": false,
+      "values": { "model": "claude-fable-5[1m]", "effort": "max" }
+    }
+  ],
   "host": {
     "schema_version": 2,
     "conversation_compaction": {
