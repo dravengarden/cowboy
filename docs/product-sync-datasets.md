@@ -82,15 +82,29 @@ They remain unchanged and are never automatically loaded into the new dataset,
 imported, deleted or sent. Server-acknowledged state reloads from the Service;
 old browser-only pending records require explicit human review.
 
-Settings → Info reports retained records and offers a local JSON download for
-each, paginated 32 at a time. Enumeration is strict and capped at 4096 keys;
-unavailable storage or overflow is an error, not an empty/complete inventory.
-Export is JSON-only, bounded to 8 MiB, 100,000 nodes and depth 64; malformed,
-cyclic or oversized values are retained without exporting. Downloads may contain
-private prompts/attachments and declare `replay_authorized: false`. They neither
-authorize import nor determine whether an old operation already took effect.
-The view seals late callbacks on unmount or product-session end and releases
-its own URLs/timers. It never closes the shared dataset owner.
+Settings → About → Storage reports older browser records separately from
+telemetry. Retention alone is not a warning. Recovery is collapsed by default;
+opening it shows one native record selector, previous/next controls and one
+local JSON download action, rather than a tall list of download buttons.
+Numbered filenames contain no account/session identifiers. Export failure is
+reported for the selected record without hiding the inventory or claiming the
+original was deleted. Enumeration is strict and capped at 4096 keys; unavailable
+storage or overflow is an error, not an empty/complete inventory. Export is
+JSON-only, bounded to 8 MiB, 100,000 nodes and depth 64; malformed, cyclic or
+oversized values are retained without exporting. Downloads may contain private
+prompts/attachments and declare `replay_authorized: false`. They neither
+authorize import nor determine whether an old operation already took effect. The
+view seals late callbacks on unmount or product-session end and releases its own
+URLs/timers. It never closes the shared dataset owner.
+
+`just settings-recovery-browser-conformance <exact-firefox>` exercises the real
+React/MUI view at mobile width with 376 synthetic native-IDB records, bounded
+layout, read-only export, per-record failures and session-end/unmount cleanup.
+It also checks that mobile telemetry diagnostics mount only when requested;
+Desktop keeps them visible by default. Journal absence does not indicate whether
+separately configured export is running. Collapsing diagnostics disposes the
+observer/preview, not a submitted operation. This fixture has no production
+account, private backend or physical iPhone download acceptance.
 
 ## Rollout and recovery
 

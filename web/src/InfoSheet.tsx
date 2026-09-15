@@ -942,10 +942,10 @@ export function InfoContent({
             </Typography>
             <ClientStorageInfoSection />
           </Stack>
+          <ProductSyncDataNotice />
         </Stack>
         {!desktop && <Divider />}
-        <TelemetryBindingPanel />
-        <ProductSyncDataNotice />
+        <TelemetryBindingPanel desktop={desktop} />
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}

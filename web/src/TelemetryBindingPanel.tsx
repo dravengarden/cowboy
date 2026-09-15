@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Alert, Button, Stack, Typography } from "@mui/material";
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryRecoveryPanel } from "./TelemetryRecoveryPanel";
 import { TelemetryMutationPanel } from "./TelemetryMutationPanel";
+import { PRODUCT_SESSION_END_EVENT } from "./productSessionEnd.ts";
 import {
   type BindingHead,
   type BindingStatus,
@@ -27,7 +28,55 @@ function Head({ value }: { value: BindingHead | null }): React.JSX.Element {
   );
 }
 
-export function TelemetryBindingPanel(): React.JSX.Element {
+/** Mobile About keeps Operator diagnostics out of the normal reading flow.
+ * Collapsing disposes previews; reopening never restores confirmation authority.
+ * Desktop keeps the diagnostic workbench visible by default.
+ */
+export function TelemetryBindingPanel(
+  { desktop = false }: { desktop?: boolean },
+): React.JSX.Element {
+  const [expanded, setExpanded] = useState(desktop);
+  const ended = useRef(false);
+  const id = useId();
+  useEffect(() => {
+    const end = () => {
+      ended.current = true;
+      setExpanded(false);
+    };
+    globalThis.addEventListener(PRODUCT_SESSION_END_EVENT, end);
+    return () => globalThis.removeEventListener(PRODUCT_SESSION_END_EVENT, end);
+  }, []);
+  return (
+    <Stack spacing={1} data-telemetry-info="service">
+      <Typography variant="overline" color="text.secondary">
+        Telemetry
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        Local file recording and remote export are independent. Installing a
+        telemetry Plugin does not enable export.
+      </Typography>
+      <Button
+        size="small"
+        color="inherit"
+        aria-expanded={expanded}
+        aria-controls={id}
+        onClick={() => {
+          if (!ended.current) setExpanded((value) => !value);
+        }}
+        sx={{ alignSelf: "flex-start", textTransform: "none" }}
+      >
+        {expanded ? "Hide export diagnostics" : "Export diagnostics"}
+      </Button>
+      {expanded && (
+        <div id={id}>
+          <TelemetryBindingDetails />
+        </div>
+      )}
+    </Stack>
+  );
+}
+
+function TelemetryBindingDetails(): React.JSX.Element {
   const [status, setStatus] = useState<BindingStatus | null>(null);
   const [plan, setPlan] = useState<ResolutionPlan | null>(null);
   const [busy, setBusy] = useState(false);
@@ -202,16 +251,15 @@ export function TelemetryBindingPanel(): React.JSX.Element {
     <Stack spacing={1} data-telemetry-binding="service">
       <Stack direction="row" alignItems="center" justifyContent="space-between">
         <Typography variant="overline" color="text.secondary">
-          Telemetry binding
+          Managed export
         </Typography>
         <Button size="small" disabled={busy} onClick={() => void refresh()}>
           Refresh
         </Button>
       </Stack>
       <Typography variant="body2" color="text.secondary">
-        Core-owned Service evidence and explicit recovery. Installing a
-        telemetry Plugin is separate from enabling export. Local rotating files
-        remain independent.
+        Operator diagnostics for managed export settings and recovery. This view
+        does not check delivery to a remote backend.
       </Typography>
       {message && <Alert severity={message.kind}>{message.text}</Alert>}
       {busy && (
@@ -221,15 +269,15 @@ export function TelemetryBindingPanel(): React.JSX.Element {
       )}
       {status?.resolution_admission === "closed" && (
         <Typography variant="body2" color="text.secondary">
-          Service resolution writes are closed. Previews do not enable
-          production admission.
+          Manual recovery changes are disabled on this Service. Read-only
+          previews are still available.
         </Typography>
       )}
       {status?.journal.state === "absent" && (
         <Typography variant="body2">
-          No managed binding journal. Explicitly configured legacy export may
-          still be active; this view does not inspect private destinations or
-          credentials.
+          No managed export changes have been recorded. Separately configured
+          export may still be active; this view does not inspect its private
+          destinations or credentials.
         </Typography>
       )}
       {status?.journal.state === "retained" && (
