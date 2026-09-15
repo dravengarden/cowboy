@@ -18,7 +18,11 @@ and accepting a production effect are different milestones.
   teardown. Signed-reader and lifecycle tests retain exact release leases on
   rejected candidates and distinguish a committed Plugin snapshot from a failed
   Provider projection. This is not unattended Machine installation, a new
-  deployment credential, physical rollback or post-effect recovery.
+  deployment credential, physical rollback or post-effect recovery. Its
+  [Controller release](releases/plugin-catalog-observer-2026-09-15.md) passed both
+  complete gates and identical 69-release reads by actual candidate, predecessor
+  and cold Controllers; it is published and activated with all 16 observed
+  workers retained. Unattended installation remains explicitly deferred.
 - Generated closed composition wire types and bounded, read-only structural
   checkers in Rust and TypeScript; combined ownership/capability cycle checks
   and an 86-case real-CLI differential gate compare complete link reports. This

@@ -63,6 +63,7 @@ primary phone/desktop product path.
 - [`product-sync-datasets.md`](product-sync-datasets.md) — Immutable Service/user browser datasets, version-fenced outboxes, explicit legacy recovery and Controller/Web rollout
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
+- [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped code responses, closed core requests, Zed observations, bounded diff/file continuations and page ETags
 - [`releases/plugin-code-read-scopes-2026-09-15.md`](releases/plugin-code-read-scopes-2026-09-15.md) — Verified scoped-code Controller activation with 15 workers retained
