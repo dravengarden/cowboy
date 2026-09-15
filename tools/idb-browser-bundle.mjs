@@ -6,7 +6,8 @@ const outDir = process.argv[2];
 const suite = process.argv[3] ?? "idb";
 if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
-  suite !== "provider-management" && suite !== "plugin-lifecycle"
+  suite !== "provider-management" && suite !== "plugin-lifecycle" &&
+  suite !== "settings-recovery"
 ) {
   throw new Error("unknown suite");
 }
@@ -21,13 +22,23 @@ await build({
   define: {
     "process.env.NODE_ENV": JSON.stringify(
       suite === "provider-ui" || suite === "provider-management" ||
-        suite === "plugin-lifecycle"
+        suite === "plugin-lifecycle" || suite === "settings-recovery"
         ? "development"
         : "production",
     ),
   },
   resolve: {
-    dedupe: ["react", "react-dom"],
+    // Match the product's app-shell peer resolution; Sheet crosses the Web /
+    // component boundary and must use this checkout's UI singletons.
+    dedupe: [
+      "@cowboy/state-store",
+      "react",
+      "react-dom",
+      "@mui/material",
+      "@mui/icons-material",
+      "@emotion/react",
+      "@emotion/styled",
+    ],
     alias: {
       "@cowboy/provider-ui":
         new URL("../components/provider-ui/src/index.ts", import.meta.url)
@@ -52,6 +63,8 @@ await build({
           ? "../web/src/providerManagementBrowserConformance.ts"
           : suite === "plugin-lifecycle"
           ? "../web/src/pluginLifecycleBrowserConformance.ts"
+          : suite === "settings-recovery"
+          ? "../web/src/settingsRecoveryBrowserConformance.ts"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",

@@ -279,7 +279,10 @@ Deno.test("the product Info entry uses core mobile/desktop confirmation and clea
   const info = Deno.readTextFileSync(
     new URL("./InfoSheet.tsx", import.meta.url),
   );
-  assert(info.includes("<TelemetryBindingPanel />"));
+  assert(info.includes("<TelemetryBindingPanel desktop={desktop} />"));
+  const localRecovery = info.indexOf("<ProductSyncDataNotice />");
+  assert(localRecovery > info.indexOf("<ClientStorageInfoSection />"));
+  assert(localRecovery < info.indexOf("<TelemetryBindingPanel desktop="));
   assert(panel.includes("<ConfirmSheet"));
   assert(!panel.includes("<Dialog"));
   assert(panel.includes("cowboy:product-sign-out"));

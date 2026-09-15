@@ -6,7 +6,8 @@ const browser = Deno.args[0];
 const suite = Deno.args[1] ?? "idb";
 if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
-  suite !== "provider-management" && suite !== "plugin-lifecycle"
+  suite !== "provider-management" && suite !== "plugin-lifecycle" &&
+  suite !== "settings-recovery"
 ) {
   throw new Error("unknown suite");
 }
@@ -18,6 +19,8 @@ const entry = suite === "idb"
   ? "runProviderUiBrowserConformance"
   : suite === "plugin-lifecycle"
   ? "runPluginLifecycleBrowserConformance"
+  : suite === "settings-recovery"
+  ? "runSettingsRecoveryBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
@@ -136,7 +139,11 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "idb" ? 8 : suite === "idb-outbox" ? 16 : 6) ||
+      (suite === "idb" || suite === "settings-recovery"
+        ? 8
+        : suite === "idb-outbox"
+        ? 16
+        : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {
     throw new Error(`browser conformance failed: ${JSON.stringify(result)}`);
