@@ -34,10 +34,13 @@ inside `agent_main()`:
    move it into a **per-agent cgroup** (`src/cgroup.rs`) so its entire process
    subtree can be reaped in one shot on teardown (see *Turn liveness*).
 2. **Connect** over the child's stdin/stdout (`ByteStreams`).
-3. Build the `Client` with two handlers:
+3. Build the `Client` with three handlers:
    - **`on_receive_notification`** → `handle_session_notification()`: translate
      each ACP `SessionUpdate` into a Hub `Event` (most pass through verbatim as
      `Event::Update`; `config_option_update` is special-cased).
+   - **`_claude/sdkMessage`** → `handle_native_activity()`: combine the selected
+     Claude behavior's native execution state with the prompt lifecycle, so
+     background-task continuations report Busy even after a prompt has returned.
    - **`on_receive_request`** → the **permission handler**: for *system*
      sessions, auto-approve; for human sessions, enqueue a pending request with a
      oneshot channel so a human (any client) can answer it. The request keeps
@@ -107,7 +110,7 @@ The loop awaits `cmd_rx` (routed from the supervisor) and translates each
 
 | Command | ACP action |
 |---|---|
-| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd` + `Running`; Grok additionally queues a local `_x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered by the idle prompt watchdog after 15 minutes of no turn progress (see *Turn liveness*). |
+| `Prompt(blocks, cmid)` | echo each block into the timeline (first tagged with `cmid` for optimistic reconcile), then `PromptRequest`. On success push `TurnEnd`, then `Running` once native execution is also idle; Grok additionally queues a local `_x.ai/session/info` context refresh. On error (incl. subprocess death) push `TurnEnd` + `Crashed`. A live-but-silent turn is recovered by the idle prompt watchdog after 15 minutes of no turn progress (see *Turn liveness*). |
 | `Cancel` | `CancelNotification` |
 | `Permission { request_id, option_id }` | resolve the pending oneshot, push `PermissionResolved` |
 | `SetConfigOption { config_id, value }` | Gemini's synthesized `mode` and Grok's `session_mode` → `SetSessionModeRequest`; Grok `model`/`reasoning_effort` → compatibility `session/set_model`; Grok `permission_mode` → `_x.ai/yolo_mode_changed`; otherwise typed `SetSessionConfigOptionRequest` (string ids and booleans), whose refreshed options are pushed back to the Hub |

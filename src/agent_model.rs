@@ -12,7 +12,7 @@ pub enum Status {
     Starting,
     /// Session established; idle, ready for a prompt.
     Running,
-    /// A prompt turn is currently being processed.
+    /// A prompt or a provider-reported autonomous continuation is being processed.
     Busy,
     /// Agent exited cleanly (or was stopped).
     Exited,

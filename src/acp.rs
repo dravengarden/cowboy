@@ -42,7 +42,8 @@ use agent_client_protocol::schema::v1::{
     SetSessionConfigOptionRequest, SetSessionModeRequest,
 };
 use agent_client_protocol::{
-    Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcRequest, JsonRpcResponse,
+    Agent, ByteStreams, Client, ConnectionTo, Error, ErrorCode, JsonRpcNotification,
+    JsonRpcRequest, JsonRpcResponse,
 };
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
@@ -926,6 +927,15 @@ fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
             "excludeDynamicSections": true,
         }),
     );
+    // The SDK can resume on a background-task notification after session/prompt
+    // already returned. Subscribe to its execution state, not its full raw
+    // transcript, so those autonomous stretches retain truthful Busy/idle edges.
+    meta.insert(
+        "claudeCode".to_owned(),
+        serde_json::json!({
+            "emitRawSDKMessages": [{"type": "system", "subtype": "session_state_changed"}],
+        }),
+    );
     Some(meta)
 }
 
@@ -1078,6 +1088,12 @@ mod startup_mode_tests {
                         "preset": "claude_code",
                         "excludeDynamicSections": true,
                     }))
+                );
+                assert_eq!(
+                    request.pointer("/_meta/claudeCode/emitRawSDKMessages"),
+                    Some(&serde_json::json!([
+                        {"type": "system", "subtype": "session_state_changed"}
+                    ]))
                 );
             }
         }
@@ -1897,6 +1913,46 @@ pub enum AgentCommand {
     },
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, JsonRpcNotification)]
+#[notification(method = "_claude/sdkMessage")]
+#[serde(rename_all = "camelCase")]
+struct ClaudeSdkMessageNotification {
+    session_id: String,
+    message: serde_json::Value,
+}
+
+/// A prompt response and native execution are independent lifetimes. Claude
+/// can finish the former, then resume the latter on a background shell result.
+/// Keep terminal/startup states authoritative and never end a pending prompt
+/// merely because an earlier SDK turn's trailing idle arrived late.
+struct SessionActivity {
+    native_session_id: Option<String>,
+    prompt_status: Status,
+    prompt_failed: bool,
+    native_busy: bool,
+}
+
+impl Default for SessionActivity {
+    fn default() -> Self {
+        Self {
+            native_session_id: None,
+            prompt_status: Status::Starting,
+            prompt_failed: false,
+            native_busy: false,
+        }
+    }
+}
+
+impl SessionActivity {
+    fn status(&self) -> Status {
+        if self.prompt_status == Status::Running && !self.prompt_failed && self.native_busy {
+            Status::Busy
+        } else {
+            self.prompt_status
+        }
+    }
+}
+
 /// Per-session client state shared by the connection's handler closures and the
 /// command loop. All inhabit the crate's single executor, but the crate
 /// requires `Send`, so this is `Arc` + `Mutex`/atomics (not `Rc`/`RefCell`).
@@ -1917,6 +1973,8 @@ struct ClientState {
     /// Notification handlers attach progress only to the prompt that currently
     /// owns `prompt_lock`. Queued prompts cannot reset or consume its state.
     active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
+    /// Combine the requested prompt lifecycle with native autonomous activity.
+    activity: Mutex<SessionActivity>,
     /// Every Cancel advances this generation. A prompt captures the current
     /// value when accepted, so Stop also cancels a retry waiting in backoff (or
     /// a prompt queued before Stop but not yet started).
@@ -1987,6 +2045,14 @@ impl ActivePrompt {
 }
 
 impl ClientState {
+    fn set_status(&self, status: Status, detail: Option<String>) {
+        let mut activity = self.activity.lock();
+        activity.prompt_status = status;
+        activity.prompt_failed = detail.is_some();
+        self.sink
+            .set_status(&self.session_id, activity.status(), detail);
+    }
+
     fn current_prompt(&self) -> Option<Arc<ActivePrompt>> {
         self.active_prompt.lock().clone()
     }
@@ -2208,6 +2274,7 @@ async fn agent_main(
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
+        activity: Mutex::new(SessionActivity::default()),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
@@ -2219,6 +2286,7 @@ async fn agent_main(
     });
 
     let notif_state = state.clone();
+    let activity_state = state.clone();
     let perm_state = state.clone();
     let main_state = state.clone();
 
@@ -2236,6 +2304,15 @@ async fn agent_main(
                         _cx: ConnectionTo<Agent>|
                         -> Result<(), Error> {
                 handle_session_notification(&notif_state, &notif);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .on_receive_notification(
+            async move |notif: ClaudeSdkMessageNotification,
+                        _cx: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_native_activity(&activity_state, &notif);
                 Ok(())
             },
             agent_client_protocol::on_receive_notification!(),
@@ -2547,6 +2624,32 @@ async fn await_prompt_with_idle_watchdog<R>(
     }
 }
 
+fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
+    if state.suppress_updates.load(Ordering::SeqCst)
+        || !crate::provider::uses_stable_preset_system_prompt(&state.provider_id)
+        || notif.message["type"] != "system"
+        || notif.message["subtype"] != "session_state_changed"
+        || notif.message["session_id"] != notif.session_id
+    {
+        return;
+    }
+    let native_busy = match notif.message["state"].as_str() {
+        Some("running" | "requires_action") => true,
+        Some("idle") => false,
+        _ => return,
+    };
+    let mut activity = state.activity.lock();
+    if activity.native_session_id.as_deref() != Some(notif.session_id.as_str()) {
+        return;
+    }
+    let previous = activity.status();
+    activity.native_busy = native_busy;
+    let status = activity.status();
+    if status != previous {
+        state.sink.set_status(&state.session_id, status, None);
+    }
+}
+
 fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
     // During a `session/load` resume the agent replays prior turns; drop them
     // — cowboy already has this history persisted (see field docs).
@@ -2805,6 +2908,7 @@ async fn run_session(
         session_meta = session.meta;
         session.session_id
     };
+    state.activity.lock().native_session_id = Some(acp_id.0.to_string());
     startup_phase.send_replace(StartupPhase::Configure);
     if crate::provider::uses_config_full_access(provider_id) {
         state.codex_full_access.store(
@@ -2947,7 +3051,7 @@ async fn run_session(
         Ok(v) => state.sink.set_config_options(&session_id, v),
         Err(e) => tracing::warn!(error = %e, "serializing startup config options"),
     }
-    state.sink.set_status(&session_id, Status::Running, None);
+    state.set_status(Status::Running, None);
     startup_phase.send_replace(StartupPhase::Ready);
 
     let grok_usage_tx = if crate::provider::uses_xai_session_extensions(provider_id) {
@@ -3034,7 +3138,7 @@ async fn run_session(
             };
         match cmd {
             AgentCommand::Prompt(blocks, cmid, completion) => {
-                state.sink.set_status(&session_id, Status::Busy, None);
+                state.set_status(Status::Busy, None);
                 // Echo each user content block into the timeline so every
                 // client (Web UI, phone, native shell) sees it — the upstream
                 // agent may not stream a user_message_chunk back. One Hub event
@@ -3087,7 +3191,7 @@ async fn run_session(
                                 stop_reason: "Cancelled".to_owned(),
                             },
                         );
-                        sink.set_status(&sid, Status::Running, None);
+                        state.set_status(Status::Running, None);
                         return Ok(());
                     }
                     let configured = tokio::select! {
@@ -3106,12 +3210,12 @@ async fn run_session(
                         sink.push(&sid, Event::TurnEnd {
                             stop_reason: if cancelled { "Cancelled" } else { "Error" }.to_owned(),
                         });
-                        sink.set_status(&sid, Status::Running, None);
+                        state.set_status(Status::Running, None);
                         return Ok(());
                     }
                     // A queued prompt may acquire the lock just after the prior
                     // turn reported Running. Reassert Busy before its RPC.
-                    sink.set_status(&sid, Status::Busy, None);
+                    state.set_status(Status::Busy, None);
                     let prompt = Arc::new(ActivePrompt::new(capture_completion));
                     *state.active_prompt.lock() = Some(Arc::clone(&prompt));
                     let mut retries = 0;
@@ -3203,7 +3307,7 @@ async fn run_session(
                                 stop_reason: "Cancelled".to_owned(),
                             },
                         );
-                        sink.set_status(&sid, Status::Running, None);
+                        state.set_status(Status::Running, None);
                         return Ok(());
                     }
                     if recycled_by_watchdog {
@@ -3229,7 +3333,7 @@ async fn run_session(
                                 stop_reason: format!("error: {detail}"),
                             },
                         );
-                        sink.set_status(&sid, Status::Crashed, Some(detail));
+                        state.set_status(Status::Crashed, Some(detail));
                         return Ok(());
                     }
                     match response {
@@ -3257,7 +3361,7 @@ async fn run_session(
                                     stop_reason: format!("{:?}", r.stop_reason),
                                 },
                             );
-                            sink.set_status(&sid, Status::Running, None);
+                            state.set_status(Status::Running, None);
                             if usage_refresh
                                 .as_ref()
                                 .is_some_and(|refresh| refresh.send(()).is_err())
@@ -3311,8 +3415,7 @@ async fn run_session(
                                     stop_reason: format!("error: {detail}"),
                                 },
                             );
-                            sink.set_status(
-                                &sid,
+                            state.set_status(
                                 if worker_alive {
                                     Status::Running
                                 } else {

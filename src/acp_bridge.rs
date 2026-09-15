@@ -75,7 +75,7 @@ struct CowboyStatus {
     session_id: String,
     provider: String,
     state: String,
-    /// Authoritative: true exactly while the Hub has an in-flight prompt turn.
+    /// Authoritative: a prompt or provider-reported autonomous continuation is active.
     turn_running: bool,
     /// The provider subprocess/ACP session is currently usable or starting.
     agent_alive: bool,

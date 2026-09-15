@@ -102,6 +102,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         pending: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
+        activity: Mutex::new(SessionActivity::default()),
         prompt_cancellation,
         codex_full_access: AtomicBool::new(false),
         grok_permission_mode: Arc::new(Mutex::new(GrokPermissionMode::AlwaysApprove)),
@@ -600,4 +601,222 @@ async fn genuinely_new_sessions_can_still_allocate_native_identity() {
             .as_deref(),
         Some("new-native-thread")
     );
+}
+
+fn native_activity(state: &str) -> ClaudeSdkMessageNotification {
+    ClaudeSdkMessageNotification {
+        session_id: NATIVE.to_owned(),
+        message: json!({
+            "type": "system", "subtype": "session_state_changed",
+            "session_id": NATIVE, "state": state,
+        }),
+    }
+}
+
+fn activity_fixture(provider: &str) -> (Arc<ClientState>, Arc<HubSink>) {
+    let (mut state, sink) = fixture_state(false);
+    Arc::get_mut(&mut state).unwrap().provider_id = provider.to_owned();
+    state.activity.lock().native_session_id = Some(NATIVE.to_owned());
+    state.set_status(Status::Running, None);
+    (state, sink)
+}
+
+fn observed_status(sink: &HubSink) -> Status {
+    sink.hub.session_info(SESSION).unwrap().meta.status
+}
+
+#[test]
+fn native_idle_never_finishes_a_pending_prompt_or_clears_a_failure() {
+    let (state, sink) = activity_fixture("claude-code");
+    state.set_status(Status::Busy, None);
+    handle_native_activity(&state, &native_activity("running"));
+    handle_native_activity(&state, &native_activity("idle"));
+    assert_eq!(observed_status(&sink), Status::Busy);
+    state.set_status(Status::Running, None);
+    assert_eq!(observed_status(&sink), Status::Running);
+
+    for status in [Status::Starting, Status::Crashed, Status::Exited] {
+        state.set_status(status, None);
+        handle_native_activity(&state, &native_activity("running"));
+        handle_native_activity(&state, &native_activity("idle"));
+        assert_eq!(observed_status(&sink), status);
+    }
+    // Recoverable prompt errors retain their detail on an otherwise live worker.
+    state.set_status(Status::Running, Some("recoverable turn failure".to_owned()));
+    let before = sink.hub.snapshot(SESSION).unwrap().0.len();
+    handle_native_activity(&state, &native_activity("running"));
+    handle_native_activity(&state, &native_activity("idle"));
+    assert_eq!(sink.hub.snapshot(SESSION).unwrap().0.len(), before);
+}
+
+#[test]
+fn native_activity_ignores_history_other_sessions_and_unrelated_messages() {
+    let (state, sink) = activity_fixture("claude-deepseek");
+    state.suppress_updates.store(true, Ordering::SeqCst);
+    handle_native_activity(&state, &native_activity("running"));
+    assert_eq!(observed_status(&sink), Status::Running);
+    state.suppress_updates.store(false, Ordering::SeqCst);
+
+    let mut wrong_session = native_activity("running");
+    wrong_session.session_id = "other".to_owned();
+    handle_native_activity(&state, &wrong_session);
+    wrong_session.message["session_id"] = "other".into();
+    handle_native_activity(&state, &wrong_session);
+    let mut unrelated = native_activity("running");
+    unrelated.message["subtype"] = "task_started".into();
+    handle_native_activity(&state, &unrelated);
+    handle_native_activity(&state, &native_activity("future-state"));
+    assert_eq!(observed_status(&sink), Status::Running);
+
+    handle_native_activity(&state, &native_activity("requires_action"));
+    assert_eq!(observed_status(&sink), Status::Busy);
+    handle_native_activity(&state, &native_activity("idle"));
+    assert_eq!(observed_status(&sink), Status::Running);
+
+    let (other, other_sink) = activity_fixture("codex");
+    handle_native_activity(&other, &native_activity("running"));
+    assert_eq!(observed_status(&other_sink), Status::Running);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep the complete prompt/native lifecycle in wire order.
+async fn native_background_resume_restores_busy_after_prompt_response_over_acp() {
+    let (state, sink) = activity_fixture("claude-code");
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let (observed_tx, mut observed_rx) = watch::channel(0_usize);
+    let notifications = state.clone();
+    let main_state = state.clone();
+    let client = Client
+        .builder()
+        .on_receive_notification(
+            async move |notification: ClaudeSdkMessageNotification,
+                        _: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_native_activity(&notifications, &notification);
+                observed_tx.send_modify(|count| *count += 1);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ByteStreams::new(client_write.compat_write(), client_read.compat()),
+            async move |cx: ConnectionTo<Agent>| {
+                run_session(
+                    &main_state,
+                    cx,
+                    None,
+                    PathBuf::from(CWD),
+                    &mut command_rx,
+                    "claude-code",
+                    &startup,
+                )
+                .await
+            },
+        );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        let initialize: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(initialize["method"], "initialize");
+        send_json(
+            &mut writer,
+            json!({
+                "jsonrpc": "2.0", "id": initialize["id"],
+                "result": {"protocolVersion": 1, "agentCapabilities": {}}
+            }),
+        )
+        .await;
+        let new: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(new["method"], "session/new");
+        assert_eq!(
+            new["params"]["_meta"]["claudeCode"]["emitRawSDKMessages"],
+            json!([
+                {"type": "system", "subtype": "session_state_changed"}
+            ])
+        );
+        send_json(
+            &mut writer,
+            json!({
+                "jsonrpc": "2.0", "id": new["id"], "result": {"sessionId": NATIVE}
+            }),
+        )
+        .await;
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        command_tx
+            .send(AgentCommand::Prompt(
+                vec![ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new("build"),
+                )],
+                None,
+                None,
+            ))
+            .unwrap();
+        let prompt: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(prompt["method"], "session/prompt");
+        send_json(&mut writer, json!({
+            "jsonrpc": "2.0", "method": "_claude/sdkMessage", "params": native_activity("running")
+        })).await;
+        observed_rx.wait_for(|count| *count == 1).await.unwrap();
+        send_json(
+            &mut writer,
+            json!({
+                "jsonrpc": "2.0", "id": prompt["id"], "result": {"stopReason": "end_turn"}
+            }),
+        )
+        .await;
+        while sink.prompt_completions.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(state.activity.lock().prompt_status, Status::Running);
+        assert_eq!(observed_status(&sink), Status::Busy);
+        // The original prompt ends, then a shell completion wakes the SDK with
+        // no new session/prompt request. Repeated native edges are idempotent.
+        for (count, native, expected) in [
+            (2, "idle", Status::Running),
+            (3, "running", Status::Busy),
+            (4, "running", Status::Busy),
+            (5, "requires_action", Status::Busy),
+            (6, "idle", Status::Running),
+        ] {
+            send_json(&mut writer, json!({
+                "jsonrpc": "2.0", "method": "_claude/sdkMessage", "params": native_activity(native)
+            })).await;
+            observed_rx
+                .wait_for(|observed| *observed == count)
+                .await
+                .unwrap();
+            assert_eq!(observed_status(&sink), expected);
+        }
+        assert_eq!(sink.prompt_starts.lock().len(), 1);
+        assert_eq!(sink.prompt_completions.lock().len(), 1);
+        let events = sink.hub.snapshot(SESSION).unwrap().0;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.event, Event::TurnEnd { .. }))
+                .count(),
+            1
+        );
+        assert!(events.iter().all(|event| {
+            !serde_json::to_string(event)
+                .unwrap()
+                .contains("session_state_changed")
+        }));
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded native activity fixture");
 }
