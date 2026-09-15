@@ -1050,20 +1050,6 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             plugin_catalog.install_empty_runtime()
         }
     };
-    // Publication already verifies signatures and commits atomically, so
-    // noticing a new release needs no operator session — only a filesystem
-    // signal. Losing the watch degrades to the explicit refresh endpoint.
-    let _catalog_watcher = match crate::plugin_catalog::spawn_catalog_watcher(
-        Arc::clone(&plugin_catalog),
-        plugin_storage.clone(),
-        Arc::clone(&provider_catalog),
-    ) {
-        Ok(watcher) => Some(watcher),
-        Err(error) => {
-            tracing::error!(%error, "Plugin Catalog watch unavailable; releases need a refresh");
-            None
-        }
-    };
     if let Some(store) = store.as_mut().filter(|_| core_security.is_none()) {
         let namespace = plugin_runtime
             .namespace_for_capability(crate::core_passkeys::STORAGE_CAPABILITY)
@@ -1463,6 +1449,14 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         "cowboy serving",
     );
 
+    // Start only after runtime/storage setup. The observer owns no install
+    // authority, stops on the HTTP signal and drains before storage teardown.
+    let catalog_watcher = crate::plugin_catalog::spawn_catalog_watcher(
+        Arc::clone(&plugin_catalog),
+        plugin_storage.clone(),
+        Arc::clone(&provider_catalog),
+        shutdown_rx.clone(),
+    );
     let result = serve_axum(
         args.bind,
         args.data_dir.clone(),
@@ -1512,6 +1506,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         shutdown_tx,
     )
     .await;
+    if let Err(error) = catalog_watcher.shutdown().await {
+        tracing::error!(%error, "Catalog observer failed during shutdown");
+    }
     scheduler_task.abort();
     reset_task.abort();
     runtime_reconciliation_task.abort();

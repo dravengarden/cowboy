@@ -24,36 +24,75 @@ not an authorization decision.
 
 ## Principle
 
-Move the authority for unattended delivery from *who is logged in* to *what is
-signed* and *what policy declares*. Every layer below keeps a verifiable
+Move the authority for unattended delivery from _who is logged in_ to _what is
+signed_ and _what policy declares_. Every layer below keeps a verifiable
 authority and a recorded actor; none of them removes one.
 
 An unauthenticated installation endpoint is explicitly rejected as a design: it
 would let anything that can reach the Controller place arbitrary executables on
-every enrolled Machine. The goal is no *human interaction*, not no *authority*.
+every enrolled Machine. The goal is no _human interaction_, not no _authority_.
 
 ## Layer 1 — Catalog watch (implemented)
 
-`src/plugin_catalog/watch.rs` watches each Catalog root and re-runs the same
-`refresh_with_runtime` + `ProviderCatalog::refresh_external` pair that startup
-and the admin endpoint already run. It introduces no endpoint, no credential and
-no new trust boundary: writing to the Catalog directory was already the
-publication boundary.
+`src/plugin_catalog/watch.rs` observes each selected Catalog root and re-runs
+the same `refresh_with_runtime` + `ProviderCatalog::refresh_external` pair that
+startup and the admin endpoint already run. It introduces no endpoint, no
+credential and no new trust boundary: writing to the Catalog directory was
+already the publication boundary.
 
-The watch is safe because publication is already crash-safe for a concurrent
-reader. `copyImmutable` stages into a temporary file and hard-links it into
-place, and the release envelope is linked **last** as the commit marker. A
-reload therefore observes either the previous Catalog or one complete immutable
-release, never a half-transaction.
+The publisher's `copyImmutable` stages into a temporary file and hard-links it
+into place; the release envelope is linked **last** as the commit marker. The
+trusted reader ignores uncommitted packages and verifies supported committed
+releases before accepting a candidate. Notifications, metadata and directory
+write access do not replace that verification. A corrupt candidate can still
+fail; publication of several releases is not one atomic transaction.
 
-- A publication burst — artifacts, package, host bundle, envelope — is collapsed
-  by a settle window into one reload.
-- A failed reload leaves the previous snapshot visible, exactly as the admin
-  endpoint does, and retries on a bounded backoff so a release is not stranded
-  until some unrelated directory write.
-- An absent root is not an error; the legacy compatibility directory is often
-  missing.
+- Catalog roots and their existing `trusted-publishers` directories have
+  separate nonrecursive watches. The Provider compatibility root is observed
+  only when the existing Provider reader already selected it.
+- Publication bursts settle after 750 ms of quiet, capped at three seconds so a
+  sustained stream cannot indefinitely postpone a read.
+- A read-only metadata scan runs at startup and every 30 seconds. It covers
+  absent or recreated roots, missed events, unavailable watches and backend
+  errors without creating paths or requiring another directory write. It does
+  not re-arm native watches after replacement; the timer remains the fallback.
+- The scan samples only named package, release-envelope, host-bundle and public
+  publisher-key metadata, including link and target identity. It does not open
+  file contents, recurse into artifacts/private state, or hash credentials.
+  Directory access/write times and unrelated files do not trigger host rebuilds.
+- The shared per-scan budget is 8,192 directory entries (including ignored
+  names) and 1 MiB of path/name bytes. Exceeding it or failing a scan preserves
+  the accepted runtime and retries at a later observation. These bound observer
+  work, not OS I/O latency or all trusted-reader resource use. They are not new
+  universal Catalog size limits.
+- An unchanged accepted metadata hint skips runtime reconstruction. Hints are
+  process-local scheduling aids, never signed identities, continuity leases or
+  installation grants.
 - `POST /api/plugins/catalog/refresh` remains as an idempotent manual fallback.
+
+### Lifetime and partial failures
+
+The Controller owns the observer task. Service shutdown, loss of its signal
+sender, or dropping the observer stops new probes, settling and retry admission.
+A probe already in progress completes read-only and cannot initiate refresh
+after stop. An already-started refresh is **drained**, not aborted: generation
+staging or migrations may have begun. The normal shutdown path joins it before
+storage teardown. This can delay shutdown by the ordinary refresh duration; it
+does not supply hard-kill recovery, compensation or rollback of physical state.
+
+A failed Plugin Catalog/runtime candidate preserves the previous visible Plugin
+snapshot. Provider projection happens **after** that snapshot commits. A legacy
+Provider failure therefore leaves the new Plugin snapshot and previous Provider
+projection; this is not an atomic two-Catalog update or a rollback. Error
+context identifies the failing stage, with retries after 2, 15 and 60 seconds.
+After that batch, periodic source checks can retry even without another event.
+Stop prevents further retries but still drains any attempt already admitted.
+
+Automated coverage includes real notification regressions, bounded source
+sampling, paused-time ownership/retry tests and actual signed Catalog fixtures:
+new publication, invalid signatures with original leases retained, and Provider
+failure/recovery after Catalog commit. These are not production Plugin
+installation, native-generation acceptance or host-policy authorization.
 
 ## Layer 2 — Host-managed deployment policy (not implemented)
 
@@ -130,8 +169,8 @@ creates a replacement grant. `not_before` / `not_after` bound replay.
 ## Attribution
 
 `Actor` in `src/plugin_operation.rs` is a closed enum serialized into
-installation and uninstall intents and into the operation journal. Layers 2 and 3
-each need a variant, or the audit chain breaks:
+installation and uninstall intents and into the operation journal. Layers 2 and
+3 each need a variant, or the audit chain breaks:
 
 ```rust
 Actor::Policy   { source: String },   // "host:/var/lib/cowboy/deployment-policy.json"

@@ -1,225 +1,290 @@
-//! Unattended adoption of published Catalog bytes.
+//! Controller-owned observation of published Catalog inputs.
 //!
-//! Publication is already unauthenticated and signature-anchored: a publisher
-//! hard-links immutable artifacts, then links the release envelope last as the
-//! Catalog commit marker, and [`load_catalog_root`] verifies every package
-//! against the trusted publisher keyring before it grants any identity. A
-//! concurrent reader therefore sees either the old Catalog or one complete
-//! immutable release.
-//!
-//! The Controller consequently never needed an operator session to *notice* a
-//! release — only to be told the directory changed. This watcher supplies that
-//! signal so a published version stops waiting for a human to open the admin
-//! surface. It grants no authority of its own: it re-runs exactly the refresh
-//! that startup and the admin endpoint already run.
-//!
-//! [`load_catalog_root`]: super::load_catalog_root
+//! Filesystem events and bounded metadata scans are hints, never publication,
+//! signature or installation authority. Refresh uses the ordinary trusted reader.
+//! Stop suppresses new attempts; an already-started refresh drains, not rolls back.
 
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use notify::{EventKind, RecursiveMode, Watcher as _};
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 
 use super::PluginCatalog;
 
-/// Collapse one publication burst — artifacts, package, host bundle, envelope —
-/// into a single refresh instead of re-staging the whole Catalog per file.
-const SETTLE: Duration = Duration::from_millis(750);
+mod sources;
 
-/// A refresh can fail for reasons unrelated to the write that woke us: host
-/// staging, a required migration, a transient storage error. Retry on a bounded
-/// backoff so a published release is not stranded until the next unrelated
-/// directory write. Failure never clears the visible snapshot.
+const SETTLE: Duration = Duration::from_millis(750);
+const MAX_SETTLE: Duration = Duration::from_secs(3);
+const RECHECK: Duration = Duration::from_secs(30);
 const RETRY_BACKOFF: [Duration; 3] = [
     Duration::from_secs(2),
     Duration::from_secs(15),
     Duration::from_secs(60),
 ];
 
-/// Dropping this stops the watch. Held by the server for its whole lifetime.
+/// Drop requests stop; shutdown also joins the task before storage teardown.
+/// Neither operation cancels an already-started Catalog/runtime refresh.
 pub(crate) struct CatalogWatcher {
-    _watchers: Vec<notify::RecommendedWatcher>,
+    watchers: Vec<notify::RecommendedWatcher>,
+    stop: watch::Sender<bool>,
+    task: Option<JoinHandle<()>>,
 }
 
-/// Watch every Catalog root and re-run the ordinary refresh when it changes.
-///
-/// # Errors
-/// Returns when a root cannot be watched. The caller may continue without
-/// unattended adoption; the admin refresh endpoint and restart still work.
+impl Drop for CatalogWatcher {
+    fn drop(&mut self) {
+        self.stop.send_replace(true);
+        self.watchers.clear();
+    }
+}
+
+impl CatalogWatcher {
+    pub(crate) async fn shutdown(mut self) -> Result<()> {
+        self.stop.send_replace(true);
+        self.watchers.clear();
+        if let Some(task) = self.task.take() {
+            task.await.context("joining Plugin Catalog observer")?;
+        }
+        Ok(())
+    }
+}
+
+struct Stop {
+    owner: watch::Receiver<bool>,
+    service: watch::Receiver<bool>,
+}
+
+impl Stop {
+    fn requested(&self) -> bool {
+        *self.owner.borrow()
+            || self.owner.has_changed().is_err()
+            || *self.service.borrow()
+            || self.service.has_changed().is_err()
+    }
+
+    async fn cancelled(&mut self) {
+        while !self.requested() {
+            tokio::select! {
+                _ = self.owner.changed() => {}
+                _ = self.service.changed() => {}
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn(
     catalog: Arc<PluginCatalog>,
     storage: crate::plugin_storage::PluginStorage,
     providers: Arc<crate::provider_catalog::ProviderCatalog>,
-) -> Result<CatalogWatcher> {
-    let (watchers, mut receiver) = watch_roots(&catalog.roots())?;
+    service: watch::Receiver<bool>,
+) -> CatalogWatcher {
+    let mut roots = catalog.roots();
+    if let Some(legacy) = providers.legacy_catalog_root()
+        && !roots.iter().any(|root| root == legacy)
+    {
+        roots.push(legacy.to_owned());
+    }
+    let (watchers, receiver) = match watch_roots(&roots) {
+        Ok(watches) => watches,
+        Err(error) => {
+            tracing::warn!(%error, "Catalog notifications unavailable; using bounded source rechecks");
+            let (_, receiver) = mpsc::channel(1);
+            (Vec::new(), receiver)
+        }
+    };
+    let (stop, owner) = watch::channel(false);
+    let roots = Arc::new(roots);
+    let task = tokio::spawn(run(
+        receiver,
+        Stop { owner, service },
+        move || {
+            let roots = Arc::clone(&roots);
+            async move {
+                tokio::task::spawn_blocking(move || sources::sample(&roots))
+                    .await
+                    .context("joining Catalog source scan")?
+            }
+        },
+        move || {
+            let catalog = Arc::clone(&catalog);
+            let storage = storage.clone();
+            let providers = Arc::clone(&providers);
+            async move { adopt(&catalog, &storage, &providers).await }
+        },
+    ));
+    CatalogWatcher {
+        watchers,
+        stop,
+        task: Some(task),
+    }
+}
 
-    tokio::spawn(async move {
-        while receiver.recv().await.is_some() {
-            settle(&mut receiver).await;
-            let mut backoff = RETRY_BACKOFF.iter();
-            loop {
-                match adopt(&catalog, &storage, &providers).await {
-                    Ok(count) => {
-                        tracing::info!(external_releases = count, "adopted the published Catalog");
-                        break;
+async fn run<P, A>(
+    mut receiver: mpsc::Receiver<()>,
+    mut stop: Stop,
+    mut probe: impl FnMut() -> P,
+    mut refresh: impl FnMut() -> A,
+) where
+    P: Future<Output = Result<sources::Hint>>,
+    A: Future<Output = Result<usize>>,
+{
+    let mut poll = tokio::time::interval(RECHECK);
+    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut hints_open = true;
+    let mut accepted = None;
+    loop {
+        // The first interval tick reconciles the startup/watch registration gap.
+        tokio::select! {
+            biased;
+            _ = stop.cancelled() => return,
+            hint = receiver.recv(), if hints_open => {
+                if hint.is_none() {
+                    hints_open = false;
+                    continue;
+                }
+                tokio::select! {
+                    biased;
+                    _ = stop.cancelled() => return,
+                    () = settle(&mut receiver) => {}
+                }
+            }
+            _ = poll.tick() => {}
+        }
+        if stop.requested() {
+            return;
+        }
+        let hint = match probe().await {
+            Ok(hint) => hint,
+            Err(error) => {
+                tracing::warn!(%error, "Catalog source scan failed; retrying at the next observation");
+                continue;
+            }
+        };
+        if stop.requested() {
+            return;
+        }
+        // An unchanged hint avoids rebuilding every Plugin host on every timer.
+        // No hint substitutes for the exact signature-checked reader below.
+        if accepted == Some(hint) {
+            continue;
+        }
+        let mut backoff = RETRY_BACKOFF.iter();
+        loop {
+            if stop.requested() {
+                return;
+            }
+            // Deliberately not selected against cancellation: staging/migration
+            // may have begun. Shutdown joins this attempt before closing storage.
+            match refresh().await {
+                Ok(count) => {
+                    accepted = Some(hint);
+                    tracing::info!(
+                        external_releases = count,
+                        "refreshed published Catalog projections"
+                    );
+                    break;
+                }
+                Err(error) => {
+                    if stop.requested() {
+                        return;
                     }
-                    Err(error) => {
-                        let Some(delay) = backoff.next() else {
-                            tracing::error!(
-                                %error,
-                                "keeping the previous Catalog; adoption needs an explicit refresh"
-                            );
-                            break;
-                        };
-                        tracing::warn!(%error, ?delay, "Catalog adoption failed; retrying");
-                        tokio::time::sleep(*delay).await;
+                    let Some(delay) = backoff.next() else {
+                        tracing::error!(%error, "Catalog refresh/projection failed; later source rechecks remain active");
+                        break;
+                    };
+                    tracing::warn!(%error, ?delay, "Catalog refresh/projection failed; retrying");
+                    tokio::select! {
+                        biased;
+                        _ = stop.cancelled() => return,
+                        () = tokio::time::sleep(*delay) => {}
                     }
                 }
             }
         }
-    });
-
-    Ok(CatalogWatcher {
-        _watchers: watchers,
-    })
+    }
 }
 
-/// Wire every existing root to one wake-up channel.
-///
-/// An absent root is skipped rather than rejected: the legacy compatibility
-/// directory is frequently missing, and publication creates the canonical one
-/// on demand.
-fn watch_roots(
-    roots: &[PathBuf],
-) -> Result<(
-    Vec<notify::RecommendedWatcher>,
-    tokio::sync::mpsc::Receiver<()>,
-)> {
-    // Depth 1 is deliberate: a burst only has to wake the loop once, and the
-    // loop always reloads every root. A dropped tick therefore loses nothing,
-    // because a full channel already means "reload pending".
-    let (sender, receiver) = tokio::sync::mpsc::channel::<()>(1);
+fn watch_roots(roots: &[PathBuf]) -> Result<(Vec<notify::RecommendedWatcher>, mpsc::Receiver<()>)> {
+    let (sender, receiver) = mpsc::channel(1);
     let mut watchers = Vec::new();
     for root in roots {
-        if !root.is_dir() {
-            tracing::debug!(root = %root.display(), "Plugin Catalog root is absent; not watched");
-            continue;
+        // Trust files are direct children of this separate, nonrecursive watch.
+        // Absent/replaced paths and backend loss are covered by source rechecks.
+        for path in [root.clone(), root.join("trusted-publishers")] {
+            if !path.is_dir() {
+                continue;
+            }
+            let sender = sender.clone();
+            let mut watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    if wakes_reader(&event) {
+                        let _ = sender.try_send(());
+                    }
+                })
+                .context("creating Plugin Catalog notifications")?;
+            watcher
+                .watch(&path, RecursiveMode::NonRecursive)
+                .with_context(|| format!("watching Plugin Catalog {}", path.display()))?;
+            watchers.push(watcher);
         }
-        let sender = sender.clone();
-        let mut watcher =
-            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                let Ok(event) = event else { return };
-                if !matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                ) {
-                    return;
-                }
-                let _ = sender.try_send(());
-            })
-            .context("creating the Plugin Catalog watcher")?;
-        watcher
-            .watch(root, RecursiveMode::NonRecursive)
-            .with_context(|| format!("watching Plugin Catalog {}", root.display()))?;
-        tracing::info!(root = %root.display(), "watching the Plugin Catalog for published releases");
-        watchers.push(watcher);
-    }
-    if watchers.is_empty() {
-        tracing::warn!("no Plugin Catalog root is watchable; releases need an explicit refresh");
     }
     Ok((watchers, receiver))
 }
 
-/// Absorb the rest of a publication burst before reloading once.
-async fn settle(receiver: &mut tokio::sync::mpsc::Receiver<()>) {
-    loop {
-        match tokio::time::timeout(SETTLE, receiver.recv()).await {
-            // Another write arrived inside the window: keep waiting.
-            Ok(Some(())) => continue,
-            // Timed out, or the sender is gone and the queue is drained.
-            Ok(None) | Err(_) => return,
+fn wakes_reader(event: &notify::Result<notify::Event>) -> bool {
+    match event {
+        Err(_) => true, // Backend errors/overflow require a bounded recheck.
+        Ok(event) => {
+            event.need_rescan()
+                || matches!(
+                    event.kind,
+                    EventKind::Any
+                        | EventKind::Other
+                        | EventKind::Create(_)
+                        | EventKind::Modify(_)
+                        | EventKind::Remove(_)
+                )
         }
     }
 }
 
-/// The same reload startup and the admin endpoint perform, in the same order.
+async fn settle(receiver: &mut mpsc::Receiver<()>) {
+    let deadline = tokio::time::Instant::now() + MAX_SETTLE;
+    loop {
+        let quiet = (tokio::time::Instant::now() + SETTLE).min(deadline);
+        match tokio::time::timeout_at(quiet, receiver.recv()).await {
+            Ok(Some(())) if tokio::time::Instant::now() < deadline => {}
+            _ => return,
+        }
+    }
+}
+
 async fn adopt(
     catalog: &PluginCatalog,
     storage: &crate::plugin_storage::PluginStorage,
     providers: &crate::provider_catalog::ProviderCatalog,
 ) -> Result<usize> {
-    let count = catalog.refresh_with_runtime(storage).await?;
-    providers.refresh_external()?;
+    let count = catalog
+        .refresh_with_runtime(storage)
+        .await
+        .context("refreshing verified Plugin Catalog/runtime")?;
+    // The Plugin snapshot has committed at this point. A legacy Provider
+    // projection failure is not a rollback or an atomic two-Catalog snapshot.
+    providers
+        .refresh_external()
+        .context("refreshing Provider projection after Catalog commit")?;
     Ok(count)
 }
 
 impl PluginCatalog {
-    /// The ordered Catalog roots this Catalog reads, canonical root first.
     pub(crate) fn roots(&self) -> Vec<PathBuf> {
         self.roots.clone()
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    /// Publication writes several files per release. The loop must observe the
-    /// burst, not one reload per byte.
-    #[tokio::test(start_paused = true)]
-    async fn a_publication_burst_settles_into_one_reload() {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
-        for _ in 0..5 {
-            let _ = sender.try_send(());
-        }
-        assert!(receiver.recv().await.is_some(), "the burst wakes the loop");
-        settle(&mut receiver).await;
-        // Everything the burst queued was absorbed by the settle window, so a
-        // second reload has nothing left to consume.
-        assert!(
-            tokio::time::timeout(SETTLE, receiver.recv()).await.is_err(),
-            "the settled burst must not schedule a second reload"
-        );
-        drop(sender);
-    }
-
-    /// A closed channel ends the watch instead of spinning.
-    #[tokio::test(start_paused = true)]
-    async fn settling_returns_when_every_watcher_is_gone() {
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<()>(1);
-        drop(sender);
-        settle(&mut receiver).await;
-        assert!(receiver.recv().await.is_none());
-    }
-
-    #[test]
-    fn an_absent_root_is_skipped_without_failing_the_watch() {
-        let root = tempfile::tempdir().unwrap();
-        let present = root.path().join("catalog");
-        fs::create_dir_all(&present).unwrap();
-        let (watchers, _receiver) =
-            watch_roots(&[present, root.path().join("legacy-that-never-existed")]).unwrap();
-        assert_eq!(watchers.len(), 1, "only the existing root is watched");
-    }
-
-    /// The real notify backend must wake the loop when a release lands. This
-    /// exercises the actual filesystem path, not a simulated event.
-    #[tokio::test]
-    async fn a_published_file_wakes_the_loop() {
-        let root = tempfile::tempdir().unwrap();
-        let catalog = root.path().join("catalog");
-        fs::create_dir_all(&catalog).unwrap();
-        let (_watchers, mut receiver) = watch_roots(std::slice::from_ref(&catalog)).unwrap();
-
-        // The envelope is the commit marker publication links last.
-        fs::write(catalog.join("fixture-1.0.0.release.json"), b"{}").unwrap();
-
-        tokio::time::timeout(Duration::from_secs(10), receiver.recv())
-            .await
-            .expect("a Catalog write must wake the loop")
-            .expect("the watcher keeps the channel open");
-    }
-}
+mod tests;

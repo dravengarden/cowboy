@@ -933,6 +933,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
     mod leases;
+    mod watch_lifetime;
 
     fn unlock_tree(path: &Path) {
         let Ok(metadata) = fs::symlink_metadata(path) else {

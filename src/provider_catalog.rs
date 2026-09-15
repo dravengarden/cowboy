@@ -137,6 +137,10 @@ mod service_catalog {
             Some(self.plugin_catalog.catalog_root())
         }
 
+        pub(crate) fn legacy_catalog_root(&self) -> Option<&Path> {
+            self.legacy_root.as_deref()
+        }
+
         pub(crate) fn refresh_external(&self) -> Result<usize> {
             let mut next = BTreeMap::new();
             for desired in self.plugin_catalog.released_plugins() {

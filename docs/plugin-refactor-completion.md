@@ -11,6 +11,14 @@ and accepting a production effect are different milestones.
   six independent Agent sources plus Zed, with no installable internal runtimes.
 - Core-owned communication, installation, security/native/Web host boundaries;
   isolated Provider accounts, exact session/workspace generations and sidecars.
+- [Controller-owned Catalog observation](unattended-release-adoption.md) uses
+  bounded event settling, public trust-directory watches and read-only metadata
+  fallback for missing/replaced roots. Unchanged hints skip host rebuilds;
+  shutdown stops new attempts and drains admitted refreshes before storage
+  teardown. Signed-reader and lifecycle tests retain exact release leases on
+  rejected candidates and distinguish a committed Plugin snapshot from a failed
+  Provider projection. This is not unattended Machine installation, a new
+  deployment credential, physical rollback or post-effect recovery.
 - Generated closed composition wire types and bounded, read-only structural
   checkers in Rust and TypeScript; combined ownership/capability cycle checks
   and an 86-case real-CLI differential gate compare complete link reports. This
