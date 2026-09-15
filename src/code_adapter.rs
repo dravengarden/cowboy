@@ -9,14 +9,17 @@ use tokio::net::{UnixListener, UnixStream};
 
 use crate::code_review::{CodeProvider as _, DiffScope, LocalCodeProvider};
 
-#[derive(Debug, Deserialize)]
+#[cfg(test)]
+mod wire_tests;
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CodeAdapterRequest {
     pub root: String,
     #[serde(flatten)]
     pub operation: CodeOperation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodeOperation {
     Manifest,
@@ -30,7 +33,7 @@ pub enum CodeOperation {
     },
     Changes,
     Repository {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<String>,
     },
     Commit {

@@ -39,6 +39,7 @@ use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
+use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound,
@@ -63,6 +64,7 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+mod code_reads;
 mod operator_approval;
 mod plugin_install;
 use plugin_install::api_machine_plugin_install;
@@ -15328,7 +15330,7 @@ async fn remote_code_request(
     state: &AppState,
     machine_id: &str,
     cwd: &str,
-    operation: serde_json::Value,
+    operation: CodeOperation,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
     if machine_id == "local" {
         return Ok(None);
@@ -15343,11 +15345,10 @@ async fn remote_code_request(
     if colocated {
         return Ok(None);
     }
-    let mut request = operation;
-    request
-        .as_object_mut()
-        .context("code adapter operation must be an object")?
-        .insert("root".to_owned(), serde_json::Value::String(cwd.to_owned()));
+    let request = serde_json::to_value(CodeAdapterRequest {
+        root: cwd.to_owned(),
+        operation,
+    })?;
     let value = state
         .machine_control
         .adapter_request(machine_id, "code", request)
@@ -15483,30 +15484,35 @@ async fn api_search_files(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    let cwd = context.cwd;
-    let limit = query.limit.clamp(1, 100);
-    let files = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
-        }
-        Ok(None) => tokio::task::spawn_blocking(move || {
-            crate::files::search(std::path::Path::new(&cwd), &query.q, limit)
-        })
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let limit = query.limit.clamp(1, 100);
+        let files = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Search {
+                query: query.q.clone(),
+                limit,
+            },
+        )
         .await
-        .unwrap_or_default(),
-    };
-    Json(FileSearchResponse { files }).into_response()
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
+            }
+            Ok(None) => tokio::task::spawn_blocking(move || {
+                crate::files::search(std::path::Path::new(&cwd), &query.q, limit)
+            })
+            .await
+            .unwrap_or_default(),
+        };
+        Json(FileSearchResponse { files }).into_response()
+    })
+    .await
 }
 
 async fn api_code_search(
@@ -15514,34 +15520,39 @@ async fn api_code_search(
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let limit = query.limit.clamp(1, 100);
-    let files = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "search", "query": query.q, "limit": limit }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
-        }
-        Ok(None) => tokio::task::spawn_blocking(move || {
-            crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
-        })
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let limit = query.limit.clamp(1, 100);
+        let files = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Search {
+                query: query.q.clone(),
+                limit,
+            },
+        )
         .await
-        .unwrap_or_default(),
-    };
-    Json(CodeSearchResponse {
-        api_version: 1,
-        files,
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Search(files))) => files,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote code search unavailable").into_response();
+            }
+            Ok(None) => tokio::task::spawn_blocking(move || {
+                crate::code_review::LocalCodeProvider::new(cwd).search(&query.q, limit)
+            })
+            .await
+            .unwrap_or_default(),
+        };
+        Json(CodeSearchResponse {
+            api_version: 1,
+            files,
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 /// Return one filesystem directory page for the mobile review tree.
@@ -15556,28 +15567,74 @@ async fn api_file_tree(
     Query(query): Query<FileTreeQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let limit = query.limit.clamp(20, 500);
-    let path = query.path;
-    let requested_path = path.clone();
-    let remote_page = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "directory", "path": path.clone(), "limit": limit }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Directory(page))) => Some(page),
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote directory unavailable").into_response();
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let limit = query.limit.clamp(20, 500);
+        let path = query.path;
+        let requested_path = path.clone();
+        let remote_page = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Directory {
+                path: path.clone(),
+                limit,
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Directory(page))) => Some(page),
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote directory unavailable").into_response();
+            }
+            Ok(None) => None,
+        };
+        if let Some(page) = remote_page {
+            let entries = page
+                .entries
+                .into_iter()
+                .map(|entry| FileTreeEntry {
+                    name: entry.name,
+                    path: entry.path,
+                    kind: if entry.is_directory {
+                        "directory"
+                    } else {
+                        "file"
+                    },
+                    ignored: entry.ignored,
+                })
+                .collect::<Vec<_>>();
+            let revision = file_tree_revision(&requested_path, &entries, page.truncated);
+            let body = serde_json::to_vec(&FileTreeResponse {
+                api_version: 1,
+                path: requested_path,
+                revision: revision.clone(),
+                entries,
+                truncated: page.truncated,
+            })
+            .expect("file tree response serializes");
+            return file_tree_http_response(&headers, &revision, body);
         }
-        Ok(None) => None,
-    };
-    if let Some(page) = remote_page {
+        let cache = state.code_cache.clone();
+        let cache_root = cwd.clone();
+        let cache_path = requested_path.clone();
+        let cached = tokio::task::spawn_blocking(move || {
+            cache.get_directory(FsPath::new(&cache_root), &cache_path, limit)
+        })
+        .await;
+        if let Ok(Ok(Some(cached))) = cached {
+            return file_tree_http_response(&headers, &cached.revision, cached.bytes);
+        }
+        let scan_root = cwd.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::code_review::LocalCodeProvider::new(scan_root).directory(&path, limit)
+        })
+        .await;
+        let Ok(Ok(page)) = result else {
+            return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
+        };
         let entries = page
             .entries
             .into_iter()
@@ -15592,80 +15649,39 @@ async fn api_file_tree(
                 ignored: entry.ignored,
             })
             .collect::<Vec<_>>();
-        let revision = file_tree_revision(&requested_path, &entries, page.truncated);
+        let truncated = page.truncated;
+        let revision = file_tree_revision(&requested_path, &entries, truncated);
         let body = serde_json::to_vec(&FileTreeResponse {
             api_version: 1,
-            path: requested_path,
+            path: requested_path.clone(),
             revision: revision.clone(),
             entries,
-            truncated: page.truncated,
+            truncated,
         })
         .expect("file tree response serializes");
-        return file_tree_http_response(&headers, &revision, body);
-    }
-    let cache = state.code_cache.clone();
-    let cache_root = cwd.clone();
-    let cache_path = requested_path.clone();
-    let cached = tokio::task::spawn_blocking(move || {
-        cache.get_directory(FsPath::new(&cache_root), &cache_path, limit)
+        let cache = state.code_cache.clone();
+        let cache_revision = revision.clone();
+        let cache_body = body.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                cache.put_directory(
+                    FsPath::new(&cwd),
+                    &requested_path,
+                    limit,
+                    &cache_revision,
+                    &cache_body,
+                )
+            })
+            .await;
+            if let Ok(Err(error)) = result {
+                tracing::warn!(%error, "persisting lazy directory cache failed");
+            } else if let Err(error) = result {
+                tracing::warn!(%error, "lazy directory cache task failed");
+            }
+        });
+        file_tree_http_response(&headers, &revision, body)
     })
-    .await;
-    if let Ok(Ok(Some(cached))) = cached {
-        return file_tree_http_response(&headers, &cached.revision, cached.bytes);
-    }
-    let scan_root = cwd.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        crate::code_review::LocalCodeProvider::new(scan_root).directory(&path, limit)
-    })
-    .await;
-    let Ok(Ok(page)) = result else {
-        return (StatusCode::BAD_REQUEST, "invalid directory").into_response();
-    };
-    let entries = page
-        .entries
-        .into_iter()
-        .map(|entry| FileTreeEntry {
-            name: entry.name,
-            path: entry.path,
-            kind: if entry.is_directory {
-                "directory"
-            } else {
-                "file"
-            },
-            ignored: entry.ignored,
-        })
-        .collect::<Vec<_>>();
-    let truncated = page.truncated;
-    let revision = file_tree_revision(&requested_path, &entries, truncated);
-    let body = serde_json::to_vec(&FileTreeResponse {
-        api_version: 1,
-        path: requested_path.clone(),
-        revision: revision.clone(),
-        entries,
-        truncated,
-    })
-    .expect("file tree response serializes");
-    let cache = state.code_cache.clone();
-    let cache_revision = revision.clone();
-    let cache_body = body.clone();
-    tokio::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || {
-            cache.put_directory(
-                FsPath::new(&cwd),
-                &requested_path,
-                limit,
-                &cache_revision,
-                &cache_body,
-            )
-        })
-        .await;
-        if let Ok(Err(error)) = result {
-            tracing::warn!(%error, "persisting lazy directory cache failed");
-        } else if let Err(error) = result {
-            tracing::warn!(%error, "lazy directory cache task failed");
-        }
-    });
-    file_tree_http_response(&headers, &revision, body)
+    .await
 }
 
 const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
@@ -15754,159 +15770,158 @@ async fn api_code_manifest(
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd.clone();
-    let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
-        match ensure_zed_worktree_for_session(&state, &context, &cwd).await {
-            Ok(ready) => ready,
-            Err(error) => {
-                tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
-                false
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd.clone();
+        let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
+            match ensure_zed_worktree_for_session(&state, &context, &cwd).await {
+                Ok(ready) => ready,
+                Err(error) => {
+                    tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
+                    false
+                }
             }
-        }
-    } else {
-        false
-    };
-    let manifest = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "manifest" }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Manifest(manifest))) => manifest,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote worktree unavailable").into_response();
-        }
-        Ok(None) => {
-            let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(cwd).manifest()
-            })
-            .await;
-            let Ok(Ok(manifest)) = result else {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable").into_response();
+        } else {
+            false
+        };
+        let manifest =
+            match remote_code_request(&state, &context.machine_id, &cwd, CodeOperation::Manifest)
+                .await
+            {
+                Ok(Some(crate::code_adapter::CodeAdapterResponse::Manifest(manifest))) => manifest,
+                Ok(Some(_)) | Err(_) => {
+                    return (StatusCode::BAD_GATEWAY, "remote worktree unavailable")
+                        .into_response();
+                }
+                Ok(None) => {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::code_review::LocalCodeProvider::new(cwd).manifest()
+                    })
+                    .await;
+                    let Ok(Ok(manifest)) = result else {
+                        return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable")
+                            .into_response();
+                    };
+                    manifest
+                }
             };
-            manifest
+        let language_state = if language_ready {
+            "ready"
+        } else {
+            "unavailable"
+        };
+        // Capability fields are part of this cached representation. Bump the
+        // contract tag whenever that shape grows so installed Mobile clients do
+        // not retain an older 304-backed manifest after a deploy.
+        let etag = format!(
+            "\"code-manifest-v3-{}-{language_state}\"",
+            manifest.revision
+        );
+        const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+        if headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains(etag.as_str()))
+        {
+            return (
+                StatusCode::NOT_MODIFIED,
+                [
+                    (header::ETAG, etag.as_str()),
+                    (header::CACHE_CONTROL, MANIFEST_CACHE_CONTROL),
+                ],
+            )
+                .into_response();
         }
-    };
-    let language_state = if language_ready {
-        "ready"
-    } else {
-        "unavailable"
-    };
-    // Capability fields are part of this cached representation. Bump the
-    // contract tag whenever that shape grows so installed Mobile clients do
-    // not retain an older 304-backed manifest after a deploy.
-    let etag = format!(
-        "\"code-manifest-v3-{}-{language_state}\"",
-        manifest.revision
-    );
-    const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains(etag.as_str()))
-    {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag.as_str()),
-                (header::CACHE_CONTROL, MANIFEST_CACHE_CONTROL),
-            ],
-        )
-            .into_response();
-    }
-    let mut response = Json(CodeManifestResponse {
-        api_version: 1,
-        provider: manifest.provider,
-        revision: manifest.revision,
-        head: manifest.head,
-        project: manifest.project,
-        branch: manifest.branch,
-        worktree: manifest.worktree,
-        change_count: manifest.change_count,
-        language: CodeLanguageCapabilities {
-            provider: if language_ready { "zed" } else { "none" },
-            state: language_state,
-            diagnostics: language_ready,
-            inlay_hints: language_ready,
-            semantic_tokens: language_ready,
-            hover: language_ready,
-            navigation: language_ready,
-            outline: language_ready,
-        },
+        let mut response = Json(CodeManifestResponse {
+            api_version: 1,
+            provider: manifest.provider,
+            revision: manifest.revision,
+            head: manifest.head,
+            project: manifest.project,
+            branch: manifest.branch,
+            worktree: manifest.worktree,
+            change_count: manifest.change_count,
+            language: CodeLanguageCapabilities {
+                provider: if language_ready { "zed" } else { "none" },
+                state: language_state,
+                diagnostics: language_ready,
+                inlay_hints: language_ready,
+                semantic_tokens: language_ready,
+                hover: language_ready,
+                navigation: language_ready,
+                outline: language_ready,
+            },
+        })
+        .into_response();
+        response
+            .headers_mut()
+            .insert(header::ETAG, etag.parse().expect("SHA256 ETag is valid"));
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static(MANIFEST_CACHE_CONTROL),
+        );
+        response
     })
-    .into_response();
-    response
-        .headers_mut()
-        .insert(header::ETAG, etag.parse().expect("SHA256 ETag is valid"));
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static(MANIFEST_CACHE_CONTROL),
-    );
-    response
+    .await
 }
 
 async fn api_code_changes(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "changes" }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote git changes unavailable").into_response();
-        }
-        Ok(None) => {
-            let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
-            })
-            .await;
-            let Ok(Ok(changes)) = result else {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable")
-                    .into_response();
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let result =
+            match remote_code_request(&state, &context.machine_id, &cwd, CodeOperation::Changes)
+                .await
+            {
+                Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
+                Ok(Some(_)) | Err(_) => {
+                    return (StatusCode::BAD_GATEWAY, "remote git changes unavailable")
+                        .into_response();
+                }
+                Ok(None) => {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
+                    })
+                    .await;
+                    let Ok(Ok(changes)) = result else {
+                        return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable")
+                            .into_response();
+                    };
+                    changes
+                }
             };
-            changes
-        }
-    };
-    Json(CodeChangesResponse {
-        api_version: 1,
-        head: result.head,
-        revision: result.revision,
-        changes: result
-            .changes
-            .into_iter()
-            .map(|change| CodeChangeResponse {
-                path: change.path,
-                old_path: change.old_path,
-                staged: change.staged,
-                unstaged: change.unstaged,
-                status: match change.status {
-                    crate::code_review::ChangeStatus::Modified => "modified",
-                    crate::code_review::ChangeStatus::Added => "added",
-                    crate::code_review::ChangeStatus::Deleted => "deleted",
-                    crate::code_review::ChangeStatus::Renamed => "renamed",
-                    crate::code_review::ChangeStatus::Untracked => "untracked",
-                    crate::code_review::ChangeStatus::Conflicted => "conflicted",
-                },
-            })
-            .collect(),
-        truncated: result.truncated,
+        Json(CodeChangesResponse {
+            api_version: 1,
+            head: result.head,
+            revision: result.revision,
+            changes: result
+                .changes
+                .into_iter()
+                .map(|change| CodeChangeResponse {
+                    path: change.path,
+                    old_path: change.old_path,
+                    staged: change.staged,
+                    unstaged: change.unstaged,
+                    status: match change.status {
+                        crate::code_review::ChangeStatus::Modified => "modified",
+                        crate::code_review::ChangeStatus::Added => "added",
+                        crate::code_review::ChangeStatus::Deleted => "deleted",
+                        crate::code_review::ChangeStatus::Renamed => "renamed",
+                        crate::code_review::ChangeStatus::Untracked => "untracked",
+                        crate::code_review::ChangeStatus::Conflicted => "conflicted",
+                    },
+                })
+                .collect(),
+            truncated: result.truncated,
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 async fn api_code_repository(
@@ -15914,46 +15929,49 @@ async fn api_code_repository(
     Path(session_id): Path<String>,
     Query(query): Query<CodeRepositoryQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let after = query.after;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        match after.as_deref() {
-            Some(oid) => serde_json::json!({ "type": "repository", "after": oid }),
-            None => serde_json::json!({ "type": "repository" }),
-        },
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Repository(repository))) => repository,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote git history unavailable").into_response();
-        }
-        Ok(None) => {
-            let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-                    .repository(after.as_deref())
-            })
-            .await;
-            let Ok(Ok(repository)) = result else {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "git history unavailable")
-                    .into_response();
-            };
-            repository
-        }
-    };
-    Json(CodeRepositoryResponse {
-        api_version: 1,
-        commits: result.commits,
-        history_truncated: result.history_truncated,
-        worktrees: result.worktrees,
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let after = query.after;
+        let result = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Repository {
+                after: after.clone(),
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Repository(repository))) => {
+                repository
+            }
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote git history unavailable").into_response();
+            }
+            Ok(None) => {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                        .repository(after.as_deref())
+                })
+                .await;
+                let Ok(Ok(repository)) = result else {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "git history unavailable")
+                        .into_response();
+                };
+                repository
+            }
+        };
+        Json(CodeRepositoryResponse {
+            api_version: 1,
+            commits: result.commits,
+            history_truncated: result.history_truncated,
+            worktrees: result.worktrees,
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 async fn api_code_commit(
@@ -15961,39 +15979,42 @@ async fn api_code_commit(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let oid = query.oid;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "commit", "oid": oid.clone() }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Commit(commit))) => commit,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote commit unavailable").into_response();
-        }
-        Ok(None) => {
-            let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).commit(&oid)
-            })
-            .await;
-            let Ok(Ok(commit)) = result else {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "commit unavailable").into_response();
-            };
-            commit
-        }
-    };
-    Json(CodeCommitResponse {
-        api_version: 1,
-        commit: result,
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let oid = query.oid;
+        let result = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Commit { oid: oid.clone() },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Commit(commit))) => commit,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote commit unavailable").into_response();
+            }
+            Ok(None) => {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).commit(&oid)
+                })
+                .await;
+                let Ok(Ok(commit)) = result else {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "commit unavailable")
+                        .into_response();
+                };
+                commit
+            }
+        };
+        Json(CodeCommitResponse {
+            api_version: 1,
+            commit: result,
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 async fn api_code_commit_diff(
@@ -16001,50 +16022,55 @@ async fn api_code_commit_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitDiffQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let oid = query.oid;
-    let path = query.path;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "commit_diff", "oid": oid.clone(), "path": path.clone() }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::CommitDiff(diff))) => diff,
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote commit diff unavailable").into_response();
-        }
-        Ok(None) => {
-            let commit_oid = oid.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-                    .commit_diff(&commit_oid, &path)
-            })
-            .await;
-            let Ok(Ok(diff)) = result else {
-                return (StatusCode::UNPROCESSABLE_ENTITY, "commit diff unavailable")
-                    .into_response();
-            };
-            diff
-        }
-    };
-    Json(CodeDiffResponse {
-        api_version: 1,
-        path: result.path,
-        revision: oid,
-        text: result.text,
-        added: result.added,
-        removed: result.removed,
-        truncated: result.truncated,
-        next_cursor: None,
-        limited: result.truncated,
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let oid = query.oid;
+        let path = query.path;
+        let result = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::CommitDiff {
+                oid: oid.clone(),
+                path: path.clone(),
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::CommitDiff(diff))) => diff,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote commit diff unavailable").into_response();
+            }
+            Ok(None) => {
+                let commit_oid = oid.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                        .commit_diff(&commit_oid, &path)
+                })
+                .await;
+                let Ok(Ok(diff)) = result else {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "commit diff unavailable")
+                        .into_response();
+                };
+                diff
+            }
+        };
+        Json(CodeDiffResponse {
+            api_version: 1,
+            path: result.path,
+            revision: oid,
+            text: result.text,
+            added: result.added,
+            removed: result.removed,
+            truncated: result.truncated,
+            next_cursor: None,
+            limited: result.truncated,
+        })
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 async fn api_code_diff(
@@ -16052,106 +16078,101 @@ async fn api_code_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeDiffQuery>,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let owner = context.scope;
-    if let Some(cursor) = query.cursor.as_deref() {
-        let page = state.diff_snapshots.next_page(&owner, cursor).await;
-        if !code_context_is_current(&state, &session_id, &owner).await {
-            return (StatusCode::GONE, "code context changed").into_response();
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let owner = context.scope;
+        if let Some(cursor) = query.cursor.as_deref() {
+            let page = state.diff_snapshots.next_page(&owner, cursor).await;
+            return match page {
+                Ok(page) => Json(CodeDiffResponse {
+                    api_version: 1,
+                    path: page.path,
+                    revision: page.revision,
+                    text: page.text,
+                    added: page.added,
+                    removed: page.removed,
+                    truncated: page.next_cursor.is_some() || page.limited,
+                    next_cursor: page.next_cursor,
+                    limited: page.limited,
+                })
+                .into_response(),
+                Err(error) if error == "diff snapshot expired" => {
+                    (StatusCode::GONE, error).into_response()
+                }
+                Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+            };
         }
-        return match page {
-            Ok(page) => Json(CodeDiffResponse {
-                api_version: 1,
-                path: page.path,
-                revision: page.revision,
-                text: page.text,
-                added: page.added,
-                removed: page.removed,
-                truncated: page.next_cursor.is_some() || page.limited,
-                next_cursor: page.next_cursor,
-                limited: page.limited,
-            })
-            .into_response(),
-            Err(error) if error == "diff snapshot expired" => {
-                (StatusCode::GONE, error).into_response()
-            }
-            Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
+        let cwd = context.cwd;
+        let Some(path) = query.path else {
+            return (StatusCode::BAD_REQUEST, "path is required").into_response();
         };
-    }
-    let cwd = context.cwd;
-    let Some(path) = query.path else {
-        return (StatusCode::BAD_REQUEST, "path is required").into_response();
-    };
-    let scope = match query.scope {
-        CodeDiffScope::Combined => crate::code_review::DiffScope::Combined,
-        CodeDiffScope::Staged => crate::code_review::DiffScope::Staged,
-        CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
-    };
-    let key = DiffSnapshotKey {
-        owner: owner.clone(),
-        path: path.clone(),
-        context: query.context,
-        show_whitespace: query.show_whitespace,
-        scope,
-    };
-    let remote_document = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({
-            "type": "diff",
-            "path": path.clone(),
-            "context": query.context,
-            "show_whitespace": query.show_whitespace,
-            "scope": scope,
-        }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::Diff(document))) => Some(document),
-        Ok(Some(_)) | Err(_) => {
-            return (StatusCode::BAD_GATEWAY, "remote diff unavailable").into_response();
-        }
-        Ok(None) => None,
-    };
-    let page = state
-        .diff_snapshots
-        .first_page(key, || async move {
-            if let Some(document) = remote_document {
-                return Ok(document);
+        let scope = match query.scope {
+            CodeDiffScope::Combined => crate::code_review::DiffScope::Combined,
+            CodeDiffScope::Staged => crate::code_review::DiffScope::Staged,
+            CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
+        };
+        let key = DiffSnapshotKey {
+            owner,
+            path: path.clone(),
+            context: query.context,
+            show_whitespace: query.show_whitespace,
+            scope,
+        };
+        let remote_document = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::Diff {
+                path: path.clone(),
+                context: query.context,
+                show_whitespace: query.show_whitespace,
+                scope,
+            },
+        )
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Diff(document))) => Some(document),
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote diff unavailable").into_response();
             }
-            tokio::task::spawn_blocking(move || {
-                crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff_snapshot(
-                    &path,
-                    query.context,
-                    query.show_whitespace,
-                    scope,
-                )
+            Ok(None) => None,
+        };
+        let page = state
+            .diff_snapshots
+            .first_page(key, || async move {
+                if let Some(document) = remote_document {
+                    return Ok(document);
+                }
+                tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).diff_snapshot(
+                        &path,
+                        query.context,
+                        query.show_whitespace,
+                        scope,
+                    )
+                })
+                .await
+                .map_err(|error| error.to_string())?
             })
-            .await
-            .map_err(|error| error.to_string())?
+            .await;
+        let Ok(page) = page else {
+            return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
+        };
+        Json(CodeDiffResponse {
+            api_version: 1,
+            path: page.path,
+            revision: page.revision,
+            text: page.text,
+            added: page.added,
+            removed: page.removed,
+            truncated: page.next_cursor.is_some() || page.limited,
+            next_cursor: page.next_cursor,
+            limited: page.limited,
         })
-        .await;
-    if !code_context_is_current(&state, &session_id, &owner).await {
-        return (StatusCode::GONE, "code context changed").into_response();
-    }
-    let Ok(page) = page else {
-        return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
-    };
-    Json(CodeDiffResponse {
-        api_version: 1,
-        path: page.path,
-        revision: page.revision,
-        text: page.text,
-        added: page.added,
-        removed: page.removed,
-        truncated: page.next_cursor.is_some() || page.limited,
-        next_cursor: page.next_cursor,
-        limited: page.limited,
+        .into_response()
     })
-    .into_response()
+    .await
 }
 
 async fn api_code_file(
@@ -16160,92 +16181,100 @@ async fn api_code_file(
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "file", "path": query.path.clone(), "cursor": query.cursor.clone() }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::File(file))) => Ok(file),
-        Ok(Some(_)) | Err(_) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
-        Ok(None) => {
-            let cache = state.code_cache.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                match cache.get_or_load(FsPath::new(&cwd), &query.path) {
-                    Ok(Some(cached)) => {
-                        debug_assert_eq!(cached.size, cached.bytes.len() as u64);
-                        crate::code_review::cached_file_page(
-                            &query.path,
-                            cached.bytes,
-                            cached.revision,
-                            query.cursor.as_deref(),
-                        )
-                    }
-                    // The cache is deliberately bounded to the physical session
-                    // worktree. Registered aggregate projects are a read-only Code
-                    // projection outside that root, so let the provider resolve and
-                    // validate those paths instead of treating a cache miss as an
-                    // authorization failure.
-                    Ok(None) | Err(_) => crate::code_review::LocalCodeProvider::new(
-                        FsPath::new(&cwd),
-                    )
-                    .file_page(&query.path, query.cursor.as_deref()),
-                }
-            }).await;
-            let Ok(result) = result else {
-                return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
-            };
-            result
-        }
-    };
-    let result = match result {
-        Ok(result) => result,
-        Err(error) if error == "file snapshot changed" => {
-            return (StatusCode::CONFLICT, error).into_response();
-        }
-        Err(error) => return code_file_error_response(&error),
-    };
-    let etag = format!("\"{}\"", result.revision);
-    const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains(etag.as_str()))
-    {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag.as_str()),
-                (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
-            ],
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let result = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::File {
+                path: query.path.clone(),
+                cursor: query.cursor.clone(),
+            },
         )
-            .into_response();
-    }
-    let mut response = Json(CodeFileResponse {
-        api_version: 1,
-        path: result.path,
-        revision: result.revision,
-        text: result.text,
-        size: result.size,
-        truncated: result.truncated,
-        next_cursor: result.next_cursor,
-        limited: result.limited,
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::File(file))) => Ok(file),
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response();
+            }
+            Ok(None) => {
+                let cache = state.code_cache.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    match cache.get_or_load(FsPath::new(&cwd), &query.path) {
+                        Ok(Some(cached)) => {
+                            debug_assert_eq!(cached.size, cached.bytes.len() as u64);
+                            crate::code_review::cached_file_page(
+                                &query.path,
+                                cached.bytes,
+                                cached.revision,
+                                query.cursor.as_deref(),
+                            )
+                        }
+                        // The cache is deliberately bounded to the physical session
+                        // worktree. Registered aggregate projects are a read-only Code
+                        // projection outside that root, so let the provider resolve and
+                        // validate those paths instead of treating a cache miss as an
+                        // authorization failure.
+                        Ok(None) | Err(_) => {
+                            crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                                .file_page(&query.path, query.cursor.as_deref())
+                        }
+                    }
+                })
+                .await;
+                let Ok(result) = result else {
+                    return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
+                };
+                result
+            }
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error) if error == "file snapshot changed" => {
+                return (StatusCode::CONFLICT, error).into_response();
+            }
+            Err(error) => return code_file_error_response(&error),
+        };
+        let etag = format!("\"{}\"", result.revision);
+        const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+        if headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains(etag.as_str()))
+        {
+            return (
+                StatusCode::NOT_MODIFIED,
+                [
+                    (header::ETAG, etag.as_str()),
+                    (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
+                ],
+            )
+                .into_response();
+        }
+        let mut response = Json(CodeFileResponse {
+            api_version: 1,
+            path: result.path,
+            revision: result.revision,
+            text: result.text,
+            size: result.size,
+            truncated: result.truncated,
+            next_cursor: result.next_cursor,
+            limited: result.limited,
+        })
+        .into_response();
+        if let Ok(value) = etag.parse() {
+            response.headers_mut().insert(header::ETAG, value);
+        }
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static(FILE_CACHE_CONTROL),
+        );
+        response
     })
-    .into_response();
-    if let Ok(value) = etag.parse() {
-        response.headers_mut().insert(header::ETAG, value);
-    }
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static(FILE_CACHE_CONTROL),
-    );
-    response
+    .await
 }
 
 async fn api_code_file_raw(
@@ -16254,81 +16283,87 @@ async fn api_code_file_raw(
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
-    let cwd = context.cwd;
-    let result = match remote_code_request(
-        &state,
-        &context.machine_id,
-        &cwd,
-        serde_json::json!({ "type": "file_raw", "path": query.path.clone() }),
-    )
-    .await
-    {
-        Ok(Some(crate::code_adapter::CodeAdapterResponse::FileRaw(file))) => Ok(file),
-        Ok(Some(_)) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
-        Err(_) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
-        Ok(None) => {
-            let cache = state.code_cache.clone();
-            let path = query.path.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let media_type = crate::code_review::preview_media_type(&path)
-                    .ok_or_else(|| "file is not a previewable media type".to_owned())?;
-                match cache.get_or_load(FsPath::new(&cwd), &path) {
-                    Ok(Some(cached)) => Ok(crate::code_review::RawFileDocument {
-                        path: path.replace('\\', "/"),
-                        revision: cached.revision,
-                        media_type: media_type.to_owned(),
-                        bytes: cached.bytes,
-                        size: cached.size,
-                    }),
-                    Ok(None) | Err(_) => {
-                        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
-                            .file_raw(&path)
-                    }
-                }
-            })
-            .await;
-            let Ok(result) = result else {
-                return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
-            };
-            result
-        }
-    };
-    let result = match result {
-        Ok(result) => result,
-        Err(error) if error == "file snapshot changed" => {
-            return (StatusCode::CONFLICT, error).into_response();
-        }
-        Err(error) => return code_file_error_response(&error),
-    };
-    let etag = format!("\"{}\"", result.revision);
-    const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
-    if headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.contains(etag.as_str()))
-    {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag.as_str()),
-                (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
-            ],
+    let owner = Arc::clone(&state);
+    let context_id = session_id.clone();
+    code_reads::scoped(&owner, &context_id, |context| async move {
+        let cwd = context.cwd;
+        let result = match remote_code_request(
+            &state,
+            &context.machine_id,
+            &cwd,
+            CodeOperation::FileRaw {
+                path: query.path.clone(),
+            },
         )
-            .into_response();
-    }
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, result.media_type),
-            (header::ETAG, etag),
-            (header::CACHE_CONTROL, FILE_CACHE_CONTROL.to_owned()),
-        ],
-        result.bytes,
-    )
-        .into_response()
+        .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::FileRaw(file))) => Ok(file),
+            Ok(Some(_)) => {
+                return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response();
+            }
+            Err(_) => return (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response(),
+            Ok(None) => {
+                let cache = state.code_cache.clone();
+                let path = query.path.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let media_type = crate::code_review::preview_media_type(&path)
+                        .ok_or_else(|| "file is not a previewable media type".to_owned())?;
+                    match cache.get_or_load(FsPath::new(&cwd), &path) {
+                        Ok(Some(cached)) => Ok(crate::code_review::RawFileDocument {
+                            path: path.replace('\\', "/"),
+                            revision: cached.revision,
+                            media_type: media_type.to_owned(),
+                            bytes: cached.bytes,
+                            size: cached.size,
+                        }),
+                        Ok(None) | Err(_) => {
+                            crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                                .file_raw(&path)
+                        }
+                    }
+                })
+                .await;
+                let Ok(result) = result else {
+                    return (StatusCode::BAD_REQUEST, "file unavailable").into_response();
+                };
+                result
+            }
+        };
+        let result = match result {
+            Ok(result) => result,
+            Err(error) if error == "file snapshot changed" => {
+                return (StatusCode::CONFLICT, error).into_response();
+            }
+            Err(error) => return code_file_error_response(&error),
+        };
+        let etag = format!("\"{}\"", result.revision);
+        const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
+        if headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains(etag.as_str()))
+        {
+            return (
+                StatusCode::NOT_MODIFIED,
+                [
+                    (header::ETAG, etag.as_str()),
+                    (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
+                ],
+            )
+                .into_response();
+        }
+        (
+            StatusCode::OK,
+            [
+                (header::CONTENT_TYPE, result.media_type),
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, FILE_CACHE_CONTROL.to_owned()),
+            ],
+            result.bytes,
+        )
+            .into_response()
+    })
+    .await
 }
 
 fn code_file_error_response(error: &str) -> Response {

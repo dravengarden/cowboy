@@ -41,14 +41,19 @@ and accepting a production effect are different milestones.
   observed workers retained. This does not resolve Workspace/Session scopes,
   grant state ownership or authorize a graph.
 - [Finite code-read scopes](plugin-code-read-scopes.md) carry exact process-local
-  Session incarnations through Zed requests/replies and diff pagination; cwd
-  ABA and delete/recreate cannot revive them. Advertised Workspace snapshots
+  Session incarnations through Zed requests/replies and all eleven buffered
+  filesystem/Git HTTP readers, including cached, conditional and error replies.
+  Cwd ABA and delete/recreate cannot revive them. Advertised Workspace snapshots
   include Service/Machine/workspace/path. Per-entry diff cursor identities
-  prevent equal-content aliases and unsafe UTF-8 slicing. This does not fence
-  all Code effects, supply continuous Workspace or filesystem identity, grant
+  prevent equal-content aliases and unsafe UTF-8 slicing. Core Code requests
+  serialize the existing closed Rust operations with unchanged wire shapes.
+  This does not fence all Code effects, supply continuous Workspace or filesystem identity, grant
   state authority or accept a native generation. Its
   [Controller release](releases/plugin-code-read-scopes-2026-09-15.md) passed the
-  complete gate and is active with all 15 observed workers retained.
+  complete gate and is active with all 15 observed workers retained. The
+  subsequent unified buffered-response and closed-request source slice adds six
+  response-boundary tests and fourteen wire vectors; its activation is recorded
+  separately, not inferred from the earlier diff/Zed deployment.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
