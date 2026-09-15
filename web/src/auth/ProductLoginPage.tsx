@@ -6,6 +6,8 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
+import ArrowForwardRounded from "@mui/icons-material/ArrowForwardRounded";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { assessAdminPassword } from "../admin/passwordStrength";
 import {
@@ -262,59 +264,78 @@ export function ProductLoginPage({
         submit();
       }}
       sx={{
-        minHeight: "100dvh",
+        height: "100%",
+        overflowY: "auto",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "flex-start",
-        px: 3,
-        pt: {
-          xs: "max(2.75rem, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
-          sm: 10,
-        },
-        pb: "max(2rem, env(safe-area-inset-bottom, 0px))",
+        pl: "max(20px, env(safe-area-inset-left, 0px))",
+        pr: "max(20px, env(safe-area-inset-right, 0px))",
+        pt:
+          "max(32px, var(--cowboy-system-top-clearance, env(safe-area-inset-top, 0px)))",
+        pb: "max(32px, env(safe-area-inset-bottom, 0px))",
         bgcolor: "background.default",
         color: "text.primary",
       }}
     >
       <Stack
-        spacing={2.5}
-        sx={{ width: "100%", maxWidth: 400, pt: { xs: 4, sm: 2 } }}
+        spacing={3}
+        useFlexGap
+        sx={{
+          width: "100%",
+          maxWidth: 420,
+          flexShrink: 0,
+          my: "auto",
+          p: { xs: 2.5, sm: 4.5 },
+          bgcolor: "background.paper",
+          border: "1px solid",
+          borderColor: (theme) => alpha(theme.palette.text.primary, 0.08),
+          borderRadius: "20px",
+          boxShadow: (theme) =>
+            `0 8px 32px ${alpha(theme.palette.common.black, 0.035)}`,
+          // The workspace's default text scale is 65%; keep sign-in legible
+          // at that scale while still honoring larger accessibility sizes.
+          "& .MuiAlert-message": {
+            fontSize: "max(0.875rem, 14px)",
+            lineHeight: 1.5,
+          },
+        }}
       >
-        <Box>
+        <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
           <Box
             component="img"
             src="/cowboy-app-icon-192-v6.png"
             alt=""
-            width={48}
-            height={48}
+            width={36}
+            height={36}
             sx={{
-              width: 48,
-              height: 48,
-              borderRadius: 1.5,
+              width: 36,
+              height: 36,
+              borderRadius: "10px",
               display: "block",
-              mb: 2,
             }}
           />
           <Typography
             component="p"
             sx={{
-              fontSize: "0.8125rem",
+              fontSize: "max(1.125rem, 18px)",
               fontWeight: 650,
-              letterSpacing: "0.04em",
-              color: "text.secondary",
+              letterSpacing: "-0.025em",
             }}
           >
             Cowboy
           </Typography>
+        </Stack>
+        <Box>
           <Typography
             component="h1"
             variant="h4"
             sx={{
-              fontWeight: 750,
-              mt: 0.75,
-              letterSpacing: -0.6,
-              fontSize: { xs: "1.75rem", sm: "2rem" },
+              fontWeight: 650,
+              letterSpacing: "-0.035em",
+              fontSize: "max(1.75rem, 28px)",
+              lineHeight: 1.25,
             }}
           >
             {needsCode
@@ -325,13 +346,13 @@ export function ProductLoginPage({
           </Typography>
           <Typography
             color="text.secondary"
-            sx={{ mt: 0.75, lineHeight: 1.45 }}
+            sx={{ mt: 1, fontSize: "max(0.9375rem, 14px)", lineHeight: 1.6 }}
           >
             {needsCode
               ? "This instance has no user yet. Enter the setup code from the host journal or data directory."
               : creating
               ? "Create the only user on this Cowboy instance."
-              : "This instance requires a product account."}
+              : "Sign in to your workspace."}
           </Typography>
         </Box>
         {creating && (
@@ -366,6 +387,36 @@ export function ProductLoginPage({
             disabled={busy}
             fullWidth
             aria-label="Sign-in method"
+            sx={{
+              borderRadius: "12px",
+              bgcolor: "action.hover",
+              backdropFilter: "none",
+              WebkitBackdropFilter: "none",
+              "& > [aria-hidden]": {
+                borderRadius: "8px",
+                bgcolor: (theme) =>
+                  theme.palette.mode === "dark"
+                    ? alpha(theme.palette.common.white, 0.12)
+                    : theme.palette.background.paper,
+                boxShadow: (theme) =>
+                  `0 1px 3px ${alpha(theme.palette.common.black, 0.08)}`,
+                "@media (prefers-reduced-motion: reduce)": {
+                  transition: "none",
+                },
+              },
+              "& .MuiButtonBase-root": {
+                minHeight: 44,
+                borderRadius: "8px",
+                px: 1,
+                fontSize: "max(0.875rem, 14px)",
+                fontWeight: 550,
+                "&.Mui-focusVisible": {
+                  outline: "2px solid",
+                  outlineColor: "primary.main",
+                  outlineOffset: 2,
+                },
+              },
+            }}
           />
         )}
         {loginContext?.kind === "password"
@@ -406,7 +457,11 @@ export function LoginMethodFallback(
           variant="contained"
           size="large"
           fullWidth
+          disableElevation
           disabled={context.native && context.busy}
+          endIcon={context.native && context.busy
+            ? undefined
+            : <ArrowForwardRounded />}
           sx={loginActionSx}
         >
           {context.native && context.busy
@@ -418,7 +473,11 @@ export function LoginMethodFallback(
             type="button"
             variant="text"
             onClick={context.onCancel}
-            sx={{ textTransform: "none", fontWeight: 650 }}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              fontSize: "max(0.875rem, 14px)",
+            }}
           >
             Cancel
           </Button>
@@ -427,7 +486,17 @@ export function LoginMethodFallback(
     );
   }
   return (
-    <Stack spacing={1.5}>
+    <Stack
+      spacing={2}
+      sx={{
+        "& .MuiInputBase-root, & .MuiInputLabel-root": {
+          fontSize: "max(1rem, 16px)",
+        },
+        "& .MuiFormHelperText-root": {
+          fontSize: "max(0.75rem, 12px)",
+        },
+      }}
+    >
       {context.mode === "setup"
         ? (
           <TextField
@@ -483,6 +552,7 @@ export function LoginMethodFallback(
         variant="contained"
         size="large"
         fullWidth
+        disableElevation
         disabled={context.busy || !context.canSubmit}
         sx={loginActionSx}
       >
@@ -494,9 +564,19 @@ export function LoginMethodFallback(
 
 const loginActionSx = {
   textTransform: "none" as const,
-  fontWeight: 650,
+  fontWeight: 600,
   letterSpacing: 0,
   minHeight: 48,
-  borderRadius: 2.5,
-  fontSize: "0.95rem",
+  px: 1.5,
+  textAlign: "center" as const,
+  borderRadius: "10px",
+  fontSize: "max(0.95rem, 15px)",
+  "& .MuiButton-endIcon.MuiButton-icon > :nth-of-type(1)": {
+    fontSize: "1.2em",
+  },
+  "&.Mui-focusVisible": {
+    outline: "2px solid",
+    outlineColor: "primary.main",
+    outlineOffset: 3,
+  },
 };
