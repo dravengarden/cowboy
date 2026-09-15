@@ -168,6 +168,7 @@ pub(super) struct InstallFixture {
     pub reader: Fixture,
     pub desired: DesiredPlugin,
     pub password: String,
+    pub catalog_password: String,
     pub package_sha256: String,
     pub release_sha256: String,
 }
@@ -194,10 +195,35 @@ impl InstallFixture {
             MachinePluginStore::new(&root.join("machine"), Platform::Linux, "x86_64".into())?;
         machine.enable_installation_tracking().await?;
         let password = connected::seed_operator(root, &machine).await?;
+        let catalog_password = crate::client_auth::new_code_verifier()?;
+        let mut identities = crate::admin::AdminIdentities::default();
+        identities.create_account(
+            &crate::admin::AdminCredentials {
+                account: "catalog-operator".into(),
+                password: catalog_password.clone(),
+            },
+            crate::admin::AdminRole::Operator,
+            chrono::Utc::now().timestamp_millis(),
+        )?;
+        let store = crate::store::Store::connect(
+            &format!(
+                "sqlite://{}",
+                root.join("controller/store.sqlite3").display()
+            ),
+            root.join("controller/artifacts"),
+        )
+        .await?;
+        store
+            .put_setting(
+                crate::admin::ADMIN_IDENTITIES_SETTING,
+                &serde_json::to_value(identities)?,
+            )
+            .await?;
         Ok(Self {
             reader,
             desired,
             password,
+            catalog_password,
             package_sha256: sha256(&package),
             release_sha256: sha256(&release),
         })
@@ -242,6 +268,28 @@ async fn installation_fixture_starts_vacant_with_real_enrollment_and_no_export_p
         &fixture.password,
         &user.password_hash
     ));
+    let settings = store.load_settings().await.unwrap();
+    let identities = crate::admin::AdminIdentities::from_setting(
+        settings
+            .iter()
+            .find(|(key, _)| key == crate::admin::ADMIN_IDENTITIES_SETTING)
+            .map(|(_, value)| value),
+    );
+    assert!(
+        identities.sessions.is_empty(),
+        "only real HTTP login may issue a fixture cookie"
+    );
+    assert_eq!(identities.accounts.len(), 1);
+    assert_eq!(identities.accounts[0].account, "catalog-operator");
+    assert_eq!(
+        identities.accounts[0].role,
+        crate::admin::AdminRole::Operator
+    );
+    assert!(crate::product_auth::verify_password(
+        &fixture.catalog_password,
+        &identities.accounts[0].password_hash
+    ));
+    assert_ne!(fixture.password, fixture.catalog_password);
     assert!(store.machine_public_key(MACHINE).await.unwrap().is_some());
     let machine = MachinePluginStore::new(
         &root.path().join("machine"),

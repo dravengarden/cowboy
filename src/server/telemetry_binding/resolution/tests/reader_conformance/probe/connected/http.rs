@@ -6,6 +6,7 @@ pub(in super::super) struct Http {
     base: String,
     client: Client,
     cookie: Option<String>,
+    cookie_name: &'static str,
     last: parking_lot::Mutex<Option<HttpObservation>>,
 }
 
@@ -34,6 +35,7 @@ impl Http {
         Ok(Self {
             base: format!("http://{address}"),
             cookie: None,
+            cookie_name: "cowboy_user=",
             last: parking_lot::Mutex::new(None),
             client: Client::builder()
                 .no_proxy()
@@ -50,6 +52,7 @@ impl Http {
     pub fn at(&self, address: std::net::SocketAddr) -> Result<Self, Failure> {
         let mut next = Self::new(address)?;
         next.cookie = Some(self.cookie.clone().ok_or(Failure::Setup)?);
+        next.cookie_name = self.cookie_name;
         Ok(next)
     }
 
@@ -107,7 +110,7 @@ impl Http {
             .get_all(header::SET_COOKIE)
             .iter()
             .filter_map(|h| h.to_str().ok()?.split(';').next())
-            .filter(|h| h.starts_with("cowboy_user="))
+            .filter(|h| h.starts_with(self.cookie_name))
             .map(str::to_owned)
             .collect();
         if cookies.len() > 1 {
@@ -174,6 +177,31 @@ impl Http {
             return Err(Failure::WrongObservation);
         }
         Ok(())
+    }
+
+    /// A separate real fixture Admin login; a Product Operator cookie must not
+    /// cross the Catalog's stronger middleware boundary.
+    pub async fn catalog_admin(
+        address: std::net::SocketAddr,
+        password: &str,
+    ) -> Result<Self, Failure> {
+        let mut http = Self::new(address)?;
+        http.cookie_name = "cowboy_admin=";
+        let reply = http
+            .call(
+                Method::POST,
+                "/api/admin/auth/login",
+                Some(json!({"account":"catalog-operator","password":password})),
+            )
+            .await?;
+        if reply.status != StatusCode::OK
+            || reply.cookie.is_none()
+            || reply.value["role"] != "operator"
+        {
+            return Err(Failure::WrongObservation);
+        }
+        http.cookie = reply.cookie;
+        Ok(http)
     }
 
     pub async fn get(&self, path: &str) -> Result<Value, Failure> {

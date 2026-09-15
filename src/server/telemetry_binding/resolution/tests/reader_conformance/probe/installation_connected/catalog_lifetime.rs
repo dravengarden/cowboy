@@ -2,9 +2,8 @@
 use super::*;
 use reqwest::{Method, StatusCode};
 
-async fn refresh(pair: &Pair<'_>, count: u64) -> Result<(), Failure> {
-    let reply = pair
-        .http
+async fn refresh(admin: &Http, count: u64) -> Result<(), Failure> {
+    let reply = admin
         .call(Method::POST, "/api/plugins/catalog/refresh", None)
         .await?
         .ok()?;
@@ -17,6 +16,10 @@ async fn interrupt(
     path: &str,
     body: Value,
 ) -> Result<(), Failure> {
+    pair.http
+        .denied(Method::POST, "/api/plugins/catalog/refresh", None)
+        .await?;
+    let admin = Http::catalog_admin(pair.address, &pair.fixture.catalog_password).await?;
     let gate = pair.proxy.hold_catalog_probe(kind)?;
     let marker = pair.root.join("catalog/victoria.release.json");
     let original = std::fs::read(&marker).map_err(|_| Failure::Setup)?;
@@ -24,9 +27,9 @@ async fn interrupt(
         let result = async {
             gate.held().await?;
             std::fs::remove_file(&marker).map_err(|_| Failure::Setup)?;
-            refresh(pair, 0).await?;
+            refresh(&admin, 0).await?;
             std::fs::write(&marker, &original).map_err(|_| Failure::Setup)?;
-            refresh(pair, 1).await
+            refresh(&admin, 1).await
         }
         .await;
         gate.release();

@@ -36,6 +36,10 @@ Fresh install/reinstall requests still succeed. Separate bounded relay counters
 require exactly two correlated probe queries/replies; an uninstall write, forged
 reply or repeated probe is refused. The two rejected probes do not add operations
 to the five flows' stopped evidence or change the 45-check/90-read matrix.
+Catalog refresh uses a separate random-password Admin Operator and real HTTP
+login, with its cookie kept out of Product installation requests. The Product
+Operator is first proved unable to refresh the Catalog. Neither fixture identity
+uses a serialized session or a production credential.
 
 | Writer flow | Service evidence before reader startup | Machine evidence |
 | --- | --- | --- |
