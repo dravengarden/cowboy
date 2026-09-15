@@ -8,26 +8,68 @@
         "when": {
           "op": "any",
           "values": [
-            { "op": "nonempty", "source": { "kind": "env", "name": "XAI_API_KEY" } },
-            { "op": "nonempty", "source": { "kind": "env", "name": "GROK_CODE_XAI_API_KEY" } },
-            { "op": "nonempty", "source": { "kind": "env", "name": "GROK_DEPLOYMENT_KEY" } }
+            {
+              "op": "nonempty",
+              "source": {
+                "kind": "env",
+                "name": "XAI_API_KEY"
+              }
+            },
+            {
+              "op": "nonempty",
+              "source": {
+                "kind": "env",
+                "name": "GROK_CODE_XAI_API_KEY"
+              }
+            },
+            {
+              "op": "nonempty",
+              "source": {
+                "kind": "env",
+                "name": "GROK_DEPLOYMENT_KEY"
+              }
+            }
           ]
         },
-        "outcome": { "state": "signed-in", "detail": "xAI credential" }
+        "outcome": {
+          "state": "signed-in",
+          "detail": "xAI credential"
+        }
       },
       {
-        "when": { "op": "nonempty", "source": { "kind": "env", "name": "GROK_AUTH_PROVIDER_COMMAND" } },
-        "outcome": { "state": "signed-in", "detail": "Grok external auth provider" }
+        "when": {
+          "op": "nonempty",
+          "source": {
+            "kind": "env",
+            "name": "GROK_AUTH_PROVIDER_COMMAND"
+          }
+        },
+        "outcome": {
+          "state": "signed-in",
+          "detail": "Grok external auth provider"
+        }
       },
       {
         "when": {
           "op": "json-object",
-          "source": { "kind": "env", "name": "GROK_AUTH" },
-          "nonempty_string_fields": ["key"],
-          "string_fields": ["auth_mode", "create_time", "user_id"],
+          "source": {
+            "kind": "env",
+            "name": "GROK_AUTH"
+          },
+          "nonempty_string_fields": [
+            "key"
+          ],
+          "string_fields": [
+            "auth_mode",
+            "create_time",
+            "user_id"
+          ],
           "root_or_values": true
         },
-        "outcome": { "state": "signed-in", "detail": "Grok account" }
+        "outcome": {
+          "state": "signed-in",
+          "detail": "Grok account"
+        }
       },
       {
         "when": {
@@ -35,35 +77,73 @@
           "values": [
             {
               "op": "json-object",
-              "source": { "kind": "file", "path": "${GROK_AUTH_PATH}" },
-              "nonempty_string_fields": ["key"],
-              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "source": {
+                "kind": "file",
+                "path": "${GROK_AUTH_PATH}"
+              },
+              "nonempty_string_fields": [
+                "key"
+              ],
+              "string_fields": [
+                "auth_mode",
+                "create_time",
+                "user_id"
+              ],
               "root_or_values": true
             },
             {
               "op": "json-object",
-              "source": { "kind": "file", "path": "${GROK_HOME}/auth.json" },
-              "nonempty_string_fields": ["key"],
-              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "source": {
+                "kind": "file",
+                "path": "${GROK_HOME}/auth.json"
+              },
+              "nonempty_string_fields": [
+                "key"
+              ],
+              "string_fields": [
+                "auth_mode",
+                "create_time",
+                "user_id"
+              ],
               "root_or_values": true
             },
             {
               "op": "json-object",
-              "source": { "kind": "file", "path": "${HOME}/.grok/auth.json" },
-              "nonempty_string_fields": ["key"],
-              "string_fields": ["auth_mode", "create_time", "user_id"],
+              "source": {
+                "kind": "file",
+                "path": "${HOME}/.grok/auth.json"
+              },
+              "nonempty_string_fields": [
+                "key"
+              ],
+              "string_fields": [
+                "auth_mode",
+                "create_time",
+                "user_id"
+              ],
               "root_or_values": true
             }
           ]
         },
-        "outcome": { "state": "signed-in", "detail": "Grok account" }
+        "outcome": {
+          "state": "signed-in",
+          "detail": "Grok account"
+        }
       }
     ],
-    "fallback": { "state": "signed-out" }
+    "fallback": {
+      "state": "signed-out"
+    }
   },
   "visual": {
-    "light": { "primary": "#44403C", "secondary": "#78716C" },
-    "dark": { "primary": "#E8E4DC", "secondary": "#C4B5A0" }
+    "light": {
+      "primary": "#44403C",
+      "secondary": "#78716C"
+    },
+    "dark": {
+      "primary": "#E8E4DC",
+      "secondary": "#C4B5A0"
+    }
   },
   "slots": [
     "provider.usage",
@@ -113,7 +193,7 @@
     "error_auth": "Sign in to Grok Build in Machines, then refresh xAI usage.",
     "error_config": "Grok Build usage is not configured on this Machine.",
     "error_fetch": "Grok Build could not fetch xAI usage.",
-    "order": 1,
+    "order": 2,
     "widget": "xai-included",
     "widget_shape": "percent"
   }

@@ -4,10 +4,20 @@
   "cli_executable": "claude",
   "cli_executable_env": "CLAUDE_CODE_EXECUTABLE",
   "cli_auth": "exit",
-  "cli_auth_argv": ["auth", "status", "--json"],
+  "cli_auth_argv": [
+    "auth",
+    "status",
+    "--json"
+  ],
   "visual": {
-    "light": { "primary": "#C65D3A", "secondary": "#9A4A30" },
-    "dark": { "primary": "#E08A6A", "secondary": "#D97757" }
+    "light": {
+      "primary": "#C65D3A",
+      "secondary": "#9A4A30"
+    },
+    "dark": {
+      "primary": "#E08A6A",
+      "secondary": "#D97757"
+    }
   },
   "slots": [
     "provider.usage",
@@ -26,27 +36,62 @@
   },
   "usage": {
     "account": "anthropic",
-    "product": "Anthropic",
+    "collector": "command",
+    "collector_argv": [
+      "@plugin-js",
+      "run",
+      "--quiet",
+      "--no-prompt",
+      "--allow-env=COWBOY_PLUGIN_COMMAND_CLAUDE,CLAUDE_CODE_EXECUTABLE,HOME,PATH,TMPDIR,USER,XDG_CONFIG_HOME,XDG_DATA_HOME,XDG_CACHE_HOME,SSL_CERT_FILE,NIX_SSL_CERT_FILE",
+      "--allow-run=claude,${ENV:COWBOY_PLUGIN_COMMAND_CLAUDE},${ENV:CLAUDE_CODE_EXECUTABLE}",
+      "${PLUGIN_DIR}/collector/index.js"
+    ],
     "session_rate_limits": {
       "pointer": "/_meta/_claude~1rateLimit",
       "target": "rateLimits",
-      "required_number_fields": ["utilization"],
-      "required_string_fields": ["rateLimitType"]
+      "required_number_fields": [
+        "utilization"
+      ],
+      "required_string_fields": [
+        "rateLimitType"
+      ]
     },
-    "order": 2,
-    "empty": "Waiting for session activity. Plan limits appear after the Provider reports them.",
+    "product": "Anthropic",
+    "error_auth": "Anthropic account status expired. Sign in to Claude Code again.",
+    "error_fetch": "Claude Code could not report the Anthropic account.",
+    "order": 0,
+    "empty": "Plan limits appear after the Provider reports a rate-limit event.",
     "limit_id_prefix": "claude",
     "limit_labels": [
-      { "id": "five_hour", "label": "5h", "window_minutes": 300 },
-      { "id": "seven_day", "label": "Weekly", "window_minutes": 10080 },
-      { "id": "seven_day_opus", "label": "Opus · Weekly", "window_minutes": 10080 },
-      { "id": "seven_day_sonnet", "label": "Sonnet · Weekly", "window_minutes": 10080 },
+      {
+        "id": "five_hour",
+        "label": "5h",
+        "window_minutes": 300
+      },
+      {
+        "id": "seven_day",
+        "label": "Weekly",
+        "window_minutes": 10080
+      },
+      {
+        "id": "seven_day_opus",
+        "label": "Opus · Weekly",
+        "window_minutes": 10080
+      },
+      {
+        "id": "seven_day_sonnet",
+        "label": "Sonnet · Weekly",
+        "window_minutes": 10080
+      },
       {
         "id": "seven_day_overage_included",
         "label": "Extra usage · Weekly",
         "window_minutes": 10080
       },
-      { "id": "overage", "label": "Extra usage" }
+      {
+        "id": "overage",
+        "label": "Extra usage"
+      }
     ]
   }
 }

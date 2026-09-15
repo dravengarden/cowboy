@@ -1,3 +1,5 @@
+import claudeCodeHost from "./claude-code/host.json" with { type: "json" };
+import { accountView, KNOWN_PLANS } from "./claude-code/collector/index.js";
 import { collectorTargets, group } from "./claude-deepseek/collector/index.js";
 import {
   nearestCredit as nearestCodexCredit,
@@ -151,5 +153,52 @@ Deno.test("Grok reset selection and protobuf string encoding stay deterministic"
     [...encodeStringField(10, "abc")],
     [82, 3, 97, 98, 99],
     "protobuf field",
+  );
+});
+
+Deno.test("Anthropic collector projects only renderable account fields", () => {
+  equal(
+    accountView({
+      subscriptionType: "max",
+      email: "user@example.com",
+      orgName: "Example Org",
+      authMethod: "claude.ai",
+      orgId: "69b1849f-1e71-41e4-94b0-c39529299651",
+    }),
+    {
+      account: {
+        account: {
+          planType: "max",
+          email: "user@example.com",
+          organization: "Example Org",
+          authMethod: "claude.ai",
+        },
+      },
+    },
+    "Anthropic account view",
+  );
+  // An unrecognised plan must still badge as a subscription rather than leak a
+  // raw upstream identifier into the card.
+  equal(
+    accountView({ subscriptionType: "some_future_tier" }).account.account
+      .planType,
+    "subscription",
+    "unknown Anthropic plan",
+  );
+  equal(accountView({}), {}, "absent Anthropic account");
+  equal(accountView({ subscriptionType: "   " }), {}, "blank Anthropic plan");
+});
+
+Deno.test("Anthropic exposes no reset capability to collect", () => {
+  const usage = claudeCodeHost.usage;
+  equal(usage.reset, undefined, "Anthropic reset verb");
+  equal(usage.reset_argv, undefined, "Anthropic reset argv");
+  equal(usage.order, 0, "Anthropic card order");
+  // Claude Code has no reset-credit concept, so the collector must refuse any
+  // operation other than the read-only collect.
+  equal(
+    KNOWN_PLANS.has("max") && KNOWN_PLANS.has("pro"),
+    true,
+    "known Anthropic plans",
   );
 });

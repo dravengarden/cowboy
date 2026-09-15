@@ -2,10 +2,19 @@
   "schema_version": 1,
   "adapter_slot": "codex",
   "cli_auth": "exit",
-  "cli_auth_argv": ["login", "status"],
+  "cli_auth_argv": [
+    "login",
+    "status"
+  ],
   "visual": {
-    "light": { "primary": "#3B5BDB", "secondary": "#0F766E" },
-    "dark": { "primary": "#8EA2FF", "secondary": "#2DD4BF" }
+    "light": {
+      "primary": "#3B5BDB",
+      "secondary": "#0F766E"
+    },
+    "dark": {
+      "primary": "#8EA2FF",
+      "secondary": "#2DD4BF"
+    }
   },
   "slots": [
     "provider.usage",
@@ -46,8 +55,11 @@
     ],
     "product": "OpenAI",
     "error_auth": "OpenAI usage authorization expired. Sign in to Codex again.",
-    "order": 0,
-    "top_bar_windows": [300, 10080],
+    "order": 1,
+    "top_bar_windows": [
+      300,
+      10080
+    ],
     "widget": "openai-weekly",
     "widget_shape": "percent",
     "widget_window": 10080
