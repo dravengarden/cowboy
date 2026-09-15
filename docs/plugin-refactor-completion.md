@@ -54,6 +54,12 @@ and accepting a production effect are different milestones.
   [buffered-reader Controller release](releases/plugin-buffered-code-reads-2026-09-15.md)
   adds six response-boundary tests and fourteen wire vectors, passed the complete
   gate, and is published and activated with all 16 observed workers retained.
+  File continuations now bind the same original context and exact requested
+  path in a bounded Controller registry before forwarding a native cursor.
+  Representation ETags include continuation identity; expiry cannot return a
+  stale cursor via `304`. Local and cached readers repair UTF-8 page/view
+  boundaries and incomplete EOF. Independent Code adapter tests are part of the
+  complete gate; source coverage is not a running remote adapter upgrade.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -146,6 +152,11 @@ unconstrained workflow executor to hide these gaps.
   Preserved worker PIDs in a bounded deployment window do not prove an actual
   generation swap or native resume. No forced rebind, login or worker restart is
   authorized merely by a Controller/Web release.
+- **Remote core Code adapter:** the shared UTF-8 paging repair is source-tested
+  in the independent adapter feature graph, but Controller activation updates
+  only colocated reads and Controller-owned cursor bindings. Accept and activate
+  the exact remote adapter through its separately authorized Machine release;
+  do not infer that upgrade from the Unix socket fixture or retained Machine PID.
 
 These checks require real account/device participation and, for the Machine or
 host-policy change, the separate maintenance boundary. Synthetic fixture keys,

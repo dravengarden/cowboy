@@ -19,6 +19,27 @@ pub(crate) enum CodeReadScope {
     },
 }
 
+impl CodeReadScope {
+    /// Logical string bytes retained by bounded read caches; not a wire identity.
+    pub(crate) fn string_bytes(&self) -> usize {
+        match self {
+            Self::Session(scope) => {
+                scope.session_id.len()
+                    + scope.machine_id.len()
+                    + scope.workspace_id.as_ref().map_or(0, String::len)
+                    + scope.cwd.len()
+                    + scope.owner_user_id.as_ref().map_or(0, String::len)
+            }
+            Self::Workspace {
+                service_id,
+                machine_id,
+                workspace_id,
+                cwd,
+            } => service_id.len() + machine_id.len() + workspace_id.len() + cwd.len(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct CodeIncarnation(Arc<()>);
 

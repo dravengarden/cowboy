@@ -446,6 +446,7 @@ test:
     # The standalone Machine ships without Controller modules. Compile and run
     # its test slice too; cargo check alone does not cover cfg(test) boundaries.
     env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features machine-host --lib
+    env -u COWBOY_PROVIDER_PACKAGE_PATH cargo test --locked --no-default-features --features code-adapter --lib
     cd plugins/zed/adapter && cargo test --all-targets --locked
     cd web && deno task test
 

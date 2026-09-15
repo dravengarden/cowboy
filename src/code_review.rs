@@ -17,9 +17,12 @@ const MAX_CHANGES: usize = 1_000;
 const MAX_HISTORY_COMMITS: usize = 128;
 const MAX_COMMIT_FILES: usize = 1_000;
 const MAX_DIFF_SNAPSHOT_BYTES: usize = 16 * 1024 * 1024;
-const FILE_PAGE_BYTES: usize = 256 * 1024;
-const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const FILE_PAGE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 const LOCAL_PROVIDER_REVISION: &[u8] = b"local-v2-project-projection";
+
+#[cfg(test)]
+mod file_page_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeChange {
@@ -790,7 +793,7 @@ impl CodeProvider for LocalCodeProvider {
             }
             None => 0,
         };
-        let available = (size as usize).min(MAX_FILE_BYTES);
+        let available = size.min(MAX_FILE_BYTES as u64) as usize;
         if offset >= available && !(offset == 0 && available == 0) {
             return Err("invalid file cursor".to_owned());
         }
@@ -801,28 +804,19 @@ impl CodeProvider for LocalCodeProvider {
         file.take(read_limit as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        if bytes.contains(&0) {
-            return Err("binary file".to_owned());
+        let (text, unread_valid_text) =
+            file_page_text(&bytes, offset as u64 + (bytes.len() as u64) < size)?;
+        let has_next = offset + bytes.len() < available || unread_valid_text;
+        if text.is_empty() && has_next {
+            return Err("file snapshot changed".to_owned());
         }
-        let valid_len = match std::str::from_utf8(&bytes) {
-            Ok(_) => bytes.len(),
-            Err(error) if error.error_len().is_none() => error.valid_up_to(),
-            Err(_) => return Err("file is not UTF-8".to_owned()),
-        };
-        let mut end = valid_len.min(FILE_PAGE_BYTES);
-        if offset + end < available
-            && let Some(newline) = bytes[..end].iter().rposition(|byte| *byte == b'\n')
-        {
-            end = newline + 1;
-        }
-        bytes.truncate(end);
-        let next_offset = offset + end;
-        let next_cursor = (next_offset < available).then(|| format!("{revision}:{next_offset}"));
-        let limited = size as usize > MAX_FILE_BYTES;
+        let next_offset = offset + text.len();
+        let next_cursor = has_next.then(|| format!("{revision}:{next_offset}"));
+        let limited = size > MAX_FILE_BYTES as u64;
         Ok(FileDocument {
             path: relative.to_string_lossy().replace('\\', "/"),
             revision,
-            text: String::from_utf8(bytes).map_err(|error| error.to_string())?,
+            text,
             size,
             truncated: next_cursor.is_some() || limited,
             next_cursor,
@@ -890,39 +884,56 @@ pub(crate) fn cached_file_page(
         }
         None => 0,
     };
-    let available = bytes.len();
+    let available = bytes.len().min(MAX_FILE_BYTES);
     if offset >= available && !(offset == 0 && available == 0) {
         return Err("invalid file cursor".to_owned());
     }
-    let mut page = bytes[offset..available.min(offset + FILE_PAGE_BYTES + 4)].to_vec();
-    if page.contains(&0) {
-        return Err("binary file".to_owned());
+    let page = &bytes[offset..available.min(offset + FILE_PAGE_BYTES + 4)];
+    let (text, unread_valid_text) = file_page_text(page, offset + page.len() < bytes.len())?;
+    let has_next = offset + page.len() < available || unread_valid_text;
+    if text.is_empty() && has_next {
+        return Err("file snapshot changed".to_owned());
     }
-    let valid_len = match std::str::from_utf8(&page) {
-        Ok(_) => page.len(),
-        Err(error) if error.error_len().is_none() => error.valid_up_to(),
-        Err(_) => return Err("file is not UTF-8".to_owned()),
-    };
-    let mut end = valid_len.min(FILE_PAGE_BYTES);
-    if offset + end < available
-        && let Some(newline) = page[..end].iter().rposition(|byte| *byte == b'\n')
-    {
-        end = newline + 1;
-    }
-    page.truncate(end);
-    let next_offset = offset + end;
+    let next_offset = offset + text.len();
+    let limited = bytes.len() > MAX_FILE_BYTES;
     Ok(FileDocument {
         path: relative.to_owned(),
         revision: revision.clone(),
-        text: String::from_utf8(page).map_err(|error| error.to_string())?,
+        text,
         size,
-        truncated: next_offset < available,
-        next_cursor: (next_offset < available).then(|| format!("{revision}:{next_offset}")),
-        limited: false,
+        truncated: has_next || limited,
+        next_cursor: has_next.then(|| format!("{revision}:{next_offset}")),
+        limited,
     })
 }
 
-fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
+/// Return one complete UTF-8 page and whether this read contains more valid text.
+/// A partial code point is allowed only at a read/view boundary, never actual EOF.
+fn file_page_text(bytes: &[u8], more_in_file: bool) -> Result<(String, bool), String> {
+    if bytes.contains(&0) {
+        return Err("binary file".to_owned());
+    }
+    let valid = match std::str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) if error.error_len().is_none() && more_in_file => {
+            std::str::from_utf8(&bytes[..error.valid_up_to()])
+                .expect("UTF-8 decoder identified a valid prefix")
+        }
+        Err(_) => return Err("file is not UTF-8".to_owned()),
+    };
+    let mut end = valid.len().min(FILE_PAGE_BYTES);
+    while !valid.is_char_boundary(end) {
+        end -= 1;
+    }
+    if (end < valid.len() || more_in_file)
+        && let Some(newline) = valid[..end].rfind('\n')
+    {
+        end = newline + 1;
+    }
+    Ok((valid[..end].to_owned(), end < valid.len()))
+}
+
+pub(crate) fn parse_file_cursor(cursor: &str) -> Result<(&str, usize), String> {
     let (revision, offset) = cursor
         .rsplit_once(':')
         .ok_or_else(|| "invalid file cursor".to_owned())?;

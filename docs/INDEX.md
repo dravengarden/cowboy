@@ -63,7 +63,7 @@ primary phone/desktop product path.
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
-- [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped buffered code responses, closed core requests, Zed observations and immutable diff cursors
+- [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped code responses, closed core requests, Zed observations, bounded diff/file continuations and page ETags
 - [`releases/plugin-code-read-scopes-2026-09-15.md`](releases/plugin-code-read-scopes-2026-09-15.md) — Verified scoped-code Controller activation with 15 workers retained
 - [`releases/plugin-buffered-code-reads-2026-09-15.md`](releases/plugin-buffered-code-reads-2026-09-15.md) — Verified buffered code-response and closed-request Controller activation with 16 workers retained
 - [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation

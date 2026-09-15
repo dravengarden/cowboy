@@ -1,4 +1,4 @@
-# Session code-read scopes and immutable diff cursors
+# Session code-read scopes and bounded continuations
 
 Core now carries one typed observation of a Session's code workspace through the
 existing Zed calls and filesystem/Git HTTP readers. This is a finite read
@@ -73,6 +73,51 @@ cursors expire at Controller activation as they did on previous restarts. No Web
 bundle, Plugin package, Machine protocol, SQL migration, persistent data format,
 host policy or native ABI changes.
 
+## File-page continuations
+
+The Controller now binds each file continuation to its original typed code-read
+observation and exact requested path. A bounded process-local registry translates
+the opaque public token into the existing native `revision:byte-offset` cursor
+only after that match, before local or remote I/O. Session retarget/ABA,
+delete/recreate, independent Hubs or Sessions, a changed advertised Workspace
+tuple, another path and a changed offset cannot adopt a prior token. The outer
+buffered-response guard still rechecks the original observation after I/O.
+Neither the public token nor the native cursor is authorization.
+
+The registry retains no file contents. It is limited to 512 entries, 1 MiB of
+logical identity-string bytes and ten minutes of idle lifetime, with lazy expiry
+and LRU eviction. Concurrent identical first pages reuse a live binding; eviction,
+expiry and Controller restart create a different random 256-bit identity. Only
+the offset remains visible in the historical `64-hex:offset` shape. Existing
+unbound native cursors return `410`, not an implicit import. Web already reloads
+file pages on `409/410`; no bundle or native protocol upgrade is required for
+the Controller binding cutover.
+
+Projection validates revision shape, byte offsets, progress, page size and
+terminal/truncated/limited flags. Malformed tokens are `400`, missing bindings
+are `410`, changed revisions are `409`, invalid backend pages are `502` and
+oversized retained identities are `503`; these errors have `no-store` and no
+ETag. Existing physical-file metadata revisions and content-cache digests remain
+separate domains; changing readers cannot silently continue with another revision.
+The binding is to the requested path, not an independent filesystem inode proof
+or a claim that a remote adapter's contents have been independently attested.
+
+File ETags hash the exact serialized page, including its public continuation.
+Two pages of one revision no longer share an ETag, and regenerating an expired
+continuation forces fresh JSON instead of `304` with an unusable cached cursor.
+Conditional reads accept exact strong/weak tags, lists and `*`, not substring
+matches, and keep `private, max-age=0, must-revalidate`.
+
+Both local and content-cache readers now cut 256 KiB pages only at UTF-8
+boundaries, preserving the existing newline preference. An incomplete codepoint
+at actual EOF is an error; a partial codepoint at the 32 MiB view limit is
+trimmed without issuing a cursor into that partial tail. Long two-, three- and
+four-byte-character lines reconstruct exactly. This shared reader also builds
+in the independent core Code adapter. A Controller release updates colocated
+reads and all Controller bindings, but **does not upgrade a running remote
+Machine adapter**; its UTF-8 repair needs the separate Machine maintenance lane.
+The signed Zed Plugin is not changed or repackaged.
+
 ## Evidence and remaining work
 
 Two regression tests failed before the repair: equal-content files returned the
@@ -93,15 +138,23 @@ serializer with the historical wire shape and round-trip the adapter reader;
 the adapter tests also run in its independent feature graph. These are source
 fixtures, not actual HTTP/native Plugin installation acceptance.
 
+Three file-page regression tests failed before the repair: cached and uncached
+long multibyte lines failed decoding, and incomplete UTF-8 at EOF returned a
+nonprogressing continuation. The expanded tests cover all scope axes above,
+byte/count/idle bounds, concurrent issue, offset tampering, invalid native pages,
+empty and limited terminal pages, representation ETags and a scope change after
+projection. A real local Unix adapter fixture round-trips opaque-to-native
+translation and reconstructs the whole long Unicode file. The standard complete
+gate now runs the independent Code adapter library tests as well as its build
+check. These fixtures do not prove a deployed remote Machine upgrade.
+
 This does not revoke or compensate a Zed effect already dispatched, release a
 pre-existing buffer on a retargeted workspace, atomically fence all Machine
 effects against Session edits, or accept an exact new Code/Agent installation.
 Discarding a stale reply is not rollback: already-started reads, manifest Zed
 readiness and rebuildable physical-path directory-cache fills are not undone.
 The final observation is not an atomic transaction with HTTP delivery or a
-future streaming-body fence. File-content digest cursors retain their existing
-format; unlike diff entry cursors they do not acquire cross-request Session
-lifetime binding here. Continuous Workspace observations, principal/policy
+future streaming-body fence. Continuous Workspace observations, principal/policy
 admission, general state leases and independent post-effect/native recovery remain
 in the
 [completion ledger](plugin-refactor-completion.md). Tests use disposable state

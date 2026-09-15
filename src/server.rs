@@ -247,6 +247,7 @@ struct AppState {
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
+    file_cursors: code_reads::file_pages::PageCursors,
     code_cache: crate::code_cache::CodeCache,
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
@@ -1480,6 +1481,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
+            file_cursors: code_reads::file_pages::PageCursors::default(),
             code_cache,
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
@@ -16184,6 +16186,20 @@ async fn api_code_file(
     let owner = Arc::clone(&state);
     let context_id = session_id.clone();
     code_reads::scoped(&owner, &context_id, |context| async move {
+        // Browser tokens bind the original context/path before local or remote I/O.
+        let continuation =
+            match state
+                .file_cursors
+                .resolve(&context.scope, &query.path, query.cursor.as_deref())
+            {
+                Ok(continuation) => continuation,
+                Err(error) => return error.into_response(),
+            };
+        let requested_path = query.path.clone();
+        let mut query = query;
+        query.cursor = continuation
+            .as_ref()
+            .map(|cursor| cursor.native_cursor().to_owned());
         let cwd = context.cwd;
         let result = match remote_code_request(
             &state,
@@ -16238,41 +16254,15 @@ async fn api_code_file(
             }
             Err(error) => return code_file_error_response(&error),
         };
-        let etag = format!("\"{}\"", result.revision);
-        const FILE_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
-        if headers
-            .get(header::IF_NONE_MATCH)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.contains(etag.as_str()))
-        {
-            return (
-                StatusCode::NOT_MODIFIED,
-                [
-                    (header::ETAG, etag.as_str()),
-                    (header::CACHE_CONTROL, FILE_CACHE_CONTROL),
-                ],
-            )
-                .into_response();
+        match state.file_cursors.project(
+            &context.scope,
+            &requested_path,
+            continuation.as_ref(),
+            result,
+        ) {
+            Ok(page) => code_reads::file_pages::response(&headers, page),
+            Err(error) => error.into_response(),
         }
-        let mut response = Json(CodeFileResponse {
-            api_version: 1,
-            path: result.path,
-            revision: result.revision,
-            text: result.text,
-            size: result.size,
-            truncated: result.truncated,
-            next_cursor: result.next_cursor,
-            limited: result.limited,
-        })
-        .into_response();
-        if let Ok(value) = etag.parse() {
-            response.headers_mut().insert(header::ETAG, value);
-        }
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            header::HeaderValue::from_static(FILE_CACHE_CONTROL),
-        );
-        response
     })
     .await
 }
