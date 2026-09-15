@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
 mod installation;
+mod site;
 mod telemetry_export;
 mod telemetry_recovery;
 mod telemetry_resolution;
@@ -426,13 +427,28 @@ impl LiveState {
     }
 }
 
-#[derive(Default)]
 pub struct MachineControl {
+    service: crate::service_identity::ServiceIdentity,
     live: RwLock<LiveState>,
     next_request: AtomicU64,
 }
 
+#[cfg(test)]
+impl Default for MachineControl {
+    fn default() -> Self {
+        Self::new(crate::service_identity::ServiceIdentity::fixture())
+    }
+}
+
 impl MachineControl {
+    pub(crate) fn new(service: crate::service_identity::ServiceIdentity) -> Self {
+        Self {
+            service,
+            live: RwLock::new(LiveState::default()),
+            next_request: AtomicU64::new(0),
+        }
+    }
+
     pub(crate) fn install(
         &self,
         machine_id: String,
@@ -502,6 +518,7 @@ impl MachineControl {
             .connections
             .get(machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
+        self.check_command_site(&connection.token, &command)?;
         Self::check_protocol(connection, &command)?;
         connection
             .tx
@@ -698,6 +715,7 @@ impl MachineControl {
             .connections
             .get(machine_id)
             .ok_or_else(|| "Machine is not connected".to_owned())?;
+        self.check_command_site(&connection.token, &command)?;
         Self::check_protocol(connection, &command)?;
         if let Some(
             RequestBinding::Connection(token)
@@ -852,7 +870,7 @@ impl MachineControl {
     ) -> Result<PluginUninstallTransport, String> {
         step.validate()
             .map_err(|_| "Invalid Plugin uninstall intent".to_owned())?;
-        if step.machine_id != token.0.machine_id {
+        if !self.matches_site(token, &step.service_id, &step.machine_id) {
             return Err("Plugin uninstall target mismatch".to_owned());
         }
         let live = self.live.read();
@@ -908,7 +926,7 @@ impl MachineControl {
         };
         step.validate()
             .map_err(|_| fail(CommandFailure::NotSent, "invalid Machine step"))?;
-        if step.machine_id != token.0.machine_id {
+        if !self.matches_site(token, &step.service_id, &step.machine_id) {
             return Err(fail(
                 CommandFailure::NotSent,
                 "Machine step target mismatch",
@@ -976,7 +994,7 @@ impl MachineControl {
         };
         step.validate()
             .map_err(|_| fail(CommandFailure::NotSent, "invalid recovery query"))?;
-        if step.machine_id != token.0.machine_id {
+        if !self.matches_site(token, &step.service_id, &step.machine_id) {
             return Err(fail(
                 CommandFailure::NotSent,
                 "recovery query target mismatch",
@@ -1030,7 +1048,7 @@ impl MachineControl {
         };
         step.validate()
             .map_err(|_| fail(CommandFailure::NotSent, "invalid telemetry binding query"))?;
-        if step.machine_id != token.0.machine_id {
+        if !self.matches_site(token, &step.service_id, &step.machine_id) {
             return Err(fail(
                 CommandFailure::NotSent,
                 "telemetry binding query target mismatch",
@@ -1078,7 +1096,7 @@ impl MachineControl {
     ) -> bool {
         let live = self.live.read();
         step.validate_commit().is_ok()
-            && step.machine_id == token.0.machine_id
+            && self.matches_site(token, &step.service_id, &step.machine_id)
             && live.connections.get(&token.0.machine_id).is_some_and(|c| {
                 c.token.same(token)
                     && c.protocol
@@ -1097,7 +1115,9 @@ impl MachineControl {
             certainty,
             detail: detail.into(),
         };
-        if step.validate_commit().is_err() || step.machine_id != token.0.machine_id {
+        if step.validate_commit().is_err()
+            || !self.matches_site(token, &step.service_id, &step.machine_id)
+        {
             return Err(failure(
                 CommandFailure::NotSent,
                 "invalid telemetry binding mutation",
@@ -1376,6 +1396,10 @@ impl MachineControl {
 #[cfg(test)]
 #[path = "machine_control/telemetry_binding_tests.rs"]
 mod telemetry_binding_tests;
+
+#[cfg(test)]
+#[path = "machine_control/site_tests.rs"]
+mod site_tests;
 
 #[cfg(test)]
 mod tests {

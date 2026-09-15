@@ -862,8 +862,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let _security_owner = crate::core_security::ControllerLock::acquire(&plugin_dir)?;
     let plugin_catalog = Arc::new(plugin_catalog);
     let product_authentication = Arc::new(product_authentication);
-    let service_id = crate::service_identity::load_or_create(&args.data_dir)
+    let service_identity = crate::service_identity::load_or_create(&args.data_dir)
         .context("loading Cowboy Service identity")?;
+    let service_id = service_identity.as_str().to_owned();
     let crate::telemetry_plugin::controller_policy::ControllerPolicy {
         writer: telemetry_writer_admission,
         background: managed_export_policy,
@@ -1054,7 +1055,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             .await
             .context("binding core Passkey storage at the legacy namespace")?;
     }
-    let machine_control = Arc::new(MachineControl::default());
+    let machine_control = Arc::new(MachineControl::new(service_identity));
     let usage = UsageService::with_plugin_catalog(
         store.clone(),
         Some(args.data_dir.join("usage-snapshot.json")),

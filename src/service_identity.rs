@@ -21,7 +21,31 @@ pub(crate) fn valid_service_id(value: &str) -> bool {
 }
 
 #[cfg(feature = "full")]
-pub(crate) fn load_or_create(data_dir: &Path) -> Result<String> {
+pub(crate) struct ServiceIdentity(String);
+
+#[cfg(feature = "full")]
+impl ServiceIdentity {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    // The historical wire fixtures use this non-production identity. There is
+    // deliberately no production string/serde/default constructor.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self("service-test".into())
+    }
+}
+
+/// Established by core startup, not by a request, policy or journal claim.
+/// Identity is not Operator authority, a state lease or an enrollment proof.
+#[cfg(feature = "full")]
+pub(crate) fn load_or_create(data_dir: &Path) -> Result<ServiceIdentity> {
+    establish(data_dir).map(ServiceIdentity)
+}
+
+#[cfg(feature = "full")]
+fn establish(data_dir: &Path) -> Result<String> {
     std::fs::create_dir_all(data_dir).context("creating Cowboy data directory")?;
     let path = data_dir.join(SERVICE_ID_FILE);
     if path.exists() {
@@ -129,11 +153,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let first = load_or_create(&root).unwrap();
         let second = load_or_create(&root).unwrap();
-        assert_eq!(first, second);
-        assert!(valid_service_id(&first));
+        assert_eq!(first.as_str(), second.as_str());
+        assert!(valid_service_id(first.as_str()));
         assert_eq!(
-            service_state_dir(Path::new("/home/me"), &first).unwrap(),
-            Path::new("/home/me/.local/state/cowboy-machine/services").join(first)
+            service_state_dir(Path::new("/home/me"), first.as_str()).unwrap(),
+            Path::new("/home/me/.local/state/cowboy-machine/services").join(first.as_str())
         );
         std::fs::remove_dir_all(root).unwrap();
     }

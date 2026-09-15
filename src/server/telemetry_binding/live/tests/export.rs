@@ -9,6 +9,20 @@ use axum::http::StatusCode;
 mod background;
 
 #[tokio::test]
+async fn resolved_export_rejects_foreign_service_even_with_matching_release_and_inventory() {
+    use crate::composition::telemetry::ResolvedExport;
+    let f = Fixture::new(true, false).await;
+    for signal in 0..3 {
+        let mut request = attempt(&f, signal);
+        request.service_id = "another-service".into();
+        request.validate().unwrap();
+        assert!(ResolvedExport::resolve(&f.catalog, &f.control, request).is_err());
+    }
+    assert_eq!(f.sends.load(Ordering::Relaxed), 0);
+    assert_eq!(f.queries.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
 async fn resolved_export_does_not_revive_after_observed_inventory_aba() {
     let f = Fixture::new(true, false).await;
     let destination = Destination::new(StatusCode::OK, false).await;

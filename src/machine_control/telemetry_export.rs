@@ -16,7 +16,7 @@ impl MachineControl {
     ) -> bool {
         let live = self.live.read();
         attempt.validate().is_ok()
-            && attempt.machine_id == token.0.machine_id
+            && self.matches_site(token, &attempt.service_id, &attempt.machine_id)
             && live.connections.get(&token.0.machine_id).is_some_and(|c| {
                 c.token.same(token)
                     && c.protocol
@@ -40,7 +40,9 @@ impl MachineControl {
             certainty,
             detail: detail.into(),
         };
-        if attempt.validate().is_err() || attempt.machine_id != token.0.machine_id {
+        if attempt.validate().is_err()
+            || !self.matches_site(token, &attempt.service_id, &attempt.machine_id)
+        {
             return Err(fail(CommandFailure::NotSent, "invalid managed export"));
         }
         let request_id = self

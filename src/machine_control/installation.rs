@@ -26,7 +26,7 @@ impl MachineControl {
         let expected = query
             .digest()
             .map_err(|_| fail(CommandFailure::NotSent, "invalid installation target query"))?;
-        if query.machine_id != token.0.machine_id {
+        if !self.matches_site(token, &query.service_id, &query.machine_id) {
             return Err(fail(
                 CommandFailure::NotSent,
                 "installation target mismatch",
@@ -87,7 +87,7 @@ impl MachineControl {
     ) -> Result<InstallObservation, CommandRequestError> {
         step.validate()
             .map_err(|_| fail(CommandFailure::NotSent, "invalid installation step"))?;
-        if step.machine_id != token.0.machine_id
+        if !self.matches_site(token, &step.service_id, &step.machine_id)
             || desired.is_some_and(|plugin| !step.matches_envelope(plugin))
         {
             return Err(fail(

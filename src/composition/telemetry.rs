@@ -92,7 +92,7 @@ impl ResolvedBinding {
     ) -> Result<Self> {
         step.validate_commit()?;
         let connection = control
-            .operation_connection(&step.machine_id)
+            .scoped_operation_connection(&step.service_id, &step.machine_id)
             .map_err(|_| anyhow::anyhow!("telemetry resolution Machine unavailable"))?;
         let port = step
             .after()?
@@ -170,7 +170,7 @@ impl ResolvedExport {
     ) -> Result<Self> {
         attempt.validate()?;
         let connection = control
-            .operation_connection(&attempt.machine_id)
+            .scoped_operation_connection(&attempt.service_id, &attempt.machine_id)
             .map_err(|_| anyhow::anyhow!("telemetry resolution Machine unavailable"))?;
         let target = attempt
             .binding

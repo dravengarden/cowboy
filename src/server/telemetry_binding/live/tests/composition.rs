@@ -5,6 +5,24 @@ use crate::composition::telemetry::ResolvedBinding;
 use crate::machine_control::CommandFailure;
 use crate::machine_protocol::PluginInstallationState;
 
+#[tokio::test]
+async fn resolved_binding_rejects_foreign_service_before_acquiring_a_port() {
+    let f = Fixture::new(true, false).await;
+    for revoke in [false, true] {
+        let mut step = f.select().machine_step().unwrap();
+        step.service_id = "another-service".into();
+        if revoke {
+            step.change = BindingChange::Revoke {
+                policy_epoch: "1".to_owned().try_into().unwrap(),
+            };
+        }
+        step.validate_commit().unwrap();
+        assert!(ResolvedBinding::resolve(&f.catalog, &f.control, step).is_err());
+    }
+    assert_eq!(f.sends.load(Ordering::Relaxed), 0);
+    assert_eq!(f.queries.load(Ordering::Relaxed), 0);
+}
+
 pub(super) fn disruptions(installed: &PluginInventory) -> Vec<Vec<PluginInventory>> {
     let mut result = vec![vec![], vec![installed.clone(), installed.clone()]];
     for field in [

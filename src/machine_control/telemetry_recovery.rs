@@ -25,7 +25,7 @@ impl MachineControl {
         query: &RecoveryAuditQuery,
     ) -> bool {
         query.digest().is_ok()
-            && query.step.machine_id == token.0.machine_id
+            && self.matches_site(token, &query.step.service_id, &query.step.machine_id)
             && self.connection_supports(
                 token,
                 crate::machine_protocol::TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
@@ -83,7 +83,7 @@ impl MachineControl {
         request: &RecoveryRequest,
     ) -> bool {
         request.validate().is_ok()
-            && request.step.machine_id == token.0.machine_id
+            && self.matches_site(token, &request.step.service_id, &request.step.machine_id)
             && self.connection_supports(
                 token,
                 crate::machine_protocol::TELEMETRY_BINDING_RECOVERY_PROTOCOL_VERSION,

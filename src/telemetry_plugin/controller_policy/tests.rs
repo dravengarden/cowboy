@@ -22,7 +22,7 @@ fn fixture() -> (tempfile::TempDir, ServeArgs, String) {
         &data.join("untouched.db"),
         b"not a database; must not be opened",
     );
-    (root, args, service)
+    (root, args, service.as_str().to_owned())
 }
 
 fn writer(service: &str) -> Value {
