@@ -47,3 +47,43 @@ export function refreshSessionUsage(
   }
   return refreshUsage(accountProvider);
 }
+
+function resetEndpoint(accountProvider: string): string {
+  return `/api/usage/${encodeURIComponent(accountProvider)}/reset`;
+}
+
+/** Spend the earliest-expiring available reset credit. */
+export async function consumeNearestReset(
+  accountProvider: string,
+  expectedCreditId: string | undefined,
+  confirm: string,
+): Promise<void> {
+  const response = await fetch(resetEndpoint(accountProvider), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirm, expected_credit_id: expectedCreditId }),
+  });
+  await expectHttpOk(response, "Could not use the nearest reset");
+}
+
+export async function scheduleNearestReset(
+  accountProvider: string,
+  fireAtMs: number,
+  confirm: string,
+): Promise<void> {
+  const response = await fetch(`${resetEndpoint(accountProvider)}/schedule`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fire_at_ms: fireAtMs, confirm }),
+  });
+  await expectHttpOk(response, "Could not schedule the nearest reset");
+}
+
+export async function cancelNearestResetSchedule(
+  accountProvider: string,
+): Promise<void> {
+  const response = await fetch(`${resetEndpoint(accountProvider)}/schedule`, {
+    method: "DELETE",
+  });
+  await expectHttpOk(response, "Could not cancel the scheduled reset");
+}

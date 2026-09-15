@@ -43,7 +43,13 @@ import {
   usageResetSchedule,
   type UsageSnapshot,
 } from "./usageLimits";
-import { readUsage, refreshUsage } from "./usageApi";
+import {
+  cancelNearestResetSchedule,
+  consumeNearestReset,
+  readUsage,
+  refreshUsage,
+  scheduleNearestReset,
+} from "./usageApi";
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
@@ -238,9 +244,6 @@ function ProviderUsageCardBody({
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const resetProvider = usageResetProvider(usage);
-  const resetEndpoint = resetProvider === undefined
-    ? undefined
-    : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
   const title = accountProviderLabel(usage.provider);
   const stale = usage.refresh?.stale === true;
@@ -271,18 +274,11 @@ function ProviderUsageCardBody({
     setResetError(null);
   };
   const cancelSchedule = async (): Promise<void> => {
-    if (resetEndpoint === undefined) return;
+    if (resetProvider === undefined) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch(`${resetEndpoint}/schedule`, {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        throw new Error(
-          await response.text() || `HTTP ${String(response.status)}`,
-        );
-      }
+      await cancelNearestResetSchedule(resetProvider);
       await onUsageChanged();
     } catch (cause) {
       setResetError(
@@ -294,33 +290,20 @@ function ProviderUsageCardBody({
   };
   const submitReset = async (): Promise<void> => {
     if (
-      resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
+      resetProvider === undefined || resetBusy || confirmText !== "confirm" ||
       (resetMode === "schedule" && !scheduleValid)
     ) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = resetMode === "schedule"
-        ? await fetch(`${resetEndpoint}/schedule`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            fire_at_ms: new Date(fireAt).getTime(),
-            confirm: confirmText,
-          }),
-        })
-        : await fetch(resetEndpoint, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            confirm: confirmText,
-            expected_credit_id: nearestCreditId,
-          }),
-        });
-      if (!response.ok) {
-        throw new Error(
-          await response.text() || `HTTP ${String(response.status)}`,
+      if (resetMode === "schedule") {
+        await scheduleNearestReset(
+          resetProvider,
+          new Date(fireAt).getTime(),
+          confirmText,
         );
+      } else {
+        await consumeNearestReset(resetProvider, nearestCreditId, confirmText);
       }
       setResetOpen(false);
       setResetMode("schedule");

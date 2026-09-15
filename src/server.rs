@@ -4282,10 +4282,14 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     ) {
         return RouteAuth::Product;
     }
+    // Manual and scheduled usage resets are driven from the product UI, so a
+    // product operator must be able to reach them with the product cookie the
+    // rest of that screen already uses. The legacy admin console keeps its own
+    // path through the admin cookie.
     if path.starts_with("/api/usage/")
         && (path.ends_with("/reset") || path.ends_with("/reset/schedule"))
     {
-        return RouteAuth::AdminOperator;
+        return RouteAuth::ProductOrAdminOperator;
     }
     if path.starts_with("/api/usage/") {
         return RouteAuth::Product;
@@ -20682,6 +20686,22 @@ mod product_auth_api_tests {
                 "observability route {path} must accept product and legacy admin operators",
             );
         }
+        for (method, path) in [
+            (Method::POST, "/api/usage/codex/reset"),
+            (Method::PUT, "/api/usage/codex/reset/schedule"),
+            (Method::DELETE, "/api/usage/codex/reset/schedule"),
+        ] {
+            assert_eq!(
+                classify_route(&method, path),
+                RouteAuth::ProductOrAdminOperator,
+                "usage reset route {path} is driven from the product UI and must \
+                 accept a product operator",
+            );
+        }
+        assert_eq!(
+            classify_route(&Method::GET, "/api/usage/codex/activity"),
+            RouteAuth::Product
+        );
         assert_eq!(
             classify_route(&Method::GET, "/api/auth/tokens"),
             RouteAuth::Product

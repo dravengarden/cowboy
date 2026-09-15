@@ -87,6 +87,11 @@ import {
   type UsageSnapshot,
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
+import {
+  cancelNearestResetSchedule,
+  consumeNearestReset,
+  scheduleNearestReset,
+} from "../usageApi";
 import { PluginSlot } from "../pluginHost";
 import {
   formatCompactCurrency,
@@ -257,9 +262,6 @@ function DesktopUsageExtras(
     : [];
   const nearestCreditId = textValue(nearestAvailableResetCredit(usage)?.id);
   const resetProvider = usageResetProvider(usage);
-  const resetEndpoint = resetProvider === undefined
-    ? undefined
-    : `/api/usage/${resetProvider}/reset`;
   const summary = record(usage.activity?.summary);
   const session = record(usage.activity?.session);
   const cost = record(session?.cost);
@@ -285,18 +287,11 @@ function DesktopUsageExtras(
     setResetError(null);
   };
   const cancelSchedule = async (): Promise<void> => {
-    if (resetEndpoint === undefined) return;
+    if (resetProvider === undefined) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch(`${resetEndpoint}/schedule`, {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        throw new Error(
-          await response.text() || `HTTP ${String(response.status)}`,
-        );
-      }
+      await cancelNearestResetSchedule(resetProvider);
       await onUsageChanged();
     } catch (cause) {
       setResetError(
@@ -308,28 +303,20 @@ function DesktopUsageExtras(
   };
   const submitReset = async (): Promise<void> => {
     if (
-      resetEndpoint === undefined || resetBusy || confirmText !== "confirm" ||
+      resetProvider === undefined || resetBusy || confirmText !== "confirm" ||
       (resetMode === "schedule" && !scheduleValid)
     ) return;
     setResetBusy(true);
     setResetError(null);
     try {
-      const response = await fetch(
-        resetMode === "schedule" ? `${resetEndpoint}/schedule` : resetEndpoint,
-        {
-          method: resetMode === "schedule" ? "PUT" : "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(
-            resetMode === "schedule"
-              ? { fire_at_ms: new Date(fireAt).getTime(), confirm: confirmText }
-              : { confirm: confirmText, expected_credit_id: nearestCreditId },
-          ),
-        },
-      );
-      if (!response.ok) {
-        throw new Error(
-          await response.text() || `HTTP ${String(response.status)}`,
+      if (resetMode === "schedule") {
+        await scheduleNearestReset(
+          resetProvider,
+          new Date(fireAt).getTime(),
+          confirmText,
         );
+      } else {
+        await consumeNearestReset(resetProvider, nearestCreditId, confirmText);
       }
       setResetOpen(false);
       setResetMode("schedule");
