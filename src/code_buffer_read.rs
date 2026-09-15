@@ -74,6 +74,7 @@ pub(crate) struct VersionEntry {
 )]
 pub(crate) enum Output {
     Language {
+        diagnostics_state: DiagnosticStatus,
         diagnostics: Vec<Diagnostic>,
         inlay_hints: Vec<InlayHint>,
         semantic_tokens: Vec<u32>,
@@ -89,11 +90,16 @@ impl Output {
             (
                 Request::Language {},
                 Self::Language {
+                    diagnostics_state,
                     diagnostics,
                     inlay_hints,
                     semantic_tokens,
                 },
             ) => {
+                ensure!(
+                    *diagnostics_state == DiagnosticStatus::Observed || diagnostics.is_empty(),
+                    "unobserved diagnostics must be empty"
+                );
                 ensure!(
                     diagnostics.len() <= 1_000
                         && inlay_hints.len() <= 2_000
@@ -139,6 +145,13 @@ impl Output {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiagnosticStatus {
+    Unobserved,
+    Observed,
 }
 
 fn text(value: &str) -> Result<()> {

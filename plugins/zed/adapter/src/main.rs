@@ -15,6 +15,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
 mod buffer_leases;
+mod diagnostics;
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
@@ -219,14 +220,14 @@ struct BufferVersionEntry {
     timestamp: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LanguagePoint {
     row: u32,
     column: u32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LanguageDiagnostic {
     start: LanguagePoint,
@@ -295,6 +296,15 @@ type BufferFiles = Arc<RwLock<HashMap<u64, proto::File>>>;
 type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
 type Zed = Arc<ZedRuntime>;
 type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
+type DiagnosticCache = Arc<std::sync::Mutex<diagnostics::Cache>>;
+
+#[derive(Default)]
+struct LanguageObservation {
+    diagnostics_state: diagnostics::Status,
+    diagnostics: Vec<LanguageDiagnostic>,
+    inlay_hints: Vec<LanguageInlayHint>,
+    semantic_tokens: Vec<u32>,
+}
 
 struct ZedRuntime {
     _child: Mutex<Child>,
@@ -303,6 +313,7 @@ struct ZedRuntime {
     events: broadcast::Sender<proto::Envelope>,
     buffer_files: BufferFiles,
     worktree_paths: WorktreePaths,
+    diagnostics: DiagnosticCache,
     next_message_id: AtomicU32,
     next_lsp_request_id: AtomicU64,
 }
@@ -411,6 +422,7 @@ impl ZedRuntime {
         let (events, _) = broadcast::channel(1_024);
         let buffer_files = BufferFiles::default();
         let worktree_paths = WorktreePaths::default();
+        let diagnostics = DiagnosticCache::default();
         tokio::spawn(write_messages(input, outbound_rx));
         tokio::spawn(read_messages(
             output,
@@ -418,6 +430,7 @@ impl ZedRuntime {
             Arc::clone(&pending),
             events.clone(),
             Arc::clone(&buffer_files),
+            Arc::clone(&diagnostics),
         ));
         outbound
             .send(proto::Envelope {
@@ -436,6 +449,7 @@ impl ZedRuntime {
             events,
             buffer_files,
             worktree_paths,
+            diagnostics,
             next_message_id: AtomicU32::new(2),
             next_lsp_request_id: AtomicU64::new(1),
         })
@@ -712,15 +726,27 @@ impl ZedRuntime {
             }),
             None,
         );
-        self.send(message)
+        self.send(message)?;
+        self.diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .remove(buffer_id);
+        Ok(())
     }
 
     async fn language(
         &self,
         buffer_id: u64,
         version: &[BufferVersionEntry],
-    ) -> Result<(Vec<LanguageDiagnostic>, Vec<LanguageInlayHint>, Vec<u32>)> {
-        let diagnostics_request = self.lsp_query(
+    ) -> Result<LanguageObservation> {
+        let revision = self
+            .diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .revision(buffer_id)?;
+        // In this pinned Zed protocol diagnostics trigger an asynchronous buffer
+        // update, not an LspQueryResponse. An ACK is not refresh completion.
+        let diagnostics_request = self.start_lsp_query(
             proto::lsp_query::Request::GetDocumentDiagnostics(proto::GetDocumentDiagnostics {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 buffer_id,
@@ -755,39 +781,30 @@ impl ZedRuntime {
                 version: proto_version(version),
             },
         ));
-        let (diagnostics, inlay_hints, semantic_tokens) =
+        let (diagnostics_ack, inlay_hints, semantic_tokens) =
             tokio::join!(diagnostics_request, inlay_request, semantic_request);
-
-        let diagnostics = diagnostics?
-            .into_iter()
-            .filter_map(|response| match response.response? {
-                proto::lsp_response::Response::GetDocumentDiagnosticsResponse(value) => Some(value),
-                _ => None,
-            })
-            .flat_map(|response| response.pulled_diagnostics)
-            .flat_map(|pulled| pulled.diagnostics)
-            .filter_map(|diagnostic| {
-                Some(LanguageDiagnostic {
-                    start: language_point(&diagnostic.start?),
-                    end: language_point(&diagnostic.end?),
-                    severity: diagnostic.severity,
-                    source: diagnostic.source,
-                    message: diagnostic.message,
-                })
-            })
-            .take(MAX_DIAGNOSTICS)
-            .collect();
-
-        let inlay_hints = inlay_hints?
+        diagnostics_ack?;
+        let cache = self.diagnostics.lock().expect("diagnostic cache poisoned");
+        let (diagnostics_state, diagnostics) = cache.read(buffer_id, revision)?;
+        let mut hints = Vec::new();
+        for mut hint in inlay_hints?
             .into_iter()
             .filter_map(|response| match response.response? {
                 proto::lsp_response::Response::InlayHintsResponse(value) => Some(value),
                 _ => None,
             })
             .flat_map(|response| response.hints)
-            .filter_map(language_inlay_hint)
             .take(MAX_INLAY_HINTS)
-            .collect();
+        {
+            let anchor = hint
+                .position
+                .as_mut()
+                .context("native inlay anchor missing")?;
+            anchor.offset = cache.anchor_offset(buffer_id, anchor)?;
+            if let Some(hint) = language_inlay_hint(hint) {
+                hints.push(hint);
+            }
+        }
 
         let semantic_tokens = semantic_tokens?
             .into_iter()
@@ -799,7 +816,12 @@ impl ZedRuntime {
             .take(MAX_SEMANTIC_TOKEN_WORDS)
             .collect();
 
-        Ok((diagnostics, inlay_hints, semantic_tokens))
+        Ok(LanguageObservation {
+            diagnostics_state,
+            diagnostics,
+            inlay_hints: hints,
+            semantic_tokens,
+        })
     }
 
     async fn hover(
@@ -932,19 +954,8 @@ impl ZedRuntime {
         &self,
         request: proto::lsp_query::Request,
     ) -> Result<Vec<proto::LspResponse>> {
-        let lsp_request_id = self.next_lsp_request_id.fetch_add(1, Ordering::Relaxed);
         let mut events = self.events.subscribe();
-        let response = self
-            .request(proto::envelope::Payload::LspQuery(proto::LspQuery {
-                project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                lsp_request_id,
-                server_id: None,
-                request: Some(request),
-            }))
-            .await?;
-        if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
-            bail!("Zed returned the wrong LspQuery acknowledgement");
-        }
+        let lsp_request_id = self.start_lsp_query(request).await?;
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 let envelope = events.recv().await?;
@@ -957,6 +968,22 @@ impl ZedRuntime {
         })
         .await
         .context("Zed language query timed out")?
+    }
+
+    async fn start_lsp_query(&self, request: proto::lsp_query::Request) -> Result<u64> {
+        let lsp_request_id = self.next_lsp_request_id.fetch_add(1, Ordering::Relaxed);
+        let response = self
+            .request(proto::envelope::Payload::LspQuery(proto::LspQuery {
+                project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                lsp_request_id,
+                server_id: None,
+                request: Some(request),
+            }))
+            .await?;
+        if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
+            bail!("Zed returned the wrong LspQuery acknowledgement");
+        }
+        Ok(lsp_request_id)
     }
 }
 
@@ -1142,6 +1169,7 @@ async fn read_messages(
     pending: PendingRequests,
     events: broadcast::Sender<proto::Envelope>,
     buffer_files: BufferFiles,
+    diagnostics: DiagnosticCache,
 ) {
     let next_message_id = AtomicU32::new(1_000_000_000);
     let next_worktree_id = AtomicU64::new(1);
@@ -1162,6 +1190,12 @@ async fn read_messages(
         };
         if std::env::var_os("COWBOY_ZED_TRACE").is_some() {
             eprintln!("Zed envelope: {envelope:?}");
+        }
+        if let Some(payload) = &envelope.payload {
+            diagnostics
+                .lock()
+                .expect("diagnostic cache poisoned")
+                .observe(payload);
         }
 
         if let Some(request_id) = envelope.responding_to
@@ -1354,19 +1388,19 @@ async fn buffer_language(
             .context("buffer is not open")?;
         (lease.remote_id, lease.version.clone())
     };
-    let (diagnostics, inlay_hints, semantic_tokens) = if let Some(zed) = zed {
+    let observation = if let Some(zed) = zed {
         zed.language(buffer_id, &version).await?
     } else {
-        (Vec::new(), Vec::new(), Vec::new())
+        LanguageObservation::default()
     };
     Ok(Response::BufferLanguage {
         api_version: ADAPTER_VERSION,
         worktree,
         path,
         version,
-        diagnostics,
-        inlay_hints,
-        semantic_tokens,
+        diagnostics: observation.diagnostics,
+        inlay_hints: observation.inlay_hints,
+        semantic_tokens: observation.semantic_tokens,
     })
 }
 

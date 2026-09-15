@@ -28,6 +28,7 @@ pub(super) enum ReadRequest {
 )]
 pub(super) enum ReadOutput {
     Language {
+        diagnostics_state: super::diagnostics::Status,
         diagnostics: Vec<super::LanguageDiagnostic>,
         inlay_hints: Vec<super::LanguageInlayHint>,
         semantic_tokens: Vec<u32>,
@@ -280,15 +281,16 @@ impl Registry {
             .context("original buffer owner is unavailable")?;
         let result = match request {
             ReadRequest::Language {} => {
-                let (diagnostics, inlay_hints, semantic_tokens) = if let Some(zed) = zed {
+                let observation = if let Some(zed) = zed {
                     zed.language(buffer.remote_id, &buffer.version).await?
                 } else {
-                    (Vec::new(), Vec::new(), Vec::new())
+                    super::LanguageObservation::default()
                 };
                 ReadOutput::Language {
-                    diagnostics,
-                    inlay_hints,
-                    semantic_tokens,
+                    diagnostics_state: observation.diagnostics_state,
+                    diagnostics: observation.diagnostics,
+                    inlay_hints: observation.inlay_hints,
+                    semantic_tokens: observation.semantic_tokens,
                 }
             }
             ReadRequest::Symbols {} => ReadOutput::Symbols {

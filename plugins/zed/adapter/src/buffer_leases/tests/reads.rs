@@ -134,8 +134,24 @@ async fn language_transport_failure_is_not_an_empty_success() {
         events: broadcast::channel(4).0,
         buffer_files: Arc::default(),
         worktree_paths: Arc::default(),
+        diagnostics: Arc::default(),
         next_message_id: AtomicU32::new(1),
         next_lsp_request_id: AtomicU64::new(1),
     };
+    zed.diagnostics
+        .lock()
+        .unwrap()
+        .observe(&proto::envelope::Payload::CreateBufferForPeer(
+            proto::CreateBufferForPeer {
+                variant: Some(proto::create_buffer_for_peer::Variant::State(
+                    proto::BufferState {
+                        id: 1,
+                        base_text: "fixture\n".into(),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
     assert!(zed.language(1, &[]).await.is_err());
 }

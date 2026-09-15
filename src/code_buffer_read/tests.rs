@@ -4,7 +4,7 @@ use serde_json::json;
 fn language() -> Value {
     json!({"type":"bufferLeaseRead", "api_version":1, "lease":"original",
         "opened_version":[{"replicaId":0,"timestamp":1}],
-        "result":{"kind":"language", "diagnostics":[{
+        "result":{"kind":"language", "diagnosticsState":"observed", "diagnostics":[{
             "start":{"row":0,"column":0}, "end":{"row":0,"column":3},
             "severity":1,"source":"fixture","message":"a diagnostic"}],
             "inlayHints":[{"offset":3,"label":"type","kind":null,"paddingLeft":false,"paddingRight":true}],
@@ -45,6 +45,8 @@ fn observation_codec_is_closed_and_does_not_accept_positions_or_authority() {
     for (pointer, replacement) in [
         ("/type", json!("bufferLanguage")),
         ("/api_version", json!(2)),
+        ("/result/diagnosticsState", json!("unobserved")),
+        ("/result/diagnosticsState", json!("invented")),
         ("/lease", json!("replacement")),
         ("/result/diagnostics/0/end/column", json!(-1)),
         ("/result/inlayHints/0/offset", json!(u64::MAX)),

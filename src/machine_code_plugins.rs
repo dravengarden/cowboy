@@ -569,7 +569,7 @@ mod tests {
                     let result = if request["request"]["kind"] == "symbols" {
                         json!({"kind":"symbols","symbols":[]})
                     } else {
-                        json!({"kind":"language","diagnostics":[{
+                        json!({"kind":"language","diagnosticsState":"observed","diagnostics":[{
                             "start":{"row":0,"column":0}, "end":{"row":0,"column":1},
                             "severity":1,"source":null,"message":generation}],
                             "inlayHints":[],"semanticTokens":[]})

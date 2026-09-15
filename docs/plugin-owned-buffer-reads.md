@@ -33,14 +33,31 @@ snapshot, an edit revision, a writer fence or a position certificate. Diagnostic
 ranges and symbol ranges are observations from the retained native buffer; this
 slice does not claim that several language servers observed one atomic version.
 
+Zed `1.13.0` acknowledges the diagnostic refresh trigger but sends diagnostics
+as buffer operations, not `LspQueryResponse`. The adapter now consumes those
+original-buffer events instead of timing out waiting for a nonexistent reply.
+`result.diagnosticsState` is `unobserved` until a diagnostic update is actually
+received, or `observed` after one (including an explicitly empty update). This
+is the last observation, not proof that an asynchronous refresh completed.
+Per-server Lamport stamps reject older diagnostic updates.
+
+Anchor conversion uses only a bounded native base-text snapshot. Any edit or
+undo invalidates it; language reads then fail closed instead of converting
+against current disk text. Foreign, unsupported-revision and split-UTF-8
+anchors also fail. Symbol queries use native UTF-16 results and do not require
+this base-anchor conversion. Full edited-buffer coordinate support is still
+unfinished; no automatic close/reopen or lease replacement is performed.
+
 Hover/navigation are deliberately rejected by this new protocol. The old
 implementation converts UTF-16 coordinates using current filesystem text and
 then builds an anchor in Zed's original base insertion. Simply attaching a
 buffer handle or comparing the old vector would not make those coordinates
 correct after edits. A later positional reader needs actual native content /
 anchor ownership and version semantics, including navigation destinations.
-The legacy Review endpoints remain unchanged except that language transport
-failures now propagate instead of masquerading as successful empty results.
+The legacy Review request/response shapes remain unchanged. Their language
+implementation gains the same native diagnostic cache, conservative anchor
+checks and transport-error propagation; only the new owned response exposes
+the explicit `diagnosticsState` observation label.
 
 ## Three retained lifetimes
 
@@ -81,6 +98,11 @@ words in complete groups of five, 2,000 total symbols with depth at most 16,
 and 64 KiB per text value. Ranges and inlay offsets are validated. Limits reject
 bad observations; they never claim a successful empty result or successful
 cleanup. The existing transport/frame bounds remain independent.
+Native snapshots are capped at 1,024 buffers, 4 MiB text per buffer and 32 MiB
+total text; diagnostic strings at 1 MiB per buffer and 8 MiB total, with at most
+32 servers per buffer. Unused diagnostic protocol fields are not retained.
+Native close removes the snapshot; limits or invalid coordinates never evict
+or release the underlying buffer owner.
 
 Source tests cover nonempty codec vectors, wrong owners/kinds, unknown fields,
 size/depth bounds, old-host refusal, Session ABA, reconnect, cancellation, busy

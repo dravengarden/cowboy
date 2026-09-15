@@ -45,7 +45,7 @@ async fn probe(fixture: &mut Fixture) {
 
 fn result(kind: &str) -> Value {
     let result = if kind == "language" {
-        json!({"kind":"language","diagnostics":[],"inlayHints":[],"semanticTokens":[]})
+        json!({"kind":"language","diagnosticsState":"unobserved","diagnostics":[],"inlayHints":[],"semanticTokens":[]})
     } else {
         json!({"kind":"symbols","symbols":[]})
     };
