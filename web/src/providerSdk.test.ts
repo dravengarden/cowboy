@@ -19,6 +19,7 @@ import {
   validateProviderContractInventory,
   validateProviderManifest,
   validateProviderUiManifest,
+  validateProviderUiPresentation,
 } from "@cowboy/provider-ui";
 import {
   currentProviderEntry,
@@ -1253,13 +1254,15 @@ Deno.test("Catalog refresh publishes new recommendations without racing foregrou
   const unsubscribe = subscribeProviderCatalog(() => notifications++);
   globalThis.fetch = () => {
     requests++;
-    return Promise.resolve(unavailable
-      ? new Response("Service recovering", { status: 503 })
-      : Response.json({
-        providers: [entry(published)],
-        authentications: [],
-        authentication_executors: [],
-      }));
+    return Promise.resolve(
+      unavailable
+        ? new Response("Service recovering", { status: 503 })
+        : Response.json({
+          providers: [entry(published)],
+          authentications: [],
+          authentication_executors: [],
+        }),
+    );
   };
   try {
     await loadProviderCatalog(true);
@@ -1280,11 +1283,40 @@ Deno.test("Catalog refresh publishes new recommendations without racing foregrou
     );
 
     unavailable = true;
-    await assertRejects(() => loadProviderCatalog(true), Error, "Service recovering");
+    await assertRejects(
+      () => loadProviderCatalog(true),
+      Error,
+      "Service recovering",
+    );
     assertEquals(currentProviderEntry("example")?.provider_version, "1.1.0");
     assertEquals(notifications, 2);
   } finally {
     unsubscribe();
     globalThis.fetch = previousFetch;
   }
+});
+
+Deno.test("a retained older-SDK generation still renders but never installs", () => {
+  // macbook-air ran claude-code 1.1.2, authored against Provider SDK 2.4.0.
+  // Refusing to draw it turned the whole application into an error screen.
+  const retained = uiManifest() as unknown as Record<string, unknown>;
+  retained.sdk_version = "2.4.0";
+
+  assertThrows(
+    () => validateProviderUiManifest(retained),
+    Error,
+    "is incompatible with Cowboy Provider SDK",
+  );
+  // Presentation must survive the same manifest.
+  validateProviderUiPresentation(retained);
+
+  // Leniency is limited to the SDK major. An unreadable surface schema is
+  // still refused, so this does not become a way to render anything.
+  const unsupportedHost = uiManifest() as unknown as Record<string, unknown>;
+  (unsupportedHost.host as Record<string, unknown>).schema_version = 99;
+  assertThrows(
+    () => validateProviderUiPresentation(unsupportedHost),
+    Error,
+    "Invalid Provider manifest envelope",
+  );
 });

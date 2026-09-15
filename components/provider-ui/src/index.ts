@@ -1462,6 +1462,24 @@ export function validateProviderUiManifest(
   validateProviderUiManifestContract(input, true);
 }
 
+/** Presentation-mode validation for a package this Cowboy still has to draw.
+ *
+ * Catalog history deliberately retains packages authored by an older SDK major,
+ * and a Machine's installed generation is deliberately rendered from its exact
+ * manifest rather than a newer one. Refusing to render them is not a safety
+ * property: it turns a stale Machine into a blank application. SDK-major
+ * compatibility gates installation and runtime instead, through
+ * `validateProviderManifest` and the compatibility report.
+ *
+ * Every other envelope rule still applies, including the supported data-only
+ * UI and host schema versions, so an unreadable surface is still rejected.
+ */
+export function validateProviderUiPresentation(
+  input: unknown,
+): asserts input is ProviderUiManifest {
+  validateProviderUiManifestContract(input, false);
+}
+
 function validateProviderUiManifestContract(
   input: unknown,
   enforceSdkCompatibility: boolean,

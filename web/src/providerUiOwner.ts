@@ -10,7 +10,7 @@ import {
   type SurfaceSlot,
   transitionProvider,
   type UiNode,
-  validateProviderUiManifest,
+  validateProviderUiPresentation,
 } from "@cowboy/provider-ui";
 import { createOwnedResourceScope } from "@cowboy/state-store/scope";
 
@@ -90,7 +90,9 @@ export function createProviderUiOwner(
   slot: SurfaceSlot,
 ) {
   const manifest = structuredClone(input);
-  validateProviderUiManifest(manifest);
+  // A retained older-SDK generation must still draw; installation and runtime
+  // compatibility are gated elsewhere.
+  validateProviderUiPresentation(manifest);
   freezeData(manifest);
   const scope = createOwnedResourceScope();
   const observation: ProviderUiObservation = Object.freeze({
