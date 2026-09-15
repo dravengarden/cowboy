@@ -29,13 +29,13 @@ not an authorization decision.
 
 ## Principle
 
-Move the authority for unattended delivery from *who is logged in* to *what is
-signed* and *what policy declares*. Every layer below keeps a verifiable
+Move the authority for unattended delivery from _who is logged in_ to _what is
+signed_ and _what policy declares_. Every layer below keeps a verifiable
 authority and a recorded actor; none of them removes one.
 
 An unauthenticated installation endpoint is explicitly rejected as a design: it
 would let anything that can reach the Controller place arbitrary executables on
-every enrolled Machine. The goal is no *human interaction*, not no *authority*.
+every enrolled Machine. The goal is no _human interaction_, not no _authority_.
 
 ## Layer 1 — Catalog watch (implemented)
 
@@ -135,8 +135,8 @@ creates a replacement grant. `not_before` / `not_after` bound replay.
 ## Attribution
 
 `Actor` in `src/plugin_operation.rs` is a closed enum serialized into
-installation and uninstall intents and into the operation journal. Layers 2 and 3
-each need a variant, or the audit chain breaks:
+installation and uninstall intents and into the operation journal. Layers 2 and
+3 each need a variant, or the audit chain breaks:
 
 ```rust
 Actor::Policy   { source: String },   // "host:/var/lib/cowboy/deployment-policy.json"
