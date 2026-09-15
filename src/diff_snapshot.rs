@@ -6,6 +6,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::code_review::{DiffDocument, DiffScope};
+use crate::core::CodeReadScope;
 
 const DEFAULT_PAGE_BYTES: usize = 256 * 1024;
 const DEFAULT_MAX_BYTES: usize = 48 * 1024 * 1024;
@@ -14,8 +15,7 @@ const DEFAULT_TTL: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiffSnapshotKey {
-    pub session_id: String,
-    pub cwd: String,
+    pub owner: CodeReadScope,
     pub path: String,
     pub context: usize,
     pub show_whitespace: bool,
@@ -24,6 +24,8 @@ pub struct DiffSnapshotKey {
 
 #[derive(Debug)]
 pub struct DiffSnapshot {
+    // Cursor identity belongs to this cache entry, not to its content digest.
+    cursor_id: String,
     pub path: String,
     pub revision: String,
     pub text: String,
@@ -117,6 +119,7 @@ impl DiffSnapshotCache {
                 generate().await.map(|document| {
                     let revision = format!("{:x}", Sha256::digest(document.text.as_bytes()));
                     Arc::new(DiffSnapshot {
+                        cursor_id: format!("{:x}", Sha256::digest(rand::random::<[u8; 32]>())),
                         path: document.path,
                         revision,
                         text: document.text,
@@ -135,18 +138,18 @@ impl DiffSnapshotCache {
         Ok(self.page(&snapshot, 0))
     }
 
-    pub async fn next_page(&self, session_id: &str, cursor: &str) -> Result<DiffPage, String> {
-        let (revision, offset) = parse_cursor(cursor)?;
+    pub async fn next_page(&self, owner: &CodeReadScope, cursor: &str) -> Result<DiffPage, String> {
+        let (cursor_id, offset) = parse_cursor(cursor)?;
         let snapshot = {
             let mut inner = self.inner.lock().await;
             self.prune(&mut inner, Instant::now());
             let Some(entry) = inner.entries.iter_mut().find(|entry| {
-                entry.key.session_id == session_id
+                &entry.key.owner == owner
                     && entry
                         .cell
                         .get()
                         .and_then(|result| result.as_ref().ok())
-                        .is_some_and(|snapshot| snapshot.revision == revision)
+                        .is_some_and(|snapshot| snapshot.cursor_id == cursor_id)
             }) else {
                 return Err("diff snapshot expired".to_owned());
             };
@@ -158,7 +161,7 @@ impl DiffSnapshotCache {
                 .cloned()
                 .ok_or_else(|| "diff snapshot unavailable".to_owned())?
         };
-        if offset == 0 || offset >= snapshot.text.len() {
+        if offset == 0 || offset >= snapshot.text.len() || !snapshot.text.is_char_boundary(offset) {
             return Err("invalid diff cursor".to_owned());
         }
         Ok(self.page(&snapshot, offset))
@@ -184,7 +187,7 @@ impl DiffSnapshotCache {
             }
         }
         let next_cursor =
-            (end < snapshot.text.len()).then(|| format!("{}:{end}", snapshot.revision));
+            (end < snapshot.text.len()).then(|| format!("{}:{end}", snapshot.cursor_id));
         DiffPage {
             path: snapshot.path.clone(),
             revision: snapshot.revision.clone(),
@@ -239,7 +242,7 @@ fn parse_cursor(cursor: &str) -> Result<(&str, usize), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DiffSnapshotCache, DiffSnapshotKey};
+    use super::{CodeReadScope, DiffSnapshotCache, DiffSnapshotKey};
     use crate::code_review::{DiffDocument, DiffScope};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -247,12 +250,20 @@ mod tests {
 
     fn key(path: &str) -> DiffSnapshotKey {
         DiffSnapshotKey {
-            session_id: "session".to_owned(),
-            cwd: "/work".to_owned(),
+            owner: owner(),
             path: path.to_owned(),
             context: 6,
             show_whitespace: true,
             scope: DiffScope::Unstaged,
+        }
+    }
+
+    fn owner() -> CodeReadScope {
+        CodeReadScope::Workspace {
+            service_id: "service-test".to_owned(),
+            machine_id: "machine-test".to_owned(),
+            workspace_id: "workspace-test".to_owned(),
+            cwd: "/work".to_owned(),
         }
     }
 
@@ -304,12 +315,20 @@ mod tests {
         let mut cursor = first.next_cursor;
         assert!(
             cache
-                .next_page("other-session", cursor.as_deref().unwrap())
+                .next_page(
+                    &CodeReadScope::Workspace {
+                        service_id: "other-service".to_owned(),
+                        machine_id: "machine-test".to_owned(),
+                        workspace_id: "workspace-test".to_owned(),
+                        cwd: "/work".to_owned(),
+                    },
+                    cursor.as_deref().unwrap()
+                )
                 .await
                 .is_err()
         );
         while let Some(next) = cursor {
-            let page = cache.next_page("session", &next).await.unwrap();
+            let page = cache.next_page(&owner(), &next).await.unwrap();
             text.push_str(&page.text);
             cursor = page.next_cursor;
         }
@@ -326,7 +345,162 @@ mod tests {
         assert!(first.text.ends_with('\n'));
         assert!(
             cache
-                .next_page("session", first.next_cursor.as_deref().unwrap())
+                .next_page(&owner(), first.next_cursor.as_deref().unwrap())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn equal_content_in_different_files_does_not_alias_cursors() {
+        let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
+        let first = cache
+            .first_page(key("a.rs"), || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        let second = cache
+            .first_page(key("b.rs"), || async { Ok(document("b.rs", 20)) })
+            .await
+            .unwrap();
+        assert_eq!(first.revision, second.revision);
+        let page = cache
+            .next_page(&owner(), second.next_cursor.as_deref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(page.path, "b.rs");
+    }
+
+    #[tokio::test]
+    async fn cursor_inside_utf8_codepoint_is_refused_without_panicking() {
+        let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
+        let first = cache
+            .first_page(key("a.rs"), || async {
+                let mut document = document("a.rs", 20);
+                document.text = "界".repeat(40);
+                Ok(document)
+            })
+            .await
+            .unwrap();
+        let (identity, _) = first
+            .next_cursor
+            .as_deref()
+            .unwrap()
+            .rsplit_once(':')
+            .unwrap();
+        assert_eq!(
+            cache
+                .next_page(&owner(), &format!("{identity}:1"))
+                .await
+                .unwrap_err(),
+            "invalid diff cursor"
+        );
+    }
+
+    #[tokio::test]
+    async fn each_workspace_identity_axis_is_required_for_cursor_reads() {
+        let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
+        let first = cache
+            .first_page(key("a.rs"), || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        let cursor = first.next_cursor.unwrap();
+        for axis in 0..4 {
+            let mut changed = owner();
+            let CodeReadScope::Workspace {
+                service_id,
+                machine_id,
+                workspace_id,
+                cwd,
+            } = &mut changed
+            else {
+                unreachable!()
+            };
+            match axis {
+                0 => *service_id = "other".into(),
+                1 => *machine_id = "other".into(),
+                2 => *workspace_id = "other".into(),
+                3 => *cwd = "/other".into(),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                cache.next_page(&changed, &cursor).await.unwrap_err(),
+                "diff snapshot expired"
+            );
+        }
+        assert!(cache.next_page(&owner(), &cursor).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_new_entry_with_identical_bytes_never_revives_an_evicted_cursor() {
+        let cache = DiffSnapshotCache::new(24, 1024, 1, Duration::from_secs(60));
+        let first = cache
+            .first_page(key("a.rs"), || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        cache
+            .first_page(key("b.rs"), || async { Ok(document("b.rs", 20)) })
+            .await
+            .unwrap();
+        let fresh = cache
+            .first_page(key("a.rs"), || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        assert_eq!(first.revision, fresh.revision);
+        assert_ne!(first.next_cursor, fresh.next_cursor);
+        assert_eq!(
+            cache
+                .next_page(&owner(), first.next_cursor.as_deref().unwrap())
+                .await
+                .unwrap_err(),
+            "diff snapshot expired"
+        );
+        assert!(
+            cache
+                .next_page(&owner(), fresh.next_cursor.as_deref().unwrap())
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn session_retarget_and_recreation_do_not_reuse_cached_pages() {
+        let hub = crate::core::Hub::new();
+        let create = || {
+            hub.create_local_session(
+                "session".into(),
+                "codex".into(),
+                "/work".into(),
+                "title".into(),
+                crate::core::SessionOrigin::default(),
+                false,
+            )
+        };
+        create();
+        let original = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        let mut snapshot_key = key("a.rs");
+        snapshot_key.owner = original.clone();
+        let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
+        let first = cache
+            .first_page(snapshot_key, || async { Ok(document("a.rs", 20)) })
+            .await
+            .unwrap();
+        hub.update_session_cwd("session", "/other".into()).unwrap();
+        hub.update_session_cwd("session", "/work".into()).unwrap();
+        let retargeted = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        assert_ne!(original, retargeted);
+        assert!(
+            cache
+                .next_page(&retargeted, first.next_cursor.as_deref().unwrap())
+                .await
+                .is_err()
+        );
+        hub.delete_session("session");
+        create();
+        let recreated = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        assert_ne!(retargeted, recreated);
+        assert!(
+            cache
+                .next_page(&recreated, first.next_cursor.as_deref().unwrap())
                 .await
                 .is_err()
         );

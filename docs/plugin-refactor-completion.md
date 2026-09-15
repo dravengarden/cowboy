@@ -40,6 +40,13 @@ and accepting a production effect are different milestones.
   passed all 807 immutable role checks and is active with Machine and all 15
   observed workers retained. This does not resolve Workspace/Session scopes,
   grant state ownership or authorize a graph.
+- [Finite code-read scopes](plugin-code-read-scopes.md) carry exact process-local
+  Session incarnations through Zed requests/replies and diff pagination; cwd
+  ABA and delete/recreate cannot revive them. Advertised Workspace snapshots
+  include Service/Machine/workspace/path. Per-entry diff cursor identities
+  prevent equal-content aliases and unsafe UTF-8 slicing. This does not fence
+  all Code effects, supply continuous Workspace or filesystem identity, grant
+  state authority or accept a native generation.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -91,7 +98,7 @@ and accepting a production effect are different milestones.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks and telemetry resolution to applicable graph contracts, Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site and telemetry installation fences and shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |

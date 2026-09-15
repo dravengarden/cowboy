@@ -26,6 +26,9 @@ use tokio::sync::{broadcast, mpsc};
 use crate::persistence::EventReducer;
 use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
+mod code_scope;
+pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
+
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
 pub const SNAPSHOT_TAIL: usize = 200;
@@ -589,6 +592,8 @@ pub struct SessionInfo {
 /// Per-session state: metadata + the seq-ordered event log.
 struct Session {
     meta: SessionMeta,
+    // A Controller-local observation lifetime, not the native worker lifetime.
+    code_incarnation: code_scope::CodeIncarnation,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -2069,6 +2074,7 @@ impl Hub {
                     id.clone(),
                     Session {
                         meta,
+                        code_incarnation: code_scope::CodeIncarnation::default(),
                         log,
                         log_bytes,
                         event_count,
@@ -2545,6 +2551,7 @@ impl Hub {
                 id.clone(),
                 Session {
                     meta: meta.clone(),
+                    code_incarnation: code_scope::CodeIncarnation::default(),
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,
@@ -3414,6 +3421,7 @@ impl Hub {
             let title = (session.meta.title == default_title)
                 .then(|| format!("{} · {cwd}", session.meta.provider));
             session.meta.cwd.clone_from(&cwd);
+            session.code_incarnation = code_scope::CodeIncarnation::default();
             if let Some(title) = &title {
                 session.meta.title.clone_from(title);
             }

@@ -41,8 +41,9 @@ use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
-    DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound, PersistenceHealth,
-    RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite, project_sync_value,
+    CodeReadScope, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound,
+    PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
+    project_sync_value,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
@@ -15285,29 +15286,42 @@ fn validate_zed_adapter_response(
 
 async fn zed_adapter_request_for_session(
     state: &AppState,
-    session_id: &str,
+    context: &ResolvedCodeContext,
     request: serde_json::Value,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    let machine_id = state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == session_id)
-        .map(|meta| meta.machine_id)
-        .context("unknown session")?;
-    if machine_id == "local" {
-        let socket = state
-            .zed_adapter_socket
-            .as_deref()
-            .context("local Zed adapter is not configured")?;
-        return zed_adapter_request(socket, request).await;
-    }
-    let value = state
-        .machine_control
-        .adapter_request(&machine_id, "zed", request)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    validate_zed_adapter_response(serde_json::from_value(value)?)
+    let CodeReadScope::Session(scope) = &context.scope else {
+        anyhow::bail!("language request requires a Session scope");
+    };
+    zed_request_in_scope(
+        &state.hub,
+        &state.machine_control,
+        state.zed_adapter_socket.as_deref(),
+        scope,
+        request,
+    )
+    .await
+}
+
+async fn zed_request_in_scope(
+    hub: &Hub,
+    control: &MachineControl,
+    local_socket: Option<&FsPath>,
+    scope: &crate::core::SessionCodeScope,
+    request: serde_json::Value,
+) -> anyhow::Result<ZedAdapterResponse> {
+    anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
+    let response = if scope.machine_id() == "local" {
+        let socket = local_socket.context("local Zed adapter is not configured")?;
+        zed_adapter_request(socket, request).await?
+    } else {
+        let value = control
+            .adapter_request(scope.machine_id(), "zed", request)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        validate_zed_adapter_response(serde_json::from_value(value)?)?
+    };
+    anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
+    Ok(response)
 }
 
 async fn remote_code_request(
@@ -15344,12 +15358,12 @@ async fn remote_code_request(
 
 async fn ensure_zed_worktree_for_session(
     state: &AppState,
-    session_id: &str,
+    context: &ResolvedCodeContext,
     cwd: &str,
 ) -> anyhow::Result<bool> {
     match zed_adapter_request_for_session(
         state,
-        session_id,
+        context,
         serde_json::json!({
             "type": "ensureWorktree",
             "path": cwd,
@@ -15659,7 +15673,7 @@ const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
 struct ResolvedCodeContext {
     machine_id: String,
     cwd: String,
-    session_id: Option<String>,
+    scope: CodeReadScope,
 }
 
 fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
@@ -15704,25 +15718,35 @@ async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCode
             .into_iter()
             .find(|workspace| workspace.id == workspace_id)?;
         return Some(ResolvedCodeContext {
+            scope: CodeReadScope::Workspace {
+                service_id: state.service_id.clone(),
+                machine_id: machine.id.clone(),
+                workspace_id: workspace.id,
+                cwd: workspace.canonical_path.clone(),
+            },
             machine_id: machine.id,
             cwd: workspace.canonical_path,
-            session_id: None,
         });
     }
     session_code_context(state, id)
 }
 
 fn session_code_context(state: &AppState, session_id: &str) -> Option<ResolvedCodeContext> {
-    state
-        .hub
-        .session_list()
-        .into_iter()
-        .find(|meta| meta.id == session_id)
-        .map(|meta| ResolvedCodeContext {
-            machine_id: meta.machine_id,
-            cwd: meta.cwd,
-            session_id: Some(meta.id),
-        })
+    let scope = state.hub.session_code_scope(session_id)?;
+    Some(ResolvedCodeContext {
+        machine_id: scope.machine_id().to_owned(),
+        cwd: scope.cwd().to_owned(),
+        scope: CodeReadScope::Session(scope),
+    })
+}
+
+async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadScope) -> bool {
+    match scope {
+        CodeReadScope::Session(scope) => state.hub.code_scope_is_current(scope),
+        CodeReadScope::Workspace { .. } => resolve_code_context(state, id)
+            .await
+            .is_some_and(|current| &current.scope == scope),
+    }
 }
 
 async fn api_code_manifest(
@@ -15733,9 +15757,9 @@ async fn api_code_manifest(
     let Some(context) = resolve_code_context(&state, &session_id).await else {
         return (StatusCode::NOT_FOUND, "unknown code context").into_response();
     };
-    let cwd = context.cwd;
-    let language_ready = if context.session_id.is_some() {
-        match ensure_zed_worktree_for_session(&state, &session_id, &cwd).await {
+    let cwd = context.cwd.clone();
+    let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
+        match ensure_zed_worktree_for_session(&state, &context, &cwd).await {
             Ok(ready) => ready,
             Err(error) => {
                 tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
@@ -16028,8 +16052,16 @@ async fn api_code_diff(
     Path(session_id): Path<String>,
     Query(query): Query<CodeDiffQuery>,
 ) -> Response {
+    let Some(context) = resolve_code_context(&state, &session_id).await else {
+        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
+    };
+    let owner = context.scope;
     if let Some(cursor) = query.cursor.as_deref() {
-        return match state.diff_snapshots.next_page(&session_id, cursor).await {
+        let page = state.diff_snapshots.next_page(&owner, cursor).await;
+        if !code_context_is_current(&state, &session_id, &owner).await {
+            return (StatusCode::GONE, "code context changed").into_response();
+        }
+        return match page {
             Ok(page) => Json(CodeDiffResponse {
                 api_version: 1,
                 path: page.path,
@@ -16048,9 +16080,6 @@ async fn api_code_diff(
             Err(error) => (StatusCode::BAD_REQUEST, error).into_response(),
         };
     }
-    let Some(context) = resolve_code_context(&state, &session_id).await else {
-        return (StatusCode::NOT_FOUND, "unknown code context").into_response();
-    };
     let cwd = context.cwd;
     let Some(path) = query.path else {
         return (StatusCode::BAD_REQUEST, "path is required").into_response();
@@ -16061,8 +16090,7 @@ async fn api_code_diff(
         CodeDiffScope::Unstaged => crate::code_review::DiffScope::Unstaged,
     };
     let key = DiffSnapshotKey {
-        session_id: session_id.clone(),
-        cwd: cwd.clone(),
+        owner: owner.clone(),
         path: path.clone(),
         context: query.context,
         show_whitespace: query.show_whitespace,
@@ -16106,6 +16134,9 @@ async fn api_code_diff(
             .map_err(|error| error.to_string())?
         })
         .await;
+    if !code_context_is_current(&state, &session_id, &owner).await {
+        return (StatusCode::GONE, "code context changed").into_response();
+    }
     let Ok(page) = page else {
         return (StatusCode::BAD_REQUEST, "diff unavailable").into_response();
     };
@@ -16368,7 +16399,7 @@ async fn api_code_language(
     };
     match zed_adapter_request_for_session(
         &state,
-        &session_id,
+        &context,
         serde_json::json!({
             "type": "bufferLanguage",
             "worktree": worktree,
@@ -16427,7 +16458,7 @@ async fn api_code_hover(
     };
     match zed_adapter_request_for_session(
         &state,
-        &session_id,
+        &context,
         serde_json::json!({
             "type": "bufferHover",
             "worktree": worktree,
@@ -16478,7 +16509,7 @@ async fn api_code_navigation(
     };
     match zed_adapter_request_for_session(
         &state,
-        &session_id,
+        &context,
         serde_json::json!({
             "type": "bufferNavigate",
             "worktree": worktree,
@@ -16532,7 +16563,7 @@ async fn api_code_outline(
     };
     match zed_adapter_request_for_session(
         &state,
-        &session_id,
+        &context,
         serde_json::json!({
             "type": "bufferSymbols",
             "worktree": worktree,
@@ -16597,7 +16628,7 @@ async fn api_code_buffer_lease(
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
     if open
-        && ensure_zed_worktree_for_session(&state, &session_id, &worktree)
+        && ensure_zed_worktree_for_session(&state, &context, &worktree)
             .await
             .is_err()
     {
@@ -16609,7 +16640,7 @@ async fn api_code_buffer_lease(
     }
     let response = zed_adapter_request_for_session(
         &state,
-        &session_id,
+        &context,
         serde_json::json!({
             "type": if open { "openBuffer" } else { "closeBuffer" },
             "worktree": worktree,
@@ -19077,6 +19108,8 @@ mod code_tree_cache_tests {
 mod zed_adapter_tests {
     use super::*;
     use tokio::net::UnixListener;
+
+    mod scope;
 
     fn test_socket(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
