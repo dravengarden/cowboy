@@ -46,7 +46,9 @@ and accepting a production effect are different milestones.
   include Service/Machine/workspace/path. Per-entry diff cursor identities
   prevent equal-content aliases and unsafe UTF-8 slicing. This does not fence
   all Code effects, supply continuous Workspace or filesystem identity, grant
-  state authority or accept a native generation.
+  state authority or accept a native generation. Its
+  [Controller release](releases/plugin-code-read-scopes-2026-09-15.md) passed the
+  complete gate and is active with all 15 observed workers retained.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

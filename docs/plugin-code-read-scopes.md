@@ -62,8 +62,9 @@ Two regression tests failed before the repair: equal-content files returned the
 wrong path on continuation, and a non-character-boundary offset panicked. The
 expanded source gate covers all Workspace identity axes, Session cwd ABA,
 delete/recreate, independent Hubs/Sessions, metadata drift, cache eviction,
-coalescing, exact page reconstruction, and real local sockets/authenticated
-Machine channels with a scope change while waiting for the reply.
+coalescing, exact page reconstruction, real local Unix sockets and fixture
+channels in the authenticated Machine registry, with a scope change while
+waiting for the reply.
 
 This does not revoke or compensate a Zed effect already dispatched, release a
 pre-existing buffer on a retargeted workspace, atomically fence all Machine
@@ -74,3 +75,7 @@ general state leases and independent post-effect/native recovery remain in the
 [completion ledger](plugin-refactor-completion.md). Tests use disposable state
 and synthetic transport replies, not a production login or native-generation
 acceptance.
+
+The [Controller release](releases/plugin-code-read-scopes-2026-09-15.md) passed
+the complete pinned gate, was published and activated, and retained all 15
+observed workers, Machine and Victoria during the bounded deployment window.
