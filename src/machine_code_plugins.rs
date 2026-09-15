@@ -20,6 +20,8 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+mod buffer_leases;
+
 const MAX_CODE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKTREE_ROUTES: usize = 4096;
 
@@ -56,6 +58,7 @@ struct WorktreeRoute {
     target: Option<CodeTarget>,
     worktree_leases: u64,
     buffers: BTreeSet<(String, String)>,
+    owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
 }
 
 impl WorktreeRoute {
@@ -89,8 +92,11 @@ impl WorktreeRoute {
         Ok(matches!(
             request["type"].as_str(),
             Some("closeBuffer" | "closeWorktree")
-        ) && self.worktree_leases == 0
-            && self.buffers.is_empty())
+        ) && self.is_idle())
+    }
+
+    fn is_idle(&self) -> bool {
+        self.worktree_leases == 0 && self.buffers.is_empty() && self.owned_buffers.is_empty()
     }
 }
 
@@ -98,6 +104,7 @@ impl WorktreeRoute {
 pub(crate) struct CodeRuntimeHost {
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
+    buffer_leases: buffer_leases::Routes,
 }
 
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
@@ -119,6 +126,16 @@ impl CodeRuntimeHost {
         payload: &Value,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
+        let reservation = match buffer_leases::Command::parse(payload)? {
+            Some(command) if command.is_prepare() => Some(self.buffer_leases.reserve().await?),
+            Some(command) => {
+                return self
+                    .buffer_leases
+                    .request(plugin_id, command, payload)
+                    .await;
+            }
+            None => None,
+        };
         let Some(worktree) = request_worktree(payload)? else {
             let target = self.target(select()?).await?;
             return exchange(target.socket(), payload).await;
@@ -140,6 +157,7 @@ impl CodeRuntimeHost {
             );
             Arc::clone(routes.entry(key).or_default())
         };
+        let retained_route = Arc::clone(&route);
         let mut route = route.lock().await;
         if route.target.is_none() {
             route.target = Some(self.target(select()?).await?);
@@ -148,13 +166,22 @@ impl CodeRuntimeHost {
             .target
             .as_ref()
             .context("code runtime route disappeared")?;
+        if reservation.is_some() && matches!(target, CodeTarget::Legacy(_)) {
+            bail!("owned buffer leases require an installed Code Plugin generation");
+        }
         if let CodeTarget::Installed(runtime) = target
-            && runtime.child.lock().try_wait()?.is_some()
+            && !runtime.is_running()?
         {
             // Runtime death loses its protocol state. Report the loss; never
             // replay a stateful request against a replacement or legacy CLI.
             *route = WorktreeRoute::default();
             bail!("code runtime exited; reopen the worktree before retrying");
+        }
+        if let Some(reservation) = reservation {
+            return self
+                .buffer_leases
+                .prepare(plugin_id, reservation, retained_route, &mut route, payload)
+                .await;
         }
         let response = exchange(target.socket(), payload).await?;
         if route.observe(payload, &response)? {
@@ -238,7 +265,7 @@ impl Drop for PrivateRuntimeDirectory {
 
 struct RunningCodeRuntime {
     child: parking_lot::Mutex<Child>,
-    process_group: Option<PluginProcessGroup>,
+    process_group: parking_lot::Mutex<Option<PluginProcessGroup>>,
     socket: PathBuf,
     _directory: PrivateRuntimeDirectory,
 }
@@ -258,7 +285,7 @@ impl RunningCodeRuntime {
         let process_id = child.id().context("code runtime has no process id")?;
         let runtime = Self {
             child: parking_lot::Mutex::new(child),
-            process_group: Some(PluginProcessGroup::new(process_id)),
+            process_group: parking_lot::Mutex::new(Some(PluginProcessGroup::new(process_id))),
             socket,
             _directory: directory,
         };
@@ -283,7 +310,7 @@ impl RunningCodeRuntime {
             "installed code runtime failed readiness"
         );
         ensure!(
-            runtime.child.lock().try_wait()?.is_none(),
+            runtime.is_running()?,
             "code runtime exited during readiness"
         );
         Ok(runtime)
@@ -296,8 +323,19 @@ impl RunningCodeRuntime {
         let _ = self.child.get_mut().wait().await;
     }
 
+    fn is_running(&self) -> Result<bool> {
+        if self.child.lock().try_wait()?.is_none() {
+            return Ok(true);
+        }
+        // Retained unknown lease evidence must not keep an exited adapter's
+        // descendants alive. Consume only this runtime's original group owner,
+        // once; later observations and final Drop cannot signal it again.
+        self.process_group.lock().take();
+        Ok(false)
+    }
+
     fn kill_group(&mut self) {
-        self.process_group.take();
+        self.process_group.get_mut().take();
     }
 }
 
@@ -408,7 +446,7 @@ mod tests {
     use serde_json::json;
     use std::io::{BufRead as _, Write as _};
 
-    fn fixture_plan(root: &Path, generation: &str) -> CodeLaunchPlan {
+    pub(super) fn fixture_plan(root: &Path, generation: &str) -> CodeLaunchPlan {
         let arguments = |phase: &str| {
             vec![
                 CodeRuntimeArgument::Literal {
@@ -499,6 +537,8 @@ mod tests {
             .iter()
             .find(|arg| arg.starts_with("generation-"))
             .unwrap();
+        let mut owned = BTreeMap::new();
+        let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
             let mut line = String::new();
@@ -507,6 +547,67 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if matches!(
+                kind,
+                "prepareBuffer" | "openBufferLease" | "queryBufferLease" | "releaseBufferLease"
+            ) {
+                let lease = if kind == "prepareBuffer" {
+                    next_lease += 1;
+                    let id = format!("{next_lease:016x}");
+                    owned.insert(id.clone(), "prepared");
+                    json!({"instance":format!("{:032x}", std::process::id()), "id":id})
+                } else {
+                    request["lease"].clone()
+                };
+                let id = lease["id"].as_str().unwrap();
+                if kind == "prepareBuffer" && generation == "generation-pause-prepare" {
+                    fs::write(home.join("prepare-requested"), "ready").unwrap();
+                    for _ in 0..500 {
+                        if home.join("resume-prepare").exists() {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    assert!(
+                        home.join("resume-prepare").exists(),
+                        "fixture preparation never resumed"
+                    );
+                }
+                if kind == "openBufferLease" {
+                    owned.insert(id.to_owned(), "open");
+                    if generation == "generation-lost" {
+                        continue;
+                    }
+                    if generation == "generation-paused" {
+                        fs::write(home.join("open-requested"), "ready").unwrap();
+                        for _ in 0..500 {
+                            if home.join("resume-open").exists() {
+                                break;
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        assert!(
+                            home.join("resume-open").exists(),
+                            "fixture open never resumed"
+                        );
+                    }
+                }
+                if kind == "releaseBufferLease" {
+                    owned.insert(id.to_owned(), "released");
+                    if generation == "generation-lost-close" {
+                        continue;
+                    }
+                }
+                let mut response = json!({"type":"bufferLease", "api_version":1, "lease":lease, "state":owned[id]});
+                if generation == "generation-mismatch" && kind == "releaseBufferLease" {
+                    response["lease"]["instance"] = json!("f".repeat(32));
+                }
+                if generation == "generation-bad-prepare" && kind == "prepareBuffer" {
+                    response["api_version"] = json!(99);
+                }
+                let _ = writeln!(stream, "{response}");
+                continue;
+            }
             let response = json!({
                 "type": if kind == "health" { "health" } else { "worktree" },
                 "leases": u8::from(kind == "openWorktree" || kind == "openBuffer"),
@@ -520,7 +621,7 @@ mod tests {
         let _ = descendant.wait();
     }
 
-    async fn assert_process_stopped(pid: u32) {
+    pub(super) async fn assert_process_stopped(pid: u32) {
         for _ in 0..100 {
             let output = Command::new("ps")
                 .args(["-o", "stat=", "-p", &pid.to_string()])

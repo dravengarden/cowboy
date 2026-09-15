@@ -88,6 +88,13 @@ and accepting a production effect are different milestones.
   passed the complete gate and matching 72-release reads by actual candidate,
   predecessor and cold binaries. It is published and activated with all 12
   observed workers, Machine and Victoria retained in its deployment window.
+- [Prepared native buffer references](plugin-native-buffer-leases.md) implement
+  effect-free preparation, non-recycled native identities, exact Machine runtime
+  retention, path-free release/query, bounded capacity and cancellation-safe
+  cleanup. Open/ambiguous effects do not expire or replay. This is a native/Machine
+  candidate, not the ordinary Controller/Web resource owner or a production
+  native-generation acceptance claim. Capability-floor negotiation, client
+  integration and separate Machine/Code Plugin activation remain required.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

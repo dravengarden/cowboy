@@ -14,6 +14,8 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
+mod buffer_leases;
+
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
 const ZED_REVISION: &str = "aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45";
@@ -47,7 +49,7 @@ enum CommandKind {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Request {
     Health,
     EnsureWorktree {
@@ -72,6 +74,19 @@ enum Request {
         path: PathBuf,
         #[serde(rename = "leaseId")]
         lease_id: String,
+    },
+    PrepareBuffer {
+        worktree: PathBuf,
+        path: PathBuf,
+    },
+    OpenBufferLease {
+        lease: buffer_leases::LeaseRef,
+    },
+    ReleaseBufferLease {
+        lease: buffer_leases::LeaseRef,
+    },
+    QueryBufferLease {
+        lease: buffer_leases::LeaseRef,
     },
     BufferLanguage {
         worktree: PathBuf,
@@ -104,6 +119,7 @@ enum Response {
         zed_version: &'static str,
         zed_revision: &'static str,
         worktrees: usize,
+        buffer_lease_api: u8,
     },
     Worktree {
         api_version: u8,
@@ -118,6 +134,11 @@ enum Response {
         leases: usize,
         buffer_id: u64,
         version: Vec<BufferVersionEntry>,
+    },
+    BufferLease {
+        api_version: u8,
+        lease: buffer_leases::LeaseRef,
+        state: buffer_leases::LeaseState,
     },
     BufferLanguage {
         api_version: u8,
@@ -160,18 +181,25 @@ enum WorktreeState {
     Ready,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct WorktreeLease {
     state: WorktreeState,
     leases: usize,
     remote_id: u64,
+    incarnation: Arc<()>,
 }
 
 type Worktrees = Arc<RwLock<HashMap<PathBuf, WorktreeLease>>>;
 struct BufferLease {
-    lease_ids: HashSet<String>,
+    lease_ids: HashSet<BufferOwner>,
     remote_id: u64,
     version: Vec<BufferVersionEntry>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+enum BufferOwner {
+    Legacy(String),
+    Owned(u64),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -246,7 +274,13 @@ struct LanguageDocumentSymbol {
     children: Vec<LanguageDocumentSymbol>,
 }
 
-type Buffers = Arc<RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>>;
+type Buffers = Arc<BufferState>;
+
+#[derive(Default)]
+struct BufferState {
+    active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
+    leases: Mutex<buffer_leases::Registry>,
+}
 type BufferFiles = Arc<RwLock<HashMap<u64, proto::File>>>;
 type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
 type Zed = Arc<ZedRuntime>;
@@ -1191,6 +1225,7 @@ async fn respond(
             zed_version: ZED_VERSION,
             zed_revision: ZED_REVISION,
             worktrees: worktrees.read().await.len(),
+            buffer_lease_api: 1,
         },
         Request::EnsureWorktree { path, trusted } => {
             ensure_worktree(path, trusted, false, worktrees, zed).await?
@@ -1212,7 +1247,13 @@ async fn respond(
                 state: lease.state,
                 leases: lease.leases,
             };
-            if lease.leases == 0 {
+            let has_buffers = buffers
+                .active
+                .read()
+                .await
+                .keys()
+                .any(|(root, _)| root == &path);
+            if lease.leases == 0 && !has_buffers {
                 all.remove(&path);
                 if let Some(zed) = zed {
                     zed.remove_worktree(remote_id)?;
@@ -1230,6 +1271,31 @@ async fn respond(
             path,
             lease_id,
         } => close_buffer(worktree, path, lease_id, buffers, zed).await?,
+        Request::PrepareBuffer { worktree, path } => {
+            buffers
+                .leases
+                .lock()
+                .await
+                .prepare(worktree, path, worktrees)
+                .await?
+        }
+        Request::OpenBufferLease { lease } => {
+            buffers
+                .leases
+                .lock()
+                .await
+                .open(lease, worktrees, buffers, zed)
+                .await?
+        }
+        Request::ReleaseBufferLease { lease } => {
+            buffers
+                .leases
+                .lock()
+                .await
+                .release(lease, buffers, zed)
+                .await?
+        }
+        Request::QueryBufferLease { lease } => buffers.leases.lock().await.query(lease)?,
         Request::BufferLanguage { worktree, path } => {
             buffer_language(worktree, path, buffers, zed).await?
         }
@@ -1260,7 +1326,7 @@ async fn buffer_language(
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
     let (buffer_id, version) = {
-        let all = buffers.read().await;
+        let all = buffers.active.read().await;
         let lease = all
             .get(&(worktree.clone(), path.clone()))
             .context("buffer is not open")?;
@@ -1333,7 +1399,7 @@ async fn buffer_hover(
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
     let (buffer_id, version) = {
-        let all = buffers.read().await;
+        let all = buffers.active.read().await;
         let lease = all
             .get(&(worktree.clone(), path.clone()))
             .context("buffer is not open")?;
@@ -1365,7 +1431,7 @@ async fn buffer_navigate(
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
     let (buffer_id, version) = {
-        let all = buffers.read().await;
+        let all = buffers.active.read().await;
         let lease = all
             .get(&(worktree.clone(), path.clone()))
             .context("buffer is not open")?;
@@ -1400,7 +1466,7 @@ async fn buffer_symbols(
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
     let (buffer_id, version) = {
-        let all = buffers.read().await;
+        let all = buffers.active.read().await;
         let lease = all
             .get(&(worktree.clone(), path.clone()))
             .context("buffer is not open")?;
@@ -1450,6 +1516,7 @@ async fn ensure_worktree(
                 state,
                 leases: 0,
                 remote_id,
+                incarnation: Arc::default(),
             },
         );
     }
@@ -1505,8 +1572,27 @@ async fn open_buffer(
         .get(&worktree)
         .context("worktree is not open")?
         .remote_id;
+    open_buffer_at(
+        worktree,
+        path,
+        worktree_id,
+        BufferOwner::Legacy(lease_id),
+        buffers,
+        zed,
+    )
+    .await
+}
+
+async fn open_buffer_at(
+    worktree: PathBuf,
+    path: PathBuf,
+    worktree_id: u64,
+    owner: BufferOwner,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
-    let mut all = buffers.write().await;
+    let mut all = buffers.active.write().await;
     if !all.contains_key(&key) {
         let (remote_id, version) = if let Some(zed) = zed {
             zed.open_buffer(worktree_id, &path).await?
@@ -1523,7 +1609,7 @@ async fn open_buffer(
         );
     }
     let lease = all.get_mut(&key).expect("buffer was just inserted");
-    lease.lease_ids.insert(lease_id);
+    lease.lease_ids.insert(owner);
     Ok(Response::Buffer {
         api_version: ADAPTER_VERSION,
         worktree,
@@ -1543,9 +1629,25 @@ async fn close_buffer(
 ) -> Result<Response> {
     validate_lease_id(&lease_id)?;
     let (worktree, path) = buffer_key(worktree, path).await?;
+    close_buffer_at(worktree, path, BufferOwner::Legacy(lease_id), buffers, zed).await
+}
+
+// Release the already captured native resource. Do not resolve a filesystem
+// path again: a renamed/deleted file is still a live native buffer.
+async fn close_buffer_at(
+    worktree: PathBuf,
+    path: PathBuf,
+    owner: BufferOwner,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
-    let mut all = buffers.write().await;
+    let mut all = buffers.active.write().await;
     let Some(lease) = all.get_mut(&key) else {
+        anyhow::ensure!(
+            matches!(owner, BufferOwner::Legacy(_)),
+            "owned native buffer is not retained"
+        );
         return Ok(Response::Buffer {
             api_version: ADAPTER_VERSION,
             worktree,
@@ -1555,8 +1657,17 @@ async fn close_buffer(
             version: Vec::new(),
         });
     };
-    lease.lease_ids.remove(&lease_id);
-    let remote_id = lease.remote_id;
+    anyhow::ensure!(
+        matches!(owner, BufferOwner::Legacy(_)) || lease.lease_ids.contains(&owner),
+        "native buffer owner changed"
+    );
+    let last = lease.lease_ids.len() == 1 && lease.lease_ids.contains(&owner);
+    if last && let Some(zed) = zed {
+        // Keep local ownership if the owned native transport rejects enqueue.
+        // This protocol has no native CloseBuffer ACK; enqueue is not recovery.
+        zed.close_buffer(lease.remote_id)?;
+    }
+    lease.lease_ids.remove(&owner);
     let leases = lease.lease_ids.len();
     let response = Response::Buffer {
         api_version: ADAPTER_VERSION,
@@ -1566,11 +1677,8 @@ async fn close_buffer(
         buffer_id: lease.remote_id,
         version: lease.version.clone(),
     };
-    if leases == 0 {
+    if last {
         all.remove(&key);
-        if let Some(zed) = zed {
-            zed.close_buffer(remote_id)?;
-        }
     }
     Ok(response)
 }
@@ -1589,9 +1697,21 @@ async fn handle(
     zed: Option<Zed>,
 ) -> Result<()> {
     let (read, mut write) = stream.into_split();
-    let mut lines = BufReader::new(read).lines();
-    while let Some(line) = lines.next_line().await? {
-        let response = match serde_json::from_str::<Request>(&line) {
+    let mut reader = BufReader::new(read);
+    loop {
+        let mut line = Vec::new();
+        (&mut reader)
+            .take(4 * 1024 * 1024 + 1)
+            .read_until(b'\n', &mut line)
+            .await?;
+        if line.is_empty() {
+            return Ok(());
+        }
+        anyhow::ensure!(
+            line.len() <= 4 * 1024 * 1024 && line.last() == Some(&b'\n'),
+            "invalid adapter request frame"
+        );
+        let response = match serde_json::from_slice::<Request>(&line) {
             Ok(request) => respond(request, &worktrees, &buffers, zed.as_ref())
                 .await
                 .unwrap_or_else(|error| Response::Error {
@@ -1605,9 +1725,12 @@ async fn handle(
         };
         let mut encoded = serde_json::to_vec(&response)?;
         encoded.push(b'\n');
-        write.write_all(&encoded).await?;
+        anyhow::ensure!(
+            encoded.len() <= 4 * 1024 * 1024,
+            "adapter response exceeds byte limit"
+        );
+        tokio::time::timeout(Duration::from_secs(35), write.write_all(&encoded)).await??;
     }
-    Ok(())
 }
 
 async fn serve(socket: PathBuf, zed_server: PathBuf, state_dir: PathBuf) -> Result<()> {
@@ -1849,7 +1972,7 @@ mod tests {
                 } if leases == expected
             ));
         }
-        assert!(buffers.read().await.is_empty());
+        assert!(buffers.active.read().await.is_empty());
         let response = respond(
             Request::CloseBuffer {
                 worktree: root.clone(),

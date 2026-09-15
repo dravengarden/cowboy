@@ -155,6 +155,14 @@ resource identity. Fixing that needs original-owner release semantics, bounded
 cleanup/unknown evidence and an exact native-generation protocol; hashing the
 current cwd or following a replacement connection is not a substitute.
 
+The [native buffer-reference candidate](plugin-native-buffer-leases.md) now
+implements pre-effect preparation, non-recycled native handles, path-free
+release/query and exact retained Machine process routing. It does not switch
+this HTTP API or establish its original principal/Session resource owner.
+Machine capability-floor acceptance, the Controller/Web consumer and separate
+Machine/Code Plugin activation are still required; Controller activation alone
+cannot close this gap.
+
 ## Evidence and remaining work
 
 Two regression tests failed before the repair: equal-content files returned the

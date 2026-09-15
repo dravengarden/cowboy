@@ -118,6 +118,7 @@
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs
           ./src/machine_code_plugins.rs
+          ./src/machine_code_plugins
           ./src/machine_cli.rs
           ./src/machine_cli
           ./src/machine_auth.rs

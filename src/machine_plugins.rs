@@ -5435,6 +5435,32 @@ mod tests {
             1
         );
         assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+        // New native references are allocated *before* open effects. Keep
+        // the legacy lease alongside them to prove the shared buffer owner
+        // sets and uninstall drain remain independent.
+        fs::write(worktree.join("owned.txt"), "owned native buffer\n").unwrap();
+        let prepare =
+            serde_json::json!({"type":"prepareBuffer", "worktree":worktree, "path":"owned.txt"});
+        let mut owned = Vec::new();
+        for _ in 0..2 {
+            let prepared = store.code_request("zed", &prepare, None).await.unwrap();
+            assert_eq!(prepared["state"], "prepared");
+            let lease = prepared["lease"].clone();
+            let open = serde_json::json!({"type":"openBufferLease", "lease":lease});
+            for _ in 0..2 {
+                assert_eq!(
+                    store.code_request("zed", &open, None).await.unwrap()["state"],
+                    "open"
+                );
+            }
+            let query = serde_json::json!({"type":"queryBufferLease", "lease":lease});
+            assert_eq!(
+                store.code_request("zed", &query, None).await.unwrap()["state"],
+                "open"
+            );
+            owned.push(lease);
+        }
+        assert_ne!(owned[0], owned[1]);
         store
             .uninstall("zed", &release.artifact_digest)
             .await
@@ -5463,6 +5489,27 @@ mod tests {
             store.code_request("zed", &close, None).await.unwrap()["leases"],
             0
         );
+        assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+        // Neither the Machine nor the native adapter may resolve these paths
+        // again. Original handles still release after both names disappear.
+        fs::remove_file(worktree.join("owned.txt")).unwrap();
+        fs::rename(&worktree, root.join("moved-worktree")).unwrap();
+        for (index, lease) in owned.into_iter().enumerate() {
+            let close = serde_json::json!({"type":"releaseBufferLease", "lease":lease});
+            assert_eq!(
+                store.code_request("zed", &close, None).await.unwrap()["state"],
+                "released"
+            );
+            // A repeated close is saved local-release evidence, not replay.
+            assert_eq!(
+                store.code_request("zed", &close, None).await.unwrap()["state"],
+                "released"
+            );
+            assert_eq!(
+                store.code_runtimes.live_generation_count().await,
+                usize::from(index == 0)
+            );
+        }
         assert_eq!(store.code_runtimes.live_generation_count().await, 0);
         let restored = store
             .reactivate("zed", &release.artifact_digest)
