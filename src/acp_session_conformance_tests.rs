@@ -820,3 +820,198 @@ async fn native_background_resume_restores_busy_after_prompt_response_over_acp()
     .await
     .expect("bounded native activity fixture");
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // The two prompts must share one real ACP connection.
+async fn partial_stream_failure_keeps_native_session_without_replaying_completed_work() {
+    let (state, sink) = activity_fixture("claude-code");
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let notifications = state.clone();
+    let main_state = state.clone();
+    let client = Client
+        .builder()
+        .on_receive_notification(
+            async move |notification: SessionNotification,
+                        _: ConnectionTo<Agent>|
+                        -> Result<(), Error> {
+                handle_session_notification(&notifications, &notification);
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ByteStreams::new(client_write.compat_write(), client_read.compat()),
+            async move |cx: ConnectionTo<Agent>| {
+                run_session(
+                    &main_state,
+                    cx,
+                    None,
+                    PathBuf::from(CWD),
+                    &mut command_rx,
+                    "claude-code",
+                    &startup,
+                )
+                .await
+            },
+        );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        for (method, result) in [
+            (
+                "initialize",
+                json!({"protocolVersion": 1, "agentCapabilities": {}}),
+            ),
+            ("session/new", json!({"sessionId": NATIVE})),
+        ] {
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            send_json(
+                &mut writer,
+                json!({"jsonrpc":"2.0", "id":request["id"], "result":result}),
+            )
+            .await;
+        }
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        let message =
+            "API Error: Connection lost mid-response. The response above may be incomplete.";
+        for (index, text) in ["write the file", "continue from the saved result"]
+            .iter()
+            .enumerate()
+        {
+            let (complete, completed) = oneshot::channel();
+            command_tx
+                .send(AgentCommand::Prompt(
+                    vec![ContentBlock::Text(
+                        agent_client_protocol::schema::v1::TextContent::new(*text),
+                    )],
+                    Some(format!("stream-prompt-{index}")),
+                    Some(complete),
+                ))
+                .unwrap();
+            let request: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            // Any automatic replay or native-session reconstruction fails here.
+            assert_eq!(request["method"], "session/prompt");
+            assert_eq!(request["params"]["sessionId"], NATIVE);
+            assert_eq!(request["params"]["prompt"][0]["text"], *text);
+            if index == 0 {
+                for update in [
+                    json!({"sessionUpdate":"tool_call", "toolCallId":"write-once", "title":"Write file", "kind":"edit", "status":"completed"}),
+                    json!({"sessionUpdate":"tool_call", "toolCallId":"incomplete", "title":"Terminal", "kind":"execute"}),
+                ] {
+                    send_json(&mut writer, json!({"jsonrpc":"2.0", "method":"session/update", "params":{"sessionId":NATIVE, "update":update}})).await;
+                }
+                send_json(
+                    &mut writer,
+                    notification(NATIVE, "agent_message_chunk", message),
+                )
+                .await;
+                send_json(
+                    &mut writer,
+                    json!({"jsonrpc":"2.0", "id":request["id"], "error":{
+                        "code":-32603, "message":message, "data":{"errorKind":"server_error"}
+                    }}),
+                )
+                .await;
+                assert!(completed.await.unwrap().unwrap_err().contains(message));
+            } else {
+                send_json(
+                    &mut writer,
+                    notification(
+                        NATIVE,
+                        "agent_message_chunk",
+                        "Continued after the saved tool result.",
+                    ),
+                )
+                .await;
+                send_json(&mut writer, json!({"jsonrpc":"2.0", "id":request["id"], "result":{"stopReason":"end_turn"}})).await;
+                assert_eq!(
+                    completed.await.unwrap().unwrap(),
+                    "Continued after the saved tool result."
+                );
+            }
+            while observed_status(&sink) == Status::Busy {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(observed_status(&sink), Status::Running);
+            assert_eq!(
+                sink.hub
+                    .session_info(SESSION)
+                    .unwrap()
+                    .meta
+                    .agent_session_id
+                    .as_deref(),
+                Some(NATIVE)
+            );
+        }
+        assert_eq!(sink.allocations.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.prompt_starts.lock().len(), 2);
+        assert_eq!(sink.prompt_completions.lock().len(), 2);
+        let events = sink.hub.snapshot(SESSION).unwrap().0;
+        let completed_tools = events.iter().filter(|event| matches!(&event.event,
+            Event::Update { update } if update["toolCallId"] == "write-once" && update["status"] == "completed"
+        )).count();
+        assert_eq!(completed_tools, 1);
+        let failures = events.iter().filter(|event| matches!(&event.event, Event::TurnEnd { stop_reason } if stop_reason.starts_with("error:"))).count();
+        assert_eq!(failures, 1);
+        assert!(!events.iter().any(|event| matches!(
+            event.event,
+            Event::Lifecycle {
+                status: Status::Crashed,
+                ..
+            }
+        )));
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded partial-stream recovery fixture");
+}
+
+#[test]
+fn partial_stream_policy_preserves_worker_but_never_replays_a_prompt() {
+    let source: cowboy_provider_sdk::StandardProviderSource =
+        serde_json::from_str(include_str!("../plugins/claude-code/provider.json")).unwrap();
+    let behavior = source.compile().unwrap().runtime.behavior;
+    for reason in [
+        "Connection lost mid-response",
+        "Server error mid-response",
+        "The response stopped arriving",
+        "Your computer went to sleep mid-response",
+    ] {
+        let detail = format!(
+            "Internal error: API Error: {reason}. The response above may be incomplete.: {{\"errorKind\":\"server_error\"}}"
+        );
+        assert!(crate::provider::keeps_worker_alive_for_behavior(
+            &behavior, &detail
+        ));
+        for visible in [false, true] {
+            assert!(!crate::provider::should_retry_without_visible_update(
+                &behavior, &detail, visible, 0
+            ));
+        }
+    }
+    for detail in [
+        "Internal error: API Error: authentication failed",
+        "Internal error: API Error: permission denied",
+        "Internal error: connection closed",
+        "API Error: Connection lost mid-response.",
+        "The response above may be incomplete.",
+    ] {
+        assert!(!crate::provider::keeps_worker_alive_for_behavior(
+            &behavior, detail
+        ));
+    }
+}

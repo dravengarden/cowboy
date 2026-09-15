@@ -4,7 +4,7 @@
 // transcript model — no code editor / file tree / git, just the conversation.
 
 import { stripImageTokens } from "./attachments";
-import { crashDetailsMatch } from "./crashDetail";
+import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import {
@@ -68,7 +68,7 @@ export type RenderItem = { key: string } & (
       resolved: boolean;
       chosen: string | null;
     }
-  | { kind: "lifecycle"; status: Status; detail: string | null }
+  | { kind: "lifecycle"; status: Status; detail: string | null; turnFailure?: boolean }
   // "Clear conversation" divider: the agent was reset to a fresh context here.
   // Everything ABOVE is transcript-only (the agent no longer remembers it).
   | { kind: "cleared"; at: number }
@@ -133,7 +133,8 @@ function sameRenderItem(a: RenderItem, b: RenderItem): boolean {
         a.title === b.title && a.resolved === b.resolved &&
         a.chosen === b.chosen && Object.is(a.options, b.options);
     case "lifecycle":
-      return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail;
+      return b.kind === "lifecycle" && a.status === b.status && a.detail === b.detail &&
+        a.turnFailure === b.turnFailure;
     case "cleared":
       return b.kind === "cleared" && a.at === b.at;
   }
@@ -321,7 +322,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const permIndex = new Map<string, number>();
 
   // Coalesce consecutive chunks of the same role/thought into one item.
-  let cursor: { kind: "message" | "thought"; role: "assistant" | "user" } | null = null;
+  let cursor: {
+    kind: "message" | "thought";
+    role: "assistant" | "user";
+    messageId?: string;
+  } | null = null;
   let lastHumanUser: Extract<RenderItem, { kind: "message" }> | undefined;
   let promptReplayOffset = 0;
 
@@ -345,7 +350,11 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               break;
             }
             const last = items[items.length - 1];
-            if (cursor?.kind === "message" && cursor.role === role && last?.kind === "message") {
+            const messageId = typeof u.messageId === "string" ? u.messageId : undefined;
+            if (
+              cursor?.kind === "message" && cursor.role === role &&
+              cursor.messageId === messageId && last?.kind === "message"
+            ) {
               pushChunk(last, chunk);
             } else {
               const text = chunk.type === "text" ? chunk.text : "";
@@ -360,7 +369,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                   ? { cmid: env.cmid }
                   : {}),
               });
-              cursor = { kind: "message", role };
+              cursor = { kind: "message", role, ...(messageId ? { messageId } : {}) };
             }
             if (role === "user") {
               const accepted = items.at(-1);
@@ -458,6 +467,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
       }
       case "lifecycle": {
+        if (env.status === "crashed" || env.status === "interrupted") {
+          settleOutstandingTools(items, "interrupted");
+        }
         // Crashes (and interrupted turns) explain a broken turn in the log.
         // A clean worker exit is session chrome — dormant in the status bar —
         // not a chat event. Painting "exited" in the transcript reads as a
@@ -465,12 +477,14 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         if (shouldPaintTranscriptLifecycle(env.status)) {
           const previous = items.at(-1);
           if (
-            previous?.kind === "lifecycle" && previous.status === env.status &&
+            previous?.kind === "lifecycle" &&
+            (previous.status === env.status || previous.turnFailure) &&
             (previous.detail === env.detail || previous.detail === null ||
               env.detail === null ||
               crashDetailsMatch(previous.detail, env.detail))
           ) {
             if (env.detail !== null) previous.detail = env.detail;
+            previous.status = env.status;
             previous.key = String(env.seq);
           } else {
             items.push({ kind: "lifecycle", status: env.status, detail: env.detail, key: String(env.seq) });
@@ -479,18 +493,32 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         break;
       }
       case "turn_end": {
-        // The turn is over, so nothing from it is still "in flight". Some agents
-        // end a turn without emitting the final tool_call_update (or it races the
-        // stop), leaving a tool stuck on `pending`/`in_progress`. Settle those to
-        // a terminal state here so (a) the card stops showing a live chip after
-        // the turn, and (b) the "agent is working" indicator — which keys off any
-        // in-flight tool to survive status races — doesn't spin forever on a
-        // replayed/abandoned turn. `completed` is the likeliest truth for a tool
-        // the agent moved past; a genuinely failed one would have reported it.
-        for (const it of items) {
-          if (it.kind === "tool" && (it.status === "pending" || it.status === "in_progress")) {
-            it.status = "completed";
+        const error = /^error(?::\s*(.*))?$/is.exec(env.stop_reason);
+        const failure = error ? error[1]?.trim() || null : undefined;
+        const interrupted = failure !== undefined || /cancel|interrupt/i.test(env.stop_reason);
+        // A failed/cancelled turn cannot prove that an unfinished tool ran.
+        // Keep confirmed results; a later actual tool result can still settle it.
+        settleOutstandingTools(items, interrupted ? "interrupted" : "completed");
+        if (failure !== undefined) {
+          const previous = items.at(-1);
+          // Older adapters emit an isolated diagnostic message immediately before
+          // the structured RPC failure. Coalesce that exact duplicate only;
+          // ordinary prose, quoted diagnostics, and successful turns are retained.
+          if (
+            failure && rpcErrorKind(failure) && previous?.kind === "message" &&
+            previous.role === "assistant" && previous.chunks.length === 1 &&
+            previous.chunks[0]?.type === "text" &&
+            previous.chunks[0].text.trim() === prettifyCrashDetail(failure)
+          ) {
+            items.pop();
           }
+          items.push({
+            kind: "lifecycle",
+            status: "interrupted",
+            detail: failure,
+            turnFailure: true,
+            key: String(env.seq),
+          });
         }
         break;
       }
@@ -509,6 +537,14 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const result = shareUnchangedRows(timeline, filtered);
   DERIVE_CACHE.set(timeline, result);
   return result;
+}
+
+function settleOutstandingTools(items: RenderItem[], status: string): void {
+  for (const item of items) {
+    if (item.kind === "tool" && (item.status === "pending" || item.status === "in_progress")) {
+      item.status = status;
+    }
+  }
 }
 
 /// The session's current plan, or null if it has none.

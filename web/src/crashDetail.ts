@@ -11,7 +11,23 @@ export function isNativeSessionRestoreTimeout(detail: string): boolean {
     lower.includes("reload to retry restore");
 }
 
-/** Pull the human sentence out of Codex-style `Internal error: {JSON}` dumps. */
+/** Read optional structured RPC error data without treating prose as an error. */
+export function rpcErrorKind(raw: string): string | null {
+  const jsonStart = raw.lastIndexOf("{");
+  if (jsonStart < 0) return null;
+  try {
+    const data: unknown = JSON.parse(raw.slice(jsonStart));
+    if (data && typeof data === "object" && "errorKind" in data) {
+      const kind = data.errorKind;
+      if (typeof kind === "string" && /^[a-z][a-z0-9_]{0,63}$/.test(kind)) return kind;
+    }
+  } catch {
+    // Malformed data stays visible in the original diagnostic.
+  }
+  return null;
+}
+
+/** Pull the human sentence out of ACP errors while retaining raw diagnostics. */
 export function prettifyCrashDetail(raw: string): string {
   if (isNativeSessionRestoreTimeout(raw)) {
     return SESSION_RESTORE_TIMEOUT_COPY;
@@ -31,7 +47,10 @@ export function prettifyCrashDetail(raw: string): string {
       // Keep the original diagnostic when the payload isn't JSON.
     }
   }
-  return trimmed.replace(/^Internal error:\s*/i, "").trim() || raw;
+  const message = rpcErrorKind(trimmed)
+    ? trimmed.slice(0, trimmed.lastIndexOf("{")).replace(/:\s*$/, "")
+    : trimmed;
+  return message.replace(/^Internal error:\s*/i, "").trim() || raw;
 }
 
 export function crashDetailsMatch(

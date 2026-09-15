@@ -1098,7 +1098,7 @@ function toolColor(
 ): "default" | "success" | "error" | "warning" {
   if (status === "completed") return "success";
   if (status === "failed") return "error";
-  if (status === "in_progress") return "warning";
+  if (status === "in_progress" || status === "interrupted") return "warning";
   return "default";
 }
 
@@ -1128,7 +1128,7 @@ function toolStatusTone(
 ): string {
   if (status === "completed") return theme.palette.success.main;
   if (status === "failed") return theme.palette.error.main;
-  if (status === "in_progress") return theme.palette.warning.main;
+  if (status === "in_progress" || status === "interrupted") return theme.palette.warning.main;
   return theme.palette.text.disabled;
 }
 
@@ -2947,11 +2947,9 @@ const ItemView = memo(function ItemView({
       // The interrupted marker (a turn cut off by a daemon restart) is a durable,
       // amber record that stays in the log after the session resumes; crashes are
       // red. Clean exits are session chrome, not a transcript event.
-      const label = transcriptLifecycleLabel(
-        item.status,
-        item.detail,
-        prettifyCrashDetail,
-      );
+      const label = item.turnFailure && item.detail
+        ? prettifyCrashDetail(item.detail)
+        : transcriptLifecycleLabel(item.status, item.detail, prettifyCrashDetail);
       if (!label) return null;
       const interrupted = item.status === "interrupted";
       const color = item.status === "crashed"
@@ -2960,16 +2958,23 @@ const ItemView = memo(function ItemView({
         ? "warning.main"
         : "text.secondary";
       return (
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ color }}>
+        <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ color }}>
           {interrupted
             ? <WarningAmberRounded fontSize="medium" />
             : <ErrorOutline fontSize="medium" />}
-          <Typography
-            variant="caption"
-            sx={{ fontWeight: interrupted ? 600 : 400 }}
-          >
-            {label}
-          </Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="caption" sx={{ fontWeight: interrupted ? 600 : 400 }}>
+              {label}
+            </Typography>
+            {item.turnFailure && (
+              <Typography variant="caption" display="block" sx={{ color: "text.secondary" }}>
+                Send a message to continue.
+              </Typography>
+            )}
+            {item.turnFailure && item.detail && (
+              <ErrorDetails detail={item.detail} />
+            )}
+          </Box>
         </Stack>
       );
     }
@@ -3056,6 +3061,17 @@ function latestCrashDetail(items: RenderItem[]): string | null {
   return null;
 }
 
+function ErrorDetails({ detail }: { detail: string }): React.JSX.Element {
+  return (
+    <Box component="details" sx={{ mt: 0.5, color: "text.secondary", fontSize: "0.75rem" }}>
+      <Box component="summary" sx={{ cursor: "pointer" }}>Details</Box>
+      <Box component="pre" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", m: 0, mt: 0.5, maxHeight: "20vh", overflow: "auto" }}>
+        {detail}
+      </Box>
+    </Box>
+  );
+}
+
 function SessionStatusBar({
   status,
   crashDetail,
@@ -3108,12 +3124,14 @@ function SessionStatusBar({
       }}
     >
       <Box sx={{ display: "flex", flexShrink: 0 }}>{icon}</Box>
-      <Typography
-        variant="caption"
-        sx={{ fontWeight: 600, minWidth: 0, lineHeight: 1.3 }}
-      >
-        {text}
-      </Typography>
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="caption" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
+          {text}
+        </Typography>
+        {status === "crashed" && crashDetail && crashDetail !== text && (
+          <ErrorDetails detail={crashDetail} />
+        )}
+      </Box>
     </Stack>
   );
 }

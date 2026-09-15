@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.22",
+  "version": "3.1.23",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -153,6 +153,27 @@
           "classification": "provider-empty-stream",
           "keep_worker_alive": true,
           "retry_once_without_visible_update": true
+        },
+        {
+          "when": {
+            "op": "all",
+            "values": [
+              { "op": "contains", "value": "api error:" },
+              {
+                "op": "any",
+                "values": [
+                  { "op": "contains", "value": "connection lost mid-response" },
+                  { "op": "contains", "value": "server error mid-response" },
+                  { "op": "contains", "value": "the response stopped arriving" },
+                  { "op": "contains", "value": "your computer went to sleep mid-response" }
+                ]
+              },
+              { "op": "contains", "value": "the response above may be incomplete" }
+            ]
+          },
+          "classification": "provider-stream-interrupted",
+          "keep_worker_alive": true,
+          "retry_once_without_visible_update": false
         }
       ]
     },
