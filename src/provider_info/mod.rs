@@ -42,39 +42,48 @@ pub(crate) fn overlay_session_usage(
         let binding = bindings
             .iter()
             .find(|binding| binding.account == provider.provider);
-        let empty = binding.and_then(|binding| binding.empty.as_deref());
-        let source = binding
-            .map(|binding| crate::usage::intern_usage_str(binding.product_label().to_owned()));
+        overlay_provider_session(provider, &session.provider, usage, binding);
+    }
+    snapshot
+}
+
+fn overlay_provider_session(
+    provider: &mut ProviderUsage,
+    agent: &str,
+    usage: &crate::agent_model::SessionUsage,
+    binding: Option<&PluginUsageSpec>,
+) {
+    // A live context update does not refresh an account quota observation or
+    // clear its refresh error. Keep session-only Providers as a fallback.
+    if provider.rate_limits.is_none() {
         if provider.status != "available"
-            && let Some(empty) = empty
+            && let Some(empty) = binding.and_then(|binding| binding.empty.as_deref())
         {
             provider.error = Some(empty.to_owned());
         }
         if let Some(projection) = binding.and_then(|binding| binding.session_rate_limits.as_ref())
             && let Some(limits) = project_session_rate_limits(&usage.raw, projection)
         {
-            if provider.rate_limits.is_none() {
-                provider.rate_limits = Some(limits);
-            }
+            provider.rate_limits = Some(limits);
             provider.status = "available";
             provider.error = None;
-            if let Some(source) = source {
-                provider.source = source;
+            if let Some(binding) = binding {
+                provider.source =
+                    crate::usage::intern_usage_str(binding.product_label().to_owned());
             }
-        }
-        let latest = json!({ "agent": session.provider, "session": usage.raw });
-        match provider.activity.as_mut().and_then(Value::as_object_mut) {
-            Some(activity) => {
-                activity.insert("latest_session".to_owned(), latest);
-            }
-            None => provider.activity = Some(json!({ "latest_session": latest })),
         }
         provider.observed_at_ms = provider.observed_at_ms.max(usage.observed_at_ms);
         if provider.status != "available" && provider.status != "exhausted" {
             provider.status = "session-only";
         }
     }
-    snapshot
+    let latest = json!({ "agent": agent, "session": usage.raw });
+    match provider.activity.as_mut().and_then(Value::as_object_mut) {
+        Some(activity) => {
+            activity.insert("latest_session".to_owned(), latest);
+        }
+        None => provider.activity = Some(json!({ "latest_session": latest })),
+    }
 }
 
 fn project_session_rate_limits(raw: &Value, projection: &UsageSessionRateLimits) -> Option<Value> {
@@ -197,6 +206,56 @@ mod tests {
                 .as_ref()
                 .map(|value| value.pointer.as_str()),
             Some("/metadata/limits")
+        );
+    }
+
+    #[test]
+    fn live_session_preserves_cached_account_quota_freshness_and_error() {
+        let binding = binding(
+            "future",
+            Some(UsageSessionRateLimits {
+                pointer: "/limits".to_owned(),
+                target: "rateLimits".to_owned(),
+                required_number_fields: vec!["utilization".to_owned()],
+                required_string_fields: Vec::new(),
+            }),
+        );
+        let usage = crate::agent_model::SessionUsage {
+            used: 30,
+            size: 100,
+            observed_at_ms: 900,
+            raw: json!({"limits": {"utilization": 90}}),
+        };
+        for limits in [json!({"remaining": 50}), json!({"rateLimitsByLimitId": {}})] {
+            let mut provider = unavailable("future", "Account", "Cached update");
+            provider.status = "available";
+            provider.observed_at_ms = 100;
+            provider.rate_limits = Some(limits.clone());
+            provider.refresh = Some(crate::usage::ProviderRefreshState {
+                last_attempt_at_ms: 800,
+                manual_refresh_after_ms: 830,
+                next_auto_refresh_at_ms: 860,
+                stale: true,
+            });
+            overlay_provider_session(&mut provider, "agent", &usage, Some(&binding));
+            assert_eq!(provider.observed_at_ms, 100);
+            assert_eq!(provider.rate_limits, Some(limits));
+            assert_eq!(provider.error.as_deref(), Some("Cached update"));
+            assert!(provider.refresh.unwrap().stale);
+            assert_eq!(
+                provider.activity.unwrap()["latest_session"]["session"],
+                usage.raw
+            );
+        }
+        let mut fallback = unavailable("future", "Account", "No data");
+        fallback.observed_at_ms = 0;
+        overlay_provider_session(&mut fallback, "agent", &usage, Some(&binding));
+        assert_eq!(fallback.status, "available");
+        assert_eq!(fallback.observed_at_ms, 900);
+        assert!(fallback.error.is_none());
+        assert_eq!(
+            fallback.rate_limits.unwrap()["rateLimits"]["utilization"],
+            90
         );
     }
 }

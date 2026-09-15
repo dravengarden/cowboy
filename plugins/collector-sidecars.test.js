@@ -195,8 +195,8 @@ Deno.test("Anthropic exposes no reset capability to collect", () => {
   equal(usage.reset_argv, undefined, "Anthropic reset argv");
   equal(usage.order, 0, "Anthropic card order");
   // The widget renders by shape, so the opaque id only has to be stable. It
-  // stays silent until Anthropic reports a rate-limit event, because the
-  // collector claims no rate_limits of its own.
+  // stays silent until the native query or a session event reports a numeric
+  // window; unknown limits must not become a full remaining balance.
   equal(usage.widget_shape, "percent", "Anthropic widget shape");
   equal(usage.widget_window, 10080, "Anthropic widget window");
   equal(usage.top_bar_windows, [300, 10080], "Anthropic top bar windows");

@@ -58,7 +58,7 @@
     },
     "product": "Anthropic",
     "error_auth": "Anthropic account status expired. Sign in to Claude Code again.",
-    "error_fetch": "Claude Code could not report the Anthropic account.",
+    "error_fetch": "Claude Code could not refresh Anthropic usage.",
     "order": 0,
     "top_bar_windows": [
       300,
@@ -67,7 +67,7 @@
     "widget": "anthropic-weekly",
     "widget_shape": "percent",
     "widget_window": 10080,
-    "empty": "Plan limits appear after the Provider reports a rate-limit event.",
+    "empty": "Plan usage is unavailable. Refresh to try again.",
     "limit_id_prefix": "claude",
     "limit_labels": [
       {

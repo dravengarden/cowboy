@@ -173,7 +173,7 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
   assertEquals(usageWidgetKind("gemini"), "none");
   assertEquals(
     usageEmptyMessage("anthropic"),
-    "Plan limits appear after the Provider reports a rate-limit event.",
+    "Plan usage is unavailable. Refresh to try again.",
   );
   assertEquals(
     usageEmptyMessage("gemini"),

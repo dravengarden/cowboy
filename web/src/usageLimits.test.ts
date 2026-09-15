@@ -1,4 +1,5 @@
 import { assertEquals } from "jsr:@std/assert";
+import { quotaView } from "../../plugins/claude-code/collector/usage.js";
 import {
   acceptedScheduleTime,
   accountProviderLabel,
@@ -39,6 +40,57 @@ function firstPartyHosts(): Array<{ id: string } & Record<string, unknown>> {
 
 const FIRST_PARTY_HOSTS = firstPartyHosts();
 applyUsageHostPlugins(FIRST_PARTY_HOSTS);
+
+Deno.test("native Claude quota renders account and model progress without inventing missing limits", () => {
+  const usage = {
+    provider: "anthropic",
+    status: "available",
+    source: "Anthropic",
+    observed_at_ms: 1,
+    ...quotaView({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 25, resets_at: "2026-09-16T04:00:00Z" },
+        seven_day: { utilization: 70, resets_at: null },
+        seven_day_opus: { utilization: null, resets_at: null },
+        model_scoped: [{
+          display_name: "Sonnet",
+          utilization: 10,
+          resets_at: null,
+        }],
+      },
+    }),
+  };
+  assertEquals(
+    usageLimits(usage).map(({ label, remaining }) => ({ label, remaining })),
+    [
+      { label: "5h", remaining: 75 },
+      { label: "Weekly", remaining: 30 },
+      { label: "Sonnet · Weekly", remaining: 90 },
+    ],
+  );
+  assertEquals(
+    usageLimits(usage)[0].resetsAt,
+    Date.parse("2026-09-16T04:00:00Z") / 1000,
+  );
+  assertEquals(topBarUsageLimits(usage).map((limit) => limit.label), [
+    "5h",
+    "Weekly",
+  ]);
+  assertEquals(
+    usageLimits({
+      ...usage,
+      ...quotaView({
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: null,
+          seven_day: { utilization: null, resets_at: null },
+        },
+      }),
+    }),
+    [],
+  );
+});
 
 Deno.test("usage plugin ids map account providers onto agent plugins", () => {
   assertEquals(usagePluginId("openai"), "codex");
