@@ -2,8 +2,13 @@
 
 Status: first slice implemented, 2026-09-15. The Controller now adopts published
 Catalog bytes without an operator session. Machine installation still requires a
-person-bound credential; the two remaining layers below replace that with signed
-and declared authority, and neither is implemented yet.
+person-bound credential.
+
+Layers 2 and 3 are **accepted and deferred**: the design below is agreed, no
+work is scheduled, and until one of them lands every installation continues to
+need a role >= Operator personal token or an admin cookie. Neither layer is a
+prerequisite for the other's value, but the rollout order at the end of this
+document still holds when they are picked up.
 
 ## The gap this closes
 
