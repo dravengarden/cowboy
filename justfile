@@ -155,13 +155,14 @@ component-package-check:
     cargo package --locked --allow-dirty --list -p cowboy-plugin-sdk >/dev/null
 
 plugin-check: component-package-check
-    deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
-    deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js
+    deno fmt --check plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js plugins/claude-code/collector/index.js plugins/claude-code/collector/usage.js plugins/claude-code/usage.test.js
+    deno check tools/check-plugin-components.ts plugins/zed/runtime/build.ts plugins/codex/collector/index.js plugins/grok/collector/index.js plugins/claude-deepseek/collector/index.js plugins/claude-deepseek/collector/pricing.js plugins/claude-code/collector/index.js
     deno test --no-check --allow-read components/plugin-api/*.test.ts
     deno test components/state-store/*.test.ts
     deno test --allow-read tools/check-plugin-components_test.ts tools/plugin-component-closure_test.ts
     deno test --allow-read --allow-write --allow-run tools/plugin-source-digest_test.ts
     deno test plugins/collector-sidecars.test.js plugins/claude-deepseek/pricing.test.js
+    deno test --allow-read --allow-write --allow-run --allow-env plugins/claude-code/usage.test.js
     deno run --allow-read --allow-run tools/check-plugin-components.ts
 
 plugin-build PLUGIN:

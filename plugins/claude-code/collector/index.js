@@ -1,13 +1,14 @@
 /* Signed Anthropic account collector. Executes outside Cowboy core.
  *
- * Read-only by construction. Claude Code exposes no pollable usage endpoint and
- * no reset-credit concept, so this collector only reports who is signed in and
- * on which plan. Plan utilisation still arrives through the Provider's session
- * rate-limit projection, which the Agent SDK emits on `rate_limit_event`.
+ * Queries the exact installed CLI's experimental get_usage control. The CLI
+ * owns authentication; this collector never reads tokens or sends model prompts.
+ * Cowboy owns refresh coalescing, cooldowns, and the last successful snapshot.
  *
  * Deliberately absent: any reset, consume, purchase or mutation verb. The
  * Provider declares no `reset` capability, so Cowboy never offers one.
  */
+
+import { nativeJson, quotaView, REQUEST_ID, USAGE_ARGS } from "./usage.js";
 
 const CHILD_ENV_KEYS = [
   "HOME",
@@ -26,7 +27,17 @@ const KNOWN_PLANS = new Set(["max", "pro", "team", "enterprise", "free"]);
 
 async function input() {
   const text = await new Response(Deno.stdin.readable).text();
-  return text.trim() === "" ? { operation: "collect" } : JSON.parse(text);
+  try {
+    const request = text.trim() === ""
+      ? { operation: "collect" }
+      : JSON.parse(text);
+    if (!request || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error();
+    }
+    return request;
+  } catch {
+    throw new Error("Invalid Anthropic usage request.");
+  }
 }
 
 function childEnvironment() {
@@ -35,6 +46,8 @@ function childEnvironment() {
     const value = Deno.env.get(key);
     if (value !== undefined) env[key] = value;
   }
+  env.DISABLE_AUTOUPDATER = "1";
+  env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   return env;
 }
 
@@ -44,28 +57,8 @@ function claudeCommand() {
 }
 
 /** `claude auth status --json` is the Provider's own read-only status verb. */
-async function authStatus() {
-  const command = new Deno.Command(claudeCommand(), {
-    args: ["auth", "status", "--json"],
-    env: childEnvironment(),
-    clearEnv: true,
-    stdin: "null",
-    stdout: "piped",
-    stderr: "piped",
-  });
-  const output = await command.output();
-  const stdout = new TextDecoder().decode(output.stdout).trim();
-  if (!output.success) {
-    const stderr = new TextDecoder().decode(output.stderr).trim();
-    throw new Error(
-      stderr || stdout || `claude auth status exited ${output.code}`,
-    );
-  }
-  try {
-    return JSON.parse(stdout);
-  } catch {
-    throw new Error("claude auth status did not return JSON");
-  }
+function authStatus(execution) {
+  return nativeJson(["auth", "status", "--json"], null, execution);
 }
 
 function text(value) {
@@ -90,25 +83,33 @@ function accountView(status) {
   return Object.keys(account).length > 0 ? { account: { account } } : {};
 }
 
-async function collect() {
-  const status = await authStatus();
+async function collect(options = {}) {
+  const execution = {
+    command: options.command ?? claudeCommand(),
+    env: options.env ?? childEnvironment(),
+    // Leave cleanup time before the host's twelve-second process-group fence.
+    deadline: Date.now() + (options.timeoutMs ?? 10_000),
+  };
+  const status = await authStatus(execution);
   if (status?.loggedIn !== true) {
-    return {
-      provider: "anthropic",
-      status: "unavailable",
-      source: "Anthropic",
-      observed_at_ms: Date.now(),
-      error: "Sign in to Claude Code to report the Anthropic account.",
-    };
+    throw new Error("Claude Code usage authentication required.");
   }
+  const usage = await nativeJson(USAGE_ARGS, {
+    type: "control_request",
+    request_id: REQUEST_ID,
+    request: { subtype: "get_usage", skip_behaviors: true },
+  }, execution);
   return {
     provider: "anthropic",
-    // The account is readable; plan utilisation still depends on the Provider
-    // reporting a rate-limit event, so no rate_limits are claimed here.
     status: "available",
     source: "Anthropic",
     observed_at_ms: Date.now(),
-    ...accountView(status),
+    ...accountView({
+      ...status,
+      subscriptionType: text(usage.subscription_type) ??
+        status.subscriptionType,
+    }),
+    ...quotaView(usage),
   };
 }
 
@@ -117,9 +118,7 @@ async function main() {
   try {
     request = await input();
     if (request.operation !== undefined && request.operation !== "collect") {
-      throw new Error(
-        `Anthropic exposes no ${request.operation} operation`,
-      );
+      throw new Error("Anthropic exposes only read-only usage collection.");
     }
     console.log(JSON.stringify(await collect()));
   } catch (error) {
@@ -132,4 +131,4 @@ if (import.meta.main) {
   await main();
 }
 
-export { accountView, collect, KNOWN_PLANS };
+export { accountView, childEnvironment, collect, KNOWN_PLANS };
