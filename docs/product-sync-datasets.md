@@ -24,7 +24,9 @@ opens a product socket.
 The Web owner discovers at most 2 KiB of strict JSON using authenticated,
 cache-free HTTP. It freezes one descriptor and does not follow a later cookie,
 Service, schema or dataset replacement. Reconnect verifies the original
-descriptor; an observed changed dataset permanently fences that owner, even if
+descriptor in the authenticated WebSocket handshake, without a redundant HTTP
+preflight. Failed admission triggers HTTP discovery to explain a mismatch;
+an observed changed dataset permanently fences that owner, even if
 the old identity later returns. Only a new product root may adopt a new dataset.
 
 `/ws` validates the dataset against the actual authenticated principal and
@@ -35,6 +37,57 @@ unknown query cannot admit this client. The existing cookie/Origin/device proof,
 capacity class and operation-role checks still apply. Cookie clients cannot
 claim the CLI class to evade the browser rule. No Plugin or Machine protocol
 changes, login side effects or session rebinding are introduced.
+
+Local title/order and queue restoration runs concurrently with socket startup.
+Late cached snapshots rebase onto live state and replay their retained mutation
+IDs. Each new message still commits its own durable outbox transaction before
+transport; socket readiness still requires `bootstrap_complete`. Cache latency
+and an extra discovery round trip are not prerequisites for an admitted send.
+
+### Send latency acceptance
+
+Run the actual product store in pinned Firefox with native IndexedDB and a
+loopback WebSocket using the following recipes in `nix develop`. Capture the
+before and after bundles from their respective isolated source checkouts; the
+runner prints each bundle's SHA-256 with the raw samples.
+
+```sh
+just send-latency-bundle /tmp/send-after
+just send-latency-browser /nix/store/<browser>/bin/firefox /tmp/send-before /tmp/send-after
+just send-admission-browser /nix/store/<browser>/bin/firefox /tmp/send-after
+```
+
+The fixture uses synthetic content, an empty profile and a private network
+namespace. Discovery and WebSocket admission each have a controlled 120 ms
+delay, the server echo has a 40 ms delay, and unrelated cache enumeration takes
+500 ms. Timing ends when the actual server echo appears in the subscribed
+timeline, not when the optimistic bubble appears. Each bundle sends one cold,
+eight warm and eight reconnect messages; server mutation IDs prevent duplicate
+effects. Reconnect timing includes connection recovery and the subsequent send.
+
+The 2026-09-15 comparison against `b12e3e60`, using Firefox 151.0.1, observed:
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Reconnect through server echo, median of 8 | 401.5 ms | 278 ms |
+| Established socket through echo, median of 8 | 97 ms | 100.5 ms |
+| Initial mount through echo, one sample | 530 ms | 405 ms |
+| HTTP dataset discoveries | 11 | 1 |
+| Distinct delivered messages | 17 | 17 |
+
+The reconnect reduction is 30.8%, consistent with removing one discovery round
+trip. Warm timing is effectively unchanged. These are controlled browser
+measurements, not physical iPhone or model-output latency. The compared bundle
+hashes are `031765d7b3274ab912764c3820a953322231a5ae40ab1c64c45db91f89c2f9f9`
+and `c1b66e8ba50b4263e9180352d378806f9fba3a9b1f55b2251c04fed1f0799719`.
+
+Admission checks also verify that changed datasets remain permanently fenced
+even if the original identity returns, and that a socket without the selected
+subprotocol admits no frames or messages. Both retain the native durable
+outbox. The latter authors a prompt during initial startup, covering the
+required per-queue hydration barrier before its first write. Production
+`delivery_persist_completed` and `delivery_confirmed` logs include durations and
+the same mutation ID for correlation; confirmation timing starts at wire send.
 
 ## Storage and lifetime
 

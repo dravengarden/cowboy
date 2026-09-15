@@ -74,7 +74,15 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 
-const telemetryOperations = new ClientOperations(startClientSpan, reportClientDuration);
+const telemetryOperations = new ClientOperations(
+  startClientSpan,
+  reportClientDuration,
+  () => performance.now(),
+  (cmid, milliseconds) => reportClientLog("info", "delivery_confirmed", "Outgoing message confirmed by the Service", {
+    mutation_id: cmid,
+    duration_ms: milliseconds,
+  }),
+);
 globalThis.addEventListener?.("cowboy:product-sign-out", () => telemetryOperations.clear());
 import { newUuid } from "./uuid";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
@@ -1700,10 +1708,9 @@ function scheduleReconnect(delay: number): void {
   }, delay);
 }
 
-// Hydrate the locally-cached sync states (title/order) from IndexedDB ONCE, then
-// open the socket. Instant-load: the last-known titles/order paint before the
-// first server byte. Reconnects skip this — the in-memory state is already fresh
-// and newer than the debounce-saved cache, so re-hydrating would stomp it.
+// Restore local sync state once, concurrently with the authenticated socket.
+// Late hydration rebases onto live state and replays durable pending mutations;
+// unrelated cache reads must not delay connection or newly authored messages.
 let didHydrate = false;
 function connect(): void {
   if (productSessionAbandoned || productSessionPausedForAuth) return;
@@ -1712,6 +1719,7 @@ function connect(): void {
     return;
   }
   didHydrate = true;
+  openSocket();
   void syncDatabase.legacyRecords().then((keys) => {
     if (keys.length && !productSessionAbandoned) {
       notify("Legacy browser records were retained separately and will not be sent. Review local recovery in Settings → Info.", "warning");
@@ -1719,34 +1727,19 @@ function connect(): void {
   }).catch(() => {
     if (!productSessionAbandoned) notify("Local data inspection failed. Existing browser records have not been deleted.", "warning");
   });
-  // The hydrate is ONLY a cache-paint optimisation (last-known titles/order before
-  // the first server byte); the socket must NEVER wait on it. A blocked IndexedDB
-  // — e.g. another tab still holding an older DB version right after a deploy
-  // reload — makes the open request HANG rather than reject, so a bare `await`
-  // here would strand the app on "Connecting…" forever with no socket EVER
-  // attempted (the symptom: app shell renders, WS never opens, no reconnect since
-  // reconnect is driven by socket.onclose and there's no socket). So race the
-  // hydrate against a short grace and open the socket on whichever finishes first.
-  let opened = false;
-  const openOnce = (): void => {
-    if (opened) return;
-    opened = true;
-    openSocket();
-  };
-  const grace = setTimeout(openOnce, 1500);
   void (async (): Promise<void> => {
     try {
       // Queue outboxes carry authored prompts and must not wait behind an
       // unrelated title/order cache whose IndexedDB read is blocked. Hydrate
-      // both classes concurrently; each client now merges safely if the socket
-      // wins the grace race.
+      // both classes concurrently; each client merges safely if live state
+      // arrives before its cached snapshot.
       await Promise.all([
         Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
         Promise.allSettled([...qClients.values()].map((entry) => entry.hydrate())),
         hydrateCachedQueues(),
       ]);
-      // If the 1.5s grace opened the socket before a slow IndexedDB read
-      // completed, onopen could not see the restored outbox. Re-send now as
+      // If the socket opened before a slow IndexedDB read completed, its
+      // readiness callback could not see the restored outbox. Re-send now as
       // well. Mutation ids make the overlap with a simultaneous onopen safe and
       // idempotent; this closes the visible-pending-but-never-runs window.
       if (socketReady && socket?.readyState === WebSocket.OPEN) {
@@ -1755,9 +1748,6 @@ function connect(): void {
       }
     } catch (err) {
       console.warn("sync hydrate failed", err);
-    } finally {
-      clearTimeout(grace);
-      openOnce();
     }
   })();
 }
@@ -1795,13 +1785,18 @@ let openingDataset = false;
 function openSocket(): void {
   if (productSessionAbandoned || productSessionPausedForAuth || openingDataset) return;
   openingDataset = true;
-  void syncDatabase.connection().then((dataset) => {
+  // The negotiated /ws handshake validates the frozen dataset against the
+  // actual Service and authenticated principal. An HTTP preflight repeats that
+  // check and adds a round trip to every foreground recovery. No command is
+  // sent until that protocol is selected and bootstrap_complete arrives.
+  void Promise.resolve().then(() => syncDatabase.ready()).then((dataset) => {
     openingDataset = false;
     openBoundSocket(dataset);
   }).catch((error) => {
     openingDataset = false;
     if (!productSessionAbandoned && !productSessionPausedForAuth) {
       if (error instanceof ProductSyncDatasetChangedError) {
+        void abandonProductSocket();
         notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
         return;
       }
@@ -1974,12 +1969,23 @@ function openBoundSocket(dataset: SyncDataset): void {
       return;
     }
     void (async () => {
-      const handshake = await probeProductAuth();
+      // WebSocket hides the HTTP upgrade error. Discover only on failed
+      // admission to distinguish a changed dataset from a temporary outage.
+      // Keep the permanent owner fence and the same reload recovery message.
+      const [datasetCheck, authCheck] = await Promise.allSettled([
+        ready ? Promise.resolve() : syncDatabase.connection(),
+        probeProductAuth(),
+      ]);
+      if (datasetCheck.status === "rejected" && datasetCheck.reason instanceof ProductSyncDatasetChangedError) {
+        void abandonProductSocket();
+        notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
+        return;
+      }
       if (
         productSessionAbandoned || productSessionPausedForAuth ||
         socket !== undefined
       ) return;
-      if (handshake === "logout") {
+      if (authCheck.status === "fulfilled" && authCheck.value === "logout") {
         logoutProductSession();
         return;
       }
@@ -2105,7 +2111,7 @@ function registerSync<T, M extends Mutators<T>>(
     },
     onChange,
     // Instant-load + durable outbox: cache {base, pending} to IndexedDB. On
-    // reload we hydrate this BEFORE the socket opens (see connect()), so the
+    // reload we hydrate this alongside the socket (see connect()), so the
     // last-known title/order paint immediately; the first server patch arrives
     // as a forced resync and overwrites stale base, while any unconfirmed
     // mutation re-sends. Each transaction merges only this client's mutation
@@ -2585,7 +2591,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
         commitQueue(sessionId);
       },
       // Durable outbox: cache {base, pending} per session. On reload we enumerate
-      // these keys and hydrate each qClient BEFORE the socket opens (see
+      // these keys and hydrate each qClient alongside socket connection (see
       // connect()), so a staged/queued message painted instantly survives the
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
@@ -2607,7 +2613,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
 }
 
 /** Eager-restore every per-session queue durable outbox cached in IndexedDB,
- *  BEFORE the socket opens (called from connect's pre-open hydrate). Enumerating
+ *  concurrently with socket connection. Enumerating
  *  the keys is what makes this correct: the qClients are created lazily during
  *  patch handling, so without enumerating we couldn't know which sessions to
  *  hydrate ahead of the resync. Each hydrate restores {base, pending} + renders
@@ -2769,6 +2775,7 @@ async function qAdd(
       cmid,
     });
   }
+  const persistStartedAt = performance.now();
   reportClientLog("info", "delivery_persist_started", "Saving outgoing message locally", {
     session_id: sessionId,
     mutation_id: cmid,
@@ -2776,6 +2783,10 @@ async function qAdd(
     connected: isConnected(),
   });
   try {
+    // A newly opened session can be authored before its queue read completes.
+    // Adopt this outbox's exact delta baseline before saving; unrelated caches
+    // and network readiness remain independent of this durability barrier.
+    await store.hydrate();
     await store.mutateDurably(mutator, { row }, cmid);
   } catch (error) {
     qStatus.delete(cmid);
@@ -2800,6 +2811,7 @@ async function qAdd(
     session_id: sessionId,
     mutation_id: cmid,
     target,
+    duration_ms: performance.now() - persistStartedAt,
   });
   const ackLabel = target === "drafts" || target === "scheduled"
     ? "Save draft"

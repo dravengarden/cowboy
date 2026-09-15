@@ -25,6 +25,7 @@ export class ClientOperations {
       attrs: Record<string, string>,
     ) => void,
     private readonly now: () => number = () => performance.now(),
+    private readonly confirmed: (cmid: string, milliseconds: number) => void = () => {},
   ) {}
 
   submit(session: string, cmid: string): string | undefined {
@@ -56,10 +57,12 @@ export class ClientOperations {
       if (!op || op.session !== session || op.acknowledged) continue;
       op.acknowledged = true;
       op.span?.end();
-      this.duration("command", this.now() - op.started, {
+      const milliseconds = this.now() - op.started;
+      this.duration("command", milliseconds, {
         operation: "submit",
         transport: "websocket",
       });
+      this.confirmed(id, milliseconds);
     }
   }
 
