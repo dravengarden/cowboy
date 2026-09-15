@@ -87,9 +87,9 @@ Deno.test("usage cards keep first-party product order and unknown cards stable",
   assertEquals(
     usageCardProviders(snapshot).map((usage) => usage.provider),
     [
+      "anthropic",
       "openai",
       "xai",
-      "anthropic",
       "deepseek",
       "gemini",
       "future-b",

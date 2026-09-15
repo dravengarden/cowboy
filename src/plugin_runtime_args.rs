@@ -1725,7 +1725,7 @@ mod tests {
         assert_eq!(usage_activity_agent_ids("openai"), &[] as &[&str]);
         assert_eq!(
             usage_accounts(),
-            ["openai", "xai", "anthropic", "deepseek", "gemini"]
+            ["anthropic", "openai", "xai", "deepseek", "gemini"]
         );
         assert_eq!(
             provider_info_urls_env("deepseek"),

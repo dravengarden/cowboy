@@ -161,15 +161,19 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
   assertEquals(usageErrorKind("openai"), "raw");
   assertEquals(usageErrorKind("xai"), "raw");
   assertEquals(usageErrorKind("gemini"), "raw");
-  assertEquals(usageCardOrder("openai"), 0);
+  assertEquals(usageCardOrder("anthropic"), 0);
+  assertEquals(usageCardOrder("openai"), 1);
+  assertEquals(usageCardOrder("xai"), 2);
+  assertEquals(usageTopBarWindowMinutes("anthropic"), [300, 10080]);
   assertEquals(usageTopBarWindowMinutes("openai"), [300, 10080]);
   assertEquals(usageWidgetKind("openai"), "openai-weekly");
+  assertEquals(usageWidgetKind("anthropic"), "anthropic-weekly");
   assertEquals(usageWidgetKind("xai"), "xai-included");
   assertEquals(usageWidgetKind("deepseek"), "deepseek-balance");
   assertEquals(usageWidgetKind("gemini"), "none");
   assertEquals(
     usageEmptyMessage("anthropic"),
-    "Waiting for session activity. Plan limits appear after the Provider reports them.",
+    "Plan limits appear after the Provider reports a rate-limit event.",
   );
   assertEquals(
     usageEmptyMessage("gemini"),
@@ -181,10 +185,12 @@ Deno.test("host usage specs overlay parser, order, errors, and top-bar windows",
   assertEquals(usageOmitEmptyLimits("deepseek"), true);
   assertEquals(usageOmitEmptyLimits("openai"), false);
   assertEquals(usageWidgetShape("openai"), "percent");
+  assertEquals(usageWidgetShape("anthropic"), "percent");
   assertEquals(usageWidgetShape("xai"), "percent");
   assertEquals(usageWidgetShape("deepseek"), "balance");
   assertEquals(usageWidgetShape("gemini"), "none");
   assertEquals(usageWidgetWindow("openai"), 10080);
+  assertEquals(usageWidgetWindow("anthropic"), 10080);
   assertEquals(usageWidgetWindow("xai"), undefined);
   assertEquals(
     usageErrorAuth("openai"),
