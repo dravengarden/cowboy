@@ -5,6 +5,7 @@ use super::connected::http::Http;
 use super::*;
 use serde_json::{Value, json};
 
+mod catalog_lifetime;
 mod copy;
 mod evidence;
 mod exercise;

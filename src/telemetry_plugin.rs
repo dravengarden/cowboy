@@ -217,7 +217,7 @@ pub(crate) fn controller_exporter(
                 Some(otlp) => serde_json::to_value(otlp).expect("OTLP envelope"),
                 None => serde_json::json!({"logs": batch.logs, "metrics": batch.metrics}),
             };
-            if !fence.allows_legacy() {
+            if !fence.allows_legacy() || !release.current(&catalog) {
                 return crate::observability::ExportReceipt::default();
             }
             let result = control.invoke_plugin_host(binding, payload).await;

@@ -28,6 +28,10 @@ use crate::plugin_host_bundle::{
     HOST_BUNDLE_SCHEMA_VERSION, MAX_HOST_BUNDLE_BYTES, PluginHostBundle,
 };
 
+mod lease;
+use lease::ReleaseObservation;
+pub(crate) use lease::VerifiedPluginRelease;
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PluginCatalogEntry {
     pub plugin_id: String,
@@ -62,6 +66,7 @@ struct CatalogArtifact {
     desired: DesiredPlugin,
     package: PluginPackage,
     host_bundle: Option<PluginHostBundle>,
+    incarnation: Arc<()>,
 }
 
 #[derive(Clone)]
@@ -93,9 +98,14 @@ pub(crate) struct VerifiedTelemetryRelease {
     contract: TelemetryBackendContract,
     generation_digest: String,
     contract_fingerprint: String,
+    observation: ReleaseObservation,
 }
 
 impl VerifiedTelemetryRelease {
+    pub(crate) fn current(&self, catalog: &PluginCatalog) -> bool {
+        self.observation.current(catalog)
+    }
+
     pub(crate) fn matches_installation(
         &self,
         installation: &crate::machine_protocol::telemetry_binding::BindingInstallation,
@@ -380,7 +390,7 @@ impl PluginCatalog {
     ) -> Result<usize> {
         let _refresh = self.refresh_lock.lock().await;
         let current = self.state.read().clone();
-        let external = self.load_external()?;
+        let mut external = self.load_external()?;
         let (releases, _) = self.select_host_releases(&external, &self.host_policy)?;
         let candidate_ids = releases
             .iter()
@@ -398,7 +408,18 @@ impl PluginCatalog {
         let runtime = Arc::new(runtime);
         let count = external.len();
         self.record_host_authority()?;
-        *self.state.write() = Arc::new(CatalogSnapshot {
+        let mut accepted = self.state.write();
+        // Only accepted, continuous *complete envelopes* retain a lease. All
+        // fallible validation/staging above must finish before this publication.
+        // Never revive a removed release from retained runtime generations.
+        for (key, next) in &mut external {
+            if let Some(previous) = accepted.external.get(key)
+                && previous.desired == next.desired
+            {
+                next.incarnation = Arc::clone(&previous.incarnation);
+            }
+        }
+        *accepted = Arc::new(CatalogSnapshot {
             external,
             runtime: Some(runtime),
         });
@@ -408,8 +429,8 @@ impl PluginCatalog {
     /// Install a fail-closed empty runtime after a startup activation failure.
     pub(crate) fn install_empty_runtime(&self) -> Arc<crate::plugin_runtime::PluginRuntime> {
         let runtime = Arc::new(crate::plugin_runtime::PluginRuntime::empty());
-        let current = self.state.read().clone();
-        *self.state.write() = Arc::new(CatalogSnapshot {
+        let mut current = self.state.write();
+        *current = Arc::new(CatalogSnapshot {
             external: current.external.clone(),
             runtime: Some(Arc::clone(&runtime)),
         });
@@ -499,8 +520,8 @@ impl PluginCatalog {
 
     /// No latest/version fallback and no embedded/source-only contract. Trust
     /// is the currently accepted Catalog snapshot; refresh failure retains the
-    /// previous snapshot under the existing Catalog policy. An in-flight call
-    /// may finish against its resolved snapshot, not an arbitrary future one.
+    /// previous snapshot under the existing Catalog policy. The result retains
+    /// its original observation; callers recheck it at later effect boundaries.
     pub(crate) fn resolve_telemetry_backend(
         &self,
         plugin_id: &str,
@@ -521,6 +542,7 @@ impl PluginCatalog {
             contract: contract.clone(),
             generation_digest: digest.to_owned(),
             contract_fingerprint: artifact.package.contract_fingerprint.clone(),
+            observation: ReleaseObservation::capture(artifact),
         })
     }
 
@@ -766,6 +788,7 @@ fn catalog_artifact(
         },
         package,
         host_bundle,
+        incarnation: Arc::new(()),
     })
 }
 
@@ -906,6 +929,8 @@ mod tests {
     use super::*;
     use sha2::Digest as _;
     use std::os::unix::fs::PermissionsExt as _;
+
+    mod leases;
 
     fn unlock_tree(path: &Path) {
         let Ok(metadata) = fs::symlink_metadata(path) else {

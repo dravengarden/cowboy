@@ -27,6 +27,16 @@ the authenticated protocol-19 handshake, exact empty-worker generation setup,
 inventory and the flow's exact target/step/receipt. It forwards original bytes,
 never fabricates replies and refuses auth/session/export/legacy commands.
 
+The install/reinstall flow additionally holds two **real read-only preflight
+replies**, one installation target observation and one uninstall step lookup.
+While each HTTP request is awaiting that reply, an authenticated Catalog refresh
+accepts removal and then restoration of the identical signed release. The old
+request must return 409 without a durable intent, worker stop or Machine effect.
+Fresh install/reinstall requests still succeed. Separate bounded relay counters
+require exactly two correlated probe queries/replies; an uninstall write, forged
+reply or repeated probe is refused. The two rejected probes do not add operations
+to the five flows' stopped evidence or change the 45-check/90-read matrix.
+
 | Writer flow | Service evidence before reader startup | Machine evidence |
 | --- | --- | --- |
 | Install, then reinstall identical bytes with another ID | Two completed operations, full exact receipts | Two Applied receipts, distinct incarnations; second CAS targets the first |

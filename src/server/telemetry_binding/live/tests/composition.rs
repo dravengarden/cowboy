@@ -139,6 +139,39 @@ async fn resolved_binding_retains_catalog_acceptance_rules_without_reviving_a_fa
     assert_eq!(f.sends.load(Ordering::Relaxed), 0);
 }
 
+pub(super) async fn remove_and_restore_release(f: &Fixture) {
+    let storage = crate::plugin_storage::PluginStorage::sqlite_files(
+        crate::plugin_dir::PluginDir::open(f.root.path()).unwrap(),
+    );
+    let marker = f.root.path().join("catalog/victoria.release.json");
+    let release = fs::read(&marker).unwrap();
+    fs::remove_file(&marker).unwrap();
+    assert_eq!(f.catalog.refresh_with_runtime(&storage).await.unwrap(), 0);
+    fs::write(&marker, release).unwrap();
+    assert_eq!(f.catalog.refresh_with_runtime(&storage).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn resolved_binding_does_not_revive_after_catalog_aba_between_checks() {
+    let f = Fixture::new(true, false).await;
+    let intent = f.select();
+    let effects = f.bind(&intent).unwrap();
+    remove_and_restore_release(&f).await;
+    // No current() call while the release was absent. The Catalog owner must
+    // remember the accepted discontinuity, even when the bytes are identical.
+    assert!(!effects.current());
+    assert!(!effects.authorized(&intent).await);
+    assert!(
+        effects
+            .dispatch(&intent.machine_step().unwrap())
+            .await
+            .is_err()
+    );
+    assert_eq!(f.sends.load(Ordering::Relaxed), 0);
+    assert_eq!(f.queries.load(Ordering::Relaxed), 0);
+    assert!(f.bind(&intent).unwrap().current());
+}
+
 #[tokio::test]
 async fn resolved_binding_fences_the_last_enqueue_check_without_losing_read_only_observation() {
     let f = Fixture::new(true, false).await;

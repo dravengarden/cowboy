@@ -208,7 +208,7 @@ async fn coordinate(
 struct LiveEffects {
     state: Arc<AppState>,
     machine: String,
-    desired: DesiredPlugin,
+    release: crate::plugin_catalog::VerifiedPluginRelease,
     connection: ConnectionToken,
     authority: InstallationAuthority,
     intent: InstallIntent,
@@ -217,23 +217,16 @@ struct LiveEffects {
 impl Effects for LiveEffects {
     async fn authorized(&self) -> bool {
         let state = &self.state;
-        let release = &self.desired.release;
+        let desired = self.release.desired();
         let valid = self.authority.within_budget()
             && self.authority.intent() == &self.intent
             && state.machine_control.is_current(&self.connection)
-            && state
-                .plugin_catalog
-                .resolve(
-                    &release.plugin_id,
-                    Some(&release.plugin_version),
-                    Some(&release.artifact_digest),
-                )
-                .is_ok_and(|desired| desired == self.desired)
-            && plugin_install_compatibility(state, &self.machine, &self.desired)
+            && self.release.current(&state.plugin_catalog)
+            && plugin_install_compatibility(state, &self.machine, desired)
                 .await
                 .is_ok_and(|problem| problem.is_none())
-            && (release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider
-                || agent_plugin_install_compatibility(state, &self.machine, &self.desired)
+            && (desired.release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider
+                || agent_plugin_install_compatibility(state, &self.machine, desired)
                     .await
                     .is_ok_and(|problem| problem.is_none()))
             && self
@@ -242,16 +235,14 @@ impl Effects for LiveEffects {
                     ProductRequestAuth::from(state.as_ref()),
                     &state.service_id,
                     &self.machine,
-                    &self.desired,
+                    desired,
                 )
                 .await
             && state.machine_control.is_current(&self.connection)
             // The Operator/compatibility reads may have waited for storage.
             // Recheck Catalog trust after those awaits, immediately before the
             // caller can enqueue an effect on the captured connection.
-            && state.plugin_catalog.resolve(
-                &release.plugin_id, Some(&release.plugin_version), Some(&release.artifact_digest),
-            ).is_ok_and(|desired| desired == self.desired)
+            && self.release.current(&state.plugin_catalog)
             && self.authority.within_budget();
         if !valid {
             self.authority.revoke();
@@ -260,10 +251,12 @@ impl Effects for LiveEffects {
     }
 
     async fn needs_auth_sync(&self, before_install: bool) -> bool {
-        if self.desired.release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
+        if self.release.desired().release.plugin_kind
+            != cowboy_plugin_sdk::PluginKind::AgentProvider
+        {
             return false;
         }
-        let plugin = &self.desired.release.plugin_id;
+        let plugin = &self.release.desired().release.plugin_id;
         let authentication = self.state.provider_auth.status(plugin);
         if !before_install {
             return authentication.is_some();
@@ -278,7 +271,7 @@ impl Effects for LiveEffects {
         let Ok(envelope) = provider_auth_envelope_for_machine(
             &self.state,
             &self.machine,
-            &self.desired.release.plugin_id,
+            &self.release.desired().release.plugin_id,
         )
         .await
         else {
@@ -296,7 +289,10 @@ impl Effects for LiveEffects {
     }
 
     async fn install(&self, step: &InstallStep) -> Result<InstallObservation, CommandRequestError> {
-        if !self.authority.matches_live_step(step) {
+        if !self.authority.matches_live_step(step)
+            || !self.release.current(&self.state.plugin_catalog)
+        {
+            self.authority.revoke();
             return Err(CommandRequestError {
                 certainty: CommandFailure::NotSent,
                 detail: "installation confirmation no longer matches the step".into(),
@@ -305,7 +301,7 @@ impl Effects for LiveEffects {
         dispatch(
             &self.state.machine_control,
             &self.connection,
-            &self.desired,
+            self.release.desired(),
             step,
         )
         .await
@@ -325,14 +321,21 @@ async fn dispatch(
 
 async fn run_admitted(effects: LiveEffects, mut fence: InstallationFence) -> Response {
     // Preserve the existing typed compatibility response at initial admission.
-    match plugin_install_compatibility(&effects.state, &effects.machine, &effects.desired).await {
+    match plugin_install_compatibility(&effects.state, &effects.machine, effects.release.desired())
+        .await
+    {
         Ok(Some(problem)) => return plugin_compatibility_response(problem),
         Err(_) => return Outcome::NotDispatched.response(),
         Ok(None) => {}
     }
-    if effects.desired.release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider {
-        match agent_plugin_install_compatibility(&effects.state, &effects.machine, &effects.desired)
-            .await
+    if effects.release.desired().release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+    {
+        match agent_plugin_install_compatibility(
+            &effects.state,
+            &effects.machine,
+            effects.release.desired(),
+        )
+        .await
         {
             Ok(Some(problem)) => return provider_compatibility_response(problem),
             Err(_) => return Outcome::NotDispatched.response(),
@@ -423,20 +426,20 @@ pub(super) async fn api_machine_plugin_install(
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
         Ok(None) => {}
     }
-    let desired =
-        match state
-            .plugin_catalog
-            .resolve(&plugin, Some(&request.version), Some(&request.digest))
-        {
-            Ok(desired) => desired,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    "Select an exact trusted Plugin release",
-                )
-                    .into_response();
-            }
-        };
+    let release = match state.plugin_catalog.resolve_verified_exact(
+        &plugin,
+        &request.version,
+        &request.digest,
+    ) {
+        Ok(release) => release,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                "Select an exact trusted Plugin release",
+            )
+                .into_response();
+        }
+    };
     let connection = match state.machine_control.operation_connection(&machine) {
         Ok(connection) => connection,
         Err(_) => return Outcome::NotDispatched.response(),
@@ -462,7 +465,8 @@ pub(super) async fn api_machine_plugin_install(
         _ => return Outcome::NotDispatched.response(),
     };
     let authority =
-        match approval.bind_installation(&machine, &desired, request.operation_id, target) {
+        match approval.bind_installation(&machine, release.desired(), request.operation_id, target)
+        {
             Ok(authority) => authority,
             Err(_) => return StatusCode::BAD_REQUEST.into_response(),
         };
@@ -483,7 +487,7 @@ pub(super) async fn api_machine_plugin_install(
         LiveEffects {
             state,
             machine,
-            desired,
+            release,
             connection,
             authority,
             intent,

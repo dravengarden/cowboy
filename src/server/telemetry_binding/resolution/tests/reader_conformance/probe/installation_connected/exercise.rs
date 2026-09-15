@@ -70,6 +70,9 @@ pub(super) async fn prepare(
 }
 
 async fn exercise(pair: &mut Pair<'_>, flow: Flow) -> Result<(), Failure> {
+    if flow == Flow::InstallAndReinstall {
+        catalog_lifetime::install(pair).await?;
+    }
     let body = pair.request(FIRST);
     let path = endpoint();
     if flow == Flow::ControllerCrashAfterApplied {
@@ -94,6 +97,7 @@ async fn exercise(pair: &mut Pair<'_>, flow: Flow) -> Result<(), Failure> {
     let reply = pair.http.call(Method::POST, &path, Some(body)).await?;
     if flow == Flow::InstallAndReinstall {
         check(reply.status == StatusCode::NO_CONTENT)?;
+        catalog_lifetime::uninstall(pair).await?;
         let reply = pair
             .http
             .call(Method::POST, &path, Some(pair.request(SECOND)))
@@ -143,5 +147,11 @@ fn verify_counts(counts: &WireCounts, flow: Flow) -> Result<(), Failure> {
             && counts.receipts_forwarded == forwarded
             && counts.dropped_receipts == delivered - forwarded
             && counts.forced_disconnects == disconnected,
-    )
+    )?;
+    let probes = if flow == Flow::InstallAndReinstall {
+        2
+    } else {
+        0
+    };
+    check(counts.catalog_probe_queries == probes && counts.catalog_probe_receipts == probes)
 }

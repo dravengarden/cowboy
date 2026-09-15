@@ -23,6 +23,12 @@ and accepting a production effect are different milestones.
   [Controller release](releases/resolved-telemetry-ports-2026-09-14.md) passed
   all 45 connected flows and nine Victoria pairs and was activated without
   restarting the resident Machine, workers or Victoria processes.
+- [Core verified release observations](plugin-release-leases.md) preserve the
+  original exact Catalog lifetime across installation, uninstall and telemetry
+  awaits. Accepted removal/re-addition or publisher-envelope replacement cannot
+  revive old confirmation; rejected candidates and unrelated releases preserve
+  continuity. This extends the finite trust boundary, not graph/state authority.
+  Publication and activation are tracked separately in that document.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -74,7 +80,7 @@ and accepting a production effect are different milestones.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Extend the finite telemetry live-resolution path to applicable graph contracts and actual Service/Workspace/Session scope identity, state leases and policy; link exact resolved results to finite domain executors | General verified-release/site/state-lease vectors beyond the telemetry per-installation observation fence and shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend the shared verified release observation and finite telemetry resolution to applicable graph contracts and actual Service/Workspace/Session scope identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond the accepted-Catalog and telemetry per-installation observation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |

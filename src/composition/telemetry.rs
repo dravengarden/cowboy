@@ -13,7 +13,7 @@ use crate::machine_protocol::telemetry_binding::{
     BindingInstallation, BindingObservation, BindingStep,
 };
 use crate::machine_protocol::telemetry_export::{ExportAttempt, ExportReceipt};
-use crate::plugin_catalog::PluginCatalog;
+use crate::plugin_catalog::{PluginCatalog, VerifiedTelemetryRelease};
 use anyhow::{Result, ensure};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,32 +25,12 @@ enum Requirement {
 
 struct ResolvedPort {
     installation: BindingInstallation,
-    requirement: Requirement,
+    release: VerifiedTelemetryRelease,
     lease: TelemetryInstallationLease,
     ended: AtomicBool,
 }
 
 impl ResolvedPort {
-    fn trusted(
-        catalog: &PluginCatalog,
-        installation: &BindingInstallation,
-        requirement: Requirement,
-    ) -> bool {
-        catalog
-            .resolve_telemetry_backend(
-                &installation.plugin_id,
-                &installation.plugin_version,
-                &String::from(installation.generation_digest.clone()),
-            )
-            .is_ok_and(|release| {
-                release.matches_installation(installation)
-                    && match requirement {
-                        Requirement::Binding => true,
-                        Requirement::Otlp(signal) => release.operation_for(Some(signal)).is_some(),
-                    }
-            })
-    }
-
     fn resolve(
         catalog: &PluginCatalog,
         control: &MachineControl,
@@ -58,8 +38,17 @@ impl ResolvedPort {
         installation: BindingInstallation,
         requirement: Requirement,
     ) -> Result<Self> {
+        let release = catalog.resolve_telemetry_backend(
+            &installation.plugin_id,
+            &installation.plugin_version,
+            &String::from(installation.generation_digest.clone()),
+        )?;
         ensure!(
-            Self::trusted(catalog, &installation, requirement),
+            release.matches_installation(&installation)
+                && match requirement {
+                    Requirement::Binding => true,
+                    Requirement::Otlp(signal) => release.operation_for(Some(signal)).is_some(),
+                },
             "telemetry resolution requires an exact verified contract"
         );
         let lease = control
@@ -67,16 +56,14 @@ impl ResolvedPort {
             .ok_or_else(|| anyhow::anyhow!("telemetry resolution installation unavailable"))?;
         Ok(Self {
             installation,
-            requirement,
+            release,
             lease,
             ended: AtomicBool::new(false),
         })
     }
 
     fn current(&self, catalog: &PluginCatalog, live: bool) -> bool {
-        let valid = !self.ended.load(Ordering::Acquire)
-            && live
-            && Self::trusted(catalog, &self.installation, self.requirement);
+        let valid = !self.ended.load(Ordering::Acquire) && live && self.release.current(catalog);
         if !valid {
             self.ended.store(true, Ordering::Release);
         }

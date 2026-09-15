@@ -4,6 +4,9 @@ use crate::machine_protocol::plugin_install::{
     InstallLookup, InstallOutcome, InstallStep, InstallTarget, InstallTargetObservation,
 };
 
+mod catalog;
+pub(super) use catalog::Kind as CatalogProbeKind;
+
 pub(super) struct Proxy {
     pub address: std::net::SocketAddr,
     record: Arc<parking_lot::Mutex<Record>>,
@@ -20,6 +23,7 @@ struct Record {
     target_query: Option<(String, String)>,
     target: Option<InstallTarget>,
     steps: Vec<InstallStep>,
+    probe: Option<catalog::Probe>,
 }
 
 impl Record {
@@ -34,6 +38,7 @@ impl Record {
             target_query: None,
             target: None,
             steps: Vec::new(),
+            probe: None,
         }
     }
 }
@@ -94,6 +99,17 @@ impl Proxy {
                         Ok(Action::Drop) => continue,
                         Ok(Action::Disconnect) => break,
                         Ok(Action::Forward) => {}
+                        Ok(Action::Hold) => {
+                            let gate = observed.lock().probe.as_ref().unwrap().gate.clone();
+                            gate.reached.notify_one();
+                            if tokio::time::timeout(DEADLINE, gate.resume.notified())
+                                .await
+                                .is_err()
+                            {
+                                observed.lock().failure = Some(Failure::Timeout);
+                                break;
+                            }
+                        }
                     }
                     let sent = if from_machine {
                         tokio::time::timeout(Duration::from_secs(2), controller.send(message)).await
@@ -125,6 +141,22 @@ impl Proxy {
         self.record.lock().counts.clone()
     }
 
+    pub fn hold_catalog_probe(&self, kind: CatalogProbeKind) -> Result<catalog::Gate, Failure> {
+        let mut record = self.record.lock();
+        check(
+            !record.readonly && record.flow == Flow::InstallAndReinstall && record.probe.is_none(),
+        )?;
+        let probe = catalog::Probe::new(kind);
+        let gate = probe.gate.clone();
+        record.probe = Some(probe);
+        Ok(gate)
+    }
+
+    pub fn finish_catalog_probe(&self) -> Result<(), Failure> {
+        let mut record = self.record.lock();
+        check(record.probe.take().is_some_and(|probe| probe.received))
+    }
+
     pub async fn applied(&self) -> Result<(), Failure> {
         tokio::time::timeout(DEADLINE, async {
             while self.counts()?.receipts_observed == 0 {
@@ -150,6 +182,7 @@ enum Action {
     Forward,
     Drop,
     Disconnect,
+    Hold,
 }
 
 fn inspect(message: &Message, from_machine: bool, record: &mut Record) -> Result<Action, Failure> {
@@ -172,6 +205,12 @@ fn inspect(message: &Message, from_machine: bool, record: &mut Record) -> Result
 }
 
 fn command_frame(command: MachineCommand, record: &mut Record) -> Result<Action, Failure> {
+    if let Some(probe) = &mut record.probe
+        && probe.command(&command)?
+    {
+        record.counts.catalog_probe_queries += 1;
+        return Ok(Action::Forward);
+    }
     match command {
         MachineCommand::RefreshInventory { .. } => {}
         MachineCommand::ObservePluginInstallation { request_id, query } if !record.readonly => {
@@ -227,6 +266,12 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<Action,
 }
 
 fn event_frame(event: MachineEvent, record: &mut Record) -> Result<Action, Failure> {
+    if let Some(probe) = &mut record.probe
+        && probe.event(&event)?
+    {
+        record.counts.catalog_probe_receipts += 1;
+        return Ok(Action::Hold);
+    }
     match event {
         MachineEvent::PluginInstallationTarget {
             request_id,

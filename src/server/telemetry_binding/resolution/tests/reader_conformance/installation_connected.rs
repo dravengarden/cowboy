@@ -49,6 +49,8 @@ pub(super) struct WireCounts {
     pub receipts_forwarded: u32,
     pub dropped_receipts: u32,
     pub forced_disconnects: u32,
+    pub catalog_probe_queries: u32,
+    pub catalog_probe_receipts: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]

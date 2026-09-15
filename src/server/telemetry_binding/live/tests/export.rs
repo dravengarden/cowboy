@@ -25,6 +25,20 @@ async fn resolved_export_does_not_revive_after_observed_inventory_aba() {
 }
 
 #[tokio::test]
+async fn resolved_export_does_not_revive_after_catalog_aba_between_checks() {
+    let f = Fixture::new(true, false).await;
+    let destination = Destination::new(StatusCode::OK, false).await;
+    configure(&f, &destination.endpoint);
+    f.coordinate(&f.select()).await;
+    let approval = Approval::new();
+    let export = scope(&f, attempt(&f, 0), &approval).unwrap();
+    composition::remove_and_restore_release(&f).await;
+    assert!(export.execute(&f.store, approval.auth()).await.is_err());
+    assert!(destination.requests.lock().is_empty());
+    assert!(scope(&f, attempt(&f, 0), &approval).is_ok());
+}
+
+#[tokio::test]
 async fn resolved_export_requires_its_verified_otlp_contract_and_original_input() {
     use crate::composition::telemetry::ResolvedExport;
     use crate::machine_control::CommandFailure;

@@ -163,7 +163,10 @@ async fn validate_intent(
     state: &Arc<AppState>,
     id: String,
     plan: PluginUninstallPlan,
-) -> Result<UninstallIntent> {
+) -> Result<(
+    UninstallIntent,
+    crate::plugin_catalog::VerifiedPluginRelease,
+)> {
     ensure!(now_ms() <= plan.expires_at_ms, "uninstall preview expired");
     ensure!(
         INSTALLATION_CAS_ENABLED || plan.installation_revision.is_none(),
@@ -182,13 +185,13 @@ async fn validate_intent(
         current.installation_revision == plan.installation_revision,
         "Plugin installation changed; refresh the uninstall plan"
     );
-    let trusted = state.plugin_catalog.resolve(
+    let trusted = state.plugin_catalog.resolve_verified_exact(
         &plan.plugin_id,
-        Some(&plan.plugin_version),
-        Some(&plan.generation_digest),
+        &plan.plugin_version,
+        &plan.generation_digest,
     )?;
     ensure!(
-        trusted.release.contract_fingerprint == plan.contract_fingerprint,
+        trusted.desired().release.contract_fingerprint == plan.contract_fingerprint,
         "uninstall release is not trusted"
     );
     let mut sessions: Vec<_> = state
@@ -239,7 +242,7 @@ async fn validate_intent(
         expires_at_ms: plan.expires_at_ms,
     };
     intent.validate()?;
-    Ok(intent)
+    Ok((intent, trusted))
 }
 
 /// Closed effects used by this coordinator, injectable for crash-window tests.
@@ -266,6 +269,7 @@ struct LiveEffects {
     connection: ConnectionToken,
     transport: PluginUninstallTransport,
     authority: UninstallAuthority,
+    release: crate::plugin_catalog::VerifiedPluginRelease,
 }
 
 fn require_applied_step(result: StepLookup) -> Result<(), CommandRequestError> {
@@ -293,17 +297,7 @@ impl Effects for LiveEffects {
                 intent,
             )
             .await
-            && self
-                .state
-                .plugin_catalog
-                .resolve(
-                    &intent.plugin_id,
-                    Some(&intent.plugin_version),
-                    Some(&intent.generation_digest),
-                )
-                .is_ok_and(|trusted| {
-                    trusted.release.contract_fingerprint == intent.contract_fingerprint
-                })
+            && self.release.current(&self.state.plugin_catalog)
             && intent.machine_step().is_ok_and(|step| {
                 self.state
                     .machine_control
@@ -609,11 +603,11 @@ async fn run_admitted(
     let result = async {
         let store = state.store.as_ref().context("Plugin lifecycle requires persistence")?;
         let connection = state.machine_control.operation_connection(&plan.machine_id).map_err(anyhow::Error::msg)?;
-        let intent = validate_intent(&state, id.clone(), plan).await?;
+        let (intent, release) = validate_intent(&state, id.clone(), plan).await?;
         let step = intent.machine_step()?;
         let transport = state.machine_control.plugin_uninstall_transport(&connection, &step).map_err(anyhow::Error::msg)?;
         let authority = approval.bind(&intent)?;
-        let effects = LiveEffects { state: Arc::clone(&state), connection, transport, authority };
+        let effects = LiveEffects { state: Arc::clone(&state), connection, transport, authority, release };
         if transport == PluginUninstallTransport::Leased {
             let observation = state.machine_control.plugin_uninstall_step(&effects.connection, &step, true)
                 .await.map_err(|_| anyhow::anyhow!("Machine operation preflight unavailable"))?;

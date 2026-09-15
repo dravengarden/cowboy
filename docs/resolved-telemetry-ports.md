@@ -51,11 +51,13 @@ whole-inventory conservative fence; this does not silently change other domains.
 
 A failed current check is terminal for the resolved port. Catalog refresh keeps
 its existing contract: a failed candidate preserves the last accepted snapshot;
-a successful removal prevents resolution/current checks. This is not immediate
-trust-file revocation, nor detection of a Catalog removal/re-addition between
-checks. There is no remote-installation observation guarantee before the Machine
-reports it. The Machine remains responsible for its actual installation CAS,
-original execution lease and private policy at the effect boundary.
+a successful removal ends the original [verified release observation](plugin-release-leases.md),
+even if identical bytes return between checks. Binding/export retain that
+original observation instead of minting another on each comparison. This is not
+immediate trust-file revocation or cancellation of effects already enqueued.
+There is no remote-installation observation guarantee before the Machine reports
+it. The Machine remains responsible for its actual installation CAS, original
+execution lease and private policy at the effect boundary.
 
 ## Authority and effects stay separate
 
