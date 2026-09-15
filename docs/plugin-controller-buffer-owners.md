@@ -1,6 +1,7 @@
 # Controller-owned buffer continuations
 
-Status: additive Controller implementation. The ordinary Review buffer and
+Status: [verified, unactivated Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md),
+blocked on six upstream Agent publications. The ordinary Review buffer and
 language APIs remain legacy; this is not the Web cutover or production
 Machine/Zed acceptance. It consumes the independently verified
 [Machine/native candidate](plugin-native-buffer-leases.md).

@@ -105,6 +105,11 @@ and accepting a production effect are different milestones.
   resource user but not a still-existing Session/path. Ordinary Review language
   reads and buffer calls remain legacy; native-generation rollout, abandoned
   browser cleanup, restart restoration and independent recovery remain open.
+  Its [Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
+  passed the complete gate (1,317 all-feature Rust tests) and immutable build.
+  All three actual Catalog readers agree on 72 ready releases, but activation
+  remains blocked by six missing upstream Agent publications. No component or
+  Plugin installation was activated by that task.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
