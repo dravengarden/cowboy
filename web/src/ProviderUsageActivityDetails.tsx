@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { expectHttpOk } from "./httpResponse";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import {
   Accordion,
@@ -322,7 +323,7 @@ export function ProviderUsageActivityDetails(
       }/activity?${query.toString()}`,
       { signal: controller.signal },
     ).then(async (response) => {
-      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+      await expectHttpOk(response, "Could not load usage activity");
       const next = record(await response.json());
       if (!next) throw new Error("Invalid activity response");
       setActivity(next);

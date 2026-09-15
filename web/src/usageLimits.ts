@@ -480,14 +480,24 @@ export function providerUsage(
   providerVersion?: string | undefined,
   providerDigest?: string | undefined,
 ): ProviderUsage | undefined {
+  return accountProviderUsage(
+    snapshot,
+    providerUsageAccount(provider, providerVersion, providerDigest),
+  );
+}
+
+export function providerUsageAccount(
+  provider: string | undefined,
+  providerVersion?: string | undefined,
+  providerDigest?: string | undefined,
+): string | undefined {
   if (!provider) return undefined;
-  const accountProvider = currentProviderEntry(
+  return currentProviderEntry(
     provider,
     providerVersion,
     providerDigest,
   )
     ?.manifest.host.account_usage?.provider;
-  return accountProviderUsage(snapshot, accountProvider);
 }
 
 export function accountProviderUsage(

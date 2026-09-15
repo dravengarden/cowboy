@@ -2404,3 +2404,13 @@ Desktop Vim + IME checks:
     compatibility path. This keeps the Obsidian/Capacitor native-resize model;
     Web keyboard padding, text input, IME, selection and caret ownership stay
     unchanged. See [Simulator evidence](../../../docs/ios-simulator.md#keyboard-viewport-ownership).
+
+107. **Session usage refresh uses the declared account identity.** The session
+    information sheet used the agent ID (`codex`) for an API keyed by account
+    (`openai`), then discarded the server's explanation and showed only HTTP
+    400. Share the exact Provider account lookup between display and refresh,
+    and preserve contextual HTTP failure messages. This is a data-request
+    change only: it adds no editor, DOM, focus, selection, IME, layout, or touch
+    behavior. Validate the API contract and Web gates; the editor verification
+    matrix applies to editor changes. See the
+    [failure analysis](../../../docs/usage-refresh-http-errors.md).

@@ -128,6 +128,8 @@ import {
   providerUsage,
   type UsageSnapshot,
 } from "./usageLimits";
+import { readUsage, refreshSessionUsage } from "./usageApi";
+import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
@@ -7333,7 +7335,7 @@ function SessionInfoSection({
         `/api/sessions/${encodeURIComponent(session.id)}/cache-protection`,
         { signal: controller.signal },
       ).then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+        await expectHttpOk(response, "Could not load cache protection status");
         const value = await response.json() as DeepseekCacheProtectionStatus;
         if (!["protected", "inactive", "disabled"].includes(value.state)) {
           throw new Error("invalid cache status");
@@ -7953,21 +7955,19 @@ function SessionProviderUsage({
     return (): void => globalThis.clearInterval(timer);
   }, []);
   const load = useCallback(async (manual: boolean): Promise<void> => {
-    const response = await fetch(
-      manual ? `/api/usage/${encodeURIComponent(provider)}` : "/api/usage",
-      { method: manual ? "POST" : "GET" },
+    setSnapshot(
+      await (manual
+        ? refreshSessionUsage(provider, providerVersion, providerDigest)
+        : readUsage()),
     );
-    if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-    setSnapshot(await response.json() as UsageSnapshot);
     setError(null);
     setClock(Date.now());
-  }, [provider]);
+  }, [provider, providerVersion, providerDigest]);
   useEffect(() => {
     const ctrl = new AbortController();
-    void fetch("/api/usage", { signal: ctrl.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-        setSnapshot(await response.json() as UsageSnapshot);
+    void readUsage(ctrl.signal)
+      .then((snapshot) => {
+        setSnapshot(snapshot);
         setError(null);
       })
       .catch((cause: unknown) => {

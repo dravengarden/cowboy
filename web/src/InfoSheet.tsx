@@ -43,6 +43,7 @@ import {
   usageResetSchedule,
   type UsageSnapshot,
 } from "./usageLimits";
+import { readUsage, refreshUsage } from "./usageApi";
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
@@ -668,11 +669,7 @@ function UsageInfoSection(): React.JSX.Element {
     setRefreshing(true);
     setError(null);
     try {
-      const response = await fetch("/api/usage", {
-        method: manual ? "POST" : "GET",
-      });
-      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-      setSnapshot(await response.json() as UsageSnapshot);
+      setSnapshot(await (manual ? refreshUsage() : readUsage()));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
     } finally {
@@ -682,14 +679,7 @@ function UsageInfoSection(): React.JSX.Element {
   const loadProvider = useCallback(async (provider: string): Promise<void> => {
     setError(null);
     try {
-      const response = await fetch(
-        `/api/usage/${encodeURIComponent(provider)}`,
-        {
-          method: "POST",
-        },
-      );
-      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
-      setSnapshot(await response.json() as UsageSnapshot);
+      setSnapshot(await refreshUsage(provider));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Refresh failed");
       throw cause;
