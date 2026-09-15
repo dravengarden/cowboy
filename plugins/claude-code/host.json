@@ -60,6 +60,13 @@
     "error_auth": "Anthropic account status expired. Sign in to Claude Code again.",
     "error_fetch": "Claude Code could not report the Anthropic account.",
     "order": 0,
+    "top_bar_windows": [
+      300,
+      10080
+    ],
+    "widget": "anthropic-weekly",
+    "widget_shape": "percent",
+    "widget_window": 10080,
     "empty": "Plan limits appear after the Provider reports a rate-limit event.",
     "limit_id_prefix": "claude",
     "limit_labels": [

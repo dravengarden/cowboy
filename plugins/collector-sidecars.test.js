@@ -194,6 +194,22 @@ Deno.test("Anthropic exposes no reset capability to collect", () => {
   equal(usage.reset, undefined, "Anthropic reset verb");
   equal(usage.reset_argv, undefined, "Anthropic reset argv");
   equal(usage.order, 0, "Anthropic card order");
+  // The widget renders by shape, so the opaque id only has to be stable. It
+  // stays silent until Anthropic reports a rate-limit event, because the
+  // collector claims no rate_limits of its own.
+  equal(usage.widget_shape, "percent", "Anthropic widget shape");
+  equal(usage.widget_window, 10080, "Anthropic widget window");
+  equal(usage.top_bar_windows, [300, 10080], "Anthropic top bar windows");
+  // Compound labels are filtered out of the top bar, so every declared window
+  // must have an account-wide label backing it.
+  const accountWide = usage.limit_labels
+    .filter((label) => !label.label.includes(" · "))
+    .map((label) => label.window_minutes);
+  equal(
+    usage.top_bar_windows.every((w) => accountWide.includes(w)),
+    true,
+    "top bar windows have account-wide labels",
+  );
   // Claude Code has no reset-credit concept, so the collector must refuse any
   // operation other than the read-only collect.
   equal(
