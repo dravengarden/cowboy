@@ -166,3 +166,7 @@ passed the complete gate and retained its 15 observed workers. The subsequent
 [buffered-reader release](releases/plugin-buffered-code-reads-2026-09-15.md)
 passed the expanded gate, is published and activated, and retained all 16
 observed workers, Machine and Victoria in its own bounded deployment window.
+The [file-page Controller release](releases/plugin-file-page-scopes-2026-09-15.md)
+passed both complete gates, is published and activated, and retained its 16
+observed workers. Its independent immutable core adapter passed seven disposable
+process cases; a running remote adapter upgrade remains separate.

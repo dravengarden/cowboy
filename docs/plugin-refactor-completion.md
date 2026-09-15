@@ -60,6 +60,10 @@ and accepting a production effect are different milestones.
   stale cursor via `304`. Local and cached readers repair UTF-8 page/view
   boundaries and incomplete EOF. Independent Code adapter tests are part of the
   complete gate; source coverage is not a running remote adapter upgrade.
+  The [file-page Controller release](releases/plugin-file-page-scopes-2026-09-15.md)
+  passed both complete gates and is published and activated with 16 workers
+  retained; its independently built core adapter passed seven actual disposable
+  process cases without upgrading a resident Machine.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -153,7 +157,8 @@ unconstrained workflow executor to hide these gaps.
   generation swap or native resume. No forced rebind, login or worker restart is
   authorized merely by a Controller/Web release.
 - **Remote core Code adapter:** the shared UTF-8 paging repair is source-tested
-  in the independent adapter feature graph, but Controller activation updates
+  in the independent feature graph and its exact immutable artifact passed seven
+  disposable process cases, but Controller activation updates
   only colocated reads and Controller-owned cursor bindings. Accept and activate
   the exact remote adapter through its separately authorized Machine release;
   do not infer that upgrade from the Unix socket fixture or retained Machine PID.
