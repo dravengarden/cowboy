@@ -29,8 +29,10 @@ use crate::plugin_host_bundle::{
 };
 
 mod lease;
+mod watch;
 use lease::ReleaseObservation;
 pub(crate) use lease::VerifiedPluginRelease;
+pub(crate) use watch::spawn as spawn_catalog_watcher;
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PluginCatalogEntry {
