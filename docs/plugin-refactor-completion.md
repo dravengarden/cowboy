@@ -107,9 +107,15 @@ and accepting a production effect are different milestones.
   browser cleanup, restart restoration and independent recovery remain open.
   Its [Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
   passed the complete gate (1,317 all-feature Rust tests) and immutable build.
-  All three actual Catalog readers agree on 72 ready releases, but activation
-  remains blocked by six missing upstream Agent publications. No component or
-  Plugin installation was activated by that task.
+  Its original six-publication prerequisite is now closed by
+  [independent signed Agent releases](releases/agent-publication-2026-09-15.md):
+  Linux old/new worker gates, actual Mac probes, four immutable reader roles,
+  all 24 public artifact URLs and automatic 78-release Catalog adoption passed.
+  The separately activated Controller `0fded719` includes this implementation;
+  the publication task retained all 13 observed workers and changed no installed
+  Plugin or component. Authenticated Catalog API/native acceptance remains
+  unchecked. Later main adds a separate Claude Code `3.1.23` release requirement;
+  the earlier six-release coverage is not acceptance of that newer package.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

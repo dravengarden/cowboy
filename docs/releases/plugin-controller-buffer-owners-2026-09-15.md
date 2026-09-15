@@ -1,9 +1,18 @@
 # Controller buffer-owner candidate — 2026-09-15
 
-Status: source and immutable Controller candidate verified; **not activated**.
+Historical status at the original gate: source and immutable Controller
+candidate verified; **not activated**.
 The production release gate refuses six missing upstream Agent publications.
 No Controller, Web, Machine, worker, Plugin installation or policy was changed
 by this task. This is not an end-to-end native/Review rollout receipt.
+
+Follow-up: the [six independent Agent publications](agent-publication-2026-09-15.md)
+now close this original prerequisite. The later, independently activated
+Controller `0fded719` includes the buffer-owner implementation, so the old
+candidate was not deployed over it. That follow-up records the exact live
+reader floor, automatic Catalog adoption and remaining authenticated/native
+acceptance, plus the separate newer Claude Code `3.1.23` publication requirement.
+The original failed gate and production snapshot below remain historical evidence.
 
 ## Candidate
 
