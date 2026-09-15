@@ -184,6 +184,31 @@ Actor::Deployer { key_id: String },   // "ci-2026-09"
 
 Removing human interaction must never remove the record of what acted.
 
+### The attribution change is the expensive part
+
+`Actor` is a closed tagged enum with `deny_unknown_fields`, and it is serialized
+into `InstallIntent` and `UninstallIntent`, which persist in the durable
+installation journal. A Controller that writes `{"kind":"policy", …}` therefore
+produces records that **every older reader rejects outright** — the previous
+Controller generation, the next-transaction recovery reader and every cold
+reader. That is the `foreign-identity` case the installation reader floors exist
+to cover.
+
+So the policy engine is not the cost. The cost is a reader-first rollout:
+
+1. Teach every reader to represent an unknown actor without failing, and accept
+   that floor first. No writer may emit the new variant before this lands.
+2. Only then add the writer and the policy engine.
+3. Re-accept `just plugin-install-reader-conformance` (168 checks across
+   immutable active, recovery and cold roles) and
+   `just plugin-install-connected-conformance` (five real flows, nine reader
+   pairs, 45 checks over 90 cold reads). Neither matrix exists in-tree; both
+   must be authored against real Controller/Machine pairs.
+
+Sequencing this wrong — shipping the writer before the readers — corrupts the
+recovery path for real installations, which is why it is called out here rather
+than left for whoever picks the layer up.
+
 ## Rollout
 
 1. Layer 1, standalone and already shipped here.
