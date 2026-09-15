@@ -10,24 +10,25 @@ completion of its graph/scope/state requirements.
 
 `resolve_verified_exact` returns `VerifiedPluginRelease`, with private fields,
 no Clone/serde/public constructor, and immutable desired release bytes. Its
-observation uses an in-process weak reference identity. The current Catalog
-must contain that exact identity at that exact key; another Catalog instance,
-a retained runtime generation or a serialized receipt cannot supply it.
+observation uses an in-process weak reference identity. The current Catalog must
+contain that exact identity at that exact key; another Catalog instance, a
+retained runtime generation or a serialized receipt cannot supply it.
 
 A successful refresh reuses the identity only if the **complete DesiredPlugin
 envelope** is unchanged, including signature, publisher key, package and bound
-host bytes. Removed, replaced and re-added entries get fresh identities. Rejected
-candidates never change the accepted snapshot or its observations. Unchanged
-refreshes, runtime-only activation and other releases do not invalidate a lease.
-Snapshot publication is protected by the existing Catalog lock; no new wire
-generation counter, global invalidation or second installer is introduced.
+host bytes. Removed, replaced and re-added entries get fresh identities.
+Rejected candidates never change the accepted snapshot or its observations.
+Unchanged refreshes, runtime-only activation and other releases do not
+invalidate a lease. Snapshot publication is protected by the existing Catalog
+lock; no new wire generation counter, global invalidation or second installer is
+introduced.
 
-| Finite consumer | Capture | Later checks |
-| --- | --- | --- |
-| Core installation | Exact Catalog lookup before awaiting the original Machine target observation | Original authority/compatibility checks, after their awaits, authentication sync and install dispatch |
-| Core uninstall | Exact trusted release during confirmation validation, before Machine preflight | Each existing finite authority/effect boundary; no fresh lookup can renew it |
-| Managed telemetry binding/export | Exact contract and original Machine installation observation at resolution | Original release and installation observations before dispatch; Machine installation lease also reaches its atomic enqueue check |
-| Explicit legacy telemetry | Exact signed contract per batch | Release observation recheck before existing host invocation; private legacy policy is unchanged |
+| Finite consumer                  | Capture                                                                        | Later checks                                                                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| Core installation                | Exact Catalog lookup before awaiting the original Machine target observation   | Original authority/compatibility checks, after their awaits, authentication sync and install dispatch                            |
+| Core uninstall                   | Exact trusted release during confirmation validation, before Machine preflight | Each existing finite authority/effect boundary; no fresh lookup can renew it                                                     |
+| Managed telemetry binding/export | Exact contract and original Machine installation observation at resolution     | Original release and installation observations before dispatch; Machine installation lease also reaches its atomic enqueue check |
+| Explicit legacy telemetry        | Exact signed contract per batch                                                | Release observation recheck before existing host invocation; private legacy policy is unchanged                                  |
 
 These observations are **not authorization**: the Operator/purpose, absolute and
 monotonic budget, original Machine connection, installation incarnation/CAS,
@@ -62,5 +63,10 @@ General verified graph resolution, Service/Workspace/Session identity, exclusive
 state leases, independent post-effect/native recovery and real account/device
 acceptance remain in the [completion ledger](plugin-refactor-completion.md).
 
-Release status: implemented with source regression tests; immutable role gates,
-remote publication and Controller-only activation are pending for this change.
+The [Controller release](releases/plugin-release-leases-2026-09-15.md) is
+published and active on Hawk. Complete source gates and 807 immutable role
+checks passed, including both real preflight ABA probes, 90 installation cold
+reads, 45 connected telemetry results and nine Victoria database pairs.
+Activation retained all 15 observed workers, Machine and Victoria processes; its
+record separately notes a recurring headless GTK portal failure in the host user
+units.

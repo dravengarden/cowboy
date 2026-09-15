@@ -28,7 +28,10 @@ and accepting a production effect are different milestones.
   awaits. Accepted removal/re-addition or publisher-envelope replacement cannot
   revive old confirmation; rejected candidates and unrelated releases preserve
   continuity. This extends the finite trust boundary, not graph/state authority.
-  Publication and activation are tracked separately in that document.
+  Its [Controller release](releases/plugin-release-leases-2026-09-15.md) passed
+  807 immutable role checks, including actual install/uninstall preflight ABA,
+  and is activated with Machine and worker identities retained. This does not
+  add generic graph execution or independent post-effect recovery.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
