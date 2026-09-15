@@ -72,6 +72,18 @@ idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts
 
+# Retain an actual product-store bundle before and after a latency change.
+send-latency-bundle OUTPUT:
+    node tools/send-latency-bundle.mjs "{{OUTPUT}}"
+
+# Controlled discovery/handshake/echo delays, actual Firefox IndexedDB and WS.
+send-latency-browser BROWSER BEFORE AFTER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" "$3"' latency "{{BROWSER}}" "{{BEFORE}}" "{{AFTER}}"
+
+# Admission failures must retain authored data and permanently fence replacements.
+send-admission-browser BROWSER BUNDLE:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/send-latency-browser.ts "$1" "$2" --safety' admission "{{BROWSER}}" "{{BUNDLE}}"
+
 # Build the public Cowboy product website from the first-party Plugin manifests.
 build-site:
     deno run --allow-read --allow-write=site-dist site/build.ts --out site-dist

@@ -6,6 +6,7 @@ Deno.test("operation retries keep context and only same-session live echoes coun
   let now = 1;
   const ended: string[] = [];
   const durations: string[] = [];
+  const confirmations: string[] = [];
   let starts = 0;
   const operations = new ClientOperations(
     (name) => {
@@ -19,6 +20,7 @@ Deno.test("operation retries keep context and only same-session live echoes coun
     },
     (name, ms) => durations.push(`${name}:${ms}`),
     () => now,
+    (id, ms) => confirmations.push(`${id}:${ms}`),
   );
   assertEquals(operations.submit("a", "one"), "parent-1");
   assertEquals(operations.submit("a", "one"), "parent-1");
@@ -26,6 +28,7 @@ Deno.test("operation retries keep context and only same-session live echoes coun
   operations.acknowledge("b", ["one"]);
   operations.firstOutput("a");
   assertEquals(durations, []);
+  assertEquals(confirmations, []);
   now = 11;
   operations.acknowledge("a", ["one"]);
   operations.acknowledge("a", ["one"]);
@@ -35,6 +38,7 @@ Deno.test("operation retries keep context and only same-session live echoes coun
   operations.firstOutput("a");
   operations.firstOutput("a");
   assertEquals(durations, ["command:10", "first_output:10"]);
+  assertEquals(confirmations, ["one:10"]);
   assertEquals(ended, ["command:ok", "first_output:ok"]);
 });
 
