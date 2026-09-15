@@ -177,3 +177,27 @@ fn batched_coordinates_match_utf16_boundaries_including_eof() {
         );
     }
 }
+
+#[test]
+fn buffer_update_ack_and_reload_invalidation_follow_the_pinned_protocol() {
+    let mut cache = Cache::default();
+    base(&mut cache, "abcdef");
+    let revision = cache.revision(7).unwrap();
+    let reload = proto::envelope::Payload::BufferReloaded(proto::BufferReloaded {
+        buffer_id: 7,
+        ..proto::BufferReloaded::default()
+    });
+    assert!(!crate::peer_request_requires_ack(&reload));
+    cache.observe(&reload);
+    assert!(cache.read(7, revision).is_err());
+    assert_eq!(cache.text_bytes, 0);
+    assert!(crate::peer_request_requires_ack(
+        &proto::envelope::Payload::UpdateBuffer(proto::UpdateBuffer::default())
+    ));
+    assert!(crate::peer_request_requires_ack(
+        &proto::envelope::Payload::Ping(proto::Ping {})
+    ));
+    assert!(!crate::peer_request_requires_ack(
+        &proto::envelope::Payload::LspQueryResponse(proto::LspQueryResponse::default())
+    ));
+}

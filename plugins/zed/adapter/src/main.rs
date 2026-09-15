@@ -1225,10 +1225,11 @@ async fn read_messages(
             continue;
         }
 
-        if matches!(
-            envelope.payload,
-            Some(proto::envelope::Payload::RemoteStarted(_) | proto::envelope::Payload::Ping(_))
-        ) {
+        if envelope
+            .payload
+            .as_ref()
+            .is_some_and(peer_request_requires_ack)
+        {
             let response = proto::Envelope {
                 id: next_message_id.fetch_add(1, Ordering::Relaxed),
                 responding_to: Some(envelope.id),
@@ -1252,6 +1253,17 @@ async fn read_messages(
     // The adapter cannot serve valid requests after the owned Zed protocol
     // process or socket dies. Exit so systemd restarts the isolated pair.
     std::process::exit(1);
+}
+
+fn peer_request_requires_ack(payload: &proto::envelope::Payload) -> bool {
+    // Buffer updates are requests in Zed 1.13; later chunks may wait for this
+    // ACK. The bounded cache observes/invalidate them before acknowledging.
+    matches!(
+        payload,
+        proto::envelope::Payload::RemoteStarted(_)
+            | proto::envelope::Payload::Ping(_)
+            | proto::envelope::Payload::UpdateBuffer(_)
+    )
 }
 
 async fn respond(

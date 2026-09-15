@@ -86,6 +86,15 @@ impl Cache {
             proto::envelope::Payload::UpdateBuffer(update) => {
                 self.operations(update.buffer_id, &update.operations);
             }
+            proto::envelope::Payload::BufferReloaded(update) => {
+                // Zed can announce reload before sending its edit chunks.
+                if let Some(buffer) = self.buffers.get_mut(&update.buffer_id) {
+                    self.text_bytes -= buffer.text.take().as_ref().map_or(0, String::len);
+                    self.diagnostic_bytes -= buffer.diagnostic_bytes;
+                    buffer.diagnostic_bytes = 0;
+                    buffer.servers.clear();
+                }
+            }
             _ => {}
         }
     }

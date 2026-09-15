@@ -39,10 +39,12 @@ original-buffer events instead of timing out waiting for a nonexistent reply.
 `result.diagnosticsState` is `unobserved` until a diagnostic update is actually
 received, or `observed` after one (including an explicitly empty update). This
 is the last observation, not proof that an asynchronous refresh completed.
-Per-server Lamport stamps reject older diagnostic updates.
+Per-server Lamport stamps reject older diagnostic updates. Buffer update
+requests are acknowledged after local observation/invalidation so Zed can send
+subsequent chunks; this is not an acknowledgement of a complete diagnostic pull.
 
-Anchor conversion uses only a bounded native base-text snapshot. Any edit or
-undo invalidates it; language reads then fail closed instead of converting
+Anchor conversion uses only a bounded native base-text snapshot. An observed
+edit, undo or reload announcement invalidates it; language reads then fail closed instead of converting
 against current disk text. Foreign, unsupported-revision and split-UTF-8
 anchors also fail. Symbol queries use native UTF-16 results and do not require
 this base-anchor conversion. Full edited-buffer coordinate support is still
