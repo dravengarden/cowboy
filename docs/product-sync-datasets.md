@@ -70,7 +70,7 @@ The 2026-09-15 comparison against `b12e3e60`, using Firefox 151.0.1, observed:
 | Measurement | Before | After |
 | --- | ---: | ---: |
 | Reconnect through server echo, median of 8 | 401.5 ms | 278 ms |
-| Established socket through echo, median of 8 | 97 ms | 100.5 ms |
+| Established socket through echo, median of 8 | 97 ms | 101 ms |
 | Initial mount through echo, one sample | 530 ms | 405 ms |
 | HTTP dataset discoveries | 11 | 1 |
 | Distinct delivered messages | 17 | 17 |
@@ -88,6 +88,14 @@ outbox. The latter authors a prompt during initial startup, covering the
 required per-queue hydration barrier before its first write. Production
 `delivery_persist_completed` and `delivery_confirmed` logs include durations and
 the same mutation ID for correlation; confirmation timing starts at wire send.
+
+The Web fix was published and activated on Hawk at 2026-09-15 13:35:45 UTC,
+source `fa94df376805b258e20628b0b762b09870afc005`, service worker `cowboy-v1693`.
+Transaction `1789479345213701115-fa94df376805` committed successfully with
+release `/nix/store/wmlvcp39jzhrvb56xp6gvadmy04ys7df-cowboy-web-release`.
+Local and public HTML, service worker, entry and changed store assets matched
+the immutable release byte-for-byte; health and version probes passed.
+Controller and resident Machine PIDs/start times remained unchanged.
 
 ## Storage and lifetime
 
