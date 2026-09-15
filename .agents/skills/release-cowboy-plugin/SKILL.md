@@ -318,8 +318,11 @@ In addition, require all applicable Provider gates below:
   bindings, and prove worker teardown reaps the sidecar. Run old/new generation
   sessions concurrently when a Provider has sidecars so upgrade drain cannot
   be satisfied by sharing replacement runtime bytes.
-- `just plugin-runtime-probe <release> <artifact-root>` hashes and probes the
-  actual target's artifacts in private temporary homes. On Linux,
+- For Agent Plugins, `just plugin-runtime-probe <release> <artifact-root>` hashes and probes the
+  actual target's artifacts in private temporary homes. Despite its generic
+  command name, this harness currently accepts only Agent payloads. Code uses
+  its package-owned runtime builder and `zed-plugin-conformance` gate above;
+  an Agent-kind rejection is not Code runtime evidence. On Linux,
   `just agent-worker-conformance <release> <artifact-root> <absolute-worker>`
   drives the real detached worker in a loopback-only network namespace with
   fake auth. Add `--previous <release> --previous-artifacts <root>` for distinct

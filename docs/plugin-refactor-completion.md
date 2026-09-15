@@ -93,7 +93,9 @@ and accepting a production effect are different milestones.
   retention, path-free release/query, bounded capacity and cancellation-safe
   cleanup. Open/ambiguous effects do not expire or replay. This is a native/Machine
   candidate, not the ordinary Controller/Web resource owner or a production
-  native-generation acceptance claim. Capability-floor negotiation, client
+  native-generation acceptance claim. Its [candidate evidence](releases/plugin-native-buffer-leases-2026-09-15.md)
+  includes 29 new tests, complete gates, immutable builds and real temporary
+  signed Zed install/uninstall/path-removal drain. Production core-probe acceptance, client
   integration and separate Machine/Code Plugin activation remain required.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.

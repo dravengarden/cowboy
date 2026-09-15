@@ -297,7 +297,8 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 zed-plugin-conformance ADAPTER SERVER:
     COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
 
-# Exact artifact probes run on the actual target OS. Worker acceptance additionally
+# Agent artifact probes run on the actual target OS; Code uses the gate above.
+# Worker acceptance additionally
 # isolates all networking to a private Linux loopback and uses only fake auth.
 plugin-runtime-probe RELEASE ARTIFACTS *ARGS:
     python3 tools/plugin_runtime_conformance.py "{{RELEASE}}" "{{ARTIFACTS}}" {{ARGS}}

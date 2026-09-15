@@ -1,6 +1,7 @@
 # Original-owner native buffer references
 
-Status: Machine/Zed implementation and conformance candidate. The ordinary
+Status: [verified Machine/Zed candidate](releases/plugin-native-buffer-leases-2026-09-15.md),
+not published or activated as a Plugin. The ordinary
 Controller/Web buffer API is **not yet switched**. This is a prerequisite for
 cross-request ownership, not its production acceptance or a generic DAG executor.
 
@@ -118,6 +119,13 @@ The legacy HTTP API remains unchanged in this candidate and retains its known
 cross-request limitations. Never enable the new consumer merely because an
 adapter health response advertises this optional API, or restore a handle after
 a Controller/Machine/native restart.
+
+The adapter currently serializes owned lease commands. These tests do not prove
+independent progress through a stalled filesystem/native request inside one
+engine, native worktree-cache reclamation, or full per-resource scheduling.
+Those remain separate lifetime work, as do legacy string-lease cleanup and
+post-effect recovery; finite reference bounds are not a global native-memory
+or liveness guarantee.
 
 Unit/socket/process fixtures cover identity, duplicate/unknown outcomes,
 cancellation, capacity, expiry, filesystem changes, wrong replies and independent

@@ -681,11 +681,15 @@ the Service login and other Machine replicas.
 
 ### Released runtime behavior acceptance
 
-The repository-owned `just plugin-runtime-probe <release> <artifact-root>`
+For Agent Plugins, the repository-owned `just plugin-runtime-probe <release> <artifact-root>`
 checks package/component digests, bounded archive extraction and each declared
 probe on the actual target platform. Artifact roots may be a Plugin's
 `dist/plugins/<id>` directory or a published Catalog. These are behavior checks,
 not substitutes for the SDK and independent signature verification.
+Despite the generic command name, this harness rejects Code payloads. Code
+uses its package-owned runtime builder and the real
+`just zed-plugin-conformance <absolute-adapter> <absolute-server>` gate described
+above; do not count an Agent-kind rejection as Code runtime acceptance.
 
 On Linux, `just agent-worker-conformance <release> <artifact-root>
 <absolute-worker>` additionally starts the real detached ACP worker in a fresh

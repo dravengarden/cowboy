@@ -69,6 +69,7 @@ primary phone/desktop product path.
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
 - [`plugin-native-buffer-leases.md`](plugin-native-buffer-leases.md) — Prepared native buffer references and exact Machine runtime retention; HTTP/Web integration and production maintenance remain separate
+- [`releases/plugin-native-buffer-leases-2026-09-15.md`](releases/plugin-native-buffer-leases-2026-09-15.md) — Verified Zed 1.3.0 and Machine candidates, 29 new tests and real signed-install/path-removal drain; no production activation
 - [`releases/plugin-code-read-scopes-2026-09-15.md`](releases/plugin-code-read-scopes-2026-09-15.md) — Verified scoped-code Controller activation with 15 workers retained
 - [`releases/plugin-buffered-code-reads-2026-09-15.md`](releases/plugin-buffered-code-reads-2026-09-15.md) — Verified buffered code-response and closed-request Controller activation with 16 workers retained
 - [`releases/plugin-file-page-scopes-2026-09-15.md`](releases/plugin-file-page-scopes-2026-09-15.md) — Scoped file continuations, page ETags, UTF-8 boundaries and verified Controller activation; remote adapter maintenance remains separate
