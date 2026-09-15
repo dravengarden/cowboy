@@ -1,6 +1,6 @@
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import type { ConfigOption } from "./protocol";
-import { currentProviderEntry } from "./providerCatalogRegistry";
+import { currentProviderPresentationEntry } from "./providerCatalogRegistry";
 
 export interface RunConfigPreset {
   id: string;
@@ -72,7 +72,7 @@ export function runConfigPresets(
 ): readonly RunConfigPreset[] {
   if (!provider) return [];
   const declared =
-    currentProviderEntry(provider, providerVersion, providerDigest)
+    currentProviderPresentationEntry(provider, providerVersion, providerDigest)
       ?.manifest.configuration.presets ?? [];
   return supportedRunConfigPresets(declared, options);
 }

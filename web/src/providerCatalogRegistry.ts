@@ -290,6 +290,27 @@ export function currentProviderEntry(
   );
 }
 
+/** Presentation-only resolution against the loaded Catalog.
+ *
+ * Signed presentation a session merely *draws* — run configuration presets and
+ * configuration option presentation — must not stay frozen at the generation a
+ * Machine happens to have installed, or a corrected declaration never reaches
+ * an existing session. Runtime behavior and every lifecycle surface keep using
+ * {@link currentProviderEntry} and its exact package identity.
+ */
+export function currentProviderPresentationEntry(
+  providerId: string,
+  providerVersion?: string,
+  providerDigest?: string,
+): ProviderCatalogEntry | undefined {
+  return providerPresentationEntry(
+    cached?.providers ?? [],
+    providerId,
+    providerVersion,
+    providerDigest,
+  );
+}
+
 export interface ProviderInstallationCatalogJoin {
   providerId: string;
   latestEntry: ProviderCatalogEntry | undefined;

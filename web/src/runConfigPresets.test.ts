@@ -1,10 +1,16 @@
 import { assertEquals } from "jsr:@std/assert";
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
+import { providerUiManifestFixture } from "./providerUiContract.fixture";
+import {
+  loadProviderCatalog,
+  resetProviderCatalog,
+} from "./providerCatalogRegistry";
 import type { ConfigOption } from "./protocol";
 import {
   activeRunConfigPreset,
   runConfigCurrentTitle,
   runConfigPresetChanges,
+  runConfigPresets,
   runConfigSummary,
   supportedRunConfigPresets,
 } from "./runConfigPresets";
@@ -203,4 +209,75 @@ Deno.test("mobile preset progress is delayed, acknowledged, and bounded", () => 
     true,
   );
   assertEquals(waitForState.includes("listeners.add(check)"), false);
+});
+
+Deno.test("a session adopts presets published after its installed generation", async () => {
+  // This is the sess-1789450485879 shape: the Machine runs claude-code 3.1.14,
+  // which declared no presets, while the presets ship in a later published
+  // generation. Pinning presentation to the installed package would leave the
+  // session without chips until someone upgrades the Machine.
+  const installed = providerUiManifestFixture();
+  installed.id = "claude-code";
+  installed.version = "3.1.14";
+  installed.configuration = { schema_version: 1, presets: [], options: [] };
+
+  const published = providerUiManifestFixture();
+  published.id = "claude-code";
+  published.version = "3.1.20";
+  published.configuration = {
+    schema_version: 1,
+    presets: [{
+      id: "sonnet-medium",
+      name: "Sonnet · Medium",
+      detail: "Sonnet 5 · Medium effort",
+      is_default: false,
+      values: { model: "model-b", effort: "medium" },
+    }],
+    options: [],
+  };
+
+  const entry = (manifest: ProviderUiManifest, digest: string) => ({
+    provider_id: manifest.id,
+    provider_version: manifest.version,
+    package_digest: digest,
+    artifact_digest: digest,
+    authentication_scope: "none-v1",
+    release_state: "ready",
+    release_detail: "published",
+    publisher: manifest.publisher,
+    contract_fingerprint: digest,
+    supported_platforms: [{ os: "linux", architecture: "x86_64" }],
+    manifest,
+  });
+
+  const previous = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          providers: [
+            entry(installed, `sha256:${"1".repeat(64)}`),
+            entry(published, `sha256:${"2".repeat(64)}`),
+          ],
+          authentications: [],
+          authentication_executors: [],
+          platform: { hosts: [] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    )) as typeof globalThis.fetch;
+  try {
+    resetProviderCatalog();
+    await loadProviderCatalog(true);
+    const resolved = runConfigPresets(
+      "claude-code",
+      options,
+      "3.1.14",
+      `sha256:${"1".repeat(64)}`,
+    );
+    assertEquals(resolved.map((preset) => preset.id), ["sonnet-medium"]);
+  } finally {
+    globalThis.fetch = previous;
+    resetProviderCatalog();
+  }
 });

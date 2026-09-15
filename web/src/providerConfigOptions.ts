@@ -1,6 +1,6 @@
 import type { ProviderUiManifest } from "@cowboy/provider-ui";
 import type { ConfigOption, Status } from "./protocol";
-import { currentProviderEntry } from "./providerCatalogRegistry";
+import { currentProviderPresentationEntry } from "./providerCatalogRegistry";
 
 export type ProviderConfigOptionPresentation =
   ProviderUiManifest["configuration"]["options"][number];
@@ -41,7 +41,7 @@ export function providerConfigOptionPresentations(
   providerDigest?: string | undefined,
 ): ReadonlyMap<string, ProviderConfigOptionPresentation> {
   if (!provider) return new Map();
-  const declarations = currentProviderEntry(
+  const declarations = currentProviderPresentationEntry(
     provider,
     providerVersion,
     providerDigest,
