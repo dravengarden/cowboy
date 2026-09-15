@@ -314,6 +314,25 @@ function isUnoriginatedPromptReplay(
   return expected !== undefined && isPromptReplayChunk(expected, chunk);
 }
 
+/** One streamed message is one bubble. Only an envelope the reader can see
+ *  between two chunks may end it: a permission card, a painted crash or
+ *  interruption, the end of the turn. `set_status` pushes a Lifecycle envelope
+ *  on every status edge including a repeat of the current one (src/core.rs), and
+ *  those land at arbitrary chunk boundaries mid-stream. Splitting on an envelope
+ *  that renders nothing breaks one message into two bubbles mid-word. */
+function envelopeEndsMessage(env: Envelope): boolean {
+  switch (env.kind) {
+    case "update":
+    case "permission_resolved":
+      return false;
+    case "lifecycle":
+      return shouldPaintTranscriptLifecycle(env.status);
+    case "permission_request":
+    case "turn_end":
+      return true;
+  }
+}
+
 export function derive(timeline: Envelope[]): RenderItem[] {
   const cached = DERIVE_CACHE.get(timeline);
   if (cached) return cached;
@@ -331,7 +350,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   let promptReplayOffset = 0;
 
   for (const env of timeline) {
-    if (env.kind !== "update") cursor = null;
+    if (envelopeEndsMessage(env)) cursor = null;
 
     switch (env.kind) {
       case "update": {
