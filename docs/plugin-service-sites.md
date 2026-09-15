@@ -65,9 +65,11 @@ These are temporary identities, signed fixtures and disposable channels, not
 production Operator authority or an externally exploitable HTTP-route finding.
 
 No Plugin/SDK/component release, Machine protocol, SQL migration, durable
-journal, identity-file format or production policy changes. Controller
-activation and actual immutable role acceptance must be recorded separately from
-source tests.
+journal, identity-file format or production policy changes. The
+[Controller release](releases/plugin-service-sites-2026-09-15.md) passed
+complete source gates and all 807 immutable role checks and is published and
+active on Hawk. Its bounded activation window retained Machine, 15 workers and
+Victoria; the pre-existing GTK portal failed state was preserved, not cleared.
 
 Workspace/Session/security-domain resolution, general state leases, graph
 contract linking and independent post-effect/native restoration remain in the

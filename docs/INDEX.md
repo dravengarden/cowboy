@@ -63,6 +63,7 @@ primary phone/desktop product path.
 - [`releases/dataset-bound-maintenance-2026-09-15.md`](releases/dataset-bound-maintenance-2026-09-15.md) — Activated dataset-bound Controller/Web, compatible cold floor, independent Machine maintenance and scoped worker evidence
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
+- [`releases/plugin-service-sites-2026-09-15.md`](releases/plugin-service-sites-2026-09-15.md) — Accepted Controller Site isolation, 807 immutable checks and production activation
 - [`plugin-spatiotemporal-design.md`](plugin-spatiotemporal-design.md) — Master target design for components, Plugins, Service/Machine scopes, authority, generations, state, effects, migration and acceptance gates
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
