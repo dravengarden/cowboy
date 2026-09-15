@@ -2,7 +2,7 @@ use super::*;
 use crate::core::SessionRegistration;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 
-fn create(hub: &Hub, machine: &str) {
+pub(super) fn create(hub: &Hub, machine: &str) {
     hub.create_session(SessionRegistration {
         id: "session".into(),
         provider: "codex".into(),

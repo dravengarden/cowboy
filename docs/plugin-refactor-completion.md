@@ -76,6 +76,14 @@ and accepting a production effect are different milestones.
   passed both complete gates and is published and activated with 16 workers
   retained; its independently built core adapter passed seven actual disposable
   process cases without upgrading a resident Machine.
+- Zed Session operations now retain their original authenticated Machine
+  connection or connected local Unix peer through worktree readiness and buffer
+  open. Same-epoch reconnect and pathname replacement cannot redirect the
+  sequence; cancellation/failure ends it without retry. Local writes/reads and
+  message bytes are bounded, and non-ready worktrees cannot open buffers.
+  Sixteen new source tests cover these boundaries. This is not native-generation
+  ownership, cross-request buffer release, compensation or post-effect recovery;
+  see [the precise remaining lease gap](plugin-code-read-scopes.md#zed-operation-connection-lifetime).
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

@@ -808,6 +808,41 @@ impl MachineControl {
         adapter: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        self.adapter_request_bound(machine_id, adapter, payload, None)
+            .await
+    }
+
+    /// Keep a multi-call operation on its original authenticated connection.
+    /// This is transport continuity, not Session/native resource authority.
+    pub(crate) async fn adapter_request_on_connection(
+        &self,
+        connection: &ConnectionToken,
+        adapter: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let response = self
+            .adapter_request_bound(
+                &connection.0.machine_id,
+                adapter,
+                payload,
+                Some(RequestBinding::Connection(connection)),
+            )
+            .await;
+        // A reply can be completed just before replacement, while its receiver
+        // is still parked. Correlation alone does not cover that handoff.
+        if !self.is_current(connection) {
+            return Err("Machine operation connection is no longer current".to_owned());
+        }
+        response
+    }
+
+    async fn adapter_request_bound(
+        &self,
+        machine_id: &str,
+        adapter: &str,
+        payload: serde_json::Value,
+        binding: Option<RequestBinding<'_>>,
+    ) -> Result<serde_json::Value, String> {
         let request_id = self.request_id("adapter")?;
         let (rx, _pending) = self.begin_request(
             machine_id,
@@ -818,7 +853,7 @@ impl MachineControl {
                 payload,
             },
             ReplyKind::Adapter,
-            None,
+            binding,
         )?;
         match tokio::time::timeout(adapter_timeout(adapter), rx).await {
             Ok(Ok(Reply::Adapter(result))) => result,
@@ -1400,6 +1435,9 @@ mod telemetry_binding_tests;
 #[cfg(test)]
 #[path = "machine_control/site_tests.rs"]
 mod site_tests;
+
+#[cfg(test)]
+mod adapter_scope_tests;
 
 #[cfg(test)]
 mod tests {

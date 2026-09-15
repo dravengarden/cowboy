@@ -59,6 +59,7 @@ use crate::store::{ActiveClientRelease, Store};
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
 use crate::web_push::{NotificationCategory, WebPushService, WebPushSubscription};
+#[cfg(test)]
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
@@ -73,6 +74,7 @@ mod plugin_uninstall;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
+mod zed_session;
 use plugin_uninstall::{
     api_machine_plugin_operation_receipt, api_machine_plugin_operations,
     api_machine_plugin_recovery_assessment, api_machine_plugin_uninstall,
@@ -15252,28 +15254,12 @@ struct CodeOutlineResponse {
     symbols: Vec<CodeDocumentSymbol>,
 }
 
+#[cfg(test)]
 async fn zed_adapter_request(
     socket: &FsPath,
     request: serde_json::Value,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    let stream = tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        UnixStream::connect(socket),
-    )
-    .await
-    .context("Zed adapter connect timed out")??;
-    let (read, mut write) = stream.into_split();
-    write.write_all(request.to_string().as_bytes()).await?;
-    write.write_all(b"\n").await?;
-    write.shutdown().await?;
-    let mut line = String::new();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(35),
-        BufReader::new(read).read_line(&mut line),
-    )
-    .await
-    .context("Zed adapter response timed out")??;
-    validate_zed_adapter_response(serde_json::from_str::<ZedAdapterResponse>(&line)?)
+    zed_session::local_request(socket, request).await
 }
 
 fn validate_zed_adapter_response(
@@ -15324,19 +15310,10 @@ async fn zed_request_in_scope(
     scope: &crate::core::SessionCodeScope,
     request: serde_json::Value,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
-    let response = if scope.machine_id() == "local" {
-        let socket = local_socket.context("local Zed adapter is not configured")?;
-        zed_adapter_request(socket, request).await?
-    } else {
-        let value = control
-            .adapter_request(scope.machine_id(), "zed", request)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        validate_zed_adapter_response(serde_json::from_value(value)?)?
-    };
-    anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
-    Ok(response)
+    zed_session::Operation::connect(hub, control, local_socket, scope)
+        .await?
+        .request(request)
+        .await
 }
 
 async fn remote_code_request(
@@ -16663,26 +16640,20 @@ async fn api_code_buffer_lease(
         // run rust-analyzer there.
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
-    if open
-        && ensure_zed_worktree_for_session(&state, &context, &worktree)
-            .await
-            .is_err()
-    {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "language service unavailable",
-        )
-            .into_response();
-    }
-    let response = zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": if open { "openBuffer" } else { "closeBuffer" },
-            "worktree": worktree,
-            "path": path,
-            "leaseId": request.lease_id,
-        }),
+    let CodeReadScope::Session(scope) = &context.scope else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    let response = zed_session::buffer_request(
+        &state.hub,
+        &state.machine_control,
+        state.zed_adapter_socket.as_deref(),
+        scope,
+        zed_session::BufferRequest {
+            worktree: &worktree,
+            path: &path,
+            lease_id: &request.lease_id,
+            open,
+        },
     )
     .await;
     match response {
@@ -16697,7 +16668,15 @@ async fn api_code_buffer_lease(
             "unexpected language service response",
         )
             .into_response(),
-        Err(error) => {
+        Err(zed_session::BufferError::Unavailable(error)) => {
+            tracing::warn!(session = %session_id, %error, "Zed worktree unavailable");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "language service unavailable",
+            )
+                .into_response()
+        }
+        Err(zed_session::BufferError::Request(error)) => {
             tracing::warn!(
                 session = %session_id,
                 operation = if open { "open" } else { "close" },
@@ -19145,6 +19124,8 @@ mod zed_adapter_tests {
     use super::*;
     use tokio::net::UnixListener;
 
+    mod buffer;
+    mod operation;
     mod scope;
 
     fn test_socket(label: &str) -> PathBuf {

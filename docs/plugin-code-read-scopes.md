@@ -118,6 +118,43 @@ reads and all Controller bindings, but **does not upgrade a running remote
 Machine adapter**; its UTF-8 repair needs the separate Machine maintenance lane.
 The signed Zed Plugin is not changed or repackaged.
 
+## Zed operation connection lifetime
+
+Each Session Zed call sequence now owns a non-serializable Controller operation.
+`ensureWorktree` and `openBuffer` share its original authenticated Machine
+connection, or one already-connected local Unix peer. A replacement connection
+cannot be adopted even if it repeats the same Machine and epoch strings. The
+Machine command registry checks that original token atomically with enqueue and
+again after awaiting the reply: completion just before a reconnect does not
+make a parked reply current. The existing exact Session observation is still
+checked before and after each exchange. Ordinary unbound adapter callers are
+unchanged; transport identity does not become a Session authorization grant.
+
+Local calls retain the connected socket rather than resolving its pathname for
+the next step. Replacing the socket pathname cannot redirect that sequence.
+Connect has a two-second deadline; each write-and-read exchange has a combined
+35-second deadline, a 4 MiB serialized request limit and a 4 MiB newline-framed
+response limit. EOF without the newline is incomplete, not an accepted reply.
+Failure or cancellation consumes the operation's transport, so a subsequent
+request cannot reuse an unread response or implicitly reconnect. Pending remote
+correlations are removed independently; no cleanup RPC or retry is invented.
+
+Opening a buffer requires the exact `worktree`, API-1, `ready` response before
+the second request. Non-ready states and wrong response variants now return
+the existing HTTP `503` readiness failure without opening a buffer. Normal
+open/close payloads and responses are unchanged. Closing does not acquire a
+new worktree readiness lease.
+
+This is **one operation's transport continuity**, not a native-generation lease
+or complete buffer ownership. Separate HTTP close requests still carry only
+the browser's lease ID and resolve their current Session target. The protocol
+does not yet carry an original core-owned resource handle. A retargeted Session,
+deleted/renamed file, Controller restart or lost open reply may therefore leave
+an old native buffer uncollected. Reusing client lease strings is not proof of
+resource identity. Fixing that needs original-owner release semantics, bounded
+cleanup/unknown evidence and an exact native-generation protocol; hashing the
+current cwd or following a replacement connection is not a substitute.
+
 ## Evidence and remaining work
 
 Two regression tests failed before the repair: equal-content files returned the
@@ -147,6 +184,16 @@ projection. A real local Unix adapter fixture round-trips opaque-to-native
 translation and reconstructs the whole long Unicode file. The standard complete
 gate now runs the independent Code adapter library tests as well as its build
 check. These fixtures do not prove a deployed remote Machine upgrade.
+
+Two Zed sequence regressions failed against the prior implementation: a reply
+completed immediately before same-epoch reconnect allowed the next request on
+the replacement channel, and non-ready worktree states still opened buffers.
+Sixteen new source tests cover these, normal open/close wire shapes, wrong
+variants/versions, cancellation, late completion, foreign registries, pending
+waiter isolation, response framing and limits, local write/read deadlines and a
+real Unix socket pathname replacement between calls. They use disposable peers
+and authenticated-registry fixtures, not an installed native-generation or
+production lease-recovery acceptance.
 
 This does not revoke or compensate a Zed effect already dispatched, release a
 pre-existing buffer on a retargeted workspace, atomically fence all Machine

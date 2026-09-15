@@ -65,7 +65,7 @@ primary phone/desktop product path.
 - [`plugin-lifecycle-history.md`](plugin-lifecycle-history.md) — Bounded typed core install/uninstall history and independent resolution, with no replay authority
 - [`releases/plugin-catalog-observer-2026-09-15.md`](releases/plugin-catalog-observer-2026-09-15.md) — Owned Catalog observation and verified Controller activation; actual candidate/predecessor/cold readers agree on 69 signed releases
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
-- [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped code responses, closed core requests, Zed observations, bounded diff/file continuations and page ETags
+- [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
 - [`releases/plugin-code-read-scopes-2026-09-15.md`](releases/plugin-code-read-scopes-2026-09-15.md) — Verified scoped-code Controller activation with 15 workers retained
 - [`releases/plugin-buffered-code-reads-2026-09-15.md`](releases/plugin-buffered-code-reads-2026-09-15.md) — Verified buffered code-response and closed-request Controller activation with 16 workers retained
 - [`releases/plugin-file-page-scopes-2026-09-15.md`](releases/plugin-file-page-scopes-2026-09-15.md) — Scoped file continuations, page ETags, UTF-8 boundaries and verified Controller activation; remote adapter maintenance remains separate
