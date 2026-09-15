@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.21",
+  "version": "3.1.22",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -45,11 +45,11 @@
   },
   "configuration_presets": [
     {
-      "id": "account-default",
+      "id": "opus-default",
       "name": "Default",
-      "detail": "Account default model and effort",
+      "detail": "Opus 5 (1M context) · Model default effort",
       "is_default": true,
-      "values": { "model": "default", "effort": "default" }
+      "values": { "model": "opus[1m]", "effort": "default" }
     },
     {
       "id": "sonnet-medium",
@@ -111,7 +111,11 @@
       "session": "stable_preset_system_prompt_v1",
       "turn_end": "portable_v1",
       "configuration": "portable_v1",
-      "default_preferences": {},
+      "default_preferences": {
+        "mode": "bypassPermissions",
+        "model": "opus[1m]",
+        "effort": "default"
+      },
       "error_rules": [
         {
           "when": { "op": "contains", "value": "maximum context length" },
