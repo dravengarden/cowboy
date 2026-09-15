@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "grok",
-  "version": "3.1.16",
+  "version": "3.1.17",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -85,9 +85,9 @@
     "dependencies": [
       {
         "id": "xai-grok",
-        "version": "0.2.117",
-        "source": "https://registry.npmjs.org/@xai-official/grok/-/grok-0.2.117.tgz",
-        "integrity": "sha512-OR7hJiGe1ZFRLqQdBv2G4R9g6rnMtqUgfCdjoJFIThL0gjYemXXqJizZKMwSdSPhwCn0QOdbDRW9LyWgKzq0Hw==",
+        "version": "1.0.30",
+        "source": "https://registry.npmjs.org/@xai-official/grok/-/grok-1.0.30.tgz",
+        "integrity": "sha512-nIz4K8DXHJMIVzbXBKWmM0qT27iZV0T4RI4LQ2AC+vO7JAAAqlQQGyZHqb3TzlF4PFMNBPpUmfnmcbEOrs6FUw==",
         "private": true
       }
     ],

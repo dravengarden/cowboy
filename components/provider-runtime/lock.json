@@ -23,80 +23,80 @@
   "components": {
     "anthropic-claude-code": {
       "kind": "npm_archive",
-      "version": "2.1.231",
+      "version": "2.1.272",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.231.tgz",
-          "integrity": "sha512-ou1X+6JWOgbY5pUerfdOmeyPwKwEN515sx9it2sxsYEqKRTvOOHkiN94enRxge9/Z1J2Iqhd4VdkQIl6UoUvYw==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.272.tgz",
+          "integrity": "sha512-QXxOsStovQPz5+hWTQMK7yb4YZFT2mXhu4ejF4nCXHcsbBEBq/jfLWr9SNJCdD4NjD9o4XxjJrDrrdKOM1Kw8g==",
           "entrypoint": "package/claude"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.231.tgz",
-          "integrity": "sha512-a0YGXTjk6N5yRWE30dkbtS0tTZ5hOEXFCjTTX2slSa7XULMlJJLQ1X8oFJwpXmlvZu9FHx1YRLKJnni05uNIQQ==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64/-/claude-code-linux-arm64-2.1.272.tgz",
+          "integrity": "sha512-tpUGL+bDziPYaBplXrR018NdSE191nNvQGDHv9QluLB7u4h3t4iRSVnZ8e2KVJerAkER7JeS76sdRGoMPRSIfA==",
           "entrypoint": "package/claude"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.231.tgz",
-          "integrity": "sha512-tpqiF9bw8jHYc85mpF0S+JxzDY4ErGF9L9/tBflHJgIqgBXL/UpkLuI53MMYCPeoaCtE88skbf/P9r8C3OUrYA==",
+          "url": "https://registry.npmjs.org/@anthropic-ai/claude-code-darwin-arm64/-/claude-code-darwin-arm64-2.1.272.tgz",
+          "integrity": "sha512-l3CI1gPSCGkWNbAnX66SbDF4uFBecCCLu9FLN43JSbMMds5cb6tjOTBMSTr1ydZRZALW9AC/PYabtQOgXIbK5Q==",
           "entrypoint": "package/claude"
         }
       }
     },
     "openai-codex": {
       "kind": "npm_archive",
-      "version": "0.153.4",
+      "version": "0.154.0",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-x64.tgz",
-          "integrity": "sha512-x1EcwBlY3AObM1VTUHNM2AzAJQsyreGdagpF+qFiYi/Oa30VBktvvG0C6tLtCzqW6hjZNWkGZQWmeVk7MuJKWg==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-x64.tgz",
+          "integrity": "sha512-a4FI3A8sGtwGrOqltrPbrS2hajrHQG591EwmRfiRoLMb10VxdBtUGW4gu6IJVYENiYGA7k3P4jlRHEoCZU/s9Q==",
           "entrypoint": "package/vendor/x86_64-unknown-linux-musl/bin/codex"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-linux-arm64.tgz",
-          "integrity": "sha512-QKdjYLYV4hXIuUQDP3P6F4NXuWFoKo9WUoV4nAREIx55kiUyi8UsYdsVobkeXir5n/maEQgYMCKLHVma4rNPiw==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-linux-arm64.tgz",
+          "integrity": "sha512-KmTCB6ST484zeYlPpKP/K5P/gRaYmt6TihVD+zotoe6O9q0JSBP+FYvCz4A/zZXR7xDOHURTSjHp0sD8wWS0YQ==",
           "entrypoint": "package/vendor/aarch64-unknown-linux-musl/bin/codex"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.4-darwin-arm64.tgz",
-          "integrity": "sha512-B1qhN3fa1ay0R0wGziXqgwSkB5icpYChNKHhtBHff/0UtSTC7z+l8aTtvMlGjH3E8HEvY3+njIJelM9CAAoVWg==",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0-darwin-arm64.tgz",
+          "integrity": "sha512-HP/vJCH/t2hB9Kg6hotN9UglClJ6/z584fal5lEP14C9gNAgAQS4/kTQC7l5V+BA3TqwDPwINSjul28cX8AYXg==",
           "entrypoint": "package/vendor/aarch64-apple-darwin/bin/codex"
         }
       }
     },
     "xai-grok": {
       "kind": "npm_brotli",
-      "version": "0.2.117",
+      "version": "1.0.30",
       "probe": ["--version"],
       "targets": {
         "linux-x86_64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-0.2.117.tgz",
-          "integrity": "sha512-t/kjK4sr5BncrW0pTXq1YBCwZThJ8CE0h24ZXM9l0aDAHgEcGBCPO1hdL6BDiyLdRna+FCQOTE46ONLBX+If3g==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.30.tgz",
+          "integrity": "sha512-yM1q8mRZeAUUhEJn0SY256D2ucz+jvmK8tKo/Ivcr+7EUouy/VtS9bRfrhTfj5i6IemYxH9NIoV4wtJjSzh90w==",
           "entrypoint": "package/bin/grok.br"
         },
         "linux-aarch64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-0.2.117.tgz",
-          "integrity": "sha512-eC2N23tNZl9Y9JHdbU9RMsBSkKpeYjpRrQ3VFEspHonfpg87C+Sk9p42fxXwbmeCHN3VQA7bj04heXS3EGqAeQ==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.30.tgz",
+          "integrity": "sha512-ggOR6JIsP8Oaz1WpdE8lJFrVKcGfq0QcYhhqir2TfZvGnO5LCIKoLF+hYFim56oLR0RmYM8v7qB4Xh2VlzuzpA==",
           "entrypoint": "package/bin/grok.br"
         },
         "macos-aarch64": {
-          "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-0.2.117.tgz",
-          "integrity": "sha512-PhAcE6G3BMat2nZ3BNonZRNaatH+48ssKilrjZ7HsTd4wU4YuZEx4VcTl/XrkjKqYanMPIxJg6RQHwE6RDnjmw==",
+          "url": "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.30.tgz",
+          "integrity": "sha512-/7FLmHU1VX+sdBGBAqDZbOqqu+3iithK9Kky3/IJBaqvxgnaeUbGFCz8f5uG6OkkoKyBZuKbwgId2iI6/e/Prw==",
           "entrypoint": "package/bin/grok.br"
         }
       }
     },
     "claude-agent-acp": {
       "kind": "node_npm",
-      "version": "0.63.0",
+      "version": "0.77.0",
       "package_dir": "packages/claude-agent-acp",
       "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
       "probe": ["--version"]
     },
     "codex-acp": {
       "kind": "node_npm",
-      "version": "1.10.0",
+      "version": "1.11.0",
       "package_dir": "packages/codex-acp",
       "script": "node_modules/@agentclientprotocol/codex-acp/dist/index.js",
       "launcher": "packages/codex-acp/launch.mjs",
@@ -104,7 +104,7 @@
     },
     "google-gemini-cli": {
       "kind": "node_npm",
-      "version": "0.55.1",
+      "version": "0.59.0",
       "package_dir": "packages/gemini",
       "script": "node_modules/@google/gemini-cli/bundle/gemini.js",
       "probe": ["--version"]

@@ -1,8 +1,8 @@
 {
   "name": "cowboy-runtime-codex-acp",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": true,
   "dependencies": {
-    "@agentclientprotocol/codex-acp": "1.10.0"
+    "@agentclientprotocol/codex-acp": "1.11.0"
   }
 }

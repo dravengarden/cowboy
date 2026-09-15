@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "gemini",
-  "version": "3.1.16",
+  "version": "3.1.17",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -80,9 +80,9 @@
     "dependencies": [
       {
         "id": "google-gemini-cli",
-        "version": "0.55.1",
-        "source": "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.55.1.tgz",
-        "integrity": "sha512-leEv91V7J3YWhZdXqYIj4nTl0hXl8oNos5aVR0whPCFqVbRvoFPTzaQOHdI2UIT1wGgp+XdCi4qUrFDnUFN7RQ==",
+        "version": "0.59.0",
+        "source": "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-0.59.0.tgz",
+        "integrity": "sha512-RHcjpQEMwVkrWz75mEFsuMuM0JRVJgzLQzkGhEY6SE0KjwOWFA1wYKTUqpzDUHprcE2mgcTActyd4ihVdC2dpg==",
         "private": true
       }
     ],

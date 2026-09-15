@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.17",
+  "version": "3.1.18",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -164,16 +164,16 @@
     "dependencies": [
       {
         "id": "claude-agent-acp",
-        "version": "0.63.0",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.63.0.tgz",
-        "integrity": "sha512-/Ylytz6KPGkih1sZd2sJAmWIGMh59T+FCJhlsfW9zpB1Lrg0/Njgk/7TplRfX2f7dELx0FeN+SBG+Uju12XwlA==",
+        "version": "0.77.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.77.0.tgz",
+        "integrity": "sha512-m8mhsAOc5+m/QZNsKCrfyIRv4KQrCLqSYHZP/aUvL3X0Xn0f9n4wKKNpOpOv0Kblh/2Mkpd4SW0KypN1dZkJfg==",
         "private": true
       },
       {
         "id": "anthropic-claude-code",
-        "version": "2.1.231",
-        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.231.tgz",
-        "integrity": "sha512-1VG6CYH/x3M58L0wNYV2yLI3IPTCic+SXFrIw9IV2OrXA4EsMFAdXArWG87GpLZMkCCLculmrtDuJlwKLsysxg==",
+        "version": "2.1.272",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.272.tgz",
+        "integrity": "sha512-sOwHBM69H8Zka3/D3rc2VNNemPYNlgfYTdhsoqPoXZdK5KcKQlzoue4asJ2RVc+tGb/Pz1qxjVV9nVJQ87W7Ng==",
         "private": true
       }
     ],

@@ -1,15 +1,3 @@
-diff --git a/src/CodexAcpClient.ts b/src/CodexAcpClient.ts
-index f9995a9..a97776f 100644
---- a/src/CodexAcpClient.ts
-+++ b/src/CodexAcpClient.ts
-@@ -532,6 +532,7 @@ export class CodexAcpClient {
-         await this.refreshSkills(request.cwd, additionalDirectories);
- 
-         const response = await this.codexClient.threadResume({
-+            excludeTurns: true,
-             config: await this.createSessionConfig(request.cwd, additionalDirectories, request.mcpServers ?? []),
-             cwd: request.cwd,
-             modelProvider: await this.getResumeModelProvider(),
 diff --git a/src/CodexJsonRpcConnection.ts b/src/CodexJsonRpcConnection.ts
 index 0f79117..f33231c 100644
 --- a/src/CodexJsonRpcConnection.ts

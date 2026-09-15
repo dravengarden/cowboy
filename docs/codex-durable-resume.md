@@ -47,6 +47,14 @@ checkpoint loader. The latter scanned roughly a 5.12 MB suffix for this thread.
 It is incorrect to attribute the entire 240-second failure to mandatory native
 hydrate or to assume every warm resume must deserialize the whole rollout.
 
+## Upstream absorption
+
+ACP 1.11.0 (`51d6247a`) adds `excludeTurns` to `threadResume` itself, so the
+Cowboy-owned `plugins/codex/runtime/adapter.patch` no longer carries that hunk.
+Keeping it would have reversed the upstream change: `patch` reports
+`Reversed (or previously applied) patch detected` and, in batch mode, removes
+the flag. The owned patch retains only the linear JSON-RPC reader and its tests.
+
 ## Why stripping `result` is not a supported migration
 
 Relevant native source is pinned at `3d2ee51ca2d5db578f328aa75e20aa22c0197c9a`
