@@ -31,7 +31,8 @@ keys, data and source text exist only in fresh temporary directories. There are
 no production URL, state-directory, environment or credential inputs.
 
 The recipe creates a non-root user namespace, loopback-only network and private
-PID/proc namespace. The transparent relay forwards original frames unchanged,
+PID/proc namespace, with an empty read-only mount hiding the host cgroup tree.
+The transparent relay forwards original frames unchanged,
 allows only finite Code/readiness/uninstall traffic and the exact runtime
 generation handshake, and rejects Agent/authentication/runtime mutations.
 Faults hold an actual correlated native reply while the client drops its HTTP

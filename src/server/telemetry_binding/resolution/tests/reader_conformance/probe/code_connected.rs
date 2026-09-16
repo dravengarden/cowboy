@@ -159,6 +159,22 @@ async fn immutable_connected_code_buffers() -> Result<()> {
         init.starts_with("/nix/store") && init.file_name().is_some_and(|name| name == "cargo"),
         "private proc with Cargo as namespace init required"
     );
+    ensure!(
+        std::fs::read_dir("/sys/fs/cgroup")?.next().is_none()
+            && std::fs::read_to_string("/proc/self/mountinfo")?
+                .lines()
+                .any(|line| {
+                    let fields: Vec<_> = line.split_whitespace().collect();
+                    fields.get(4) == Some(&"/sys/fs/cgroup")
+                        && fields
+                            .get(5)
+                            .is_some_and(|options| options.split(',').any(|option| option == "ro"))
+                        && line
+                            .split_once(" - ")
+                            .is_some_and(|(_, fs)| fs.starts_with("tmpfs "))
+                }),
+        "empty read-only cgroup cover required"
+    );
     let input: Input = serde_json::from_slice(&std::fs::read(std::env::var(
         "COWBOY_TEST_CODE_CONNECTED_INPUT",
     )?)?)?;
