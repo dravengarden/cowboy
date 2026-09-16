@@ -115,6 +115,7 @@ Deno.test("every prefix continuation has one stable command meaning", () => {
     n: "session.new",
     w: "workspace.cycleRegion",
     r: "workspace.enterResize",
+    e: "composer.toggleSourceMode",
     ",": "settings.open",
   });
 });

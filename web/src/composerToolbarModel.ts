@@ -20,11 +20,13 @@ export const DEFAULT_COMPOSER_TOOLBAR: readonly string[] = [
   "outdent",
   "mention",
   "slash",
+  "sourceMode",
 ];
 
-// Migrate only the exact retired default. A genuinely curated device order is
-// user-owned and must remain untouched.
-const LEGACY_COMPOSER_TOOLBAR: readonly string[] = [
+// Migrate only an exact retired default. A genuinely curated device order is
+// user-owned and must remain untouched, so a list is retired here ONLY when it
+// was itself a shipped default — never because it merely looks close to one.
+const RETIRED_COMPOSER_TOOLBARS: readonly (readonly string[])[] = [[
   "undo",
   "redo",
   "heading",
@@ -44,7 +46,28 @@ const LEGACY_COMPOSER_TOOLBAR: readonly string[] = [
   "mention",
   "slash",
   "attach",
-];
+], [
+  // Retired when Source mode was added; identical to the current default
+  // without its last entry.
+  "undo",
+  "redo",
+  "bold",
+  "italic",
+  "code",
+  "link",
+  "heading",
+  "bulletList",
+  "numberedList",
+  "checklist",
+  "quote",
+  "codeBlock",
+  "highlight",
+  "strikethrough",
+  "indent",
+  "outdent",
+  "mention",
+  "slash",
+]];
 
 function sameToolbar(
   left: readonly string[],
@@ -62,7 +85,7 @@ export function normalizeComposerToolbarOrder(
     return [...DEFAULT_COMPOSER_TOOLBAR];
   }
   const ids = value.filter((id): id is string => isKnown(id));
-  return sameToolbar(ids, LEGACY_COMPOSER_TOOLBAR)
+  return RETIRED_COMPOSER_TOOLBARS.some((retired) => sameToolbar(ids, retired))
     ? [...DEFAULT_COMPOSER_TOOLBAR]
     : ids;
 }

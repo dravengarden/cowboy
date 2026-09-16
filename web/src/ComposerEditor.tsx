@@ -30,6 +30,7 @@ import {
 } from "@codemirror/commands";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
+import { useComposerSourceMode } from "./composerSourceMode";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { isImeKeyEvent, isImeProtectedInput } from "./imeKey";
 import {
@@ -382,6 +383,14 @@ export const ComposerEditor = forwardRef<
   const vimApiRef = useRef<VimApi | null>(null);
 
   const vimExt = useVimExtension(vim ?? false, vimApiRef);
+
+  // Source mode is read here, not prop-drilled: the compact composer, the
+  // fullscreen editor and the queue/draft editors are separate mounts of THIS
+  // component, and they must never disagree about how the same markdown is
+  // presented. A flip changes the memo below, which @uiw/react-codemirror
+  // applies as a StateEffect.reconfigure — the document, selection and undo
+  // history are CM6 state, not configuration, so they all survive.
+  const sourceMode = useComposerSourceMode();
 
   // Surface the live vim mode to the card's NORMAL/INSERT hint. Once Vim is
   // present (vimExt truthy → vimApiRef populated), subscribe to the
@@ -952,10 +961,19 @@ export const ComposerEditor = forwardRef<
       // handler (Prec.highest, earlier in this array) so the send/draft chords
       // keep precedence; the engine's own Prec.highest Enter then drives tight-
       // list continuation on a PLAIN Enter. Markdown stays the literal value.
-      ...livePreviewExtensions(),
+      ...livePreviewExtensions({ sourceMode }),
       ...(vimExt ? [vimExt] : []),
     ],
-    [theme, sessionId, placeholder, vim, vimExt, aboveCursor, touchInput],
+    [
+      theme,
+      sessionId,
+      placeholder,
+      vim,
+      vimExt,
+      aboveCursor,
+      touchInput,
+      sourceMode,
+    ],
   );
 
   // Pixel-exact MUI `OutlinedInput` (no-label, size="small"), replicated rather

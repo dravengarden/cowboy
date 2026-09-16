@@ -143,6 +143,12 @@ the continuation is optional.
 - Workspace prefix then `L/Q/D`: focus Plan, Queue, or Drafts.
 - Workspace prefix then `N/W/R/,`: create a Session, cycle visible regions,
   enter Resize mode, or open Settings.
+- Workspace prefix then `E` (Prompt pane): toggle the composer between live
+  preview and Source mode. Obsidian binds this to `Mod+E`, which both collision
+  audits reject — Chrome owns it for the address bar and desktop apps for a
+  common editor action — so the toggle takes the documented prefix fallback and
+  keeps the same `E` mnemonic. It works from Vim Insert, Normal, and Visual
+  because the preference is global rather than an edit on the document.
 - `Alt/Option+1…0`: switch to one of the first ten Sessions globally.
 - `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
   turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.

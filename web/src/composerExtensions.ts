@@ -31,6 +31,11 @@ import {
 import "./mdlive/styles/inline-preview.css";
 
 export interface LivePreviewOptions {
+  /// Obsidian's Source mode: keep the markdown LITERAL — no inline
+  /// rendering, no hidden markers — while every other editing behaviour
+  /// stays identical. Off (live preview) is the default. See
+  /// composerSourceMode.ts.
+  sourceMode?: boolean;
   /// Plain-click on a rendered link. Omit → the engine's default
   /// `window.open(url, "_blank", "noopener,noreferrer")`, which matches how
   /// cowboy opens links elsewhere (MarkdownImpl) and is handled by the Tauri
@@ -83,10 +88,35 @@ export function livePreviewExtensions(
     // own Prec.high token-Backspace runs first but no-ops outside a token.)
     Prec.high(keymap.of(closeBracketsKeymap)),
     keymap.of([...markdownKeymap, indentWithTab]),
-    inlinePreview({
-      ...opts,
-      onLinkClick: opts.onLinkClick ?? openExternalUrl,
-    }),
+    // LIVE PREVIEW vs SOURCE MODE. Source mode leaves the whole decoration
+    // engine OUT rather than suppressing it from the outside: mdlive has no
+    // "off" switch, and a half-mounted decoration layer is exactly the kind of
+    // coupled state PITFALLS.md forbids. Everything else — the syntax tree, the
+    // highlight colours, pairing, wrapping, and cowboy's own @-token and
+    // attachment widgets — is identical in both modes, so toggling can never
+    // change the document.
+    //
+    // The one behavioural difference is Enter. mdlive owns a Prec.highest
+    // tight-list continuation (inline-preview.ts `insertTightListItem`),
+    // which exists because loose and tight lists LOOK identical once rendered.
+    // With the engine out, @codemirror/lang-markdown's own
+    // `insertNewlineContinueMarkup` takes over — it still continues bullets,
+    // ordered items and tasks, and its loose-list blank line is the honest
+    // result on a surface where the blank lines are visible. Do not
+    // re-implement the tight variant here; that would fork vendored logic
+    // (mdlive/SYNC.md).
+    ...(opts.sourceMode
+      ? [
+        // Marks the editable for tests and for anything that needs to style
+        // the raw surface. Decorative only — the mode change is announced by
+        // the control the user just operated.
+        EditorView.contentAttributes.of({ "data-composer-source": "true" }),
+      ]
+      : [
+        inlinePreview({
+          onLinkClick: opts.onLinkClick ?? openExternalUrl,
+        }),
+      ]),
     EditorView.lineWrapping,
   ];
   // Every add/drop here, and every iOS pitfall it touches, is documented in

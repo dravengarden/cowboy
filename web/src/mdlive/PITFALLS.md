@@ -69,6 +69,7 @@ here says otherwise.
 |---|---|---|
 | `markdown({base: markdownLanguage, codeLanguages: []})` | ✅ | the syntax tree the engine reads. `codeLanguages: []` = no embedded-code grammars (keep deps small). |
 | `inlinePreview()` + `atomicEditorTheme` + `atomicMarkdownSyntax` | ✅ | the live-preview decorations + theme + highlight (the whole point). |
+| `inlinePreview()` **only in live preview** | ✅/❌ by mode | Obsidian's Source mode (pitfall #108). `livePreviewExtensions({sourceMode: true})` leaves the decoration engine OUT entirely; theme, highlight, pairing and the language stay. Never try to half-mount it. |
 | `closeBrackets()` + `markdownLanguage.data.of({closeBrackets:{brackets:[… * _ ` ]}})` | ✅ | Obsidian-style auto-pairing incl. emphasis delimiters. |
 | `extendEmphasisPair` | ✅ | grow `*|*` → `**|**` as you type. |
 | `autoCloseCodeFence` | ✅ | auto-close ``` fences. |
@@ -1048,6 +1049,11 @@ fullscreen editor:
       caret at the end and raises the keyboard. CloseFullscreen (not Hide)
       is what leaves fullscreen (pitfall #23).
 - [ ] Toolbar quote/list/heading: caret lands AFTER the marker (pitfall #7).
+- [ ] Toggle Source mode (toolbar `RAW` button, or workspace prefix → E on
+      Desktop) with a caret mid-text: the document is byte-identical, markers
+      become literal, the caret and selection survive, undo still crosses the
+      flip, and typing pinyin on a marker line stays clean in BOTH modes
+      (pitfall #108).
 - [ ] Attach a photo, then type — keyboard returns, input works.
 - [ ] Paste a photo in the middle of text — the image lands at the caret and the
       caret resumes immediately after the image, before the original trailing
@@ -2414,3 +2420,38 @@ Desktop Vim + IME checks:
     behavior. Validate the API contract and Web gates; the editor verification
     matrix applies to editor changes. See the
     [failure analysis](../../../docs/usage-refresh-http-errors.md).
+
+108. **Source mode drops the decoration engine; it must never edit the
+    document.** Obsidian's live-preview ↔ Source toggle
+    (`composerSourceMode.ts` → `livePreviewExtensions({sourceMode})`) is the one
+    supported way to run this editor without mdlive's decorations. Rules, in
+    order of how badly each bites:
+
+    - **Omit the engine, never suppress it.** mdlive has no off switch, and
+      leaving `inlinePreviewPlugin` mounted while trying to neutralise its
+      ranges is exactly the coupled half-state the cardinal rule forbids. The
+      branch in `composerExtensions.ts` is the whole mechanism.
+    - **Both modes share one document.** Only decorations differ, so a toggle
+      can never rewrite, re-serialize or normalise text. The single behavioural
+      difference is Enter: mdlive's `Prec.highest` tight-list continuation goes
+      with the engine and @codemirror/lang-markdown's own
+      `insertNewlineContinueMarkup` takes over (it still continues bullets,
+      ordered items and tasks). Do not fork `insertTightListItem` out of the
+      vendored file to "fix" that — see SYNC.md.
+    - **The flip is a CM6 reconfigure**, dispatched by @uiw/react-codemirror
+      when the memoised extension array changes — the same path Vim already
+      uses. Document, selection and undo history are state, not configuration,
+      so they survive; a reconfigure during native marked text does not, which
+      is why nothing toggles this automatically. It is a user action only.
+    - **Cowboy's own widgets stay in BOTH modes** (@-file tokens, `cowboy-att:`
+      inline images). They represent attachments and references, not markdown
+      formatting, and their Backspace/trailing-line handling is load-bearing on
+      iOS. Revealing raw `![…](cowboy-att:…)` text in Source mode is a separate,
+      deliberate piece of work — note that Obsidian's own workaround for the
+      open image-caret bug (#69) is Source mode, so if that is ever attempted it
+      must be verified against #69 rather than assumed to fix it. **Do not claim
+      #69 fixed because Source mode exists.**
+    - **Presentation only.** The composer geometry, frost, focus handling and
+      touch paths are untouched, so the mobile swipe contract is unaffected.
+      Source mode still needs the caret/IME/paste rows of the verification
+      matrix, because it changes which decorations the caret walks through.

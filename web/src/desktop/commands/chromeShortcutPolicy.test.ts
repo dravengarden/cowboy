@@ -64,7 +64,7 @@ Deno.test("direct product chords and Alt session slots remain browser-safe", () 
 
 Deno.test("workspace navigation has no global bare-letter shortcut", () => {
   assertEquals(Object.keys(DESKTOP_WORKSPACE_COMMANDS).sort(), [
-    ",", "c", "d", "l", "n", "p", "q", "r", "s", "t", "w",
+    ",", "c", "d", "e", "l", "n", "p", "q", "r", "s", "t", "w",
   ]);
   for (const shortcut of Object.values(DESKTOP_SHORTCUTS)) {
     assert(!/^[a-z]$/i.test(shortcut));

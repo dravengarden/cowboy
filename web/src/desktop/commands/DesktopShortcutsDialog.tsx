@@ -33,6 +33,12 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.focusTopbar], title: "Focus Top Bar" },
   { keys: [DESKTOP_SHORTCUTS.newSession], title: "Create a new Session" },
   { keys: [DESKTOP_SHORTCUTS.settings], title: "Open Settings" },
+  {
+    keys: [DESKTOP_SHORTCUTS.toggleSourceMode],
+    title: "Toggle composer Source mode",
+    description:
+      "Edit the literal markdown instead of the live preview. Obsidian's Mod+E is reserved by Chrome and macOS, so Source mode uses the workspace prefix",
+  },
   { keys: ["R"], title: "Open Run Configuration in Top Bar" },
   { keys: ["U"], title: "Open Usage Limits in Top Bar" },
   { keys: ["A"], title: "Verify Product Session when prompted in Top Bar" },

@@ -141,6 +141,7 @@ import {
     composerColWidthStore,
 } from "./desktopLayout";
 import { setVimSetting, useVimSetting } from "./vimSetting";
+import { setComposerSourceMode, useComposerSourceMode } from "./composerSourceMode";
 import {
     setComposerDebugSetting,
     useComposerDebugSetting,
@@ -4181,6 +4182,7 @@ function DesktopSettingsContent({
     shortcutsAvailable: boolean;
 }): React.JSX.Element {
     const vim = useVimSetting();
+    const sourceMode = useComposerSourceMode();
     const composerDebug = useComposerDebugSetting();
     const reading = useReadingSettings();
     const selectedFont = getFontPreset(reading.fontVariant);
@@ -4267,6 +4269,9 @@ function DesktopSettingsContent({
                 >
                     <DesktopSettingsRow shortcut="M" shortcutAvailable={shortcutsAvailable} label="Vim keybindings" description="Modal editing in the composer">
                         <DesktopSettingsChoice active={vim} onClick={() => setVimSetting(!vim)} ariaLabel="Toggle Vim keybindings">{vim ? "On" : "Off"}</DesktopSettingsChoice>
+                    </DesktopSettingsRow>
+                    <DesktopSettingsRow shortcut="E" shortcutAvailable={shortcutsAvailable} label="Source mode" description="Edit the literal markdown instead of the live preview">
+                        <DesktopSettingsChoice active={sourceMode} onClick={() => setComposerSourceMode(!sourceMode)} ariaLabel="Toggle composer source mode">{sourceMode ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                     <DesktopSettingsRow shortcut="D" shortcutAvailable={shortcutsAvailable} label="Debug mode" description="Verbose composer input logs for agents">
                         <DesktopSettingsChoice active={composerDebug} onClick={() => { const next = !composerDebug; setComposerDebugSetting(next); reportComposerDebugModeChanged(next); }} ariaLabel="Toggle composer debug mode">{composerDebug ? "On" : "Off"}</DesktopSettingsChoice>
