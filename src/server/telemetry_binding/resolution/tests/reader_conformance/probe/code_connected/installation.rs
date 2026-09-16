@@ -6,11 +6,21 @@ pub(super) async fn run(pair: &Pair<'_>, request: &Value) -> Result<(), Failure>
     let endpoint = format!("/api/machines/{MACHINE}/plugins/zed");
     let history = format!("{endpoint}/installation-operations");
     let before = pair.http.get(&history).await?;
+    eprintln!(
+        "Code installation history: enabled={}, empty={}",
+        before["admission_enabled"] == true,
+        before["operations"] == json!([])
+    );
     check(before["admission_enabled"] == true && before["operations"] == json!([]))?;
     let anonymous = Http::new(pair.address)?;
-    anonymous
-        .denied(Method::POST, &endpoint, Some(request.clone()))
+    let denied = anonymous
+        .call(Method::POST, &endpoint, Some(request.clone()))
         .await?;
+    eprintln!(
+        "Code anonymous installation status: {}",
+        denied.status.as_u16()
+    );
+    check(denied.status == StatusCode::UNAUTHORIZED)?;
     check(
         !pair
             .proxy
