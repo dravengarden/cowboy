@@ -164,21 +164,32 @@ export function ProductRecentAuthSheet({
     providerAbort.current?.abort();
     passkeyAbort.current?.abort();
   }, []);
+  // Read at reset time, never depended on. `me` is replaced by a new object
+  // on every session push, and this effect clears the sheet's state — so
+  // listing it here meant an ordinary background refresh wiped the outcome of
+  // whatever the reader had just done. A verification that succeeded set
+  // `verifiedMe`, announced the cookie change, and had its own resumption
+  // cleared before the Continue button could paint: the tap looked like it did
+  // nothing, which is exactly what it then did.
+  const resetInputs = useRef({ me, accountMethods, primaryMethods, purpose });
+  resetInputs.current = { me, accountMethods, primaryMethods, purpose };
   useEffect(() => {
     if (!open) return;
+    const current = resetInputs.current;
     setPassword("");
     setError(null);
     setNotice(null);
     setVerifiedMe(null);
     setMethod(
       initialMethod(
-        me,
-        purpose,
-        accountMethods,
-        primaryMethods,
+        current.me,
+        current.purpose,
+        current.accountMethods,
+        current.primaryMethods,
       ),
     );
-  }, [accountMethods, me, open, primaryMethods, purpose]);
+    // Opening the sheet, or repurposing it, is the only reason to start clean.
+  }, [open, purpose]);
   useEffect(() => {
     if (methods.some((candidate) => candidate.id === method)) return;
     setMethod(

@@ -70,3 +70,25 @@ Deno.test("verification outcomes render beside the button that caused them", () 
   assertEquals(sheetSource.includes("Verify now, then $"), false);
   assert(sheetSource.includes("Safari only opens the Passkey prompt from a"));
 });
+
+// The sheet's reset effect clears error, notice, and — worse — a verification
+// that already succeeded and is waiting for the reader's Continue tap. `me` is
+// a fresh object on every session push, so depending on it meant any background
+// refresh discarded that result and the tap read as doing nothing.
+Deno.test("a background session refresh cannot discard a finished verification", () => {
+  const effect = sheetSource.slice(
+    sheetSource.indexOf("const resetInputs = useRef("),
+    sheetSource.indexOf("}, [open, purpose]);") + "}, [open, purpose]);".length,
+  );
+  assert(effect.includes("setVerifiedMe(null)"));
+  assert(effect.endsWith("}, [open, purpose]);"));
+  // The values are read through the ref, so they cannot re-trigger the reset.
+  assert(effect.includes("const current = resetInputs.current;"));
+  assert(effect.includes("current.me"));
+  assertEquals(
+    sheetSource.includes(
+      "}, [accountMethods, me, open, primaryMethods, purpose]);",
+    ),
+    false,
+  );
+});
