@@ -13,6 +13,10 @@ the agent had host access but no browser Operator credential. Those requests
 did not enter the installer. A successful Catalog publication is not an
 installation receipt.
 
+The [completed Hawk rollout](releases/agent-operator-upgrade-2026-09-16.md)
+subsequently installed 3.1.25 and verified real subscriber quota, including a
+collector correction discovered during the first live upgrade.
+
 Browser authentication remains useful for remote operators. A Controller host
 also has an operating-system authority boundary: its Service account controls
 the application and its data. The local Operator endpoint makes that authority
@@ -42,9 +46,9 @@ Review the exact signed release and installed target before submitting:
 
 ```sh
 cowboy operator upgrade \
-  --machine hawk --plugin claude-code --version 3.1.24 \
-  --digest sha256:f3f0b9245fcd7084b41c4d3073206926cf0d8b9db0c9badaf3ed8186aca37919 \
-  --operation-id hawk-claude-code-3-1-24-reviewed-upgrade
+  --machine hawk --plugin claude-code --version 3.1.25 \
+  --digest sha256:88e7b0d1a832102e09fc1d2cc3f968a831046c357a89d7d59b1977792204d1f9 \
+  --operation-id hawk-claude-code-3-1-25-reviewed-upgrade
 cowboy operator operations --machine hawk --plugin claude-code
 cowboy operator inspect --machine hawk
 cowboy operator usage --refresh anthropic

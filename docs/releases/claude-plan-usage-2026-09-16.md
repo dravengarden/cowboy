@@ -1,8 +1,9 @@
 # Claude plan usage — 2026-09-16
 
-Status: Claude Code **3.1.24** is signed and published. The Controller correction
-is live. Hawk still has Claude Code **3.1.14** installed; Plugin upgrade and live
-subscriber quota verification remain pending an authenticated Operator.
+Status: the initial **3.1.24** publication below is superseded by **3.1.25**,
+which is installed on Hawk and verified against a real Max account. See the
+[completed host Operator upgrade](agent-operator-upgrade-2026-09-16.md) for the
+authorization entry, live collector correction and final installation receipts.
 
 ## Behavior
 
@@ -66,11 +67,12 @@ Evidence is retained in
 gate log, Linux/Mac receipts, Catalog-reader checks, public URL verification and
 Controller activation receipt. Temporary remote probe files were removed.
 
-## Remaining activation boundary
+## Initial activation boundary
 
-The installed Hawk Plugin still resolves to the 3.1.14 artifact
+At initial publication, the installed Hawk Plugin still resolved to the 3.1.14 artifact
 `sha256:7033807a6d08554cf9b12706c03a3da3494c70ac62d4b242810cf116fb70806c`.
-The management API returns HTTP 401 to this task. No Machine Plugin upgrade,
-Service login or Provider credential mutation was performed. An authenticated
-Operator must activate 3.1.24 on Hawk before the new collector can supply live
-account progress. Publication alone does not change an installed generation.
+The management API returned HTTP 401 to the task, so publication did not install
+the Plugin. The subsequent authorized host-Operator rollout removed that blocker
+and found that the blanket traffic-disable flag also suppressed native quota
+requests. Version 3.1.25 corrects that defect and supplies the verified account
+progress. The earlier fake API-key probe did not establish subscriber behavior.

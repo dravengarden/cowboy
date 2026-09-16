@@ -76,7 +76,8 @@ primary phone/desktop product path.
 - [`releases/plugin-owned-buffer-reads-2026-09-16.md`](releases/plugin-owned-buffer-reads-2026-09-16.md) — Activated Controller observations and verified Zed diagnostic-protocol repair; 13 workers retained, with Machine/Code rollout separate
 - [`releases/plugin-controller-buffer-owners-2026-09-15.md`](releases/plugin-controller-buffer-owners-2026-09-15.md) — Verified Controller candidate and 20 new tests; historical publication blocker and later running-source follow-up
 - [`releases/agent-publication-2026-09-15.md`](releases/agent-publication-2026-09-15.md) — Six independent signed Agent publications, Linux/Mac gates, four actual Catalog readers and automatic adoption without component restart or Plugin installation
-- [`releases/claude-plan-usage-2026-09-16.md`](releases/claude-plan-usage-2026-09-16.md) — Native Anthropic plan usage in Claude Code 3.1.24, verified publication and Controller activation; Hawk Plugin upgrade remains pending
+- [`releases/claude-plan-usage-2026-09-16.md`](releases/claude-plan-usage-2026-09-16.md) — Initial native Anthropic usage publication and the subsequent subscriber correction
+- [`releases/agent-operator-upgrade-2026-09-16.md`](releases/agent-operator-upgrade-2026-09-16.md) — Live host Operator CLI, completed Claude Code 3.1.25 upgrade and verified Max plan progress
 - [`releases/plugin-native-buffer-leases-2026-09-15.md`](releases/plugin-native-buffer-leases-2026-09-15.md) — Verified Zed 1.3.0 and Machine candidates, 29 new tests and real signed-install/path-removal drain; no production activation
 - [`releases/plugin-code-read-scopes-2026-09-15.md`](releases/plugin-code-read-scopes-2026-09-15.md) — Verified scoped-code Controller activation with 15 workers retained
 - [`releases/plugin-buffered-code-reads-2026-09-15.md`](releases/plugin-buffered-code-reads-2026-09-15.md) — Verified buffered code-response and closed-request Controller activation with 16 workers retained
