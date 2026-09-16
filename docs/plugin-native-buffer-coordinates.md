@@ -82,10 +82,21 @@ delete/undo/redo and all Unicode boundaries against the pinned engine. Transport
 fixtures reject late edits in all four read paths and resolve nonempty navigation
 without a destination file. These are deliberately not production LSP evidence.
 The real immutable adapter/server conformance gate additionally edits a file
-after open and waits for a newly inserted UTF-16 position to become queryable,
-then exercises signed temporary installation, retained reads after uninstall,
+after open and verifies that disk-only positions are refused while the original
+native positions and buffer identity remain usable. It then exercises signed
+temporary installation, retained reads after uninstall,
 file/worktree disappearance, owner drain and reactivation. The `.txt` fixture
 does not claim a nonempty real language-server hover or diagnostic.
+
+An initial real-process test incorrectly expected a filesystem edit to trigger
+native text history; it timed out. Tracing only the disposable fixture showed
+`UpdateWorktree` and `UpdateBufferFile`, but no text operation or reload. In the
+pinned server, `language::Buffer::file_updated` emits `ReloadNeeded`; the
+headless route does not automatically turn this into `ReloadBuffers`. The
+adapter deliberately does not add that mutation to a read. Explicit content
+synchronization/reload authority remains a prerequisite for Review. Native
+edit/undo acceptance here uses actual engine-generated operation fixtures,
+not a claim that production disk edits already synchronize.
 
 `openedVersion` remains the original open lower bound in the owned API; it is
 not upgraded into a content certificate. The closed owned read union is still

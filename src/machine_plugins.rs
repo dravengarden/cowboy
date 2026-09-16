@@ -5430,14 +5430,13 @@ mod tests {
             1
         );
         let open_buffer = serde_json::json!({"type": "openBuffer", "worktree": worktree, "path": "fixture.txt", "leaseId": "conformance"});
-        assert_eq!(
-            store.code_request("zed", &open_buffer, None).await.unwrap()["leases"],
-            1
-        );
+        let original_buffer = store.code_request("zed", &open_buffer, None).await.unwrap();
+        assert_eq!(original_buffer["leases"], 1);
         assert_eq!(store.code_runtimes.live_generation_count().await, 1);
-        // A position on a newly added line cannot be represented by the old
-        // base insertion. Observe the real server's reload/edits without
-        // reopening the buffer; no language server is configured for .txt.
+        // Headless Zed 1.13 announces file metadata, not an automatic reload.
+        // A read must not create anchors from changed disk text, reload the
+        // original native buffer or replace its owner. No LSP is configured
+        // for .txt; edit/undo messages are covered by the private engine tests.
         fs::write(
             worktree.join("fixture.txt"),
             "real isolated Zed buffer\nnew native line\n汉🙂 tail\n",
@@ -5445,21 +5444,27 @@ mod tests {
         .unwrap();
         let hover = serde_json::json!({"type":"bufferHover", "worktree":worktree,
             "path":"fixture.txt", "row":2, "column":3});
-        tokio::time::timeout(Duration::from_secs(15), async {
-            loop {
-                if let Ok(observed) = store.code_request("zed", &hover, None).await {
-                    assert_eq!(observed["type"], "bufferHover");
-                    assert!(observed["contents"].is_array());
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect("real native edited-buffer coordinates never became readable");
+        for _ in 0..3 {
+            let error = store.code_request("zed", &hover, None).await.unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("position is outside native content"),
+                "{error:#}"
+            );
+            let original_position = serde_json::json!({"type":"bufferHover", "worktree":worktree,
+                "path":"fixture.txt", "row":0, "column":1});
+            let observed = store
+                .code_request("zed", &original_position, None)
+                .await
+                .unwrap();
+            assert_eq!(observed["type"], "bufferHover");
+            assert!(observed["contents"].is_array());
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         assert_eq!(
-            store.code_request("zed", &open_buffer, None).await.unwrap()["leases"],
-            1,
+            store.code_request("zed", &open_buffer, None).await.unwrap(),
+            original_buffer,
             "read refreshed or replaced the original owner"
         );
         // New native references are allocated *before* open effects. Keep
