@@ -27,6 +27,12 @@ Explicit auth-off mode keeps its existing local identity; it is never a fallback
 for a revoked authenticated continuation. Automation scopes do not authorize
 Plugin mutations.
 
+An explicitly enabled [local host delegation](agent-driven-plugin-release.md)
+can also construct installation approval through a separate private Unix
+listener. It captures kernel peer identity and the original host grant generation
+instead of a Product credential. It shares the same bounded coordinator and
+effect checks; it cannot become a Product login or be supplied over TCP.
+
 The detached task retains only the credential hash and minimal lookup identity,
 never bearer secrets, whole headers, OIDC token material or DPoP proofs. A device
 continuation rechecks the same access-token registry entry without consuming its

@@ -12,6 +12,8 @@ use std::time::Duration;
 
 enum Credential {
     Local,
+    #[cfg(unix)]
+    Host(Arc<crate::local_operator::Grant>),
     Admin {
         token_hash: String,
     },
@@ -37,6 +39,22 @@ pub(super) struct OperatorApproval {
 }
 
 impl OperatorApproval {
+    #[cfg(unix)]
+    pub(super) fn capture_host(
+        service: &str,
+        grant: Arc<crate::local_operator::Grant>,
+    ) -> Result<Self, StatusCode> {
+        if !grant.current() {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        Ok(Self {
+            service: service.to_owned(),
+            actor: grant.actor(),
+            credential: Credential::Host(grant),
+            received: TimeSample::now(),
+        })
+    }
+
     pub(super) fn capture(
         auth: ProductRequestAuth<'_>,
         service: &str,
@@ -204,6 +222,10 @@ impl OperatorApproval {
     }
 
     pub(super) async fn current_operator(&self, auth: ProductRequestAuth<'_>) -> Option<Actor> {
+        #[cfg(unix)]
+        if let Credential::Host(grant) = &self.credential {
+            return grant.current().then(|| grant.actor());
+        }
         if let Credential::Admin { token_hash } = &self.credential {
             return admin_identities(auth.hub)
                 .principal_by_token_hash(token_hash, auth_now_ms())
@@ -223,6 +245,8 @@ impl OperatorApproval {
     ) -> Option<ProductPrincipal> {
         match &self.credential {
             Credential::Admin { .. } => return None,
+            #[cfg(unix)]
+            Credential::Host(_) => return None,
             Credential::Local => {
                 return (!auth.product_auth_enabled)
                     .then(crate::product_auth::local_product_principal);
@@ -288,6 +312,8 @@ impl OperatorApproval {
                 identity.user_id.clone()
             }
             Credential::Local | Credential::Admin { .. } => return None,
+            #[cfg(unix)]
+            Credential::Host(_) => return None,
         };
         let principal = product_principal(auth.hub, &user);
         (user_id == user.id && principal.role.at_least(AdminRole::Operator)).then_some(principal)

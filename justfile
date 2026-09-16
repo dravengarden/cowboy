@@ -476,6 +476,12 @@ check: toolchain-check native-shell-check provider-check site-check composition-
 check-compact:
     CARGO_INCREMENTAL=0 just check
 
+# Exercise the actual private Operator CLI/Controller and enrolled Machine.
+# Only active entries write; other matrix entries are resolved, not reader-tested.
+plugin-local-operator-conformance MATRIX RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; export COWBOY_TEST_LOCAL_OPERATOR_MATRIX="$1" COWBOY_TEST_LOCAL_OPERATOR_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib immutable_local_operator_installation -- --ignored --nocapture' conformance "{{MATRIX}}" "{{RECEIPT}}"
+
 test-fast:
     cargo nextest run --all-features --locked
 

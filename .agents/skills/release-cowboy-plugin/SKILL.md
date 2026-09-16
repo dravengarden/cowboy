@@ -188,6 +188,11 @@ Never invent a command that its repository does not own.
   Machine-wide package. A required core contract change is a separate task.
 - Keep release and installation separate. Publishing makes a version available
   in the Catalog; it never installs or upgrades that version on a Machine.
+- With an authorized Machine upgrade, an agent may use the Controller's
+  explicitly enabled `cowboy operator` host delegation. Follow
+  [`docs/agent-driven-plugin-release.md`](../../../docs/agent-driven-plugin-release.md)
+  for exact release selection, operation identity, durable receipts and
+  postflight. This uses the normal installer and requires no browser cookie.
 - Keep Provider authentication Cowboy Service-scoped. A release must not add a
   Machine login control, perform login, or mutate the active Service credential.
 - Keep lifecycle effects on their typed surfaces: Service login/logout on

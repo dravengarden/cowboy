@@ -40,6 +40,11 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   `/healthz`, `/version`, the SPA version/cache headers, and Machine presence.
   Web/bundle changes also need a PWA hard-reload (a WS reconnect keeps stale JS).
   (memories: cowboy-switch-restarts-approval-channel, cowboy-v1-deploy)
+- Authorized Plugin upgrades may use `cowboy operator` on the Controller host
+  as its Service account after explicit host delegation is enabled. Follow
+  `docs/agent-driven-plugin-release.md`: select exact version/digest, retain one
+  operation ID, and inspect receipts after failures. Never substitute browser
+  credential copying, live database edits or installation-pointer writes.
 
 ## Architecture gotchas
 - The normative Provider-platform contract is `docs/requirements.md`. The

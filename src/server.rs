@@ -67,6 +67,8 @@ use tokio_util::io::ReaderStream;
 
 mod code_buffers;
 mod code_reads;
+#[cfg(unix)]
+mod local_operator;
 mod operator_approval;
 mod plugin_install;
 use plugin_install::api_machine_plugin_install;
@@ -8930,7 +8932,7 @@ async fn serve_axum(
     shutdown_tx: watch::Sender<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(state);
-    let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir));
+    let setup = Arc::new(crate::admin::AdminSetupState::new(data_dir.clone()));
     let setup_needed = match state.store.as_ref() {
         Some(store) => store
             .list_users()
@@ -9243,6 +9245,9 @@ async fn serve_axum(
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(addr = %bind, "WS/HTTP listening");
 
+    #[cfg(unix)]
+    let local_operator = local_operator::start(&data_dir, Arc::clone(&state))?;
+
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -9251,6 +9256,8 @@ async fn serve_axum(
     .with_graceful_shutdown(shutdown_signal(shutdown_tx))
     .await
     .context("axum serve");
+    #[cfg(unix)]
+    local_operator.shutdown().await;
     code_buffers.shutdown().await;
     result?;
     Ok(())

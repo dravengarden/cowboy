@@ -23,6 +23,7 @@ primary phone/desktop product path.
 - [`plugin-recovery-assessment.md`](plugin-recovery-assessment.md) — Read-only recovery assessment across Service evidence, Machine receipts and current installation tombstones
 - [`plugin-execution-leases.md`](plugin-execution-leases.md) — Connection-bound, process-monotonic admission for journaled Plugin effects
 - [`plugin-service-authorization.md`](plugin-service-authorization.md) — Current confirming-credential and Operator checks at Service effect boundaries
+- [`agent-driven-plugin-release.md`](agent-driven-plugin-release.md) — Explicit host delegation, private Operator CLI, exact Plugin upgrades and durable postflight
 - [`unattended-release-adoption.md`](unattended-release-adoption.md) — Controller-owned Catalog observation, bounded fallback and shutdown drain; unattended installation intent and host policy remain designs
 - [`plugin-no-effect-resolution.md`](plugin-no-effect-resolution.md) — Independently confirmed, atomic resolution of proven pre-effect uninstall interruptions
 - [`telemetry-binding-resolution.md`](telemetry-binding-resolution.md) — Independently authorized Service binding resolution, schema-two audit reader and closed production admission

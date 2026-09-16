@@ -34,6 +34,9 @@ enum Command {
     /// Sign this computer in through the configured Cowboy browser login.
     #[cfg(feature = "full")]
     Login(LoginArgs),
+    /// Operate the Controller through its explicitly enabled private host endpoint.
+    #[cfg(all(feature = "full", unix))]
+    Operator(crate::local_operator::OperatorArgs),
     /// Debug: drive one provider end-to-end (spawn, initialize, prompt, stream).
     #[cfg(feature = "full")]
     TryAgent(TryAgentArgs),
@@ -392,6 +395,8 @@ impl Cli {
             }
             #[cfg(feature = "full")]
             Command::Login(args) => login_client(args).await,
+            #[cfg(all(feature = "full", unix))]
+            Command::Operator(args) => crate::local_operator::run(args).await,
             #[cfg(feature = "full")]
             Command::TryAgent(args) => {
                 crate::server::init_tracing();

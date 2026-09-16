@@ -9,6 +9,7 @@ mod catalog_lifetime;
 mod copy;
 mod evidence;
 mod exercise;
+mod local_operator;
 mod proxy;
 mod recovery;
 use evidence::Evidence;

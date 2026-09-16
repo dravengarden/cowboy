@@ -1,5 +1,66 @@
 use super::*;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn host_installation_uses_the_same_budget_and_cannot_revive_after_revocation() {
+    use std::io::Write as _;
+    let h = Harness::new().await;
+    let root = tempfile::tempdir().unwrap();
+    let directory = crate::local_operator::directory(root.path()).unwrap();
+    let policy = directory.join("grant.json");
+    let mut file = crate::local_operator::private_file(&policy, true).unwrap();
+    file.write_all(
+        &serde_json::to_vec(&serde_json::json!({"schema":1,"generation":"a".repeat(64)})).unwrap(),
+    )
+    .unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let grant =
+        crate::local_operator::Grant::capture(&directory, crate::local_operator::uid(), live)
+            .unwrap();
+    let approval = OperatorApproval::capture_host("service-test", Arc::new(grant)).unwrap();
+    assert!(
+        approval
+            .current_product_operator(h.context())
+            .await
+            .is_none(),
+        "host delegation cannot impersonate a Product login"
+    );
+    let desired = desired();
+    let authority = approval
+        .bind_installation(
+            "machine-test",
+            &desired,
+            "host-install-fixture".into(),
+            crate::machine_protocol::plugin_install::InstallTarget::Vacant {},
+        )
+        .unwrap();
+    assert!(
+        authority
+            .check(h.context(), "service-test", "machine-test", &desired)
+            .await
+    );
+    assert!(authority.intent().expires_at_ms <= auth_now_ms() + 300_000);
+    std::fs::remove_file(&policy).unwrap();
+    assert!(
+        !authority
+            .check(h.context(), "service-test", "machine-test", &desired)
+            .await
+    );
+    let mut replacement = crate::local_operator::private_file(&policy, true).unwrap();
+    replacement
+        .write_all(
+            &serde_json::to_vec(&serde_json::json!({"schema":1,"generation":"a".repeat(64)}))
+                .unwrap(),
+        )
+        .unwrap();
+    assert!(
+        !authority
+            .check(h.context(), "service-test", "machine-test", &desired)
+            .await
+    );
+    assert!(!authority.matches_live_step(&authority.intent().machine_step().unwrap()));
+}
+
 #[tokio::test]
 async fn installation_wire_deadline_keeps_time_spent_before_binding() {
     let h = Harness::new().await;

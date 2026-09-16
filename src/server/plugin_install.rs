@@ -388,6 +388,25 @@ pub(super) async fn api_machine_plugin_install(
     headers: HeaderMap,
     Json(request): Json<PluginInstallRequest>,
 ) -> Response {
+    let approval = match OperatorApproval::capture(
+        ProductRequestAuth::from(state.as_ref()),
+        &state.service_id,
+        authenticated.as_ref().map(|Extension(auth)| auth),
+        &headers,
+    ) {
+        Ok(approval) => approval,
+        Err(status) => return status.into_response(),
+    };
+    confirmed_install(state, machine, plugin, request, approval).await
+}
+
+pub(super) async fn confirmed_install(
+    state: Arc<AppState>,
+    machine: String,
+    plugin: String,
+    request: PluginInstallRequest,
+    approval: OperatorApproval,
+) -> Response {
     if !DURABLE_INSTALL_ENABLED {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -398,15 +417,6 @@ pub(super) async fn api_machine_plugin_install(
     if !crate::plugin_operation::installation::valid_operation_id(&request.operation_id) {
         return (StatusCode::BAD_REQUEST, "Invalid Plugin operation identity").into_response();
     }
-    let approval = match OperatorApproval::capture(
-        ProductRequestAuth::from(state.as_ref()),
-        &state.service_id,
-        authenticated.as_ref().map(|Extension(auth)| auth),
-        &headers,
-    ) {
-        Ok(approval) => approval,
-        Err(status) => return status.into_response(),
-    };
     let Some(store) = state.store.as_ref() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };

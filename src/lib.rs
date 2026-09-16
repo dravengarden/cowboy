@@ -59,6 +59,8 @@ mod files;
 mod first_party_sources;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod legacy_provider_release;
+#[cfg(all(feature = "full", unix))]
+mod local_operator;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_auth;
 #[cfg(feature = "machine-host")]
