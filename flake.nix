@@ -84,6 +84,7 @@
           ./src
           ./migrations
           ./web/src/protocol.ts
+          ./contracts/code-buffer-client.fixture.json
           ./tests/fixtures/otel-client.json
           ./tests/fixtures/composition-v1.json
           ./tests/fixtures/telemetry-resolution-surface.json
