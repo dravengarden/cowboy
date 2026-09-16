@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import { AuthApiError } from "./authApi.ts";
 import {
   externalPasskeyEventsUrl,
@@ -116,19 +116,46 @@ Deno.test("Passkey failures preserve server errors and explain browser cancellat
     ),
     "Passkey setup expired",
   );
+  // The browser reports a dismissed prompt, a timeout, and "the provider that
+  // answered holds no Passkey for this site" under one name and will not say
+  // which. The message has to cover the third case, because that is the one the
+  // reader can act on — it is what happens when a password manager takes the
+  // prompt but the Passkey lives in the system keychain.
+  for (const name of ["NotAllowedError", "AbortError"]) {
+    const verifying = passkeyErrorMessage(
+      new DOMException("cancelled", name),
+      "fallback",
+    );
+    assert(verifying.includes("has no Cowboy Passkey"));
+    assert(verifying.includes("dismissed"));
+    assertEquals(
+      passkeyErrorMessage(
+        new DOMException("cancelled", name),
+        "fallback",
+        "register",
+      ),
+      "Passkey setup was dismissed or timed out. Nothing was added; try again.",
+    );
+  }
+  // Adding a second Passkey and picking the provider that already holds one is
+  // the standard way to reach InvalidStateError; say how to finish the job.
   assertEquals(
     passkeyErrorMessage(
-      new DOMException("cancelled", "NotAllowedError"),
+      new DOMException("exists", "InvalidStateError"),
       "fallback",
+      "register",
     ),
-    "Passkey verification was cancelled or timed out.",
+    "That provider already holds a Cowboy Passkey. To add a second, choose a different one in the prompt.",
   );
-  assertEquals(
+  assert(
     passkeyErrorMessage(
-      new DOMException("cancelled", "AbortError"),
+      new DOMException("no uv", "ConstraintError"),
       "fallback",
-    ),
-    "Passkey verification was cancelled or timed out.",
+    ).includes("device unlock"),
+  );
+  assert(
+    passkeyErrorMessage(new DOMException("x", "UnknownError"), "fallback")
+      .includes("different provider"),
   );
   assertEquals(
     passkeyErrorMessage(new Error("private"), "fallback"),

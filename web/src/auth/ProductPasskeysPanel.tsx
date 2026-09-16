@@ -349,7 +349,9 @@ export function ProductPasskeysPanel({
           });
           return;
         }
-        setError(passkeyErrorMessage(reason, "Could not add a Passkey"));
+        setError(
+          passkeyErrorMessage(reason, "Could not add a Passkey", "register"),
+        );
       })
       .finally(() => setBusy(false));
   };

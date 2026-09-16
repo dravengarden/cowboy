@@ -515,20 +515,46 @@ export async function verifyPasskey(signal?: AbortSignal): Promise<ProductMe> {
   throw new Error("Passkeys are unavailable on this device");
 }
 
+/** Which ceremony failed. The browser reports the same `DOMException` names
+ *  for both, but "cancelled" means different things when you are adding a
+ *  Passkey and when you are being asked for one. */
+export type PasskeyCeremony = "register" | "verify";
+
 export function passkeyErrorMessage(
   reason: unknown,
   fallback: string,
+  ceremony: PasskeyCeremony = "verify",
 ): string {
   if (reason instanceof AuthApiError) return reason.message;
   if (reason instanceof DOMException) {
     if (reason.name === "AbortError" || reason.name === "NotAllowedError") {
-      return "Passkey verification was cancelled or timed out.";
+      // The browser reports this same name for a dismissed prompt, a timeout,
+      // AND for a provider that answered the request holding no Passkey for
+      // this site — which is what happens when a password manager takes the
+      // prompt but the Passkey lives in the system keychain. Naming that third
+      // case is the difference between "try again" and knowing what to change.
+      return ceremony === "register"
+        ? "Passkey setup was dismissed or timed out. Nothing was added; try again."
+        : "No Passkey was used: the prompt was dismissed, it timed out, or the provider that answered has no Cowboy Passkey. Try again and choose the one that holds it.";
     }
     if (reason.name === "InvalidStateError") {
-      return "This Passkey is already registered.";
+      // The standard way to end up here is doing the right thing — adding a
+      // second Passkey — and picking the provider that already has one.
+      return ceremony === "register"
+        ? "That provider already holds a Cowboy Passkey. To add a second, choose a different one in the prompt."
+        : "This Passkey is already registered.";
+    }
+    if (reason.name === "ConstraintError") {
+      return "The Passkey provider could not verify you locally. Set up a device unlock — Touch ID, Windows Hello, or a PIN — then try again.";
+    }
+    if (reason.name === "NotSupportedError") {
+      return "This browser or Passkey provider cannot create the kind of Passkey Cowboy requires.";
     }
     if (reason.name === "SecurityError") {
       return "This browser cannot use Passkeys for this Cowboy address.";
+    }
+    if (reason.name === "UnknownError") {
+      return "The Passkey provider failed without saying why. Try again, or choose a different provider in the prompt.";
     }
   }
   return fallback;

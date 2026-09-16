@@ -28,6 +28,7 @@ export function PasskeyReauthLock({
     passkeyReauthDue(eligible, serverRequired, dueAt, Date.now()),
   );
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -61,14 +62,25 @@ export function PasskeyReauthLock({
     if (busy || !passkeyFlowSupported()) return;
     setBusy(true);
     setError(null);
+    setHint(null);
     void (async () => {
       const next = await verifyPasskey();
       setLocked(false);
       onUnlocked(next);
     })()
       .catch((err: unknown) => {
-        if (passkeyFlowCancelled(err)) return;
-        setError(passkeyErrorMessage(err, "Passkey verification failed"));
+        if (passkeyFlowCancelled(err)) {
+          // The browser reports a dismissed prompt and "the provider that
+          // answered holds no Passkey for this site" under the same name, on
+          // purpose — it will not say which. Saying nothing was the worse
+          // guess: a password manager that grabs the prompt and comes up empty
+          // left this card looking inert. One neutral line is true either way.
+          setHint(
+            "No Passkey was used. If yours lives in another app, pick that app in the prompt — or add a second Passkey in Settings so whichever one answers can unlock.",
+          );
+          return;
+        }
+        setError(passkeyErrorMessage(err, "Passkey verification failed", "verify"));
       })
       .finally(() => setBusy(false));
   };
@@ -117,6 +129,7 @@ export function PasskeyReauthLock({
             until you unlock it; running agents continue in the background.
           </Typography>
           {error && <Alert severity="error">{error}</Alert>}
+          {!error && hint && <Alert severity="info">{hint}</Alert>}
           <Button
             autoFocus
             variant="contained"
