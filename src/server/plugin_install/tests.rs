@@ -66,8 +66,13 @@ impl Default for MockEffects {
 }
 
 impl Effects for MockEffects {
-    async fn authorized(&self) -> bool {
-        self.checks.fetch_add(1, Ordering::SeqCst) != self.deny_at
+    async fn authorized(&self) -> Result<(), Precondition> {
+        // The fake denies by call index; which precondition it blames is not
+        // what these tests are about, so they all use one.
+        if self.checks.fetch_add(1, Ordering::SeqCst) == self.deny_at {
+            return Err(Precondition::OperatorApproval);
+        }
+        Ok(())
     }
     async fn needs_auth_sync(&self, _: bool) -> bool {
         self.sync
@@ -149,6 +154,60 @@ fn exact_release_is_required_and_unrecognized_install_fields_are_rejected() {
     );
 }
 
+/// A refusal has to say what to fix. Before this, every one of these answered
+/// with the same sentence — "confirmation, compatibility, connection or
+/// authentication preconditions changed" — which is true of all of them and
+/// actionable for none, so an operator converging a fleet could not tell a
+/// Machine that needs updating from one that needs reconnecting.
+#[test]
+fn each_refused_precondition_says_what_to_fix() {
+    let details: Vec<&str> = [
+        Precondition::OperatorApproval,
+        Precondition::MachineConnection,
+        Precondition::MachineAdmission,
+        Precondition::MachineTarget,
+        Precondition::CatalogRelease,
+        Precondition::MachineCapability,
+        Precondition::Storage,
+    ]
+    .into_iter()
+    .map(Precondition::detail)
+    .collect();
+    for detail in &details {
+        assert!(
+            detail.starts_with("Plugin installation was not sent: "),
+            "{detail}"
+        );
+        assert_eq!(details.iter().filter(|other| *other == detail).count(), 1);
+    }
+    // The two Machine-side refusals need opposite actions, so they must not
+    // read alike: admission disabled is "update Cowboy Machine there", a lost
+    // connection is "reconnect it".
+    assert!(
+        Precondition::MachineAdmission
+            .detail()
+            .contains("admission disabled")
+    );
+    assert!(
+        Precondition::MachineAdmission
+            .detail()
+            .contains("Update Cowboy Machine")
+    );
+    assert!(
+        Precondition::MachineConnection
+            .detail()
+            .contains("control connection")
+    );
+    assert!(
+        Precondition::MachineConnection
+            .detail()
+            .contains("same operation ID")
+    );
+    // A named refusal is still a 409 carrying the same durable problem.
+    let response = Outcome::NotDispatched(Precondition::MachineAdmission).response();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
 #[test]
 fn reservation_preserves_existing_lifecycle_fences_and_other_slots() {
     for previous in [
@@ -193,7 +252,7 @@ async fn every_effect_checks_authority_and_stops_after_revocation() {
                 if installed {
                     Outcome::AuthenticationPending
                 } else {
-                    Outcome::NotDispatched
+                    Outcome::NotDispatched(Precondition::OperatorApproval)
                 }
             );
             assert_eq!(
@@ -226,7 +285,7 @@ async fn authentication_failure_distinguishes_before_and_after_installation() {
         assert_eq!(
             outcome,
             if sync_fails_at == 0 {
-                Outcome::NotDispatched
+                Outcome::NotDispatched(Precondition::OperatorApproval)
             } else {
                 Outcome::AuthenticationPending
             }
@@ -254,7 +313,10 @@ async fn only_not_sent_restores_previous_fence_and_acknowledged_install_never_re
         ] {
             let (expected, disposition) = match failure {
                 None => (Outcome::Installed, None),
-                Some(CommandFailure::NotSent) => (Outcome::NotDispatched, previous),
+                Some(CommandFailure::NotSent) => (
+                    Outcome::NotDispatched(Precondition::MachineConnection),
+                    previous,
+                ),
                 _ => (
                     Outcome::NeedsReconcile,
                     Some(PluginFenceState::NeedsReconcile),

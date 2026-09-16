@@ -1035,7 +1035,10 @@ mod tests {
             serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap();
         let manifest = source.compile().unwrap();
         assert_eq!(
-            manifest.runtime.environment.get("CLAUDE_CODE_RETRY_WATCHDOG"),
+            manifest
+                .runtime
+                .environment
+                .get("CLAUDE_CODE_RETRY_WATCHDOG"),
             Some(&cowboy_provider_sdk::RuntimeValue::Literal("1".to_owned()))
         );
         assert!(

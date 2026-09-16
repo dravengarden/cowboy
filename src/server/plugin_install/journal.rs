@@ -47,14 +47,18 @@ impl<'a> Progress<'a> {
         Ok(())
     }
 
+    /// `problem` is the durable journal's existing vocabulary and is written
+    /// unchanged; `precondition` never reaches storage — it only names the
+    /// refusal in the HTTP response so the caller knows what to fix.
     pub(super) async fn abort(
         &mut self,
         fence: &mut InstallationFence,
         problem: InstallProblem,
+        precondition: super::Precondition,
     ) -> anyhow::Result<Outcome> {
         self.advance(InstallPhase::Aborted, Some(problem)).await?;
         fence.disposition = Disposition::Previous;
-        Ok(Outcome::NotDispatched)
+        Ok(Outcome::NotDispatched(precondition))
     }
 
     pub(super) async fn storage_failure(&self) {
