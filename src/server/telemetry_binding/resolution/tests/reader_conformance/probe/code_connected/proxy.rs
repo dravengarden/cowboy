@@ -17,10 +17,11 @@ pub(super) struct Counts {
 pub(super) struct Gate {
     reached: Arc<Notify>,
     resume: Arc<Notify>,
+    budget: Duration,
 }
 impl Gate {
     pub async fn held(&self) -> Result<(), Failure> {
-        tokio::time::timeout(DEADLINE, self.reached.notified())
+        tokio::time::timeout(self.budget, self.reached.notified())
             .await
             .map_err(|_| Failure::Timeout)
     }
@@ -176,6 +177,14 @@ impl Proxy {
         let gate = Gate {
             reached: Arc::default(),
             resume: Arc::default(),
+            // Installation includes two signed executable probes and a native
+            // readiness probe; it has the product's original 90-second budget.
+            // The shorter ordinary read deadline is not an install deadline.
+            budget: if kind == "installationStep" {
+                Duration::from_secs(90)
+            } else {
+                DEADLINE
+            },
         };
         record.hold = Some((kind, gate.clone()));
         Ok(gate)

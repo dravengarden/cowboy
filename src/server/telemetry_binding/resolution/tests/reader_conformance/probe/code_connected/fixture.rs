@@ -212,7 +212,13 @@ pub(super) async fn stop_native(root: &Path) -> Result<(), Failure> {
     .await
     .map_err(|_| Failure::Cleanup)?;
     for directory in directories {
-        let metadata = std::fs::symlink_metadata(&directory).map_err(|_| Failure::Cleanup)?;
+        let metadata = match std::fs::symlink_metadata(&directory) {
+            Ok(metadata) => metadata,
+            // A stopped probe may finish its own scoped directory cleanup
+            // before this fixture's process termination observation settles.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err(Failure::Cleanup),
+        };
         check(metadata.is_dir() && !metadata.is_symlink())?;
         std::fs::remove_dir_all(directory).map_err(|_| Failure::Cleanup)?;
     }

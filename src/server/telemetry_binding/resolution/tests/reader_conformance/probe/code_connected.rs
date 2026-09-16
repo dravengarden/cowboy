@@ -267,7 +267,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         controller: None,
         machine: None,
         proxy: relay,
-        http: Http::new(address)?,
+        http: Http::with_timeout(address, Duration::from_secs(100))?,
     };
     drop(listener);
     let result = tokio::time::timeout(Duration::from_secs(150), async {
