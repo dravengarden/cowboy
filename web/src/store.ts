@@ -108,7 +108,7 @@ import {
 import { mergeCanonicalTimeline, snapshotJoinGap } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
-import { shouldAnnounceLegacyRecords } from "./legacyRecordsNotice";
+import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import {
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
@@ -1723,7 +1723,18 @@ function connect(): void {
   didHydrate = true;
   openSocket();
   void syncDatabase.legacyRecords().then((keys) => {
-    if (!productSessionAbandoned && shouldAnnounceLegacyRecords(keys)) {
+    if (productSessionAbandoned) return;
+    const announcement = legacyRecordsAnnouncement(keys);
+    // Logged on every load, warned on at most one: when this notice was
+    // repeating on an iPad there was no way to tell from the outside WHY, so
+    // the decision is now visible in VictoriaLogs
+    // (`event_name:legacy_records_notice`) even when nothing is shown.
+    reportClientLog("info", "legacy_records_notice", "Legacy record notice decided", {
+      reason: announcement.reason,
+      retained: announcement.count,
+      announced: announcement.announce,
+    });
+    if (announcement.announce) {
       notify("Legacy browser records were retained separately and will not be sent. Review local recovery in Settings → Info.", "warning");
     }
   }).catch(() => {
