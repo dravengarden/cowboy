@@ -141,9 +141,20 @@ and accepting a production effect are different milestones.
   release; ambiguous mutations do not replay, and authority loss cannot adopt
   replacement cookies. Twenty-six Web tests, two shared-wire Rust handler tests
   and six real Firefox/React StrictMode cases pass. This library is not imported
-  by ordinary Review: real identity integration, unresolved-resource presentation,
+  by ordinary Review: unresolved-resource presentation,
   positional semantics, actual Machine/Code rollout and supported-device
-  acceptance remain required. Publication alone changes no running component.
+  acceptance remain required. That library publication changed no running component.
+- [Core product-context integration](plugin-buffer-product-context.md) connects
+  that registry to the production auth/dataset/session-end lifetime. Sign-out
+  fences remote operations before cleanup callbacks; same-Service reconnects
+  preserve owners, observed replacement cannot ABA-revive them, and permanent
+  socket-root abandonment seals admission before draining local writers. Ending
+  authority does not drop an already-borrowed outbox's final save or send native
+  cleanup with replacement credentials. Fifteen focused tests and six additional
+  real Firefox cases pass, including native-IDB final-write recovery; the actual
+  product-store admission fixture also retains pending prompts without delivery.
+  Review, native rollout, abandoned-browser recovery and device acceptance remain
+  separate; the core facade is not a serialized grant or Plugin API.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

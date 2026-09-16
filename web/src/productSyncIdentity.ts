@@ -2,12 +2,15 @@
  * Auth owns activation; the socket independently binds its real principal.
  * Kept outside store.ts so login never imports/opens the product transport.
  */
+import { productSessionSignal } from "./productSessionEnd.ts";
+
 let principal: string | undefined;
 
 export function bindProductSyncPrincipal(
   userId: string | null | undefined,
 ): boolean {
   if (
+    productSessionSignal().aborted ||
     typeof userId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(userId) ||
     (principal !== undefined && principal !== userId)
   ) return false;
@@ -16,6 +19,8 @@ export function bindProductSyncPrincipal(
 }
 
 export function productSyncPrincipal(): string | undefined {
+  // The frozen identity is still needed to drain already-borrowed local
+  // outboxes. It is not new authority; admission uses the ended core signal.
   return principal;
 }
 

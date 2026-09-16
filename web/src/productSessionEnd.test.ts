@@ -3,6 +3,7 @@ import {
   announceProductSessionEnd,
   PRODUCT_SESSION_END_EVENT,
   ProductSessionEndEvent,
+  productSessionSignal,
 } from "./productSessionEnd.ts";
 import { createIdbPersistenceOwner } from "../../components/state-sync-idb/index.ts";
 import { FakeIndexedDb, microtasks } from "./idbPersistence.fixture.ts";
@@ -14,6 +15,7 @@ Deno.test("session-end event seals synchronously and waits for all registered cl
   const events: string[] = [];
   let received: ProductSessionEndEvent | undefined;
   target.addEventListener(PRODUCT_SESSION_END_EVENT, (event) => {
+    assertEquals(productSessionSignal(target).aborted, true);
     if (!(event instanceof ProductSessionEndEvent)) {
       throw new Error("untyped end event");
     }
@@ -81,6 +83,27 @@ Deno.test("session-end deadlines are bounded before any observer can acquire eff
     );
   }
   assertEquals(called, 0);
+  assertEquals(productSessionSignal(target).aborted, false);
+});
+
+Deno.test("product authority lifetime is stable, ends before events and never revives for late consumers", async () => {
+  const target = new EventTarget();
+  const other = new EventTarget();
+  const signal = productSessionSignal(target);
+  const order: string[] = [];
+  assertEquals(productSessionSignal(target), signal);
+  signal.addEventListener("abort", () => order.push("fenced"));
+  target.addEventListener(PRODUCT_SESSION_END_EVENT, () => order.push("event"));
+  await announceProductSessionEnd(target);
+  assertEquals(order, ["fenced", "event"]);
+  assertEquals(productSessionSignal(target), signal);
+  assertEquals(signal.aborted, true);
+  assertEquals(productSessionSignal(other).aborted, false);
+  await announceProductSessionEnd(target);
+  assertEquals(order, ["fenced", "event", "event"]);
+  const late = new EventTarget();
+  await announceProductSessionEnd(late);
+  assertEquals(productSessionSignal(late).aborted, true);
 });
 
 Deno.test("all controlled auth navigations await local end barriers without importing product store", async () => {
@@ -106,6 +129,12 @@ Deno.test("all controlled auth navigations await local end barriers without impo
   );
   assertEquals(gate.includes('from "../store"'), false);
   const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  assertEquals(
+    store.includes(
+      "productSessionAbandoned = true;\n  syncDatabase.stopAdmission();",
+    ),
+    true,
+  );
   assertEquals(
     store.includes(
       "event instanceof ProductSessionEndEvent) event.waitUntil(closing)",

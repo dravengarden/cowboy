@@ -5,10 +5,12 @@ The internal client in `web/src/codeBuffers/` implements typed ownership of the
 [original-owner observations](plugin-owned-buffer-reads.md). It is core Web code,
 not an installable Plugin, a public SDK grant or a second resource lifecycle.
 
-Status: source implementation and isolated browser acceptance. Ordinary Review
-does **not** import this client yet. Its existing buffer/language calls, Web
-bundle, Machine generation and installed Code Plugin are unchanged. Publishing
-this prerequisite does not warrant a Controller restart or claim Web cutover.
+Status: source implementation and isolated browser acceptance, now connected
+to the [core product identity lifetime](plugin-buffer-product-context.md).
+Ordinary Review does **not** import this client yet; its existing buffer/language
+calls, Machine generation and installed Code Plugin remain unchanged. The core
+lifetime integration needs a Web release, not a Controller restart or Review
+cutover.
 
 ## Ownership, not React mount lifetime
 
@@ -16,8 +18,10 @@ this prerequisite does not warrant a Controller restart or claim Web cutover.
 Service/principal lifetime. Core must retain the registry outside dismissible
 views and abort that lifetime before changing authority. The context, fetch
 port and timeout are captured once; mutating caller options cannot rebind them.
-The future product consumer must connect this signal to its real identity
-lifecycle. An injected signal in a fixture is not a real login/logout test.
+`productCodeBuffers.ready()` connects that signal to the actual core product
+identity/dataset owner without importing the socket store. An injected signal
+alone in a fixture is not a real login/logout test; the separate product-context
+fixture exercises the production binding and end rendezvous, not the auth UI.
 
 `reserve({ sessionId, path })` captures immutable input without network I/O.
 An effect may then call `prepare()`, followed by at most one `open()` attempt.
@@ -120,11 +124,13 @@ shared browser runner. Rust/core/native sources and the new client are unchanged
 by that integration. The integrated tree additionally passes Web typecheck,
 lint, all 1,538 Web tests, Web build, the runner checks, and all four relevant
 real-browser suites: Code buffers **6**, Settings recovery **9**, IDB owners **8**
-and outboxes **16**. This turn publishes source only; it activates no application
-component, Machine or installed Plugin and does not restart a live session.
+and outboxes **16**. That publication was source-only; it activated no application
+component, Machine or installed Plugin and did not restart a live session.
 
-Before Review cutover, connect the registry to the real Service/principal
-lifetime and explicit unresolved-resource presentation; finish positional
+The subsequent [product-context integration](plugin-buffer-product-context.md)
+binds the real Service/principal lifetime and keeps final local outbox drain
+separate from ending remote authority. Before Review cutover, implement explicit
+unresolved-resource presentation; finish positional
 content/anchor semantics; accept and independently activate the exact Machine
 and Code Plugin; then test the actual consumer on supported devices. Never
 mix new owner cleanup with old path-based open/read calls or silently downgrade

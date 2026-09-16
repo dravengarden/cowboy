@@ -2,6 +2,27 @@
 export const PRODUCT_SESSION_END_EVENT = "cowboy:product-sign-out";
 export type ProductSessionEndOutcome = "drained" | "failed" | "pending";
 
+const lifetimes = new WeakMap<EventTarget, AbortController>();
+
+function lifetime(target: EventTarget): AbortController {
+  let owner = lifetimes.get(target);
+  if (!owner) {
+    owner = new AbortController();
+    lifetimes.set(target, owner);
+  }
+  return owner;
+}
+
+/** Core page authority lifetime, not a dismissible view or network connection.
+ * Late consumers see the same ended signal; a reload creates the new lifetime.
+ * Reading it performs no fetch, socket, storage or event-listener registration.
+ */
+export function productSessionSignal(
+  target: EventTarget = globalThis,
+): AbortSignal {
+  return lifetime(target).signal;
+}
+
 export class ProductSessionEndEvent extends Event {
   constructor(readonly waitUntil: (cleanup: Promise<void>) => void) {
     super(PRODUCT_SESSION_END_EVENT);
@@ -19,6 +40,9 @@ export async function announceProductSessionEnd(
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5000) {
     throw new RangeError("product cleanup deadline must be 1..5000ms");
   }
+  // Fence all borrowed continuations before any event observer or asynchronous
+  // navigation cleanup can run. Ending authority never sends remote cleanup.
+  lifetime(target).abort();
   const pending: Promise<void>[] = [];
   let accepting = true;
   const event = new ProductSessionEndEvent((cleanup) => {

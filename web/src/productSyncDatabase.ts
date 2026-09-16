@@ -9,6 +9,7 @@ import {
   type IdbPersistenceOwner,
 } from "@cowboy/state-sync-idb";
 import { productSyncPrincipal } from "./productSyncIdentity.ts";
+import { productSessionSignal } from "./productSessionEnd.ts";
 
 export interface SyncDataset {
   readonly schema: "dravengarden.cowboy.product-sync-dataset/v1";
@@ -114,10 +115,13 @@ function suffix(scope: ProductSyncScope): string {
 export function createProductSyncDatabase(
   currentPrincipal: () => string | undefined,
   discover = discoverSyncDataset,
-  opts: Pick<IdbOwnerOpts, "factory" | "dbName" | "openTimeoutMs"> = {},
+  opts: Pick<IdbOwnerOpts, "factory" | "dbName" | "openTimeoutMs"> & {
+    readonly context?: AbortSignal;
+  } = {},
 ) {
+  const { context, ...storageOptions } = opts;
   const owner: IdbPersistenceOwner = createIdbPersistenceOwner({
-    ...opts,
+    ...storageOptions,
     schemaVersion: 2,
     connectionLifetime: "transaction",
   });
@@ -125,16 +129,31 @@ export function createProductSyncDatabase(
   let loading: Promise<SyncDataset> | undefined;
   let closed = false;
   let changed = false;
+  const lifetime = new AbortController();
+  const endAdmission = () => {
+    context?.removeEventListener("abort", endAdmission);
+    lifetime.abort();
+  };
+  const seal = () => {
+    closed = true;
+    endAdmission();
+  };
+  if (context?.aborted) endAdmission();
+  else context?.addEventListener("abort", endAdmission, { once: true });
   const borrowed = new Set<string>();
   const assertCurrent = (): void => {
     if (changed) throw new ProductSyncDatasetChangedError();
     if (closed || (dataset && currentPrincipal() !== dataset.user_id)) {
-      closed = true; // an observed principal change cannot ABA-revive this owner
+      seal(); // an observed principal change cannot ABA-revive this owner
       invalid();
     }
   };
-  const ready = (): Promise<SyncDataset> => {
+  const assertAdmission = (): void => {
     assertCurrent();
+    if (lifetime.signal.aborted) invalid();
+  };
+  const ready = (): Promise<SyncDataset> => {
+    assertAdmission();
     if (dataset) return Promise.resolve(dataset);
     if (loading) return loading;
     const principal = currentPrincipal();
@@ -146,8 +165,11 @@ export function createProductSyncDatabase(
     // Only discovery before ownership may be retried. Never change an adopted
     // dataset to follow a new cookie, Service, user or schema version.
     loading = discover(principal).then((value) => {
-      assertCurrent();
-      if (currentPrincipal() !== principal) invalid();
+      assertAdmission();
+      if (currentPrincipal() !== principal) {
+        seal();
+        invalid();
+      }
       dataset = decodeSyncDataset(value, principal);
       return dataset;
     }).finally(() => {
@@ -158,24 +180,36 @@ export function createProductSyncDatabase(
   const prefix = (identity: SyncDataset): string =>
     `cowboy:dataset:${identity.dataset_id}:`;
   return {
+    /** Invalidation only, not a serialized grant or permission to open buffers.
+     * Borrowers must await ready() before acquiring the bound Service context.
+     */
+    get signal(): AbortSignal {
+      return lifetime.signal;
+    },
+    /** The permanent product-root shutdown fences remote consumers and new
+     * borrowers before draining existing local writers, then calls dispose().
+     */
+    stopAdmission: endAdmission,
     ready,
     async connection(): Promise<SyncDataset> {
       const identity = await ready();
+      assertAdmission();
       // A new Controller at the same origin is not the original Service. A
       // reconnect may verify the adopted dataset but may never replace it.
       const fresh = decodeSyncDataset(
         await discover(identity.user_id),
         identity.user_id,
       );
-      assertCurrent();
+      assertAdmission();
       if (fresh.dataset_id !== identity.dataset_id) {
-        closed = changed = true;
+        changed = true;
+        seal();
         throw new ProductSyncDatasetChangedError();
       }
       return identity;
     },
     outbox<T>(scope: ProductSyncScope): LocalPersistence<ClientSnapshot<T>> {
-      assertCurrent();
+      assertAdmission();
       const localKey = suffix(scope);
       if (borrowed.has(localKey)) {
         throw new IdbPersistenceError("record_mode_conflict");
@@ -185,7 +219,9 @@ export function createProductSyncDatabase(
       const acquire = async (): Promise<
         LocalPersistence<ClientSnapshot<T>>
       > => {
-        const identity = await ready();
+        // Already-borrowed local writers may drain their original dataset
+        // after authority ends. Do not rediscover or acquire a new namespace.
+        const identity = dataset ?? await ready();
         assertCurrent();
         local ??= owner.outbox<T>(`${prefix(identity)}${localKey}`);
         return local;
@@ -214,8 +250,9 @@ export function createProductSyncDatabase(
     },
     async queueSessions(): Promise<string[]> {
       const identity = await ready();
+      assertAdmission();
       const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertCurrent();
+      assertAdmission();
       const start = `${prefix(identity)}session:`;
       return keys.filter((key) =>
         key.startsWith(start) && key.endsWith(":queue")
@@ -225,15 +262,17 @@ export function createProductSyncDatabase(
     },
     async legacyRecords(): Promise<string[]> {
       await ready();
+      assertAdmission();
       const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertCurrent();
+      assertAdmission();
       return keys.filter((key) => key.startsWith("cowboy:sync:"));
     },
     async exportLegacy(key: string): Promise<string> {
       await ready();
+      assertAdmission();
       if (!key.startsWith("cowboy:sync:") || key.length > 4096) invalid();
       const value = await owner.persistence<unknown>(key).load();
-      assertCurrent();
+      assertAdmission();
       if (value === null) invalid();
       // Bounded JSON-only export, NEVER import/resend. Stored data may be
       // malformed, cyclic, oversized or belong to a previous account.
@@ -290,12 +329,13 @@ export function createProductSyncDatabase(
      * dataset record is never a candidate. */
     async discardLegacy(key: string): Promise<void> {
       await ready();
+      assertAdmission();
       if (!key.startsWith("cowboy:sync:") || key.length > 4096) invalid();
       await owner.discard(key);
-      assertCurrent();
+      assertAdmission();
     },
     dispose(): Promise<void> {
-      closed = true;
+      seal();
       return owner.dispose();
     },
     get lifecycle() {
@@ -308,4 +348,6 @@ export function createProductSyncDatabase(
 // Construction performs no fetch, database open or login/transport effect.
 export const productSyncDatabase = createProductSyncDatabase(
   productSyncPrincipal,
+  discoverSyncDataset,
+  { context: productSessionSignal() },
 );

@@ -369,6 +369,7 @@ function clearReconnectTimer(): void {
 
 function abandonProductSocket(): Promise<void> {
   productSessionAbandoned = true;
+  syncDatabase.stopAdmission();
   productSessionPausedForAuth = false;
   clearReconnectTimer();
   stopLiveness();

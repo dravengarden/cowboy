@@ -7,7 +7,8 @@ const suite = Deno.args[1] ?? "idb";
 if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
-  suite !== "settings-recovery" && suite !== "code-buffers"
+  suite !== "settings-recovery" && suite !== "code-buffers" &&
+  suite !== "code-buffer-context"
 ) {
   throw new Error("unknown suite");
 }
@@ -23,6 +24,8 @@ const entry = suite === "idb"
   ? "runSettingsRecoveryBrowserConformance"
   : suite === "code-buffers"
   ? "runCodeBufferBrowserConformance"
+  : suite === "code-buffer-context"
+  ? "runCodeBufferContextBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(

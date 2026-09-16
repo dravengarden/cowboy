@@ -112,6 +112,15 @@ not dataset identities: replacing a component must not lose pending mutations.
 Service, user, Session and state remain distinct. This does not add a general
 exclusive state-dataset grant or infer arbitrary workspace identity.
 
+The [core product lifetime](plugin-buffer-product-context.md) now also fences
+typed Code owners. Sign-out ends authority before cleanup callbacks, but leaves
+already-borrowed outboxes able to drain their original adopted dataset before
+the shared database is disposed. Permanent socket-root abandonment calls
+`stopAdmission()` before that drain. New borrowers, metadata operations and
+reconnects are refused after end; frozen principal evidence remains available
+only to complete original local writes. Observed identity mismatch is a hard
+refusal, not an instruction to move pending data into a new dataset.
+
 The exact `{base,pending}` envelope, mutation identities, atomic delta merge and
 load-result handoff from [atomic outboxes](atomic-idb-outboxes.md) remain.
 Newly created clients must also hydrate and adopt the exact load result before
