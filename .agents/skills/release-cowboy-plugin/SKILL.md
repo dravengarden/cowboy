@@ -285,6 +285,17 @@ In addition, require all applicable Provider gates below:
   it does not install on a registered Machine. The private Nix recipe requires
   a static Linux adapter and the exact server; a copied Nix ELF with a store
   interpreter is not a portable artifact.
+  Before a core owned-buffer/Review cutover, additionally run
+  `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
+  It connects supplied immutable Controller/Machine releases and the exact
+  native pair using disposable enrollment, password login and a temporary
+  signed Code installation in isolated network/PID namespaces. Require all
+  seven checks, original-ID release and no replay across held actual replies,
+  uninstall/path removal, connection replacement and Controller restart.
+  Restart refusal is not restoration; fixture teardown is not native recovery.
+  See `docs/plugin-code-connected-conformance.md`. This changes no production
+  account, installation, runtime generation or component and does not authorize
+  a Machine upgrade, Review activation or physical-device acceptance.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog

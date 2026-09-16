@@ -11,6 +11,7 @@ pub(super) enum Lane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Role {
+    Supplied,
     Active,
     Rollback,
     Cold,
@@ -143,91 +144,102 @@ impl MachineMatrix {
 }
 
 fn resolve(lanes: impl IntoIterator<Item = (Lane, Readers)>) -> Result<Vec<Artifact>> {
+    resolve_roles(lanes.into_iter().flat_map(|(lane, readers)| {
+        [
+            (lane, Role::Active, readers.active),
+            (lane, Role::Rollback, readers.rollback),
+            (lane, Role::Cold, readers.cold),
+        ]
+    }))
+}
+
+pub(super) fn supplied_pair(controller: PathBuf, machine: PathBuf) -> Result<Vec<Artifact>> {
+    resolve_roles([
+        (Lane::Controller, Role::Supplied, controller),
+        (Lane::Machine, Role::Supplied, machine),
+    ])
+}
+
+fn resolve_roles(lanes: impl IntoIterator<Item = (Lane, Role, PathBuf)>) -> Result<Vec<Artifact>> {
     let mut artifacts = Vec::new();
-    for (lane, readers) in lanes {
-        for (role, release) in [
-            (Role::Active, readers.active),
-            (Role::Rollback, readers.rollback),
-            (Role::Cold, readers.cold),
-        ] {
-            ensure!(
-                immutable(&release) && release.canonicalize()? == release,
-                "exact immutable release required"
-            );
-            let source_bytes = std::fs::read(release.join("etc/cowboy-release/source.json"))?;
-            let source: serde_json::Value = serde_json::from_slice(&source_bytes)?;
-            let expected_lane = if lane == Lane::Controller {
-                "controller"
-            } else {
-                "machine"
-            };
-            ensure!(
-                source["schema"] == 1
-                    && source["component"] == "cowboy"
-                    && source["lane"] == expected_lane
-                    && source["dirty"] == false
-                    && source["repository"] == "git@github.com:dravengarden/cowboy.git"
-                    && source["revision"].as_str().is_some_and(revision_valid),
-                "invalid release provenance"
-            );
-            ensure!(
-                source["bootstrap"].is_null()
-                    || (source["bootstrap"] == true && role == Role::Cold && lane == Lane::Machine),
-                "bootstrap is only a cold Machine reader"
-            );
-            // Do not copy arbitrary manifest fields into evidence.
-            let allowed = [
-                "schema",
-                "component",
-                "lane",
-                "dirty",
-                "repository",
-                "revision",
-                "workerGeneration",
-                "bootstrap",
-            ];
-            ensure!(
-                source
-                    .as_object()
-                    .is_some_and(|o| o.keys().all(|key| allowed.contains(&key.as_str()))),
-                "unknown provenance field"
-            );
-            ensure!(
-                if lane == Lane::Machine {
-                    source["workerGeneration"].as_str().is_some_and(|value| {
-                        value.len() == 27
-                            && value.starts_with("worker-")
-                            && value[7..].bytes().all(|b| b.is_ascii_hexdigit())
-                    })
-                } else {
-                    source["workerGeneration"].is_null()
-                },
-                "invalid worker provenance"
-            );
-            let executable = release
-                .join("bin")
-                .join(if lane == Lane::Controller {
-                    "cowboy"
-                } else {
-                    "cowboy-machine"
+    for (lane, role, release) in lanes {
+        ensure!(
+            immutable(&release) && release.canonicalize()? == release,
+            "exact immutable release required"
+        );
+        let source_bytes = std::fs::read(release.join("etc/cowboy-release/source.json"))?;
+        let source: serde_json::Value = serde_json::from_slice(&source_bytes)?;
+        let expected_lane = if lane == Lane::Controller {
+            "controller"
+        } else {
+            "machine"
+        };
+        ensure!(
+            source["schema"] == 1
+                && source["component"] == "cowboy"
+                && source["lane"] == expected_lane
+                && source["dirty"] == false
+                && source["repository"] == "git@github.com:dravengarden/cowboy.git"
+                && source["revision"].as_str().is_some_and(revision_valid),
+            "invalid release provenance"
+        );
+        ensure!(
+            source["bootstrap"].is_null()
+                || (source["bootstrap"] == true && role == Role::Cold && lane == Lane::Machine),
+            "bootstrap is only a cold Machine reader"
+        );
+        // Do not copy arbitrary manifest fields into evidence.
+        let allowed = [
+            "schema",
+            "component",
+            "lane",
+            "dirty",
+            "repository",
+            "revision",
+            "workerGeneration",
+            "bootstrap",
+        ];
+        ensure!(
+            source
+                .as_object()
+                .is_some_and(|o| o.keys().all(|key| allowed.contains(&key.as_str()))),
+            "unknown provenance field"
+        );
+        ensure!(
+            if lane == Lane::Machine {
+                source["workerGeneration"].as_str().is_some_and(|value| {
+                    value.len() == 27
+                        && value.starts_with("worker-")
+                        && value[7..].bytes().all(|b| b.is_ascii_hexdigit())
                 })
-                .canonicalize()?;
-            ensure!(
-                executable.starts_with("/nix/store") && executable.is_file(),
-                "immutable executable required"
-            );
-            let executable_chain = executable_chain(lane, &release, &executable)?;
-            artifacts.push(Artifact {
-                lane,
-                role,
-                release,
-                executable_sha256: sha256(&std::fs::read(&executable)?),
-                executable,
-                source_sha256: sha256(&source_bytes),
-                source,
-                executable_chain,
-            });
-        }
+            } else {
+                source["workerGeneration"].is_null()
+            },
+            "invalid worker provenance"
+        );
+        let executable = release
+            .join("bin")
+            .join(if lane == Lane::Controller {
+                "cowboy"
+            } else {
+                "cowboy-machine"
+            })
+            .canonicalize()?;
+        ensure!(
+            executable.starts_with("/nix/store") && executable.is_file(),
+            "immutable executable required"
+        );
+        let executable_chain = executable_chain(lane, &release, &executable)?;
+        artifacts.push(Artifact {
+            lane,
+            role,
+            release,
+            executable_sha256: sha256(&std::fs::read(&executable)?),
+            executable,
+            source_sha256: sha256(&source_bytes),
+            source,
+            executable_chain,
+        });
     }
     Ok(artifacts)
 }

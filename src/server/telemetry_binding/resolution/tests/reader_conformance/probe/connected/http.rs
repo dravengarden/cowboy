@@ -95,7 +95,7 @@ impl Http {
             elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             result: HttpResult::Body,
         });
-        if path.starts_with("/api/telemetry/")
+        if (path.starts_with("/api/telemetry/") || path.starts_with("/api/code/buffers"))
             && status == StatusCode::OK
             && response
                 .headers()

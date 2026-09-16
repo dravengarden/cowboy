@@ -20,6 +20,7 @@ const DEADLINE: Duration = Duration::from_secs(12);
 const LOG_BYTES: usize = 128 * 1024;
 
 mod admission;
+mod code_connected;
 mod connected;
 mod installation;
 mod installation_connected;

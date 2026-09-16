@@ -322,6 +322,11 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 zed-plugin-conformance ADAPTER SERVER:
     COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
 
+# Real authenticated Controller/Machine/Code chain. No production state or egress.
+code-buffer-connected-conformance INPUT RECEIPT:
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; export COWBOY_TEST_CODE_CONNECTED_INPUT="$1" COWBOY_TEST_CODE_CONNECTED_RECEIPT="$2"; exec cargo test --offline --locked --all-features --lib immutable_connected_code_buffers -- --ignored --nocapture' conformance "{{INPUT}}" "{{RECEIPT}}"
+
 # Agent artifact probes run on the actual target OS; Code uses the gate above.
 # Worker acceptance additionally
 # isolates all networking to a private Linux loopback and uses only fake auth.
