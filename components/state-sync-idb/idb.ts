@@ -65,6 +65,11 @@ export interface IdbPersistenceOwner {
   outbox<T>(key: string): LocalPersistence<ClientSnapshot<T>>;
   /** Best-effort by default; use strict + limit for recovery/owned datasets. */
   listKeys(opts?: IdbListKeysOpts): Promise<string[]>;
+  /** Delete one stored record, reporting failure rather than swallowing it: a
+   * caller offering this to a reader must not claim a deletion that did not
+   * happen. An outbox borrowed in this owner is refused, since its holder owns
+   * a delta baseline that a silent deletion would desync. */
+  discard(key: string): Promise<void>;
   readonly lifecycle: IdbSnapshot;
   /** Seal new calls, drain admitted transactions, then close all generations.
    * A native open cannot be cancelled: late handles are closed, and a stuck
@@ -444,6 +449,14 @@ export function createIdbPersistenceOwner(
           if (strict) throw error;
           return [];
         }
+      }),
+    discard: (key: string): Promise<void> =>
+      scope.run(async () => {
+        if (recordModes.get(key) === "outbox") {
+          throw new IdbPersistenceError("record_mode_conflict");
+        }
+        await run("readwrite", (store) => store.delete(key));
+        recordModes.delete(key);
       }),
     get lifecycle(): IdbSnapshot {
       const retained = [...generations];

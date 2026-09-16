@@ -10,6 +10,10 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState(0);
+  // Deletion is irreversible and the record may hold a prompt that was never
+  // sent, so the reader arms it deliberately and one press only ever takes the
+  // record it is looking at.
+  const [armed, setArmed] = useState(false);
   const [result, setResult] = useState<
     { kind: "info" | "warning"; text: string } | null
   >(null);
@@ -47,6 +51,7 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
       setInspectionFailed(false);
       setExpanded(false);
       setBusy(false);
+      setArmed(false);
       setResult(null);
     };
     globalThis.addEventListener(PRODUCT_SESSION_END_EVENT, end);
@@ -96,12 +101,50 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
       if (owned.active) setBusy(false);
     });
   };
+  const discard = (): void => {
+    const owned = lifetime.current;
+    const key = keys[selected];
+    if (!owned?.active || owned.busy || key === undefined || !armed) return;
+    owned.busy = true;
+    setBusy(true);
+    setResult(null);
+    void productSyncDatabase.discardLegacy(key).then(() => {
+      if (!owned.active) return;
+      const left = keys.filter((candidate) => candidate !== key);
+      setKeys(left);
+      setSelected((current) => Math.max(0, Math.min(current, left.length - 1)));
+      setArmed(false);
+      setResult({
+        kind: "info",
+        text: left.length
+          ? "Deleted. The remaining records are untouched."
+          : "Deleted. No older records are kept on this device now.",
+      });
+    }).catch(() => {
+      if (owned.active) {
+        // Never report a deletion that may not have happened: the reader would
+        // stop looking for data that is still on the device. Disarm too — an
+        // irreversible action that just failed should be re-armed deliberately,
+        // not left one stray press away from running again.
+        setArmed(false);
+        setResult({
+          kind: "warning",
+          text:
+            "This record could not be deleted. It is still on this device and was not sent.",
+        });
+      }
+    }).finally(() => {
+      owned.busy = false;
+      if (owned.active) setBusy(false);
+    });
+  };
   const select = (index: number): void => {
     if (
       !lifetime.current?.active || lifetime.current.busy ||
       !Number.isSafeInteger(index) || index < 0 || index >= keys.length
     ) return;
     setSelected(index);
+    setArmed(false);
     setResult(null);
   };
   if (!keys.length && !inspectionFailed) return null;
@@ -182,8 +225,55 @@ export function ProductSyncDataNotice(): React.JSX.Element | null {
                 onClick={download}
                 sx={{ textTransform: "none" }}
               >
-                {busy ? "Preparing download…" : "Download selected record"}
+                {busy ? "Working…" : "Download selected record"}
               </Button>
+              {armed
+                ? (
+                  <Alert
+                    severity="warning"
+                    action={
+                      <Stack direction="row" spacing={1}>
+                        <Button
+                          size="small"
+                          color="inherit"
+                          disabled={busy}
+                          onClick={() => setArmed(false)}
+                          sx={{ textTransform: "none" }}
+                        >
+                          Keep
+                        </Button>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="contained"
+                          disabled={busy}
+                          onClick={discard}
+                          sx={{ textTransform: "none" }}
+                        >
+                          Delete
+                        </Button>
+                      </Stack>
+                    }
+                  >
+                    Delete record {selected + 1} from this device? It cannot be
+                    recovered, and it may hold a prompt that was never sent.
+                    Download it first if you have not read it.
+                  </Alert>
+                )
+                : (
+                  <Button
+                    disabled={busy}
+                    size="small"
+                    color="error"
+                    onClick={() => {
+                      setResult(null);
+                      setArmed(true);
+                    }}
+                    sx={{ alignSelf: "flex-start", textTransform: "none" }}
+                  >
+                    Delete selected record
+                  </Button>
+                )}
               {result && (
                 <Alert severity={result.kind} role="status">
                   {result.text}

@@ -139,7 +139,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "idb" || suite === "settings-recovery"
+      (suite === "settings-recovery"
+        ? 9
+        : suite === "idb"
         ? 8
         : suite === "idb-outbox"
         ? 16

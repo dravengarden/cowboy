@@ -283,6 +283,17 @@ export function createProductSyncDatabase(
       }
       return serialized;
     },
+    /** Discard one retained record on this device. Deliberately reachable only
+     * from an explicit reader action: v2 fences v1 writers without deleting
+     * their data, so nothing here may run as a migration, a cleanup or a
+     * side effect of adoption. The key must be a retained one — an owned
+     * dataset record is never a candidate. */
+    async discardLegacy(key: string): Promise<void> {
+      await ready();
+      if (!key.startsWith("cowboy:sync:") || key.length > 4096) invalid();
+      await owner.discard(key);
+      assertCurrent();
+    },
     dispose(): Promise<void> {
       closed = true;
       return owner.dispose();

@@ -46,6 +46,10 @@ export class FakeRequest<R> extends TrackedTarget {
   }
 }
 
+/** A staged deletion. A plain `undefined` write cannot say it, because a record
+ * may legitimately hold `undefined`. */
+const DELETED = Symbol("deleted");
+
 export class FakeTransaction extends TrackedTarget {
   error: DOMException | null = null;
   readonly requests: FakeRequest<unknown>[] = [];
@@ -81,6 +85,11 @@ export class FakeTransaction extends TrackedTarget {
       },
       get: (key: IDBValidKey): IDBRequest<unknown> =>
         make(this.database.factory.data.get(key)),
+      delete: (key: IDBValidKey): IDBRequest<unknown> => {
+        const request = make(undefined);
+        this.writes.set(key, DELETED);
+        return request;
+      },
       getAllKeys: (_query?: unknown, count?: number): IDBRequest<unknown> =>
         make([...this.database.factory.data.keys()].slice(0, count)),
     } as IDBObjectStore;
@@ -90,7 +99,8 @@ export class FakeTransaction extends TrackedTarget {
     if (this.finished) return;
     this.finished = true;
     for (const [key, value] of this.writes) {
-      this.database.factory.data.set(key, value);
+      if (value === DELETED) this.database.factory.data.delete(key);
+      else this.database.factory.data.set(key, value);
     }
     this.dispatchEvent(new Event("complete"));
   }

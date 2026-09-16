@@ -322,3 +322,49 @@ Deno.test("dataset discovery checks HTTP status, bounded body, encoding and exac
     globalThis.fetch = original;
   }
 });
+
+Deno.test("a retained record is discarded only by exact key, never an owned one", async () => {
+  const factory = new FakeIndexedDb();
+  factory.data.set("cowboy:sync:queue:session-a", { pending: ["draft"] });
+  factory.data.set("cowboy:sync:service:title", { titles: {} });
+  const owned = `cowboy:dataset:${descriptor().dataset_id}:session:s:queue`;
+  factory.data.set(owned, snapshot("a"));
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(descriptor()),
+    { factory: factory as unknown as IDBFactory },
+  );
+  assertEquals(await db.legacyRecords(), [
+    "cowboy:sync:queue:session-a",
+    "cowboy:sync:service:title",
+  ]);
+
+  for (const rejected of [owned, "cowboy:dataset:other", "sync:queue", ""]) {
+    await assertRejects(() => db.discardLegacy(rejected));
+  }
+  assertEquals(factory.data.size, 3);
+
+  await db.discardLegacy("cowboy:sync:queue:session-a");
+  assertEquals(factory.data.has("cowboy:sync:queue:session-a"), false);
+  assertEquals(factory.data.has(owned), true);
+  assertEquals(await db.legacyRecords(), ["cowboy:sync:service:title"]);
+
+  await db.discardLegacy("cowboy:sync:service:title");
+  assertEquals(await db.legacyRecords(), []);
+  assertEquals(factory.data.size, 1);
+  await db.dispose();
+});
+
+Deno.test("discarding a retained record does not resurrect it for a later reader", async () => {
+  const factory = new FakeIndexedDb();
+  factory.data.set("cowboy:sync:queue:session-a", { pending: ["draft"] });
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(descriptor()),
+    { factory: factory as unknown as IDBFactory },
+  );
+  await db.discardLegacy("cowboy:sync:queue:session-a");
+  await assertRejects(() => db.exportLegacy("cowboy:sync:queue:session-a"));
+  assertEquals(await db.legacyRecords(), []);
+  await db.dispose();
+});

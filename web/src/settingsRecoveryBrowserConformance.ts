@@ -97,6 +97,7 @@ export async function runSettingsRecoveryBrowserConformance(): Promise<
   const original = {
     legacyRecords: productSyncDatabase.legacyRecords,
     exportLegacy: productSyncDatabase.exportLegacy,
+    discardLegacy: productSyncDatabase.discardLegacy,
     fetch: globalThis.fetch,
     createURL: URL.createObjectURL,
     revokeURL: URL.revokeObjectURL,
@@ -220,7 +221,7 @@ export async function runSettingsRecoveryBrowserConformance(): Promise<
       "selector lost records",
     );
     check(
-      container.querySelectorAll("button").length === 4,
+      container.querySelectorAll("button").length === 5,
       "one button was rendered per record",
     );
     const height = container.getBoundingClientRect().height;
@@ -350,6 +351,83 @@ export async function runSettingsRecoveryBrowserConformance(): Promise<
       "fresh StrictMode mount starts collapsed / unmount drains late export without another URL or download",
     );
 
+    const discarded: string[] = [];
+    // Read the tally through a call so an earlier assertion cannot narrow it.
+    const countDiscards = () => discarded.length;
+    productSyncDatabase.discardLegacy = (key) => {
+      discarded.push(key);
+      return owner.discardLegacy(key);
+    };
+    render(createElement(ProductSyncDataNotice));
+    await until(
+      () => !!container.textContent?.includes("376 older records"),
+      "inventory missing before deletion",
+    );
+    click("Review older records");
+    click("Delete selected record");
+    check(
+      !!container.textContent?.includes("cannot be recovered") &&
+        countDiscards() === 0,
+      "arming deleted a record or asked for nothing",
+    );
+    click("Keep");
+    check(
+      countDiscards() === 0 &&
+        !container.textContent?.includes("cannot be recovered"),
+      "keeping the record deleted it or stayed armed",
+    );
+    click("Delete selected record");
+    select(5);
+    check(
+      !container.textContent?.includes("cannot be recovered"),
+      "another record was selected while a confirmation stayed armed",
+    );
+    click("Delete selected record");
+    click("Delete");
+    await settle();
+    check(
+      countDiscards() === 1 && discarded[0] === keys[5],
+      `deletion took the wrong record: ${JSON.stringify(discarded)}`,
+    );
+    await until(
+      () => !!container.textContent?.includes("375 older records"),
+      "inventory kept a deleted record",
+    );
+    check(
+      !(await owner.legacyRecords()).includes(keys[5] ?? ""),
+      "record survived its own deletion in storage",
+    );
+    check(
+      (await owner.legacyRecords()).length === 375 && countCalls() === 0,
+      "deletion took more than one record or sent data",
+    );
+    productSyncDatabase.discardLegacy = () =>
+      Promise.reject(new Error("private delete error"));
+    click("Delete selected record");
+    click("Delete");
+    await settle();
+    check(
+      !!container.textContent?.includes("still on this device") &&
+        !container.textContent?.includes("private delete error"),
+      "failed deletion claimed success or leaked its reason",
+    );
+    check(
+      !!container.textContent?.includes("375 older records") &&
+        (await owner.legacyRecords()).length === 375,
+      "failed deletion dropped a record the device still holds",
+    );
+    const lateDelete = deferredFixture<undefined>();
+    productSyncDatabase.discardLegacy = () => lateDelete.promise;
+    click("Delete selected record");
+    click("Delete");
+    render(null);
+    lateDelete.resolve(undefined);
+    await settle();
+    check(!container.textContent, "unmount allowed a late deletion to paint");
+    tests.push(
+      "deletion needs arming and one press takes only the record on screen / reselect disarms / failure keeps the record and hides its reason / unmount drains a late deletion",
+    );
+
     productSyncDatabase.legacyRecords = async () => {
       throw new Error("private storage error");
     };
@@ -474,6 +552,7 @@ export async function runSettingsRecoveryBrowserConformance(): Promise<
     await settle();
     productSyncDatabase.legacyRecords = original.legacyRecords;
     productSyncDatabase.exportLegacy = original.exportLegacy;
+    productSyncDatabase.discardLegacy = original.discardLegacy;
     globalThis.fetch = original.fetch;
     URL.createObjectURL = original.createURL;
     URL.revokeObjectURL = original.revokeURL;
