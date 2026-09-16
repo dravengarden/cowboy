@@ -50,6 +50,7 @@ import {
   removeImageTokenById,
 } from "./inlineImages";
 import { clipboardFiles, type Attachment } from "./attachments";
+import { dataTransferCarriesFiles } from "./composer/composerFileDrop";
 import {
   fileCompletionSource,
   slashCompletionSource,
@@ -799,6 +800,24 @@ export const ComposerEditor = forwardRef<
           }
           if (files.length === 0 || !onPasteFilesRef.current) return false;
           event.preventDefault();
+          onPasteFilesRef.current(files);
+          return true;
+        },
+        // Desktop file drop takes the paste path at the drop point. CM6's
+        // default would read every dropped file as text into the document.
+        // Preventing the default tells a surrounding card drop target that
+        // the drop is already attached.
+        drop: (event, view): boolean => {
+          if (
+            touchInput || !onPasteFilesRef.current ||
+            !dataTransferCarriesFiles(event.dataTransfer)
+          ) return false;
+          event.preventDefault();
+          const files = clipboardFiles(event.dataTransfer!);
+          if (files.length === 0) return true;
+          const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+          if (pos !== null) view.dispatch({ selection: { anchor: pos } });
+          view.focus();
           onPasteFilesRef.current(files);
           return true;
         },

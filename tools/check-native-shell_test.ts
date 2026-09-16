@@ -96,6 +96,13 @@ for (
       "frontend escapes",
     ],
     [
+      "native file drop interception",
+      "tauri/tauri.conf.json",
+      '"dragDropEnabled": false',
+      '"dragDropEnabled": true',
+      "leave file drops to the WebView",
+    ],
+    [
       "personal team",
       "apple/project.yml",
       "        CODE_SIGN_STYLE: Manual",

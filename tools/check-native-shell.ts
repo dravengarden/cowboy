@@ -118,6 +118,15 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     config.identifier === "top.thundersparrow.cowboy",
     "native identity changed",
   );
+  // Tauri's own drag-drop handler swallows OS file drops before the WebView
+  // sees them, which would disable the Composer's HTML5 file drop.
+  requireValue(
+    config.app.windows.every(
+      (window: { dragDropEnabled?: boolean }) =>
+        window.dragDropEnabled === false,
+    ),
+    "native windows must leave file drops to the WebView",
+  );
   requireValue(
     !config.build.beforeBuildCommand && !config.build.beforeDevCommand,
     "native build may not invoke an ambient frontend",

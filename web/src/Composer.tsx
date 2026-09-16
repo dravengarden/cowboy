@@ -82,6 +82,7 @@ import {
 } from "./composer/PlatformComposerEditor";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { useComposerDraftController } from "./composer/useComposerDraftController";
+import { useComposerFileDrop } from "./composer/composerFileDrop";
 import {
   type NativeClipboardImagePasteRequest,
   runNativeClipboardImagePaste,
@@ -1072,6 +1073,10 @@ export function ComposerWorkspace({
     // touch-native editors still require the live React value.
     mirrorTextInReact: surface !== "desktop",
   });
+  const fileDrop = useComposerFileDrop(
+    !touchInput,
+    (files): void => addFiles(files, { preserveFocus: true }),
+  );
   // Clearing is independent from sending. A still-uploading attachment cannot
   // be sent yet, but it is still user-owned staged content and must remain
   // removable from the utility rail.
@@ -2165,6 +2170,7 @@ export function ComposerWorkspace({
         // hole between the session rail and transcript.
         variant="outlined"
         elevation={0}
+        {...fileDrop.handlers}
         sx={{
           position: "relative",
           display: !desktop && mobilePendingEditing ? "none" : "flex",
@@ -2318,6 +2324,32 @@ export function ComposerWorkspace({
               sx={{ position: "absolute", top: 10, right: 10, zIndex: 4 }}
             />
           </Suspense>
+        )}
+        {fileDrop.active && (
+          <Box
+            data-composer-file-drop="true"
+            aria-hidden
+            sx={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 5,
+              display: "grid",
+              placeItems: "center",
+              borderRadius: "inherit",
+              border: 2,
+              borderStyle: "dashed",
+              borderColor: "primary.main",
+              bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
+              color: "primary.main",
+              typography: "body2",
+              fontWeight: 600,
+              // Hit-testing must keep reaching the editor so a drop over text
+              // still lands at its exact position.
+              pointerEvents: "none",
+            }}
+          >
+            Drop files to attach
+          </Box>
         )}
         {
           /* Top-edge resize handle: drag to grow/shrink the editor; dragging past the
