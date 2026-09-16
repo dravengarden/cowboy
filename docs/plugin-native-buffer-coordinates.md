@@ -31,6 +31,10 @@ and `postage` graph are exempted in the private `deny.toml`, with parent paths
 documented there. The unmodified `option-ext 0.2.0` MPL-2.0 license exception is
 restricted to that package. Both GNU and distributable musl Linux x86_64 targets
 are audited; root licensing/dependency policy is unchanged.
+The package-owned Nix recipe fetches registry archives directly from the
+official immutable `static.crates.io` host with the original lockfile checksums;
+this avoids a rejected API redirect without changing package identity or
+depending on a publisher's local Cargo cache.
 
 ## Spatial and temporal boundaries
 

@@ -7,7 +7,15 @@ let
     version = (builtins.fromTOML
       (builtins.readFile ../adapter/Cargo.toml)).package.version;
     src = pkgs.lib.cleanSource ../adapter;
-    cargoLock = {
+    cargoDeps = (platform.importCargoLock.override {
+      # Change only the download endpoint, not Cargo's registry definitions or
+      # any checksum. extraRegistries would define crates-io twice in Cargo.
+      fetchurl = args: pkgs.fetchurl (args // {
+        url = pkgs.lib.replaceStrings
+          [ "https://crates.io/api/v1/crates/" ]
+          [ "https://static.crates.io/crates/" ] args.url;
+      });
+    }) {
       lockFile = ../adapter/Cargo.lock;
       outputHashes = {
         "proto-0.1.0" =
