@@ -21,6 +21,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 mod buffer_leases;
+mod buffer_sync;
+#[cfg(test)]
+mod sync_fixture;
 
 const MAX_CODE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKTREE_ROUTES: usize = 4096;
@@ -105,11 +108,20 @@ pub(crate) struct CodeRuntimeHost {
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
+    buffer_sync: buffer_sync::Operations,
 }
 
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
 
 impl CodeRuntimeHost {
+    pub(crate) async fn synchronize(
+        &self,
+        invocation: crate::machine_plugins::CodeBufferSyncInvocation,
+    ) -> Result<crate::machine_protocol::code_buffer_sync::Snapshot> {
+        self.buffer_sync
+            .execute(invocation, &self.buffer_leases)
+            .await
+    }
     #[cfg(test)]
     pub async fn live_generation_count(&self) -> usize {
         self.engines
@@ -126,9 +138,8 @@ impl CodeRuntimeHost {
         payload: &Value,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
-        // Private adapter synchronization is not a generic Code RPC. Until a
-        // separately authorized core purpose and original-owner continuation
-        // exists, neither a path nor a read lease may cross this effect gate.
+        // Private synchronization is never a generic Code RPC. Only the
+        // separate connection-issued core invocation can enter that executor.
         ensure!(
             !matches!(
                 payload["type"].as_str(),
@@ -569,6 +580,7 @@ mod tests {
             .find(|arg| arg.starts_with("generation-"))
             .unwrap();
         let mut owned = BTreeMap::new();
+        let mut synchronization = super::sync_fixture::Fixture::default();
         let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -578,6 +590,12 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if let Some(response) = synchronization.reply(&request, &home, generation) {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
             if matches!(
                 kind,
                 "prepareBuffer"

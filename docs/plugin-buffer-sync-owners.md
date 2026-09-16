@@ -16,7 +16,9 @@ version. The adapter derives the exact current CRDT clock from its passive
 native mirror. Neither that declaration nor a read lease is a Service grant.
 The Machine candidate's generic dispatcher refuses both `prepareBufferSync` and
 `bufferSync` before selecting any runtime, including requests with an injected
-worktree. An authorized core continuation has not yet been added.
+worktree. The source now adds a separate [Machine core continuation](plugin-machine-buffer-sync.md)
+on protocol 20, with a distinct ownership-support probe in the Zed `1.9.0`
+candidate. It does not enable Service/Review effects or change the active Machine.
 
 Preparation must find one original, open Cowboy owner across **every entry
 with the same native buffer ID**. Legacy owners count too. Any unresolved owned
@@ -76,8 +78,8 @@ native request, and cleanup after path removal.
 Run the complete pinned gate, `just zed-native-sync-conformance <server>`,
 `just zed-plugin-conformance <adapter> <server>` and the connected core Code
 gate against the exact release pair. No production activation is implied by
-the source tests. Core synchronization authority, authority-loss handling,
-original-generation routing, Review integration, owned navigation destinations,
+the source tests. Service synchronization authority, Product/Session authority-loss
+handling, acceptance/activation of the Machine continuation, Review integration, owned navigation destinations,
 independent post-effect recovery and supported-device acceptance remain open.
 The purpose enum is a closed request declaration, not that missing authority.
 Before core admission, an exact original adapter must explicitly establish

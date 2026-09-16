@@ -1,7 +1,6 @@
-//! Private adapter coordination, not a Service authorization API. The Machine
-//! explicitly rejects these commands until its separate purpose/authority and
-//! original-generation routing contract is accepted. A serialized ID, content
-//! hash or read lease never grants a public synchronization effect.
+//! Private adapter coordination, not a Service authorization API. Generic
+//! Machine forwarding rejects effects; protocol 20 adds a separate core-owned
+//! invocation. A serialized ID, content hash or read lease grants no effect.
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -21,6 +20,16 @@ use crate::{
 type Key = (PathBuf, PathBuf);
 const MAX_OPERATIONS: usize = 256;
 const PREPARE_TTL: Duration = Duration::from_secs(30);
+
+pub(super) async fn support(zed: Option<&Zed>) -> Result<Response> {
+    // A distinct, effect-free claim by this adapter, not only its native
+    // server. Old adapters must not be mistaken for exclusive owners.
+    crate::sync_native::support(zed).await?;
+    Ok(Response::BufferSyncOwnerSupport {
+        api_version: crate::ADAPTER_VERSION,
+        protocol: 1,
+    })
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
@@ -13,33 +14,11 @@ use tokio::time::Instant;
 
 use super::{CodeTarget, RunningCodeRuntime, WorktreeRoute, exchange};
 use crate::code_buffer_read;
+pub(super) use crate::machine_protocol::code_buffer_sync::BufferRef as LeaseRef;
 
 const MAX_LEASES: usize = 1_024;
 const PREPARE_TTL: Duration = Duration::from_secs(30);
 type Key = (String, LeaseRef);
-
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct LeaseRef {
-    instance: String,
-    id: String,
-}
-
-impl LeaseRef {
-    fn validate(&self) -> Result<()> {
-        let hex = |value: &str, len| {
-            value.len() == len
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        };
-        ensure!(
-            hex(&self.instance, 32) && hex(&self.id, 16) && self.id != "0000000000000000",
-            "invalid native buffer reference"
-        );
-        Ok(())
-    }
-}
 
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
@@ -167,6 +146,8 @@ struct Entry {
     // Removed before an open can cross an async boundary. Only effect-free
     // reservations may expire; missing/ambiguous replies keep their permit.
     until: Option<Instant>,
+    state: State,
+    sync: Arc<AtomicBool>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -291,6 +272,8 @@ impl Routes {
                 route: retained_route,
                 runtime: Arc::clone(runtime),
                 until: Some(reservation.until),
+                state: State::Prepared,
+                sync: Arc::default(),
                 _permit: reservation.permit,
             },
         );
@@ -347,6 +330,24 @@ impl Routes {
         // Serialize with original worktree operations, but never consult its
         // current target: a dead/reopened route cannot replace this process.
         let mut route_guard = route.lock().await;
+        {
+            let mut registry = self.registry.lock().await;
+            let entry = registry
+                .entries
+                .get_mut(&key)
+                .context("original buffer lease is no longer retained")?;
+            ensure!(
+                !entry.sync.load(Ordering::Acquire)
+                    || matches!(command, Command::QueryBufferLease { .. }),
+                "original buffer is reserved for synchronization"
+            );
+            if matches!(
+                command,
+                Command::OpenBufferLease { .. } | Command::ReleaseBufferLease { .. }
+            ) {
+                entry.state = State::Unknown;
+            }
+        }
         ensure!(
             runtime.is_running()?,
             "original buffer runtime exited; outcome unavailable"
@@ -375,8 +376,69 @@ impl Routes {
         if reply.state == State::Released {
             self.registry.lock().await.retire(key.clone());
             forget_route(&key.1, &mut route_guard);
+        } else if let Some(entry) = self.registry.lock().await.entries.get_mut(&key) {
+            entry.state = reply.state;
         }
         Ok(response)
+    }
+
+    pub(super) async fn sync_target(&self, lease: &LeaseRef) -> Result<SyncTarget> {
+        let registry = self.registry.lock().await;
+        let entry = registry
+            .entries
+            .get(&("zed".into(), lease.clone()))
+            .context("original buffer lease is not retained")?;
+        ensure!(
+            entry.state == State::Open && entry.until.is_none(),
+            "original buffer is not open"
+        );
+        Ok(SyncTarget {
+            runtime: Arc::clone(&entry.runtime),
+            route: Arc::clone(&entry.route),
+            marker: Arc::clone(&entry.sync),
+        })
+    }
+
+    /// Caller holds this target's original route lock. Recheck after the wait:
+    /// a queued release or another synchronization must not borrow stale state.
+    pub(super) async fn sync_fence(
+        &self,
+        lease: &LeaseRef,
+        target: &SyncTarget,
+    ) -> Result<SyncFence> {
+        let registry = self.registry.lock().await;
+        let entry = registry
+            .entries
+            .get(&("zed".into(), lease.clone()))
+            .context("original buffer lease is not retained")?;
+        ensure!(
+            entry.state == State::Open
+                && entry.until.is_none()
+                && Arc::ptr_eq(&entry.sync, &target.marker),
+            "original buffer changed"
+        );
+        ensure!(
+            target
+                .marker
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok(),
+            "buffer already reserved for synchronization"
+        );
+        Ok(SyncFence(Arc::clone(&target.marker)))
+    }
+}
+
+pub(super) struct SyncTarget {
+    pub runtime: Arc<RunningCodeRuntime>,
+    pub route: Arc<Mutex<WorktreeRoute>>,
+    marker: Arc<AtomicBool>,
+}
+
+pub(super) struct SyncFence(Arc<AtomicBool>);
+
+impl Drop for SyncFence {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 

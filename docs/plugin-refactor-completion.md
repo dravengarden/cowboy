@@ -1,7 +1,7 @@
 # Plugin refactor completion ledger
 
 Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
-and current code on 2026-09-16. This is the current exit checklist, not a list of
+and current code on 2026-09-17. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
 
@@ -241,6 +241,15 @@ and accepting a production effect are different milestones.
   installed `1.8.0` on Hawk while retaining both original Code processes and all
   16 observed workers. This is not core writer authority, public Review cutover
   or independent recovery; the closed purpose declaration supplies none of them.
+- [Machine synchronization continuation](plugin-machine-buffer-sync.md) adds
+  protocol-20 core routing and a non-serializable original-connection invocation,
+  separate from generic Code forwarding. The Zed `1.9.0` source candidate adds
+  a distinct ownership-support probe; native-only support cannot satisfy it.
+  One-use Apply, unknown exclusion, original-process retention and bounded
+  observation/retirement are implemented. Source tests cover cancellation,
+  connection/queued-authority loss, malformed replies, capacity and runtime death.
+  Immutable runtime acceptance and activation remain separate; no Service
+  confirmation endpoint, ordinary Review integration or recovery is enabled.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

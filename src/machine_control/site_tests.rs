@@ -134,3 +134,46 @@ async fn installation_query_rejects_foreign_service_before_remote_observation() 
     assert!(commands.try_recv().is_err());
     assert!(control.live.read().pending.is_empty());
 }
+
+#[test]
+fn synchronization_cannot_cross_a_site_or_older_machine_protocol_boundary() {
+    use crate::machine_protocol::code_buffer_sync;
+    for protocol in [19, 20] {
+        let root = tempfile::tempdir().unwrap();
+        let control =
+            MachineControl::new(crate::service_identity::load_or_create(root.path()).unwrap());
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let token = control.install("machine".into(), "epoch".into(), false, protocol, tx);
+        for (service, machine) in [
+            (control.service.as_str().to_owned(), "machine"),
+            (format!("svc-{}", "f".repeat(32)), "machine"),
+            (control.service.as_str().to_owned(), "other"),
+        ] {
+            let request: code_buffer_sync::Request = serde_json::from_value(serde_json::json!({
+                "service_id":service,"machine_id":machine,"action":{"kind":"query",
+                "operation":{"instance":"a".repeat(32),"id":"0000000000000001"}}
+            }))
+            .unwrap();
+            request.validate().unwrap();
+            let command = MachineCommand::CodeBufferSync {
+                request_id: "sync-site".into(),
+                request: Box::new(request),
+            };
+            let expected =
+                protocol == 20 && service == control.service.as_str() && machine == "machine";
+            assert_eq!(control.send("machine", command.clone()).is_ok(), expected);
+            assert_eq!(commands.try_recv().is_ok(), expected);
+            let result = control.begin_request(
+                "machine",
+                "sync-site",
+                command,
+                ReplyKind::Adapter,
+                Some(RequestBinding::Connection(&token)),
+            );
+            assert_eq!(result.is_ok(), expected);
+            assert_eq!(commands.try_recv().is_ok(), expected);
+            drop(result);
+            assert!(control.live.read().pending.is_empty());
+        }
+    }
+}

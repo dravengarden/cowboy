@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod code_buffer_sync;
 pub mod installation_revision;
 pub mod plugin_install;
 pub mod plugin_recovery;
@@ -17,7 +18,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 19;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 20;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -41,6 +42,9 @@ pub const TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION: u16 = 18;
 /// Closed installation target CAS, durable attempts and original-connection
 /// leases. Negotiation is not independent Machine writer admission.
 pub const PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION: u16 = 19;
+/// Original-generation buffer synchronization through a separate core command.
+/// Negotiation alone grants no effect and does not enable a Review consumer.
+pub const CODE_BUFFER_SYNC_PROTOCOL_VERSION: u16 = 20;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -784,6 +788,10 @@ pub enum MachineCommand {
         adapter: String,
         payload: serde_json::Value,
     },
+    CodeBufferSync {
+        request_id: String,
+        request: Box<code_buffer_sync::Request>,
+    },
     /// Execute one signed host operation against the active exact Plugin and
     /// authentication generation on this Machine.
     InvokePluginHost {
@@ -810,6 +818,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::CodeBufferSync { .. } => CODE_BUFFER_SYNC_PROTOCOL_VERSION,
             Self::QueryTelemetryRecoveryAudit { .. } => TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
             Self::ExportBoundTelemetry { .. } => TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION,
             Self::RecoverTelemetryBinding { .. } | Self::QueryTelemetryRecovery { .. } => {

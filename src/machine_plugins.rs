@@ -7,12 +7,15 @@
 
 #![warn(clippy::pedantic)]
 
+#[cfg(test)]
+mod code_sync_conformance;
 mod installation;
 mod operations;
 mod telemetry;
 use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::InstallGuard;
 
+pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
@@ -803,6 +806,13 @@ impl MachinePluginStore {
                 .join(digest_generation_name(digest)?)
                 .join("home"),
         }))
+    }
+
+    pub(crate) async fn synchronize_code_buffer(
+        &self,
+        invocation: CodeBufferSyncInvocation,
+    ) -> Result<crate::machine_protocol::code_buffer_sync::Snapshot> {
+        self.code_runtimes.synchronize(invocation).await
     }
 
     /// Resolve the selected Plugin by capability id, never a global server
@@ -5517,11 +5527,13 @@ mod tests {
                 serde_json::json!({"kind":"content","content":changed_content,"result":{"kind":"mismatch"}})
             );
         }
+        let synchronization = code_sync_conformance::prepare(&store, &worktree).await;
         store
             .uninstall("zed", &release.artifact_digest)
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
+        code_sync_conformance::finish(&store, synchronization).await;
         let other = serde_json::json!({"type": "openWorktree", "path": root, "trusted": true});
         assert!(
             store

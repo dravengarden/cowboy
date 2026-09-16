@@ -60,6 +60,7 @@ enum CommandKind {
 enum Request {
     Health,
     NativeSyncSupport,
+    BufferSyncOwnerSupport {},
     PrepareBufferSync {
         lease: buffer_leases::LeaseRef,
         purpose: sync_owners::Purpose,
@@ -135,6 +136,10 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    BufferSyncOwnerSupport {
+        api_version: u8,
+        protocol: u8,
+    },
     BufferSync {
         api_version: u8,
         operation: sync_owners::OperationRef,
@@ -1378,6 +1383,7 @@ async fn respond(
             buffer_lease_api: 1,
         },
         Request::NativeSyncSupport => sync_native::support(zed).await?,
+        Request::BufferSyncOwnerSupport {} => sync_owners::support(zed).await?,
         Request::PrepareBufferSync {
             lease,
             purpose,

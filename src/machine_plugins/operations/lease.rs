@@ -17,6 +17,8 @@ mod telemetry_recovery;
 pub(crate) use telemetry_recovery::BindingRecoveryLease;
 mod installation;
 pub(crate) use installation::InstallationLease;
+mod code_buffer_sync;
+pub(crate) use code_buffer_sync::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
 
 /// The connection task is the unique owner. Detached command tasks receive only
 /// leases; retaining one must not keep a disconnected connection authorized.

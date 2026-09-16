@@ -1761,6 +1761,28 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::CodeBufferSync {
+            request_id,
+            request,
+        } => {
+            // Capture the actual connection before spawning or waiting. Wire
+            // data and a read lease alone cannot construct an invocation.
+            let invocation = execution.code_buffer_sync(*request);
+            tokio::spawn(async move {
+                let result = async {
+                    Ok::<_, anyhow::Error>(serde_json::to_value(
+                        providers.synchronize_code_buffer(invocation?).await?,
+                    )?)
+                }
+                .await;
+                let _ = events.send(MachineEvent::AdapterResponse {
+                    request_id,
+                    accepted: result.is_ok(),
+                    payload: result.ok(),
+                    detail: None,
+                });
+            });
+        }
         MachineCommand::RecoverTelemetryBinding {
             request_id,
             recovery,

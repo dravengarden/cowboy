@@ -49,6 +49,54 @@ fn encoded(id: u32, response: wire::CowboyBufferSyncResponse) -> Vec<u8> {
     .encode_to_vec()
 }
 
+#[tokio::test]
+async fn owner_support_is_distinct_effect_free_and_requires_the_actual_native_pair() {
+    let worktrees = Arc::default();
+    let buffers: Buffers = Arc::default();
+    assert!(
+        respond(
+            Request::BufferSyncOwnerSupport {},
+            &worktrees,
+            &buffers,
+            None
+        )
+        .await
+        .is_err()
+    );
+    for extra in ["worktree", "lease", "authorized"] {
+        assert!(
+            serde_json::from_value::<Request>(
+                serde_json::json!({"type":"bufferSyncOwnerSupport",extra:true})
+            )
+            .is_err()
+        );
+    }
+    let (zed, mut receiver) = fixture().await;
+    let call = respond(
+        Request::BufferSyncOwnerSupport {},
+        &worktrees,
+        &buffers,
+        Some(&zed),
+    );
+    tokio::pin!(call);
+    let observed = tokio::select! {
+        _ = &mut call => panic!("support did not probe the native peer"),
+        value = receiver.recv() => value.unwrap(),
+    };
+    let Some(Payload::Request(request)) = observed.payload else {
+        panic!("wrong native payload")
+    };
+    assert_eq!(request.action, Action::Probe as i32);
+    zed.sync
+        .response(observed.id, &encoded(observed.id, supported()));
+    assert_eq!(
+        serde_json::to_value(call.await.unwrap()).unwrap(),
+        serde_json::json!({"type":"bufferSyncOwnerSupport","api_version":1,"protocol":1})
+    );
+    assert!(buffers.active.read().await.is_empty());
+    assert!(receiver.try_recv().is_err());
+}
+
 #[test]
 fn closed_response_schema_rejects_foreign_identity_and_impossible_state() {
     let query = wire::CowboyBufferSync {

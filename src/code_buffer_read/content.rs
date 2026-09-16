@@ -1,27 +1,7 @@
 //! Text equality evidence, not a lease, version, filesystem identity or grant.
 use super::*;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Content {
-    sha256: String,
-    utf8_bytes: u32,
-}
-
-impl Content {
-    pub(super) fn validate(&self) -> Result<()> {
-        ensure!(
-            self.utf8_bytes <= 4 * 1024 * 1024
-                && self.sha256.len() == 64
-                && self
-                    .sha256
-                    .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
-            "invalid buffer content identity"
-        );
-        Ok(())
-    }
-}
+pub(crate) use crate::machine_protocol::code_buffer_sync::Content;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
