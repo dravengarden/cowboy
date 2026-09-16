@@ -47,14 +47,32 @@ impl Drop for PluginProcessGroup {
             crate::cgroup::kill_and_remove(directory);
         }
         #[cfg(unix)]
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &format!("-{}", self.process_id)])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        if let Some(group) = owned_group_id(self.process_id) {
+            // Cleanup is a core mechanism, not an ambient executable lookup.
+            // In particular an empty or attacker-controlled PATH must neither
+            // strand descendants nor execute a replacement `kill` program.
+            if let Err(error) =
+                rustix::process::kill_process_group(group, rustix::process::Signal::KILL)
+                && error != rustix::io::Errno::SRCH
+            {
+                tracing::warn!(%error, group = self.process_id, "Plugin process-group cleanup failed");
+            }
+        }
     }
 }
+
+#[cfg(unix)]
+pub(crate) fn owned_group_id(raw: u32) -> Option<rustix::process::Pid> {
+    // kill(-1, ...) means ALL permitted processes, not process group 1.
+    // Zero would select our own group. Neither is ever an owned child group.
+    (raw > 1)
+        .then(|| i32::try_from(raw).ok())
+        .flatten()
+        .and_then(rustix::process::Pid::from_raw)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod process_group_tests;
 
 #[derive(Debug)]
 pub(crate) struct PluginCommandOutput {

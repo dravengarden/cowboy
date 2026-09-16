@@ -205,6 +205,8 @@ fn inspect(
         MachineFrame::Command { command } if !from_machine => command_frame(command, record)?,
         MachineFrame::Event { event } if from_machine => match event {
             MachineEvent::AdapterResponse { request_id, .. }
+            | MachineEvent::PluginInstallationTarget { request_id, .. }
+            | MachineEvent::PluginInstallationStep { request_id, .. }
             | MachineEvent::PluginUninstallRecovery { request_id, .. }
             | MachineEvent::PluginUninstallStep { request_id, .. } => {
                 return record.reply(&request_id);
@@ -220,6 +222,30 @@ fn inspect(
 fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Failure> {
     match command {
         MachineCommand::RefreshInventory { .. } => Ok(()),
+        MachineCommand::ObservePluginInstallation { request_id, query } => {
+            check(
+                query.service_id == SERVICE
+                    && query.machine_id == MACHINE
+                    && query.plugin_id == "zed",
+            )?;
+            record.command(request_id, "installationObservation")
+        }
+        MachineCommand::InstallPluginStep {
+            request_id,
+            step,
+            plugin,
+        } => {
+            check(
+                step.service_id == SERVICE
+                    && step.machine_id == MACHINE
+                    && step.plugin_id == "zed"
+                    && step.operation_id == "connected-code-install"
+                    && step.plugin_kind == cowboy_plugin_sdk::PluginKind::CodeIntelligence
+                    && step.matches_envelope(&plugin),
+            )?;
+            step.validate().map_err(|_| Failure::WrongObservation)?;
+            record.command(request_id, "installationStep")
+        }
         MachineCommand::AdapterRequest {
             request_id,
             adapter,

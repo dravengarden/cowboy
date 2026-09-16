@@ -119,6 +119,7 @@
           ./src/plugin_host.rs
           ./src/plugin_host_bundle.rs
           ./src/plugin_process.rs
+          ./src/plugin_process
           ./src/plugin_runtime_args.rs
           ./src/legacy_provider_release.rs
           ./src/machine_broker.rs

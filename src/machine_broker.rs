@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::os::fd::FromRawFd as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -79,49 +78,41 @@ async fn wait_for_direct_worker_exit(
     }
 }
 
-async fn signal_direct_worker(
+fn signal_direct_worker(
     workers: &Mutex<HashMap<String, u32>>,
     session_id: &str,
     pid: u32,
-    signal: &str,
+    signal: rustix::process::Signal,
 ) -> Result<()> {
-    // The reaper removes the exact mapping before a PID can be reused for a
-    // future session worker. Recheck immediately before signalling so a stale
-    // watchdog can never target an unrelated process.
-    if !direct_worker_is_current(workers, session_id, pid) {
+    // Keep the original mapping borrowed through the syscall. No subprocess,
+    // PATH lookup or await may separate this owner check from signal delivery.
+    let workers = workers.lock();
+    if workers.get(session_id).copied() != Some(pid) {
         return Ok(());
     }
-    let status = Command::new("kill")
-        .arg(signal)
-        // Direct workers lead an isolated process group. A negative target
-        // fences the worker and every provider/adapter child that has not
-        // deliberately escaped that group, avoiding orphaned sidecars after a
-        // hard kill.
-        .arg(format!("-{pid}"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .with_context(|| format!("sending {signal} to direct worker {session_id} pid {pid}"))?;
-    if status.success() || !direct_worker_is_current(workers, session_id, pid) {
-        return Ok(());
+    let group = crate::plugin_process::owned_group_id(pid).context("invalid owned worker group")?;
+    match rustix::process::kill_process_group(group, signal) {
+        Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("signalling direct worker {session_id} group {pid}"))
+        }
     }
-    anyhow::bail!("kill {signal} {pid} exited {status}")
 }
 
-async fn direct_worker_group_exists(pid: u32) -> bool {
-    match Command::new("kill")
-        .arg("-0")
-        .arg(format!("-{pid}"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-    {
-        Ok(status) => status.success(),
+fn direct_worker_group_exists(pid: u32) -> bool {
+    let Some(group) = crate::plugin_process::owned_group_id(pid) else {
+        return true; // Invalid ownership is not evidence of process absence.
+    };
+    observed_group_exists(rustix::process::test_kill_process_group(group), pid)
+}
+
+fn observed_group_exists(result: rustix::io::Result<()>, pid: u32) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(rustix::io::Errno::SRCH) => false,
         Err(error) => {
-            // Fail closed: losing the platform signal utility must retain the
-            // owner fence instead of declaring a potentially live group gone.
+            // EPERM proves no absence. An external kill program's exit status
+            // used to conflate it with ESRCH and could release this fence early.
             tracing::error!(pid, %error, "probing direct worker process group failed");
             true
         }
@@ -131,7 +122,7 @@ async fn direct_worker_group_exists(pid: u32) -> bool {
 async fn wait_for_direct_worker_group_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if !direct_worker_group_exists(pid).await {
+        if !direct_worker_group_exists(pid) {
             return true;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -146,18 +137,22 @@ async fn reap_direct_worker_group(
     session_id: &str,
     pid: u32,
 ) -> bool {
-    if !direct_worker_group_exists(pid).await {
+    if !direct_worker_group_exists(pid) {
         return true;
     }
     tracing::warn!(session = %session_id, pid, "direct worker exited with live process-group descendants; sending TERM");
-    if let Err(error) = signal_direct_worker(workers, session_id, pid, "-TERM").await {
+    if let Err(error) =
+        signal_direct_worker(workers, session_id, pid, rustix::process::Signal::TERM)
+    {
         tracing::warn!(session = %session_id, pid, %error, "direct worker descendant TERM failed");
     }
     if wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_TERM_TIMEOUT).await {
         return true;
     }
     tracing::error!(session = %session_id, pid, "direct worker descendants ignored TERM; sending KILL");
-    if let Err(error) = signal_direct_worker(workers, session_id, pid, "-KILL").await {
+    if let Err(error) =
+        signal_direct_worker(workers, session_id, pid, rustix::process::Signal::KILL)
+    {
         tracing::error!(session = %session_id, pid, %error, "direct worker descendant KILL failed");
     }
     let reaped = wait_for_direct_worker_group_exit(pid, DIRECT_WORKER_KILL_TIMEOUT).await;
@@ -179,14 +174,18 @@ async fn enforce_direct_worker_exit(
         return true;
     }
     tracing::warn!(session = %session_id, pid, "direct worker ignored graceful Stop; sending TERM");
-    if let Err(error) = signal_direct_worker(&workers, &session_id, pid, "-TERM").await {
+    if let Err(error) =
+        signal_direct_worker(&workers, &session_id, pid, rustix::process::Signal::TERM)
+    {
         tracing::warn!(session = %session_id, pid, %error, "direct worker TERM failed");
     }
     if wait_for_direct_worker_exit(&workers, &session_id, pid, term_timeout).await {
         return true;
     }
     tracing::error!(session = %session_id, pid, "direct worker ignored TERM; sending KILL");
-    if let Err(error) = signal_direct_worker(&workers, &session_id, pid, "-KILL").await {
+    if let Err(error) =
+        signal_direct_worker(&workers, &session_id, pid, rustix::process::Signal::KILL)
+    {
         tracing::error!(session = %session_id, pid, %error, "direct worker KILL failed");
     }
     wait_for_direct_worker_exit(&workers, &session_id, pid, kill_timeout).await
@@ -2824,6 +2823,37 @@ pub(crate) use tests::dispatch_trace_fixture;
 mod tests {
     use super::*;
 
+    #[test]
+    fn process_probe_refuses_to_treat_permission_failure_as_exit() {
+        assert!(observed_group_exists(Ok(()), 2));
+        assert!(!observed_group_exists(Err(rustix::io::Errno::SRCH), 2));
+        for error in [
+            rustix::io::Errno::PERM,
+            rustix::io::Errno::INTR,
+            rustix::io::Errno::INVAL,
+        ] {
+            assert!(observed_group_exists(Err(error), 2));
+        }
+        for pid in [0, 1, u32::MAX] {
+            assert!(direct_worker_group_exists(pid));
+        }
+    }
+
+    #[test]
+    fn signal_requires_original_mapping_and_a_bounded_group() {
+        let workers = Mutex::new(HashMap::new());
+        for pid in [0, 1, u32::MAX] {
+            assert!(
+                signal_direct_worker(&workers, "stale", pid, rustix::process::Signal::KILL).is_ok()
+            );
+            workers.lock().insert("owned".into(), pid);
+            assert!(
+                signal_direct_worker(&workers, "owned", pid, rustix::process::Signal::KILL)
+                    .is_err()
+            );
+        }
+    }
+
     #[cfg(feature = "full")]
     pub(crate) async fn dispatch_trace_fixture(command: CoreCommand) -> WorkerCommand {
         let root = tempfile::tempdir().unwrap();
@@ -4442,18 +4472,23 @@ mod tests {
         let status = match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
             Ok(result) => result.expect("wait for worker descendant fixture"),
             Err(_) => {
-                let _ = signal_direct_worker(&workers, "sess-descendant", pid, "-KILL").await;
+                let _ = signal_direct_worker(
+                    &workers,
+                    "sess-descendant",
+                    pid,
+                    rustix::process::Signal::KILL,
+                );
                 panic!("worker fixture leader did not exit");
             }
         };
         assert!(status.success());
         assert!(
-            direct_worker_group_exists(pid).await,
+            direct_worker_group_exists(pid),
             "fixture must leave a process-group descendant"
         );
 
         assert!(reap_direct_worker_group(&workers, "sess-descendant", pid).await);
-        assert!(!direct_worker_group_exists(pid).await);
+        assert!(!direct_worker_group_exists(pid));
         workers.lock().remove("sess-descendant");
     }
 

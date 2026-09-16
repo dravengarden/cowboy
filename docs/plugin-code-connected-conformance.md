@@ -24,9 +24,10 @@ The test reuses the core installation acceptance harness's disposable Service
 identity, enrolled Machine, real password login, private SQLite state, closed
 process environment and bounded HTTP client. A stopped fixture Session supplies
 placement; no Agent credentials, worker or inference request is permitted. A
-temporary signed installation is seeded using the normal Machine installer
-before the immutable Machine starts. Thus this gate accepts native use and
-HTTP uninstall, not connected Code installation admission. Catalog entries,
+temporary signed release is served only as immutable fixture bytes. The Machine
+starts with an empty installation slot; real authenticated Controller admission
+must observe the target, stage/probe/install that release and settle both
+durable journals. Catalog entries,
 keys, data and source text exist only in fresh temporary directories. There are
 no production URL, state-directory, environment or credential inputs.
 
@@ -36,7 +37,7 @@ The isolated test adopts orphaned descendants, waits tracked leaders first,
 and reaps descendants before accepting cleanup; Cargo as namespace init is not
 itself evidence that those children were reaped.
 The transparent relay forwards original frames unchanged,
-allows only finite Code/readiness/uninstall traffic and the exact runtime
+allows only finite Code/readiness/installation/uninstall traffic and the exact runtime
 generation handshake, and rejects Agent/authentication/runtime mutations.
 Faults hold an actual correlated native reply while the client drops its HTTP
 future; they never fabricate an ACK or change a production timeout. Receipts
@@ -44,19 +45,22 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Seven checks cover:
+Eight checks cover (receipt schema `...code-buffer-connected-conformance/v2`):
 
-1. Anonymous refusal, real login/enrollment and effect-free preparation refusal
+1. Anonymous installation refusal, actual signed Code installation, cancelled
+   HTTP observation after the Machine receipt, durable completion and duplicate
+   operation-ID refusal without a second install dispatch.
+2. Anonymous refusal, real login/enrollment and effect-free preparation refusal
    before the ordinary manifest establishes native worktree readiness.
-2. Cancelled open, duplicate pending/open observation and exactly one dispatch.
-3. Three independent owners, exact Unicode UTF-8 content and UTF-16 position,
+3. Cancelled open, duplicate pending/open observation and exactly one dispatch.
+4. Three independent owners, exact Unicode UTF-8 content and UTF-16 position,
    language/symbol/hover observations and disk/native mismatch without reload.
-4. Cancelled read, `202` release refusal while borrowed, explicit later release
+5. Cancelled read, `202` release refusal while borrowed, explicit later release
    and continued use of another owner.
-5. Genuine HTTP uninstall, source deletion/worktree rename and path-free reads
+6. Genuine HTTP uninstall, source deletion/worktree rename and path-free reads
    of the original retained native owner.
-6. Cancelled release, terminal original-ID observation and no duplicate effect.
-7. Same-Machine reconnect cannot adopt the old connection; Controller restart
+7. Cancelled release, terminal original-ID observation and no duplicate effect.
+8. Same-Machine reconnect cannot adopt the old connection; Controller restart
    cannot restore an old process-local resource ID or claim it released.
 
 The last case deliberately leaves unresolved native ownership. Teardown kills

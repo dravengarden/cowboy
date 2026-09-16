@@ -1,5 +1,4 @@
 use super::*;
-use base64::Engine as _;
 use cowboy_plugin_sdk::{
     PLUGIN_RELEASE_SIGNATURE_NAMESPACE, PluginArtifactFormat, PluginArtifactProbe, PluginManifest,
     PluginPackage, PluginPayload, PluginRelease, PluginRuntimeArtifacts, ReleasedPluginComponent,
@@ -9,6 +8,14 @@ pub(super) struct Seeded {
     pub password: String,
     pub package_sha256: String,
     pub release_sha256: String,
+    pub install: serde_json::Value,
+    artifacts: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl Drop for Seeded {
+    fn drop(&mut self) {
+        self.artifacts.abort();
+    }
 }
 
 pub(super) async fn seed(
@@ -121,12 +128,6 @@ pub(super) async fn seed(
     release.artifact_digest = release.computed_artifact_digest()?;
     release.signature =
         publisher.sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())?;
-    let desired = crate::machine_protocol::DesiredPlugin {
-        release: release.clone(),
-        package_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        publisher_public_key: publisher.public_key().into(),
-        host_bundle_base64: None,
-    };
     std::fs::create_dir_all(root.join("catalog/trusted-publishers"))?;
     private_write(
         &root
@@ -143,14 +144,6 @@ pub(super) async fn seed(
         "x86_64".into(),
     )?;
     machine.enable_installation_tracking().await?;
-    let server = tokio::spawn(async move { axum::serve(listener, router).await });
-    let installed = machine.install(&desired).await;
-    server.abort();
-    let _ = server.await;
-    ensure!(
-        installed?.generation_digest == release.artifact_digest,
-        "wrong fixture installation"
-    );
     let password = super::super::super::connected::seed_operator(root, &machine).await?;
     private_write(&root.join("workspace/fixture.txt"), TEXT.as_bytes())?;
     // Seed a stopped owned Session before startup, never fake a native worker.
@@ -166,6 +159,11 @@ pub(super) async fn seed(
         password,
         package_sha256: sha256(&bytes),
         release_sha256: sha256(&release_bytes),
+        install: json!({"operation_id":"connected-code-install",
+            "version":release.plugin_version,"digest":release.artifact_digest}),
+        // Only publish immutable bytes. The live Machine must stage, probe and
+        // install them via actual authenticated Controller admission below.
+        artifacts: tokio::spawn(async move { axum::serve(listener, router).await }),
     })
 }
 

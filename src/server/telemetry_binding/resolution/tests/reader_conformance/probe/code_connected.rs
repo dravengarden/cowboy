@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 mod exercise;
 mod fixture;
+mod installation;
 mod proxy;
 
 const SESSION: &str = "sess-901";
@@ -195,7 +196,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v1",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v2",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -226,7 +227,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 7;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 8;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
@@ -251,8 +252,8 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
     )
     .await
     .map_err(|_| Failure::Setup)?;
-    receipt.package_sha256 = Some(seeded.package_sha256);
-    receipt.release_sha256 = Some(seeded.release_sha256);
+    receipt.package_sha256 = Some(seeded.package_sha256.clone());
+    receipt.release_sha256 = Some(seeded.release_sha256.clone());
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .map_err(|_| Failure::Setup)?;
@@ -288,6 +289,9 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
             .arg(root.path().join("code.sock"));
         pair.machine = Some(Running::spawn(&mut command)?);
         pair.connected(1).await?;
+        receipt.stage = "connected_installation";
+        installation::run(&pair, &seeded.install).await?;
+        receipt.checks.push("authenticated_code_installation");
         exercise::run(&mut pair, &mut receipt.stage, &mut receipt.checks).await
     })
     .await
