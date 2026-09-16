@@ -5,6 +5,32 @@ use serde_json::{Value, json};
 
 mod authority;
 
+#[tokio::test]
+async fn nonempty_observations_match_browser_wire_fixture() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/code-buffer-client.fixture.json"
+    ))
+    .unwrap();
+    let (mut fixture, id) = opened().await;
+    for (request, kind) in [
+        (Request::Language {}, "language"),
+        (Request::Symbols {}, "symbols"),
+    ] {
+        let task = start(&fixture, &id, request);
+        probe(&mut fixture).await;
+        let command = command(&mut fixture).await;
+        let mut native = result(kind);
+        native["result"] = contract[kind]["result"].clone();
+        native["opened_version"] = contract[kind]["openedVersion"].clone();
+        reply(&fixture.context, &fixture.connection, command, native);
+        let response = task.await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut expected = contract[kind].clone();
+        expected["resourceId"] = json!(id);
+        assert_eq!(json_response(response).await, expected);
+    }
+}
+
 async fn opened() -> (Fixture, String) {
     let mut fixture = Fixture::new();
     let id = fixture.prepare(1).await.resource_id;

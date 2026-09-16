@@ -134,6 +134,16 @@ and accepting a production effect are different milestones.
   Hover/navigation still need actual content/anchor version semantics;
   the open vector is only a lower bound. Review integration, Machine/Plugin
   activation and independent post-effect recovery are not implied by this API.
+- [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
+  typed client prerequisite: captured authority lifetime and input, one-shot
+  preparation/open, strict bounded readonly observations, cancellation-safe
+  continuations, and explicit original-ID cleanup. Pending/unknown/error is not
+  release; ambiguous mutations do not replay, and authority loss cannot adopt
+  replacement cookies. Twenty-six Web tests, two shared-wire Rust handler tests
+  and six real Firefox/React StrictMode cases pass. This library is not imported
+  by ordinary Review: real identity integration, unresolved-resource presentation,
+  positional semantics, actual Machine/Code rollout and supported-device
+  acceptance remain required. Publication alone changes no running component.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

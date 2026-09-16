@@ -7,7 +7,7 @@ const suite = process.argv[3] ?? "idb";
 if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
-  suite !== "settings-recovery"
+  suite !== "settings-recovery" && suite !== "code-buffers"
 ) {
   throw new Error("unknown suite");
 }
@@ -22,7 +22,8 @@ await build({
   define: {
     "process.env.NODE_ENV": JSON.stringify(
       suite === "provider-ui" || suite === "provider-management" ||
-        suite === "plugin-lifecycle" || suite === "settings-recovery"
+        suite === "plugin-lifecycle" || suite === "settings-recovery" ||
+        suite === "code-buffers"
         ? "development"
         : "production",
     ),
@@ -65,6 +66,8 @@ await build({
           ? "../web/src/pluginLifecycleBrowserConformance.ts"
           : suite === "settings-recovery"
           ? "../web/src/settingsRecoveryBrowserConformance.ts"
+          : suite === "code-buffers"
+          ? "../web/src/codeBufferBrowserConformance.ts"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",
