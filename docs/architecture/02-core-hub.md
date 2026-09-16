@@ -103,8 +103,8 @@ The Hub never touches the database directly. Each state change emits a
 **`StoreWrite`** variant — `InsertSession`, `AppendEvent`, `UpdateStatus`,
 `UpdateTitle`, `SetAgentSessionId`, `DeleteSession`, `UpdatePending`,
 `UpdateSessionOrder`, and Mobile review state
-— onto a bounded mpsc
-channel drained in reduced batches by the background writer task
+— onto one count- and byte-bounded FIFO with finite oversized/control reservations,
+drained in reduced batches by the background writer task
 ([Storage](05-storage.md)). The hot path never blocks on the DB; overflow and
 exhausted retries explicitly degrade health.
 

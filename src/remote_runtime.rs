@@ -2120,9 +2120,9 @@ mod tests {
 
     #[test]
     fn compact_failure_is_recorded_and_kept_in_the_transcript() {
-        let (tx, mut rx) = mpsc::channel(16);
         let health = Arc::new(crate::core::PersistenceHealth::default());
-        let hub = Hub::with_store(Some(crate::core::StoreSink::new(tx, health)));
+        let (sink, mut rx) = crate::core::StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "s".to_owned(),
             "codex".to_owned(),

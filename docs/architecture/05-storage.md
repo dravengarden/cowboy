@@ -16,15 +16,39 @@ state; Zed owns unsaved buffers.
 
 ## Write-behind
 
-The Hub never blocks on the database. It emits a `StoreWrite` intent onto a
-bounded mpsc channel (8,192 intents); a background **writer task** drains small
-batches, reduces high-frequency events, and executes the corresponding `Store`
-operations. Queue overflow or a batch that exhausts four retries marks
-persistence degraded through `/healthz` and `/api/metrics`.
+The Hub never blocks on the database. Its process-local `StoreSink` admits
+`StoreWrite` intents into one mutex-protected FIFO; a background **writer task**
+drains batches, reduces high-frequency events, and executes the corresponding
+`Store` operations. Capacity admission, enqueue and refund use the same lock.
+There are no detached capacity-waiting tasks that can reorder accepted writes
+or escape the queue's bounds.
+
+Normal admission is bounded by 8,192 intents and 8 MiB of estimated payload.
+One additional byte lane admits a single oversized intent, up to 64 MiB, inside
+the same FIFO and count limit. It does not consume ordinary byte capacity, so
+one 16 MiB update does not reject the small events immediately following it.
+Non-streaming lifecycle/permission and metadata writes can use another 64 count
+slots and 256 KiB of bytes when the normal budget is exhausted. These are finite
+reservations, not priority scheduling or unlimited bypasses. A second queued
+oversized intent is refused until the first has been dequeued.
+
+The writer stops gathering at 256 intents or an estimated 8 MiB, allowing the
+one intent that crosses that threshold; an oversized first item runs alone.
+Queue budgets exclude the writer's current batch, reducer and Hub hot tail;
+they estimate payload size, not total process RSS. Attachments and private
+settings count too. `cowboy_persistence_pending{,_bytes}` measure only intents
+still in the FIFO, not database commit acknowledgements.
+
+True exhaustion, admission after close, a receiver dropped without draining,
+or a batch that exhausts four retries marks persistence degraded through
+`/healthz` and `/api/metrics`. Degradation stays sticky for that Controller
+process, even after the queue drains. This is bounded write-behind, not lossless
+buffering under arbitrary overload. Admission errors report closed reasons and
+event coordinates, never event/attachment/setting payloads.
 
 ```mermaid
 flowchart TB
-    HUB["Hub.push(Event)"] --> CH["StoreWrite channel<br/>(bounded: 8,192)"]
+    HUB["Hub.push(Event)"] --> CH["StoreWrite FIFO<br/>(count + byte reservations)"]
     CH --> WR["batch + reduce + retry"]
     WR --> STORE{"Store facade"}
     STORE --> PG[("PostgreSQL")]
@@ -40,9 +64,12 @@ flowchart TB
 ```
 
 Writes normally land within milliseconds. On SIGTERM the HTTP/WS server closes
-connections and waits up to ten seconds for the writer to drain. A hard crash can
+connections and waits up to ten seconds for the writer to drain. Closing
+admission retains all already-accepted FIFO entries for that drain. A hard crash can
 still lose the latest in-memory batch; synchronous token-path writes would couple
 live fan-out latency to storage, so cowboy keeps that window observable and bounded.
+Restarting starts new health counters; it cannot establish recovery of previously
+rejected intents. See the [admission repair](../persistence-admission.md).
 
 ## Schema
 

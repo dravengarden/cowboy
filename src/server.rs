@@ -43,8 +43,8 @@ use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound,
-    PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreSink, StoreWrite,
-    project_sync_value,
+    PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
+    StoreWrite, project_sync_value,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
 use crate::machine_control::MachineControl;
@@ -70,6 +70,8 @@ mod code_reads;
 #[cfg(unix)]
 mod local_operator;
 mod operator_approval;
+#[cfg(test)]
+mod persistence_tests;
 mod plugin_install;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
@@ -968,9 +970,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .next_session_number()
                 .await
                 .context("seeding session id counter")?;
-            let (tx, rx) = mpsc::channel::<StoreWrite>(STORE_QUEUE_CAPACITY);
             let health = Arc::new(PersistenceHealth::default());
-            let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+            let (sink, rx) = StoreSink::channel(STORE_QUEUE_CAPACITY, Arc::clone(&health));
+            let hub = Hub::with_store(Some(sink));
             let settings = store
                 .load_settings()
                 .await
@@ -1625,33 +1627,39 @@ async fn run_web_push_notifications(
 /// frames only advance the durable sequence watermark.
 async fn run_store_writer(
     store: Store,
-    mut rx: mpsc::Receiver<StoreWrite>,
+    mut rx: StoreReceiver,
     health: Arc<PersistenceHealth>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let mut reducer = EventReducer::default();
+    let mut draining = *shutdown.borrow();
+    if draining {
+        rx.close();
+    }
     loop {
         let first = tokio::select! {
             biased;
-            changed = shutdown.changed() => {
-                if changed.is_ok() && *shutdown.borrow() {
+            changed = shutdown.changed(), if !draining => {
+                if changed.is_err() || *shutdown.borrow() {
                     rx.close();
-                    rx.recv().await
-                } else {
-                    continue;
+                    draining = true;
                 }
+                continue;
             }
             write = rx.recv() => write,
         };
         let Some(first) = first else { break };
+        let mut bytes = crate::core::estimated_store_write_bytes(&first);
         let mut batch = vec![first];
-        while batch.len() < 256 {
+        while batch.len() < 256 && bytes < crate::core::STORE_BATCH_MAX_BYTES {
             match tokio::time::timeout(std::time::Duration::from_millis(10), rx.recv()).await {
-                Ok(Some(write)) => batch.push(write),
+                Ok(Some(write)) => {
+                    bytes = bytes.saturating_add(crate::core::estimated_store_write_bytes(&write));
+                    batch.push(write);
+                }
                 Ok(None) | Err(_) => break,
             }
         }
-        health.consumed_writes(&batch);
         if !apply_store_batch(&store, &mut reducer, batch).await {
             health.mark_failed_batch();
         }

@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
@@ -28,6 +28,9 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
 pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
+mod persistence_queue;
+pub(crate) use persistence_queue::NORMAL_BYTES as STORE_BATCH_MAX_BYTES;
+pub use persistence_queue::{PersistenceHealth, StoreReceiver, StoreSink};
 
 /// How many recent events a fresh client gets over WS (the live tail). Older
 /// history is paged in over HTTP. Sized to comfortably fill a few phone screens.
@@ -54,9 +57,6 @@ pub(crate) const HOT_TAIL_MAX_BYTES: usize = 1024 * 1024;
 /// through `/api/history`; a busy turn keeps the full 1 MiB so the focused
 /// transcript does not stall mid-stream.
 pub(crate) const HOT_TAIL_IDLE_MAX_BYTES: usize = 512 * 1024;
-/// Persistence queue byte ceiling. Count-only bounds let a few multi-megabyte
-/// raw events fill tens of MiB while the writer is stalled on Postgres.
-const STORE_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const BROADCAST_CAPACITY: usize = 1_024;
 /// Event-count ceiling for the cursor-based HTTP history route. The byte budget
 /// above is the primary bound; this limits render work for many tiny events.
@@ -1199,7 +1199,7 @@ pub struct HubMemoryStats {
 /// Persistence intent sent on the write-behind channel from `Hub` to the
 /// background DB writer task in `crate::server`. Each variant maps 1:1 to a
 /// [`crate::store::Store`] call.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum StoreWrite {
     InsertSession(Box<SessionMeta>),
     AppendEvent(Envelope),
@@ -1281,169 +1281,7 @@ pub enum StoreWrite {
     },
 }
 
-/// Shared operational state for the bounded write-behind queue.
-#[derive(Debug, Default)]
-pub struct PersistenceHealth {
-    pending: AtomicUsize,
-    pending_bytes: AtomicUsize,
-    dropped: AtomicU64,
-    failed_batches: AtomicU64,
-    degraded: AtomicBool,
-    last_error: Mutex<Option<String>>,
-}
-
-impl PersistenceHealth {
-    #[must_use]
-    pub fn pending(&self) -> usize {
-        self.pending.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn pending_bytes(&self) -> usize {
-        self.pending_bytes.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn failed_batches(&self) -> u64 {
-        self.failed_batches.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn is_healthy(&self) -> bool {
-        !self.degraded.load(Ordering::Relaxed)
-    }
-
-    #[must_use]
-    pub fn last_error(&self) -> Option<String> {
-        self.last_error.lock().clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn consumed(&self, count: usize) {
-        saturating_fetch_sub(&self.pending, count);
-    }
-
-    pub(crate) fn consumed_writes<'a, I>(&self, writes: I)
-    where
-        I: IntoIterator<Item = &'a StoreWrite>,
-    {
-        let mut count = 0usize;
-        let mut bytes = 0usize;
-        for write in writes {
-            count = count.saturating_add(1);
-            bytes = bytes.saturating_add(estimated_store_write_bytes(write));
-        }
-        saturating_fetch_sub(&self.pending, count);
-        saturating_fetch_sub(&self.pending_bytes, bytes);
-    }
-
-    pub(crate) fn mark_failed_batch(&self) {
-        self.failed_batches.fetch_add(1, Ordering::Relaxed);
-        self.degraded.store(true, Ordering::Relaxed);
-        *self.last_error.lock() = Some("database write retries exhausted".to_owned());
-    }
-
-    fn mark_rejected(&self, error: &str) {
-        self.dropped.fetch_add(1, Ordering::Relaxed);
-        self.degraded.store(true, Ordering::Relaxed);
-        *self.last_error.lock() = Some(error.to_owned());
-    }
-}
-
-/// Non-blocking producer for the bounded persistence queue. Queue exhaustion
-/// is deliberately visible through health/metrics instead of growing memory
-/// without bound or silently discarding an intent.
-#[derive(Clone)]
-pub struct StoreSink {
-    tx: mpsc::Sender<StoreWrite>,
-    health: std::sync::Arc<PersistenceHealth>,
-}
-
-impl StoreSink {
-    #[must_use]
-    pub fn new(tx: mpsc::Sender<StoreWrite>, health: std::sync::Arc<PersistenceHealth>) -> Self {
-        Self { tx, health }
-    }
-
-    pub fn send(&self, write: StoreWrite) -> bool {
-        let bytes = estimated_store_write_bytes(&write);
-        let pending_bytes = self.health.pending_bytes.load(Ordering::Relaxed);
-        let over_byte_budget = matches!(write, StoreWrite::AppendEvent(_))
-            && pending_bytes > 0
-            && pending_bytes.saturating_add(bytes) > STORE_QUEUE_MAX_BYTES;
-        self.health.pending.fetch_add(1, Ordering::Relaxed);
-        self.health
-            .pending_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
-        if over_byte_budget {
-            self.health.pending.fetch_sub(1, Ordering::Relaxed);
-            self.health
-                .pending_bytes
-                .fetch_sub(bytes, Ordering::Relaxed);
-            self.health
-                .mark_rejected("persistence queue exceeded byte budget");
-            tracing::error!(
-                bytes,
-                pending_bytes = self.health.pending_bytes(),
-                "persistence queue rejected a large event"
-            );
-            return false;
-        }
-        match self.tx.try_send(write) {
-            Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(write))
-                if !matches!(write, StoreWrite::AppendEvent(_)) =>
-            {
-                // Low-volume state (queue, drafts, settings, lifecycle) must not
-                // disappear merely because a burst of stream events filled the
-                // bounded queue. Wait for capacity off the synchronous Hub path.
-                let tx = self.tx.clone();
-                let health = Arc::clone(&self.health);
-                match tokio::runtime::Handle::try_current() {
-                    Ok(runtime) => {
-                        runtime.spawn(async move {
-                            if let Err(tokio::sync::mpsc::error::SendError(rejected)) =
-                                tx.send(write).await
-                            {
-                                health.consumed_writes(std::iter::once(&rejected));
-                                health.mark_rejected("persistence channel closed");
-                                tracing::error!("critical persistence intent was not accepted");
-                            }
-                        });
-                        true
-                    }
-                    _ => {
-                        self.health.consumed_writes(std::iter::once(&write));
-                        self.health
-                            .mark_rejected("persistence queue full outside Tokio runtime");
-                        false
-                    }
-                }
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Full(rejected))
-            | Err(tokio::sync::mpsc::error::TrySendError::Closed(rejected)) => {
-                self.health.consumed_writes(std::iter::once(&rejected));
-                self.health
-                    .mark_rejected("persistence queue rejected an intent");
-                tracing::error!("persistence queue rejected an intent");
-                false
-            }
-        }
-    }
-}
-
-fn saturating_fetch_sub(value: &AtomicUsize, amount: usize) {
-    let _ = value.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-        Some(current.saturating_sub(amount))
-    });
-}
-
-fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
+pub(crate) fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
     match write {
         StoreWrite::AppendEvent(envelope) => estimated_envelope_bytes(envelope),
         StoreWrite::UpdateConfigOptions { options, .. }
@@ -1463,6 +1301,10 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
             |size, message| {
                 size.saturating_add(message.id.len())
                     .saturating_add(message.text.len())
+                    .saturating_add(message.cmid.as_deref().map_or(0, str::len))
+                    .saturating_add(message.content.iter().fold(64usize, |size, block| {
+                        size.saturating_add(estimated_json_bytes(block))
+                    }))
             },
         ),
         StoreWrite::UpsertWakeup {
@@ -1471,9 +1313,38 @@ fn estimated_store_write_bytes(write: &StoreWrite) -> usize {
             .len()
             .saturating_add(prompt.len())
             .saturating_add(32),
-        StoreWrite::RecordSessionError { message, .. } => message.len().saturating_add(64),
-        StoreWrite::InsertSession(_) => 512,
-        _ => 128,
+        StoreWrite::RecordSessionError {
+            id,
+            session_id,
+            message,
+            ..
+        } => message
+            .len()
+            .saturating_add(id.len())
+            .saturating_add(session_id.len())
+            .saturating_add(64),
+        // Metadata and private settings can carry payloads too. Count their
+        // complete representation without allocating a second serialized copy.
+        _ => {
+            let mut count = SerializedBytes(0);
+            if serde_json::to_writer(&mut count, write).is_err() {
+                return usize::MAX;
+            }
+            count.0.saturating_add(64)
+        }
+    }
+}
+
+struct SerializedBytes(usize);
+
+impl std::io::Write for SerializedBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -5256,9 +5127,9 @@ mod config_preference_tests {
 
     #[test]
     fn authoritative_options_replace_a_retired_persisted_value() {
-        let (tx, mut rx) = mpsc::channel(16);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, mut rx) = StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "codex-session".to_owned(),
             "codex".to_owned(),
@@ -5514,9 +5385,9 @@ mod runtime_reconciliation_tests {
 
     #[test]
     fn restore_heals_a_preference_retired_by_the_persisted_option_snapshot() {
-        let (tx, mut rx) = mpsc::channel(4);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, mut rx) = StoreSink::channel(4, health);
+        let hub = Hub::with_store(Some(sink));
         let mut restored = restored_busy("session-stale-config");
         restored.config_preferences = serde_json::json!({
             "model": "gpt-5.3-codex-spark",
@@ -5926,9 +5797,9 @@ mod core_tests {
 
     #[test]
     fn persisted_hub_bounds_hot_history_but_keeps_total_count() {
-        let (tx, _rx) = mpsc::channel(HOT_TAIL + HOT_TAIL_TRIM_BATCH + 2);
         let health = std::sync::Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, _rx) = StoreSink::channel(HOT_TAIL + HOT_TAIL_TRIM_BATCH + 2, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "bounded".to_owned(),
             "codex".to_owned(),
@@ -6034,9 +5905,9 @@ mod core_tests {
 
     #[test]
     fn persist_queue_receives_compact_tool_events() {
-        let (tx, mut rx) = mpsc::channel(4);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, Arc::clone(&health))));
+        let (sink, mut rx) = StoreSink::channel(4, Arc::clone(&health));
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "queued-compact".to_owned(),
             "codex".to_owned(),
@@ -6058,6 +5929,7 @@ mod core_tests {
                 }),
             },
         );
+        assert!(health.pending_bytes() > 0);
         let write = rx.try_recv().expect("compact persist intent");
         let StoreWrite::AppendEvent(envelope) = &write else {
             panic!("expected compact persist intent");
@@ -6066,8 +5938,7 @@ mod core_tests {
             panic!("expected update");
         };
         assert!(update.get("rawOutput").is_none());
-        assert!(health.pending_bytes() > 0);
-        health.consumed_writes(std::iter::once(&write));
+        assert_eq!(health.pending_bytes(), 0);
     }
 
     #[test]
@@ -6113,9 +5984,9 @@ mod core_tests {
 
     #[test]
     fn idle_hot_tail_is_tighter_than_a_busy_turn() {
-        let (tx, _rx) = mpsc::channel(32);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, _rx) = StoreSink::channel(32, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "idle-tail".to_owned(),
             "codex".to_owned(),
@@ -6355,9 +6226,9 @@ mod core_tests {
             now_ms()
         ));
         let _ = std::fs::remove_dir_all(&artifact_root);
-        let (tx, _rx) = mpsc::channel(64_000);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, _rx) = StoreSink::channel(64_000, health);
+        let hub = Hub::with_store(Some(sink));
         hub.set_artifacts(crate::artifacts::ArtifactStore::new(artifact_root.clone()).unwrap());
 
         for index in 0..sessions {
@@ -6523,9 +6394,9 @@ mod core_tests {
 
     #[test]
     fn persisted_hub_bounds_canonical_hot_history_by_payload_bytes() {
-        let (tx, _rx) = mpsc::channel(32);
         let health = std::sync::Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, _rx) = StoreSink::channel(32, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "byte-hot-tail".to_owned(),
             "codex".to_owned(),
@@ -6558,9 +6429,9 @@ mod core_tests {
 
     #[test]
     fn persisted_hub_keeps_one_oversized_newest_event() {
-        let (tx, _rx) = mpsc::channel(4);
         let health = std::sync::Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, _rx) = StoreSink::channel(4, health);
+        let hub = Hub::with_store(Some(sink));
         hub.create_local_session(
             "oversized-hot-tail".to_owned(),
             "codex".to_owned(),
@@ -7461,9 +7332,8 @@ mod core_tests {
 
     #[tokio::test]
     async fn critical_persistence_waits_behind_a_full_event_queue() {
-        let (tx, mut rx) = mpsc::channel(1);
         let health = Arc::new(PersistenceHealth::default());
-        let sink = StoreSink::new(tx, Arc::clone(&health));
+        let (sink, mut rx) = StoreSink::channel(1, Arc::clone(&health));
         assert!(sink.send(StoreWrite::AppendEvent(Envelope {
             session_id: "s".to_owned(),
             seq: 1,
@@ -7481,16 +7351,15 @@ mod core_tests {
             rx.recv().await,
             Some(StoreWrite::UpdateTitle { .. })
         ));
-        health.consumed(2);
         assert_eq!(health.dropped(), 0);
         assert_eq!(health.pending(), 0);
     }
 
     #[tokio::test]
     async fn session_broadcast_errors_are_persisted_outside_the_transcript() {
-        let (tx, mut rx) = mpsc::channel(4);
         let health = Arc::new(PersistenceHealth::default());
-        let hub = Hub::with_store(Some(StoreSink::new(tx, health)));
+        let (sink, mut rx) = StoreSink::channel(4, health);
+        let hub = Hub::with_store(Some(sink));
         let mut live = hub.subscribe();
 
         hub.broadcast_error(
