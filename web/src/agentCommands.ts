@@ -77,7 +77,11 @@ const CLEAR_ACTION: SessionAction = {
   kind: "reset",
   label: "Clear conversation",
   detail:
-    "Start the agent on a fresh context, discarding the conversation so far — it won't remember anything above. The transcript stays on screen (a divider marks the cut) so you keep the record. This can't be undone.",
+    // "This can't be undone" deliberately does NOT live here: the confirm
+    // surfaces render it inside the consequence block (ConfirmConsequence), in
+    // the destructive colour, where it is the last thing read before the tap —
+    // not the tail of a three-line paragraph.
+    "Start the agent on a fresh context, discarding the conversation so far — it won't remember anything above. The transcript stays on screen (a divider marks the cut) so you keep the record.",
   destructive: true,
 };
 

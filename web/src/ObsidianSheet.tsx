@@ -269,6 +269,23 @@ export function ObsidianSheet({
   }, [dismiss, paint]);
 
   const [level, setLevel] = useState(0);
+  // Does the body actually continue under the action bar? The riser gradient is
+  // a SIGNAL ("there is more above"), so a short confirm card — title, one
+  // paragraph, done — must not paint it: over finished text it is just a
+  // smudge, which is exactly how the Clear card read.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [bodyScrolls, setBodyScrolls] = useState(false);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || typeof ResizeObserver !== "function") return undefined;
+    const measure = (): void =>
+      setBodyScrolls(body.scrollHeight > body.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    for (const child of body.children) observer.observe(child);
+    return (): void => observer.disconnect();
+  }, [children]);
   useEffect(() => {
     if (!open) return;
     const { level: nextLevel, close } = markDetentSheetOpen();
@@ -406,6 +423,7 @@ export function ObsidianSheet({
           )}
         </Box>
         <Box
+          ref={bodyRef}
           sx={{
             flex: "0 1 auto",
             minHeight: 0,
@@ -458,7 +476,7 @@ export function ObsidianSheet({
               // The SAME plate every other Cancel/confirm bar uses — a confirm
               // card and a sheet footer are one decision surface with two
               // hosts, so they must not drift apart (decisionShelf.ts).
-              ...decisionShelfSurface(theme),
+              ...decisionShelfSurface(theme, { riser: bodyScrolls }),
             })}
           >
             {actions}

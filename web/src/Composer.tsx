@@ -107,6 +107,7 @@ import {
 } from "./localFirstDelivery";
 import type { ComposerWorkspaceProps } from "./composer/contracts";
 import { resolveSessionAction, type SessionAction } from "./agentCommands";
+import { ConfirmConsequence } from "./ConfirmConsequence";
 import {
   currentProviderEntry,
   useProviderCatalog,
@@ -614,7 +615,10 @@ function SessionActionConfirmDialog({
       {action !== null && (
         <>
           <DialogContentText>{action.detail}</DialogContentText>
-          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+          <ConfirmConsequence
+            tone={action.destructive ? "error" : "primary"}
+            irreversible={action.destructive}
+          >
             {action.kind === "slash" && action.command !== undefined
               ? (
                 <>
@@ -638,7 +642,7 @@ function SessionActionConfirmDialog({
               : `Resets ${provider || "the agent"} to a fresh context now${
                 activeTurn ? " (ends the current turn)" : ""
               }.`}
-          </DialogContentText>
+          </ConfirmConsequence>
         </>
       )}
     </ConfirmSheet>

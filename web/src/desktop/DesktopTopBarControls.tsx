@@ -41,6 +41,7 @@ import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { resolveSessionAction } from "../agentCommands";
+import { ConfirmConsequence } from "../ConfirmConsequence";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
@@ -2125,7 +2126,7 @@ export function DesktopTopBarControls({
         <DialogContent>
           <DialogContentText>{compactAction?.detail}</DialogContentText>
           {compactAction?.command && (
-            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+            <ConfirmConsequence>
               Sends{" "}
               <Box
                 component="code"
@@ -2142,7 +2143,7 @@ export function DesktopTopBarControls({
               {status === "busy" || status === "starting"
                 ? " (queued after the current turn)"
                 : ""}.
-            </DialogContentText>
+            </ConfirmConsequence>
           )}
         </DialogContent>
         <DialogActions>
@@ -2174,12 +2175,12 @@ export function DesktopTopBarControls({
         <DialogTitle>Clear conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{clearAction?.detail}</DialogContentText>
-          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+          <ConfirmConsequence tone="error" irreversible>
             Resets {session?.provider ?? "the agent"} to a fresh context now
             {status === "busy" || status === "starting"
               ? " (ends the current turn)"
               : ""}.
-          </DialogContentText>
+          </ConfirmConsequence>
         </DialogContent>
         <DialogActions>
           <Button
