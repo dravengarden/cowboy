@@ -47,7 +47,9 @@ function childEnvironment() {
     if (value !== undefined) env[key] = value;
   }
   env.DISABLE_AUTOUPDATER = "1";
-  env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  // The blanket traffic switch also suppresses the native plan-usage request.
+  env.DISABLE_TELEMETRY = "1";
+  env.DISABLE_ERROR_REPORTING = "1";
   return env;
 }
 

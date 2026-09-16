@@ -15,6 +15,13 @@ hooks, tools, MCP servers and session persistence are disabled for the query.
 The collector reads at most 256 KiB and spends at most ten seconds across both
 native commands, leaving cleanup time before the host's process-group timeout.
 
+Version 3.1.25 disables auto-update, telemetry and error reporting individually.
+Do not set or inherit `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the collector:
+CLI 2.1.272 also suppresses the plan-usage request under that blanket switch,
+returning `rate_limits_available: true` with null limits for a signed-in Max
+account. The live subscriber check exposed this in 3.1.24; fake API-key probes
+could not detect it because those accounts do not have plan windows.
+
 Native utilization is a percentage from 0 to 100; reset times are ISO 8601.
 The collector projects numeric five-hour, weekly and per-model windows into
 Cowboy's generic usage buckets. Enabled extra usage may have a percentage but

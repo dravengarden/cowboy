@@ -112,7 +112,7 @@ async function fixture(source, run) {
     const command = `${dir}/claude`;
     await Deno.writeTextFile(
       command,
-      `#!/bin/sh\nexec ${quote(Deno.execPath())} run --quiet ${
+      `#!/bin/sh\nexec ${quote(Deno.execPath())} run --quiet --allow-env ${
         quote(`${dir}/fixture.mjs`)
       } "$@"\n`,
     );
@@ -270,7 +270,9 @@ Deno.test("collector child environment excludes inherited routing and credential
     const env = childEnvironment();
     equal(env.ANTHROPIC_COWBOY_USAGE_FIXTURE, undefined);
     equal(env.DISABLE_AUTOUPDATER, "1");
-    equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, "1");
+    equal(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, undefined);
+    equal(env.DISABLE_TELEMETRY, "1");
+    equal(env.DISABLE_ERROR_REPORTING, "1");
     equal(
       Object.keys(env).filter((key) =>
         /API_KEY|TOKEN|PROXY|BASE_URL/.test(key)
@@ -279,5 +281,42 @@ Deno.test("collector child environment excludes inherited routing and credential
     );
   } finally {
     Deno.env.delete("ANTHROPIC_COWBOY_USAGE_FIXTURE");
+  }
+});
+
+Deno.test("subscriber quota remains reachable when the parent disables nonessential traffic", async () => {
+  const key = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC";
+  const previous = Deno.env.get(key);
+  Deno.env.set(key, "1");
+  try {
+    await fixture(
+      `
+      if (Deno.args[0] === "auth") {
+        console.log(JSON.stringify({loggedIn:true, subscriptionType:"max"}));
+      } else {
+        await new Response(Deno.stdin.readable).text();
+        const blocked = Deno.env.get(${JSON.stringify(key)}) === "1";
+        console.log(JSON.stringify({type:"control_response", response:{
+          subtype:"success", request_id:${
+        JSON.stringify(REQUEST_ID)
+      }, response:{
+            rate_limits_available:true,
+            rate_limits: blocked ? null : {five_hour:{utilization:4}}
+          }
+        }}));
+      }
+    `,
+      async ({ command }) => {
+        const result = await collect({ command });
+        equal(
+          result.rate_limits.rateLimitsByLimitId["claude-five_hour"].primary
+            .usedPercent,
+          4,
+        );
+      },
+    );
+  } finally {
+    if (previous === undefined) Deno.env.delete(key);
+    else Deno.env.set(key, previous);
   }
 });
