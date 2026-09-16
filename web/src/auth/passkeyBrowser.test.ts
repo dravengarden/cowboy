@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import {
   shapePasskeyCreationPublicKey,
   shapePasskeyRequestPublicKey,
@@ -140,4 +140,27 @@ Deno.test("required resident keys stay required", () => {
     residentKey: "required",
     requireResidentKey: true,
   });
+});
+
+const source = await Deno.readTextFile(
+  new URL("./passkeyBrowser.ts", import.meta.url),
+);
+
+// The chain only works if the first link exists: the authenticator reports its
+// transports once, at registration, and webauthn-rs carries them into the stored
+// credential and back out into `allowCredentials` on every later assertion.
+// Without this the Service stores `transports: null` and the client is left
+// guessing routes for a credential it knows nothing about.
+Deno.test("registration records the authenticator's own transports", () => {
+  const registration = source.slice(
+    source.indexOf("if (response instanceof AuthenticatorAttestationResponse)"),
+    source.indexOf(
+      "} else if (response instanceof AuthenticatorAssertionResponse)",
+    ),
+  );
+  assert(registration.includes("response.getTransports()"));
+  // A browser without getTransports() reports nothing, which is not the same
+  // claim as "this credential has no routes".
+  assert(registration.includes('typeof response.getTransports === "function"'));
+  assert(registration.includes("transports.length > 0 ? { transports } : {}"));
 });

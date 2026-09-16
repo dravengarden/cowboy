@@ -196,9 +196,22 @@ function credentialToJson(
     clientExtensionResults: credential.getClientExtensionResults(),
   };
   if (response instanceof AuthenticatorAttestationResponse) {
+    // The authenticator's own answer to "how can this credential be reached".
+    // Without it the Service stores `transports: null`, every later assertion
+    // ships a credential with no routes, and the client has to guess — which is
+    // what made a platform-only Passkey look reachable by every cross-device
+    // and third-party provider. webauthn-rs carries this into the stored
+    // credential and back out into `allowCredentials` on assertion, so it is
+    // recorded once here and correct from then on. Omitted when empty: an empty
+    // array is a claim of "no routes", which is not what an older browser
+    // lacking getTransports() is telling us.
+    const transports = typeof response.getTransports === "function"
+      ? response.getTransports()
+      : [];
     json.response = {
       clientDataJSON: bufferToBase64Url(response.clientDataJSON),
       attestationObject: bufferToBase64Url(response.attestationObject),
+      ...(transports.length > 0 ? { transports } : {}),
     };
   } else if (response instanceof AuthenticatorAssertionResponse) {
     json.response = {
