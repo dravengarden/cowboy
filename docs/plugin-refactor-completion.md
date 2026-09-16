@@ -192,6 +192,10 @@ and accepting a production effect are different milestones.
   View unmount does not cancel admitted work or replay it on remount. This closes
   the client cleanup-visibility prerequisite, not Review integration, durable
   native recovery, Machine/Plugin activation or supported-device acceptance.
+  Its [Web-only release](releases/plugin-buffer-cleanup-surface-2026-09-16.md)
+  passed the complete gate, nine new unit cases and thirty real-browser cases
+  across four suites. It is published and active, with all fourteen workers,
+  Controller, Machine and Victoria processes retained.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

@@ -5,6 +5,8 @@ with a typed local projection of retained owners. This is core Web resource
 management, not a Plugin capability, another lifecycle, native synchronization
 or independently authorized post-effect recovery. Ordinary Review remains on its
 existing API; no Machine, Plugin or worker is installed by this change.
+The [verified Web-only release](releases/plugin-buffer-cleanup-surface-2026-09-16.md)
+is active, with all fourteen observed workers retained and no process restart.
 
 ## Original ownership, visible uncertainty
 
