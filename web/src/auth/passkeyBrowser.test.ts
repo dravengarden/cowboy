@@ -26,17 +26,61 @@ Deno.test("desktop assertion prefers this device before hybrid QR", () => {
 Deno.test("missing transports are filled so Chrome tries Touch ID, not only QR", () => {
   const shaped = shapePasskeyRequestPublicKey({
     challenge: "challenge",
-    allowCredentials: [{
-      type: "public-key",
-      id: "cred",
-      transports: ["usb"],
-    }],
+    allowCredentials: [{ type: "public-key", id: "cred" }],
   }, desktopTab);
   assertEquals(shaped.allowCredentials, [{
     type: "public-key",
     id: "cred",
-    transports: ["usb", "internal", "hybrid"],
+    transports: ["internal", "hybrid"],
   }]);
+});
+
+// Widening a credential's reported transports is the client claiming a route
+// the authenticator never offered, and that claim is what puts a third-party
+// passkey provider in front of a credential it does not hold: the browser was
+// told this one might be reachable the way that provider works.
+Deno.test("a reported transport set is authoritative, never widened", () => {
+  const platformOnly = shapePasskeyRequestPublicKey({
+    challenge: "challenge",
+    allowCredentials: [{
+      type: "public-key",
+      id: "cred",
+      transports: ["internal"],
+    }],
+  }, desktopTab);
+  assertEquals(platformOnly.allowCredentials, [{
+    type: "public-key",
+    id: "cred",
+    transports: ["internal"],
+  }]);
+  // And with nothing reachable by hybrid, the hint does not ask for it either.
+  assertEquals(platformOnly.hints, ["client-device"]);
+
+  const securityKey = shapePasskeyRequestPublicKey({
+    challenge: "challenge",
+    allowCredentials: [{ type: "public-key", id: "cred", transports: ["usb"] }],
+  }, desktopTab);
+  assertEquals(securityKey.allowCredentials, [{
+    type: "public-key",
+    id: "cred",
+    transports: ["usb"],
+  }]);
+
+  // A synced credential genuinely has both routes; keep both.
+  const synced = shapePasskeyRequestPublicKey({
+    challenge: "challenge",
+    allowCredentials: [{
+      type: "public-key",
+      id: "cred",
+      transports: ["internal", "hybrid"],
+    }],
+  }, desktopTab);
+  assertEquals(synced.allowCredentials, [{
+    type: "public-key",
+    id: "cred",
+    transports: ["internal", "hybrid"],
+  }]);
+  assertEquals(synced.hints, ["client-device", "hybrid"]);
 });
 
 Deno.test("phone assertion does not advertise hybrid QR", () => {

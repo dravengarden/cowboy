@@ -50,25 +50,51 @@ export function currentPasskeyDisplayContext(): PasskeyDisplayContext {
   };
 }
 
-function passkeyHints(display: PasskeyDisplayContext): string[] {
-  return display.mobile
-    ? [...MOBILE_PASSKEY_HINTS]
-    : [...LOCAL_PASSKEY_HINTS];
+function passkeyHints(
+  display: PasskeyDisplayContext,
+  transports?: readonly string[],
+): string[] {
+  if (display.mobile) return [...MOBILE_PASSKEY_HINTS];
+  // Hint hybrid only when some credential can actually be reached that way.
+  // Hinting it for a platform-only credential invites every cross-device and
+  // third-party provider into the picker for a credential none of them hold.
+  if (transports && !transports.includes("hybrid")) {
+    return [...MOBILE_PASSKEY_HINTS];
+  }
+  return [...LOCAL_PASSKEY_HINTS];
 }
 
-function withLocalTransports(
+/**
+ * What the browser is told about reaching THIS credential.
+ *
+ * Reported transports are authoritative: they came from the authenticator that
+ * created the credential, and widening them is the client asserting something
+ * the authenticator never said. That widening is what puts a third-party
+ * passkey provider in front of a credential it does not have — the browser was
+ * told the credential might be reachable by a route that provider serves.
+ *
+ * The widening remains for credentials whose transports are unknown, which is
+ * the case the comment on LOCAL_PASSKEY_HINTS describes: without it Chrome
+ * ranks the hybrid QR sheet above Touch ID, and a Chromium desktop PWA cannot
+ * see iCloud Keychain passkeys at all (crbug 364926914).
+ */
+function credentialTransports(
   existing: unknown,
   display: PasskeyDisplayContext,
 ): AuthenticatorTransport[] {
-  const transports = new Set<string>(
-    Array.isArray(existing)
-      ? existing.filter((item): item is string => typeof item === "string")
-      : [],
-  );
-  transports.add("internal");
-  if (display.mobile) transports.delete("hybrid");
-  else transports.add("hybrid");
-  return [...transports] as AuthenticatorTransport[];
+  const known = Array.isArray(existing)
+    ? existing.filter((item): item is string => typeof item === "string")
+    : [];
+  if (known.length > 0) {
+    // A phone offering a QR code to itself is not a route; drop only that.
+    const kept = display.mobile
+      ? known.filter((transport) => transport !== "hybrid")
+      : known;
+    return [...new Set(kept)] as AuthenticatorTransport[];
+  }
+  const filled = new Set<string>(["internal"]);
+  if (!display.mobile) filled.add("hybrid");
+  return [...filled] as AuthenticatorTransport[];
 }
 
 export function shapePasskeyCreationPublicKey(
@@ -97,16 +123,21 @@ export function shapePasskeyRequestPublicKey(
   const allowCredentials = Array.isArray(options.allowCredentials)
     ? options.allowCredentials.map((item) => {
       const descriptor = { ...(item as Record<string, unknown>) };
-      descriptor.transports = withLocalTransports(
+      descriptor.transports = credentialTransports(
         descriptor.transports,
         display,
       );
       return descriptor;
     })
     : options.allowCredentials;
+  const reachable = Array.isArray(allowCredentials)
+    ? allowCredentials.flatMap((item) =>
+      (item as { transports?: string[] }).transports ?? []
+    )
+    : undefined;
   return {
     ...options,
-    hints: passkeyHints(display),
+    hints: passkeyHints(display, reachable),
     allowCredentials,
   };
 }
