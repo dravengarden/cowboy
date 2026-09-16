@@ -17,8 +17,14 @@ pub(super) async fn seed(
     native: &[Binary; 2],
     helper: &Path,
     git: &Path,
+    core_adapter: &Path,
 ) -> Result<Seeded> {
     super::super::seed(root, reader, helper).await?;
+    std::fs::create_dir(root.join("machine/bootstrap"))?;
+    std::os::unix::fs::symlink(
+        core_adapter,
+        root.join("machine/bootstrap/cowboy-code-adapter"),
+    )?;
     std::os::unix::fs::symlink(git, root.join("tools/git"))?;
     std::fs::create_dir(root.join("git-template"))?;
     let mut init = command(git, root);

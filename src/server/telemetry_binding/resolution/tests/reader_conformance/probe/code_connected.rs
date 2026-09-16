@@ -56,6 +56,7 @@ struct Receipt {
     source_revision: String,
     artifacts: Vec<Artifact>,
     native: [Binary; 2],
+    core_adapter: Binary,
     ssh_keygen: manifest::Executable,
     git: manifest::Executable,
     package_sha256: Option<String>,
@@ -162,6 +163,12 @@ async fn immutable_connected_code_buffers() -> Result<()> {
         path.is_absolute() && path.symlink_metadata().is_err(),
         "new absolute receipt required"
     );
+    let core_adapter = Binary::resolve(
+        input
+            .machine
+            .join("bin/cowboy-code-adapter")
+            .canonicalize()?,
+    )?;
     let mut receipt = Receipt {
         schema: "dravengarden.cowboy.code-buffer-connected-conformance/v1",
         source_revision: manifest::clean_revision()?,
@@ -170,6 +177,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             Binary::resolve(input.adapter)?,
             Binary::resolve(input.server)?,
         ],
+        core_adapter,
         ssh_keygen: manifest::ssh_keygen()?,
         git: manifest::tool("git")?,
         package_sha256: None,
@@ -214,6 +222,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         &receipt.native,
         &receipt.ssh_keygen.path,
         &receipt.git.path,
+        &receipt.core_adapter.path,
     )
     .await
     .map_err(|_| Failure::Setup)?;
@@ -248,7 +257,10 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         pair.http.login(&seeded.password).await?;
         let mut command =
             configured_command(&receipt.artifacts[1], root.path(), pair.proxy.address);
-        command.arg("--plugin-operation-admission");
+        command
+            .arg("--plugin-operation-admission")
+            .arg("--code-adapter-socket")
+            .arg(root.path().join("code.sock"));
         pair.machine = Some(Running::spawn(&mut command)?);
         pair.connected(1).await?;
         exercise::run(&mut pair, &mut receipt.stage, &mut receipt.checks).await
