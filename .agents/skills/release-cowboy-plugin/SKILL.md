@@ -506,6 +506,27 @@ do not bump an envelope or add a dummy host merely to make the old reader skip.
    a Machine installation or upgrade endpoint unless the user separately asks
    to install it on a specific Machine.
 
+When the user does ask to converge a Machine, use the repository-owned
+`scripts/converge-machine.ts <machine> [--apply]`. It resolves each target from
+the Catalog it just read, so the digest — the entire trust claim — is never
+typed by hand, and it derives one deterministic operation identity per
+(machine, plugin, version) so a retry after a lost response reuses the same one
+instead of installing twice. A dry run is the default. It refuses rather than
+guesses: a Plugin holding an active session lease is left alone, a target that
+is not `ready` is skipped, an installed version ahead of the Catalog is never
+downgraded, and every skip is reported with its reason. After applying it
+re-reads the inventory, because an applied receipt and an installed generation
+are different facts, and exits nonzero while anything remains unconverged.
+
+Installation through the local Operator is currently accepted for the
+Controller's own Machine. A remote Machine can return HTTP 409 "preconditions
+changed" for every target, including a same-bytes reinstall of the version it
+already runs, which shows the refusal is machine-level rather than
+release-specific. That response does not name which precondition failed, so
+neither an operator nor an agent can correct it from the response alone; treat a
+remote 409 as an unfinished convergence to report, never as a reason to retry
+with a new identity.
+
 For first-party artifacts, sign and independently re-verify the exact output:
 
 ```bash

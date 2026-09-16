@@ -410,6 +410,7 @@ provider-check: plugin-check
     deno test --allow-read --allow-write --allow-run=sha256sum tools/check-provider-release-coverage_test.ts
     deno test --allow-read tools/provider-runtime-platforms_test.ts
     deno test --allow-read --allow-write .agents/skills/release-cowboy-plugin/scripts/audit-dependencies_test.ts
+    deno test --allow-read .agents/skills/release-cowboy-plugin/scripts/converge-machine_test.ts
     deno test tools/plugin-publication-receipt_test.ts
     deno test --allow-read --allow-write --allow-run=sha256sum tools/immutable-publication_test.ts
     python3 -m unittest discover -s tools -p plugin_runtime_conformance_test.py
