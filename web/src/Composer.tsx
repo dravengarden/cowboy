@@ -131,6 +131,7 @@ import {
 import { readUsage, refreshSessionUsage } from "./usageApi";
 import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
+import { SessionPreparingLine } from "./sessionPreparing";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -378,6 +379,10 @@ const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 // global MuiIconButton theme override (same as the session-list buttons); this
 // only keeps them from shrinking in the flex toolbar row.
 const TOOLBAR_ICON_BTN = { flexShrink: 0 } as const;
+// Why an agent-backed toolbar action is greyed out while the session boots. The
+// button keeps its slot (no reflow on the ready edge); this explains the state
+// instead of leaving a silently dead control.
+const AGENT_BOOTING_HINT = "Available once the agent is ready";
 const TOOLBAR_MIN_H = {
   minHeight: 34,
   "@media (pointer: coarse)": { minHeight: 40 },
@@ -1068,15 +1073,19 @@ export function ComposerWorkspace({
   // be sent yet, but it is still user-owned staged content and must remain
   // removable from the utility rail.
   const clearable = text.trim().length > 0 || attachments.length > 0;
+  // Sending during startup is QUEUEING, not an error: the session is not
+  // dispatchable while it boots, so store.submitPrompt routes the prompt to the
+  // daemon queue and the daemon's own status-change drain fires it the instant
+  // the agent reports Running. Blocking it here made the "you can start typing
+  // while this session prepares…" placeholder a lie — ⌘↵ silently did nothing.
   const submitAndNotify = useCallback((): boolean => {
-    if (preparing) return false;
     const submitted = submit();
     if (submitted) {
       if (!desktop) dismissMobileSoftwareKeyboard();
       onSubmitted?.();
     }
     return submitted;
-  }, [desktop, onSubmitted, preparing, submit]);
+  }, [desktop, onSubmitted, submit]);
   const submitFeedback = useNetworkActionState();
   // Mobile-only fullscreen compose: the ↗ opens a near-full-screen sheet (the
   // first-class long-form / future-markdown editor). Desktop keeps the Zed-style
@@ -1111,7 +1120,6 @@ export function ComposerWorkspace({
     setMobileKeyboardDismissed(false);
   }, []);
   const submitWithFeedback = useCallback((onSucceeded?: () => void): void => {
-    if (preparing) return;
     void (async () => {
       let submitted = false;
       const succeeded = await submitFeedback.run(() => {
@@ -1132,7 +1140,6 @@ export function ComposerWorkspace({
   }, [
     dismissAfterMobileDelivery,
     onSubmitted,
-    preparing,
     submitFeedback,
     submitTracked,
   ]);
@@ -1390,6 +1397,19 @@ export function ComposerWorkspace({
   // restart) — the composer treats it like exited/crashed: "send to resume".
   const dead = status === "exited" || status === "crashed" ||
     status === "interrupted";
+  // Session startup is a SESSION-level state, so it is presented on session-level
+  // surfaces (the navbar StatusDot, the composer's top-edge progress line, the
+  // transcript empty state) — NOT by restructuring this toolbar. Every action
+  // keeps its slot while the agent boots and only loses `enabled`, so the row
+  // never reflows on the ready edge and the affordances stay discoverable.
+  // Blocked here are exactly the actions that need a LIVE worker; attaching,
+  // clearing the editor, saving a draft and sending (→ queue) are local/daemon
+  // work and stay usable — the placeholder promises the user can start writing.
+  const agentActionsDisabled = dead || preparing;
+  // Force-push interrupts an in-flight turn or jumps a held queue. While the
+  // session is still starting there is no turn to interrupt and the queue drains
+  // on its own the moment the agent reports Running, so ⚡ is meaningless.
+  const forceable = !preparing && (busy || starting || paused);
   // "Working" is EXACTLY the ACP turn being in flight (`busy` = a session/prompt
   // request that hasn't returned a stop_reason) — the same predicate Zed uses
   // (`ThreadStatus::Generating == running_turn.is_some()`). We deliberately do NOT
@@ -1671,6 +1691,10 @@ export function ComposerWorkspace({
     // swallow the trailing click after the Composer reflows.
     e.preventDefault();
     if (!sendable) return;
+    // The Queue button also owns the primary action while the session starts.
+    // Force-push is off in that state (nothing to interrupt), so its long-press
+    // must not open the confirm either — the hold falls through to a plain queue.
+    if (!forceable) return;
     const el = e.currentTarget;
     lpFired.current = false;
     lpStart.current = { x: e.clientX, y: e.clientY };
@@ -2281,6 +2305,15 @@ export function ComposerWorkspace({
           }),
         }}
       >
+        {
+          /* SESSION-level startup progress. It rides the card's top edge — the
+            seam between the transcript and the writing surface — so the "the
+            agent is still booting" fact is stated once, where the user is
+            already looking, instead of eating the toolbar's primary action.
+            Absolutely positioned: it costs no layout and the card does not
+            reflow when the agent reports Running. */
+        }
+        {preparing && <SessionPreparingLine />}
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut
@@ -2503,7 +2536,7 @@ export function ComposerWorkspace({
                   sendable={sendable}
                   canAttach={!dead}
                   canJumpFront={queue.length > 0}
-                  canForce={busy || starting || paused}
+                  canForce={forceable}
                   canMore={!desktopActionsExpanded}
                   onSlash={(): void => editorRef.current?.insertTrigger("/")}
                   onReference={(): void =>
@@ -2632,8 +2665,7 @@ export function ComposerWorkspace({
                             size="small"
                             color="warning"
                             aria-label="force push"
-                            disabled={!sendable ||
-                              !(busy || starting || paused)}
+                            disabled={!sendable || !forceable}
                             onClick={(e): void =>
                               setForceAnchor(e.currentTarget)}
                           >
@@ -2641,7 +2673,7 @@ export function ComposerWorkspace({
                           </IconButton>,
                           `${ALT_LABEL}↵`,
                           `${ALT_LABEL}Enter · force push`,
-                          sendable && (busy || starting || paused),
+                          sendable && forceable,
                         )}
                       </span>
                     </Tooltip>
@@ -2714,7 +2746,7 @@ export function ComposerWorkspace({
                   )}
                   {!desktopActionsExpanded && (
                     <MenuItem
-                      disabled={!sendable || !(busy || starting || paused)}
+                      disabled={!sendable || !forceable}
                       onClick={(): void => {
                         setDesktopMoreAnchor(null);
                         setForceAnchor(desktopMoreButtonRef.current);
@@ -2884,9 +2916,11 @@ export function ComposerWorkspace({
             completion remains available by typing `/` in the editor. Desktop
             keeps its dedicated slash affordance in the separate toolbar above. */
                   }
-                  {!preparing && !desktop && compactAction && (
+                  {!desktop && compactAction && (
                     <Tooltip
-                      title={compacting
+                      title={preparing
+                        ? AGENT_BOOTING_HINT
+                        : compacting
                         ? "Compacting…"
                         : compactContext.refreshing
                         ? "Refreshing context usage…"
@@ -2898,7 +2932,7 @@ export function ComposerWorkspace({
                       <span>
                         <IconButton
                           aria-label="compact conversation"
-                          disabled={dead || compacting}
+                          disabled={agentActionsDisabled || compacting}
                           sx={{ ...TOOLBAR_ICON_BTN, p: 0.75 }}
                           onClick={(): void => setCmdConfirm(compactAction)}
                         >
@@ -2915,12 +2949,16 @@ export function ComposerWorkspace({
                     /* @ folds out on compact (mobile) — the row is too tight, and typing
             "@" raises the same file picker. Desktop keeps the dedicated button. */
                   }
-                  {!preparing && !compact && (
-                    <Tooltip title="Reference a file (@)">
+                  {!compact && (
+                    <Tooltip
+                      title={preparing
+                        ? AGENT_BOOTING_HINT
+                        : "Reference a file (@)"}
+                    >
                       <span>
                         <IconButton
                           aria-label="reference a file"
-                          disabled={dead}
+                          disabled={agentActionsDisabled}
                           sx={TOOLBAR_ICON_BTN}
                           onClick={(): void =>
                             editorRef.current?.insertTrigger("@")}
@@ -2946,12 +2984,16 @@ export function ComposerWorkspace({
                     /* Session-lifecycle Clear action. Compact is mobile's first button above;
             both actions still require confirmation before they run. */
                   }
-                  {!preparing && clearAction && (
-                    <Tooltip title="Clear conversation">
+                  {clearAction && (
+                    <Tooltip
+                      title={preparing
+                        ? AGENT_BOOTING_HINT
+                        : "Clear conversation"}
+                    >
                       <span>
                         <IconButton
                           aria-label="clear conversation"
-                          disabled={dead}
+                          disabled={agentActionsDisabled}
                           sx={TOOLBAR_ICON_BTN}
                           onClick={(): void => setCmdConfirm(clearAction)}
                         >
@@ -2968,26 +3010,15 @@ export function ComposerWorkspace({
                   }
                   {!compact && <Box sx={{ flex: 1 }} />}
                   {
-                    /* Primary action: Send (idle) / Queue (busy — long-press → force push).
-            Moved here from the old absolute overlay so the whole composer is one
-            card; the long-press force-push ring + haptics are preserved. */
+                    /* Primary action: Send (idle) / Queue (busy or still starting —
+            long-press → force push). Moved here from the old absolute overlay so
+            the whole composer is one card; the long-press force-push ring +
+            haptics are preserved. A starting session is not dispatchable, so this
+            queues and the daemon drains it on the Running edge — the primary
+            action is never replaced by a spinner (session-level progress belongs
+            to the card's top-edge line, not to this button). */
                   }
-                  {preparing
-                    ? (
-                      <Tooltip title="Preparing session">
-                        <span>
-                          <IconButton
-                            color="primary"
-                            aria-label="preparing session"
-                            disabled
-                            sx={TOOLBAR_ICON_BTN}
-                          >
-                            <CircularProgress size={17} color="inherit" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )
-                    : busy || starting
+                  {busy || starting
                     ? (
                       <Box
                         component="span"
@@ -3085,83 +3116,81 @@ export function ComposerWorkspace({
                     )}
                   {
                     /* Secondary actions, always inline now: Save-draft (always), Jump-to-front
-            (with a queue), Force-push (while busy/starting). The narrow-phone ⋮ fold
+            (with a queue), Force-push (while busy or paused). The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
-            out to the navbar freed the room that fold used to reclaim. */
+            out to the navbar freed the room that fold used to reclaim.
+            These stay MOUNTED while the session starts — a booting agent greys
+            out the controls it owns, it never removes the row's slots. */
                   }
-                  {!preparing && (
-                    <>
-                      <Tooltip title="Save as draft">
-                        <span>
-                          <IconButton
-                            aria-label="save as draft"
-                            disabled={!sendable}
-                            sx={TOOLBAR_ICON_BTN}
-                            onClick={saveDraft}
-                          >
-                            <EditNoteOutlined fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                      <Tooltip title="Force push">
-                        <span>
-                          <IconButton
-                            color="warning"
-                            aria-label="force push"
-                            // Usable while a turn runs (busy/starting) OR the queue is paused —
-                            // in both cases ⚡ pushes this message ahead of the held/queued work.
-                            disabled={!sendable ||
-                              !(busy || starting || paused)}
-                            sx={TOOLBAR_ICON_BTN}
-                            onPointerDown={(event): void =>
-                              event.preventDefault()}
-                            onClick={(e): void =>
-                              setForceAnchor(e.currentTarget)}
-                          >
-                            <Bolt fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                      {
-                        /* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
-            as the queue fills/drains or a turn starts/ends; each is just disabled
-            (greyed) when it doesn't apply — Jump-front with no queue to jump, Force-push
-            with no running turn to interrupt. */
-                      }
-                      <Tooltip title="Jump to front of queue">
-                        <span>
-                          <IconButton
-                            aria-label="jump to front of queue"
-                            disabled={!sendable || queue.length === 0}
-                            sx={TOOLBAR_ICON_BTN}
-                            onClick={jumpToFront}
-                          >
-                            <VerticalAlignTop fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                      {
-                        /* Schedule the current content: park it as a draft that the SERVER
-            auto-sends at a future time (fires even with every client offline). */
-                      }
-                      <Tooltip title="定时发送">
-                        <span>
-                          <IconButton
-                            aria-label="schedule send"
-                            disabled={!sendable}
-                            sx={TOOLBAR_ICON_BTN}
-                            onClick={(): void =>
-                              setScheduleTarget({
-                                id: undefined,
-                                initial: null,
-                              })}
-                          >
-                            <Schedule fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    </>
-                  )}
+                  <Tooltip title="Save as draft">
+                    <span>
+                      <IconButton
+                        aria-label="save as draft"
+                        disabled={!sendable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={saveDraft}
+                      >
+                        <EditNoteOutlined fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="Force push">
+                    <span>
+                      <IconButton
+                        color="warning"
+                        aria-label="force push"
+                        // Usable while a turn runs (busy) OR the queue is paused —
+                        // in both cases ⚡ pushes this message ahead of the held/queued work.
+                        // Never while the session is still starting (nothing to interrupt).
+                        disabled={!sendable || !forceable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onPointerDown={(event): void =>
+                          event.preventDefault()}
+                        onClick={(e): void =>
+                          setForceAnchor(e.currentTarget)}
+                      >
+                        <Bolt fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  {
+                    /* Jump-front + Force-push are ALWAYS shown so the send cluster never reflows
+        as the queue fills/drains or a turn starts/ends; each is just disabled
+        (greyed) when it doesn't apply — Jump-front with no queue to jump, Force-push
+        with no running turn to interrupt. */
+                  }
+                  <Tooltip title="Jump to front of queue">
+                    <span>
+                      <IconButton
+                        aria-label="jump to front of queue"
+                        disabled={!sendable || queue.length === 0}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={jumpToFront}
+                      >
+                        <VerticalAlignTop fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  {
+                    /* Schedule the current content: park it as a draft that the SERVER
+        auto-sends at a future time (fires even with every client offline). */
+                  }
+                  <Tooltip title="定时发送">
+                    <span>
+                      <IconButton
+                        aria-label="schedule send"
+                        disabled={!sendable}
+                        sx={TOOLBAR_ICON_BTN}
+                        onClick={(): void =>
+                          setScheduleTarget({
+                            id: undefined,
+                            initial: null,
+                          })}
+                      >
+                        <Schedule fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                   <Tooltip title="Clear composer">
                     <span data-mobile-composer-clear>
                       <IconButton
@@ -3462,7 +3491,7 @@ export function ComposerWorkspace({
           onSchedule={(): void =>
             setScheduleTarget({ id: undefined, initial: null })}
           onForcePush={(anchor): void => setForceAnchor(anchor)}
-          forcePushEnabled={busy || starting || paused}
+          forcePushEnabled={forceable}
           onCollapse={(): void => {
             // Carry fullscreen edits back to the inline editor. The inline editor
             // REMOUNTS on close (it only renders while !composeFs) and seeds from

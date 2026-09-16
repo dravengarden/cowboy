@@ -51,8 +51,29 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
       .test(composerSource),
     true,
   );
-  assertEquals(composerSource.includes('aria-label="preparing session"'), true);
-  assertEquals(composerSource.includes("if (preparing) return false;"), true);
+  // Startup is presented on session-level surfaces (StatusDot, the composer's
+  // top-edge line, the transcript empty state) — never by replacing the
+  // composer's primary action with a spinner, and never by unmounting toolbar
+  // actions (the row would reflow on the ready edge).
+  assertEquals(
+    composerSource.includes('aria-label="preparing session"'),
+    false,
+  );
+  assertEquals(
+    composerSource.includes("{preparing && <SessionPreparingLine"),
+    true,
+  );
+  assertEquals(
+    composerSource.includes("{!preparing && !desktop && compactAction"),
+    false,
+  );
+  assertEquals(composerSource.includes("{!preparing && !compact &&"), false);
+  assertEquals(composerSource.includes("{!preparing && clearAction"), false);
+  // Writing during startup must reach the daemon queue: the session is not
+  // dispatchable yet, so submitPrompt queues and the daemon drains it on the
+  // Running edge. A local guard here would make the placeholder a lie.
+  assertEquals(composerSource.includes("if (preparing) return false;"), false);
+  assertEquals(composerSource.includes("if (preparing) return;"), false);
   assertEquals(appSource.includes("if (mobile) claimKeyboard();"), true);
   assertEquals(
     appSource.includes("const openNewSession = (): void => {"),

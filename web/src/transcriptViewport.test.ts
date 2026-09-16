@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   columnReverseVisualFirstRowIndex,
+  conversationEmptyPresentation,
   historyPrefetchTransition,
   magneticHapticTransition,
   restoredTranscriptFollowing,
@@ -133,6 +134,75 @@ Deno.test("cleared conversation empty state yields to new content", () => {
     false,
   );
   assertEquals(shouldShowClearedConversationEmptyState([]), false);
+});
+
+Deno.test("a booting agent is never described as ready", () => {
+  // The regression this function exists for: clearing a conversation restarts
+  // the agent, so the cleared empty state is on screen WHILE status is
+  // "starting". It kept its own wording but must not claim readiness.
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "starting",
+      itemCount: 1,
+      optimisticCount: 0,
+      cleared: true,
+      fresh: false,
+    }),
+    { kind: "cleared", preparing: true },
+  );
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "running",
+      itemCount: 1,
+      optimisticCount: 0,
+      cleared: true,
+      fresh: false,
+    }),
+    { kind: "cleared", preparing: false },
+  );
+  // A brand-new session has no items at all: startup IS the whole state.
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "starting",
+      itemCount: 0,
+      optimisticCount: 0,
+      cleared: false,
+      fresh: false,
+    }),
+    { kind: "preparing", preparing: true },
+  );
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "running",
+      itemCount: 0,
+      optimisticCount: 0,
+      cleared: false,
+      fresh: true,
+    }),
+    { kind: "ready", preparing: false },
+  );
+  // An optimistic bubble is conversation: a prompt queued during startup
+  // replaces every empty state the moment it is painted.
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "starting",
+      itemCount: 0,
+      optimisticCount: 1,
+      cleared: false,
+      fresh: false,
+    }),
+    null,
+  );
+  assertEquals(
+    conversationEmptyPresentation({
+      status: "running",
+      itemCount: 4,
+      optimisticCount: 0,
+      cleared: false,
+      fresh: false,
+    }),
+    null,
+  );
 });
 
 Deno.test("mounted scrollback content hands the viewport to real rows", () => {

@@ -86,8 +86,11 @@ Deno.test("a context reset becomes a full conversation start until new content",
     transcriptSource.includes("data-conversation-empty-state={kind}"),
     true,
   );
+  // The cleared flavour now arrives through conversationEmptyPresentation, which
+  // also carries whether the agent is still booting — a cleared session restarts
+  // its agent, so its copy must not claim readiness while status is "starting".
   assertEquals(
-    /<ConversationEmptyState\s+kind="cleared"\s+context=\{conversationContext\}\s*\/>/u
+    /<ConversationEmptyState\s+kind=\{emptyPresentation\.kind\}\s+preparing=\{emptyPresentation\.preparing\}\s+context=\{conversationContext\}\s*\/>/u
       .test(transcriptSource),
     true,
   );

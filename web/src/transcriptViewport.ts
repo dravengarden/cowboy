@@ -41,6 +41,39 @@ export function shouldShowClearedConversationEmptyState(
   );
 }
 
+/** Which conversation empty state a session with no renderable conversation
+ *  should show, and whether it must also say the agent is still booting.
+ *
+ *  The startup fact outranks the emptiness flavour: a session that was just
+ *  cleared (or freshly created) restarts its agent, so for a few seconds the
+ *  transcript is BOTH "no conversation yet" AND "not ready". The old chain
+ *  checked `status === "starting"` only in the `itemCount === 0` branch, so a
+ *  cleared session fell through to the cleared copy and told the user the agent
+ *  "is ready with a fresh context" while it was still spinning up — the single
+ *  most visible contradiction in the startup UI.
+ *
+ *  `preparing` is a MODIFIER, not a kind: the cleared/fresh wording stays (it is
+ *  still true and still the more informative sentence) and only its readiness
+ *  claim plus the progress bar follow the session status. */
+export function conversationEmptyPresentation(input: {
+  status: string;
+  itemCount: number;
+  optimisticCount: number;
+  cleared: boolean;
+  fresh: boolean;
+}): { kind: "preparing" | "cleared" | "ready"; preparing: boolean } | null {
+  // An optimistic bubble is already conversation: never replace it with an
+  // empty state, however the session status reads.
+  if (input.optimisticCount > 0) return null;
+  const preparing = input.status === "starting";
+  if (input.itemCount === 0 && preparing) {
+    return { kind: "preparing", preparing: true };
+  }
+  if (input.cleared) return { kind: "cleared", preparing };
+  if (input.fresh) return { kind: "ready", preparing };
+  return null;
+}
+
 export function shouldRecoverUnrenderableHistory(input: {
   managed: boolean;
   itemCount: number;

@@ -169,8 +169,10 @@ import {
   typicalTranscriptRowHeight,
 } from "./transcriptLiveWindow";
 import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
+import { prepareSweep } from "./sessionPreparing";
 import {
   columnReverseVisualFirstRowIndex,
+  conversationEmptyPresentation,
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackBoundaryRequestKey,
@@ -617,10 +619,6 @@ function ScrollbackLoadingSkeleton({
 // wrong and a blank wall reads as broken). Dormant / interrupted / crashed empty
 // sessions are NOT handled here — their SessionStatusBar already carries the
 // matching "send a message to wake/restart it" line, so this would just double it.
-const prepareSweep = keyframes`
-  0% { transform: translateX(-110%); }
-  55%, 100% { transform: translateX(310%); }
-`;
 
 type ConversationEmptyKind = "preparing" | "ready" | "cleared";
 
@@ -644,9 +642,15 @@ function focusPrimaryComposer(): void {
 
 function ConversationEmptyState({
   kind,
+  preparing,
   context,
 }: {
   kind: ConversationEmptyKind;
+  // The agent is still booting (session status "starting"). For `kind ===
+  // "preparing"` that IS the state; for cleared / fresh it is a modifier that
+  // withdraws the readiness claim and adds the sweep bar. See
+  // conversationEmptyPresentation.
+  preparing: boolean;
   context: ConversationEmptyContext;
 }): React.JSX.Element {
   const agent = providerPresentation(
@@ -662,14 +666,22 @@ function ConversationEmptyState({
     : kind === "cleared"
     ? "New conversation"
     : "Start a conversation";
+  // "ready" is a claim about the agent, so it must track the session status. A
+  // cleared session restarts its agent: saying "is ready with a fresh context"
+  // while the process is still spinning up is the contradiction this modifier
+  // removes. Typing is still invited — a prompt written now is queued and the
+  // daemon drains it on the Running edge.
+  const readiness = preparing ? "is starting" : "is ready";
   const detail = kind === "preparing"
     ? location
       ? `Creating an isolated workspace for ${location}.`
       : "Creating an isolated workspace and starting the agent."
     : kind === "cleared"
-    ? `Previous context was cleared. ${agent} is ready with a fresh context.`
+    ? `Previous context was cleared. ${agent} ${readiness} with a fresh context.`
     : location
-    ? `${agent} is ready in ${location}.`
+    ? `${agent} ${readiness} in ${location}.`
+    : preparing
+    ? `${agent} is starting — you can write your first message now.`
     : `${agent} is ready for your first message.`;
   const facts = [
     context.model,
@@ -680,7 +692,12 @@ function ConversationEmptyState({
     .filter((value, index, values): value is string =>
       Boolean(value) && values.indexOf(value) === index
     );
-  const interactive = kind !== "preparing";
+  // Every empty state is a writing surface now: a prompt typed while the agent
+  // boots is QUEUED (the daemon drains it on the Running edge), so tapping the
+  // empty transcript to focus the composer is valid during startup too. Only the
+  // live-region role still distinguishes them — the startup state is an
+  // announcement, the others are landmarks.
+  const announces = kind === "preparing";
   const settingsTap = useReliableTouchTap<HTMLButtonElement>(() => {
     openSessionSettings("agent");
   });
@@ -692,25 +709,21 @@ function ConversationEmptyState({
   return (
     <Stack
       data-conversation-empty-state={kind}
-      role={interactive ? "region" : "status"}
-      tabIndex={interactive ? 0 : undefined}
+      role={announces ? "status" : "region"}
+      tabIndex={0}
       aria-live="polite"
       aria-label={`${title}. ${detail}`}
-      onClick={interactive
-        ? (event): void => {
-          if (!writeFromEmpty(event)) return;
-          focusPrimaryComposer();
-        }
-        : undefined}
-      onKeyDown={interactive
-        ? (event): void => {
-          if (isImeKeyEvent(event.nativeEvent)) return;
-          if (event.key !== "Enter" && event.key !== " ") return;
-          if (!writeFromEmpty(event)) return;
-          event.preventDefault();
-          focusPrimaryComposer();
-        }
-        : undefined}
+      onClick={(event): void => {
+        if (!writeFromEmpty(event)) return;
+        focusPrimaryComposer();
+      }}
+      onKeyDown={(event): void => {
+        if (isImeKeyEvent(event.nativeEvent)) return;
+        if (event.key !== "Enter" && event.key !== " ") return;
+        if (!writeFromEmpty(event)) return;
+        event.preventDefault();
+        focusPrimaryComposer();
+      }}
       sx={{
         flex: "1 1 0 !important",
         minHeight: 220,
@@ -722,7 +735,7 @@ function ConversationEmptyState({
         textAlign: "center",
         gap: 1.1,
         color: "text.secondary",
-        cursor: interactive ? "text" : "default",
+        cursor: "text",
         userSelect: "none",
         WebkitUserSelect: "none",
         outline: "none",
@@ -761,7 +774,7 @@ function ConversationEmptyState({
       <Typography variant="body2" sx={{ maxWidth: 420, lineHeight: 1.55 }}>
         {detail}
       </Typography>
-      {kind === "preparing" && (
+      {preparing && (
         <Box
           aria-hidden
           sx={{
@@ -778,7 +791,10 @@ function ConversationEmptyState({
               inset: 0,
               width: "38%",
               borderRadius: "inherit",
-              bgcolor: "primary.main",
+              // The status palette, not the brand one: `starting` is info blue
+              // everywhere else (App statusColor / StatusDot), and this bar plus
+              // the composer's top-edge line are the same signal on one screen.
+              bgcolor: "info.main",
               animation:
                 `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
             },
@@ -792,7 +808,6 @@ function ConversationEmptyState({
         <ButtonBase
           data-conversation-empty-settings
           aria-label={`Change session settings: ${facts.join(", ")}`}
-          disabled={!interactive}
           {...settingsTap}
           onPointerDown={(event): void => {
             event.stopPropagation();
@@ -811,8 +826,8 @@ function ConversationEmptyState({
             px: 0.75,
             py: 0.75,
             borderRadius: 3,
-            cursor: interactive ? "pointer" : "default",
-            "&:active": interactive ? { transform: "scale(0.99)" } : undefined,
+            cursor: "pointer",
+            "&:active": { transform: "scale(0.99)" },
             "&:focus-visible": {
               outline: "2px solid",
               outlineColor: "primary.main",
@@ -846,20 +861,18 @@ function ConversationEmptyState({
                 })}
               />
             ))}
-            {interactive && (
-              <Tune
-                aria-hidden
-                sx={{ fontSize: 16, color: "text.secondary", opacity: 0.78 }}
-              />
-            )}
+            <Tune
+              aria-hidden
+              sx={{ fontSize: 16, color: "text.secondary", opacity: 0.78 }}
+            />
           </Stack>
         </ButtonBase>
       )}
-      {interactive && (
-        <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
-          Tap anywhere here to write
-        </Typography>
-      )}
+      <Typography variant="caption" sx={{ mt: 0.25, opacity: 0.72 }}>
+        {preparing
+          ? "Tap here to write — it sends when ready"
+          : "Tap anywhere here to write"}
+      </Typography>
     </Stack>
   );
 }
@@ -4160,6 +4173,17 @@ export function Transcript({
     items.length,
     pendingMessages.length,
   );
+  // One decision for all three empty flavours, so the startup fact can outrank
+  // the emptiness flavour instead of being lost in a ternary chain (a cleared
+  // session used to render "…is ready with a fresh context" while its agent was
+  // still booting — see conversationEmptyPresentation).
+  const emptyPresentation = conversationEmptyPresentation({
+    status,
+    itemCount: items.length,
+    optimisticCount: optimisticMsgs.length,
+    cleared: showClearedEmptyState,
+    fresh: showFreshSessionEmptyState,
+  });
   // "stick-to-bottom" UX, done properly this time:
   //
   // Previous bug: we listened to `onScroll` to decide if the user "wanted"
@@ -5409,11 +5433,16 @@ export function Transcript({
           },
         }}
       >
-        {status === "starting" && items.length === 0 &&
-            optimisticMsgs.length === 0
+        {
+          /* A brand-new session has nothing to restore, so its startup state
+            outranks the skeleton; cleared / fresh keep losing to a real
+            restore in flight, then carry the same startup modifier. */
+        }
+        {emptyPresentation?.kind === "preparing"
           ? (
             <ConversationEmptyState
               kind="preparing"
+              preparing
               context={conversationContext}
             />
           )
@@ -5427,17 +5456,11 @@ export function Transcript({
               onRetry={() => void retrySessionHydration(sessionId)}
             />
           )
-          : showClearedEmptyState && optimisticMsgs.length === 0
+          : emptyPresentation !== null
           ? (
             <ConversationEmptyState
-              kind="cleared"
-              context={conversationContext}
-            />
-          )
-          : showFreshSessionEmptyState && optimisticMsgs.length === 0
-          ? (
-            <ConversationEmptyState
-              kind="ready"
+              kind={emptyPresentation.kind}
+              preparing={emptyPresentation.preparing}
               context={conversationContext}
             />
           )
