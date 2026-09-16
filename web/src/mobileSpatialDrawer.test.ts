@@ -195,3 +195,14 @@ Deno.test("settled drawers retain declarative depth and pager ownership", () => 
     ),
   );
 });
+
+Deno.test("drawer and pager settle a stream whose start node was re-rendered", () => {
+  for (const source of [drawerSource, productShellSource]) {
+    assert(source.includes("followDetachedTouchStream(event.target, {"));
+    assert(source.includes("move: onTouchMove,"));
+    assert(source.includes("end: onTouchEnd,"));
+    assert(source.includes("cancel: onTouchCancel,"));
+    const end = source.slice(source.indexOf("const onTouchEnd = (): void => {"));
+    assert(end.indexOf("stopFollowingDetachedStream();") < end.indexOf("if ("));
+  }
+});

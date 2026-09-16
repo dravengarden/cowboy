@@ -155,7 +155,7 @@ Deno.test("the renderer lets a host claim a link, and heads have slugs", () => {
   const anchor = markdownImpl.slice(
     markdownImpl.indexOf("a({ children, href })"),
   );
-  assert(anchor.includes("onLinkClick?.(href, event) === true"));
+  assert(anchor.includes("onLinkClickRef.current?.(href, event) === true"));
   // Claimed links must not also reach the external opener.
   assert(
     anchor.indexOf("event.preventDefault();\n              return;") <
@@ -179,4 +179,18 @@ Deno.test("the anchor scroll is measured, never scrollIntoView", () => {
   assertEquals(executable.includes("scrollIntoView"), false);
   assert(block.includes("getBoundingClientRect()"));
   assert(block.includes("appliedAnchor.current = previewAnchor.id"));
+});
+
+Deno.test("a Review render never remounts the rendered Markdown under a finger", () => {
+  // A fresh link callback busts the Markdown memo; fresh renderer functions
+  // are new element types. Either remounts the node a drawer swipe started on,
+  // and iOS then never delivers that swipe's touchend to the drawer.
+  assert(reviewApp.includes("const followMarkdownLink = useCallback("));
+  assert(
+    reviewApp.includes("followMarkdownLinkRef.current = followMarkdownLinkNow"),
+  );
+  assert(markdownImpl.includes("const components = useMemo((): Components => ({"));
+  assert(markdownImpl.includes("}), [centerCopy, codeTheme, dark, invert, touchWrap]);"));
+  assert(markdownImpl.includes("onLinkClickRef.current?.(href, event) === true"));
+  assertEquals(markdownImpl.includes("const components: Components = {"), false);
 });

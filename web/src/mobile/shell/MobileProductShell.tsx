@@ -17,6 +17,7 @@ import {
 } from "../../obsidianDrawerGesture";
 import {
   expandedSelection,
+  followDetachedTouchStream,
   hasHorizontalScroller,
   hasVerticalScroller,
   swipeCommits,
@@ -167,6 +168,7 @@ export function MobileProductShell({
     let directManipulationActive = false;
     let presentationWidth = shell.clientWidth;
     let currentOffset = pagerTargetOffset(productRef.current, presentationWidth);
+    let stopFollowingDetachedStream: () => void = () => undefined;
 
     const render = (offset: number, width: number): void => {
       currentOffset = offset;
@@ -260,6 +262,7 @@ export function MobileProductShell({
       }, duration + 20);
     };
     const onTouchStart = (event: TouchEvent): void => {
+      stopFollowingDetachedStream();
       const touch = event.touches[0];
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);
@@ -294,6 +297,13 @@ export function MobileProductShell({
         ),
         dominance: obsidianDrawerDominance(scrollable),
       };
+      // Capture on the shell cannot see a stream whose start node a page
+      // render detached; follow it there so a claimed pager still settles.
+      stopFollowingDetachedStream = followDetachedTouchStream(event.target, {
+        move: onTouchMove,
+        end: onTouchEnd,
+        cancel: onTouchCancel,
+      });
       prepareNavigationHaptic();
       // Promote both pages before the 2 px claim so the first translate
       // only writes transform. Overflow flatten waits for rAF bookkeeping.
@@ -377,6 +387,7 @@ export function MobileProductShell({
       }
     };
     const onTouchEnd = (): void => {
+      stopFollowingDetachedStream();
       if (!gesture) return;
       if (!gesture.locked) {
         gesture = null;
@@ -396,6 +407,7 @@ export function MobileProductShell({
       settle(next, velocity, width);
     };
     const onTouchCancel = (): void => {
+      stopFollowingDetachedStream();
       const locked = gesture?.locked === true;
       const current = gesture?.product ?? productRef.current;
       const width = gesture?.width;
@@ -440,6 +452,7 @@ export function MobileProductShell({
     const releaseSheetHold = bindMobileSheetPresentationHold(shell);
     return () => {
       releaseSheetHold();
+      stopFollowingDetachedStream();
       globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onOpenProduct);
       shell.removeEventListener("touchstart", onTouchStart, true);
       shell.removeEventListener("touchmove", onTouchMove, true);

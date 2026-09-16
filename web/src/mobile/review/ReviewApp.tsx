@@ -2067,7 +2067,7 @@ export function ReviewApp({
    *
    * Returns true when this navigated, so the renderer suppresses the anchor.
    */
-  const followMarkdownLink = (href: string): boolean => {
+  const followMarkdownLinkNow = (href: string): boolean => {
     if (target.kind !== "source") return false;
     const resolved = resolveReviewLink(target.path, href);
     if (resolved.kind === "external") return false;
@@ -2121,6 +2121,16 @@ export function ReviewApp({
     openSource(resolved.path, resolved.line, true);
     return true;
   };
+  // The rendered preview must keep one identity across Review renders. A new
+  // callback busts the Markdown memo and remounts every paragraph and link;
+  // iOS then keeps delivering an in-flight drawer swipe to the detached node,
+  // the drawer never sees touchend, and the peek sticks part-way open.
+  const followMarkdownLinkRef = useRef(followMarkdownLinkNow);
+  followMarkdownLinkRef.current = followMarkdownLinkNow;
+  const followMarkdownLink = useCallback(
+    (href: string): boolean => followMarkdownLinkRef.current(href),
+    [],
+  );
   const navigateBack = (): void => {
     const previous = navigationHistory.at(-1);
     if (!previous) return;

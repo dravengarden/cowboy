@@ -636,21 +636,31 @@ const MarkdownImpl = memo(function MarkdownImpl({
   // swipe/←→ pages within the one message.
   const galleryImages = useMemo(() => parseImages(text), [text]);
   const [lbIndex, setLbIndex] = useState<number | null>(null);
+  // Renderer components are element types. A fresh function per render makes
+  // ReactMarkdown remount every paragraph, heading, and link, which detaches
+  // the node an in-flight touch started on. Read per-render inputs through
+  // refs so a host re-render never changes those identities.
+  const galleryImagesRef = useRef(galleryImages);
+  galleryImagesRef.current = galleryImages;
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
 
-  const components: Components = {
+  const components = useMemo((): Components => ({
     img({ src, alt }) {
       const url = typeof src === "string" ? src : "";
       // Composer placement tokens are not HTTP resources. Rendering them as
       // `<img src="cowboy-att:…">` is the blank rounded box in a user bubble.
       if (!url || url.startsWith("cowboy-att:")) return null;
-      const i = galleryImages.findIndex((g) => g.src === url);
       return (
         <Box
           component="img"
           src={url}
           alt={alt ?? ""}
           loading="lazy"
-          onClick={() => setLbIndex(i >= 0 ? i : 0)}
+          onClick={() => {
+            const i = galleryImagesRef.current.findIndex((g) => g.src === url);
+            setLbIndex(i >= 0 ? i : 0);
+          }}
           sx={{
             display: "block",
             maxWidth: "100%",
@@ -730,7 +740,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
             // inside the code reviewer a relative href is another file in the
             // workspace, not a page on this origin. Claiming is the host's call
             // because only it knows which document this markdown came from.
-            if (href && onLinkClick?.(href, event) === true) {
+            if (href && onLinkClickRef.current?.(href, event) === true) {
               event.preventDefault();
               return;
             }
@@ -799,7 +809,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         </Box>
       );
     },
-  };
+  }), [centerCopy, codeTheme, dark, invert, touchWrap]);
 
   return (
     <>

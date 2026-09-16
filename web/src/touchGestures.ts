@@ -153,3 +153,48 @@ export function isVerticalScrollContainer(
   return geometry.scrollHeight > geometry.clientHeight + 2 &&
     (overflowY === "auto" || overflowY === "scroll");
 }
+
+export interface TouchStreamHandlers {
+  move: (event: TouchEvent) => void;
+  end: (event: TouchEvent) => void;
+  cancel: (event: TouchEvent) => void;
+}
+
+/** Keep a swipe recognizer attached to a touch stream whose start node leaves
+ *  the document mid-gesture.
+ *
+ *  Touch events stay targeted at the node the finger first landed on. If a
+ *  React render replaces that node, WebKit keeps dispatching the rest of the
+ *  stream to the detached node, which has no ancestors — a gesture root never
+ *  sees the remaining touchmove or the touchend, so a claimed drawer or pager
+ *  freezes part-way and never settles. Forward the stream from the start node
+ *  only while it is detached; while it is connected the root listeners keep
+ *  their normal capture/bubble order. A recognizer that ran first and stopped
+ *  propagation still hides the event, as it would on the connected path. */
+export function followDetachedTouchStream(
+  target: EventTarget | null,
+  handlers: TouchStreamHandlers,
+): () => void {
+  const node = target as (EventTarget & { isConnected?: unknown }) | null;
+  if (!node || typeof node.isConnected !== "boolean") return () => undefined;
+  const forward = (handler: (event: TouchEvent) => void) =>
+  (event: TouchEvent): void => {
+    if (node.isConnected === true || event.cancelBubble) return;
+    handler(event);
+  };
+  const move = forward(handlers.move);
+  const end = forward(handlers.end);
+  const cancel = forward(handlers.cancel);
+  node.addEventListener("touchmove", move as EventListener, {
+    passive: false,
+  });
+  node.addEventListener("touchend", end as EventListener, { passive: true });
+  node.addEventListener("touchcancel", cancel as EventListener, {
+    passive: true,
+  });
+  return () => {
+    node.removeEventListener("touchmove", move as EventListener);
+    node.removeEventListener("touchend", end as EventListener);
+    node.removeEventListener("touchcancel", cancel as EventListener);
+  };
+}

@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   createRetargetedTouchClickGuard,
   expandedSelection,
+  followDetachedTouchStream,
   horizontalSwipe,
   inputOverlayOwnsDrawerGesture,
   isPairedTouchClick,
@@ -103,4 +104,40 @@ Deno.test("preview movement freeze belongs only to a primary mouse press", () =>
   assertEquals(shouldFreezePreviewPointer("mouse", 1), false);
   assertEquals(shouldFreezePreviewPointer("touch", 0), false);
   assertEquals(shouldFreezePreviewPointer("pen", 0), false);
+});
+
+Deno.test("a swipe keeps its touch stream after a render detaches the start node", () => {
+  class StartNode extends EventTarget {
+    isConnected = true;
+  }
+  const node = new StartNode();
+  const seen: string[] = [];
+  // Registered first, like the capture-phase pager on the detached path.
+  node.addEventListener("touchmove", (event) => {
+    if ((event as Event & { claimed?: boolean }).claimed) event.stopPropagation();
+  });
+  const stop = followDetachedTouchStream(node, {
+    move: () => seen.push("move"),
+    end: () => seen.push("end"),
+    cancel: () => seen.push("cancel"),
+  });
+  const touch = (type: string, claimed = false) =>
+    Object.assign(new Event(type, { cancelable: true }), { claimed });
+
+  // Connected: the gesture root hears the bubbled event; do not double-handle.
+  node.dispatchEvent(touch("touchmove"));
+  assertEquals(seen, []);
+
+  node.isConnected = false;
+  node.dispatchEvent(touch("touchmove"));
+  // A recognizer that already claimed and stopped the event keeps it hidden.
+  node.dispatchEvent(touch("touchmove", true));
+  node.dispatchEvent(touch("touchend"));
+  assertEquals(seen, ["move", "end"]);
+
+  stop();
+  node.dispatchEvent(touch("touchcancel"));
+  assertEquals(seen, ["move", "end"]);
+  const noop = { move: () => undefined, end: () => undefined, cancel: () => undefined };
+  assertEquals(followDetachedTouchStream(null, noop)(), undefined);
 });

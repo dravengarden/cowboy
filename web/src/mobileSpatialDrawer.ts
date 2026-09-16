@@ -25,6 +25,7 @@ import {
 } from "./obsidianDrawerGesture";
 import {
   expandedSelection,
+  followDetachedTouchStream,
   hasHorizontalScroller,
   hasVerticalScroller,
   inputOverlayOwnsDrawerGesture,
@@ -106,6 +107,7 @@ export function bindMobileSpatialDrawer({
   let releasePresentation: (() => void) | undefined;
   let presentationWidth = 1;
   let lastPublishedProgress: string | null = null;
+  let stopFollowingDetachedStream: () => void = () => undefined;
   const drawerWidth = (): number => {
     const width = gestureTarget.clientWidth || surface.clientWidth;
     return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
@@ -357,6 +359,7 @@ export function bindMobileSpatialDrawer({
   };
 
   const onTouchStart = (event: TouchEvent): void => {
+    stopFollowingDetachedStream();
     const touch = event.touches[0];
     const target = event.target instanceof Element ? event.target : null;
     const inputOverlay = target?.closest("[data-mobile-keyboard-open]");
@@ -405,6 +408,13 @@ export function bindMobileSpatialDrawer({
       samples: [{ t: now, x: touch.clientX }],
     };
     commit = startOpen;
+    // A peek re-render can replace the node this finger started on. Keep the
+    // rest of the stream, or a claimed swipe freezes part-way open.
+    stopFollowingDetachedStream = followDetachedTouchStream(event.target, {
+      move: onTouchMove,
+      end: onTouchEnd,
+      cancel: onTouchCancel,
+    });
     // Assemble the peek layer on finger-down, before the 2 px claim writes
     // the first translate. Obsidian's workspace is already that layer.
     armPresentation();
@@ -497,6 +507,7 @@ export function bindMobileSpatialDrawer({
     }
   };
   const onTouchEnd = (): void => {
+    stopFollowingDetachedStream();
     if (!gesture) return;
     if (!gesture.locked) {
       if (gesture.prepared) releaseDirectManipulation();
@@ -518,6 +529,7 @@ export function bindMobileSpatialDrawer({
     settle(shouldOpen, releaseVelocity, releaseDirectManipulation, width);
   };
   const onTouchCancel = (): void => {
+    stopFollowingDetachedStream();
     const wasLocked = gesture?.locked === true;
     const wasPrepared = gesture?.prepared === true;
     const startOpen = gesture?.startOpen ?? getOpen();
@@ -560,6 +572,7 @@ export function bindMobileSpatialDrawer({
   return {
     settle,
     dispose: () => {
+      stopFollowingDetachedStream();
       if (gesture?.locked || directManipulationActive) {
         globalThis.dispatchEvent(
           new CustomEvent("cowboy:transcript-direct-manipulation-end"),

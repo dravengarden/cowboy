@@ -83,6 +83,14 @@ gesture root (shell)
     when the Agent→Code pager locks or a spatial drawer is claimed. Do not
     wait for settle/`inert`, and do not defer the blur to rAF — iOS only
     treats it as the originating gesture in that event.
+11. **A render inside the peek must not replace the node a finger is on.**
+    Touch events stay targeted at the start node; once React detaches it,
+    iOS delivers the rest of the stream to a node with no ancestors, so
+    the drawer/pager root never sees touchend and the peek freezes
+    part-way open with `data-mobile-drawer-moving` leaked. Keep renderer
+    identities stable (Markdown `components`, host callbacks behind a
+    ref), and keep `followDetachedTouchStream` wired in both recognizers
+    as the backstop.
 
 ### 2.1 Surfaces that inherit the swipe compositor
 
