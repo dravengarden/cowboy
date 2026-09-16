@@ -111,7 +111,14 @@ import {
 import {
   hideLiveCrashDuplicate,
   prettifyCrashDetail,
+  rpcErrorKind,
 } from "./crashDetail";
+import { reportClientLog } from "./observability";
+import {
+  canContinueFailedTurn,
+  TURN_CONTINUATION_PROMPT,
+  turnFailureTelemetry,
+} from "./turnRecovery";
 import { PromptOriginNote } from "./PromptOriginNote";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
@@ -128,6 +135,7 @@ import {
   returnFailedMessage,
   send,
   sessionTurnActivityAt,
+  submitPrompt,
   useConnected,
   useStoreSelector,
 } from "./store";
@@ -2883,6 +2891,73 @@ function PermissionCard({
   );
 }
 
+/** The turn died but the worker did not: state the recovery and offer it.
+ *
+ *  Typing the continuation by hand was the only way to resume, every time. The
+ *  button sends the same thing the reader would have typed, plus the fact only
+ *  Cowboy knows — that the cut was the transport (turnRecovery.ts).
+ *
+ *  It also reports the failure once per card, because "this happens now and
+ *  then" is not a number: the event is what will say whether this is worth
+ *  automating, and for which Provider. */
+function TurnFailureRecovery({
+  itemKey,
+  detail,
+  sessionId,
+  status,
+  provider,
+}: {
+  itemKey: string;
+  detail: string | null;
+  sessionId: string;
+  status: Status;
+  provider: string;
+}): React.JSX.Element {
+  const continuable = canContinueFailedTurn(status);
+  useEffect(() => {
+    if (reportedTurnFailures.has(itemKey)) return;
+    reportedTurnFailures.add(itemKey);
+    reportClientLog(
+      "warn",
+      "turn_failure_surfaced",
+      "A turn ended in a Provider failure",
+      turnFailureTelemetry(provider, detail ? rpcErrorKind(detail) : null),
+    );
+  }, [detail, itemKey, provider]);
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      spacing={0.75}
+      sx={{ mt: 0.25, flexWrap: "wrap" }}
+    >
+      <Typography variant="caption" sx={{ color: "text.secondary" }}>
+        {continuable
+          ? "The session is still open where it stopped."
+          : "Send a message to continue."}
+      </Typography>
+      {continuable && (
+        <Button
+          size="small"
+          variant="outlined"
+          color="inherit"
+          data-turn-failure-continue
+          onClick={(): void => {
+            void submitPrompt(sessionId, TURN_CONTINUATION_PROMPT);
+          }}
+          sx={{ minHeight: 28, py: 0.1, px: 1, textTransform: "none" }}
+        >
+          Continue
+        </Button>
+      )}
+    </Stack>
+  );
+}
+
+// One report per card, not per render: the transcript re-renders on every
+// scroll threshold and the count would be meaningless.
+const reportedTurnFailures = new Set<string>();
+
 // `memo`'d: with `derive` memoized upstream, each item keeps a stable identity
 // across renders that don't change the timeline (e.g. scroll-threshold or
 // permission-sheet state). Without this, any such re-render would re-run the
@@ -2891,6 +2966,8 @@ function PermissionCard({
 const ItemView = memo(function ItemView({
   item,
   streaming,
+  sessionId,
+  status,
   provider,
   providerVersion,
   providerDigest,
@@ -2899,6 +2976,10 @@ const ItemView = memo(function ItemView({
   onOpenTool,
 }: {
   item: RenderItem;
+  sessionId: string;
+  /** The session's live status — a failed turn is only continuable while its
+   *  worker is still there (turnRecovery.ts). */
+  status: Status;
   /** True when this item is the last assistant chunk-bearing item and the
    *  session is still busy. Adds a blinking caret / dots accordingly. */
   streaming?: boolean;
@@ -2980,9 +3061,13 @@ const ItemView = memo(function ItemView({
               {label}
             </Typography>
             {item.turnFailure && (
-              <Typography variant="caption" display="block" sx={{ color: "text.secondary" }}>
-                Send a message to continue.
-              </Typography>
+              <TurnFailureRecovery
+                itemKey={item.key}
+                detail={item.detail}
+                sessionId={sessionId}
+                status={status}
+                provider={provider}
+              />
             )}
             {item.turnFailure && item.detail && (
               <ErrorDetails detail={item.detail} />
@@ -5664,6 +5749,8 @@ export function Transcript({
                     <ItemView
                       item={item}
                       streaming={item.key === streamingRowKey}
+                      sessionId={sessionId}
+                      status={status}
                       provider={provider}
                       providerVersion={providerVersion}
                       providerDigest={providerDigest}
