@@ -226,18 +226,21 @@ and accepting a production effect are different milestones.
   also pass. The [signed 1.7.0 rollout](releases/zed-native-sync-2026-09-16.md)
   includes eight-group exact-pair acceptance, compatible actual Catalog readers,
   separately authorized Hawk Machine maintenance and completed Plugin
-  installation. This is not a public synchronization grant: adapter multi-owner
-  exclusion, core purpose/authority, Review integration and independently
-  authorized restoration remain separate gates.
+  installation. This is not a public synchronization grant. Adapter multi-owner
+  exclusion is accepted separately below; core purpose/authority, Review
+  integration and independently authorized restoration remain required.
 - [Private synchronization ownership](plugin-buffer-sync-owners.md) adds the
-  Zed `1.8.0` candidate: same-native-ID owner exclusion, conservative alias/open
+  Zed `1.8.0` release: same-native-ID owner exclusion, conservative alias/open
   admission, retained Pending/Unknown fences and one-use Apply. Original-ID
   query/retirement cannot adopt replacements, replay an effect or dispose of
-  uncertainty. Core's generic Machine Code route explicitly denies the private
-  commands before runtime selection. Focused cancellation/sharing/capacity tests
-  and an actual private-server owner/synchronization flow pass. This is not core
-  writer authority, public Review cutover, production activation or independent
-  recovery; the closed purpose declaration cannot supply those guarantees.
+  uncertainty. The verified Machine candidate explicitly denies the private
+  commands before generic runtime selection; its activation awaits separate
+  maintenance. Focused cancellation/sharing/capacity tests, real native-owner
+  synchronization, complete gates and both actual/candidate Machine connected
+  flows pass. The [signed Plugin rollout](releases/zed-sync-owners-2026-09-16.md)
+  installed `1.8.0` on Hawk while retaining both original Code processes and all
+  16 observed workers. This is not core writer authority, public Review cutover
+  or independent recovery; the closed purpose declaration supplies none of them.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -344,8 +347,11 @@ unconstrained workflow executor to hide these gaps.
 - **Remote core Code adapter:** the shared UTF-8 paging and owned Code changes
   are now [activated on Hawk](releases/zed-native-sync-2026-09-16.md) through the
   separately authorized Machine release, with exact connected acceptance and
-  installed Zed 1.7.0 evidence. Ordinary Review, independent recovery, other
-  Machines and supported-device acceptance remain separate; a healthy Machine
+  installed Zed 1.7.0 evidence. The [subsequent 1.8.0 Plugin-only upgrade](releases/zed-sync-owners-2026-09-16.md)
+  retained that Machine and existing Code connections; its new explicit generic
+  synchronization guard is still a verified Machine candidate. Ordinary Review,
+  independent recovery, other Machines and supported-device acceptance remain
+  separate; a healthy Machine
   and installed Plugin do not establish those consumer exits.
 
 These checks require real account/device participation and, for the Machine or

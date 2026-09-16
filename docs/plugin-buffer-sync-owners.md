@@ -1,9 +1,11 @@
 # Private buffer synchronization owners
 
-Source candidate: Zed Plugin/adapter `1.8.0`, paired with the unchanged static
-`cowboy-zed-server 1.0.0`. This extends the [native conditional primitive](plugin-native-buffer-sync.md),
-not the ordinary Review API or core authorization. Publication, installation
-and a permitted product consumer remain separate acceptance steps.
+Zed Plugin/adapter `1.8.0` is [signed, published and installed on Hawk](releases/zed-sync-owners-2026-09-16.md),
+paired with the unchanged static `cowboy-zed-server 1.0.0`. This extends the
+[native conditional primitive](plugin-native-buffer-sync.md), not the ordinary
+Review API or core authorization. Existing native connections were retained;
+installation does not migrate their owners or grant a product effect. The
+accompanying Machine candidate is verified but awaits separate maintenance.
 
 ## Finite private contract
 
@@ -12,7 +14,7 @@ lease, a closed `refresh_from_disk` purpose declaration and bounded desired
 content identity. It cannot accept a replacement path, native ticket or caller
 version. The adapter derives the exact current CRDT clock from its passive
 native mirror. Neither that declaration nor a read lease is a Service grant.
-Core's generic Machine dispatcher refuses both `prepareBufferSync` and
+The Machine candidate's generic dispatcher refuses both `prepareBufferSync` and
 `bufferSync` before selecting any runtime, including requests with an injected
 worktree. An authorized core continuation has not yet been added.
 
@@ -78,3 +80,6 @@ the source tests. Core synchronization authority, authority-loss handling,
 original-generation routing, Review integration, owned navigation destinations,
 independent post-effect recovery and supported-device acceptance remain open.
 The purpose enum is a closed request declaration, not that missing authority.
+Before core admission, an exact original adapter must explicitly establish
+support for this ownership contract. Native protocol-1 support alone also
+describes `1.7.0`; it cannot prove adapter exclusion or authorize synchronization.

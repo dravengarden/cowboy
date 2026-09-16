@@ -74,7 +74,8 @@ only the browser or Controller probe.
 ## Private implementation
 
 The approved implementation is a source-pinned, static Linux x86_64 private
-server (`cowboy-zed-server 1.0.0`) paired with Zed Plugin/adapter `1.7.0`. Upstream's
+server (`cowboy-zed-server 1.0.0`), introduced with Zed Plugin/adapter `1.7.0` and
+retained unchanged by the installed `1.8.0` ownership extension. Upstream's
 `version` command still identifies `1.13.0`; the signed runtime dependency
 version/digest identifies the patched distribution. The additive protobuf
 extension uses envelope tags 1000/1001 and protocol 1; it does not alter or
@@ -133,20 +134,23 @@ Review consumer.
 
 ## Remaining delivery boundary
 
-The `1.8.0` source candidate adds [private adapter ownership exclusion](plugin-buffer-sync-owners.md)
+The [installed `1.8.0` release](releases/zed-sync-owners-2026-09-16.md) adds
+[private adapter ownership exclusion](plugin-buffer-sync-owners.md)
 and a separate synchronization operation identity. It refuses shared native IDs,
 retains exclusion through Pending/Unknown, and never resends Apply. Its private
-socket purpose declaration is **not** a core grant. The Machine explicitly
-rejects these commands on its generic Code route; no Controller/Web effect or
+socket purpose declaration is **not** a core grant. The accompanying verified
+Machine candidate explicitly rejects these commands on its generic Code route;
+that candidate awaits separate maintenance. No Controller/Web effect or
 Review consumer is enabled. Core purpose/authority and original-generation
 routing remain required. Read leases and content hashes remain insufficient,
 and no fallback to legacy reload is permitted.
 
-The exact static adapter/server pair passed the eight-group connected Code gate
-and was signed, published and installed on Hawk through the normal Plugin
-installer. Separately authorized Machine maintenance retained immediate worker
-processes; one later native identity-preserving roll is recorded in the
-[rollout evidence](releases/zed-native-sync-2026-09-16.md). Building or publishing
+Both exact static releases passed the eight-group connected Code gate and were
+installed through the normal Plugin installer. The earlier `1.7.0` release's
+separately authorized Machine maintenance retained immediate worker processes;
+one later native identity-preserving roll is recorded in its
+[rollout evidence](releases/zed-native-sync-2026-09-16.md). The `1.8.0` upgrade
+restarted no Machine or existing native process. Building or publishing
 alone still does not install a Plugin or enable its effects. Actual Review must
 pass independent-reader/authority-loss/HTTP-cancellation tests, reject stale
 file/outline results and positions, own navigation destinations, and run its

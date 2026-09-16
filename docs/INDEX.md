@@ -73,6 +73,7 @@ primary phone/desktop product path.
 - [`plugin-native-buffer-sync.md`](plugin-native-buffer-sync.md) — Installed private conditional synchronization; core authority and Review cutover remain separate
 - [`plugin-buffer-sync-owners.md`](plugin-buffer-sync-owners.md) — Private adapter exclusive ownership, one-use synchronization and retained unknown fences; no core write grant
 - [`releases/zed-native-sync-2026-09-16.md`](releases/zed-native-sync-2026-09-16.md) — Signed Zed 1.7.0 installation and separate Hawk Machine maintenance, exact native gates and bounded worker continuity
+- [`releases/zed-sync-owners-2026-09-16.md`](releases/zed-sync-owners-2026-09-16.md) — Signed Zed 1.8.0 ownership exclusion, Hawk upgrade retaining Code/worker processes, and a verified but unactivated Machine candidate
 - [`plugin-process-cleanup.md`](plugin-process-cleanup.md) — Core-owned process-group signals without PATH helpers, exact worker mapping and permission-failure fences
 - [`releases/plugin-process-cleanup-2026-09-16.md`](releases/plugin-process-cleanup-2026-09-16.md) — Activated Controller cleanup repair and eight-group actual Code installation acceptance; links the subsequent separate Machine activation
 - [`plugin-controller-buffer-owners.md`](plugin-controller-buffer-owners.md) — Product-owned Controller references, bounded admitted continuations and path-free original-owner cleanup; Review/native rollout remains separate
