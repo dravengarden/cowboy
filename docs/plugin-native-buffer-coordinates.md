@@ -5,6 +5,8 @@ a passive, bounded mirror of the exact server's text CRDT. It also removes
 filesystem-text conversion from native hover/navigation. The upstream remote
 server remains `1.13.0`; the public Plugin capability and owned-read API do not
 change. This source design is not an installation receipt.
+The [candidate verification record](releases/plugin-native-coordinates-2026-09-16.md)
+binds the final binaries, integration checks and deliberately unclaimed rollout.
 
 ## Dependency decision
 

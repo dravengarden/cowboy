@@ -143,6 +143,11 @@ and accepting a production effect are different milestones.
   base-only restriction above, not the closed owned-read API. Review content
   certificates, destination ownership, actual Plugin activation and supported
   device acceptance remain separate.
+  The [candidate acceptance](releases/plugin-native-coordinates-2026-09-16.md)
+  records 51 private tests, the complete gate and exact static-process acceptance.
+  Real headless Zed does not automatically reload on disk changes: explicit
+  content synchronization is still missing. The candidate is unsigned and
+  uninstalled; no production component activation was issued by this task.
 - [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
   typed client prerequisite: captured authority lifetime and input, one-shot
   preparation/open, strict bounded readonly observations, cancellation-safe
