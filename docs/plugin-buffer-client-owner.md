@@ -108,6 +108,21 @@ This evidence is not actual Review integration, a production identity switch,
 native generation coexistence, nonempty real LSP results or supported-device
 acceptance.
 
+The complete `nix develop -c just check-compact` passed before integration:
+1,335 all-feature Rust, 305 Machine, 26 core adapter, 35 private Zed, 1,536 Web
+and 17 isolated PostgreSQL tests, plus formatting, lint, dependency, contract,
+feature and release-build gates. The existing ignored acceptance tests remain
+ignored; a passing unit gate does not stand in for those isolated process gates.
+
+Source commit `b190fe69b1725a8bdb1e986071ed8216cdb4dc04` rebases this work onto
+remote `c1c81e72` (retained browser-record deletion), preserving its change to the
+shared browser runner. Rust/core/native sources and the new client are unchanged
+by that integration. The integrated tree additionally passes Web typecheck,
+lint, all 1,538 Web tests, Web build, the runner checks, and all four relevant
+real-browser suites: Code buffers **6**, Settings recovery **9**, IDB owners **8**
+and outboxes **16**. This turn publishes source only; it activates no application
+component, Machine or installed Plugin and does not restart a live session.
+
 Before Review cutover, connect the registry to the real Service/principal
 lifetime and explicit unresolved-resource presentation; finish positional
 content/anchor semantics; accept and independently activate the exact Machine
