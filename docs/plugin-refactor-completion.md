@@ -117,12 +117,21 @@ and accepting a production effect are different milestones.
   unchecked. The later [Claude Code `3.1.23` publication](releases/claude-stream-recovery-2026-09-15.md)
   now has its own Linux/Mac and 79-release reader/adoption evidence; neither
   publication installs it into retained sessions.
+  The subsequent [Claude Code `3.1.24` publication](releases/claude-plan-usage-2026-09-16.md)
+  is also integrated; its native quota collector still requires separate Plugin
+  activation. The owned-buffer release below accepts the resulting 80-release
+  Catalog without changing an installed Plugin.
 - [Owned buffer observations](plugin-owned-buffer-reads.md) add closed diagnostics
   and symbol reads borrowing the original core/native owner, with fresh original
   credential, Session and connection checks and bounded typed result validation.
   Reads never re-resolve the source path or change effect evidence. Zed `1.4.0`
+  consumes actual diagnostic buffer updates, acknowledges their transport and
   propagates native language transport failures rather than returning false empty
-  success. Hover/navigation still need actual content/anchor version semantics;
+  success. Observed edits/reloads invalidate its bounded base coordinates.
+  Its [Controller release](releases/plugin-owned-buffer-reads-2026-09-16.md) passed
+  the complete gate and actual static-Zed conformance and is active with all 13
+  observed workers retained; the native Plugin remains an uninstalled candidate.
+  Hover/navigation still need actual content/anchor version semantics;
   the open vector is only a lower bound. Review integration, Machine/Plugin
   activation and independent post-effect recovery are not implied by this API.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,

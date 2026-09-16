@@ -5,7 +5,9 @@ and document symbols** to an already-open
 [original buffer owner](plugin-controller-buffer-owners.md). The private Zed
 candidate is `1.4.0`; its pinned upstream server remains `1.13.0`. This does not
 switch Review, install a Plugin, activate a Machine generation or complete the
-Plugin refactor. Release/production evidence is recorded separately.
+Plugin refactor. The [Controller release is active](releases/plugin-owned-buffer-reads-2026-09-16.md);
+that receipt separately records the uninstalled native candidate and remaining
+end-to-end acceptance.
 
 ## Closed protocol and coordinates
 
@@ -44,10 +46,10 @@ requests are acknowledged after local observation/invalidation so Zed can send
 subsequent chunks; this is not an acknowledgement of a complete diagnostic pull.
 
 Anchor conversion uses only a bounded native base-text snapshot. An observed
-edit, undo or reload announcement invalidates it; language reads then fail closed instead of converting
-against current disk text. Foreign, unsupported-revision and split-UTF-8
-anchors also fail. Symbol queries use native UTF-16 results and do not require
-this base-anchor conversion. Full edited-buffer coordinate support is still
+edit, undo or reload announcement invalidates it; language reads then fail closed
+instead of converting against current disk text. Foreign, unsupported-revision
+and split-UTF-8 anchors also fail. Symbol queries use native UTF-16 results and
+do not require this base-anchor conversion. Full edited-buffer coordinate support is still
 unfinished; no automatic close/reopen or lease replacement is performed.
 
 Hover/navigation are deliberately rejected by this new protocol. The old
