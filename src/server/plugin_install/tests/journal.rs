@@ -8,7 +8,7 @@ struct CheckedEffects<'a> {
 }
 
 impl Effects for CheckedEffects<'_> {
-    async fn authorized(&self) -> bool {
+    async fn authorized(&self) -> Result<(), Precondition> {
         self.inner.authorized().await
     }
     async fn needs_auth_sync(&self, before: bool) -> bool {

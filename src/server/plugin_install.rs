@@ -72,10 +72,69 @@ impl Drop for InstallationFence {
     }
 }
 
+/// Which precondition stopped an installation before it was sent.
+///
+/// The durable journal keeps recording the single `PreconditionsChanged`
+/// problem, so this adds no persisted state and no new reader schema: it exists
+/// only to make the HTTP refusal actionable. Naming the class is what the
+/// caller was missing — "confirmation, compatibility, connection or
+/// authentication preconditions changed" is true of all six of these, and an
+/// operator (or an agent converging a fleet) cannot tell from it whether to
+/// reconnect a Machine, refresh a Catalog, update Cowboy Machine, or simply
+/// re-approve. None of these name a credential or a Machine-private detail;
+/// each is state the caller can already read from its own endpoints.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Precondition {
+    /// The approval expired, was revoked, or no longer matches this request.
+    OperatorApproval,
+    /// The Machine has no current control connection, or reconnected after the
+    /// request captured one.
+    MachineConnection,
+    /// The Machine answered the target query without enabling installation
+    /// admission — its Cowboy Machine build does not accept installs yet.
+    MachineAdmission,
+    /// The Machine did not return an observable installation target.
+    MachineTarget,
+    /// The exact release is no longer trusted/current in the Catalog.
+    CatalogRelease,
+    /// The Machine's reported capability inventory rejects this release.
+    MachineCapability,
+    /// The Controller's persistence is unavailable.
+    Storage,
+}
+
+impl Precondition {
+    fn detail(self) -> &'static str {
+        match self {
+            Self::OperatorApproval => {
+                "Plugin installation was not sent: the operator approval expired, was revoked, or no longer matches this request. Approve again, then confirm."
+            }
+            Self::MachineConnection => {
+                "Plugin installation was not sent: the Machine has no current control connection, or it reconnected after this request captured one. Confirm the Machine is connected, then retry with the same operation ID."
+            }
+            Self::MachineAdmission => {
+                "Plugin installation was not sent: this Machine reports installation admission disabled. Update Cowboy Machine on that host before installing or upgrading Plugins there."
+            }
+            Self::MachineTarget => {
+                "Plugin installation was not sent: the Machine did not report an observable installation target. Confirm the Machine is connected and its Cowboy Machine build supports Plugin installation."
+            }
+            Self::CatalogRelease => {
+                "Plugin installation was not sent: the selected release is no longer current in the trusted Catalog. Refresh the Catalog and re-read the exact version and digest."
+            }
+            Self::MachineCapability => {
+                "Plugin installation was not sent: the Machine's reported capability inventory does not accept this release. Update Cowboy Machine on that host."
+            }
+            Self::Storage => {
+                "Plugin installation was not sent: Controller persistence is unavailable."
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     Installed,
-    NotDispatched,
+    NotDispatched(Precondition),
     RejectedBeforeStaging,
     AuthenticationPending,
     NeedsReconcile,
@@ -85,9 +144,7 @@ impl Outcome {
     fn response(self) -> Response {
         let detail = match self {
             Self::Installed => return StatusCode::NO_CONTENT.into_response(),
-            Self::NotDispatched => {
-                "Plugin installation was not sent: confirmation, compatibility, connection or authentication preconditions changed. Refresh before confirming again."
-            }
+            Self::NotDispatched(precondition) => precondition.detail(),
             Self::RejectedBeforeStaging => {
                 "Machine durably rejected this installation before staging began. The original attempt will not be replayed. Refresh the target before a new confirmation."
             }
@@ -103,7 +160,9 @@ impl Outcome {
 }
 
 trait Effects: Sync {
-    fn authorized(&self) -> impl std::future::Future<Output = bool> + Send;
+    /// `Ok(())` when every precondition still holds; otherwise the first one
+    /// that did not, so a refusal can say what to do about it.
+    fn authorized(&self) -> impl std::future::Future<Output = Result<(), Precondition>> + Send;
     fn needs_auth_sync(
         &self,
         before_install: bool,
@@ -122,31 +181,35 @@ async fn coordinate(
 ) -> anyhow::Result<Outcome> {
     // Legacy records are read-only evidence, not a route back into execution.
     let step = progress.machine_step()?;
-    if !effects.authorized().await {
+    if let Err(precondition) = effects.authorized().await {
         return progress
-            .abort(fence, InstallProblem::PreconditionsChanged)
+            .abort(fence, InstallProblem::PreconditionsChanged, precondition)
             .await;
     }
     if effects.needs_auth_sync(true).await {
         progress
             .advance(InstallPhase::SyncingAuthentication, None)
             .await?;
-        if !effects.authorized().await {
+        if let Err(precondition) = effects.authorized().await {
             return progress
-                .abort(fence, InstallProblem::PreconditionsChanged)
+                .abort(fence, InstallProblem::PreconditionsChanged, precondition)
                 .await;
         }
         if !effects.sync_auth().await {
             return progress
-                .abort(fence, InstallProblem::AuthenticationSyncFailed)
+                .abort(
+                    fence,
+                    InstallProblem::AuthenticationSyncFailed,
+                    Precondition::OperatorApproval,
+                )
                 .await;
         }
     }
     progress.advance(InstallPhase::Installing, None).await?;
     // A journal commit can wait on storage. Recheck after it, at enqueue.
-    if !effects.authorized().await {
+    if let Err(precondition) = effects.authorized().await {
         return progress
-            .abort(fence, InstallProblem::TransportNotSent)
+            .abort(fence, InstallProblem::TransportNotSent, precondition)
             .await;
     }
     // Cancellation/panic after this point may leave a remote effect. Only
@@ -173,7 +236,11 @@ async fn coordinate(
         }
         Err(error) if error.certainty == CommandFailure::NotSent => {
             return progress
-                .abort(fence, InstallProblem::TransportNotSent)
+                .abort(
+                    fence,
+                    InstallProblem::TransportNotSent,
+                    Precondition::MachineConnection,
+                )
                 .await;
         }
         // Missing/unavailable evidence and a generic ACK prove neither success
@@ -189,7 +256,7 @@ async fn coordinate(
         }
     }
     if effects.needs_auth_sync(false).await
-        && (!effects.authorized().await || !effects.sync_auth().await)
+        && (effects.authorized().await.is_err() || !effects.sync_auth().await)
     {
         progress
             .advance(
@@ -205,6 +272,64 @@ async fn coordinate(
     Ok(Outcome::Installed)
 }
 
+impl LiveEffects {
+    /// The precondition sequence behind `authorized`. Ordered so the caller is
+    /// told the earliest thing that has to be true: a stale approval is not
+    /// worth reporting as a Catalog problem, and a disconnected Machine is not
+    /// worth reporting as an approval problem.
+    async fn first_unmet(&self) -> Result<(), Precondition> {
+        let state = &self.state;
+        let desired = self.release.desired();
+        if !self.authority.within_budget() || self.authority.intent() != &self.intent {
+            return Err(Precondition::OperatorApproval);
+        }
+        if !state.machine_control.is_current(&self.connection) {
+            return Err(Precondition::MachineConnection);
+        }
+        if !self.release.current(&state.plugin_catalog) {
+            return Err(Precondition::CatalogRelease);
+        }
+        if !plugin_install_compatibility(state, &self.machine, desired)
+            .await
+            .is_ok_and(|problem| problem.is_none())
+        {
+            return Err(Precondition::MachineCapability);
+        }
+        if desired.release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
+            && !agent_plugin_install_compatibility(state, &self.machine, desired)
+                .await
+                .is_ok_and(|problem| problem.is_none())
+        {
+            return Err(Precondition::MachineCapability);
+        }
+        if !self
+            .authority
+            .check(
+                ProductRequestAuth::from(state.as_ref()),
+                &state.service_id,
+                &self.machine,
+                desired,
+            )
+            .await
+        {
+            return Err(Precondition::OperatorApproval);
+        }
+        // The Operator/compatibility reads may have waited for storage. Recheck
+        // the connection and Catalog trust after those awaits, immediately
+        // before the caller can enqueue an effect on the captured connection.
+        if !state.machine_control.is_current(&self.connection) {
+            return Err(Precondition::MachineConnection);
+        }
+        if !self.release.current(&state.plugin_catalog) {
+            return Err(Precondition::CatalogRelease);
+        }
+        if !self.authority.within_budget() {
+            return Err(Precondition::OperatorApproval);
+        }
+        Ok(())
+    }
+}
+
 struct LiveEffects {
     state: Arc<AppState>,
     machine: String,
@@ -215,39 +340,16 @@ struct LiveEffects {
 }
 
 impl Effects for LiveEffects {
-    async fn authorized(&self) -> bool {
-        let state = &self.state;
-        let desired = self.release.desired();
-        let valid = self.authority.within_budget()
-            && self.authority.intent() == &self.intent
-            && state.machine_control.is_current(&self.connection)
-            && self.release.current(&state.plugin_catalog)
-            && plugin_install_compatibility(state, &self.machine, desired)
-                .await
-                .is_ok_and(|problem| problem.is_none())
-            && (desired.release.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider
-                || agent_plugin_install_compatibility(state, &self.machine, desired)
-                    .await
-                    .is_ok_and(|problem| problem.is_none()))
-            && self
-                .authority
-                .check(
-                    ProductRequestAuth::from(state.as_ref()),
-                    &state.service_id,
-                    &self.machine,
-                    desired,
-                )
-                .await
-            && state.machine_control.is_current(&self.connection)
-            // The Operator/compatibility reads may have waited for storage.
-            // Recheck Catalog trust after those awaits, immediately before the
-            // caller can enqueue an effect on the captured connection.
-            && self.release.current(&state.plugin_catalog)
-            && self.authority.within_budget();
-        if !valid {
+    async fn authorized(&self) -> Result<(), Precondition> {
+        // Same checks, same order, same short-circuit as the previous `&&`
+        // chain — including the deliberate re-checks after each await, since a
+        // connection or Catalog can change while an earlier check waits on
+        // storage. The only difference is that the first failure is now named.
+        let result = self.first_unmet().await;
+        if result.is_err() {
             self.authority.revoke();
         }
-        valid
+        result
     }
 
     async fn needs_auth_sync(&self, before_install: bool) -> bool {
@@ -279,7 +381,7 @@ impl Effects for LiveEffects {
         };
         // Key lookup may wait for storage. Check again at enqueue, retaining the
         // original connection rather than silently following a reconnect.
-        self.authorized().await
+        self.authorized().await.is_ok()
             && self
                 .state
                 .provider_auth_sync
@@ -325,7 +427,7 @@ async fn run_admitted(effects: LiveEffects, mut fence: InstallationFence) -> Res
         .await
     {
         Ok(Some(problem)) => return plugin_compatibility_response(problem),
-        Err(_) => return Outcome::NotDispatched.response(),
+        Err(_) => return Outcome::NotDispatched(Precondition::MachineCapability).response(),
         Ok(None) => {}
     }
     if effects.release.desired().release.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
@@ -338,15 +440,15 @@ async fn run_admitted(effects: LiveEffects, mut fence: InstallationFence) -> Res
         .await
         {
             Ok(Some(problem)) => return provider_compatibility_response(problem),
-            Err(_) => return Outcome::NotDispatched.response(),
+            Err(_) => return Outcome::NotDispatched(Precondition::MachineCapability).response(),
             Ok(None) => {}
         }
     }
     let Some(store) = effects.state.store.as_ref() else {
-        return Outcome::NotDispatched.response();
+        return Outcome::NotDispatched(Precondition::Storage).response();
     };
-    if !effects.authorized().await {
-        return Outcome::NotDispatched.response();
+    if let Err(precondition) = effects.authorized().await {
+        return Outcome::NotDispatched(precondition).response();
     }
     // Even COMMIT failure may be ambiguous. From here, only a durable terminal
     // transition can release this process's reservation.
@@ -452,7 +554,7 @@ pub(super) async fn confirmed_install(
     };
     let connection = match state.machine_control.operation_connection(&machine) {
         Ok(connection) => connection,
-        Err(_) => return Outcome::NotDispatched.response(),
+        Err(_) => return Outcome::NotDispatched(Precondition::MachineConnection).response(),
     };
     // Pure observation on the original connection; inventory absence is never
     // a Vacant target. Time spent here consumes the original approval budget.
@@ -472,7 +574,14 @@ pub(super) async fn confirmed_install(
             target,
             ..
         }) => target,
-        _ => return Outcome::NotDispatched.response(),
+        // A Machine that answers with admission disabled is a different fact
+        // from one that could not answer at all, and the two need different
+        // fixes: update Cowboy Machine there, versus reconnect it.
+        Ok(InstallTargetObservation::Observed {
+            admission_enabled: false,
+            ..
+        }) => return Outcome::NotDispatched(Precondition::MachineAdmission).response(),
+        _ => return Outcome::NotDispatched(Precondition::MachineTarget).response(),
     };
     let authority =
         match approval.bind_installation(&machine, release.desired(), request.operation_id, target)
