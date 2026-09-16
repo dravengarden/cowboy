@@ -4,6 +4,8 @@ The [typed browser owner](plugin-buffer-client-owner.md) now has a core product
 entry point, `productCodeBuffers.ready()`. Communication, identity and resource
 admission remain core mechanisms, not installable Plugins. Ordinary Review still
 uses its existing API; this integration is a prerequisite, not that cutover.
+The [verified Web release](releases/plugin-buffer-product-context-2026-09-16.md)
+is active on Hawk with service worker `cowboy-v1695`; it restarted no process.
 
 ## Identity and time
 

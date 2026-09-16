@@ -155,6 +155,8 @@ and accepting a production effect are different milestones.
   product-store admission fixture also retains pending prompts without delivery.
   Review, native rollout, abandoned-browser recovery and device acceptance remain
   separate; the core facade is not a serialized grant or Plugin API.
+  Its [Web-only release](releases/plugin-buffer-product-context-2026-09-16.md)
+  is active with the full gate passing and all 13 observed workers retained.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
