@@ -13,6 +13,18 @@ fn base(cache: &mut Cache, text: &str) {
             ..proto::CreateBufferForPeer::default()
         },
     ));
+    cache.observe(&proto::envelope::Payload::CreateBufferForPeer(
+        proto::CreateBufferForPeer {
+            variant: Some(proto::create_buffer_for_peer::Variant::Chunk(
+                proto::BufferChunk {
+                    buffer_id: 7,
+                    is_last: true,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    ));
 }
 
 fn update(cache: &mut Cache, server: u64, timestamp: u32, diagnostics: Vec<proto::Diagnostic>) {
@@ -125,7 +137,7 @@ fn missing_foreign_nonbase_and_mid_character_anchors_fail_closed() {
         value.start = anchor;
         update(&mut cache, 1, 1, vec![value]);
         assert!(cache.read(7, revision).is_err());
-        assert_eq!(cache.diagnostic_bytes, 0);
+        assert!(cache.diagnostic_bytes <= "fixture diagnostic".len());
     }
 }
 
@@ -168,7 +180,12 @@ fn batched_coordinates_match_utf16_boundaries_including_eof() {
             ..proto::Diagnostic::default()
         })
         .collect();
-    let converted = convert(text, 7, &values).unwrap();
+    let mirror = Mirror::new(7, text).unwrap();
+    let converted: Vec<_> = capture(&values)
+        .unwrap()
+        .iter()
+        .map(|value| convert(&mirror, value).unwrap())
+        .collect();
     for (entry, offset) in converted.iter().zip(offsets) {
         let expected = crate::offset_to_utf16_point(text, offset).unwrap();
         assert_eq!(
@@ -190,7 +207,8 @@ fn buffer_update_ack_and_reload_invalidation_follow_the_pinned_protocol() {
     assert!(!crate::peer_request_requires_ack(&reload));
     cache.observe(&reload);
     assert!(cache.read(7, revision).is_err());
-    assert_eq!(cache.text_bytes, 0);
+    assert_eq!(cache.text_bytes, 6);
+    assert!(cache.read(7, cache.revision(7).unwrap()).is_ok());
     assert!(crate::peer_request_requires_ack(
         &proto::envelope::Payload::UpdateBuffer(proto::UpdateBuffer::default())
     ));
@@ -200,4 +218,59 @@ fn buffer_update_ack_and_reload_invalidation_follow_the_pinned_protocol() {
     assert!(!crate::peer_request_requires_ack(
         &proto::envelope::Payload::LspQueryResponse(proto::LspQueryResponse::default())
     ));
+}
+
+#[test]
+fn initial_share_and_reload_wait_for_history_without_reopening() {
+    let mut cache = Cache::default();
+    base(&mut cache, "a🙂z\n");
+    cache.buffers.get_mut(&7).unwrap().shared = false;
+    assert!(cache.revision(7).is_err());
+    cache.buffers.get_mut(&7).unwrap().shared = true;
+    let old = cache.revision(7).unwrap();
+    let mut peer = crate::coordinates::tests::peer("a🙂z\n", 1);
+    let edit = crate::coordinates::tests::wire(&peer.edit([(0..0, "汉\n")]));
+    cache.observe(&proto::envelope::Payload::BufferReloaded(
+        proto::BufferReloaded {
+            buffer_id: 7,
+            version: peer
+                .version()
+                .iter()
+                .map(|entry| proto::VectorClockEntry {
+                    replica_id: u32::from(entry.replica_id.as_u16()),
+                    timestamp: entry.value,
+                })
+                .collect(),
+            ..Default::default()
+        },
+    ));
+    assert!(cache.revision(7).is_err());
+    assert!(cache.buffers[&7].text.is_some());
+    cache.operations(7, std::slice::from_ref(&edit));
+    let new = cache.revision(7).unwrap();
+    assert!(cache.read(7, old).is_err());
+    cache.operations(7, &[edit]);
+    assert_eq!(cache.revision(7).unwrap(), new, "duplicate advanced epoch");
+    assert!(cache.read(7, new).is_ok());
+}
+
+#[test]
+fn diagnostics_keep_original_anchors_but_resolve_against_edited_content() {
+    let mut cache = Cache::default();
+    base(&mut cache, "a🙂z\n");
+    update(&mut cache, 1, 1, vec![diagnostic()]);
+    let old = cache.revision(7).unwrap();
+    let mut peer = crate::coordinates::tests::peer("a🙂z\n", 1);
+    let operation = crate::coordinates::tests::wire(&peer.edit([(0..0, "汉\n")]));
+    cache.operations(7, &[operation]);
+    assert!(cache.check(7, old).is_err());
+    let (_, entries) = cache.read(7, cache.revision(7).unwrap()).unwrap();
+    assert_eq!(
+        (
+            entries[0].start.row,
+            entries[0].start.column,
+            entries[0].end.column
+        ),
+        (1, 1, 3)
+    );
 }

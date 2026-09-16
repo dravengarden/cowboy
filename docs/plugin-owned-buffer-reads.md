@@ -3,7 +3,7 @@
 The additive Controller API now connects **diagnostics/inlays/semantic tokens
 and document symbols** to an already-open
 [original buffer owner](plugin-controller-buffer-owners.md). The private Zed
-candidate is `1.4.0`; its pinned upstream server remains `1.13.0`. This does not
+candidate is now `1.5.0`; its pinned upstream server remains `1.13.0`. This does not
 switch Review, install a Plugin, activate a Machine generation or complete the
 Plugin refactor. The [Controller release is active](releases/plugin-owned-buffer-reads-2026-09-16.md);
 that receipt separately records the uninstalled native candidate and remaining
@@ -29,8 +29,8 @@ apply before resource lookup. Success is HTTP 200 with `Cache-Control: no-store`
 are generic and no-store; native paths, references and error details are not
 returned as browser execution authority.
 
-`openedVersion` is the vector captured when the native buffer was opened, used
-as a **lower bound** by Zed's language queries. It is not a current content
+`openedVersion` is the vector captured when the native buffer was opened: a
+**lower bound**, not a current content
 snapshot, an edit revision, a writer fence or a position certificate. Diagnostic
 ranges and symbol ranges are observations from the retained native buffer; this
 slice does not claim that several language servers observed one atomic version.
@@ -45,19 +45,23 @@ Per-server Lamport stamps reject older diagnostic updates. Buffer update
 requests are acknowledged after local observation/invalidation so Zed can send
 subsequent chunks; this is not an acknowledgement of a complete diagnostic pull.
 
-Anchor conversion uses only a bounded native base-text snapshot. An observed
-edit, undo or reload announcement invalidates it; language reads then fail closed
-instead of converting against current disk text. Foreign, unsupported-revision
-and split-UTF-8 anchors also fail. Symbol queries use native UTF-16 results and
-do not require this base-anchor conversion. Full edited-buffer coordinate support is still
-unfinished; no automatic close/reopen or lease replacement is performed.
+The `1.5.0` private adapter uses the exact pinned upstream text engine for
+[bounded edited-buffer coordinates](plugin-native-buffer-coordinates.md).
+Initial sharing must finish; reload announcements wait for their native version
+floor. Edit/undo history advances an adapter-local epoch. Queries capture the
+current native vector and reject results when that epoch changes during I/O.
+Foreign, unavailable and split-UTF-8 anchors fail closed. There is no disk-text
+conversion, automatic close/reopen or lease replacement. Diagnostic anchors
+remain last-observed and are resolved against the retained native content;
+the epoch check does not turn multiple LSP responses into an atomic snapshot.
 
 Hover/navigation are deliberately rejected by this new protocol. The old
-implementation converts UTF-16 coordinates using current filesystem text and
-then builds an anchor in Zed's original base insertion. Simply attaching a
-buffer handle or comparing the old vector would not make those coordinates
-correct after edits. A later positional reader needs actual native content /
-anchor ownership and version semantics, including navigation destinations.
+implementation's disk/base-insertion conversion is replaced in `1.5.0` with
+actual native insertion anchors. This fixes a native implementation prerequisite,
+not the missing browser-content certificate. Simply attaching a buffer handle or
+comparing the open vector cannot bind the browser's cursor to that native text.
+A later positional reader still needs content/anchor ownership and version
+semantics across the client boundary, including navigation destinations.
 The legacy Review request/response shapes remain unchanged. Their language
 implementation gains the same native diagnostic cache, conservative anchor
 checks and transport-error propagation; only the new owned response exposes
@@ -102,8 +106,10 @@ words in complete groups of five, 2,000 total symbols with depth at most 16,
 and 64 KiB per text value. Ranges and inlay offsets are validated. Limits reject
 bad observations; they never claim a successful empty result or successful
 cleanup. The existing transport/frame bounds remain independent.
-Native snapshots are capped at 1,024 buffers, 4 MiB text per buffer and 32 MiB
-total text; diagnostic strings at 1 MiB per buffer and 8 MiB total, with at most
+Native mirrors are capped at 1,024 buffers, 4 MiB retained history per buffer
+and 32 MiB globally (base text + encoded operations + dense clock charge, not
+an RSS claim), plus 4,096 operations per buffer; diagnostic strings at 1 MiB
+per buffer and 8 MiB total, with at most
 32 servers per buffer. Unused diagnostic protocol fields are not retained.
 Native close removes the snapshot; limits or invalid coordinates never evict
 or release the underlying buffer owner.

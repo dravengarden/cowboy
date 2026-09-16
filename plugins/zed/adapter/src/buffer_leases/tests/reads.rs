@@ -153,5 +153,28 @@ async fn language_transport_failure_is_not_an_empty_success() {
                 ..Default::default()
             },
         ));
-    assert!(zed.language(1, &[]).await.is_err());
+    zed.diagnostics
+        .lock()
+        .unwrap()
+        .observe(&proto::envelope::Payload::CreateBufferForPeer(
+            proto::CreateBufferForPeer {
+                variant: Some(proto::create_buffer_for_peer::Variant::Chunk(
+                    proto::BufferChunk {
+                        buffer_id: 1,
+                        is_last: true,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+    let error = zed
+        .language(1)
+        .await
+        .err()
+        .expect("dead transport succeeded");
+    assert!(
+        error.to_string().contains("Zed writer task stopped"),
+        "{error:#}"
+    );
 }

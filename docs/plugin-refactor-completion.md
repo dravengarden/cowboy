@@ -134,6 +134,15 @@ and accepting a production effect are different milestones.
   Hover/navigation still need actual content/anchor version semantics;
   the open vector is only a lower bound. Review integration, Machine/Plugin
   activation and independent post-effect recovery are not implied by this API.
+- [Native edited-buffer coordinates](plugin-native-buffer-coordinates.md) advance
+  the private Zed candidate to `1.5.0`. A bounded passive mirror uses the exact
+  pinned upstream text engine for edits, undo and insertion anchors, including
+  UTF-16/UTF-8 validation over tombstones. Native language, hover, navigation and
+  symbol reads reject late text changes. Reload floors do not reopen owners;
+  diagnostic state remains explicitly last-observed. This supersedes the `1.4.0`
+  base-only restriction above, not the closed owned-read API. Review content
+  certificates, destination ownership, actual Plugin activation and supported
+  device acceptance remain separate.
 - [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
   typed client prerequisite: captured authority lifetime and input, one-shot
   preparation/open, strict bounded readonly observations, cancellation-safe

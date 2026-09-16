@@ -5435,6 +5435,33 @@ mod tests {
             1
         );
         assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+        // A position on a newly added line cannot be represented by the old
+        // base insertion. Observe the real server's reload/edits without
+        // reopening the buffer; no language server is configured for .txt.
+        fs::write(
+            worktree.join("fixture.txt"),
+            "real isolated Zed buffer\nnew native line\n汉🙂 tail\n",
+        )
+        .unwrap();
+        let hover = serde_json::json!({"type":"bufferHover", "worktree":worktree,
+            "path":"fixture.txt", "row":2, "column":3});
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                if let Ok(observed) = store.code_request("zed", &hover, None).await {
+                    assert_eq!(observed["type"], "bufferHover");
+                    assert!(observed["contents"].is_array());
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("real native edited-buffer coordinates never became readable");
+        assert_eq!(
+            store.code_request("zed", &open_buffer, None).await.unwrap()["leases"],
+            1,
+            "read refreshed or replaced the original owner"
+        );
         // New native references are allocated *before* open effects. Keep
         // the legacy lease alongside them to prove the shared buffer owner
         // sets and uninstall drain remain independent.

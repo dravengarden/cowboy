@@ -282,7 +282,7 @@ impl Registry {
         let result = match request {
             ReadRequest::Language {} => {
                 let observation = if let Some(zed) = zed {
-                    zed.language(buffer.remote_id, &buffer.version).await?
+                    zed.language(buffer.remote_id).await?
                 } else {
                     super::LanguageObservation::default()
                 };
@@ -295,8 +295,7 @@ impl Registry {
             }
             ReadRequest::Symbols {} => ReadOutput::Symbols {
                 symbols: if let Some(zed) = zed {
-                    zed.document_symbols(buffer.remote_id, &buffer.version)
-                        .await?
+                    zed.document_symbols(buffer.remote_id).await?
                 } else {
                     Vec::new()
                 },

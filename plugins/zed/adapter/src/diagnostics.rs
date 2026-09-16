@@ -1,15 +1,15 @@
-//! Zed 1.13 diagnostics arrive as buffer operations, not `LspQueryResponse`.
-//! Until a full CRDT mirror exists, anchor conversion is supported only while
-//! the original base text is unchanged. Never resolve anchors using disk text.
-
+//! Bounded original-native-buffer observations, including edited text anchors.
+//! Diagnostics remain last-observed state, not an atomic multi-LSP snapshot.
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context as _, Result, ensure};
 use serde::Serialize;
 
-use crate::{LanguageDiagnostic, LanguagePoint, MAX_DIAGNOSTICS};
+use crate::{
+    BufferVersionEntry, LanguageDiagnostic, LanguagePoint, MAX_DIAGNOSTICS, coordinates::Mirror,
+};
 
-const MAX_TEXT: usize = 4 * 1024 * 1024;
+const MAX_TEXT: usize = crate::coordinates::MAX_HISTORY;
 const MAX_TOTAL_TEXT: usize = 32 * 1024 * 1024;
 const MAX_DIAGNOSTIC_TEXT: usize = 1024 * 1024;
 const MAX_TOTAL_DIAGNOSTIC_TEXT: usize = 8 * 1024 * 1024;
@@ -23,7 +23,8 @@ pub(crate) enum Status {
 }
 
 struct Buffer {
-    text: Option<String>,
+    text: Option<Mirror>,
+    shared: bool,
     revision: u64,
     servers: BTreeMap<u64, Server>,
     diagnostic_bytes: usize,
@@ -32,12 +33,28 @@ struct Buffer {
 
 struct Server {
     stamp: (u32, u32),
-    diagnostics: Vec<LanguageDiagnostic>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+struct Diagnostic {
+    start: proto::Anchor,
+    end: proto::Anchor,
+    severity: i32,
+    source: Option<String>,
+    message: String,
+}
+
+/// Private query continuation, never serialized or reconstructed from a path.
+pub(crate) struct Position {
+    pub(crate) revision: u64,
+    pub(crate) anchor: proto::Anchor,
+    pub(crate) version: Vec<BufferVersionEntry>,
 }
 
 #[derive(Default)]
 pub(crate) struct Cache {
     buffers: HashMap<u64, Buffer>,
+    // Retained base + encoded text history, not just currently visible bytes.
     text_bytes: usize,
     diagnostic_bytes: usize,
     sequence: u64,
@@ -46,7 +63,7 @@ pub(crate) struct Cache {
 impl Cache {
     pub(crate) fn remove(&mut self, id: u64) {
         if let Some(buffer) = self.buffers.remove(&id) {
-            self.text_bytes -= buffer.text.as_ref().map_or(0, String::len);
+            self.text_bytes -= buffer.text.as_ref().map_or(0, Mirror::bytes);
             self.diagnostic_bytes -= buffer.diagnostic_bytes;
         }
     }
@@ -65,12 +82,21 @@ impl Cache {
                     self.sequence = sequence;
                     let text = (state.base_text.len() <= MAX_TEXT
                         && self.text_bytes + state.base_text.len() <= MAX_TOTAL_TEXT)
-                        .then(|| state.base_text.clone());
-                    self.text_bytes += text.as_ref().map_or(0, String::len);
+                        .then(|| {
+                            Mirror::new(state.id, &state.base_text)
+                                .and_then(|mut text| {
+                                    text.require(&state.saved_version)?;
+                                    Ok(text)
+                                })
+                                .ok()
+                        })
+                        .flatten();
+                    self.text_bytes += text.as_ref().map_or(0, Mirror::bytes);
                     self.buffers.insert(
                         state.id,
                         Buffer {
                             text,
+                            shared: false,
                             revision: sequence,
                             servers: BTreeMap::new(),
                             diagnostic_bytes: 0,
@@ -80,6 +106,11 @@ impl Cache {
                 }
                 Some(proto::create_buffer_for_peer::Variant::Chunk(chunk)) => {
                     self.operations(chunk.buffer_id, &chunk.operations);
+                    if chunk.is_last
+                        && let Some(buffer) = self.buffers.get_mut(&chunk.buffer_id)
+                    {
+                        buffer.shared = true;
+                    }
                 }
                 None => {}
             },
@@ -87,12 +118,20 @@ impl Cache {
                 self.operations(update.buffer_id, &update.operations);
             }
             proto::envelope::Payload::BufferReloaded(update) => {
-                // Zed can announce reload before sending its edit chunks.
                 if let Some(buffer) = self.buffers.get_mut(&update.buffer_id) {
-                    self.text_bytes -= buffer.text.take().as_ref().map_or(0, String::len);
-                    self.diagnostic_bytes -= buffer.diagnostic_bytes;
-                    buffer.diagnostic_bytes = 0;
-                    buffer.servers.clear();
+                    // The announcement may precede its edits. Keep the same
+                    // history, but refuse reads until that exact floor arrives.
+                    if let Some(sequence) = self.sequence.checked_add(1) {
+                        self.sequence = sequence;
+                        buffer.revision = sequence;
+                        if let Some(text) = &mut buffer.text
+                            && text.require(&update.version).is_err()
+                        {
+                            self.text_bytes -= buffer.text.take().map_or(0, |text| text.bytes());
+                        }
+                    } else {
+                        self.text_bytes -= buffer.text.take().map_or(0, |text| text.bytes());
+                    }
                 }
             }
             _ => {}
@@ -106,10 +145,27 @@ impl Cache {
         for operation in operations {
             match &operation.variant {
                 Some(proto::operation::Variant::Edit(_) | proto::operation::Variant::Undo(_)) => {
-                    self.text_bytes -= buffer.text.take().as_ref().map_or(0, String::len);
-                    self.diagnostic_bytes -= buffer.diagnostic_bytes;
-                    buffer.diagnostic_bytes = 0;
-                    buffer.servers.clear();
+                    let Some(mut text) = buffer.text.take() else {
+                        continue;
+                    };
+                    let previous = text.bytes();
+                    let applied = self
+                        .sequence
+                        .checked_add(1)
+                        .zip(text.apply(operation, MAX_TOTAL_TEXT - self.text_bytes).ok());
+                    self.text_bytes -= previous;
+                    if let Some((sequence, changed)) = applied {
+                        if changed {
+                            self.sequence = sequence;
+                            buffer.revision = sequence;
+                        }
+                        self.text_bytes += text.bytes();
+                        buffer.text = Some(text);
+                    } else {
+                        self.diagnostic_bytes -= buffer.diagnostic_bytes;
+                        buffer.diagnostic_bytes = 0;
+                        buffer.servers.clear();
+                    }
                 }
                 Some(proto::operation::Variant::UpdateDiagnostics(update)) => {
                     if buffer.text.is_none() || buffer.overflow {
@@ -140,27 +196,25 @@ impl Cache {
                     }
                     self.diagnostic_bytes -= buffer.diagnostic_bytes;
                     buffer.diagnostic_bytes = 0;
-                    if count > MAX_DIAGNOSTICS
+                    let captured = if count > MAX_DIAGNOSTICS
                         || bytes > MAX_DIAGNOSTIC_TEXT
                         || self.diagnostic_bytes + bytes > MAX_TOTAL_DIAGNOSTIC_TEXT
                         || (!buffer.servers.contains_key(&update.server_id)
                             && buffer.servers.len() >= 32)
                     {
+                        None
+                    } else {
+                        capture(&update.diagnostics).ok()
+                    };
+                    if let Some(diagnostics) = captured {
+                        buffer
+                            .servers
+                            .insert(update.server_id, Server { stamp, diagnostics });
+                        buffer.diagnostic_bytes = bytes;
+                        self.diagnostic_bytes += bytes;
+                    } else {
                         buffer.overflow = true;
                         buffer.servers.clear();
-                    } else {
-                        let text = buffer.text.as_deref().expect("snapshot was checked");
-                        let diagnostics = convert(text, id, &update.diagnostics);
-                        if let Ok(diagnostics) = diagnostics {
-                            buffer
-                                .servers
-                                .insert(update.server_id, Server { stamp, diagnostics });
-                            buffer.diagnostic_bytes = bytes;
-                            self.diagnostic_bytes += bytes;
-                        } else {
-                            buffer.overflow = true;
-                            buffer.servers.clear();
-                        }
                     }
                 }
                 _ => {}
@@ -168,33 +222,62 @@ impl Cache {
         }
     }
 
-    pub(crate) fn revision(&self, id: u64) -> Result<u64> {
+    fn text(&self, id: u64) -> Result<&Mirror> {
         let buffer = self
             .buffers
             .get(&id)
             .context("native buffer snapshot unavailable")?;
+        let text = buffer
+            .text
+            .as_ref()
+            .context("native buffer history is invalid or exceeds limits")?;
         ensure!(
-            buffer.text.is_some(),
-            "native buffer content changed or exceeds snapshot limits"
+            buffer.shared && text.ready(),
+            "native buffer history is incomplete"
         );
         ensure!(
             !buffer.overflow,
             "native diagnostic snapshot is invalid or exceeds limits"
         );
-        Ok(buffer.revision)
+        Ok(text)
     }
 
-    pub(crate) fn read(&self, id: u64, revision: u64) -> Result<(Status, Vec<LanguageDiagnostic>)> {
+    pub(crate) fn revision(&self, id: u64) -> Result<u64> {
+        self.text(id)?;
+        Ok(self.buffers[&id].revision)
+    }
+
+    pub(crate) fn version(&self, id: u64) -> Result<Vec<BufferVersionEntry>> {
+        Ok(self.text(id)?.version())
+    }
+
+    pub(crate) fn check(&self, id: u64, revision: u64) -> Result<()> {
         ensure!(
             self.revision(id)? == revision,
             "native buffer snapshot changed during read"
         );
+        Ok(())
+    }
+
+    pub(crate) fn position(&self, id: u64, row: u32, column: u32) -> Result<Position> {
+        let text = self.text(id)?;
+        Ok(Position {
+            revision: self.revision(id)?,
+            anchor: text.position(row, column)?,
+            version: text.version(),
+        })
+    }
+
+    pub(crate) fn read(&self, id: u64, revision: u64) -> Result<(Status, Vec<LanguageDiagnostic>)> {
+        self.check(id, revision)?;
+        let text = self.text(id)?;
         let buffer = &self.buffers[&id];
         let diagnostics = buffer
             .servers
             .values()
-            .flat_map(|server| server.diagnostics.clone())
-            .collect();
+            .flat_map(|server| &server.diagnostics)
+            .map(|diagnostic| convert(text, diagnostic))
+            .collect::<Result<_>>()?;
         Ok((
             if buffer.servers.is_empty() {
                 Status::Unobserved
@@ -206,105 +289,51 @@ impl Cache {
     }
 
     pub(crate) fn anchor_offset(&self, id: u64, anchor: &proto::Anchor) -> Result<u64> {
-        self.revision(id)?;
-        let text = self.buffers[&id]
-            .text
-            .as_deref()
-            .expect("snapshot was checked");
-        let offset = anchor_offset(anchor, id, text.len())?;
+        self.text(id)?.offset(anchor)
+    }
+
+    pub(crate) fn range(
+        &self,
+        id: u64,
+        start: &proto::Anchor,
+        end: &proto::Anchor,
+    ) -> Result<(LanguagePoint, LanguagePoint)> {
+        let text = self.text(id)?;
         ensure!(
-            text.is_char_boundary(usize::try_from(offset)?),
-            "invalid inlay anchor boundary"
+            text.offset(start)? <= text.offset(end)?,
+            "reversed native anchor range"
         );
-        Ok(offset)
+        Ok((text.point(start)?, text.point(end)?))
     }
 }
 
-fn convert(
-    text: &str,
-    id: u64,
-    diagnostics: &[proto::Diagnostic],
-) -> Result<Vec<LanguageDiagnostic>> {
-    let mut ranges = Vec::with_capacity(diagnostics.len());
-    let mut offsets = Vec::with_capacity(diagnostics.len() * 2);
-    for diagnostic in diagnostics {
-        let start = anchor_offset(
-            diagnostic
-                .start
-                .as_ref()
-                .context("diagnostic start missing")?,
-            id,
-            text.len(),
-        )?;
-        let end = anchor_offset(
-            diagnostic.end.as_ref().context("diagnostic end missing")?,
-            id,
-            text.len(),
-        )?;
-        ensure!(
-            start <= end
-                && text.is_char_boundary(usize::try_from(start)?)
-                && text.is_char_boundary(usize::try_from(end)?),
-            "invalid diagnostic range"
-        );
-        ranges.push((start, end));
-        offsets.extend([start, end]);
-    }
-    offsets.sort_unstable();
-    offsets.dedup();
-    let mut wanted = offsets.into_iter().peekable();
-    let mut points = BTreeMap::new();
-    let mut point = LanguagePoint { row: 0, column: 0 };
-    // One scan, not one full-text scan per diagnostic in the protocol reader.
-    for (offset, character) in text
-        .char_indices()
-        .chain(std::iter::once((text.len(), '\0')))
-    {
-        if wanted.peek() == Some(&u64::try_from(offset)?) {
-            points.insert(wanted.next().expect("offset was present"), point.clone());
-        }
-        if wanted.peek().is_none() {
-            break;
-        }
-        if character == '\n' {
-            point.row += 1;
-            point.column = 0;
-        } else {
-            point.column += u32::try_from(character.len_utf16())?;
-        }
-    }
-    Ok(diagnostics
+fn capture(values: &[proto::Diagnostic]) -> Result<Vec<Diagnostic>> {
+    values
         .iter()
-        .zip(ranges)
-        .map(|(diagnostic, (start, end))| LanguageDiagnostic {
-            start: points[&start].clone(),
-            end: points[&end].clone(),
-            severity: diagnostic.severity,
-            source: diagnostic.source.clone(),
-            message: diagnostic.message.clone(),
+        .map(|value| {
+            Ok(Diagnostic {
+                start: value.start.clone().context("diagnostic start missing")?,
+                end: value.end.clone().context("diagnostic end missing")?,
+                severity: value.severity,
+                source: value.source.clone(),
+                message: value.message.clone(),
+            })
         })
-        .collect())
+        .collect()
 }
 
-fn anchor_offset(anchor: &proto::Anchor, id: u64, length: usize) -> Result<u64> {
+fn convert(text: &Mirror, diagnostic: &Diagnostic) -> Result<LanguageDiagnostic> {
     ensure!(
-        anchor.buffer_id.is_none_or(|buffer| buffer == id),
-        "foreign buffer anchor"
+        text.offset(&diagnostic.start)? <= text.offset(&diagnostic.end)?,
+        "reversed diagnostic range"
     );
-    if anchor.replica_id == 0 && anchor.timestamp == 0 && anchor.offset == 0 {
-        return Ok(0);
-    }
-    if anchor.replica_id == u32::from(u16::MAX)
-        && anchor.timestamp == u32::MAX
-        && anchor.offset == u64::from(u32::MAX)
-    {
-        return Ok(u64::try_from(length)?);
-    }
-    ensure!(
-        anchor.replica_id == 0 && anchor.timestamp == 1 && anchor.offset <= u64::try_from(length)?,
-        "anchor requires an unsupported content revision"
-    );
-    Ok(anchor.offset)
+    Ok(LanguageDiagnostic {
+        start: text.point(&diagnostic.start)?,
+        end: text.point(&diagnostic.end)?,
+        severity: diagnostic.severity,
+        source: diagnostic.source.clone(),
+        message: diagnostic.message.clone(),
+    })
 }
 
 #[cfg(test)]

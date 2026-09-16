@@ -15,6 +15,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
 mod buffer_leases;
+#[cfg(test)]
+mod coordinate_queries;
+mod coordinates;
 mod diagnostics;
 
 const ADAPTER_VERSION: u8 = 1;
@@ -734,23 +737,18 @@ impl ZedRuntime {
         Ok(())
     }
 
-    async fn language(
-        &self,
-        buffer_id: u64,
-        version: &[BufferVersionEntry],
-    ) -> Result<LanguageObservation> {
-        let revision = self
-            .diagnostics
-            .lock()
-            .expect("diagnostic cache poisoned")
-            .revision(buffer_id)?;
+    async fn language(&self, buffer_id: u64) -> Result<LanguageObservation> {
+        let (revision, version) = {
+            let cache = self.diagnostics.lock().expect("diagnostic cache poisoned");
+            (cache.revision(buffer_id)?, cache.version(buffer_id)?)
+        };
         // In this pinned Zed protocol diagnostics trigger an asynchronous buffer
         // update, not an LspQueryResponse. An ACK is not refresh completion.
         let diagnostics_request = self.start_lsp_query(
             proto::lsp_query::Request::GetDocumentDiagnostics(proto::GetDocumentDiagnostics {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 buffer_id,
-                version: proto_version(version),
+                version: proto_version(&version),
             }),
         );
         let inlay_request =
@@ -771,14 +769,14 @@ impl ZedRuntime {
                     bias: proto::Bias::Right as i32,
                     buffer_id: Some(buffer_id),
                 }),
-                version: proto_version(version),
+                version: proto_version(&version),
             }));
         let semantic_request = self.lsp_query(proto::lsp_query::Request::SemanticTokens(
             proto::SemanticTokens {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 buffer_id,
                 for_server: None,
-                version: proto_version(version),
+                version: proto_version(&version),
             },
         ));
         let (diagnostics_ack, inlay_hints, semantic_tokens) =
@@ -827,17 +825,26 @@ impl ZedRuntime {
     async fn hover(
         &self,
         buffer_id: u64,
-        version: &[BufferVersionEntry],
-        offset: u64,
+        row: u32,
+        column: u32,
     ) -> Result<Vec<LanguageHoverBlock>> {
+        let position = self
+            .diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .position(buffer_id, row, column)?;
         let responses = self
             .lsp_query(proto::lsp_query::Request::GetHover(proto::GetHover {
                 project_id: proto::REMOTE_SERVER_PROJECT_ID,
                 buffer_id,
-                position: Some(position_anchor(buffer_id, offset)),
-                version: proto_version(version),
+                position: Some(position.anchor),
+                version: proto_version(&position.version),
             }))
             .await?;
+        self.diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .check(buffer_id, position.revision)?;
         Ok(responses
             .into_iter()
             .filter_map(|response| match response.response? {
@@ -857,12 +864,22 @@ impl ZedRuntime {
     async fn navigate(
         &self,
         buffer_id: u64,
-        version: &[BufferVersionEntry],
-        offset: u64,
+        row: u32,
+        column: u32,
         kind: NavigationKind,
     ) -> Result<Vec<LanguageLocation>> {
+        let position = self
+            .diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .position(buffer_id, row, column)?;
         let responses = self
-            .lsp_query(navigation_request(buffer_id, version, offset, kind))
+            .lsp_query(navigation_request(
+                buffer_id,
+                &position.version,
+                position.anchor,
+                kind,
+            ))
             .await?;
         let locations = responses
             .into_iter()
@@ -896,48 +913,43 @@ impl ZedRuntime {
             .collect::<Vec<_>>();
         let files = self.buffer_files.read().await;
         let worktrees = self.worktree_paths.read().await;
+        let cache = self.diagnostics.lock().expect("diagnostic cache poisoned");
+        cache.check(buffer_id, position.revision)?;
         let mut result = Vec::with_capacity(locations.len());
         for location in locations {
-            let Some(file) = files.get(&location.buffer_id) else {
-                continue;
-            };
-            let Some(start) = location.start else {
-                continue;
-            };
+            let file = files
+                .get(&location.buffer_id)
+                .context("native navigation file unavailable")?;
+            let start = location.start.context("native navigation start missing")?;
             let end = location.end.unwrap_or_else(|| start.clone());
-            let Some(worktree) = worktrees.get(&file.worktree_id) else {
-                continue;
-            };
+            let worktree = worktrees
+                .get(&file.worktree_id)
+                .context("native navigation worktree unavailable")?;
             let path = worktree.join(&file.path);
-            let text = tokio::fs::read_to_string(&path).await.ok();
-            let Some(text) = text else {
-                continue;
-            };
-            let Some(start) = offset_to_utf16_point(&text, start.offset) else {
-                continue;
-            };
-            let Some(end) = offset_to_utf16_point(&text, end.offset) else {
-                continue;
-            };
+            let (start, end) = cache.range(location.buffer_id, &start, &end)?;
             result.push(LanguageLocation { path, start, end });
         }
         Ok(result)
     }
 
-    async fn document_symbols(
-        &self,
-        buffer_id: u64,
-        version: &[BufferVersionEntry],
-    ) -> Result<Vec<LanguageDocumentSymbol>> {
+    async fn document_symbols(&self, buffer_id: u64) -> Result<Vec<LanguageDocumentSymbol>> {
+        let (revision, version) = {
+            let cache = self.diagnostics.lock().expect("diagnostic cache poisoned");
+            (cache.revision(buffer_id)?, cache.version(buffer_id)?)
+        };
         let responses = self
             .lsp_query(proto::lsp_query::Request::GetDocumentSymbols(
                 proto::GetDocumentSymbols {
                     project_id: proto::REMOTE_SERVER_PROJECT_ID,
                     buffer_id,
-                    version: proto_version(version),
+                    version: proto_version(&version),
                 },
             ))
             .await?;
+        self.diagnostics
+            .lock()
+            .expect("diagnostic cache poisoned")
+            .check(buffer_id, revision)?;
         let mut remaining = MAX_DOCUMENT_SYMBOLS;
         Ok(responses
             .into_iter()
@@ -990,10 +1002,10 @@ impl ZedRuntime {
 fn navigation_request(
     buffer_id: u64,
     version: &[BufferVersionEntry],
-    offset: u64,
+    anchor: proto::Anchor,
     kind: NavigationKind,
 ) -> proto::lsp_query::Request {
-    let position = Some(position_anchor(buffer_id, offset));
+    let position = Some(anchor);
     let version = proto_version(version);
     match kind {
         NavigationKind::Definition => {
@@ -1039,6 +1051,7 @@ fn navigation_request(
     }
 }
 
+#[cfg(test)]
 fn position_anchor(buffer_id: u64, offset: u64) -> proto::Anchor {
     // Zed initializes every disk buffer's base insertion at Lamport
     // { replica: LOCAL (0), value: 1 }. MIN/MAX are boundary sentinels and
@@ -1244,9 +1257,19 @@ async fn read_messages(
 
         if let Some(proto::envelope::Payload::CreateBufferForPeer(message)) = &envelope.payload
             && let Some(proto::create_buffer_for_peer::Variant::State(state)) = &message.variant
-            && let Some(file) = &state.file
         {
-            buffer_files.write().await.insert(state.id, file.clone());
+            let mut files = buffer_files.write().await;
+            files.remove(&state.id);
+            if let Some(file) = &state.file {
+                files.insert(state.id, file.clone());
+            }
+        }
+        if let Some(proto::envelope::Payload::UpdateBufferFile(update)) = &envelope.payload {
+            let mut files = buffer_files.write().await;
+            files.remove(&update.buffer_id);
+            if let Some(file) = &update.file {
+                files.insert(update.buffer_id, file.clone());
+            }
         }
         let _ = events.send(envelope);
     }
@@ -1393,15 +1416,12 @@ async fn buffer_language(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
-    let (buffer_id, version) = {
-        let all = buffers.active.read().await;
-        let lease = all
-            .get(&(worktree.clone(), path.clone()))
-            .context("buffer is not open")?;
-        (lease.remote_id, lease.version.clone())
-    };
+    let all = buffers.active.read().await;
+    let lease = all
+        .get(&(worktree.clone(), path.clone()))
+        .context("buffer is not open")?;
     let observation = if let Some(zed) = zed {
-        zed.language(buffer_id, &version).await?
+        zed.language(lease.remote_id).await?
     } else {
         LanguageObservation::default()
     };
@@ -1409,42 +1429,14 @@ async fn buffer_language(
         api_version: ADAPTER_VERSION,
         worktree,
         path,
-        version,
+        version: lease.version.clone(),
         diagnostics: observation.diagnostics,
         inlay_hints: observation.inlay_hints,
         semantic_tokens: observation.semantic_tokens,
     })
 }
 
-fn utf16_point_to_offset(text: &str, row: u32, column: u32) -> Result<u64> {
-    let mut line_start = 0usize;
-    let mut lines = text.split_inclusive('\n');
-    let line = lines
-        .nth(usize::try_from(row)?)
-        .context("hover row is outside the buffer")?;
-    for preceding in text.split_inclusive('\n').take(usize::try_from(row)?) {
-        line_start += preceding.len();
-    }
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    let mut utf16 = 0u32;
-    let mut byte = 0usize;
-    for character in line.chars() {
-        if utf16 >= column {
-            break;
-        }
-        let width = u32::try_from(character.len_utf16())?;
-        if utf16 + width > column {
-            bail!("hover column splits a UTF-16 character");
-        }
-        utf16 += width;
-        byte += character.len_utf8();
-    }
-    if utf16 < column {
-        bail!("hover column is outside the buffer");
-    }
-    Ok(u64::try_from(line_start + byte)?)
-}
-
+#[cfg(test)]
 fn offset_to_utf16_point(text: &str, offset: u64) -> Option<LanguagePoint> {
     let offset = usize::try_from(offset).ok()?;
     if offset > text.len() || !text.is_char_boundary(offset) {
@@ -1466,17 +1458,13 @@ async fn buffer_hover(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
-    let (buffer_id, version) = {
-        let all = buffers.active.read().await;
-        let lease = all
-            .get(&(worktree.clone(), path.clone()))
-            .context("buffer is not open")?;
-        (lease.remote_id, lease.version.clone())
-    };
-    let text = tokio::fs::read_to_string(worktree.join(&path)).await?;
-    let offset = utf16_point_to_offset(&text, row, column)?;
+    // Retain the original buffer through the query, including against legacy close.
+    let all = buffers.active.read().await;
+    let lease = all
+        .get(&(worktree.clone(), path.clone()))
+        .context("buffer is not open")?;
     let contents = if let Some(zed) = zed {
-        zed.hover(buffer_id, &version, offset).await?
+        zed.hover(lease.remote_id, row, column).await?
     } else {
         Vec::new()
     };
@@ -1498,17 +1486,12 @@ async fn buffer_navigate(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
-    let (buffer_id, version) = {
-        let all = buffers.active.read().await;
-        let lease = all
-            .get(&(worktree.clone(), path.clone()))
-            .context("buffer is not open")?;
-        (lease.remote_id, lease.version.clone())
-    };
-    let text = tokio::fs::read_to_string(worktree.join(&path)).await?;
-    let offset = utf16_point_to_offset(&text, row, column)?;
+    let all = buffers.active.read().await;
+    let lease = all
+        .get(&(worktree.clone(), path.clone()))
+        .context("buffer is not open")?;
     let mut locations = if let Some(zed) = zed {
-        zed.navigate(buffer_id, &version, offset, kind).await?
+        zed.navigate(lease.remote_id, row, column, kind).await?
     } else {
         Vec::new()
     };
@@ -1533,15 +1516,12 @@ async fn buffer_symbols(
     zed: Option<&Zed>,
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
-    let (buffer_id, version) = {
-        let all = buffers.active.read().await;
-        let lease = all
-            .get(&(worktree.clone(), path.clone()))
-            .context("buffer is not open")?;
-        (lease.remote_id, lease.version.clone())
-    };
+    let all = buffers.active.read().await;
+    let lease = all
+        .get(&(worktree.clone(), path.clone()))
+        .context("buffer is not open")?;
     let symbols = if let Some(zed) = zed {
-        zed.document_symbols(buffer_id, &version).await?
+        zed.document_symbols(lease.remote_id).await?
     } else {
         Vec::new()
     };
@@ -2123,11 +2103,12 @@ mod tests {
 
     #[test]
     fn hover_points_convert_utf16_columns_to_utf8_offsets() {
-        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 0).unwrap(), 5);
-        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 1).unwrap(), 7);
-        assert_eq!(utf16_point_to_offset("zero\nα😀x\n", 1, 3).unwrap(), 11);
-        assert!(utf16_point_to_offset("zero\nα😀x\n", 1, 2).is_err());
-        assert!(utf16_point_to_offset("zero\nα😀x\n", 9, 0).is_err());
+        let text = coordinates::Mirror::new(42, "zero\nα😀x\n").unwrap();
+        assert_eq!(text.offset(&text.position(1, 0).unwrap()).unwrap(), 5);
+        assert_eq!(text.offset(&text.position(1, 1).unwrap()).unwrap(), 7);
+        assert_eq!(text.offset(&text.position(1, 3).unwrap()).unwrap(), 11);
+        assert!(text.position(1, 2).is_err());
+        assert!(text.position(9, 0).is_err());
         let point = offset_to_utf16_point("zero\nα😀x\n", 11).unwrap();
         assert_eq!((point.row, point.column), (1, 3));
         assert!(offset_to_utf16_point("😀", 1).is_none());

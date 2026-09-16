@@ -1,5 +1,5 @@
 [graph]
-targets = ["x86_64-unknown-linux-gnu"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
 
 [advisories]
 ignore = []
@@ -11,6 +11,9 @@ allow = [
   "Unicode-3.0",
 ]
 confidence-threshold = 0.8
+# Unmodified file-level copyleft helper from Zed util -> dirs. Stays in the
+# already GPL-isolated adapter, never in Cowboy's root Cargo graph.
+exceptions = [{ name = "option-ext", version = "=0.2.0", allow = ["MPL-2.0"] }]
 
 [licenses.private]
 ignore = true
@@ -27,6 +30,15 @@ skip = [
   { name = "heck", version = "=0.3.3" },
   { name = "linux-raw-sys", version = "=0.4.15" },
   { name = "rustix", version = "=0.38.44" },
+  # Exact pinned Zed util/proto require different semver generations. These
+  # cannot unify without patching/upgrading the coordinated native engine.
+  { name = "fastrand", version = "=1.9.0" }, # util -> futures-lite 1
+  { name = "futures-lite", version = "=1.13.0" }, # util vs smol 2
+  { name = "itertools", version = "=0.10.5" }, # prost vs util
+  { name = "nix", version = "=0.29.0" }, # util vs command-fds
+  { name = "thiserror", version = "=1.0.69" }, # text -> postage vs util
+  { name = "thiserror-impl", version = "=1.0.69" },
+  { name = "which", version = "=4.4.2" }, # prost-build vs util
 ]
 
 [sources]
