@@ -51,18 +51,15 @@ Deno.test("new session navigation precedes Machine preparation completion", () =
       .test(composerSource),
     true,
   );
-  // Startup is presented on session-level surfaces (StatusDot, the composer's
-  // top-edge line, the transcript empty state) — never by replacing the
-  // composer's primary action with a spinner, and never by unmounting toolbar
-  // actions (the row would reflow on the ready edge).
+  // Startup is presented on session-level surfaces (StatusDot and the
+  // transcript empty state) — never by replacing the composer's primary action
+  // with a spinner, never by unmounting toolbar actions (the row would reflow
+  // on the ready edge), and not by a second progress mark on the composer card.
   assertEquals(
     composerSource.includes('aria-label="preparing session"'),
     false,
   );
-  assertEquals(
-    composerSource.includes("{preparing && <SessionPreparingLine"),
-    true,
-  );
+  assertEquals(composerSource.includes("SessionPreparingLine"), false);
   assertEquals(
     composerSource.includes("{!preparing && !desktop && compactAction"),
     false,

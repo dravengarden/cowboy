@@ -131,7 +131,6 @@ import {
 import { readUsage, refreshSessionUsage } from "./usageApi";
 import { expectHttpOk } from "./httpResponse";
 import { SessionReloadDialog } from "./SessionReloadDialog";
-import { SessionPreparingLine } from "./sessionPreparing";
 import { createPortal, flushSync } from "react-dom";
 import { FullscreenComposer } from "./FullscreenComposer";
 import { ComposerToolbarSettings } from "./ComposerToolbarSettings";
@@ -2305,15 +2304,6 @@ export function ComposerWorkspace({
           }),
         }}
       >
-        {
-          /* SESSION-level startup progress. It rides the card's top edge — the
-            seam between the transcript and the writing surface — so the "the
-            agent is still booting" fact is stated once, where the user is
-            already looking, instead of eating the toolbar's primary action.
-            Absolutely positioned: it costs no layout and the card does not
-            reflow when the agent reports Running. */
-        }
-        {preparing && <SessionPreparingLine />}
         {desktop && (
           <Suspense fallback={null}>
             <DesktopRegionShortcut

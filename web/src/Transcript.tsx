@@ -792,8 +792,8 @@ function ConversationEmptyState({
               width: "38%",
               borderRadius: "inherit",
               // The status palette, not the brand one: `starting` is info blue
-              // everywhere else (App statusColor / StatusDot), and this bar plus
-              // the composer's top-edge line are the same signal on one screen.
+              // everywhere else (App statusColor / StatusDot), so this bar and
+              // the navbar dot read as one signal.
               bgcolor: "info.main",
               animation:
                 `${prepareSweep} 1.65s cubic-bezier(.4,0,.2,1) infinite`,
