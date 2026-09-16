@@ -4,6 +4,8 @@
 Code processes and all 16 observed workers retained their PID/start identities.
 No Machine maintenance was performed. This accepts private adapter ownership
 exclusion, not core synchronization authority, Review cutover or restoration.
+The later persistence incident below remains unresolved; installation acceptance
+must not be reported as current end-to-end Service health.
 
 ## Exact source and release
 
@@ -118,6 +120,30 @@ artifact. This descendant adds desktop composer file dropping; it does not alter
 this release's core/Plugin bytes. This task did not activate it. Local/public
 health, version and five exact SPA/admin/SW/entry files and cache headers pass
 against that actual Web root; its version is `4d8405ee6e987d3fa911a2bb540bdf0b`.
+
+## Later persistence degradation — unresolved
+
+At `13:45:36.204Z`, after the accepted installation observation window, the
+unchanged Controller logged two rejected append events (estimated 437 and 132
+bytes) while its pending queue held approximately 15.6 MB. Its existing
+8 MiB admission rule allows one oversized event into an empty queue, then rejects
+additional append events while over budget. The exact still-active Controller
+source `2fb32d52` contains this rule and the sticky degradation flag.
+
+Final read-only checks returned **HTTP 503 `persistence degraded`** both locally
+and publicly. Metrics report zero queued events/bytes, two dropped intents and
+zero failed database batches; Machine is connected with 16 workers. Disk space
+and inodes are available. The saved installer still reports `completed/applied`
+and the exact installed 1.8.0 generation. No Controller/Machine restart, journal
+edit, counter reset or event replay was attempted. The rejected event contents
+and their recovery are not established by these counters.
+
+The earlier healthy HTTP receipt remains a bounded historical observation, not
+a claim of continuing health. Read-only evidence is retained as
+`later-{local,public}-health.txt`, `later-persistence-metrics.txt` and
+`later-persistence-events.txt` in the private evidence directory. Persistence
+admission and any independently justified recovery need a separate repair;
+draining the queue or restarting cannot prove restoration of the lost intents.
 
 ## Verified Machine candidate, not activated
 
