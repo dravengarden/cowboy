@@ -4,8 +4,11 @@ import {
   externalPasskeyEventsUrl,
   externalPasskeyRequiresFailureSignal,
   externalPasskeyUrl,
+  PASSKEY_UNTOUCHED_MS,
+  passkeyCancellationMessage,
   passkeyErrorMessage,
   passkeyFlowCancelled,
+  passkeyPromptWasUntouched,
   reconcileExternalPasskeyAfterBrowserClose,
   reconcileExternalPasskeyAfterResume,
   waitForExternalPasskeyEvent,
@@ -269,4 +272,28 @@ Deno.test("closing an unfinished native Passkey request never races its server c
     "Cancelled",
   );
   assertEquals(finalizeCalls, 10);
+});
+
+// "I tapped Verify and nothing happened" is a real outcome, not a user error:
+// Safari drops a WebAuthn call whose activation expired while the challenge was
+// being fetched, and a provider holding no credential for the site returns the
+// same exception a dismissal does. Elapsed time is the one signal that is ours
+// to read — a prompt no human could have answered did not get answered.
+Deno.test("a prompt that closed instantly is not reported as a decision", () => {
+  const now = 10_000;
+  assert(passkeyPromptWasUntouched(now - 50, now));
+  assert(passkeyPromptWasUntouched(now - (PASSKEY_UNTOUCHED_MS - 1), now));
+  assertEquals(
+    passkeyPromptWasUntouched(now - PASSKEY_UNTOUCHED_MS, now),
+    false,
+  );
+  assertEquals(passkeyPromptWasUntouched(now - 5_000, now), false);
+  // A clock that moved backwards is not evidence of anything.
+  assertEquals(passkeyPromptWasUntouched(now + 1_000, now), false);
+
+  assert(
+    passkeyCancellationMessage(true).includes("before anyone could answer"),
+  );
+  assert(passkeyCancellationMessage(true).includes("pick that app"));
+  assert(passkeyCancellationMessage(false).includes("cancelled"));
 });

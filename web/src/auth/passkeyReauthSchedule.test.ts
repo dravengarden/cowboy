@@ -44,3 +44,29 @@ Deno.test("a dismissed unlock prompt explains itself instead of going quiet", ()
     ),
   );
 });
+
+const sheetSource = await Deno.readTextFile(
+  new URL("./ProductRecentAuthSheet.tsx", import.meta.url),
+);
+
+Deno.test("verification outcomes render beside the button that caused them", () => {
+  // The body scrolls. An alert inserted above the method tabs lands off-screen
+  // on a phone, which is what "I tapped Verify and nothing happened" looks like.
+  const actionArea = sheetSource.slice(sheetSource.indexOf("{error && <Alert"));
+  assert(actionArea.indexOf("<Tabs") > 0);
+  assert(
+    actionArea.indexOf("Verify with Passkey") > actionArea.indexOf("<Tabs"),
+  );
+  assertEquals(
+    sheetSource.indexOf("{error && <Alert") <
+      sheetSource.indexOf("Identity verified"),
+    false,
+  );
+  // Timing decides which cancellation wording the reader gets.
+  assert(sheetSource.includes("const startedAtMs = Date.now();"));
+  assert(sheetSource.includes("passkeyPromptWasUntouched(startedAtMs)"));
+  // The header no longer explains a step that has not happened yet; the resume
+  // instruction sits with the button it describes.
+  assertEquals(sheetSource.includes("Verify now, then $"), false);
+  assert(sheetSource.includes("Safari only opens the Passkey prompt from a"));
+});

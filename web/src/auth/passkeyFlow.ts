@@ -560,6 +560,35 @@ export function passkeyErrorMessage(
   return fallback;
 }
 
+/** A ceremony that ends this fast was not a person deciding anything.
+ *
+ *  WebAuthn reports a dismissed prompt, a lost tap, and "the provider that
+ *  answered holds nothing for this site" under one exception name and refuses
+ *  to distinguish them — correctly, since the difference leaks which
+ *  credentials exist. Elapsed time is not that secret: a prompt that never
+ *  reached a human cannot have been answered by one. Safari in particular drops
+ *  a WebAuthn call whose user activation expired while the challenge was being
+ *  fetched, and from the outside that looks exactly like "the button does
+ *  nothing".
+ *
+ *  The threshold is deliberately generous; this only chooses wording. */
+export const PASSKEY_UNTOUCHED_MS = 400;
+
+export function passkeyPromptWasUntouched(
+  startedAtMs: number,
+  now = Date.now(),
+): boolean {
+  const elapsed = now - startedAtMs;
+  return Number.isFinite(elapsed) && elapsed >= 0 &&
+    elapsed < PASSKEY_UNTOUCHED_MS;
+}
+
+export function passkeyCancellationMessage(untouched: boolean): string {
+  return untouched
+    ? "The Passkey prompt closed before anyone could answer it. Tap again — and if your Passkey lives in another app, pick that app in the prompt."
+    : "Passkey verification was cancelled. Try again when ready.";
+}
+
 export function passkeyFlowCancelled(reason: unknown): boolean {
   if (reason instanceof DOMException) {
     return reason.name === "AbortError" || reason.name === "NotAllowedError";

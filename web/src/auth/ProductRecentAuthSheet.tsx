@@ -29,7 +29,9 @@ import {
   runNativeOidc,
 } from "./nativeOidcFlow";
 import {
+  passkeyCancellationMessage,
   passkeyErrorMessage,
+  passkeyPromptWasUntouched,
   passkeyFlowCancelled,
   passkeyFlowSupported,
   verifyPasskey,
@@ -202,6 +204,7 @@ export function ProductRecentAuthSheet({
   ): void => {
     if (busy) return;
     const epoch = ++requestEpoch.current;
+    const startedAtMs = Date.now();
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -219,7 +222,9 @@ export function ProductRecentAuthSheet({
         if (requestEpoch.current !== epoch) return;
         if (passkeyFlowCancelled(reason)) {
           setNotice(
-            "Passkey verification was cancelled. Try again when ready.",
+            passkeyCancellationMessage(
+              passkeyPromptWasUntouched(startedAtMs),
+            ),
           );
           return;
         }
@@ -283,11 +288,7 @@ export function ProductRecentAuthSheet({
     ? locked
       ? "Your scheduled Passkey check is due. Verify locally to unlock this view; running agents continue in the background."
       : "Your scheduled Passkey check is approaching. Verify now without interrupting running agents."
-    : `Passkey changes require a sign-in or Passkey check from the last five minutes. Verify now, then ${
-      requireResumeGesture
-        ? "tap Continue once so Safari can open the Passkey prompt."
-        : "Cowboy will continue your pending change automatically."
-    }`;
+    : "Passkey changes require a sign-in or Passkey check from the last five minutes.";
 
   return (
     <ConfirmSheet
@@ -321,8 +322,6 @@ export function ProductRecentAuthSheet({
           <Typography color="text.secondary">
             {description}
           </Typography>
-          {error && <Alert severity="error">{error}</Alert>}
-          {notice && <Alert severity="info">{notice}</Alert>}
           {!verifiedMe && purpose === "primary" &&
             primaryMethods.legacySession && (
             <Alert severity="info">
@@ -344,6 +343,12 @@ export function ProductRecentAuthSheet({
               <Alert severity="success">
                 Identity verified. Your pending change is still here.
               </Alert>
+              {requireResumeGesture && (
+                <Typography variant="body2" color="text.secondary">
+                  Tap once more: Safari only opens the Passkey prompt from a
+                  fresh tap.
+                </Typography>
+              )}
               <Button
                 type="button"
                 variant="contained"
@@ -354,6 +359,11 @@ export function ProductRecentAuthSheet({
               </Button>
             </>
           )}
+          {/* Tapping a verification button and seeing its outcome appear above
+            the fold reads as nothing happening at all. Alerts sit directly
+            above the action that produces them. */}
+          {error && <Alert severity="error">{error}</Alert>}
+          {notice && <Alert severity="info">{notice}</Alert>}
           {!verifiedMe && methods.length > 1 && (
             <Tabs
               value={method}
@@ -361,6 +371,13 @@ export function ProductRecentAuthSheet({
               variant="scrollable"
               scrollButtons="auto"
               aria-label="Verification method"
+              sx={{
+                borderBottom: 1,
+                borderColor: "divider",
+                minHeight: 40,
+                mb: -1,
+                "& .MuiTab-root": { minHeight: 40, py: 0 },
+              }}
             >
               {methods.map((candidate) => (
                 <Tab

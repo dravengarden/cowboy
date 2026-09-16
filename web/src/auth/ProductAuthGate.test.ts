@@ -302,9 +302,11 @@ Deno.test("Passkey changes recover from an expired recent-auth window", async ()
   assertEquals(sheet.includes('label="Password"'), false);
   assert(sheet.includes("verifyPasskey"));
   assert(sheet.includes("Waiting for Passkey…"));
-  assert(
-    sheet.includes("Passkey verification was cancelled. Try again when ready."),
-  );
+  // The wording now depends on whether a human could have answered the prompt
+  // (passkeyFlow.ts): an instant close is a lost tap or an empty provider, not
+  // a decision. Both cases still come from one source.
+  assert(sheet.includes("passkeyCancellationMessage("));
+  assert(sheet.includes("passkeyPromptWasUntouched(startedAtMs)"));
   assert(sheet.includes("runNativeOidc"));
   assert(sheet.includes("runBrowserOidc"));
   assert(sheet.includes("useProviderHandoff"));

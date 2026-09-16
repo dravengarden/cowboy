@@ -2,7 +2,9 @@ import { Alert, Button, Modal, Paper, Stack, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { type ProductMe } from "./authApi";
 import {
+  passkeyCancellationMessage,
   passkeyErrorMessage,
+  passkeyPromptWasUntouched,
   passkeyFlowCancelled,
   passkeyFlowSupported,
   verifyPasskey,
@@ -60,6 +62,7 @@ export function PasskeyReauthLock({
 
   const confirm = (): void => {
     if (busy || !passkeyFlowSupported()) return;
+    const startedAtMs = Date.now();
     setBusy(true);
     setError(null);
     setHint(null);
@@ -76,7 +79,9 @@ export function PasskeyReauthLock({
           // guess: a password manager that grabs the prompt and comes up empty
           // left this card looking inert. One neutral line is true either way.
           setHint(
-            "No Passkey was used. If yours lives in another app, pick that app in the prompt — or add a second Passkey in Settings so whichever one answers can unlock.",
+            passkeyPromptWasUntouched(startedAtMs)
+              ? passkeyCancellationMessage(true)
+              : "No Passkey was used. If yours lives in another app, pick that app in the prompt — or add a second Passkey in Settings so whichever one answers can unlock.",
           );
           return;
         }
