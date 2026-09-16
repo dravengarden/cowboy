@@ -32,6 +32,9 @@ no production URL, state-directory, environment or credential inputs.
 
 The recipe creates a non-root user namespace, loopback-only network and private
 PID/proc namespace, with an empty read-only mount hiding the host cgroup tree.
+The isolated test adopts orphaned descendants, waits tracked leaders first,
+and reaps descendants before accepting cleanup; Cargo as namespace init is not
+itself evidence that those children were reaped.
 The transparent relay forwards original frames unchanged,
 allows only finite Code/readiness/uninstall traffic and the exact runtime
 generation handshake, and rejects Agent/authentication/runtime mutations.
@@ -69,3 +72,7 @@ navigation destination ownership, Machine maintenance and signed Code release
 publication/installation, supported devices, abandoned-browser/restart recovery,
 independent restoration and general graph/state leases. This test-only change
 does not require or authorize a production component restart.
+
+The [2026-09-16 acceptance record](releases/plugin-code-connected-conformance-2026-09-16.md)
+binds two successful runs to their exact supplied artifacts and records the
+separate complete source gate. It does not change the exclusions above.

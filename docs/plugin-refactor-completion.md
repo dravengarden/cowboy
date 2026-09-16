@@ -196,6 +196,19 @@ and accepting a production effect are different milestones.
   passed the complete gate, nine new unit cases and thirty real-browser cases
   across four suites. It is published and active, with all fourteen workers,
   Controller, Machine and Victoria processes retained.
+- [Connected core Code acceptance](plugin-code-connected-conformance.md) now
+  exercises supplied immutable Controller/Machine/Zed processes through real
+  disposable login, enrollment and a temporary signed installation. Two runs
+  pass all seven groups: cancellation without mutation replay, independent
+  content-bound owners, explicit release after a borrowed read, HTTP uninstall
+  and missing-path reads, plus connection/restart refusal without adoption.
+  Original native replies are held, never fabricated. Cleanup waits and reaps
+  fixture descendants behind private PID/network and read-only cgroup isolation.
+  Its [source-only delivery](releases/plugin-code-connected-conformance-2026-09-16.md)
+  passed the full gate after integrating main. Supplied artifacts are not actual
+  host-role acceptance; forced fixture teardown is not production recovery.
+  Connected Code installation admission, Review, content synchronization,
+  owned navigation, native rollout and supported-device acceptance remain open.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -249,7 +262,8 @@ and accepting a production effect are different milestones.
 | --- | --- | --- |
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
-| P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; extend actual immutable process acceptance to Agent authentication projection and code/native integration | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from a telemetry fixture |
+| P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection, connected Code installation admission and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
+| P4 / Code consumer | Connect ordinary Review to retained core buffer owners, explicit disk/native synchronization with dirty/shared-buffer authority, and owned navigation destinations | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
