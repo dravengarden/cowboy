@@ -23,7 +23,7 @@ All factories return CM6 `Extension`s.
 
 | Export | What |
 |---|---|
-| `inlinePreview(config?)` | The live-preview decorations + the markdown-aware Enter/keymap. `config.onLinkClick?: (url) => void` — called on a plain click of a rendered link; defaults to `window.open(url, '_blank', …)`. In a Tauri/Electron shell, pass an opener that routes through the host. |
+| `inlinePreview(config?)` | The live-preview decorations + the markdown-aware Enter/keymap. **Omit it** (keeping the rest) for an Obsidian-style *source mode*: the same document, edited raw. `config.onLinkClick?: (url) => void` — called on a plain click of a rendered link; defaults to `window.open(url, '_blank', …)`. In a Tauri/Electron shell, pass an opener that routes through the host. |
 | `atomicEditorTheme` | The base editor theme (transparent, reading layout). |
 | `atomicMarkdownSyntax` | Syntax highlighting for markdown tokens (`syntaxHighlighting(atomicMarkdownHighlight)`). |
 | `atomicMarkdownHighlight` | The raw `HighlightStyle` (compose your own if needed). |

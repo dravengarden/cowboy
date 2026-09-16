@@ -24,6 +24,7 @@ import {
   FormatQuote,
   Functions,
   InsertLink,
+  RawOn,
   Redo,
   StrikethroughS,
   Tag,
@@ -32,6 +33,7 @@ import {
   Undo,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "./ComposerEditor";
+import { toggleComposerSourceMode } from "./composerSourceMode";
 
 // The context a command runs against. The editor handle covers in-doc actions;
 // `attach` drives the HOST file-picker (attachment isn't editor-only) — which is
@@ -98,6 +100,11 @@ export const COMPOSER_COMMANDS: readonly ComposerCommand[] = [
   { id: "mention", icon: <AlternateEmail />, label: "Mention file", run: (c): void => c.editor.insertTrigger("@") },
   { id: "slash", icon: <Tag />, label: "Slash command", run: (c): void => c.editor.insertTrigger("/") },
   { id: "attach", icon: <AttachFile />, label: "Insert attachment", run: (c): void => c.attach() },
+  // The only command that acts on the VIEW rather than the document: Obsidian's
+  // live-preview ↔ source toggle. It writes the global preference (every open
+  // editor follows) instead of touching `ctx.editor`, so it needs no new
+  // context — and the editor keeps focus, caret and undo history across the flip.
+  { id: "sourceMode", icon: <RawOn />, label: "Toggle source mode", run: (): void => void toggleComposerSourceMode() },
 ];
 
 export const COMPOSER_COMMANDS_BY_ID: Readonly<Record<string, ComposerCommand>> = Object

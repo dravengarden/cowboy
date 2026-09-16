@@ -4,6 +4,7 @@ import type { Status } from "../protocol";
 import { useStoreSelector } from "../store";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
+import { useComposerSourceMode } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import { useDesktopCommands } from "./commands/DesktopCommandProvider";
@@ -16,6 +17,7 @@ import {
   DESKTOP_RESIZE_HINT,
   DESKTOP_SESSION_SLOTS_LABEL,
   DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -88,6 +90,7 @@ function regionHints(
   region: string | null,
   status: Status,
   projection: "history" | "explore",
+  sourceMode: boolean,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -129,6 +132,12 @@ function regionHints(
       return [
         { keys: "Esc", label: "Normal" },
         { keys: "Mod+Enter", label: status === "busy" ? "Queue" : "Send" },
+        // The label names the destination, not the current state: a hint
+        // describes what the key does next.
+        {
+          keys: DESKTOP_SHORTCUTS.toggleSourceMode,
+          label: sourceMode ? "Live preview" : "Source",
+        },
       ];
     default:
       return [];
@@ -146,6 +155,7 @@ export function DesktopStatusLine({
   const commands = useDesktopCommands();
   const { focusedPane, focusedRegion, mode } = workspace;
   const vimEnabled = useVimSetting();
+  const sourceMode = useComposerSourceMode();
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
@@ -197,7 +207,7 @@ export function DesktopStatusLine({
     : [];
   const ordinaryHints: RegionHint[] = [
     ...promptRegions,
-    ...regionHints(focusedRegion, status, projection),
+    ...regionHints(focusedRegion, status, projection, sourceMode),
     ...(focusedRegion === "sessions.list" && itemCount > 0
       ? [{ keys: DESKTOP_SESSION_SLOTS_LABEL, label: "Switch" }]
       : []),
@@ -236,6 +246,11 @@ export function DesktopStatusLine({
       { keys: "N", label: "New", availability: "available" },
       { keys: "W", label: "Next region", availability: "available" },
       { keys: "R", label: "Resize", availability: "available" },
+      {
+        keys: DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
+        label: sourceMode ? "Live preview" : "Source",
+        availability: focusedPane === "prompt" ? "available" : "inactive",
+      },
       { keys: ",", label: "Settings", availability: "available" },
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]

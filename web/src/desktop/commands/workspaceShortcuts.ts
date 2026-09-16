@@ -25,6 +25,12 @@ export const DESKTOP_WORKSPACE_KEYS = {
   cycleRegion: "W",
   resize: "R",
   settings: ",",
+  // Obsidian binds live-preview ↔ source to Mod+E, which Cowboy cannot have:
+  // Chrome owns it for the address bar and macOS apps for a common editor
+  // action (chromeShortcutPolicy / macShortcutPolicy both reject it). The
+  // workspace prefix is FOCUS.md's documented fallback, and it keeps the same
+  // E mnemonic while working from Vim Insert, Normal and native inputs.
+  toggleSourceMode: "E",
 } as const;
 
 export function desktopWorkspaceSequence(key: string): string {
@@ -48,6 +54,9 @@ export const DESKTOP_SHORTCUTS = {
   focusDrafts: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
   cycleRegion: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.cycleRegion),
   resize: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.resize),
+  toggleSourceMode: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
+  ),
   sessionSlots: "Alt+1…0",
 } as const;
 
@@ -70,6 +79,7 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   n: "session.new",
   w: "workspace.cycleRegion",
   r: "workspace.enterResize",
+  e: "composer.toggleSourceMode",
   ",": "settings.open",
 };
 

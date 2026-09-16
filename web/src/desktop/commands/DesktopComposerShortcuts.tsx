@@ -3,7 +3,12 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./DesktopCommandProvider";
-import { DESKTOP_SHORTCUTS } from "./workspaceShortcuts";
+import {
+  DESKTOP_SHORTCUTS,
+  DESKTOP_WORKSPACE_KEYS,
+  DESKTOP_WORKSPACE_PREFIX,
+} from "./workspaceShortcuts";
+import { toggleComposerSourceMode } from "../../composerSourceMode";
 
 export function DesktopComposerCommandBindings({
   sendable,
@@ -153,6 +158,25 @@ export function DesktopComposerCommandBindings({
       disabledReason: "Every prompt action is already visible",
       run: () => state.current.onMore(),
     },
+    {
+      // Obsidian's "Toggle Live Preview/Source mode", scoped to the Prompt pane
+      // because that is where every composer mount lives (the editor, plus the
+      // queue and draft edit surfaces). The preference itself is global, so this
+      // needs no editor handle and is never disabled — there is no state in
+      // which the user may not choose how their own markdown is displayed.
+      id: "composer.toggleSourceMode",
+      title: "Toggle Source mode",
+      description:
+        "Show the prompt as literal markdown instead of live preview",
+      group: "Prompt actions",
+      sequence: [
+        DESKTOP_WORKSPACE_PREFIX,
+        DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
+      ],
+      allowInEditor: true,
+      contexts: ["prompt"],
+      run: () => void toggleComposerSourceMode(),
+    },
   ], []);
 
   useDesktopCommand(commands[0] as DesktopCommand);
@@ -163,5 +187,6 @@ export function DesktopComposerCommandBindings({
   useDesktopCommand(commands[5] as DesktopCommand);
   useDesktopCommand(commands[6] as DesktopCommand);
   useDesktopCommand(commands[7] as DesktopCommand);
+  useDesktopCommand(commands[8] as DesktopCommand);
   return null;
 }
