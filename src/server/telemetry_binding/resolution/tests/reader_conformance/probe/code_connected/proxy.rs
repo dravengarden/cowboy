@@ -165,7 +165,13 @@ impl Proxy {
         let mut record = self.record.lock();
         check(
             record.hold.is_none()
-                && ["openBufferLease", "readBufferLease", "releaseBufferLease"].contains(&kind),
+                && [
+                    "openBufferLease",
+                    "readBufferLease",
+                    "releaseBufferLease",
+                    "installationStep",
+                ]
+                .contains(&kind),
         )?;
         let gate = Gate {
             reached: Arc::default(),
