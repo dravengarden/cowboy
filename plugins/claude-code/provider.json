@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.25",
+  "version": "3.1.26",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.10",
   "display": {
@@ -182,7 +182,8 @@
       "CLAUDE_CODE_EXECUTABLE": {
         "source": "component_command",
         "component": { "kind": "provider_cli", "slot": "claude" }
-      }
+      },
+      "CLAUDE_CODE_RETRY_WATCHDOG": "1"
     },
     "remove_environment": [],
     "remove_environment_prefixes": ["ANTHROPIC_", "CLAUDE_"],

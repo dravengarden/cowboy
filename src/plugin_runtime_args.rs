@@ -1796,6 +1796,13 @@ mod tests {
         assert!(!isolated_shell("codex-deepseek"));
         assert!(!isolated_shell("claude-code"));
         assert_eq!(isolated_shell_plugins(), ["claude-deepseek"]);
+        // The Provider owns its upstream retry posture: with the watchdog the
+        // pinned CLI stops giving up on no-response/overload/connection classes
+        // at the low default caps (docs/claude-stream-recovery.md).
+        assert_eq!(
+            environment_value("claude-code", "CLAUDE_CODE_RETRY_WATCHDOG"),
+            Some("1")
+        );
         assert_eq!(cli_executable("claude-code"), Some("claude"));
         assert_eq!(
             cli_executable_env("claude-code"),

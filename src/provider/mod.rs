@@ -1024,6 +1024,29 @@ mod tests {
         .remove(id)
     }
 
+    /// The Provider's own retry posture must reach the worker through the
+    /// INSTALLED package, which is the path a pinned generation launches from
+    /// (`runtime.environment` is resolved here, not through the builtin table).
+    /// The launcher applies these AFTER removing inherited `CLAUDE_`/`ANTHROPIC_`
+    /// variables, so a host cannot suppress or forge it.
+    #[test]
+    fn claude_code_package_carries_its_upstream_retry_posture() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap();
+        let manifest = source.compile().unwrap();
+        assert_eq!(
+            manifest.runtime.environment.get("CLAUDE_CODE_RETRY_WATCHDOG"),
+            Some(&cowboy_provider_sdk::RuntimeValue::Literal("1".to_owned()))
+        );
+        assert!(
+            manifest
+                .runtime
+                .remove_environment_prefixes
+                .iter()
+                .any(|prefix| prefix == "CLAUDE_")
+        );
+    }
+
     #[test]
     fn worker_accepts_machine_validated_historical_provider_package() {
         let source: StandardProviderSource =

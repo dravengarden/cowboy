@@ -12,6 +12,27 @@ the user's next message. It does not automatically resend a prompt that may have
 already executed tools. Authentication errors, permission failures, unknown
 connection errors and actual process exits retain their existing handling.
 
+Claude Code Plugin 3.1.26 sets `CLAUDE_CODE_RETRY_WATCHDOG=1` in the Provider's
+owned process environment. In the pinned CLI (2.1.272) that flag is read inside
+the API request loop and removes the caps that otherwise end a retry sequence
+early: without it a no-response error is allowed one occurrence
+before `api_request_no_response_exhausted`, repeated 529 overload throws
+`api_request_overload_repeated`, and exceeding the retry budget throws
+`api_request_retry_exhausted` even for connection-class and 429 errors. With it
+those classes keep retrying. Anthropic's own self-hosted runner configuration in
+the same bundle sets this flag together with `CLAUDE_ENABLE_STREAM_WATCHDOG`,
+which already defaults to on and is therefore not set here.
+
+This retry happens inside one API request, before the CLI has committed the
+assistant message, so it does not re-execute tools that already ran — which is
+why it is a different and safer lever than resending a prompt from Cowboy. It
+does not make a sustained outage succeed; it converts a single dropped stream
+into another attempt, and a wedged attempt is still bounded by Cowboy's idle
+watchdog. The flag is Provider-owned configuration, not a Cowboy behavior
+change: the plugin sets it after inherited `CLAUDE_`/`ANTHROPIC_` variables are
+removed (`src/acp.rs` spawns with removal first, then the plugin environment),
+so a host variable can neither enable nor suppress it.
+
 The transcript treats unfinished tools as interrupted after a failed or
 cancelled turn, or an interrupted/crashed lifecycle. Confirmed tool results
 remain unchanged; a later actual result can still settle an interrupted card.
