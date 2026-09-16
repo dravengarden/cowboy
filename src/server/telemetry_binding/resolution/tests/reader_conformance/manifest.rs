@@ -66,8 +66,12 @@ pub(super) struct Executable {
 }
 
 pub(super) fn ssh_keygen() -> Result<Executable> {
+    tool("ssh-keygen")
+}
+
+pub(super) fn tool(name: &str) -> Result<Executable> {
     for directory in std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()) {
-        let Ok(path) = directory.join("ssh-keygen").canonicalize() else {
+        let Ok(path) = directory.join(name).canonicalize() else {
             continue;
         };
         if path.starts_with("/nix/store") && path.is_file() {
@@ -77,7 +81,7 @@ pub(super) fn ssh_keygen() -> Result<Executable> {
             });
         }
     }
-    anyhow::bail!("pinned shell must supply an immutable OpenSSH helper")
+    anyhow::bail!("pinned shell must supply the immutable helper")
 }
 
 fn executable_chain(lane: Lane, release: &Path, entry: &Path) -> Result<Vec<Executable>> {

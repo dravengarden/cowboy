@@ -57,6 +57,7 @@ struct Receipt {
     artifacts: Vec<Artifact>,
     native: [Binary; 2],
     ssh_keygen: manifest::Executable,
+    git: manifest::Executable,
     package_sha256: Option<String>,
     release_sha256: Option<String>,
     stage: &'static str,
@@ -170,6 +171,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             Binary::resolve(input.server)?,
         ],
         ssh_keygen: manifest::ssh_keygen()?,
+        git: manifest::tool("git")?,
         package_sha256: None,
         release_sha256: None,
         stage: "setup",
@@ -211,6 +213,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         &reader,
         &receipt.native,
         &receipt.ssh_keygen.path,
+        &receipt.git.path,
     )
     .await
     .map_err(|_| Failure::Setup)?;

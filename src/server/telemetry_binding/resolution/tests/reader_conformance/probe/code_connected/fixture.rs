@@ -16,8 +16,28 @@ pub(super) async fn seed(
     reader: &Fixture,
     native: &[Binary; 2],
     helper: &Path,
+    git: &Path,
 ) -> Result<Seeded> {
     super::super::seed(root, reader, helper).await?;
+    std::os::unix::fs::symlink(git, root.join("tools/git"))?;
+    std::fs::create_dir(root.join("git-template"))?;
+    let mut init = command(git, root);
+    init.env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .arg("init")
+        .arg("--quiet")
+        .arg("--initial-branch=main")
+        .arg(format!(
+            "--template={}",
+            root.join("git-template").display()
+        ))
+        .arg(root.join("workspace"));
+    ensure!(
+        tokio::time::timeout(Duration::from_secs(3), init.status())
+            .await??
+            .success(),
+        "fixture Git initialization failed"
+    );
     let manifest: PluginManifest = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/plugins/zed/plugin.json"
