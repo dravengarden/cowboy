@@ -158,6 +158,9 @@ impl Proxy {
         }
         Ok(record.counts.clone())
     }
+    pub fn snapshot(&self) -> Counts {
+        self.record.lock().counts.clone()
+    }
     pub fn hold(&self, kind: &'static str) -> Result<Gate, Failure> {
         let mut record = self.record.lock();
         check(

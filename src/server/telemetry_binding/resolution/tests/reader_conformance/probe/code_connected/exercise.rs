@@ -126,7 +126,7 @@ pub(super) async fn run(
         .call(Method::PUT, &endpoint(&first), Some(json!({})))
         .await?;
     check(pending.status == StatusCode::ACCEPTED)?;
-    snapshot(&pending.value, &first, "prepared", true)?;
+    snapshot(&pending.value, &first, "unknown", true)?;
     gate.release();
     settled(pair, &first, "open").await?;
     operation(pair, Method::PUT, &first, "open").await?;
@@ -231,7 +231,13 @@ pub(super) async fn run(
         .http
         .call(Method::DELETE, &endpoint(&retained), Some(json!({})))
         .await?;
-    check(release.status == StatusCode::CONFLICT)?;
+    check(release.status == StatusCode::BAD_GATEWAY)?;
+    let unknown = pair
+        .http
+        .call(Method::DELETE, &endpoint(&retained), Some(json!({})))
+        .await?
+        .ok()?;
+    snapshot(&unknown, &retained, "unknown", false)?;
     check(pair.proxy.counts()?.commands == commands)?;
     *stage = "controller_restart";
     pair.controller

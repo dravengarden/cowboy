@@ -134,11 +134,16 @@ impl Pair<'_> {
         // Native runtimes deliberately use their own groups. End the exact
         // fixture executables before killing Machine; do not leave orphans.
         let mut result = fixture::stop_native(self.root).await;
+        eprintln!("Code fixture native cleanup: {result:?}");
         if let Some(mut process) = self.machine.take() {
-            result = result.and(process.finish().await);
+            let stopped = process.finish().await;
+            eprintln!("Code fixture Machine cleanup: {stopped:?}");
+            result = result.and(stopped);
         }
         if let Some(mut process) = self.controller.take() {
-            result = result.and(process.finish().await);
+            let stopped = process.finish().await;
+            eprintln!("Code fixture Controller cleanup: {stopped:?}");
+            result = result.and(stopped);
         }
         result.and(self.proxy.finish().await)
     }
@@ -269,8 +274,9 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
     .unwrap_or(Err(Failure::Timeout));
     receipt.last_http = pair.http.last();
     let cleanup = pair.finish().await;
-    receipt.wire = pair.proxy.counts()?;
+    receipt.wire = pair.proxy.snapshot();
     receipt.cleanup = cleanup.is_ok();
+    pair.proxy.counts()?;
     result.and(cleanup)?;
     receipt.stage = "complete";
     Ok(())
