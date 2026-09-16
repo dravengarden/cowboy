@@ -99,6 +99,13 @@ Deno.test("core buffer readiness reuses the bound dataset without opening storag
 Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a display label", async () => {
   const f = fixture();
   f.principal(undefined);
+  const stop = f.product.cleanup.subscribe(() => {});
+  assertEquals(f.product.cleanup.get(), {
+    contextLost: false,
+    active: 0,
+    rows: [],
+  });
+  stop();
   await assertRejects(() => f.product.ready(), BufferClientError);
   assertEquals(f.discoveries(), 0);
   assertEquals(f.calls, []);

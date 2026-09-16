@@ -184,6 +184,14 @@ and accepting a production effect are different milestones.
   separate; the core facade is not a serialized grant or Plugin API.
   Its [Web-only release](releases/plugin-buffer-product-context-2026-09-16.md)
   is active with the full gate passing and all 13 observed workers retained.
+- [Core Code cleanup presentation](plugin-buffer-cleanup-surface.md) projects
+  original retained owners into Settings with stable typed observations,
+  bounded local pagination and separately confirmed one-pass cleanup. Active
+  consumers cannot be closed here; uncertain release is query-only, removed
+  handles cannot target replacements and authority end redacts/fences actions.
+  View unmount does not cancel admitted work or replay it on remount. This closes
+  the client cleanup-visibility prerequisite, not Review integration, durable
+  native recovery, Machine/Plugin activation or supported-device acceptance.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'

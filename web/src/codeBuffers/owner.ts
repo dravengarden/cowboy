@@ -2,6 +2,7 @@
  * browser abort can replace the original resource or prove its release.
  */
 import { decodeObservation } from "./observations.ts";
+import { createCleanupMonitor } from "./cleanup.ts";
 import {
   type CapturedContent,
   type ContentKind,
@@ -39,6 +40,9 @@ export interface OwnerView {
   readonly fresh: boolean;
   readonly busy: Job | undefined;
   readonly closing: boolean;
+  readonly cleaning: boolean;
+  /** An unacknowledged DELETE is observation-only, never a new release intent. */
+  readonly releaseAttempted: boolean;
   readonly contextLost: boolean;
   readonly failure: Failure | undefined;
 }
@@ -70,12 +74,13 @@ const MAX_OWNERS = 64;
 export function createOwnedCodeBuffers(options: TransportOptions) {
   const context = options.context;
   const transport = createTransport({ ...options, context });
-  const retained = new Set<OwnedCodeBuffer>();
+  const monitor = createCleanupMonitor(context);
   return Object.freeze({
+    cleanup: monitor.store,
     /** No restore(id), import, serialization, LRU or automatic account adoption. */
     reserve(target: BufferTarget): OwnedCodeBuffer {
       transport.check();
-      if (retained.size >= MAX_OWNERS) throw new BufferClientError("capacity");
+      if (monitor.size() >= MAX_OWNERS) throw new BufferClientError("capacity");
       const captured = Object.freeze({
         sessionId: text(target.sessionId, 128),
         path: text(target.path, 4096),
@@ -87,13 +92,14 @@ export function createOwnedCodeBuffers(options: TransportOptions) {
         captured,
         context,
         transport,
-        () => retained.delete(owner),
+        () => monitor.retire(owner),
+        monitor.changed,
       );
-      retained.add(owner);
+      monitor.add(owner, captured);
       return owner;
     },
     retained(): readonly OwnedCodeBuffer[] {
-      return Object.freeze([...retained]);
+      return monitor.retained();
     },
   });
 }
@@ -103,6 +109,7 @@ function createOwner(
   context: AbortSignal,
   transport: ReturnType<typeof createTransport>,
   retire: () => void,
+  changed: () => void,
 ): OwnedCodeBuffer {
   let phase: OwnerView["phase"] = "reserved";
   let id: ResourceId | undefined;
@@ -136,6 +143,7 @@ function createOwner(
       phase = "released";
       retire();
     }
+    changed();
     return snapshot;
   };
   const perform = async <T>(
@@ -150,6 +158,7 @@ function createOwner(
         settle = resolve;
       }),
     };
+    changed();
     try {
       const result = await effect();
       transport.check();
@@ -163,6 +172,7 @@ function createOwner(
     } finally {
       job = undefined;
       settle();
+      changed();
     }
   };
   const snapshot = async (method: "PUT" | "GET" | "DELETE") => {
@@ -226,6 +236,8 @@ function createOwner(
         fresh: fresh && !context.aborted,
         busy: job?.kind,
         closing,
+        cleaning: cleanup !== undefined,
+        releaseAttempted: releaseSent,
         contextLost: context.aborted,
         failure,
       }),
@@ -329,7 +341,9 @@ function createOwner(
       if (cleanup) return cleanup;
       cleanup = cleanupPass().finally(() => {
         cleanup = undefined;
+        changed();
       });
+      changed();
       return cleanup;
     },
   });

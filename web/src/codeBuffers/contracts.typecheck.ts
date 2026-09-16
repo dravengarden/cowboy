@@ -1,6 +1,16 @@
 /** Compile-only boundary tests, never imported by the product. */
 import type { CapturedContent, ContentObservation } from "./content.ts";
 import type { OwnedCodeBuffer } from "./owner.ts";
+import type { CodeBufferCleanup } from "./cleanup.ts";
+
+export function cleanupTypes(cleanup: CodeBufferCleanup) {
+  // @ts-expect-error a display resource ID is not an original cleanup handle
+  cleanup.inspect("resource-id");
+  // @ts-expect-error arbitrary objects cannot acquire cleanup authority
+  cleanup.continueCleanup({ ordinal: 1 });
+  // @ts-expect-error Settings cannot open a resource or revive a previous page
+  cleanup.open("old-resource");
+}
 
 export function contentTypes(owner: OwnedCodeBuffer, content: CapturedContent) {
   const hover: Promise<ContentObservation<"hover">> = owner.readContent(

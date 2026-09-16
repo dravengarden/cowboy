@@ -53,6 +53,7 @@ import {
 import { ConfirmSheet } from "./Sheet";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
+import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
 import {
   type ClientRuntimeMetrics,
   readClientRuntimeMetrics,
@@ -919,6 +920,7 @@ export function InfoContent({
         </Stack>
         {!desktop && <Divider />}
         <TelemetryBindingPanel desktop={desktop} />
+        <CodeBufferCleanupPanel />
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}

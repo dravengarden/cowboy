@@ -8,7 +8,7 @@ if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
-  suite !== "code-buffer-context"
+  suite !== "code-buffer-context" && suite !== "code-buffer-cleanup"
 ) {
   throw new Error("unknown suite");
 }
@@ -24,7 +24,8 @@ await build({
     "process.env.NODE_ENV": JSON.stringify(
       suite === "provider-ui" || suite === "provider-management" ||
         suite === "plugin-lifecycle" || suite === "settings-recovery" ||
-        suite === "code-buffers" || suite === "code-buffer-context"
+        suite === "code-buffers" || suite === "code-buffer-context" ||
+        suite === "code-buffer-cleanup"
         ? "development"
         : "production",
     ),
@@ -71,6 +72,8 @@ await build({
           ? "../web/src/codeBufferBrowserConformance.ts"
           : suite === "code-buffer-context"
           ? "../web/src/codeBufferContextBrowserConformance.ts"
+          : suite === "code-buffer-cleanup"
+          ? "../web/src/codeBufferCleanupBrowserConformance.tsx"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",

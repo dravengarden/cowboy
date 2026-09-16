@@ -89,7 +89,9 @@ delivering none. Existing buffer, Settings recovery, IDB-owner and outbox browse
 suites pass separately. These are not physical iPhone, actual Review or deployed
 native-generation acceptance.
 
-Remaining work includes Review's unresolved-resource UI, positional content and
+The [core Settings cleanup surface](plugin-buffer-cleanup-surface.md) now
+observes this same registry without readiness discovery or new resource effects.
+Remaining work includes Review integration, positional content and
 anchor semantics, independent Machine/Code activation, supported-device
 acceptance and independently authorized post-effect recovery. See the
 [completion ledger](plugin-refactor-completion.md); the overall Plugin refactor

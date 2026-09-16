@@ -20,6 +20,8 @@ export function createProductCodeBuffers(
     if (context.aborted) throw new BufferClientError("context_lost");
   };
   return Object.freeze({
+    /** Local-only projection; viewing it never discovers or opens resources. */
+    cleanup: buffers.cleanup,
     async ready(observer?: AbortSignal): Promise<typeof buffers> {
       check();
       if (observer?.aborted) throw new BufferClientError("cancelled");

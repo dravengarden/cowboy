@@ -134,8 +134,9 @@ component, Machine or installed Plugin and did not restart a live session.
 
 The subsequent [product-context integration](plugin-buffer-product-context.md)
 binds the real Service/principal lifetime and keeps final local outbox drain
-separate from ending remote authority. Before Review cutover, implement explicit
-unresolved-resource presentation; finish positional
+separate from ending remote authority. The [core Settings cleanup surface](plugin-buffer-cleanup-surface.md)
+now presents unresolved owners without polling or replay. Before Review cutover,
+finish positional
 content/anchor semantics; accept and independently activate the exact Machine
 and Code Plugin; then test the actual consumer on supported devices. Never
 mix new owner cleanup with old path-based open/read calls or silently downgrade
