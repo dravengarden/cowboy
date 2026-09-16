@@ -293,6 +293,12 @@ In addition, require all applicable Provider gates below:
   A native single-peer check does not establish exclusive adapter ownership or
   core write authority; keep the public effect closed until both are accepted.
   See `docs/plugin-native-buffer-sync.md`.
+  Adapter synchronization changes also require the same-ID multi-owner/alias
+  admission, one-use Apply, Pending/Unknown retention, disconnected observer,
+  exact-content outcome, capacity and original-ID cleanup gates described in
+  `docs/plugin-buffer-sync-owners.md`. Keep private socket purpose declarations
+  distinct from core grants; generic Machine Code forwarding must not enable
+  these effects before an accepted authority/routing continuation exists.
   Before a core owned-buffer/Review cutover, additionally run
   `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
   It connects supplied immutable Controller/Machine releases and the exact

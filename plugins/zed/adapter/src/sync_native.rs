@@ -17,6 +17,16 @@ use wire::cowboy_buffer_sync_response::{Phase, Refusal};
 type ResponseSender = oneshot::Sender<Option<wire::CowboyBufferSyncResponse>>;
 type Pending = Arc<std::sync::Mutex<HashMap<u32, ResponseSender>>>;
 
+pub(super) async fn support(zed: Option<&Zed>) -> Result<Response> {
+    let zed = zed.context("native runtime is unavailable")?;
+    let instance = zed.sync.probe(zed).await?;
+    Ok(Response::NativeSyncSupport {
+        api_version: ADAPTER_VERSION,
+        protocol: 1,
+        instance: format!("{:032x}", u128::from_be_bytes(instance)),
+    })
+}
+
 #[cfg(test)]
 mod connected;
 #[cfg(test)]

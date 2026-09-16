@@ -229,6 +229,15 @@ and accepting a production effect are different milestones.
   installation. This is not a public synchronization grant: adapter multi-owner
   exclusion, core purpose/authority, Review integration and independently
   authorized restoration remain separate gates.
+- [Private synchronization ownership](plugin-buffer-sync-owners.md) adds the
+  Zed `1.8.0` candidate: same-native-ID owner exclusion, conservative alias/open
+  admission, retained Pending/Unknown fences and one-use Apply. Original-ID
+  query/retirement cannot adopt replacements, replay an effect or dispose of
+  uncertainty. Core's generic Machine Code route explicitly denies the private
+  commands before runtime selection. Focused cancellation/sharing/capacity tests
+  and an actual private-server owner/synchronization flow pass. This is not core
+  writer authority, public Review cutover, production activation or independent
+  recovery; the closed purpose declaration cannot supply those guarantees.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

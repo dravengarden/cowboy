@@ -70,7 +70,8 @@ primary phone/desktop product path.
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
 - [`plugin-native-buffer-leases.md`](plugin-native-buffer-leases.md) — Prepared native buffer references and exact Machine runtime retention; HTTP/Web integration and production maintenance remain separate
-- [`plugin-native-buffer-sync.md`](plugin-native-buffer-sync.md) — Implemented and installed private conditional synchronization; core authority, adapter exclusion and Review cutover remain separate
+- [`plugin-native-buffer-sync.md`](plugin-native-buffer-sync.md) — Installed private conditional synchronization; core authority and Review cutover remain separate
+- [`plugin-buffer-sync-owners.md`](plugin-buffer-sync-owners.md) — Private adapter exclusive ownership, one-use synchronization and retained unknown fences; no core write grant
 - [`releases/zed-native-sync-2026-09-16.md`](releases/zed-native-sync-2026-09-16.md) — Signed Zed 1.7.0 installation and separate Hawk Machine maintenance, exact native gates and bounded worker continuity
 - [`plugin-process-cleanup.md`](plugin-process-cleanup.md) — Core-owned process-group signals without PATH helpers, exact worker mapping and permission-failure fences
 - [`releases/plugin-process-cleanup-2026-09-16.md`](releases/plugin-process-cleanup-2026-09-16.md) — Activated Controller cleanup repair and eight-group actual Code installation acceptance; links the subsequent separate Machine activation

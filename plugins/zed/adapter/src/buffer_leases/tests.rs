@@ -4,6 +4,35 @@ use crate::{BufferState, Request, ensure_worktree, respond};
 mod reads;
 
 #[tokio::test]
+async fn unknown_native_open_cannot_be_excluded_by_a_sync_path_check() {
+    let fixture = Fixture::new().await;
+    let open = fixture.prepare().await;
+    fixture
+        .request(Request::OpenBufferLease {
+            lease: open.clone(),
+        })
+        .await
+        .unwrap();
+    let other = fixture.prepare().await;
+    let mut registry = fixture.buffers.leases.lock().await;
+    assert!(registry.sync_target(&open).is_ok());
+    assert!(registry.sync_target(&other).is_err());
+    registry.slots.get_mut(&2).unwrap().state = Phase::Unknown;
+    assert!(
+        registry
+            .sync_target(&open)
+            .unwrap_err()
+            .to_string()
+            .contains("unresolved buffer owner")
+    );
+    registry.slots.get_mut(&2).unwrap().state = Phase::Open;
+    assert!(registry.sync_target(&open).is_ok());
+    let mut foreign = open;
+    foreign.instance = "f".repeat(32);
+    assert!(registry.sync_target(&foreign).is_err());
+}
+
+#[tokio::test]
 async fn disconnected_observer_does_not_lose_the_native_open_record() {
     use tokio::io::AsyncWriteExt as _;
     let fixture = Fixture::new().await;

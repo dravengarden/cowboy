@@ -133,13 +133,14 @@ Review consumer.
 
 ## Remaining delivery boundary
 
-The adapter exposes only a private support probe, not public sync commands.
-Multiple adapter owners can share one native peer: the native single-peer
-condition alone does **not** prove exclusive Cowboy buffer ownership. Separate
-core purpose/authority, original-owner routing, adapter-side ownership exclusion
-through the effect, cancellation/unknown retention and explicit consumer
-admission are still required before exposing Apply. Read leases and content
-hashes remain insufficient. No fallback to legacy reload is permitted.
+The `1.8.0` source candidate adds [private adapter ownership exclusion](plugin-buffer-sync-owners.md)
+and a separate synchronization operation identity. It refuses shared native IDs,
+retains exclusion through Pending/Unknown, and never resends Apply. Its private
+socket purpose declaration is **not** a core grant. The Machine explicitly
+rejects these commands on its generic Code route; no Controller/Web effect or
+Review consumer is enabled. Core purpose/authority and original-generation
+routing remain required. Read leases and content hashes remain insufficient,
+and no fallback to legacy reload is permitted.
 
 The exact static adapter/server pair passed the eight-group connected Code gate
 and was signed, published and installed on Hawk through the normal Plugin

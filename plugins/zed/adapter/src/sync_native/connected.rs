@@ -332,9 +332,11 @@ async fn native_process_child() {
     let old = "before🙂\n";
     let new = "after汉字\n";
     tokio::fs::write(&path, old).await.unwrap();
-    let zed = ZedRuntime::start_with_disconnect(&server, &root.join("state"), || {})
-        .await
-        .unwrap();
+    let zed = Arc::new(
+        ZedRuntime::start_with_disconnect(&server, &root.join("state"), || {})
+            .await
+            .unwrap(),
+    );
     let instance = zed.sync.probe(&zed).await.unwrap();
     let (worktree, _) = zed.open_worktree(&workspace, true).await.unwrap();
     let (buffer, version) = zed
@@ -418,6 +420,7 @@ async fn native_process_child() {
     );
     native_edits_and_close_refuse(&zed, &instance, &workspace, worktree).await;
     native_source_bounds_and_lost_reply(&zed, &instance, &workspace, worktree).await;
+    crate::sync_owners::connected::exercise(&zed, &workspace).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"

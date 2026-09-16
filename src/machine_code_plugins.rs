@@ -126,6 +126,16 @@ impl CodeRuntimeHost {
         payload: &Value,
         select: impl FnOnce() -> Result<CodeRuntimeSelection>,
     ) -> Result<Value> {
+        // Private adapter synchronization is not a generic Code RPC. Until a
+        // separately authorized core purpose and original-owner continuation
+        // exists, neither a path nor a read lease may cross this effect gate.
+        ensure!(
+            !matches!(
+                payload["type"].as_str(),
+                Some("prepareBufferSync" | "bufferSync")
+            ),
+            "buffer synchronization requires separate core authority"
+        );
         let reservation = match buffer_leases::Command::parse(payload)? {
             Some(command) if command.is_prepare() => Some(self.buffer_leases.reserve().await?),
             Some(command) => {
@@ -445,6 +455,27 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::io::{BufRead as _, Write as _};
+
+    #[tokio::test]
+    async fn private_sync_cannot_use_generic_rpc_or_a_read_lease_as_authority() {
+        let host = CodeRuntimeHost::default();
+        for kind in ["prepareBufferSync", "bufferSync"] {
+            for extra_path in [false, true] {
+                let mut request = json!({"type":kind,"purpose":"refresh_from_disk",
+                    "lease":{"instance":"a".repeat(32),"id":"0000000000000001"}});
+                if extra_path {
+                    request["worktree"] = json!("/tmp");
+                }
+                let error = host
+                    .request("zed", &request, || panic!("resolved a replacement runtime"))
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("separate core authority"));
+                assert!(host.routes.lock().await.is_empty());
+                assert_eq!(host.live_generation_count().await, 0);
+            }
+        }
+    }
 
     pub(super) fn fixture_plan(root: &Path, generation: &str) -> CodeLaunchPlan {
         let arguments = |phase: &str| {

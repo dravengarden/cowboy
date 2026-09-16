@@ -21,6 +21,7 @@ mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
 mod sync_native;
+mod sync_owners;
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
@@ -59,6 +60,15 @@ enum CommandKind {
 enum Request {
     Health,
     NativeSyncSupport,
+    PrepareBufferSync {
+        lease: buffer_leases::LeaseRef,
+        purpose: sync_owners::Purpose,
+        content: content_reads::Content,
+    },
+    BufferSync {
+        operation: sync_owners::OperationRef,
+        action: sync_owners::Action,
+    },
     EnsureWorktree {
         path: PathBuf,
         trusted: bool,
@@ -125,6 +135,11 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    BufferSync {
+        api_version: u8,
+        operation: sync_owners::OperationRef,
+        state: sync_owners::State,
+    },
     NativeSyncSupport {
         api_version: u8,
         protocol: u32,
@@ -216,6 +231,7 @@ struct BufferLease {
     lease_ids: HashSet<BufferOwner>,
     remote_id: u64,
     version: Vec<BufferVersionEntry>,
+    sync: Option<sync_owners::Fence>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -302,6 +318,7 @@ type Buffers = Arc<BufferState>;
 struct BufferState {
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
     leases: Mutex<buffer_leases::Registry>,
+    syncs: Mutex<sync_owners::Registry>,
 }
 type BufferFiles = Arc<RwLock<HashMap<u64, proto::File>>>;
 type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
@@ -1360,14 +1377,19 @@ async fn respond(
             worktrees: worktrees.read().await.len(),
             buffer_lease_api: 1,
         },
-        Request::NativeSyncSupport => {
-            let zed = zed.context("native runtime is unavailable")?;
-            let instance = zed.sync.probe(zed).await?;
-            Response::NativeSyncSupport {
-                api_version: ADAPTER_VERSION,
-                protocol: 1,
-                instance: format!("{:032x}", u128::from_be_bytes(instance)),
-            }
+        Request::NativeSyncSupport => sync_native::support(zed).await?,
+        Request::PrepareBufferSync {
+            lease,
+            purpose,
+            content,
+        } => sync_owners::prepare(lease, purpose, content, buffers, zed).await?,
+        Request::BufferSync { operation, action } => {
+            buffers
+                .syncs
+                .lock()
+                .await
+                .act(operation, action, buffers, zed)
+                .await?
         }
         Request::EnsureWorktree { path, trusted } => {
             ensure_worktree(path, trusted, false, worktrees, zed).await?
@@ -1486,6 +1508,7 @@ async fn buffer_language(
     let lease = all
         .get(&(worktree.clone(), path.clone()))
         .context("buffer is not open")?;
+    sync_owners::ensure_readable(lease)?;
     let observation = if let Some(zed) = zed {
         zed.language(lease.remote_id).await?
     } else {
@@ -1529,6 +1552,7 @@ async fn buffer_hover(
     let lease = all
         .get(&(worktree.clone(), path.clone()))
         .context("buffer is not open")?;
+    sync_owners::ensure_readable(lease)?;
     let contents = if let Some(zed) = zed {
         zed.hover(lease.remote_id, row, column).await?
     } else {
@@ -1553,6 +1577,8 @@ async fn buffer_navigate(
 ) -> Result<Response> {
     let (worktree, path) = buffer_key(worktree, path).await?;
     let all = buffers.active.read().await;
+    // Native navigation may open a destination whose ID is not known yet.
+    sync_owners::ensure_admission(&all)?;
     let lease = all
         .get(&(worktree.clone(), path.clone()))
         .context("buffer is not open")?;
@@ -1586,6 +1612,7 @@ async fn buffer_symbols(
     let lease = all
         .get(&(worktree.clone(), path.clone()))
         .context("buffer is not open")?;
+    sync_owners::ensure_readable(lease)?;
     let symbols = if let Some(zed) = zed {
         zed.document_symbols(lease.remote_id).await?
     } else {
@@ -1707,6 +1734,7 @@ async fn open_buffer_at(
 ) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.active.write().await;
+    sync_owners::ensure_admission(&all)?;
     if !all.contains_key(&key) {
         let (remote_id, version) = if let Some(zed) = zed {
             zed.open_buffer(worktree_id, &path).await?
@@ -1719,6 +1747,7 @@ async fn open_buffer_at(
                 lease_ids: HashSet::new(),
                 remote_id,
                 version,
+                sync: None,
             },
         );
     }
@@ -1775,6 +1804,7 @@ async fn close_buffer_at(
         matches!(owner, BufferOwner::Legacy(_)) || lease.lease_ids.contains(&owner),
         "native buffer owner changed"
     );
+    sync_owners::ensure_readable(lease)?;
     let last = lease.lease_ids.len() == 1 && lease.lease_ids.contains(&owner);
     if last && let Some(zed) = zed {
         // Keep local ownership if the owned native transport rejects enqueue.

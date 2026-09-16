@@ -100,6 +100,22 @@ pub(super) struct Registry {
 }
 
 impl Registry {
+    pub(super) fn sync_target(&mut self, lease: &LeaseRef) -> Result<(u64, (PathBuf, PathBuf))> {
+        let id = self.resolve(lease)?;
+        // A cancelled open may already own an unobserved native buffer, even
+        // through an alias. It cannot be excluded by comparing pathname keys.
+        ensure!(
+            self.slots.values().all(|slot| slot.state != Phase::Unknown),
+            "an unresolved buffer owner prevents exclusive synchronization"
+        );
+        let slot = self
+            .slots
+            .get(&id)
+            .context("buffer lease has been released")?;
+        ensure!(slot.state == Phase::Open, "buffer lease is not open");
+        Ok((id, (slot.worktree.clone(), slot.path.clone())))
+    }
+
     fn expire_prepared(&mut self) {
         // Only effect-free reservations expire. Open/ambiguous native effects
         // stay retained; no LRU or timeout may pretend they have been released.
@@ -235,6 +251,9 @@ impl Registry {
             slot.prepared_at.elapsed() < PREPARE_TTL,
             "buffer preparation expired"
         );
+        // Synchronization preparation takes this same registry lock before
+        // installing its fence. A local admission refusal has no open effect.
+        super::sync_owners::ensure_admission(&*buffers.active.read().await)?;
         open_prevalidated(slot, id, current.remote_id, buffers, zed).await?;
         Ok(reply(lease, LeaseState::Open))
     }
@@ -290,6 +309,7 @@ impl Registry {
             .get(&(slot.worktree.clone(), slot.path.clone()))
             .filter(|buffer| buffer.lease_ids.contains(&BufferOwner::Owned(id)))
             .context("original buffer owner is unavailable")?;
+        super::sync_owners::ensure_readable(buffer)?;
         let result = match request {
             ReadRequest::Language {} => {
                 let observation = if let Some(zed) = zed {
