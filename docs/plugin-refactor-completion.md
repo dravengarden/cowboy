@@ -321,12 +321,14 @@ unconstrained workflow executor to hide these gaps.
 
 ## Production and supported-client acceptance still required
 
-- **Current persistence health:** after the [1.8.0 installation window](releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved),
-  the unchanged Controller's existing byte-budget rule rejected two append
-  events. Its queue has drained and database-failure count is zero, but local
-  and public health remain `503 persistence degraded`. Installed Plugin identity
-  is accepted; current end-to-end Service health and those intents' recovery are
-  not. No reset, restart or replay was used to conceal the incident.
+- **Historical persistence loss:** the two append rejections after the
+  [1.8.0 installation window](releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved)
+  led to a separately [repaired and activated Controller admission queue](releases/persistence-admission-2026-09-16.md).
+  Local/public health is now 200, with zero drops/failed batches in the new
+  epoch and all 16 worker/four Code process identities retained. The original
+  rejected contents and recovery remain unknown; no replay or DB edit was used
+  to claim restoration. The independent failed Web transaction is still awaiting
+  its own recovery; no Machine maintenance was performed.
 - **Supported browser and retained-worker acceptance:** dataset-aware Web, bound
   Controller, compatible cold recovery and independently authorized Machine
   maintenance are [activated](releases/dataset-bound-maintenance-2026-09-15.md).

@@ -43,6 +43,7 @@ primary phone/desktop product path.
 - [`architecture/04-providers.md`](architecture/04-providers.md) — Provider packages, launch generations, behavior, and compatibility fallback
 - [`architecture/05-storage.md`](architecture/05-storage.md) — PostgreSQL/SQLite store, write-behind, pagination, and retention
 - [`persistence-admission.md`](persistence-admission.md) — Bounded FIFO admission, oversized/control reservations, shutdown drain and explicit loss limits
+- [`releases/persistence-admission-2026-09-16.md`](releases/persistence-admission-2026-09-16.md) — Controller admission repair, healthy new persistence epoch, retained worker/native processes and historical loss limits
 - [`architecture/06-server-api.md`](architecture/06-server-api.md) — REST, WebSocket, runtime SPA files, and session reload
 - [`architecture/08-memory.md`](architecture/08-memory.md) — Agent-owned memory and provider-state boundaries
 - [`architecture/09-frontend.md`](architecture/09-frontend.md) — React state, durable draft delivery, transcript, composer, PWA, and native-shell contracts

@@ -4,8 +4,10 @@
 Code processes and all 16 observed workers retained their PID/start identities.
 No Machine maintenance was performed. This accepts private adapter ownership
 exclusion, not core synchronization authority, Review cutover or restoration.
-The later persistence incident below remains unresolved; installation acceptance
-must not be reported as current end-to-end Service health.
+The later persistence admission bug was separately
+[repaired on Controller](persistence-admission-2026-09-16.md). Its two historical
+rejected intents remain unrecovered; installation acceptance must not be reported
+as proof of their restoration.
 
 ## Exact source and release
 
@@ -123,6 +125,10 @@ against that actual Web root; its version is `4d8405ee6e987d3fa911a2bb540bdf0b`.
 
 ## Later persistence degradation — unresolved
 
+Update: the [15:38 UTC Controller repair](persistence-admission-2026-09-16.md)
+restores current health; historical event recovery remains unknown. The following
+is the retained pre-repair observation, not a claim that health is still 503.
+
 At `13:45:36.204Z`, after the accepted installation observation window, the
 unchanged Controller logged two rejected append events (estimated 437 and 132
 bytes) while its pending queue held approximately 15.6 MB. Its existing
@@ -142,8 +148,9 @@ The earlier healthy HTTP receipt remains a bounded historical observation, not
 a claim of continuing health. Read-only evidence is retained as
 `later-{local,public}-health.txt`, `later-persistence-metrics.txt` and
 `later-persistence-events.txt` in the private evidence directory. Persistence
-admission and any independently justified recovery need a separate repair;
-draining the queue or restarting cannot prove restoration of the lost intents.
+admission received the separate repair linked above; independently justified
+historical recovery remains open. Draining the queue or restarting cannot prove
+restoration of the lost intents.
 
 ## Verified Machine candidate, not activated
 
