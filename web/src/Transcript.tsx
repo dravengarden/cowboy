@@ -120,6 +120,7 @@ import {
   turnFailureTelemetry,
 } from "./turnRecovery";
 import { PromptOriginNote } from "./PromptOriginNote";
+import { TranscriptFileChip } from "./TranscriptFileChip";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
 import { TranscriptReconnectingActivity } from "./TranscriptTurnActivity";
@@ -1214,6 +1215,15 @@ function ChunkView({
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
+  if (chunk.type === "file") {
+    return (
+      <TranscriptFileChip
+        name={chunk.name}
+        mimeType={chunk.mimeType}
+        invert={invert}
+      />
+    );
+  }
   return (
     <Markdown
       text={chunk.text}
@@ -1378,12 +1388,12 @@ function OptimisticUserBubble({
                 />
               )
               : (
-                <Typography
+                <TranscriptFileChip
                   key={`attachment-${index}-${part.attachment.id}`}
-                  variant="body2"
-                >
-                  📎 {part.attachment.name}
-                </Typography>
+                  name={part.attachment.name}
+                  mimeType={part.attachment.mimeType}
+                  invert
+                />
               )
           )}
         {inFlight && (
@@ -3309,7 +3319,11 @@ function itemProgressSignature(
     case "message":
       return `${count}:${item.key}:m:${
         item.chunks.map((chunk) =>
-          chunk.type === "text" ? chunk.text.length : chunk.src.length
+          chunk.type === "text"
+            ? chunk.text.length
+            : chunk.type === "image"
+            ? chunk.src.length
+            : chunk.name.length
         ).join(",")
       }`;
     case "thought":

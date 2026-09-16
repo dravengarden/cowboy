@@ -26,9 +26,12 @@ export {
 
 /// A renderable slice of a message — text and images can interleave inside
 /// one message item (e.g. user pastes "describe this:" + image + " thanks").
+/// A non-image attachment is its own `file` chunk: the transcript never holds
+/// its bytes, but it must still show that the message carried a file.
 export type ContentChunk =
   | { type: "text"; text: string }
-  | { type: "image"; src: string; alt?: string };
+  | { type: "image"; src: string; alt?: string }
+  | { type: "file"; name: string; mimeType?: string };
 
 // Every item carries a STABLE `key` — the seq of the envelope that first
 // created it (coalesced message/thought items keep their first chunk's seq).
@@ -100,9 +103,14 @@ function sameChunks(a: ContentChunk[], b: ContentChunk[]): boolean {
   return a.every((chunk, index) => {
     const other = b[index];
     if (!other || chunk.type !== other.type) return false;
-    return chunk.type === "text"
-      ? other.type === "text" && chunk.text === other.text
-      : other.type === "image" && chunk.src === other.src && chunk.alt === other.alt;
+    if (chunk.type === "text") {
+      return other.type === "text" && chunk.text === other.text;
+    }
+    if (chunk.type === "file") {
+      return other.type === "file" && chunk.name === other.name &&
+        chunk.mimeType === other.mimeType;
+    }
+    return other.type === "image" && chunk.src === other.src && chunk.alt === other.alt;
   });
 }
 
@@ -158,6 +166,16 @@ function shareUnchangedRows(timeline: Envelope[], items: RenderItem[]): RenderIt
   return changed ? shared : items;
 }
 
+function resourceNameFromUri(uri: string): string {
+  const last = uri.split("/").filter(Boolean).pop();
+  if (!last) return "attachment";
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
 /// Convert an ACP content block into a renderable chunk (or null if we don't
 /// support that type yet).
 function chunkOf(update: AcpUpdate): ContentChunk | null {
@@ -185,11 +203,15 @@ function chunkOf(update: AcpUpdate): ContentChunk | null {
   }
   if (c.type === "resource" || c.type === "resource_link") {
     // A file the user attached (embedded resource or link). The agent reads the
-    // bytes; in the transcript we just echo a paperclip + the file name so the
-    // user sees what they sent. Derive a readable name from the uri.
+    // bytes; the transcript shows a file card, the same way an image shows a
+    // thumbnail, so the attachment is visible without being inlined as prose.
     const uri = c.resource?.uri ?? c.uri ?? "";
-    const name = c.name ?? decodeURIComponent(uri.split("/").pop() ?? uri) ?? "attachment";
-    return { type: "text", text: `📎 ${name}` };
+    const mimeType = c.resource?.mimeType ?? c.mimeType;
+    return {
+      type: "file",
+      name: c.name || resourceNameFromUri(uri),
+      ...(mimeType ? { mimeType } : {}),
+    };
   }
   if (c.type === "image") {
     // ACP image content blocks have a few shapes; cover both flat
@@ -283,6 +305,7 @@ function sameContentChunk(left: ContentChunk, right: ContentChunk): boolean {
   if (left.type !== right.type) return false;
   if (left.type === "text" && right.type === "text") return left.text === right.text;
   if (left.type === "image" && right.type === "image") return left.src === right.src;
+  if (left.type === "file" && right.type === "file") return left.name === right.name;
   return false;
 }
 

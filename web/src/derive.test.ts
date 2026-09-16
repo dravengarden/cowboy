@@ -682,3 +682,49 @@ Deno.test("a visible boundary still separates two messages", () => {
     }
   }
 });
+
+Deno.test("a sent file is its own chunk, not a paperclip glued to the prompt", () => {
+  const items = derive([
+    {
+      session_id: "s1",
+      seq: 1,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: {
+          type: "resource",
+          resource: {
+            uri: "attachment:///2026%20Product%20Release%20Slides.pdf",
+            blob: "JVBERi0=",
+            mimeType: "application/pdf",
+          },
+        },
+      },
+    },
+    {
+      session_id: "s1",
+      seq: 2,
+      kind: "update",
+      update: {
+        sessionUpdate: "user_message_chunk",
+        promptOrigin: { actor: "human", source: "composer" },
+        content: { type: "text", text: "summarize this" },
+      },
+    },
+  ]);
+  const message = items[0];
+  if (items.length !== 1 || message?.kind !== "message") {
+    throw new Error("the file and its prompt should be one user message");
+  }
+  const [file, text] = message.chunks;
+  if (
+    file?.type !== "file" || file.name !== "2026 Product Release Slides.pdf" ||
+    file.mimeType !== "application/pdf"
+  ) {
+    throw new Error(`expected a file chunk, got ${JSON.stringify(file)}`);
+  }
+  if (text?.type !== "text" || text.text !== "summarize this") {
+    throw new Error("the prompt text must stay separate from the file");
+  }
+});
