@@ -178,7 +178,7 @@ pub(super) async fn run(
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
 
-    *stage = "uninstall_and_path_removal";
+    *stage = "uninstall_preview";
     let plugin = format!("/api/machines/{MACHINE}/plugins/zed");
     let plan = pair
         .http
@@ -186,6 +186,7 @@ pub(super) async fn run(
         .await?
         .ok()?;
     check(plan["affected_sessions"] == json!([]) && plan["plan_id"].is_string())?;
+    *stage = "uninstall_commit";
     let uninstalled = pair
         .http
         .post(
@@ -194,6 +195,7 @@ pub(super) async fn run(
         )
         .await?;
     check(uninstalled["phase"] == "completed" && uninstalled["deleted_session_ids"] == json!([]))?;
+    *stage = "removed_paths";
     std::fs::remove_file(pair.root.join("workspace/fixture.txt")).map_err(|_| Failure::Setup)?;
     std::fs::rename(
         pair.root.join("workspace"),
@@ -243,7 +245,7 @@ pub(super) async fn run(
     pair.controller
         .take()
         .ok_or(Failure::Setup)?
-        .finish()
+        .finish_with_reaper(true)
         .await?;
     pair.start_controller().await?;
     pair.connected(3).await?;

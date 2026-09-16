@@ -255,7 +255,8 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
             };
             record.command(request_id, kind)
         }
-        MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
+        MachineCommand::QueryPluginUninstallStep { request_id, step }
+        | MachineCommand::QueryPluginUninstallRecovery { request_id, step } => {
             check(
                 step.service_id == SERVICE && step.machine_id == MACHINE && step.plugin_id == "zed",
             )?;
@@ -327,6 +328,46 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
         _ => return Err(Failure::UnexpectedHandshake),
     }
     Ok(())
+}
+
+#[test]
+fn relay_accepts_only_scoped_uninstall_preflight_and_bounds_correlation() {
+    let mut step = crate::machine_protocol::plugin_step::fixture();
+    step.service_id = SERVICE.into();
+    step.machine_id = MACHINE.into();
+    step.plugin_id = "zed".into();
+    let mut record = Record::default();
+    command_frame(
+        MachineCommand::QueryPluginUninstallStep {
+            request_id: "preflight".into(),
+            step: Box::new(step.clone()),
+        },
+        &mut record,
+    )
+    .unwrap();
+    assert!(record.command("preflight".into(), "uninstallStep").is_err());
+    assert!(record.reply("preflight").unwrap().is_none());
+    step.machine_id = "another-machine".into();
+    assert!(
+        command_frame(
+            MachineCommand::UninstallPluginStep {
+                request_id: "wrong-target".into(),
+                step: Box::new(step),
+            },
+            &mut record,
+        )
+        .is_err()
+    );
+    for index in 0..32 {
+        record
+            .command(index.to_string(), "readBufferLease")
+            .unwrap();
+    }
+    assert!(
+        record
+            .command("overflow".into(), "readBufferLease")
+            .is_err()
+    );
 }
 
 #[test]

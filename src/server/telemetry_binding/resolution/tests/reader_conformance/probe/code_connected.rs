@@ -136,16 +136,17 @@ impl Pair<'_> {
         let mut result = fixture::stop_native(self.root).await;
         eprintln!("Code fixture native cleanup: {result:?}");
         if let Some(mut process) = self.machine.take() {
-            let stopped = process.finish().await;
+            let stopped = process.finish_with_reaper(true).await;
             eprintln!("Code fixture Machine cleanup: {stopped:?}");
             result = result.and(stopped);
         }
         if let Some(mut process) = self.controller.take() {
-            let stopped = process.finish().await;
+            let stopped = process.finish_with_reaper(true).await;
             eprintln!("Code fixture Controller cleanup: {stopped:?}");
             result = result.and(stopped);
         }
-        result.and(self.proxy.finish().await)
+        result = result.and(self.proxy.finish().await);
+        result.and(fixture::reap_orphans().await)
     }
 }
 
@@ -175,6 +176,9 @@ async fn immutable_connected_code_buffers() -> Result<()> {
                 }),
         "empty read-only cgroup cover required"
     );
+    // Cargo is namespace init but does not reap native grandchildren. Adopt
+    // them here and explicitly reap after their tracked parents have stopped.
+    rustix::process::set_child_subreaper(rustix::process::Pid::from_raw(1))?;
     let input: Input = serde_json::from_slice(&std::fs::read(std::env::var(
         "COWBOY_TEST_CODE_CONNECTED_INPUT",
     )?)?)?;

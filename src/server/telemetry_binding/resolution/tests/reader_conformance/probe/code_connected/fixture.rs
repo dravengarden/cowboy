@@ -234,6 +234,23 @@ fn native_directory(socket: &str) -> Option<PathBuf> {
     .then(|| directory.to_owned())
 }
 
+/// Called only after all fixture leaders have been waited. No live Tokio-owned
+/// child remains; every adopted descendant belongs to this isolated test.
+pub(super) async fn reap_orphans() -> Result<(), Failure> {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match rustix::process::wait(rustix::process::WaitOptions::NOHANG) {
+                Ok(Some(_)) => continue,
+                Err(rustix::io::Errno::CHILD) => return Ok(()),
+                Ok(None) => tokio::time::sleep(Duration::from_millis(10)).await,
+                Err(_) => return Err(Failure::Cleanup),
+            }
+        }
+    })
+    .await
+    .map_err(|_| Failure::Cleanup)?
+}
+
 #[test]
 fn teardown_cannot_select_broad_or_unrelated_directories() {
     for socket in [

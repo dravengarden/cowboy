@@ -191,6 +191,12 @@ impl Running {
         }
     }
     async fn finish(&mut self) -> Result<(), Failure> {
+        self.finish_with_reaper(false).await
+    }
+    /// Only the private PID-namespace harness opts in, after making its test
+    /// process a subreaper. Reap this group's adopted children, never another
+    /// concurrently managed process's leader.
+    async fn finish_with_reaper(&mut self, reap: bool) -> Result<(), Failure> {
         self.kill_group()?;
         tokio::time::timeout(Duration::from_secs(3), self.child.wait())
             .await
@@ -200,6 +206,26 @@ impl Running {
             .await
             .map_err(|_| Failure::Cleanup)?
             .map_err(|_| Failure::Cleanup)?;
+        if reap {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    match rustix::process::waitpgid(self.pid, rustix::process::WaitOptions::NOHANG)
+                    {
+                        Ok(Some(_)) => continue,
+                        Ok(None) | Err(rustix::io::Errno::CHILD) => {}
+                        Err(_) => return Err(Failure::Cleanup),
+                    }
+                    if rustix::process::test_kill_process_group(self.pid)
+                        == Err(rustix::io::Errno::SRCH)
+                    {
+                        return Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| Failure::Cleanup)??;
+        }
         if rustix::process::test_kill_process_group(self.pid) != Err(rustix::io::Errno::SRCH) {
             return Err(Failure::Cleanup);
         }
