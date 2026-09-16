@@ -511,9 +511,11 @@ Installation through the local Operator is currently accepted for the
 Controller's own Machine. A remote Machine can return HTTP 409 "preconditions
 changed" for every target, including a same-bytes reinstall of the version it
 already runs, which shows the refusal is machine-level rather than
-release-specific. That response does not name which precondition failed, so
-neither an operator nor an agent can correct it from the response alone; treat a
-remote 409 as an unfinished convergence to report, never as a reason to retry
+release-specific. The refusal names its precondition, and for those Machines it is
+"the Machine did not report an observable installation target": their agent runs
+without `--plugin-operation-admission`, which is a per-host recovery-contract
+decision rather than anything a release or an upgrade command can supply. Treat
+such a 409 as an unfinished convergence to report, never as a reason to retry
 with a new identity.
 
 For first-party artifacts, sign and independently re-verify the exact output:

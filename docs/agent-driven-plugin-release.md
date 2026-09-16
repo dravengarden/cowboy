@@ -22,6 +22,24 @@ also has an operating-system authority boundary: its Service account controls
 the application and its data. The local Operator endpoint makes that authority
 explicit and auditable for Plugin operations.
 
+## Admission is per Machine
+
+Publishing a release makes it installable; it does not make every Machine able
+to accept it. A Machine only reports an observable installation target when its
+own agent runs with `--plugin-operation-admission`, and that flag is a host
+recovery-contract decision taken per machine, not part of a release.
+
+Hawk passes it. Falcon and macbook-air do not, so every install to them is
+refused before dispatch — including a same-bytes reinstall of the version they
+already run, which is how to tell this apart from a release problem. The
+Controller now names that refusal: "the Machine did not report an observable
+installation target." Enabling admission elsewhere is separate host maintenance
+(Columbus `machines/docs/nixos-deployment.md`), not something an upgrade command
+can do for you.
+
+So a fleet convergence can legitimately end with Machines still behind. Report
+them; do not retry under a new operation identity.
+
 ## Enable once, then operate
 
 Use a Controller binary that includes `cowboy operator`. Run these commands on
