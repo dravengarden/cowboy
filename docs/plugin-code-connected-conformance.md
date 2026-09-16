@@ -74,5 +74,5 @@ independent restoration and general graph/state leases. This test-only change
 does not require or authorize a production component restart.
 
 The [2026-09-16 acceptance record](releases/plugin-code-connected-conformance-2026-09-16.md)
-binds two successful runs to their exact supplied artifacts and records the
+binds three successful runs to their exact supplied artifacts and records the
 separate complete source gate. It does not change the exclusions above.

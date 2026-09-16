@@ -8,12 +8,16 @@ native-runtime gates, not ordinary Review integration or recovery.
 
 ## Source and supplied artifacts
 
-Final implementation source:
+Initial integrated implementation source:
 `8aefb03240353cf1b2836d7c60ab8ab8eb32c9d4`, integrating remote main
 `435adb3c98dc097526e1edda3eb082eca0b2c0a0`. The first passing run used
-`4f8a57e0`; the second used the integrated clean source. The enclosing
-documentation commit only records evidence. Other than formatting an incoming
-Provider test assertion, Rust changes are confined to test modules. No public
+`4f8a57e0`; the second used that integrated clean source. Before publication,
+main advanced to `444af3466204d1bafe18541805e878c2045160d7` with installation
+precondition diagnostics and per-Machine admission guidance. Final integration
+`e7a2a075b164fa4f69ee9eca1c6a4352334e2f8e` preserves those changes; both the
+complete gate and a third connected run passed from that clean source. The
+enclosing documentation commit only records evidence. Other than formatting an
+incoming Provider test assertion, this slice's Rust changes are test-only. No public
 Plugin contract, dependency pin, migration, runtime implementation or Web
 bundle was changed by this slice. The canonical release skill now requires
 the connected gate before an owned-buffer/Review cutover.
@@ -37,8 +41,8 @@ Each run signs its own disposable envelope; none is a Catalog publication.
 
 ## Accepted evidence
 
-Both actual-process runs passed all seven check groups with `accepted: true`
-and `cleanup: true`. The integrated run observed three authenticated
+All three actual-process runs passed all seven check groups with `accepted: true`
+and `cleanup: true`. The final integrated run observed three authenticated
 connections, three matching runtime configurations, 57 correlated replies,
 three held replies and one intentional connection cut. Exactly three native
 opens, two releases and one uninstall step were dispatched. Dropped HTTP
@@ -61,7 +65,8 @@ resident Machine; temporary password, signing key and source text never enter
 receipts. No production account, host policy or installation was used.
 
 The complete `nix develop -c env RUST_TEST_THREADS=1 just check-compact` passed
-on the same clean integrated source: 1,351 main Rust tests (31 ignored),
+on both clean integration points: initially 1,351 main Rust tests, then 1,352
+after preserving main's additional precondition test (31 ignored in each),
 308 Machine tests, 26 core adapter tests, 56 Zed adapter tests,
 1,599 Web tests and 17 isolated PostgreSQL tests. It also passed the 86-case
 composition differential gate, package/Provider checks, native-shell contracts,
@@ -82,8 +87,14 @@ public artifact. Selected SHA-256 values:
   `01732708348c3c186a6f83bdcbb0ff3dd05e9860e90a64585360f683ad810157`.
 - Integrated-source process log:
   `ef920a309d669446695d8aca3882b8059de7cc0bbf1215088a5708fdc1598369`.
-- Complete source gate:
+- Initial complete source gate:
   `fd288ac69d56cc484e4a11783d88c3b7cfcb42b1e0b7e73bb9a6b1e1e0c61666`.
+- Final integrated-source receipt (`final.json`):
+  `a77994c5b843bae5896e96a9c259022f5593d0221b1cfc1c6a4f399cdd6fcae3`.
+- Final integrated-source process log:
+  `dca394bfc777dcfa59e41d0726f6b284abb5f540264a4de77c044b73cb04c773`.
+- Final complete source gate:
+  `7a417e859fb1e101d25eacd840240fa6f5980574e0566cb9670d4e6f5db6610a`.
 
 ## Remaining boundary
 

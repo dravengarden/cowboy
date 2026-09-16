@@ -198,7 +198,7 @@ and accepting a production effect are different milestones.
   Controller, Machine and Victoria processes retained.
 - [Connected core Code acceptance](plugin-code-connected-conformance.md) now
   exercises supplied immutable Controller/Machine/Zed processes through real
-  disposable login, enrollment and a temporary signed installation. Two runs
+  disposable login, enrollment and a temporary signed installation. Three runs
   pass all seven groups: cancellation without mutation replay, independent
   content-bound owners, explicit release after a borrowed read, HTTP uninstall
   and missing-path reads, plus connection/restart refusal without adoption.
