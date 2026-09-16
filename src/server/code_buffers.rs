@@ -77,7 +77,7 @@ fn router() -> Router<Context> {
         )
         .route(
             "/api/code/buffers/{id}/read",
-            post(reads::read).layer(DefaultBodyLimit::max(128)),
+            post(reads::read).layer(DefaultBodyLimit::max(512)),
         )
 }
 

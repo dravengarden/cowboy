@@ -727,10 +727,18 @@ async fn http_routes_reject_retargeting_and_unbounded_bodies_without_native_call
             StatusCode::UNPROCESSABLE_ENTITY,
         ),
         (
-            json!({"kind":"symbols", "path":"x".repeat(256)}),
+            json!({"kind":"symbols", "path":"x".repeat(512)}),
             StatusCode::PAYLOAD_TOO_LARGE,
         ),
         (json!({"kind":"language"}), StatusCode::NOT_FOUND),
+        (
+            serde_json::from_str::<Value>(include_str!(
+                "../../../plugins/zed/adapter/fixtures/content.json"
+            ))
+            .unwrap()["request"]
+                .clone(),
+            StatusCode::NOT_FOUND,
+        ),
     ] {
         let response = client
             .post(format!("{base}/api/code/buffers/unknown/read"))

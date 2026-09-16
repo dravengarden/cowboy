@@ -52,6 +52,38 @@ async fn read_support_and_invalid_requests_never_select_a_plugin() {
 }
 
 #[tokio::test]
+async fn content_support_is_pathless_core_only_and_content_is_validated_before_dispatch() {
+    let host = CodeRuntimeHost::default();
+    let probe = json!({"type":"bufferLeaseContentSupport"});
+    assert_eq!(
+        host.request("fixture-code", &probe, || panic!("selected a Plugin"))
+            .await
+            .unwrap(),
+        json!({"type":"bufferLeaseContentSupport","api_version":1})
+    );
+    assert!(crate::machine_code_plugins::request_worktree(&probe).is_err());
+    let wire: Value = serde_json::from_str(include_str!(
+        "../../../plugins/zed/adapter/fixtures/content.json"
+    ))
+    .unwrap();
+    for content in [
+        json!({"sha256":"F".repeat(64),"utf8Bytes":7}),
+        json!({"sha256":"0".repeat(64),"utf8Bytes":4_194_305}),
+    ] {
+        let mut request = wire["request"].clone();
+        request["content"] = content;
+        let command = json!({"type":"readBufferLease","lease":{"instance":"a".repeat(32),"id":"0000000000000001"},"request":request});
+        assert!(Command::parse(&command).is_err());
+        assert!(
+            host.request("fixture-code", &command, || panic!("selected a Plugin"))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(host.live_generation_count().await, 0);
+}
+
+#[tokio::test]
 async fn reads_retain_exact_generation_and_do_not_need_a_filesystem_path() {
     let root = PrivateRuntimeDirectory::create().unwrap();
     let host = CodeRuntimeHost::default();

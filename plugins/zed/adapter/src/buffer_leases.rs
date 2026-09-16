@@ -13,11 +13,15 @@ use super::{BufferOwner, Buffers, Response, WorktreeState, Worktrees, Zed};
 
 // Kept private to the independently built Plugin. Core independently validates
 // the entire reply; the real-runtime conformance gate checks these two codecs.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum ReadRequest {
     Language {},
     Symbols {},
+    Content {
+        content: super::content_reads::Content,
+        query: super::content_reads::Query,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +39,10 @@ pub(super) enum ReadOutput {
     },
     Symbols {
         symbols: Vec<super::LanguageDocumentSymbol>,
+    },
+    Content {
+        content: super::content_reads::Content,
+        result: super::content_reads::Output,
     },
 }
 
@@ -266,6 +274,9 @@ impl Registry {
         buffers: &Buffers,
         zed: Option<&Zed>,
     ) -> Result<Response> {
+        if let ReadRequest::Content { content, .. } = &request {
+            content.validate()?;
+        }
         let id = self.resolve(&lease)?;
         let slot = self
             .slots
@@ -300,6 +311,13 @@ impl Registry {
                     Vec::new()
                 },
             },
+            ReadRequest::Content { content, query } => {
+                let result = zed
+                    .context("native content observations unavailable")?
+                    .content_read(buffer.remote_id, &content, query)
+                    .await?;
+                ReadOutput::Content { content, result }
+            }
         };
         Ok(Response::BufferLeaseRead {
             api_version: 1,

@@ -132,13 +132,14 @@ pub(super) async fn request(
 pub(super) async fn read_support(
     control: &MachineControl,
     connection: &ConnectionToken,
+    kind: &str,
 ) -> Result<()> {
     let value = control
-        .adapter_request_on_connection(connection, "zed", json!({"type":"bufferLeaseReadSupport"}))
+        .adapter_request_on_connection(connection, "zed", json!({"type":kind}))
         .await
         .map_err(anyhow::Error::msg)?;
     ensure!(
-        value == json!({"type":"bufferLeaseReadSupport", "api_version":1}),
+        value == json!({"type":kind, "api_version":1}),
         "owned buffer reads unavailable"
     );
     Ok(())

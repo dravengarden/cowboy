@@ -133,6 +133,16 @@ export function decodeObservation<K extends ReadKind>(
   id: ResourceId,
   kind: K,
 ): Observation<K> {
+  const envelope = decodeReadEnvelope(value, id);
+  // The selected decoder independently checks the tag; no unchecked wire cast.
+  const result = kind === "language"
+    ? language(envelope.result)
+    : symbols(envelope.result);
+  requireValue(result.kind === kind);
+  return Object.freeze({ ...envelope, result }) as Observation<K>;
+}
+
+export function decodeReadEnvelope(value: unknown, id: ResourceId) {
   const row = record(value, [
     "apiVersion",
     "resourceId",
@@ -150,15 +160,10 @@ export function decodeObservation<K extends ReadKind>(
       return Object.freeze({ replicaId, timestamp: integer(row.timestamp) });
     }),
   );
-  // The selected decoder independently checks the tag; no unchecked wire cast.
-  const result = kind === "language"
-    ? language(row.result)
-    : symbols(row.result);
-  requireValue(result.kind === kind);
   return Object.freeze({
-    apiVersion: 1,
+    apiVersion: 1 as const,
     resourceId: id,
     openedVersion,
-    result,
-  }) as Observation<K>;
+    result: row.result,
+  });
 }

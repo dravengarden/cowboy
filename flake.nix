@@ -85,6 +85,7 @@
           ./migrations
           ./web/src/protocol.ts
           ./contracts/code-buffer-client.fixture.json
+          ./plugins/zed/adapter/fixtures/content.json
           ./tests/fixtures/otel-client.json
           ./tests/fixtures/composition-v1.json
           ./tests/fixtures/telemetry-resolution-surface.json
@@ -110,6 +111,9 @@
           ./tests/fixtures/composition-v1.json
           ./src/claude_shell.rs
           ./src/cgroup.rs
+          ./src/code_buffer_read.rs
+          ./src/code_buffer_read
+          ./plugins/zed/adapter/fixtures/content.json
           ./src/first_party_sources.rs
           ./src/plugin_auth_probe.rs
           ./src/plugin_host.rs
@@ -457,6 +461,8 @@
         test -e ${cowboy-src}/components/plugin-sdk/Cargo.toml
         test -e ${cowboy-src}/plugins/codex/provider.json
         test -e ${cowboy-src}/plugins/zed/plugin.json
+        test -e ${cowboy-src}/plugins/zed/adapter/fixtures/content.json
+        test ! -e ${cowboy-src}/plugins/zed/adapter/src/main.rs
         test -e ${cowboy-src}/build.rs
         test -e ${cowboy-src}/plugins/grok/host.json
         test -e ${cowboy-src}/plugins/grok/collector/index.js
@@ -475,6 +481,9 @@
         test -e ${machine-src}/build.rs
         test -e ${machine-src}/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
+        test -e ${machine-src}/src/code_buffer_read/content.rs
+        test -e ${machine-src}/plugins/zed/adapter/fixtures/content.json
+        test ! -e ${machine-src}/plugins/zed/adapter/src/main.rs
         test -e ${machine-src}/plugins/gemini/provider.json
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml

@@ -148,6 +148,13 @@ and accepting a production effect are different milestones.
   Real headless Zed does not automatically reload on disk changes: explicit
   content synchronization is still missing. The candidate is unsigned and
   uninstalled; no production component activation was issued by this task.
+- [Content-bound observations](plugin-content-bound-reads.md) add a closed
+  complete-text identity check through Web, Controller, Machine and private
+  Zed `1.6.0`. Language/symbol/hover queries refuse mismatched content before
+  native dispatch and reject in-flight edit/undo ABA. Mismatch does not reload
+  or replace an owner. Browser capture/typed results and native text equality
+  do not grant synchronization, owned navigation destinations, ordinary Review
+  integration, native installation or device acceptance.
 - [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
   typed client prerequisite: captured authority lifetime and input, one-shot
   preparation/open, strict bounded readonly observations, cancellation-safe

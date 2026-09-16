@@ -1,6 +1,8 @@
 use super::*;
 use serde_json::json;
 
+mod content;
+
 fn language() -> Value {
     json!({"type":"bufferLeaseRead", "api_version":1, "lease":"original",
         "opened_version":[{"replicaId":0,"timestamp":1}],

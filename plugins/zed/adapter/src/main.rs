@@ -15,6 +15,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
 mod buffer_leases;
+mod content_reads;
 #[cfg(test)]
 mod coordinate_queries;
 mod coordinates;
@@ -301,7 +302,8 @@ type Zed = Arc<ZedRuntime>;
 type PendingRequests = Arc<Mutex<HashMap<u32, oneshot::Sender<proto::Envelope>>>>;
 type DiagnosticCache = Arc<std::sync::Mutex<diagnostics::Cache>>;
 
-#[derive(Default)]
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct LanguageObservation {
     diagnostics_state: diagnostics::Status,
     diagnostics: Vec<LanguageDiagnostic>,
@@ -845,7 +847,7 @@ impl ZedRuntime {
             .lock()
             .expect("diagnostic cache poisoned")
             .check(buffer_id, position.revision)?;
-        Ok(responses
+        let contents: Vec<_> = responses
             .into_iter()
             .filter_map(|response| match response.response? {
                 proto::lsp_response::Response::GetHoverResponse(value) => Some(value),
@@ -857,8 +859,18 @@ impl ZedRuntime {
                 language: block.language,
                 markdown: block.is_markdown,
             })
-            .take(32)
-            .collect())
+            .take(33)
+            .collect();
+        anyhow::ensure!(
+            contents.len() <= 32
+                && contents.iter().all(|block| block.text.len() <= 64 * 1024
+                    && block
+                        .language
+                        .as_ref()
+                        .is_none_or(|value| value.len() <= 64 * 1024)),
+            "hover contents exceed limits"
+        );
+        Ok(contents)
     }
 
     async fn navigate(

@@ -3,6 +3,14 @@
  */
 import { decodeObservation } from "./observations.ts";
 import {
+  type CapturedContent,
+  type ContentKind,
+  type ContentObservation,
+  type ContentQueries,
+  contentRequest,
+  decodeContentObservation,
+} from "./content.ts";
+import {
   BufferClientError,
   decodeSnapshot,
   type Failure,
@@ -47,6 +55,12 @@ export interface OwnedCodeBuffer {
     kind: K,
     observer?: AbortSignal,
   ): Promise<Observation<K>>;
+  /** Conditional read only. End the observer when the displayed snapshot changes. */
+  readContent<Q extends ContentQueries[ContentKind]>(
+    content: CapturedContent,
+    query: Q,
+    observer?: AbortSignal,
+  ): Promise<ContentObservation<Q["kind"]>>;
   /** One bounded cleanup pass. Retained is NOT closed or automatically retried. */
   close(): Promise<CloseResult>;
 }
@@ -271,6 +285,39 @@ function createOwner(
           transport.check();
           // Ending a view discards results, but does not cancel the borrow or
           // redirect cleanup to the next view's path/context.
+          if (closing || observer?.aborted) unavailable("cancelled");
+          return result;
+        }),
+        observer,
+      );
+    },
+    async readContent<Q extends ContentQueries[ContentKind]>(
+      content: CapturedContent,
+      query: Q,
+      observer?: AbortSignal,
+    ): Promise<ContentObservation<Q["kind"]>> {
+      check(observer);
+      if (
+        closing || releaseSent || !fresh || last?.state !== "open" ||
+        last.pending
+      ) unavailable("state");
+      const current = resource();
+      const request = contentRequest(content, query);
+      return observePromise(
+        perform("read", async () => {
+          const reply = await transport.request(
+            `/${current}/read`,
+            "POST",
+            request,
+            2 * 1024 * 1024,
+          );
+          if (reply.status !== 200) unavailable("protocol");
+          const result = decodeContentObservation<Q["kind"]>(
+            reply.value,
+            current,
+            request,
+          );
+          transport.check();
           if (closing || observer?.aborted) unavailable("cancelled");
           return result;
         }),

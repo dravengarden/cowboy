@@ -70,6 +70,11 @@ release or implement abandoned-browser/restart recovery.
 
 ## Closed reads and bounded transport
 
+The subsequent [content-bound extension](plugin-content-bound-reads.md) adds
+`captureContent` and `readContent` with query-specific types and a distinct
+native mismatch result. It does not change the lower-bound-only semantics of
+the two unbound methods below, install a Plugin or switch ordinary Review.
+
 `read("language")` and `read("symbols")` return distinct readonly result types.
 The codec checks exact fields, operation, API version and original resource ID;
 recursively freezes results; and enforces the Controller's numeric, byte, count,

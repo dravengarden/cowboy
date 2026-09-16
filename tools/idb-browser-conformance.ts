@@ -146,7 +146,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.tests.length !==
       (suite === "settings-recovery"
         ? 9
-        : suite === "idb"
+        : suite === "idb" || suite === "code-buffers"
         ? 8
         : suite === "idb-outbox"
         ? 16

@@ -46,6 +46,7 @@ impl LeaseRef {
 pub(super) enum Command {
     BufferLeaseSupport {},
     BufferLeaseReadSupport {},
+    BufferLeaseContentSupport {},
     PrepareBuffer {
         worktree: String,
         path: String,
@@ -72,6 +73,7 @@ impl Command {
             Some(
                 "bufferLeaseSupport"
                     | "bufferLeaseReadSupport"
+                    | "bufferLeaseContentSupport"
                     | "prepareBuffer"
                     | "openBufferLease"
                     | "releaseBufferLease"
@@ -84,15 +86,20 @@ impl Command {
         let value: Self =
             serde_json::from_value(payload.clone()).context("invalid owned buffer command")?;
         match &value {
-            Self::BufferLeaseSupport {} | Self::BufferLeaseReadSupport {} => {}
+            Self::BufferLeaseSupport {}
+            | Self::BufferLeaseReadSupport {}
+            | Self::BufferLeaseContentSupport {} => {}
             Self::PrepareBuffer { worktree, path } => ensure!(
                 worktree.len() <= 4_096 && path.len() <= 4_096,
                 "buffer path exceeds byte limit"
             ),
             Self::OpenBufferLease { lease }
             | Self::ReleaseBufferLease { lease }
-            | Self::QueryBufferLease { lease }
-            | Self::ReadBufferLease { lease, .. } => lease.validate()?,
+            | Self::QueryBufferLease { lease } => lease.validate()?,
+            Self::ReadBufferLease { lease, request } => {
+                lease.validate()?;
+                request.validate()?;
+            }
         }
         Ok(Some(value))
     }
@@ -109,6 +116,7 @@ impl Command {
             | Self::ReadBufferLease { lease, .. } => Ok(lease),
             Self::BufferLeaseSupport {}
             | Self::BufferLeaseReadSupport {}
+            | Self::BufferLeaseContentSupport {}
             | Self::PrepareBuffer { .. } => {
                 anyhow::bail!("buffer reference has not been prepared")
             }
@@ -303,6 +311,9 @@ impl Routes {
         }
         if matches!(command, Command::BufferLeaseReadSupport {}) {
             return Ok(serde_json::json!({"type":"bufferLeaseReadSupport", "api_version":1}));
+        }
+        if matches!(command, Command::BufferLeaseContentSupport {}) {
+            return Ok(serde_json::json!({"type":"bufferLeaseContentSupport", "api_version":1}));
         }
         self.reap_prepared().await;
         let key = (plugin_id.to_owned(), command.lease()?.clone());

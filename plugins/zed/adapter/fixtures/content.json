@@ -1,0 +1,29 @@
+{
+  "text": "a🙂z\n",
+  "request": {
+    "kind": "content",
+    "content": {
+      "sha256": "1e0c92b4782cedba7c6b7149c796cc5f31a128c1b55d54999018fbefeebfc95e",
+      "utf8Bytes": 7
+    },
+    "query": { "kind": "hover", "position": { "row": 0, "column": 3 } }
+  },
+  "response": {
+    "apiVersion": 1,
+    "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+    "openedVersion": [{ "replicaId": 0, "timestamp": 1 }],
+    "result": {
+      "kind": "content",
+      "content": {
+        "sha256": "1e0c92b4782cedba7c6b7149c796cc5f31a128c1b55d54999018fbefeebfc95e",
+        "utf8Bytes": 7
+      },
+      "result": {
+        "kind": "hover",
+        "contents": [
+          { "text": "Unicode fixture", "language": null, "markdown": true }
+        ]
+      }
+    }
+  }
+}

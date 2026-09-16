@@ -5493,6 +5493,30 @@ mod tests {
             owned.push(lease);
         }
         assert_ne!(owned[0], owned[1]);
+        // Text identity is independent of path/mtime and of the open vector.
+        // Even a still-valid row must refuse different displayed text. No read
+        // may reload the disk edit into the retained, shared native buffer.
+        let content_id = |text: &str| {
+            serde_json::json!({
+                "sha256":format!("{:x}", Sha256::digest(text.as_bytes())), "utf8Bytes":text.len()
+            })
+        };
+        let native_content = content_id("owned native buffer\n");
+        let changed_content = content_id("changed disk buffer\n");
+        fs::write(worktree.join("owned.txt"), "changed disk buffer\n").unwrap();
+        for query in [
+            serde_json::json!({"kind":"language"}),
+            serde_json::json!({"kind":"symbols"}),
+            serde_json::json!({"kind":"hover","position":{"row":0,"column":1}}),
+        ] {
+            let read = serde_json::json!({"type":"readBufferLease","lease":owned[0],
+                "request":{"kind":"content","content":changed_content,"query":query}});
+            let response = store.code_request("zed", &read, None).await.unwrap();
+            assert_eq!(
+                response["result"],
+                serde_json::json!({"kind":"content","content":changed_content,"result":{"kind":"mismatch"}})
+            );
+        }
         store
             .uninstall("zed", &release.artifact_digest)
             .await
@@ -5537,6 +5561,27 @@ mod tests {
                 assert_eq!(observed["result"]["kind"], kind);
                 assert!(observed["opened_version"].is_array());
                 assert_eq!(store.code_runtimes.live_generation_count().await, 1);
+            }
+            for query in [
+                serde_json::json!({"kind":"language"}),
+                serde_json::json!({"kind":"symbols"}),
+                serde_json::json!({"kind":"hover","position":{"row":0,"column":1}}),
+            ] {
+                let read = serde_json::json!({"type":"readBufferLease", "lease":lease,
+                    "request":{"kind":"content","content":native_content,"query":query}});
+                let response = store.code_request("zed", &read, None).await.unwrap();
+                assert_eq!(response["lease"], lease);
+                assert_eq!(response["result"]["content"], native_content);
+                if query["kind"] == "hover" {
+                    assert_eq!(response["result"]["result"]["kind"], "hover");
+                    assert!(response["result"]["result"]["contents"].is_array());
+                } else {
+                    assert_eq!(response["result"]["result"]["kind"], "observed");
+                    assert_eq!(
+                        response["result"]["result"]["observation"]["kind"],
+                        query["kind"]
+                    );
+                }
             }
             let close = serde_json::json!({"type":"releaseBufferLease", "lease":lease});
             assert_eq!(

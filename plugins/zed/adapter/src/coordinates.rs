@@ -1,7 +1,8 @@
 //! A passive mirror of the exact pinned server's text CRDT. No disk reads,
 //! edits, reopen, clock renewal or cross-buffer coordinate fallback.
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::fmt::Write as _;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context as _, Result, ensure};
 use proto::Message as _;
@@ -26,6 +27,7 @@ pub(crate) struct Mirror {
     operations: BTreeMap<Stamp, [u8; 32]>,
     required: clock::Global,
     bytes: usize,
+    content: OnceLock<crate::content_reads::Content>,
 }
 
 impl Mirror {
@@ -49,6 +51,7 @@ impl Mirror {
             operations: BTreeMap::new(),
             required: clock::Global::new(),
             bytes: base.len(),
+            content: OnceLock::new(),
         })
     }
 
@@ -114,6 +117,7 @@ impl Mirror {
         );
         self.operations.insert(key, digest);
         self.bytes += cost;
+        self.content.take();
         Ok(true)
     }
 
@@ -271,6 +275,24 @@ impl Mirror {
                 timestamp: entry.value,
             })
             .collect()
+    }
+
+    pub(crate) fn content(&self) -> &crate::content_reads::Content {
+        self.content.get_or_init(|| {
+            let mut digest = Sha256::new();
+            for chunk in self.buffer.as_rope().chunks() {
+                digest.update(chunk.as_bytes());
+            }
+            let mut sha256 = String::with_capacity(64);
+            for byte in digest.finalize() {
+                write!(sha256, "{byte:02x}").expect("write to string");
+            }
+            crate::content_reads::Content {
+                sha256,
+                // Visible text cannot exceed the admitted 4 MiB history.
+                utf8_bytes: u32::try_from(self.buffer.len()).expect("bounded native content"),
+            }
+        })
     }
 
     pub(crate) fn position(&self, row: u32, column: u32) -> Result<proto::Anchor> {

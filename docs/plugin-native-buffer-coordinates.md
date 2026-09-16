@@ -79,6 +79,11 @@ resynchronizing reopen or effect replay is introduced.
 
 ## Acceptance and remaining work
 
+The later [1.6.0 content-bound reads](plugin-content-bound-reads.md) compare the
+complete displayed text before native language/symbol/hover dispatch. This
+closes text-equality checking, not explicit synchronization, destination
+ownership or the Review/native rollout described below.
+
 Source fixtures compare native edits, multiple ranges, concurrent replicas,
 delete/undo/redo and all Unicode boundaries against the pinned engine. Transport
 fixtures reject late edits in all four read paths and resolve nonempty navigation

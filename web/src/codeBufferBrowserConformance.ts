@@ -10,6 +10,10 @@ import golden from "../../contracts/code-buffer-client.fixture.json" with {
 import { fixture, ID, opened, OTHER, wire } from "./codeBuffers/fixture.ts";
 import type { CloseResult, OwnedCodeBuffer } from "./codeBuffers/owner.ts";
 import { BufferClientError } from "./codeBuffers/protocol.ts";
+import { captureContent, type CapturedContent } from "./codeBuffers/content.ts";
+import contentGolden from "../../plugins/zed/adapter/fixtures/content.json" with {
+  type: "json",
+};
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -220,6 +224,7 @@ async function strictMode(tests: string[]) {
 export async function runCodeBufferBrowserConformance(): Promise<string[]> {
   const tests: string[] = [];
   await strictMode(tests);
+  await contentLifetime(tests);
   const pending = await opened();
   try {
     const close = pending.owner.close();
@@ -300,4 +305,103 @@ export async function runCodeBufferBrowserConformance(): Promise<string[]> {
     authority.context.abort();
   }
   return tests;
+}
+
+async function contentLifetime(tests: string[]) {
+  const f = await opened();
+  const first = await captureContent(contentGolden.text);
+  const second = await captureContent("different text\n");
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const outcomes: string[] = [];
+  let action: (() => void) | undefined;
+  function Harness({ snapshot }: { snapshot: CapturedContent }) {
+    const [result, setResult] = useState("idle");
+    useEffect(() => {
+      const view = new AbortController();
+      action = () => {
+        void f.owner.readContent(snapshot, {
+          kind: "hover",
+          position: { row: 0, column: 1 },
+        }, view.signal)
+          .then((value) => {
+            if (!view.signal.aborted) {
+              outcomes.push(value.result.result.kind);
+              setResult(value.result.result.kind);
+            }
+          }).catch((error: unknown) => {
+            check(
+              error instanceof BufferClientError && error.kind === "cancelled",
+              "unexpected content error",
+            );
+          });
+      };
+      return () => {
+        view.abort();
+        action = undefined;
+      };
+    }, [snapshot]);
+    return createElement("button", { onClick: () => action?.() }, result);
+  }
+  const render = (snapshot: CapturedContent) =>
+    flushSync(() =>
+      root.render(
+        createElement(StrictMode, null, createElement(Harness, { snapshot })),
+      )
+    );
+  try {
+    render(first);
+    container.querySelector("button")!.click();
+    await requests(f, 3);
+    render(second);
+    f.reply(2, contentGolden.response);
+    await until(() => !f.owner.view().busy);
+    check(
+      outcomes.length === 0 && container.textContent === "idle",
+      "old text result painted into replacement view",
+    );
+    // Discarding a stale read requires observing the original owner again.
+    const observation = f.owner.observe();
+    f.reply(3, wire("open"));
+    await observation;
+    container.querySelector("button")!.click();
+    await requests(f, 5);
+    const sent = JSON.parse(String(f.calls[4]!.init.body));
+    check(
+      sent.content.sha256 !== contentGolden.request.content.sha256,
+      "replacement reused old text digest",
+    );
+    f.reply(4, {
+      ...contentGolden.response,
+      result: {
+        kind: "content",
+        content: sent.content,
+        result: { kind: "mismatch" },
+      },
+    });
+    await until(() => container.textContent === "mismatch");
+    check(
+      outcomes.join() === "mismatch" && f.calls.length === 5,
+      "mismatch auto-reloaded or reopened native owner",
+    );
+    tests.push(
+      "real WebCrypto hashes displayed Unicode text and StrictMode content replacement discards an in-flight hover",
+    );
+    tests.push(
+      "content mismatch is distinct from empty hover and never triggers reload or replacement ownership",
+    );
+    flushSync(() => root.unmount());
+    const closed = f.owner.close();
+    await requests(f, 6);
+    f.reply(5, wire("released"));
+    check(
+      (await closed).kind === "released",
+      "original content owner did not drain",
+    );
+  } finally {
+    f.context.abort();
+    root.unmount();
+    container.remove();
+  }
 }

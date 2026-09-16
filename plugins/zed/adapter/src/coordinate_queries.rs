@@ -2,6 +2,8 @@
 use super::*;
 use coordinates::tests::{peer, wire};
 
+mod content;
+
 async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
     let (outbound, receiver) = mpsc::unbounded_channel();
     let mut child = Command::new("true").spawn().unwrap();
@@ -208,8 +210,7 @@ async fn language_observation_discards_late_edits_across_all_subqueries() {
     let error = task
         .await
         .unwrap()
-        .err()
-        .expect("stale language observation succeeded");
+        .expect_err("stale language observation succeeded");
     assert!(
         error.to_string().contains("changed during read"),
         "{error:#}"

@@ -35,6 +35,7 @@ async fn read_inner(
     headers: HeaderMap,
     request: Request,
 ) -> Result<ReadResponse, StatusCode> {
+    request.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
     let approval = approval(&state, &authenticated, &headers)?;
     let owners = Arc::clone(&state.code_buffers);
     let job = owners.admit_read(&authenticated.principal.user_id, &id)?;
@@ -42,9 +43,13 @@ async fn read_inner(
     let deadline = tokio::time::Instant::now() + registry::JOB_TIMEOUT;
     let receiver = owners.spawn(async move {
         check_read(&worker_state, &approval, &job.binding).await?;
-        remote::read_support(&worker_state.machine_control, &job.binding.connection)
-            .await
-            .map_err(|_| StatusCode::NOT_IMPLEMENTED)?;
+        remote::read_support(
+            &worker_state.machine_control,
+            &job.binding.connection,
+            request.support_kind(),
+        )
+        .await
+        .map_err(|_| StatusCode::NOT_IMPLEMENTED)?;
         check_read(&worker_state, &approval, &job.binding).await?;
         let reply = remote::read(
             &worker_state.machine_control,

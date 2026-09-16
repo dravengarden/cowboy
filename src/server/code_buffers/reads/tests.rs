@@ -4,6 +4,7 @@ use crate::machine_protocol::MachineCommand;
 use serde_json::{Value, json};
 
 mod authority;
+mod content;
 
 #[tokio::test]
 async fn nonempty_observations_match_browser_wire_fixture() {

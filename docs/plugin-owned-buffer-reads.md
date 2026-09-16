@@ -11,6 +11,12 @@ end-to-end acceptance.
 
 ## Closed protocol and coordinates
 
+The subsequent [content-bound read extension](plugin-content-bound-reads.md)
+adds a distinct closed `content` request with conditional language/symbol/hover
+queries in private Zed `1.6.0`. Its body limit is 512 bytes. The unbound API
+described below retains its shapes and lower-bound semantics; content matching
+does not reload native buffers or enable ordinary Review.
+
 `POST /api/code/buffers/{id}/read` accepts exactly one of:
 
 ```json
@@ -22,7 +28,7 @@ end-to-end acceptance.
 ```
 
 There is no path, Session ID, Machine ID, native reference, arbitrary operation
-or position in this body. The 128-byte input bound and closed tagged Rust union
+or position in this body. The input bound (now 512 bytes) and closed tagged Rust union
 apply before resource lookup. Success is HTTP 200 with `Cache-Control: no-store`:
 `apiVersion: 1`, `resourceId`, `openedVersion` and `result`. Result is a closed
 `language` or `symbols` union matching the requested operation. Handler errors

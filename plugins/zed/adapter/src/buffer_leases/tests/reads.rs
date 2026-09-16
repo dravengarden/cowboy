@@ -168,11 +168,7 @@ async fn language_transport_failure_is_not_an_empty_success() {
                 ..Default::default()
             },
         ));
-    let error = zed
-        .language(1)
-        .await
-        .err()
-        .expect("dead transport succeeded");
+    let error = zed.language(1).await.expect_err("dead transport succeeded");
     assert!(
         error.to_string().contains("Zed writer task stopped"),
         "{error:#}"

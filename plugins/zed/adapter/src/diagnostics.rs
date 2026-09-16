@@ -259,6 +259,15 @@ impl Cache {
         Ok(())
     }
 
+    pub(crate) fn match_content(
+        &self,
+        id: u64,
+        content: &crate::content_reads::Content,
+    ) -> Result<Option<u64>> {
+        let text = self.text(id)?;
+        Ok((text.content() == content).then_some(self.buffers[&id].revision))
+    }
+
     pub(crate) fn position(&self, id: u64, row: u32, column: u32) -> Result<Position> {
         let text = self.text(id)?;
         Ok(Position {
