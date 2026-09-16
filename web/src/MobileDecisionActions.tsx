@@ -1,13 +1,15 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Box, Button, CircularProgress } from "@mui/material";
 import type { ButtonProps } from "@mui/material";
+import { decisionActionEmphasis, decisionShelfSurface } from "./decisionShelf";
 
 /**
  * Canonical mobile Cancel / confirm footer.
  *
  * Decisions use explicit text, not ambiguous corner glyphs. `shelf` paints the
- * New-session hairline strip so a reserved DetentSheet footer does not float
- * over the form. The parent still owns overlay-vs-reserved positioning.
+ * floating plate (decisionShelf.ts) so a reserved DetentSheet footer reads as
+ * chrome the form scrolls under. The parent still owns overlay-vs-reserved
+ * positioning.
  */
 export function MobileDecisionActions({
   cancelLabel = "Cancel",
@@ -40,20 +42,23 @@ export function MobileDecisionActions({
   const actions = (
     <Box
       data-mobile-decision-actions
-      sx={{
+      sx={(theme) => ({
         width: "100%",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 1,
-      }}
+        // An overlay (unshelved) footer floats on its own, so it still wants the
+        // accent glow even without the plate.
+        ...decisionActionEmphasis(theme),
+      })}
     >
       <Button
         color="inherit"
         disabled={cancelDisabled}
         onPointerDown={preserveInput}
         onClick={onCancel}
-        sx={{ minHeight: 44, px: 2, textTransform: "none", fontWeight: 650 }}
+        sx={{ minHeight: 44, px: 2.25, textTransform: "none", fontWeight: 650 }}
       >
         {cancelLabel}
       </Button>
@@ -76,17 +81,15 @@ export function MobileDecisionActions({
   return (
     <Box
       data-mobile-decision-footer-shelf
-      sx={{
+      sx={(theme) => ({
         // DetentSheet owns a 16px footer gutter. Bleed this strip back to the
         // sheet edges so it reads as bottom chrome, not a card in the form.
         width: "calc(100% + 32px)",
         mx: -2,
         px: 2,
-        pt: 0.75,
-        bgcolor: "background.default",
-        borderTop: 1,
-        borderColor: "divider",
-      }}
+        pt: 1,
+        ...decisionShelfSurface(theme),
+      })}
     >
       {actions}
     </Box>

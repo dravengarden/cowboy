@@ -10,6 +10,7 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
+import { decisionActionEmphasis } from "./decisionShelf";
 import type { Theme } from "@mui/material/styles";
 import { AccessTime, Check, Tune } from "@mui/icons-material";
 import { Sheet } from "./Sheet";
@@ -328,7 +329,15 @@ export function TimeRangeButton({
               {tooLong ? `Range must be ${String(Math.round(maxDurationMs / 86_400_000))} days or less.` : "Choose a valid range ending no later than now."}
             </Typography>
           )}
-          <Stack direction="row" spacing={1} justifyContent="space-between">
+          <Stack
+            direction="row"
+            spacing={1}
+            justifyContent="space-between"
+            // Same accent glow / tonal Cancel as every sheet footer. Only the
+            // PLATE is footer-only chrome; the decision buttons are one design
+            // everywhere (decisionShelf.ts).
+            sx={(theme) => decisionActionEmphasis(theme)}
+          >
             <Button onClick={resetDraft}>Reset</Button>
             <Stack direction="row" spacing={1}>
               <Button onClick={() => setOpen(false)}>Cancel</Button>

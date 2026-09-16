@@ -173,8 +173,12 @@ export function NetworkButton(
       }}
       sx={{
         position: "relative",
+        // box-shadow/transform ride along so a NetworkButton used as a sheet's
+        // confirm action presses exactly like the shared decision shelf's own
+        // buttons (decisionShelf.ts) — this sx would otherwise replace the
+        // transition the shelf sets on it.
         transition:
-          "opacity 120ms ease, background-color 120ms ease, color 120ms ease",
+          "opacity 120ms ease, background-color 120ms ease, color 120ms ease, box-shadow 150ms ease, transform 150ms ease",
         ...(state.pending && { opacity: 0.58 }),
         ...(state.progress && { "& .MuiButton-startIcon": { opacity: 0 } }),
         ...sx,

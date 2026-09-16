@@ -16,6 +16,7 @@ import {
 } from "react";
 import { Box, Paper, Typography, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { decisionShelfSurface } from "./decisionShelf";
 import { markDetentSheetOpen } from "@cowboy/app-shell";
 import { haptic as fireHaptic, MobileSheetDismiss } from "@cowboy/app-shell";
 import {
@@ -443,7 +444,8 @@ export function ObsidianSheet({
           : null}
         {actions == null ? null : (
           <Box
-            sx={{
+            data-mobile-decision-footer-shelf
+            sx={(theme) => ({
               flexShrink: 0,
               display: "flex",
               justifyContent: "space-between",
@@ -453,9 +455,11 @@ export function ObsidianSheet({
               px: 2.25,
               pt: 1,
               pb: SAFE_INSIDE,
-              borderTop: 1,
-              borderColor: "divider",
-            }}
+              // The SAME plate every other Cancel/confirm bar uses — a confirm
+              // card and a sheet footer are one decision surface with two
+              // hosts, so they must not drift apart (decisionShelf.ts).
+              ...decisionShelfSurface(theme),
+            })}
           >
             {actions}
           </Box>

@@ -12,6 +12,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
+import { decisionActionEmphasis } from "./decisionShelf";
 import {
   Check,
   ContentCopy,
@@ -554,7 +555,15 @@ export function UsageLogs(
             onChange={(agents) =>
               setDraftFilters((current) => ({ ...current, agents }))}
           />
-          <Stack direction="row" spacing={1} justifyContent="space-between">
+          <Stack
+            direction="row"
+            spacing={1}
+            justifyContent="space-between"
+            // Same accent glow / tonal Cancel as every sheet footer. Only the
+            // PLATE is footer-only chrome; the decision buttons are one design
+            // everywhere (decisionShelf.ts).
+            sx={(theme) => decisionActionEmphasis(theme)}
+          >
             <Stack direction="row" spacing={0.5}>
               <Button
                 onClick={() =>
