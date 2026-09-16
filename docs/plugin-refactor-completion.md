@@ -155,6 +155,12 @@ and accepting a production effect are different milestones.
   or replace an owner. Browser capture/typed results and native text equality
   do not grant synchronization, owned navigation destinations, ordinary Review
   integration, native installation or device acceptance.
+  The [Controller/Web release](releases/plugin-content-bound-reads-2026-09-16.md)
+  passed both complete gates, fourteen actual Firefox cases, static native
+  conformance and identical 81-release reads by all four actual Controller
+  roles. Both components are published and active; all fourteen observed workers,
+  Machine and Victoria retained their processes. Machine/Zed `1.6.0` remain
+  unactivated candidates, not production end-to-end Code acceptance.
 - [Core browser buffer owners](plugin-buffer-client-owner.md) implement the
   typed client prerequisite: captured authority lifetime and input, one-shot
   preparation/open, strict bounded readonly observations, cancellation-safe

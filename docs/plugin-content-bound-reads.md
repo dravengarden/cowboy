@@ -6,6 +6,9 @@ observations over the original core buffer owner. The server and private
 `aaf5f57dd36c41cf2ed49b13bcb091d52d5aef45`. No new dependency, native writer,
 durable format, public Plugin capability or generic graph executor is added.
 Source support does not install that Plugin or switch ordinary Review.
+The [Controller/Web delivery receipt](releases/plugin-content-bound-reads-2026-09-16.md)
+records complete gates, immutable builds, temporary native conformance and the
+separate production activation boundary.
 
 ## One conditional read, not a transferable certificate
 

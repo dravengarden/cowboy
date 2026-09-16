@@ -3,7 +3,7 @@
 The additive Controller API now connects **diagnostics/inlays/semantic tokens
 and document symbols** to an already-open
 [original buffer owner](plugin-controller-buffer-owners.md). The private Zed
-candidate is now `1.5.0`; its pinned upstream server remains `1.13.0`. This does not
+candidate is now `1.6.0`; its pinned upstream server remains `1.13.0`. This does not
 switch Review, install a Plugin, activate a Machine generation or complete the
 Plugin refactor. The [Controller release is active](releases/plugin-owned-buffer-reads-2026-09-16.md);
 that receipt separately records the uninstalled native candidate and remaining
@@ -17,7 +17,7 @@ queries in private Zed `1.6.0`. Its body limit is 512 bytes. The unbound API
 described below retains its shapes and lower-bound semantics; content matching
 does not reload native buffers or enable ordinary Review.
 
-`POST /api/code/buffers/{id}/read` accepts exactly one of:
+The unbound `POST /api/code/buffers/{id}/read` requests are exactly:
 
 ```json
 { "kind": "language" }
