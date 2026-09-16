@@ -110,8 +110,11 @@ Catalog format, installation, telemetry policy, Worker generation or native ABI
 changes here. Machine maintenance and signed Zed publication/installation remain
 independent. Diagnostic and symbol reads now have an
 [additive owned interface](plugin-owned-buffer-reads.md). Before switching Review,
-resolve hover/navigation content-coordinate ownership, implement
-pending/unknown observation and explicit release in the
-client, and accept the actual Machine/Code generation. There is no heartbeat,
-automatic abandoned-browser cleanup, Controller-restart restoration, continuous
-principal/workspace writer fence or generic DAG recovery claim in this slice.
+resolve hover/navigation content-coordinate ownership, connect the
+[typed browser owner](plugin-buffer-client-owner.md) to the real identity and
+Review lifetimes, present unresolved cleanup, and accept the actual Machine/Code
+generation. The client implements pending/unknown observation and explicit
+release with isolated StrictMode acceptance; it does not yet change live Review.
+There is no heartbeat, automatic abandoned-browser cleanup, Controller-restart
+restoration, continuous principal/workspace writer fence or generic DAG recovery
+claim in this slice.

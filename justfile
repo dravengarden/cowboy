@@ -68,6 +68,10 @@ provider-ui-browser-conformance BROWSER:
 provider-management-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" provider-management' conformance "{{BROWSER}}"
 
+# Core buffer owner: real development StrictMode, no Review/native activation.
+code-buffer-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffers' conformance "{{BROWSER}}"
+
 idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts

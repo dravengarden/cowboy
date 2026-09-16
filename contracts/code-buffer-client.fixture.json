@@ -1,0 +1,49 @@
+{
+  "prepared": {
+    "apiVersion": 1,
+    "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+    "state": "prepared",
+    "pending": false
+  },
+  "language": {
+    "apiVersion": 1,
+    "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+    "openedVersion": [{ "replicaId": 0, "timestamp": 1 }],
+    "result": {
+      "kind": "language",
+      "diagnosticsState": "observed",
+      "diagnostics": [{
+        "start": { "row": 0, "column": 1 },
+        "end": { "row": 0, "column": 3 },
+        "severity": 1,
+        "source": null,
+        "message": "Fixture: λ → 😀"
+      }],
+      "inlayHints": [{
+        "offset": 3,
+        "label": ": String",
+        "kind": null,
+        "paddingLeft": true,
+        "paddingRight": false
+      }],
+      "semanticTokens": [0, 1, 2, 0, 0]
+    }
+  },
+  "symbols": {
+    "apiVersion": 1,
+    "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+    "openedVersion": [],
+    "result": {
+      "kind": "symbols",
+      "symbols": [{
+        "name": "example",
+        "kind": 12,
+        "start": { "row": 0, "column": 0 },
+        "end": { "row": 2, "column": 0 },
+        "selectionStart": { "row": 0, "column": 3 },
+        "selectionEnd": { "row": 0, "column": 10 },
+        "children": []
+      }]
+    }
+  }
+}

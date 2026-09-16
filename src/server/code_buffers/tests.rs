@@ -4,6 +4,26 @@ use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 use serde_json::{Value, json};
 
+#[tokio::test]
+async fn lifecycle_matches_browser_wire_fixture() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../contracts/code-buffer-client.fixture.json"
+    ))
+    .unwrap();
+    let mut fixture = Fixture::new();
+    let prepared = fixture.prepare(1).await;
+    let id = prepared.resource_id.clone();
+    let mut expected = contract["prepared"].clone();
+    expected["resourceId"] = json!(id);
+    assert_eq!(serde_json::to_value(prepared).unwrap(), expected);
+    for (action, state) in [(Action::Open, "open"), (Action::Release, "released")] {
+        let response = fixture.operation(&id, action, state).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        expected["state"] = json!(state);
+        assert_eq!(json_response(response).await, expected);
+    }
+}
+
 pub(super) struct Fixture {
     pub context: Context,
     pub connection: ConnectionToken,

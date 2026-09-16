@@ -117,8 +117,11 @@ reads both kinds after uninstall, file deletion and worktree rename, then drains
 the retained native generation. Fixture acceptance is not a production login.
 
 Before Web cutover, still accept the actual Machine/Code generation, implement
-client pending/unknown/release handling, resolve positional read semantics and
-verify supported-device behavior. Abandoned-browser cleanup, Controller restart
-restoration and independently authorized post-effect recovery remain separate.
+the Review/identity integration of the [typed browser owner](plugin-buffer-client-owner.md),
+resolve positional read semantics and verify supported-device behavior. The
+client's pending/unknown/release handling now has source and isolated StrictMode
+acceptance, not production consumer acceptance. Abandoned-browser cleanup,
+Controller restart restoration and independently authorized post-effect recovery
+remain separate.
 No new durable state, migration, public SDK capability or generic DAG executor
 is introduced here.
