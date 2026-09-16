@@ -41,6 +41,7 @@ import { Kbd, useConfirmEnter } from "../Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import { ShortcutKeycap } from "../ShortcutKeycap";
 import { resolveSessionAction } from "../agentCommands";
+import { ConfirmConsequence } from "../ConfirmConsequence";
 import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
@@ -124,8 +125,23 @@ import {
   nextRunConfigChoiceIndex,
   runConfigKeyAction,
 } from "./runConfigKeyboard";
+import {
+  ACTION_ICON_WIDTH_PX,
+  type TopBarDensity,
+  topBarDensity,
+  type UsageTone,
+  usageCountdown,
+  usageRemainingTone,
+  USAGE_BALANCE_SEGMENT_WIDTH_PX,
+  USAGE_SEGMENT_WIDTH_PX,
+} from "./topBarDensity";
 
 const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
+
+// The region keycap, divider, Settings and Code controls that App.tsx renders
+// after this strip inside the same scroller. They are not ours to collapse, but
+// they DO consume the width we are deciding against.
+const TOPBAR_TRAILING_WIDTH_PX = 130;
 
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();
@@ -171,11 +187,71 @@ function textValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** The word rides with the keycap at full density and steps aside when the
+ *  toolbar is tight. The action keeps its icon, its visible letter, its
+ *  tooltip and its Command Palette entry, so nothing becomes unreachable —
+ *  unlike the horizontal scroll this replaces, which pushed Clear off-screen. */
+function SessionActionLabel({
+  label,
+  keyLabel,
+  accent,
+  available,
+  density,
+}: {
+  label: string;
+  keyLabel: string;
+  accent: boolean;
+  available: boolean;
+  density: TopBarDensity;
+}): React.JSX.Element {
+  return (
+    <Stack
+      direction="row"
+      spacing={0.5}
+      alignItems="center"
+      sx={{ width: "100%" }}
+    >
+      {density === "full" && (
+        <Typography variant="caption" fontWeight={750}>
+          {label}
+        </Typography>
+      )}
+      <ShortcutKeycap
+        keyLabel={keyLabel}
+        variant="global"
+        accent={accent}
+        availability={shortcutAvailability(available, accent)}
+        sx={{
+          flexShrink: 0,
+          ...(density === "full"
+            ? { ml: "auto !important" }
+            : { mx: "auto !important" }),
+        }}
+      />
+    </Stack>
+  );
+}
+
+const USAGE_TONE_COLOR: Record<UsageTone, string> = {
+  critical: "error.main",
+  low: "warning.main",
+  normal: "text.primary",
+};
+
 function UsageProviderSummary(
-  { provider }: { provider: UsageWidgetProvider },
+  { provider, first, now }: {
+    provider: UsageWidgetProvider;
+    first: boolean;
+    /** The strip's 30s tick, passed in rather than read from the clock at
+     *  render: a countdown that silently depends on when React happened to
+     *  re-render is a countdown that goes stale without anyone noticing. */
+    now: number;
+  },
 ): React.JSX.Element {
   const balance = usageWidgetHasBalance(provider);
-  const width = balance ? 286 : 156;
+  const width = balance
+    ? USAGE_BALANCE_SEGMENT_WIDTH_PX
+    : USAGE_SEGMENT_WIDTH_PX;
   const primary = balance
     ? formatCompactCurrency(provider.balance, provider.currency)
     : `${String(provider.remaining)}%`;
@@ -192,7 +268,14 @@ function UsageProviderSummary(
       } · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${
         provider.cacheMissRate.toFixed(1)
       }% · ${provider.blockingErrors.toLocaleString()} blocked`
-    : `${provider.periodLabel} · resets ${shortResetTime(provider.resetsAt)}`;
+    // The countdown, not the stamp. "resets Sep 20 02:00 PM" was the widest
+    // thing in the strip and still made you do the subtraction; the U panel
+    // keeps the absolute form (it prints both). Falls back to the stamp when an
+    // account reports a reset this client cannot place on a clock.
+    : `${provider.periodLabel} · ${
+      usageCountdown(provider.resetsAt, now) ??
+        `resets ${shortResetTime(provider.resetsAt)}`
+    }`;
   return (
     <Box
       data-usage-provider={provider.kind}
@@ -202,8 +285,10 @@ function UsageProviderSummary(
         px: 0.75,
         py: 0.25,
         textAlign: "left",
-        borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-        bgcolor: "action.hover",
+        // One segmented control, not three floating chips: the group paints the
+        // surface and 1px rules separate the accounts, which reads calmer and
+        // returns the per-card gutters to the toolbar.
+        ...(first ? {} : { borderLeft: 1, borderColor: "divider" }),
       }}
     >
       <Stack direction="row" spacing={0.55}>
@@ -219,7 +304,15 @@ function UsageProviderSummary(
           variant="caption"
           fontWeight={800}
           noWrap
-          sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+          sx={{
+            flexShrink: 0,
+            fontVariantNumeric: "tabular-nums",
+            // A bare number is not scannable: 0% and 95% render identically
+            // until one of them is red.
+            color: balance
+              ? "text.primary"
+              : USAGE_TONE_COLOR[usageRemainingTone(provider.remaining)],
+          }}
         >
           {primary}
         </Typography>
@@ -1004,6 +1097,26 @@ export function DesktopTopBarControls({
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
+  // How much width the toolbar actually has. Measured on the scroller App.tsx
+  // owns, because that element is the viewport this strip must fit inside — the
+  // strip's own box is `max-content` and would measure its wishes, not its
+  // room. Density is derived during render (not stored in state) so a resize
+  // repaints once; the ref only carries the previous tier so the hysteresis in
+  // topBarDensity() can keep a boundary-width pane from flickering.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const densityRef = useRef<TopBarDensity>("full");
+  const [availableWidth, setAvailableWidth] = useState(0);
+  useEffect(() => {
+    const scroller = stripRef.current?.closest<HTMLElement>(
+      "[data-desktop-topbar-scroller]",
+    );
+    if (!scroller || typeof ResizeObserver !== "function") return undefined;
+    const measure = (): void => setAvailableWidth(scroller.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    return (): void => observer.disconnect();
+  }, []);
   const reloadTarget = openSurface === "reload" ? session ?? null : null;
   const compactConfirm = openSurface === "compact";
   const clearConfirm = openSurface === "clear";
@@ -1469,19 +1582,40 @@ export function DesktopTopBarControls({
   // than this strip, the margin collapses and the parent toolbar scrolls instead
   // of compressing controls into one another.
   const usageMinWidth = snapshot === null ? 132 : widgetProviders.reduce(
-    (width, provider) => width + (usageWidgetHasBalance(provider) ? 164 : 156),
+    (width, provider) =>
+      width +
+      (usageWidgetHasBalance(provider)
+        ? USAGE_BALANCE_SEGMENT_WIDTH_PX
+        : USAGE_SEGMENT_WIDTH_PX),
     0,
-  ) + Math.max(0, widgetProviders.length - 1) * 4 + 44;
+  ) + 44;
+  const actionCount = 2 + Number(Boolean(compactAction)) +
+    Number(Boolean(clearAction));
   const sessionActionsMinWidth = 90 + (compactAction ? 96 : 0) +
     (clearAction ? 80 : 0) + 80 +
-    (2 + Number(Boolean(compactAction)) + Number(Boolean(clearAction))) *
-      DESKTOP_TOPBAR_CONTROL_GAP_PX;
-  const controlsMinWidth = 190 + usageMinWidth + sessionActionsMinWidth +
+    actionCount * DESKTOP_TOPBAR_CONTROL_GAP_PX;
+  // Same cluster with the words in tooltips. Both numbers feed the density
+  // decision, so the strip knows what it would cost BEFORE it collapses.
+  const compactActionsMinWidth = actionCount *
+    (ACTION_ICON_WIDTH_PX + DESKTOP_TOPBAR_CONTROL_GAP_PX);
+  const density = topBarDensity(availableWidth, {
+    config: 190,
+    usage: usageMinWidth,
+    actions: sessionActionsMinWidth,
+    compactActions: compactActionsMinWidth,
+    trailing: TOPBAR_TRAILING_WIDTH_PX,
+  }, densityRef.current);
+  densityRef.current = density;
+  const controlsMinWidth = 190 +
+    usageMinWidth +
+    (density === "full" ? sessionActionsMinWidth : compactActionsMinWidth) +
     2 * DESKTOP_TOPBAR_CONTROL_GAP_PX;
 
   return (
     <Stack
+      ref={stripRef}
       data-desktop-topbar-controls
+      data-desktop-topbar-density={density}
       direction="row"
       alignItems="center"
       spacing={DESKTOP_TOPBAR_CONTROL_GAP}
@@ -1639,11 +1773,21 @@ export function DesktopTopBarControls({
         >
           {widgetProviders.length > 0
             ? (
-              <Stack direction="row" spacing={0.4} alignItems="stretch">
-                {widgetProviders.map((provider) => (
+              <Stack
+                direction="row"
+                alignItems="stretch"
+                sx={{
+                  borderRadius: `${DESKTOP_INSET_RADIUS}px`,
+                  bgcolor: "action.hover",
+                  overflow: "hidden",
+                }}
+              >
+                {widgetProviders.map((provider, index) => (
                   <UsageProviderSummary
                     key={provider.kind}
                     provider={provider}
+                    first={index === 0}
+                    now={clock}
                   />
                 ))}
               </Stack>
@@ -1851,34 +1995,22 @@ export function DesktopTopBarControls({
                 />
               }
               disabled={session === undefined}
+              aria-label="Reload session runtime"
               onClick={(): void => {
                 if (session) setOpenSurface("reload");
               }}
               sx={desktopSessionActionSx({
                 open: reloadTarget !== null,
-                minWidth: 90,
+                minWidth: density === "full" ? 90 : ACTION_ICON_WIDTH_PX,
               })}
             >
-              <Stack
-                direction="row"
-                spacing={0.5}
-                alignItems="center"
-                sx={{ width: "100%" }}
-              >
-                <Typography variant="caption" fontWeight={750}>
-                  Reload
-                </Typography>
-                <ShortcutKeycap
-                  keyLabel="L"
-                  variant="global"
-                  accent={reloadTarget !== null}
-                  availability={shortcutAvailability(
-                    shortcutsActive && session !== undefined,
-                    reloadTarget !== null,
-                  )}
-                  sx={{ flexShrink: 0, ml: "auto !important" }}
-                />
-              </Stack>
+              <SessionActionLabel
+                label="Reload"
+                keyLabel="L"
+                accent={reloadTarget !== null}
+                available={shortcutsActive && session !== undefined}
+                density={density}
+              />
             </Button>
           </span>
         </Tooltip>
@@ -1913,29 +2045,16 @@ export function DesktopTopBarControls({
                 onClick={(): void => setOpenSurface("compact")}
                 sx={desktopSessionActionSx({
                   open: compactConfirm,
-                  minWidth: 96,
+                  minWidth: density === "full" ? 96 : ACTION_ICON_WIDTH_PX,
                 })}
               >
-                <Stack
-                  direction="row"
-                  spacing={0.5}
-                  alignItems="center"
-                  sx={{ width: "100%" }}
-                >
-                  <Typography variant="caption" fontWeight={750}>
-                    Compact
-                  </Typography>
-                  <ShortcutKeycap
-                    keyLabel="C"
-                    variant="global"
-                    accent={compactConfirm}
-                    availability={shortcutAvailability(
-                      shortcutsActive && !dead && !compacting,
-                      compactConfirm,
-                    )}
-                    sx={{ flexShrink: 0, ml: "auto !important" }}
-                  />
-                </Stack>
+                <SessionActionLabel
+                  label="Compact"
+                  keyLabel="C"
+                  accent={compactConfirm}
+                  available={shortcutsActive && !dead && !compacting}
+                  density={density}
+                />
               </Button>
             </span>
           </Tooltip>
@@ -1960,11 +2079,12 @@ export function DesktopTopBarControls({
                   />
                 }
                 disabled={dead}
+                aria-label="Clear conversation"
                 onClick={(): void => setOpenSurface("clear")}
                 sx={{
                   ...desktopSessionActionSx({
                     open: clearConfirm,
-                    minWidth: 80,
+                    minWidth: density === "full" ? 80 : ACTION_ICON_WIDTH_PX,
                   }),
                   "&:hover": {
                     borderColor: "error.main",
@@ -1972,26 +2092,13 @@ export function DesktopTopBarControls({
                   },
                 }}
               >
-                <Stack
-                  direction="row"
-                  spacing={0.5}
-                  alignItems="center"
-                  sx={{ width: "100%" }}
-                >
-                  <Typography variant="caption" fontWeight={750}>
-                    Clear
-                  </Typography>
-                  <ShortcutKeycap
-                    keyLabel="X"
-                    variant="global"
-                    accent={clearConfirm}
-                    availability={shortcutAvailability(
-                      shortcutsActive && !dead,
-                      clearConfirm,
-                    )}
-                    sx={{ flexShrink: 0, ml: "auto !important" }}
-                  />
-                </Stack>
+                <SessionActionLabel
+                  label="Clear"
+                  keyLabel="X"
+                  accent={clearConfirm}
+                  available={shortcutsActive && !dead}
+                  density={density}
+                />
               </Button>
             </span>
           </Tooltip>
@@ -2019,7 +2126,7 @@ export function DesktopTopBarControls({
         <DialogContent>
           <DialogContentText>{compactAction?.detail}</DialogContentText>
           {compactAction?.command && (
-            <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+            <ConfirmConsequence>
               Sends{" "}
               <Box
                 component="code"
@@ -2036,7 +2143,7 @@ export function DesktopTopBarControls({
               {status === "busy" || status === "starting"
                 ? " (queued after the current turn)"
                 : ""}.
-            </DialogContentText>
+            </ConfirmConsequence>
           )}
         </DialogContent>
         <DialogActions>
@@ -2068,12 +2175,12 @@ export function DesktopTopBarControls({
         <DialogTitle>Clear conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{clearAction?.detail}</DialogContentText>
-          <DialogContentText sx={{ mt: 1.5, fontSize: "0.8125rem" }}>
+          <ConfirmConsequence tone="error" irreversible>
             Resets {session?.provider ?? "the agent"} to a fresh context now
             {status === "busy" || status === "starting"
               ? " (ends the current turn)"
               : ""}.
-          </DialogContentText>
+          </ConfirmConsequence>
         </DialogContent>
         <DialogActions>
           <Button

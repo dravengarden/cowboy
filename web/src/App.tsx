@@ -3372,6 +3372,12 @@ export function App({
                             // session the settings icon stays a trailing cluster
                             // and must not stretch across the empty pane.
                             <Box
+                                // The width the top-bar strip must fit inside.
+                                // DesktopTopBarControls observes this element to
+                                // pick its density; scrolling is now only the
+                                // last resort, not the first answer to a narrow
+                                // pane (desktop/topBarDensity.ts).
+                                data-desktop-topbar-scroller
                                 sx={{
                                     flex: active ? 1 : "0 0 auto",
                                     ml: "auto",

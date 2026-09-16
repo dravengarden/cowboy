@@ -63,9 +63,20 @@ Deno.test("desktop session actions share compact geometry without duplicate cont
   assert(start >= 0);
   assert(end > start);
   assert(actions.includes("desktopSessionActionSx"));
-  assert(actions.includes("minWidth: 90"));
-  assert(actions.includes("minWidth: 96"));
-  assert(actions.includes("minWidth: 80"));
+  // Both tiers are pinned here: the full widths, and the single icon width the
+  // cluster falls back to when the toolbar cannot afford the words. Density is
+  // the ONLY thing that may change them — a control must never be sized by
+  // whether it happens to fit.
+  assert(actions.includes('minWidth: density === "full" ? 90'));
+  assert(actions.includes('minWidth: density === "full" ? 96'));
+  assert(actions.includes('minWidth: density === "full" ? 80'));
+  assert(actions.includes("ACTION_ICON_WIDTH_PX"));
+  // Collapsing the word may not cost the action its name or its letter.
+  assert(actions.includes('aria-label="Reload session runtime"'));
+  assert(actions.includes('aria-label="Clear conversation"'));
+  assert(actions.includes('keyLabel="L"'));
+  assert(actions.includes('keyLabel="C"'));
+  assert(actions.includes('keyLabel="X"'));
   assertEquals(actions.includes("contextPercent"), false);
   assert(
     embeddedControlSource.includes("export function desktopSessionActionSx"),
