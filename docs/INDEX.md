@@ -70,6 +70,9 @@ primary phone/desktop product path.
 - [`plugin-service-sites.md`](plugin-service-sites.md) — Core-established Service identity and final Site checks for finite installation, telemetry and recovery transports
 - [`plugin-code-read-scopes.md`](plugin-code-read-scopes.md) — Session-scoped responses, connection-bound Zed operations, remaining buffer ownership gaps, bounded diff/file continuations and page ETags
 - [`plugin-native-buffer-leases.md`](plugin-native-buffer-leases.md) — Prepared native buffer references and exact Machine runtime retention; HTTP/Web integration and production maintenance remain separate
+- [`plugin-native-buffer-sync.md`](plugin-native-buffer-sync.md) — Investigated upstream reload race and proposed native conditional synchronization; implementation decision and rollout remain separate
+- [`plugin-process-cleanup.md`](plugin-process-cleanup.md) — Core-owned process-group signals without PATH helpers, exact worker mapping and permission-failure fences
+- [`releases/plugin-process-cleanup-2026-09-16.md`](releases/plugin-process-cleanup-2026-09-16.md) — Activated Controller cleanup repair and eight-group actual Code installation acceptance; Machine remains an unactivated candidate
 - [`plugin-controller-buffer-owners.md`](plugin-controller-buffer-owners.md) — Product-owned Controller references, bounded admitted continuations and path-free original-owner cleanup; Review/native rollout remains separate
 - [`plugin-owned-buffer-reads.md`](plugin-owned-buffer-reads.md) — Closed original-owner diagnostic/symbol observations; lower-bound versions are not positional authority, with separate native rollout
 - [`plugin-buffer-client-owner.md`](plugin-buffer-client-owner.md) — Typed browser continuation owner, bounded transport and real StrictMode acceptance; ordinary Review cutover remains separate
