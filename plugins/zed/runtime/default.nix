@@ -57,28 +57,12 @@ let
     '';
   });
 
-  # Zed's official remote-development flow installs a release server on
-  # the target host rather than compiling the editor workspace there.
-  # Pin the exact preview release that corresponds to ZED_REVISION in the
-  # adapter. This keeps Cowboy's instance reproducible and independent of
-  # the user's ~/.zed_server lifecycle.
-  cowboy-zed-server = pkgs.runCommand "cowboy-zed-server-1.13.0" {
-    src = pkgs.fetchurl {
-      url =
-        "https://github.com/zed-industries/zed/releases/download/v1.13.0-pre/zed-remote-server-linux-x86_64.gz";
-      hash = "sha256-+E10MkfNuSORMNvhyRm3Ij5UfM5mrWwKSVkj+FJGQ+Y=";
-    };
-    nativeBuildInputs = [ pkgs.gzip ];
-    meta = {
-      description = "Pinned isolated Zed remote server for Cowboy Code";
-      license = pkgs.lib.licenses.gpl3Plus;
-      mainProgram = "cowboy-zed-server";
-    };
-  } ''
-      mkdir -p "$out/bin"
-      gzip -dc "$src" > "$out/bin/cowboy-zed-server"
-      chmod 0555 "$out/bin/cowboy-zed-server"
-  '';
+  # Private source-pinned conditional-sync primitive and deterministic native
+  # tests. The distribution version is distinct from upstream's CLI version;
+  # exact signed Plugin bytes select this pair, never a user's ordinary Zed.
+  cowboy-zed-server = import ./server.nix {
+    inherit pkgs rustToolchain rustPlatform;
+  };
 in {
   inherit cowboy-zed-adapter cowboy-zed-adapter-portable cowboy-zed-server;
 }

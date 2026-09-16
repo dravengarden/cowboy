@@ -322,6 +322,11 @@ zed-plugin-runtime-build ARTIFACT_BASE:
 zed-plugin-conformance ADAPTER SERVER:
     COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
 
+# Actual private native conditional effect, isolated from ordinary Zed and the
+# live Machine. No network, host PID visibility or writable cgroup hierarchy.
+zed-native-sync-conformance SERVER:
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_NATIVE_SYNC_SERVER="$1"; exec cargo test --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml sync_native::connected::immutable_native_sync -- --ignored --exact --nocapture' conformance "{{SERVER}}"
+
 # Real authenticated Controller/Machine/Code chain. No production state or egress.
 code-buffer-connected-conformance INPUT RECEIPT:
     cargo test --locked --all-features --lib --no-run
@@ -446,6 +451,7 @@ composition-check:
 fmt:
     cargo fmt --check
     cd plugins/zed/adapter && cargo fmt --check
+    rustfmt --edition 2024 --check plugins/zed/runtime/server/cowboy_sync.rs plugins/zed/runtime/server/cowboy_bounded.rs plugins/zed/runtime/server/tests.rs
 
 fmt-write:
     cargo fmt

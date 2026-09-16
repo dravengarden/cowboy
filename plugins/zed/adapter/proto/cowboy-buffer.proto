@@ -1,0 +1,54 @@
+// GPL-3.0-or-later. Private extension of the exact pinned Zed protocol.
+syntax = "proto3";
+package zed.messages;
+
+message CowboyBufferSyncVersion {
+  uint32 replica_id = 1;
+  uint32 timestamp = 2;
+}
+
+message CowboyBufferSync {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  enum Action {
+    UNSPECIFIED = 0;
+    PROBE = 1;
+    PREPARE = 2;
+    APPLY = 3;
+    QUERY = 4;
+    RETIRE = 5;
+  }
+  Action action = 3;
+  bytes instance = 4;
+  uint64 operation_id = 5;
+  uint64 buffer_id = 6;
+  repeated CowboyBufferSyncVersion version = 7;
+  bytes content_sha256 = 8;
+  uint32 content_bytes = 9;
+}
+
+message CowboyBufferSyncResponse {
+  uint32 protocol = 1;
+  bytes instance = 2;
+  uint64 operation_id = 3;
+  enum Phase {
+    UNSPECIFIED = 0;
+    SUPPORTED = 1;
+    PREPARED = 2;
+    PENDING = 3;
+    APPLIED = 4;
+    REFUSED = 5;
+    RETIRED = 6;
+  }
+  Phase phase = 4;
+  repeated CowboyBufferSyncVersion version = 5;
+  bytes content_sha256 = 6;
+  uint32 content_bytes = 7;
+  enum Refusal {
+    NONE = 0;
+    CHANGED = 1;
+    SOURCE = 2;
+    SHARED = 3;
+  }
+  Refusal refusal = 8;
+}

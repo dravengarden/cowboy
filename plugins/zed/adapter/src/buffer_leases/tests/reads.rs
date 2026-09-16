@@ -131,6 +131,7 @@ async fn language_transport_failure_is_not_an_empty_success() {
         _child: Mutex::new(child),
         outbound,
         pending: Arc::default(),
+        sync: crate::sync_native::Transport::new().0,
         events: broadcast::channel(4).0,
         buffer_files: Arc::default(),
         worktree_paths: Arc::default(),

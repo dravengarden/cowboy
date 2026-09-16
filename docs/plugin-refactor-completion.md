@@ -215,6 +215,17 @@ and accepting a production effect are different milestones.
   supported-device acceptance remain open. The
   [native synchronization investigation](plugin-native-buffer-sync.md) records
   why adapter-side preflight plus upstream reload cannot safely close that gap.
+- The [private native synchronization primitive](plugin-native-buffer-sync.md)
+  is now implemented in a source-pinned static Zed server, with an additive
+  typed protocol and new Zed `1.7.0` source manifest. Six native GPUI/filesystem
+  tests include deterministic edit/undo, read-only, peer and worktree changes
+  at both asynchronous boundaries, bounded source loads and retained operation
+  identity. The real private-server gate verifies actual text propagation,
+  stale-observation rejection, invalid source refusal, lost-response queries,
+  duplicate refusal and process-instance loss. Adapter framing/correlation tests
+  also pass. This is not a public synchronization grant: adapter multi-owner
+  exclusion, core purpose/authority, Review integration, signed rollout and
+  independently authorized restoration remain separate gates.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

@@ -285,6 +285,14 @@ In addition, require all applicable Provider gates below:
   it does not install on a registered Machine. The private Nix recipe requires
   a static Linux adapter and the exact server; a copied Nix ELF with a store
   interpreter is not a portable artifact.
+  The private conditional-sync server additionally requires its source-owned
+  native GPUI/filesystem gate and `just zed-native-sync-conformance
+  <immutable-server>`. Require deterministic edits/undo/owner changes at each
+  asynchronous boundary, retained original-ID outcomes, bounded source reads,
+  actual native event propagation and restart refusal. Barriers are test-only.
+  A native single-peer check does not establish exclusive adapter ownership or
+  core write authority; keep the public effect closed until both are accepted.
+  See `docs/plugin-native-buffer-sync.md`.
   Before a core owned-buffer/Review cutover, additionally run
   `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
   It connects supplied immutable Controller/Machine releases and the exact

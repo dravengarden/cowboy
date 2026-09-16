@@ -1,10 +1,9 @@
-# Native buffer synchronization: decision required
+# Native buffer synchronization
 
-**Investigation and proposed boundary, not an implemented effect.** The owned
-Code APIs refuse a content mismatch; they must not silently repair it by calling
-the legacy reload API. Ordinary Review still uses its legacy API. The connected
-acceptance gate now covers actual Code installation, but does not close this
-gap.
+**Private native primitive in source; not an enabled Service/Review effect.**
+The owned Code APIs still refuse a content mismatch; they must not silently
+repair it by calling the legacy reload API. Ordinary Review still uses its
+legacy API. Installation acceptance is a prerequisite, not consumer cutover.
 
 ## Observed upstream limitation
 
@@ -34,7 +33,7 @@ An adapter mutex, `is_dirty` preflight or content check before an ordinary
 the same shared native buffer and is not a synchronization or ownership proof.
 Ending a read observer does not authorize either operation.
 
-## Proposed finite effect
+## Finite effect contract
 
 Communication, authorization and installation stay core-owned. A Code Plugin may
 provide the native conditional primitive through its existing exact signed
@@ -70,22 +69,84 @@ Plugin version and immutable runtime bindings. Unsupported installed pairs must
 refuse the capability before any mutation. This cannot be advertised by updating
 only the browser or Controller probe.
 
-## Delivery choice
+## Private implementation
 
-Cowboy currently packages the pinned upstream prebuilt server. A private native
-patch means owning its reproducible build, static release matrix, patch rebases
-and exact server/adapter compatibility; it must not modify a user's ordinary Zed
-installation or mutable state. The alternative is to wait for an accepted
-upstream conditional primitive, keeping synchronization unavailable and content
-mismatch explicit. The implementation decision and separate Hawk Machine/Code
-maintenance are pending; neither is implied by the Controller cleanup release.
+The approved implementation is a source-pinned, static Linux x86_64 private
+server (`cowboy-zed-server 1.0.0`) paired with Zed Plugin/adapter `1.7.0`. Upstream's
+`version` command still identifies `1.13.0`; the signed runtime dependency
+version/digest identifies the patched distribution. The additive protobuf
+extension uses envelope tags 1000/1001 and protocol 1; it does not alter or
+silently replace upstream `ReloadBuffers`.
 
-Acceptance must cover real edits during loading and before commit, dirty and
-shared buffers, edit/undo ABA, independent readers, loss of authority, dropped
-HTTP/native replies, crash/unknown outcomes and exact original-ID observation.
-Actual Review must additionally reject stale file/outline results and positions,
-own navigation destinations, and run its real consumer/browser/device checks.
-The current eight-group connected gate is a prerequisite, not that acceptance.
+- Probe is effect-free. Prepare retains the original buffer entity, file
+  object and exact native vector. Native-issued IDs are monotonic within a
+  random 128-bit process instance; neither expiration nor retirement recycles
+  one. Serialized IDs are not authorization.
+- Apply admits once. The Store owns its task before responding Pending, so
+  dropping an observer cannot cancel admission or make it replayable. Query
+  uses only the original instance/ID. Retire cannot remove a Pending record.
+  Only effect-free Prepared records expire (30 seconds); at most 256 records
+  and one pending source load are retained.
+- The final version/clean/read-write/file/worktree/shared-peer checks and
+  mutation run in one native update turn. Read-only, dirty, edit/undo ABA,
+  changed file objects, removed worktrees and additional native peers refuse.
+- Source reads are limited to 4 MiB. UTF-8 BOM, CR/CRLF and invalid UTF-8 refuse
+  instead of being silently normalized. Linux `openat2` refuses symlinks in
+  every path component; nonblocking descriptor validation rejects FIFOs,
+  directories and oversized sources, and a bounded read rejects growth.
+  Kernels without this primitive fail closed; there is no weaker fallback.
+- Applied reports the candidate content identity and resulting native vector.
+  Native operation/reload events invalidate previous adapter observations.
+  This is not a guarantee of an atomic LSP refresh or a filesystem transaction.
+  Losing the process loses the journal; an unknown outcome is not restoration.
+
+`plugins/zed/runtime/server.nix` owns the source revision, source/dependency
+hashes and overlays. The bounded-open helper uses the already upstream-locked
+`rustix 1.1.2`; the small manifest/lock patch does not upgrade its bytes. This is
+a static dependency, not an ambient executable or shared library requirement.
+The recipe includes the GPL source overlays and upstream license, builds the
+headless server separately from desktop feature unification, runs native tests,
+and rejects ELF interpreter/shared-library dependencies. It does not modify a
+user's ordinary Zed installation, Cargo checkout or mutable configuration.
+
+Validation has two distinct layers:
+
+1. The Nix build runs native GPUI buffer-store tests with barriers before source
+   loading and immediately before commit. They exercise edit/undo, clean-state
+   and sharing/owner changes at both boundaries, observer loss, retained Pending
+   state, expiration, capacity and no replay. Test barriers do not exist in the
+   shipped binary. Native filesystem tests cover bounded growth, nonregular
+   files and final/parent symlinks.
+2. `just zed-native-sync-conformance <immutable-server>` uses the real server
+   and private wire decoder in disposable state, with no network, host PID
+   visibility, writable cgroup hierarchy, ordinary Zed settings or ambient
+   language tools. It verifies actual mutation/content events, edit/undo/close
+   refusal, invalid source bytes, a deliberately unobserved Apply reply,
+   original-ID queries, duplicate/retired/unissued IDs and process restart.
+
+The adapter additionally tests closed request/reply correlation, cancellation
+cleanup, bounded waiters, mixed upstream/private replies, every split point and
+bytewise framing. These tests are not proof of core authorization or an actual
+Review consumer.
+
+## Remaining delivery boundary
+
+The adapter exposes only a private support probe, not public sync commands.
+Multiple adapter owners can share one native peer: the native single-peer
+condition alone does **not** prove exclusive Cowboy buffer ownership. Separate
+core purpose/authority, original-owner routing, adapter-side ownership exclusion
+through the effect, cancellation/unknown retention and explicit consumer
+admission are still required before exposing Apply. Read leases and content
+hashes remain insufficient. No fallback to legacy reload is permitted.
+
+Release must accept exact static adapter/server bytes through the eight-group
+connected Code gate and sign/publish a new immutable Plugin. Building or
+publishing does not upgrade Hawk. Machine/Code maintenance must preserve active
+tasks and use the normal component/Plugin activators. Actual Review must then
+pass independent-reader/authority-loss/HTTP-cancellation tests, reject stale
+file/outline results and positions, own navigation destinations, and run its
+real consumer/browser/device checks. None of these follows from the native
+primitive's gate or a Controller cleanup release.
 
 See the [completion ledger](plugin-refactor-completion.md). Conditional reload,
 independent post-effect restoration and verified native generation recovery

@@ -12,6 +12,7 @@ async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>
         _child: Mutex::new(child),
         outbound,
         pending: Arc::default(),
+        sync: sync_native::Transport::new().0,
         events: broadcast::channel(16).0,
         buffer_files: Arc::default(),
         worktree_paths: Arc::default(),

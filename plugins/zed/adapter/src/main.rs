@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
-use proto::Message as _;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -20,6 +20,7 @@ mod content_reads;
 mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
+mod sync_native;
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";
@@ -57,6 +58,7 @@ enum CommandKind {
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Request {
     Health,
+    NativeSyncSupport,
     EnsureWorktree {
         path: PathBuf,
         trusted: bool,
@@ -123,6 +125,11 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    NativeSyncSupport {
+        api_version: u8,
+        protocol: u32,
+        instance: String,
+    },
     Health {
         api_version: u8,
         zed_version: &'static str,
@@ -315,6 +322,7 @@ struct ZedRuntime {
     _child: Mutex<Child>,
     outbound: mpsc::UnboundedSender<proto::Envelope>,
     pending: PendingRequests,
+    sync: Arc<sync_native::Transport>,
     events: broadcast::Sender<proto::Envelope>,
     buffer_files: BufferFiles,
     worktree_paths: WorktreePaths,
@@ -369,6 +377,14 @@ async fn verify_zed_server(path: &Path) -> Result<()> {
 
 impl ZedRuntime {
     async fn start(server: &Path, state_dir: &Path) -> Result<Self> {
+        Self::start_with_disconnect(server, state_dir, || std::process::exit(1)).await
+    }
+
+    async fn start_with_disconnect(
+        server: &Path,
+        state_dir: &Path,
+        disconnected: fn(),
+    ) -> Result<Self> {
         let runtime_dir = state_dir.join("server");
         tokio::fs::create_dir_all(&runtime_dir).await?;
         let log = runtime_dir.join("server.log");
@@ -428,15 +444,23 @@ impl ZedRuntime {
         let buffer_files = BufferFiles::default();
         let worktree_paths = WorktreePaths::default();
         let diagnostics = DiagnosticCache::default();
-        tokio::spawn(write_messages(input, outbound_rx));
-        tokio::spawn(read_messages(
+        let (sync, sync_rx) = sync_native::Transport::new();
+        tokio::spawn(write_messages(input, outbound_rx, sync_rx));
+        let reader = read_messages(
             output,
             outbound.clone(),
             Arc::clone(&pending),
             events.clone(),
             Arc::clone(&buffer_files),
             Arc::clone(&diagnostics),
-        ));
+            Arc::clone(&sync),
+        );
+        tokio::spawn(async move {
+            reader.await;
+            // Production exits so its supervisor can restart the isolated pair.
+            // Private process tests may await cleanup without exiting the harness.
+            disconnected();
+        });
         outbound
             .send(proto::Envelope {
                 id: 1,
@@ -451,6 +475,7 @@ impl ZedRuntime {
             _child: Mutex::new(child),
             outbound,
             pending,
+            sync,
             events,
             buffer_files,
             worktree_paths,
@@ -1171,11 +1196,20 @@ fn language_inlay_hint(hint: proto::InlayHint) -> Option<LanguageInlayHint> {
 async fn write_messages(
     mut input: UnixStream,
     mut messages: mpsc::UnboundedReceiver<proto::Envelope>,
+    mut sync: mpsc::Receiver<sync_native::wire::CowboyBufferSyncEnvelope>,
 ) {
-    while let Some(envelope) = messages.recv().await {
+    loop {
+        let encoded = tokio::select! {
+            envelope = messages.recv() => match envelope {
+                Some(envelope) => envelope.encode_to_vec(),
+                None => break,
+            },
+            envelope = sync.recv() => match envelope {
+                Some(envelope) => envelope.encode_to_vec(),
+                None => break,
+            },
+        };
         let result = async {
-            let mut encoded = Vec::with_capacity(envelope.encoded_len());
-            envelope.encode(&mut encoded)?;
             let length = u32::try_from(encoded.len()).context("Zed message is too large")?;
             input.write_all(&length.to_le_bytes()).await?;
             input.write_all(&encoded).await?;
@@ -1195,6 +1229,7 @@ async fn read_messages(
     events: broadcast::Sender<proto::Envelope>,
     buffer_files: BufferFiles,
     diagnostics: DiagnosticCache,
+    sync: Arc<sync_native::Transport>,
 ) {
     let next_message_id = AtomicU32::new(1_000_000_000);
     let next_worktree_id = AtomicU64::new(1);
@@ -1206,13 +1241,26 @@ async fn read_messages(
             }
             let mut encoded = vec![0; length as usize];
             output.read_exact(&mut encoded).await?;
-            anyhow::Ok(proto::Envelope::decode(encoded.as_slice())?)
+            anyhow::Ok((proto::Envelope::decode(encoded.as_slice())?, encoded))
         }
         .await;
-        let Ok(envelope) = result else {
+        let Ok((envelope, encoded)) = result else {
             pending.lock().await.clear();
+            sync.stopped();
             break;
         };
+        if let Some(id) = envelope.responding_to
+            && sync.response(
+                id,
+                if envelope.payload.is_none() {
+                    &encoded
+                } else {
+                    &[]
+                },
+            )
+        {
+            continue;
+        }
         if std::env::var_os("COWBOY_ZED_TRACE").is_some() {
             eprintln!("Zed envelope: {envelope:?}");
         }
@@ -1285,9 +1333,6 @@ async fn read_messages(
         }
         let _ = events.send(envelope);
     }
-    // The adapter cannot serve valid requests after the owned Zed protocol
-    // process or socket dies. Exit so systemd restarts the isolated pair.
-    std::process::exit(1);
 }
 
 fn peer_request_requires_ack(payload: &proto::envelope::Payload) -> bool {
@@ -1315,6 +1360,15 @@ async fn respond(
             worktrees: worktrees.read().await.len(),
             buffer_lease_api: 1,
         },
+        Request::NativeSyncSupport => {
+            let zed = zed.context("native runtime is unavailable")?;
+            let instance = zed.sync.probe(zed).await?;
+            Response::NativeSyncSupport {
+                api_version: ADAPTER_VERSION,
+                protocol: 1,
+                instance: format!("{:032x}", u128::from_be_bytes(instance)),
+            }
+        }
         Request::EnsureWorktree { path, trusted } => {
             ensure_worktree(path, trusted, false, worktrees, zed).await?
         }
