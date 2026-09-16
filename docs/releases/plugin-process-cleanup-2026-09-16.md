@@ -1,7 +1,9 @@
 # Core process cleanup and connected Code installation — 2026-09-16
 
-**Controller published and activated; Machine remains an unactivated
-candidate.** This release removes ambient signal-helper lookup and extends
+**Initial result: Controller published and activated; Machine remained an
+unactivated candidate.** The subsequent
+[Zed rollout](zed-native-sync-2026-09-16.md) includes separately authorized Hawk
+Machine activation. This release removes ambient signal-helper lookup and extends
 connected Code acceptance to actual authenticated installation. It does not
 switch ordinary Review, synchronize native text, publish a new Zed Plugin or
 restore native resources after a crash.

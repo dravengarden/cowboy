@@ -34,3 +34,9 @@ Controller activation covers its Plugin commands only. Applying the broker and
 resident Code runtime changes requires a separate Machine maintenance release;
 publishing or building that candidate does not activate it. The worker-generation
 source closure is unchanged, so no Agent generation drain is requested by this fix.
+
+The subsequent [Zed 1.7.0 rollout](releases/zed-native-sync-2026-09-16.md) includes
+that separately authorized Hawk Machine activation. It records the old Machine's
+isolated installation timeout, the accepted syscall-based replacement, retained
+workers and one later native identity-preserving generation cutover. That
+integrated release includes other previously pending Machine changes too.

@@ -223,9 +223,12 @@ and accepting a production effect are different milestones.
   identity. The real private-server gate verifies actual text propagation,
   stale-observation rejection, invalid source refusal, lost-response queries,
   duplicate refusal and process-instance loss. Adapter framing/correlation tests
-  also pass. This is not a public synchronization grant: adapter multi-owner
-  exclusion, core purpose/authority, Review integration, signed rollout and
-  independently authorized restoration remain separate gates.
+  also pass. The [signed 1.7.0 rollout](releases/zed-native-sync-2026-09-16.md)
+  includes eight-group exact-pair acceptance, compatible actual Catalog readers,
+  separately authorized Hawk Machine maintenance and completed Plugin
+  installation. This is not a public synchronization grant: adapter multi-owner
+  exclusion, core purpose/authority, Review integration and independently
+  authorized restoration remain separate gates.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -233,7 +236,9 @@ and accepting a production effect are different milestones.
   descendant termination, unrelated-child isolation and permission/mapping
   tests pass. This does not add PID-reuse immunity, escaped-descendant
   containment or independently verified native recovery. Controller activation
-  and the separate Machine candidate are recorded in the same acceptance note.
+  and the initial separate Machine candidate are recorded in the same acceptance
+  note; the subsequent [Hawk maintenance](releases/zed-native-sync-2026-09-16.md)
+  activates this repair in Machine too, without an ambient helper workaround.
 - Typed Provider authoring, owned UI effects, state-store/resource scopes,
   subscription/task drain and explicit IDB connection/transaction ownership.
 - [Atomic IDB outbox deltas](atomic-idb-outboxes.md) preserve updated peers'
@@ -327,12 +332,12 @@ unconstrained workflow executor to hide these gaps.
   Preserved worker PIDs in a bounded deployment window do not prove an actual
   generation swap or native resume. No forced rebind, login or worker restart is
   authorized merely by a Controller/Web release.
-- **Remote core Code adapter:** the shared UTF-8 paging repair is source-tested
-  in the independent feature graph and its exact immutable artifact passed seven
-  disposable process cases, but Controller activation updates
-  only colocated reads and Controller-owned cursor bindings. Accept and activate
-  the exact remote adapter through its separately authorized Machine release;
-  do not infer that upgrade from the Unix socket fixture or retained Machine PID.
+- **Remote core Code adapter:** the shared UTF-8 paging and owned Code changes
+  are now [activated on Hawk](releases/zed-native-sync-2026-09-16.md) through the
+  separately authorized Machine release, with exact connected acceptance and
+  installed Zed 1.7.0 evidence. Ordinary Review, independent recovery, other
+  Machines and supported-device acceptance remain separate; a healthy Machine
+  and installed Plugin do not establish those consumer exits.
 
 These checks require real account/device participation and, for the Machine or
 host-policy change, the separate maintenance boundary. Synthetic fixture keys,

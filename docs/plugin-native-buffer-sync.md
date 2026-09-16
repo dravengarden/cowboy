@@ -1,6 +1,8 @@
 # Native buffer synchronization
 
-**Private native primitive in source; not an enabled Service/Review effect.**
+**Private native primitive published and installed on Hawk; not an enabled
+Service/Review effect.** The [accepted rollout](releases/zed-native-sync-2026-09-16.md)
+includes separate Machine maintenance and exact signed Zed installation.
 The owned Code APIs still refuse a content mismatch; they must not silently
 repair it by calling the legacy reload API. Ordinary Review still uses its
 legacy API. Installation acceptance is a prerequisite, not consumer cutover.
@@ -139,14 +141,16 @@ through the effect, cancellation/unknown retention and explicit consumer
 admission are still required before exposing Apply. Read leases and content
 hashes remain insufficient. No fallback to legacy reload is permitted.
 
-Release must accept exact static adapter/server bytes through the eight-group
-connected Code gate and sign/publish a new immutable Plugin. Building or
-publishing does not upgrade Hawk. Machine/Code maintenance must preserve active
-tasks and use the normal component/Plugin activators. Actual Review must then
+The exact static adapter/server pair passed the eight-group connected Code gate
+and was signed, published and installed on Hawk through the normal Plugin
+installer. Separately authorized Machine maintenance retained immediate worker
+processes; one later native identity-preserving roll is recorded in the
+[rollout evidence](releases/zed-native-sync-2026-09-16.md). Building or publishing
+alone still does not install a Plugin or enable its effects. Actual Review must
 pass independent-reader/authority-loss/HTTP-cancellation tests, reject stale
 file/outline results and positions, own navigation destinations, and run its
 real consumer/browser/device checks. None of these follows from the native
-primitive's gate or a Controller cleanup release.
+primitive's gate or its installation.
 
 See the [completion ledger](plugin-refactor-completion.md). Conditional reload,
 independent post-effect restoration and verified native generation recovery
