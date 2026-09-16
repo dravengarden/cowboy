@@ -13,6 +13,7 @@
 import {
   Component,
   type HTMLAttributes,
+  isValidElement,
   memo,
   type ReactNode,
   useCallback,
@@ -32,6 +33,7 @@ import "katex/dist/katex.min.css";
 import { ImageLightbox } from "@cowboy/app-shell";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { copyText } from "./clipboard";
+import { headingSlug } from "./mobile/review/reviewLinkTarget";
 import { openExternalUrl, shouldRouteExternalClick } from "./openExternal";
 import { Collapsible } from "./tools/Collapsible";
 import { PrismAsyncLight as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -555,19 +557,41 @@ class MarkdownCodeBoundary extends Component<
 // Build a heading component renderer at a given em size + line-height. Kept at
 // module scope so the `components` map below stays declarative; `mt`/`mb` are
 // uniform so consecutive headings/paragraphs keep an even rhythm.
+function headingText(children: ReactNode): string {
+  if (typeof children === "string" || typeof children === "number") {
+    return String(children);
+  }
+  if (Array.isArray(children)) return children.map(headingText).join("");
+  if (isValidElement<{ children?: ReactNode }>(children)) {
+    return headingText(children.props.children);
+  }
+  return "";
+}
+
 function makeHeading(
   fontSize: string,
   lineHeight: number,
+  component: "h1" | "h2" | "h3" | "h4" | "h5" | "h6",
 ): (props: { children?: ReactNode }) => React.JSX.Element {
   return function Heading({ children }): React.JSX.Element {
+    // A slug id, so a `#fragment` link has something to land on and the
+    // resolver (reviewLinkTarget.ts) and the document agree on the name. The
+    // element is also a real heading tag now — previously every heading was a
+    // `div`, which cost assistive technology the outline for a styling detail.
+    const slug = headingSlug(headingText(children));
     return (
       <Box
+        component={component}
+        {...(slug === "" ? {} : { id: slug })}
         sx={{
           fontSize,
           fontWeight: 600,
           lineHeight,
           mt: 1.2,
           mb: 0.5,
+          // The tag change must not bring the browser's own heading metrics
+          // back: sizes stay em-relative and margins stay uniform.
+          scrollMarginTop: "3rem",
         }}
       >
         {children}
@@ -588,6 +612,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
   invert = false,
   centerCopy = false,
   touchWrap = false,
+  onLinkClick,
 }: {
   /** Raw markdown source. */
   text: string;
@@ -596,6 +621,10 @@ const MarkdownImpl = memo(function MarkdownImpl({
   invert?: boolean;
   centerCopy?: boolean;
   touchWrap?: boolean;
+  /** Claim a link before it is opened as a web address. Return true when the
+   *  host navigated instead; the anchor's default and the external opener are
+   *  both suppressed. Omit for ordinary prose (the transcript). */
+  onLinkClick?: (href: string, event: React.MouseEvent) => boolean;
 }): React.JSX.Element {
   const theme = useTheme();
   const dark = theme.palette.mode === "dark" || invert;
@@ -697,6 +726,14 @@ const MarkdownImpl = memo(function MarkdownImpl({
           target="_blank"
           rel="noopener noreferrer"
           onClick={(event): void => {
+            // A host may CLAIM a link before it is treated as a web address:
+            // inside the code reviewer a relative href is another file in the
+            // workspace, not a page on this origin. Claiming is the host's call
+            // because only it knows which document this markdown came from.
+            if (href && onLinkClick?.(href, event) === true) {
+              event.preventDefault();
+              return;
+            }
             // Browser/PWA navigation remains a real anchor. WKWebView cannot
             // reliably create a `_blank` window, so native shells alone route
             // the same user gesture through Tauri's operating-system opener.
@@ -728,12 +765,12 @@ const MarkdownImpl = memo(function MarkdownImpl({
     // especially heavy on a phone. Render them em-relative (so they still scale
     // with the OS base size) but tighter, with compact margins. Sizes step down
     // h1→h4; h5/h6 collapse to body weight-only emphasis.
-    h1: makeHeading("1.35em", 1.3),
-    h2: makeHeading("1.2em", 1.3),
-    h3: makeHeading("1.08em", 1.35),
-    h4: makeHeading("1em", 1.4),
-    h5: makeHeading("0.92em", 1.4),
-    h6: makeHeading("0.85em", 1.4),
+    h1: makeHeading("1.35em", 1.3, "h1"),
+    h2: makeHeading("1.2em", 1.3, "h2"),
+    h3: makeHeading("1.08em", 1.35, "h3"),
+    h4: makeHeading("1em", 1.4, "h4"),
+    h5: makeHeading("0.92em", 1.4, "h5"),
+    h6: makeHeading("0.85em", 1.4, "h6"),
     p({ children }) {
       // Inherit the reading line-height set on the transcript scroll container
       // (Settings → Reading), instead of a fixed 1.5. Default container leading

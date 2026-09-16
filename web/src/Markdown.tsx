@@ -57,6 +57,7 @@ export const Markdown = memo(function Markdown({
   invert = false,
   centerCopy = false,
   touchWrap = false,
+  onLinkClick,
 }: {
   text: string;
   invert?: boolean;
@@ -64,11 +65,21 @@ export const Markdown = memo(function Markdown({
   centerCopy?: boolean;
   /** Soft-wrap fenced code on touch surfaces. */
   touchWrap?: boolean;
+  /** Claim a link before it opens as a web address — the code reviewer uses
+   *  this to follow a relative path to another file in the workspace. Return
+   *  true when the host navigated. */
+  onLinkClick?: (href: string, event: React.MouseEvent) => boolean;
 }): React.JSX.Element {
   return (
     <MarkdownBoundary text={text} invert={invert}>
       <Suspense fallback={<MarkdownSourceFallback text={text} invert={invert} />}>
-        <MarkdownImpl text={text} invert={invert} centerCopy={centerCopy} touchWrap={touchWrap} />
+        <MarkdownImpl
+          text={text}
+          invert={invert}
+          centerCopy={centerCopy}
+          touchWrap={touchWrap}
+          {...(onLinkClick ? { onLinkClick } : {})}
+        />
       </Suspense>
     </MarkdownBoundary>
   );

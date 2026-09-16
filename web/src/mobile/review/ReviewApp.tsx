@@ -59,6 +59,7 @@ import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import {
   mutateMobileReview,
+  notify,
   openSession,
   useMobileReviewState,
   useStoreSelector,
@@ -96,6 +97,7 @@ import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
+import { resolveReviewLink } from "./reviewLinkTarget";
 import { ReviewMediaPreview } from "./ReviewMediaPreview";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { isReviewMediaPath, reviewPreviewKind } from "./reviewPreview";
@@ -419,6 +421,8 @@ function DocumentView({
   onBufferUnavailable,
   readScrollPosition,
   rememberScrollPosition,
+  onMarkdownLink,
+  previewAnchor,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -437,6 +441,12 @@ function DocumentView({
   onBufferUnavailable: () => void;
   readScrollPosition: (key: string) => unknown;
   rememberScrollPosition: (key: string, top: number) => void;
+  /** Claim a rendered-Markdown link. True when the app navigated instead of
+   *  letting it open as a web address. */
+  onMarkdownLink: (href: string) => boolean;
+  /** A heading to land on once THIS document is rendered — either a same-file
+   *  `#hash` or the tail of a `other.md#hash` that is still loading. */
+  previewAnchor?: { path: string; hash: string; id: number } | undefined;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -499,6 +509,42 @@ function DocumentView({
   const appliedOuterRestore = useRef<string | undefined>(undefined);
   const outerScrollable = markdownPreview || previewKind === "mermaid" ||
     mediaPreview || settings.softWrap;
+  // A `#heading` may arrive before the file it belongs to has loaded (a
+  // cross-file `other.md#section`), so the scroll waits for THIS document to be
+  // the one asked for and for its text to be on screen. Consumed by id, so the
+  // same anchor tapped twice still scrolls.
+  const appliedAnchor = useRef(0);
+  useLayoutEffect(() => {
+    if (
+      !previewAnchor || !markdownPreview || previewAnchor.path !== target.path ||
+      loadedPath !== target.path || appliedAnchor.current === previewAnchor.id
+    ) return undefined;
+    const frame = globalThis.requestAnimationFrame(() => {
+      const scroller = outerScrollRef.current;
+      const heading = scroller?.querySelector<HTMLElement>(
+        `[id="${CSS.escape(previewAnchor.hash)}"]`,
+      );
+      if (!scroller || !heading) return;
+      appliedAnchor.current = previewAnchor.id;
+      // Position by measurement rather than scrollIntoView: the preview lives
+      // inside the peek compositor, and scrollIntoView on iOS may scroll an
+      // ancestor instead, dragging the whole workspace sideways.
+      const top = scroller.scrollTop +
+        heading.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top - 12;
+      scroller.scrollTop = Math.max(0, top);
+      rememberScrollPosition(outerScrollKey, scroller.scrollTop);
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [
+    loadedPath,
+    markdownPreview,
+    outerScrollKey,
+    previewAnchor,
+    rememberScrollPosition,
+    target.path,
+    text,
+  ]);
 
   useLayoutEffect(() => {
     if (
@@ -1479,7 +1525,11 @@ function DocumentView({
                 },
               }}
             >
-              <Markdown text={text} touchWrap />
+              <Markdown
+                text={text}
+                touchWrap
+                onLinkClick={onMarkdownLink}
+              />
             </Box>
           )
           : (
@@ -1699,6 +1749,10 @@ export function ReviewApp({
   );
   const [tabCloseRequest, setTabCloseRequest] = useState<TabCloseRequest>();
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
+  const [previewAnchor, setPreviewAnchor] = useState<
+    { path: string; hash: string; id: number } | undefined
+  >(undefined);
+  const previewAnchorId = useRef(0);
   const [navigationHistory, setNavigationHistory] = useState<
     CodeNavigationEntry[]
   >([]);
@@ -2000,6 +2054,72 @@ export function ReviewApp({
         ? {}
         : { revealLine: currentVisibleLine.current }),
     };
+  };
+  /**
+   * Follow a link inside rendered Markdown.
+   *
+   * Deliberately reuses the go-to-definition stack rather than inventing a
+   * second history: a doc link and a symbol jump are the same act — "I left
+   * where I was" — and a reader must not have to remember which Back a given
+   * jump answers to. The Back/Forward pair in the header therefore lights up
+   * for documentation exactly as it does for code, and the per-path scroll
+   * memory returns the previous document to the paragraph it was left at.
+   *
+   * Returns true when this navigated, so the renderer suppresses the anchor.
+   */
+  const followMarkdownLink = (href: string): boolean => {
+    if (target.kind !== "source") return false;
+    const resolved = resolveReviewLink(target.path, href);
+    if (resolved.kind === "external") return false;
+    if (resolved.kind === "unsupported") {
+      // Claimed and reported: falling through would resolve it against the
+      // app's own origin and open a page that cannot exist.
+      notify("That link points outside this workspace.", "warning");
+      return true;
+    }
+    if (resolved.kind === "anchor") {
+      navigationHaptic();
+      setPreviewAnchor({
+        path: target.path,
+        hash: resolved.hash,
+        id: ++previewAnchorId.current,
+      });
+      return true;
+    }
+    if (resolved.path === target.path) {
+      // Same document: a heading move, not a navigation entry.
+      if (resolved.hash) {
+        setPreviewAnchor({
+          path: target.path,
+          hash: resolved.hash,
+          id: ++previewAnchorId.current,
+        });
+      }
+      return true;
+    }
+    navigationHaptic();
+    const previous = currentNavigationEntry();
+    if (previous) {
+      setNavigationHistory((history) => [...history, previous].slice(-32));
+    }
+    setNavigationForwardHistory([]);
+    setSymbolRestore(undefined);
+    setCloseSymbolRequest((value) => value + 1);
+    currentSymbol.current = undefined;
+    currentNavigationFrame.current = {
+      kind: "source",
+      path: resolved.path,
+      ...(resolved.line === undefined ? {} : { revealLine: resolved.line }),
+    };
+    setPreviewAnchor(
+      resolved.hash === undefined ? undefined : {
+        path: resolved.path,
+        hash: resolved.hash,
+        id: ++previewAnchorId.current,
+      },
+    );
+    openSource(resolved.path, resolved.line, true);
+    return true;
   };
   const navigateBack = (): void => {
     const previous = navigationHistory.at(-1);
@@ -2722,6 +2842,8 @@ export function ReviewApp({
               onBufferUnavailable={requestBufferRecovery}
               readScrollPosition={readScrollPosition}
               rememberScrollPosition={rememberScrollPosition}
+              onMarkdownLink={followMarkdownLink}
+              previewAnchor={previewAnchor}
               onNavigate={(location, origin) => {
                 if (target.kind !== "source") return;
                 const previous: CodeNavigationEntry = {
