@@ -2,8 +2,9 @@
 
 The admission repair is published on `main` and active on Hawk. Local and public
 health return HTTP 200; the new Controller epoch has zero rejected intents and
-zero failed database batches. **The two historical rejected intents have not
-been recovered or replayed.** Healthy new counters do not establish their recovery.
+zero failed database batches. **Recovery of the two historical rejected intents
+remains unknown; this repair did not replay them.** Healthy new counters do not
+establish their recovery.
 
 ## Exact release
 

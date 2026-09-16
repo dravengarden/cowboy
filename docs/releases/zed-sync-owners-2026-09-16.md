@@ -5,9 +5,9 @@ Code processes and all 16 observed workers retained their PID/start identities.
 No Machine maintenance was performed. This accepts private adapter ownership
 exclusion, not core synchronization authority, Review cutover or restoration.
 The later persistence admission bug was separately
-[repaired on Controller](persistence-admission-2026-09-16.md). Its two historical
-rejected intents remain unrecovered; installation acceptance must not be reported
-as proof of their restoration.
+[repaired on Controller](persistence-admission-2026-09-16.md). Recovery of its two
+historical rejected intents remains unknown; installation acceptance must not be
+reported as proof of their restoration.
 
 ## Exact source and release
 
