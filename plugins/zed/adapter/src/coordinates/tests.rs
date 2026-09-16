@@ -268,3 +268,35 @@ fn undo_cannot_target_an_unknown_operation_or_another_undo() {
     mirror.apply(&redo, MAX_HISTORY).unwrap();
     same(&mirror, &source);
 }
+
+#[test]
+fn empty_base_is_not_confused_with_the_first_local_insertion() {
+    let mut local = peer("", 0);
+    let mut remote = peer("", 1);
+    let first = local.edit([(0..0, "🙂")]);
+    let second = remote.edit([(0..0, "汉")]);
+    local.apply_ops([second.clone()]);
+    remote.apply_ops([first.clone()]);
+    for operations in [[&first, &second], [&second, &first]] {
+        let mut mirror = Mirror::new(7, "").unwrap();
+        for operation in operations {
+            mirror.apply(&wire(operation), MAX_HISTORY).unwrap();
+        }
+        same(&mirror, &local);
+        same(&mirror, &remote);
+    }
+}
+
+#[test]
+fn one_native_author_cannot_fork_its_causal_history() {
+    let mut source = peer("abc", 1);
+    let mut mirror = Mirror::new(7, "abc").unwrap();
+    let mut operation = wire(&source.edit([(0..0, "x")]));
+    mirror.apply(&operation, MAX_HISTORY).unwrap();
+    let Some(proto::operation::Variant::Edit(edit)) = &mut operation.variant else {
+        unreachable!()
+    };
+    edit.lamport_timestamp += 1;
+    assert!(mirror.apply(&operation, MAX_HISTORY).is_err());
+    same(&mirror, &source);
+}

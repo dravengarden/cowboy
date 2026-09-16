@@ -17,6 +17,7 @@ type Stamp = (u32, u32);
 
 pub(crate) struct Mirror {
     buffer: text::Buffer,
+    has_base: bool,
     // Same upstream engine, insertion-only projection. Its historical rope
     // exposes native FullOffsets (including tombstones) for UTF-8 validation;
     // no independently implemented fragment ordering or CRDT is involved.
@@ -42,6 +43,7 @@ impl Mirror {
         let full = text::Buffer::new(text::ReplicaId::LOCAL, text::BufferId::new(id)?, base);
         Ok(Self {
             buffer,
+            has_base: !base.is_empty(),
             full,
             insertions,
             operations: BTreeMap::new(),
@@ -122,10 +124,20 @@ impl Mirror {
                 && !version.observed(timestamp),
             "native operation has unavailable or conflicting history"
         );
+        if let Some(previous) = self
+            .buffer
+            .version()
+            .iter()
+            .find(|entry| entry.replica_id == timestamp.replica_id)
+        {
+            ensure!(
+                version.observed(previous),
+                "native author omitted its own history"
+            );
+        }
         for entry in version.iter() {
-            let base = entry.replica_id == text::ReplicaId::LOCAL
-                && entry.value == 1
-                && self.insertions.contains_key(&(0, 1));
+            let base =
+                entry.replica_id == text::ReplicaId::LOCAL && entry.value == 1 && self.has_base;
             ensure!(
                 base || self
                     .operations
@@ -137,7 +149,7 @@ impl Mirror {
                 "invalid native Lamport order"
             );
         }
-        if self.insertions.contains_key(&(0, 1)) {
+        if self.has_base {
             ensure!(
                 version.observed(clock::Lamport {
                     replica_id: text::ReplicaId::LOCAL,
