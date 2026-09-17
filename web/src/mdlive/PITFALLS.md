@@ -70,18 +70,18 @@ here says otherwise.
 | `markdown({base: markdownLanguage, codeLanguages: []})` | ✅ | the syntax tree the engine reads. `codeLanguages: []` = no embedded-code grammars (keep deps small). |
 | `inlinePreview()` + `atomicEditorTheme` + `atomicMarkdownSyntax` | ✅ | the live-preview decorations + theme + highlight (the whole point). |
 | `inlinePreview()` **only in live preview** | ✅/❌ by mode | Obsidian's Source mode (pitfall #108). `livePreviewExtensions({sourceMode: true})` leaves the decoration engine OUT entirely; theme, highlight, pairing and the language stay. Never try to half-mount it. |
-| `closeBrackets()` + `markdownLanguage.data.of({closeBrackets:{brackets:[… * _ ` ]}})` | ✅ | Obsidian-style auto-pairing incl. emphasis delimiters. |
-| `extendEmphasisPair` | ✅ | grow `*|*` → `**|**` as you type. |
-| `autoCloseCodeFence` | ✅ | auto-close ``` fences. |
+| `obsidianAutoPair` (composer/obsidianAutoPair.ts) | ✅ | Port of Obsidian's closeBrackets fork: `( [ { ' "` + `* _ `` ` `` + ``` fence, same-char markers pair only between whitespace, `= ~ $ %` wrap a selection. Replaces upstream `closeBrackets()`, `extendEmphasisPair` and `autoCloseCodeFence` (pitfall #109). |
+| upstream `closeBrackets()` / `extendEmphasisPair` / `autoCloseCodeFence` | ❌ removed | Together they turned typed `**bold**` into `**bold******` and `中文**bold**` into a stray `*` (pitfall #109). |
 | `Prec.high(keymap.of(closeBracketsKeymap))` | ✅ | **Backspace deletes an empty pair as a unit** (`*|*`→empty). MUST be `Prec.high` — else cowboy's `defaultKeymap` `deleteCharBackward` wins and orphans the closer. |
-| `markdownKeymap` | ✅ | markdown keybindings (list continuation is owned by inlinePreview's `Prec.highest` Enter, so markdownKeymap's Enter is beaten — fine). |
+| `markdown({addKeymap: false})` + `obsidianMarkdownKeymap` | ✅ | Obsidian's list/quote Enter, Shift-Enter, quote-aware Tab/Shift-Tab (composer/markdownEditing.ts), identical in live preview and Source mode. lang-markdown's loose-list Enter and markup Backspace are off; the explicit `markdownKeymap` was dead (defaultKeymap won) and is gone (pitfall #109). |
+| `indentUnit.of("\t")` | ✅ | Obsidian's default `useTab`; a tab nests `1.` items too. |
 | `indentOnInput()` | ✅ | auto-indent. |
 | `drawSelection()` | ❌ removed | Native caret/selection is required for the iOS Paste/Select callout. The PWA `translateZ(0)` layer that once required a drawn caret is gone. See historical pitfalls #2–#3. |
 | `dropCursor()` | ❌ removed | It was coupled to the drawn-selection workaround and is unnecessary in the native-shell path. |
 | `highlightActiveLine()` | ✅ | active-line bg (atomic-theme styles `.cm-activeLine`). |
 | `search({top:true})` + `searchKeymap` | ❌ removed | Stock CM6 Find is Chrome-looking chrome (`Find` / `replace all`). Desktop already refuses to bind `Mod+F` as a Cowboy command; the vendored keymap was sneaking the panel back in. Search the workspace through the command palette. |
 | `EditorView.theme({".cm-widgetBuffer":{visibility:"hidden"}})` | ✅ | hide the iOS broken-image dot (pitfall #4). |
-| `indentWithTab` | ✅ | Tab indent. |
+| `indentWithTab` | ❌ replaced | Tab/Shift-Tab come from `obsidianMarkdownKeymap` (quote-aware, always keeps focus). |
 | `rectangularSelection()` / `allowMultipleSelections` | ❌ | multi-cursor; desktop-only nicety, needs drawSelection to render. Re-add desktop-only if ever wanted. |
 | `history()` / `historyKeymap` / `defaultKeymap` | ❌ | **cowboy's `ComposerEditor` base already provides these.** A 2nd `history()` SPLITS UNDO. Never add here. |
 | `table-widget` / `image-blocks` / `wiki-links` | ❌ | the only **contenteditable** widgets = the IME landmine; and cowboy has no notes vault for `[[wiki-links]]`. Out of v1. See SYNC.md. |
@@ -2431,13 +2431,10 @@ Desktop Vim + IME checks:
       leaving `inlinePreviewPlugin` mounted while trying to neutralise its
       ranges is exactly the coupled half-state the cardinal rule forbids. The
       branch in `composerExtensions.ts` is the whole mechanism.
-    - **Both modes share one document.** Only decorations differ, so a toggle
-      can never rewrite, re-serialize or normalise text. The single behavioural
-      difference is Enter: mdlive's `Prec.highest` tight-list continuation goes
-      with the engine and @codemirror/lang-markdown's own
-      `insertNewlineContinueMarkup` takes over (it still continues bullets,
-      ordered items and tasks). Do not fork `insertTightListItem` out of the
-      vendored file to "fix" that — see SYNC.md.
+    - **Both modes share one document and one keymap.** Only decorations
+      differ, so a toggle can never rewrite, re-serialize or normalise text.
+      Enter is Obsidian's list continuation in both modes (pitfall #109);
+      mdlive's tight-list Enter was removed as a LOCAL edit (SYNC.md).
     - **The flip is a CM6 reconfigure**, dispatched by @uiw/react-codemirror
       when the memoised extension array changes — the same path Vim already
       uses. Document, selection and undo history are state, not configuration,
@@ -2455,3 +2452,86 @@ Desktop Vim + IME checks:
       touch paths are untouched, so the mobile swipe contract is unaffected.
       Source mode still needs the caret/IME/paste rows of the verification
       matrix, because it changes which decorations the caret walks through.
+
+109. **Input details follow Obsidian 1.13's shipped editor, not upstream CM6
+    defaults.** A 2026-09-17 audit compared Cowboy against Obsidian 1.13.8's APK
+    and 1.13.7's desktop `app.js` (both bundle CM6). Every row below was a
+    reproducible Cowboy defect or divergence; the fixes are ports, not new
+    heuristics. None of them touches pitfall #69's image-line Return path, and
+    none adds pointer/touch interception, delayed focus, or a composition-time
+    dispatch.
+
+    - **Typing pairs (`composer/obsidianAutoPair.ts`).** Upstream closeBrackets
+      pairs a same-character token whenever the next character is not a word
+      character, and the vendored `extendEmphasisPair` grew `*|*` into
+      `**|**`; typed `**bold**` ended as `**bold**|****`, and `中文**bold**`
+      left a stray `*`. Obsidian's fork pairs `* _ \`` only between
+      whitespace/line edges and never right after the same token, steps over
+      tracked closers, opens a fence on the third backtick (closer indented for
+      a list/quote), wraps a selection with `= ~ $ %`, and on iOS restores a
+      line-start `—` to `--`. Lezer (unlike Obsidian's HyperMD tokens)
+      reports a closing `**` as its own node, so a closing delimiter is
+      stepped over rather than treated as a node start. All handlers bail
+      during composition (`compositionStarted`, or `composing` on Android).
+    - **Line commands (`composer/markdownEditing.ts`).** One pure module ports
+      Obsidian's `processLines` list/quote/checklist/heading toggles,
+      `toggleMarkdownFormatting`, `insertBlock`, `insertMarkdownLink`,
+      quote-aware indent/outdent and `newlineAndIndentContinueMarkdownList`.
+      CM6 (`markdownEditingCommands.ts`) and the native touch textarea apply
+      the same edits, so the engines can no longer disagree. Fixed: Enter at
+      the start of a list item duplicated its marker; `1.`/quote exit took
+      three Enters; the code-block button split a line mid-sentence;
+      Bullet on `- [ ] foo` produced `[ ] foo`; toggles ignored multi-line
+      selections; Bold on a caret did not wrap the word; Italic inside
+      `**bold**` stripped a star.
+    - **Native textarea undo.** Writing `textarea.value` discards the
+      browser undo stack, so toolbar Undo could not revert a toolbar edit or
+      anything typed before it. Toolbar and picker edits now replace only the
+      changed span through `execCommand("insertText")` in the same gesture
+      (value write remains the fallback) and never run while the IME owns the
+      textarea (#83/#84). `clear()` no longer refocuses after delivery.
+    - **Code-fence Backspace** only removes an exact empty pair found by
+      CommonMark fence pairing; it used to delete a block whose info string was
+      being edited and to merge adjacent blocks.
+    - **IME.** Obsidian sets `EditorView.EDIT_CONTEXT = false`; Android
+      Chrome otherwise moves composition events off the DOM, where Cowboy's
+      holds listen. Obsidian maps (never rebuilds) live-preview decorations
+      while composing; mdlive's preview plugin and the `@` chip plugin now do
+      the same and rebuild after `compositionend`. The send/draft chord checks
+      live composition (`isComposing`/`view.composing`), not keyCode 229: an
+      idle macOS CJK source reports ⌘⏎ as 229/`Process` (#96) and the chord
+      fell through to a blank line. Picker queries do not open from marked
+      text.
+    - **Content attributes.** CM6 defaults spellcheck, autocorrect and
+      autocapitalize off; Obsidian turns them on. The touch CM6 editor now
+      matches the native textarea it replaces, so promoting a message no longer
+      drops QuickType, autocapitalization and double-space period mid-typing.
+      Desktop keeps OS autocorrect off (WKWebView honors it, Electron did not)
+      and enables spellcheck only. Attributes are constant for the editor
+      lifetime; never reconfigure them during composition.
+    - **Paste.** Obsidian's order is rich text → URL-over-selection link →
+      files → text. Office/spreadsheet copies carry a rendered PNG beside real
+      HTML/text and used to arrive as a screenshot; files now lose to text
+      unless the HTML is only that picture. A URL pasted over a single-line
+      selection becomes `[selection](url)`. CRLF is normalized before the
+      `insertText` caret offset (a raw CRLF threw at document end). An empty
+      payload no longer deletes the CM6 selection, the textarea never cancels a
+      paste that has plain text, and the native shell never issues a second
+      web-clipboard read. Pastes carry `input.paste` so undo never joins them
+      with typing. HTML→Markdown conversion (Obsidian's turndown) is not ported.
+    - **Pickers.** Like Obsidian's EditorSuggest, a visible list owns
+      Enter/Tab/arrows even while an async `@file` refresh marks it pending;
+      Tab accepts; Escape closes only a visible list and otherwise reaches the
+      surface, including the Desktop Queue/Draft discard capture. `/` queries
+      stop at a second slash and use the same substring filter in both engines.
+      The native picker gained arrow/Enter/Tab selection, opens only from
+      typing (never from focus or a long-press selection), and in fullscreen
+      follows the caret line instead of rendering under the status bar.
+
+    Not ported (recorded decisions): HTML→Markdown paste, drop of files onto a
+    touch CM6 editor, numbered-list renumbering on arbitrary edits, and
+    typing-time pairing in the native textarea (that would need beforeinput
+    interception, forbidden by #55/#80). Verification: the whole matrix above
+    plus pinyin on a list/marker line, `**bold**` typed after Chinese text,
+    toolbar Bold/List/Checklist then toolbar Undo in the native textarea, and a
+    spreadsheet paste on Desktop.

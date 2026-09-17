@@ -13,6 +13,11 @@ import type {
 } from "./ComposerEditor";
 import { type Attachment, clipboardFiles } from "./attachments";
 import { readWebClipboard } from "./composer/webClipboard";
+import { hasNativeClipboardBridge } from "./composer/clipboardPort";
+import {
+  normalizeClipboardText,
+  pastedTextBeatsFiles,
+} from "./composer/clipboardPastePolicy";
 import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
@@ -21,22 +26,29 @@ import { imeOwnsEditable, isImeKeyEvent } from "./imeKey";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
-  cycleNativeHeading,
-  indentNativeLines,
-  insertNativeCodeBlock,
-  insertNativeLink,
   mapNativeSelectionThroughValueChange,
   nativeTextareaFittedHeight,
   nativeTextareaNeedsScroll,
   type NativeTextEdit,
-  outdentNativeLines,
   replaceNativeSelection,
-  setNativeHeading,
-  toggleNativeCheckbox,
-  toggleNativeLinePrefix,
-  toggleNativeWrap,
   wrapNativeSelection,
 } from "./composer/nativeTextareaEditing";
+import {
+  applyMarkdownEdit,
+  cycleHeading,
+  indentLines,
+  insertCodeBlock,
+  insertMarkdownLink,
+  outdentLines,
+  setHeading,
+  toggleChecklist,
+} from "./composer/markdownEditing";
+import {
+  inlineFormatCommand,
+  linePrefixCommand,
+  type MarkdownEditCommand,
+  NATIVE_INDENT_UNIT,
+} from "./composer/markdownEditingCommands";
 // Compatibility hook for composer call sites. Platform classification is owned
 // centrally by SurfaceProvider so every part of the app agrees on the active
 // interaction model (especially iPad + trackpad and hybrid devices).
@@ -66,7 +78,8 @@ interface Trigger {
 // dismisses the popup.
 function computeTrigger(value: string, caret: number): Trigger | null {
   const before = value.slice(0, caret);
-  const slash = /^\/(\S*)$/u.exec(before);
+  // A second `/` makes it a path, not a command (Obsidian's slash rule).
+  const slash = /^\/([^\s/]*)$/u.exec(before);
   if (slash) return { type: "/", from: 0, query: slash[1] ?? "" };
   const at = /(?:^|\s)@(\S*)$/u.exec(before);
   if (at) {
@@ -74,6 +87,44 @@ function computeTrigger(value: string, caret: number): Trigger | null {
     return { type: "@", from: caret - q.length - 1, query: q };
   }
   return null;
+}
+
+// Caret line top inside a textarea (relative to its border box, after its own
+// scroll), measured with an off-screen mirror. Read-only: it never touches the
+// textarea's value, selection, or focus.
+function nativeTextareaCaretTop(
+  ta: HTMLTextAreaElement,
+): { top: number; lineHeight: number } | null {
+  const doc = ta.ownerDocument;
+  const view = doc.defaultView;
+  if (!view) return null;
+  const style = view.getComputedStyle(ta);
+  const mirror = doc.createElement("div");
+  for (const property of [
+    "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom",
+    "paddingLeft", "borderTopWidth", "borderRightWidth", "borderBottomWidth",
+    "borderLeftWidth", "borderStyle", "fontFamily", "fontSize", "fontWeight",
+    "fontStyle", "letterSpacing", "lineHeight", "textTransform", "wordSpacing",
+    "tabSize",
+  ] as const) {
+    mirror.style[property] = style[property];
+  }
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.textContent = ta.value.slice(0, ta.selectionStart ?? ta.value.length);
+  const marker = doc.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.appendChild(marker);
+  doc.body.appendChild(mirror);
+  const top = marker.offsetTop - ta.scrollTop;
+  const lineHeight = marker.offsetHeight ||
+    Number.parseFloat(style.lineHeight) || 24;
+  mirror.remove();
+  return { top, lineHeight };
 }
 
 async function fetchFileOptions(
@@ -212,6 +263,9 @@ export const ComposerTextarea = forwardRef<
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
+  // Keyboard-highlighted picker row, as in Obsidian's suggestion list and the
+  // CM6 completion list this textarea hands off to.
+  const [selectedOption, setSelectedOption] = useState(0);
   // A fitted MUI textarea commonly reports scrollHeight one CSS pixel taller
   // than clientHeight due to line-height rounding. Promoting that residue to an
   // iOS scroll container makes UIKit keep a stale caret rect after Return. Only
@@ -226,12 +280,38 @@ export const ComposerTextarea = forwardRef<
   // the picker is open: on each keystroke (a multiline textarea grows, moving
   // its top) and on visualViewport resize (keyboard open/close, rotation).
   const [anchorTop, setAnchorTop] = useState(0);
+  // Expanded (fullscreen) canvases fill the screen, so "above the input" is
+  // under the status bar. There the list follows the caret line like
+  // Obsidian's suggest: below it when the lower half has room, else above.
+  const [caretPlacement, setCaretPlacement] = useState<
+    { side: "below" | "above"; offset: number; room: number } | null
+  >(null);
   const pickerOpen = Boolean(trigger) && options.length > 0;
+  useEffect(() => {
+    setSelectedOption(0);
+  }, [options]);
   useLayoutEffect(() => {
     if (!pickerOpen) return undefined;
     const measure = (): void => {
-      const r = inputRef.current?.getBoundingClientRect();
+      const ta = inputRef.current;
+      const r = ta?.getBoundingClientRect();
       if (r) setAnchorTop(r.top);
+      if (!ta || !r || !expanded) {
+        setCaretPlacement(null);
+        return;
+      }
+      const caret = nativeTextareaCaretTop(ta);
+      if (caret === null) {
+        setCaretPlacement(null);
+        return;
+      }
+      const lineBottom = caret.top + caret.lineHeight;
+      const roomBelow = r.height - lineBottom;
+      setCaretPlacement(
+        roomBelow >= Math.min(200, r.height / 2)
+          ? { side: "below", offset: lineBottom, room: roomBelow }
+          : { side: "above", offset: r.height - caret.top, room: caret.top },
+      );
     };
     measure();
     const vv = globalThis.visualViewport;
@@ -241,7 +321,7 @@ export const ComposerTextarea = forwardRef<
       vv?.removeEventListener("resize", measure);
       vv?.removeEventListener("scroll", measure);
     };
-  }, [pickerOpen, value]);
+  }, [pickerOpen, value, expanded]);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
@@ -425,17 +505,75 @@ export const ComposerTextarea = forwardRef<
     lastNativeValueRef.current = edit.value;
   };
 
+  // Assigning `textarea.value` discards the browser's undo stack, so the
+  // toolbar Undo could neither revert a formatting tap nor anything typed
+  // before it. Obsidian's commands are ordinary undoable edits; do the same by
+  // replacing only the changed span through the editing command, in the same
+  // gesture, then restore the edit's selection. Fall back to a value write if
+  // the engine refuses the command.
+  const writeUndoableNativeEdit = (
+    ta: HTMLTextAreaElement,
+    edit: NativeTextEdit,
+  ): void => {
+    const previous = ta.value;
+    let prefix = 0;
+    while (
+      prefix < previous.length && prefix < edit.value.length &&
+      previous[prefix] === edit.value[prefix]
+    ) prefix += 1;
+    let suffix = 0;
+    while (
+      suffix < previous.length - prefix &&
+      suffix < edit.value.length - prefix &&
+      previous[previous.length - 1 - suffix] ===
+        edit.value[edit.value.length - 1 - suffix]
+    ) suffix += 1;
+    const inserted = edit.value.slice(prefix, edit.value.length - suffix);
+    if (previous !== edit.value) {
+      lastNativeValueRef.current = edit.value;
+      ta.setSelectionRange(prefix, previous.length - suffix);
+      const doc = ta.ownerDocument;
+      const applied = inserted === ""
+        ? doc.execCommand("delete")
+        : doc.execCommand("insertText", false, inserted);
+      if (!applied || ta.value !== edit.value) ta.value = edit.value;
+    }
+    ta.setSelectionRange(edit.from, edit.to);
+    rememberSelection(ta);
+    lastNativeValueRef.current = edit.value;
+  };
+
   // Accessory buttons prevent pointer-down default, so the native textarea is
   // still UIKit's first responder when this runs. Commit literal Markdown and
   // its selection synchronously; a delayed selection write after React paints
   // is enough to reset an iPad keyboard/selection transaction.
   const applyTextEdit = (edit: NativeTextEdit): void => {
+    // Never write the textarea while the IME owns it (pitfalls #83/#84).
+    if (nativeImeOwns()) return;
     const ta = inputRef.current;
     ta?.focus();
-    if (ta) writeNativeEdit(ta, edit);
+    if (ta) writeUndoableNativeEdit(ta, edit);
     onChange(edit.value);
     setTrigger(null);
     if (ta) publishSelection(ta);
+  };
+
+  const applyMarkdownCommand = (command: MarkdownEditCommand): void => {
+    const ta = inputRef.current;
+    const current = ta?.value ?? value;
+    const selection = ta
+      ? (ta.ownerDocument.activeElement === ta
+        ? rememberSelection(ta)
+        : rememberedSelection(ta))
+      : { anchor: current.length, head: current.length };
+    const edit = command(current, selection);
+    if (!edit) return;
+    const { anchor, head } = edit.selection;
+    applyTextEdit({
+      value: applyMarkdownEdit(current, edit),
+      from: Math.min(anchor, head),
+      to: Math.max(anchor, head),
+    });
   };
 
   const sync = (v: string, caret: number): void =>
@@ -466,7 +604,7 @@ export const ComposerTextarea = forwardRef<
   // the textarea focused, so move the live native caret synchronously and do not
   // schedule a post-render selection write.
   const applyOption = (option: PickerOption): void => {
-    if (!trigger) return;
+    if (!trigger || nativeImeOwns()) return;
     const { apply } = option;
     const current = currentTextSelection();
     const end = trigger.from + 1 + trigger.query.length;
@@ -474,7 +612,7 @@ export const ComposerTextarea = forwardRef<
       current.value.slice(end);
     const pos = trigger.from + apply.length;
     const ta = inputRef.current;
-    if (ta) writeNativeEdit(ta, { value: next, from: pos, to: pos });
+    if (ta) writeUndoableNativeEdit(ta, { value: next, from: pos, to: pos });
     onChange(next);
     selectedSlashCommandRef.current = option.slashCommand ?? null;
     setTrigger(null);
@@ -515,7 +653,8 @@ export const ComposerTextarea = forwardRef<
       publishSelection(ta);
     },
     // The native touch textarea has no Vim state; Escape belongs to its host.
-    escapeBelongsToApp: (): boolean => true,
+    // No Vim here; only a visible `@`/`/` picker keeps Escape local.
+    escapeBelongsToApp: (): boolean => !pickerOpen,
     focusEnd: (): void => {
       const ta = inputRef.current;
       if (!ta) return;
@@ -541,18 +680,25 @@ export const ComposerTextarea = forwardRef<
       text: string,
       capturedSelection?: ComposerEditorSelection,
     ): void => {
-      if (text.length === 0) return;
+      const insert = normalizeClipboardText(text);
+      if (insert.length === 0) return;
       const ta = inputRef.current;
       const current = ta?.value ?? value;
       const anchor = capturedSelection?.anchor ??
         ta?.selectionStart ?? current.length;
       const head = capturedSelection?.head ??
         ta?.selectionEnd ?? anchor;
-      applyTextEdit(replaceNativeSelection(current, anchor, head, text));
+      applyTextEdit(replaceNativeSelection(current, anchor, head, insert));
     },
+    // Clearing runs after an asynchronous delivery acknowledgement, when the
+    // Mobile keyboard has already been released on purpose. Do not refocus.
     clear: (): void => {
       selectedSlashCommandRef.current = null;
-      applyTextEdit({ value: "", from: 0, to: 0 });
+      const ta = inputRef.current;
+      if (ta && ta.value !== "") writeNativeEdit(ta, { value: "", from: 0, to: 0 });
+      onChange("");
+      setTrigger(null);
+      if (ta) publishSelection(ta);
     },
     consumeSelectedSlashCommand: (): string | null => {
       const command = selectedSlashCommandRef.current;
@@ -632,63 +778,30 @@ export const ComposerTextarea = forwardRef<
         ),
       );
     },
+    // Same Obsidian command implementations as the CM6 engine
+    // (composer/markdownEditing.ts), applied as one undoable native edit.
     toggleWrap: (marker: string): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        toggleNativeWrap(current.value, current.from, current.to, marker),
-      );
+      const command = inlineFormatCommand(marker);
+      if (command) applyMarkdownCommand(command);
     },
-    indent: (): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        indentNativeLines(current.value, current.from, current.to),
-      );
-    },
-    outdent: (): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        outdentNativeLines(current.value, current.from, current.to),
-      );
-    },
+    indent: (): void =>
+      applyMarkdownCommand((doc, selection) =>
+        indentLines(doc, selection, NATIVE_INDENT_UNIT)
+      ),
+    outdent: (): void =>
+      applyMarkdownCommand((doc, selection) =>
+        outdentLines(doc, selection, NATIVE_INDENT_UNIT, 4)
+      ),
     toggleLinePrefix: (prefix: string): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        toggleNativeLinePrefix(current.value, current.from, current.to, prefix),
-      );
+      const command = linePrefixCommand(prefix);
+      if (command) applyMarkdownCommand(command);
     },
-    cycleHeading: (): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        cycleNativeHeading(current.value, current.from, current.to),
-      );
-    },
-    setHeading: (level: number): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        setNativeHeading(current.value, current.from, current.to, level),
-      );
-    },
-    toggleCheckbox: (): void => {
-      const current = currentTextSelection();
-      const edit = toggleNativeCheckbox(
-        current.value,
-        current.from,
-        current.to,
-      );
-      if (edit) applyTextEdit(edit);
-    },
-    insertLink: (): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        insertNativeLink(current.value, current.from, current.to),
-      );
-    },
-    insertCodeBlock: (): void => {
-      const current = currentTextSelection();
-      applyTextEdit(
-        insertNativeCodeBlock(current.value, current.from, current.to),
-      );
-    },
+    cycleHeading: (): void => applyMarkdownCommand(cycleHeading),
+    setHeading: (level: number): void =>
+      applyMarkdownCommand((doc, selection) => setHeading(doc, selection, level)),
+    toggleCheckbox: (): void => applyMarkdownCommand(toggleChecklist),
+    insertLink: (): void => applyMarkdownCommand(insertMarkdownLink),
+    insertCodeBlock: (): void => applyMarkdownCommand(insertCodeBlock),
     undo: (): void => {
       const ta = inputRef.current;
       if (!ta) return;
@@ -714,31 +827,40 @@ export const ComposerTextarea = forwardRef<
       elevation={6}
       sx={{
         position: "absolute",
-        bottom: "100%",
         left: 0,
         right: 0,
-        mb: 0.5,
+        ...(caretPlacement
+          ? {
+            ...(caretPlacement.side === "below"
+              ? { top: `${String(caretPlacement.offset + 4)}px` }
+              : { bottom: `${String(caretPlacement.offset + 4)}px` }),
+            maxHeight: `${String(Math.max(96, Math.min(caretPlacement.room - 8, 320)))}px`,
+          }
+          : { bottom: "100%", mb: 0.5 }),
         // Cap to the space ABOVE the input so the popup never overflows the top
         // of the screen and clips its first rows. `anchorTop` is the input's
         // distance from the (visual) viewport top; minus the safe-area inset +
         // a gap is exactly the room available. clamp keeps a usable floor and
         // never exceeds 40vh on a tall/keyboard-less screen. overflowY:auto then
         // makes every option reachable by scrolling within that bound.
-        maxHeight: anchorTop > 0
-          ? `clamp(120px, calc(${
-            String(anchorTop)
-          }px - var(--cowboy-system-top-clearance) - 12px), 40vh)`
-          : "40vh",
+        ...(!caretPlacement && {
+          maxHeight: anchorTop > 0
+            ? `clamp(120px, calc(${
+              String(anchorTop)
+            }px - var(--cowboy-system-top-clearance) - 12px), 40vh)`
+            : "40vh",
+        }),
         overflowY: "auto",
         borderRadius: 1.5,
         zIndex: 4,
         py: 0.5,
       }}
     >
-      {options.map((o) => (
+      {options.map((o, index) => (
         <Box
           key={o.apply}
           role="option"
+          aria-selected={index === selectedOption}
           // preventDefault on mousedown keeps the textarea focused (the keyboard
           // never drops); a plain Box isn't focusable so it can't steal focus.
           // Select on click so the list can still be scrolled by dragging.
@@ -756,6 +878,8 @@ export const ComposerTextarea = forwardRef<
             display: "flex",
             alignItems: "baseline",
             gap: 1,
+            // Return accepts this row, as in the CM6 list and Obsidian.
+            ...(index === selectedOption && { bgcolor: "action.selected" }),
             "&:active": { bgcolor: "action.selected" },
             "@media (hover: hover)": { "&:hover": { bgcolor: "action.hover" } },
           }}
@@ -827,10 +951,13 @@ export const ComposerTextarea = forwardRef<
             composingRef.current = true;
           }
           onChange(e.target.value);
-          sync(
-            e.target.value,
-            e.target.selectionStart ?? e.target.value.length,
-          );
+          // Marked text is not a query yet; compositionend syncs the result.
+          if (!composingRef.current) {
+            sync(
+              e.target.value,
+              e.target.selectionStart ?? e.target.value.length,
+            );
+          }
           rememberSelection(e.target as HTMLTextAreaElement);
         }}
         onCompositionStart={(e): void => {
@@ -855,17 +982,64 @@ export const ComposerTextarea = forwardRef<
         }}
         onSelect={(e): void => {
           const ta = e.target as HTMLTextAreaElement;
-          sync(ta.value, ta.selectionStart ?? ta.value.length);
+          // Like Obsidian, only typing opens the picker. Focus, a tap into an
+          // existing `@path`, or a long-press selection must not start a file
+          // query while UIKit prepares its edit menu; a moved caret may only
+          // narrow or close a picker that is already open.
+          if (trigger) {
+            const caret = ta.selectionStart ?? ta.value.length;
+            setTrigger(
+              caret === (ta.selectionEnd ?? caret)
+                ? computeTrigger(ta.value, caret)
+                : null,
+            );
+          }
           publishSelection(ta);
         }}
         onKeyDown={(e): void => {
-          if (isImeKeyEvent(e.nativeEvent)) return;
-          if (e.key === "Escape" && trigger) {
+          const native = e.nativeEvent;
+          // An idle CJK input source labels modified Enter as 229/Process
+          // (pitfall #96). Only a real composition owns those chords.
+          const chordEnter = !native.isComposing && !composingRef.current &&
+            (hasDraftMod(e) || hasSendMod(e)) &&
+            (e.code === "Enter" || e.code === "NumpadEnter");
+          if (isImeKeyEvent(native) && !chordEnter) return;
+          if (pickerOpen) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const step = e.key === "ArrowDown" ? 1 : -1;
+              setSelectedOption((current) =>
+                (current + step + options.length) % options.length
+              );
+              return;
+            }
+            if (
+              (e.key === "Enter" || e.key === "Tab") && !e.shiftKey &&
+              !hasDraftMod(e) && !hasSendMod(e)
+            ) {
+              const option = options[selectedOption] ?? options[0];
+              if (option) {
+                e.preventDefault();
+                applyOption(option);
+                return;
+              }
+            }
+          }
+          // Escape closes only a visible list; an empty or still-loading query
+          // must not swallow the surface's own Escape.
+          if (e.key === "Escape" && pickerOpen) {
             e.preventDefault();
             setTrigger(null);
             return;
           }
-          if (e.key === "Enter" && hasDraftMod(e) && onSaveDraft) {
+          if (trigger && e.key === "Escape") setTrigger(null);
+          if (chordEnter && hasDraftMod(e) && onSaveDraft) {
+            e.preventDefault();
+            onSaveDraft();
+          } else if (chordEnter && hasSendMod(e)) {
+            e.preventDefault();
+            onSubmit();
+          } else if (e.key === "Enter" && hasDraftMod(e) && onSaveDraft) {
             // ⌃⏎ / Alt+⏎ → draft (e.g. an iPad with an external keyboard).
             e.preventDefault();
             onSaveDraft();
@@ -887,7 +1061,9 @@ export const ComposerTextarea = forwardRef<
           }
         }}
         onPaste={(e): void => {
-          const files = clipboardFiles(e.clipboardData);
+          const files = pastedTextBeatsFiles(e.clipboardData)
+            ? []
+            : clipboardFiles(e.clipboardData);
           reportMobileNativePasteEvent({
             surface: "textarea",
             clipboard: e.clipboardData,
@@ -904,7 +1080,10 @@ export const ComposerTextarea = forwardRef<
           // user gesture can still read the web clipboard port. Native
           // shell never needs this: its accessory button uses the
           // pasteboard bridge, and UIKit paste already carries files.
-          if (!onPasteFiles) return;
+          if (!onPasteFiles || hasNativeClipboardBridge()) return;
+          // Readable text always pastes natively; never cancel it for a
+          // lazily provided image that may not materialize.
+          if (e.clipboardData?.getData("text/plain")) return;
           const types = e.clipboardData ? Array.from(e.clipboardData.types) : [];
           const looksLikeImage = types.some((type) =>
             type === "Files" || type.startsWith("image/")
@@ -959,6 +1138,8 @@ export const ComposerTextarea = forwardRef<
           fontSize: "1rem",
           fontWeight: "inherit",
           lineHeight: "var(--cowboy-reading-line-height, 1.5)",
+          // A tab is Obsidian's list indent; render it like CM6's tabSize.
+          tabSize: 4,
           overflowX: "hidden",
           overflowY: nativeScrollable ? "auto" : "hidden",
           caretColor: "primary.main",

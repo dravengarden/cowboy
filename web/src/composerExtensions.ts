@@ -7,11 +7,11 @@
 // composition — the "Obsidian feel" lives in the EDITING + selection extensions,
 // not just the decorations. We include everything it does EXCEPT items with a
 // strong reason to drop (noted at the bottom).
-import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { Highlight } from "./composerHighlight";
-import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { indentOnInput } from "@codemirror/language";
-import { indentWithTab } from "@codemirror/commands";
+import { closeBracketsKeymap } from "@codemirror/autocomplete";
+import { indentOnInput, indentUnit } from "@codemirror/language";
+import { obsidianMarkdownKeymap } from "./composer/markdownEditingCommands";
 import {
   EditorView,
   highlightActiveLine,
@@ -22,13 +22,20 @@ import { openExternalUrl } from "./openExternal";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,
-  autoCloseCodeFence,
-  extendEmphasisPair,
   inlinePreview,
 } from "./mdlive";
+import { obsidianAutoPair } from "./composer/obsidianAutoPair";
 // The engine's hide/reveal + layout CSS. Imported once here (this module is
 // pulled in by every surface), so a host never has to remember to add it.
 import "./mdlive/styles/inline-preview.css";
+
+// Obsidian sets `EditorView.EDIT_CONTEXT = false` before creating any editor.
+// @codemirror/view otherwise routes Android Chrome input through the
+// EditContext API, where composition events fire on the EditContext object
+// instead of the DOM. Cowboy's composition holds (the textarea↔CM6 host swap,
+// the soft-keyboard Backspace chain) listen on the DOM, so keep Android on the
+// same contenteditable input path as iOS and Obsidian. Global by design.
+(EditorView as unknown as { EDIT_CONTEXT?: boolean }).EDIT_CONTEXT = false;
 
 export interface LivePreviewOptions {
   /// Obsidian's Source mode: keep the markdown LITERAL — no inline
@@ -43,10 +50,10 @@ export interface LivePreviewOptions {
   onLinkClick?: (url: string) => void;
 }
 
-// Returns the live-preview + markdown-editing extensions, mirroring atomic-editor.
-// Append AFTER the host's own base extensions; the engine self-manages decoration
-// precedence (its Enter handler is `Prec.highest`, owning list continuation, then
-// falling through). `codeLanguages: []` = no embedded fenced-code grammars in v1.
+// Returns the live-preview + markdown-editing extensions. Append AFTER the
+// host's own base extensions: the host's Prec.high image-line Enter and
+// Backspace chain must run before Obsidian's list keymap here.
+// `codeLanguages: []` = no embedded fenced-code grammars in v1.
 export function livePreviewExtensions(
   opts: LivePreviewOptions = {},
 ): Extension[] {
@@ -68,14 +75,29 @@ export function livePreviewExtensions(
     // Do NOT re-add drawSelection / dropCursor / the composition dance.
     highlightActiveLine(),
     indentOnInput(),
-    // --- Obsidian-style bracket / emphasis / code-fence pairing ---
-    closeBrackets(),
-    extendEmphasisPair,
-    autoCloseCodeFence,
+    // --- Obsidian bracket / emphasis / code-fence pairing ---
+    // Obsidian ships its own closeBrackets fork for Markdown: same-character
+    // markers pair only between whitespace, tracked closers are stepped over,
+    // three backticks open a fence, and `= ~ $ %` wrap a selection. It replaces
+    // upstream closeBrackets() plus the vendored extendEmphasisPair and
+    // autoCloseCodeFence, which together turned typed `**bold**` into
+    // `**bold******`. See composer/obsidianAutoPair.ts and PITFALLS.md.
+    obsidianAutoPair,
     // --- markdown language + GFM (source of the engine's syntax tree) ---
     // `extensions: [Highlight]` teaches lezer `==text==` (composerHighlight.ts) —
     // GFM has no highlight rule. mdlive renders it via the node-class entries.
-    markdown({ base: markdownLanguage, codeLanguages: [], extensions: [Highlight] }),
+    // `addKeymap: false`: Obsidian's own Enter / Shift-Enter / Tab below replace
+    // lang-markdown's loose-list continuation and markup-aware Backspace.
+    // Obsidian deletes list markup one character at a time.
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: [],
+      extensions: [Highlight],
+      addKeymap: false,
+    }),
+    // Obsidian's default `useTab`: a tab nests `1.` items as well as bullets.
+    indentUnit.of("\t"),
+    // Read by closeBracketsKeymap's empty-pair Backspace only.
     markdownLanguage.data.of({
       closeBrackets: { brackets: ["(", "[", "{", "'", '"', "*", "_", "`"] },
     }),
@@ -87,7 +109,10 @@ export function livePreviewExtensions(
     // deletes one char, orphaning the closer), so wrap it Prec.high. (cowboy's
     // own Prec.high token-Backspace runs first but no-ops outside a token.)
     Prec.high(keymap.of(closeBracketsKeymap)),
-    keymap.of([...markdownKeymap, indentWithTab]),
+    // Obsidian's list Enter, Shift-Enter and quote-aware Tab / Shift-Tab, in
+    // live preview and Source mode alike. Prec.high but later than the
+    // composer's own Prec.high image-line Enter and Backspace chain.
+    obsidianMarkdownKeymap,
     // LIVE PREVIEW vs SOURCE MODE. Source mode leaves the whole decoration
     // engine OUT rather than suppressing it from the outside: mdlive has no
     // "off" switch, and a half-mounted decoration layer is exactly the kind of
@@ -96,15 +121,8 @@ export function livePreviewExtensions(
     // attachment widgets — is identical in both modes, so toggling can never
     // change the document.
     //
-    // The one behavioural difference is Enter. mdlive owns a Prec.highest
-    // tight-list continuation (inline-preview.ts `insertTightListItem`),
-    // which exists because loose and tight lists LOOK identical once rendered.
-    // With the engine out, @codemirror/lang-markdown's own
-    // `insertNewlineContinueMarkup` takes over — it still continues bullets,
-    // ordered items and tasks, and its loose-list blank line is the honest
-    // result on a surface where the blank lines are visible. Do not
-    // re-implement the tight variant here; that would fork vendored logic
-    // (mdlive/SYNC.md).
+    // Enter is identical in both modes, as in Obsidian: the mode only changes
+    // decorations. (mdlive's tight-list Enter was removed; see SYNC.md.)
     ...(opts.sourceMode
       ? [
         // Marks the editable for tests and for anything that needs to style

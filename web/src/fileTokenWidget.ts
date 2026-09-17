@@ -78,11 +78,24 @@ function buildChips(view: EditorView): DecorationSet {
 export const tokenChipPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    composingRebuildPending = false;
     constructor(view: EditorView) {
       this.decorations = buildChips(view);
     }
     update(u: ViewUpdate): void {
-      if (u.docChanged || u.selectionSet || u.viewportChanged) {
+      // Like Obsidian, never replace widgets under native marked text: pinyin
+      // typed right after a chip would otherwise be swallowed into the chip
+      // label mid-composition. Map now; rebuild once composition ends.
+      if (u.view.composing) {
+        if (u.docChanged) this.decorations = this.decorations.map(u.changes);
+        this.composingRebuildPending = true;
+        return;
+      }
+      if (
+        this.composingRebuildPending || u.docChanged || u.selectionSet ||
+        u.viewportChanged
+      ) {
+        this.composingRebuildPending = false;
         this.decorations = buildChips(u.view);
       }
     }
@@ -135,16 +148,51 @@ export function deleteTokenBackward(view: EditorView): boolean {
   return false;
 }
 
-// A line that is (just) a code fence: ``` / ~~~ (3+), optional indent + info.
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+// A code fence line: ``` / ~~~ (3+) with up to three spaces of indent.
+const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
 
-// Backspace that removes an EMPTY fenced code block as a unit. `autoCloseCodeFence`
-// turns a typed ``` into ```\n``` (an empty block, rendered as a dark bar); deleting
-// it char-by-char leaves an orphaned closing fence — the "往回删除还会留一小段"
-// leftover. When the caret sits at the END of the opening fence (or the START of the
-// closing fence) of an empty block, delete the whole block in one press. Returns
-// false otherwise, so normal Backspace / token-delete still run. Wire it in the
-// Backspace keymap alongside the token deleters.
+interface FenceLine {
+  role: "open" | "close";
+  /** Line number of the matching fence, or -1 for an unclosed opener. */
+  partner: number;
+  /** Whether an opener has no info string. */
+  bare: boolean;
+}
+
+// Pair fences from the top of the document, as CommonMark does: a closer uses
+// the opener's character, is at least as long, and has no info string.
+function fenceLines(doc: EditorView["state"]["doc"]): Map<number, FenceLine> {
+  const lines = new Map<number, FenceLine>();
+  let open: { line: number; marker: string } | null = null;
+  for (let n = 1; n <= doc.lines; n++) {
+    const match = FENCE_RE.exec(doc.line(n).text);
+    const marker = match?.[1];
+    if (!marker) continue;
+    const info = (match[2] ?? "").trim();
+    if (!open) {
+      open = { line: n, marker };
+      lines.set(n, { role: "open", partner: -1, bare: info === "" });
+    } else if (
+      info === "" && marker[0] === open.marker[0] &&
+      marker.length >= open.marker.length
+    ) {
+      const opener = lines.get(open.line);
+      if (opener) opener.partner = n;
+      lines.set(n, { role: "close", partner: open.line, bare: true });
+      open = null;
+    }
+  }
+  return lines;
+}
+
+// Backspace that removes an EMPTY fenced code block as a unit. Typing three
+// backticks auto-closes an empty block (rendered as a dark bar); deleting it
+// char-by-char leaves an orphaned closing fence. Only the exact empty pair is
+// removed: the caret at the END of a bare opening fence, or at the START of
+// its closing fence, with only blank lines between. A fence with an info
+// string, a closing fence followed by another block, or a block opener that
+// follows another block is ordinary text for Backspace — deleting it must
+// never merge two blocks or drop code.
 export function deleteEmptyCodeFenceBackward(view: EditorView): boolean {
   const { state } = view;
   const range = state.selection.main;
@@ -152,30 +200,23 @@ export function deleteEmptyCodeFenceBackward(view: EditorView): boolean {
   const { doc } = state;
   const caret = doc.lineAt(range.head);
   if (!FENCE_RE.test(caret.text)) return false;
+  const fence = fenceLines(doc).get(caret.number);
+  if (!fence || fence.partner < 0) return false;
 
   let openLn = -1;
   let closeLn = -1;
-  if (range.head === caret.to) {
-    // Caret at end of an OPENING fence → the block runs down to the next fence,
-    // with only blank lines (an empty body) between.
+  if (fence.role === "open" && fence.bare && range.head === caret.to) {
     openLn = caret.number;
-    for (let i = caret.number + 1; i <= doc.lines; i++) {
-      const t = doc.line(i).text;
-      if (FENCE_RE.test(t)) { closeLn = i; break; }
-      if (t.trim() !== "") return false; // real content → leave it alone
-    }
-  } else if (range.head === caret.from) {
-    // Caret at start of a CLOSING fence → the block runs up to the previous fence.
+    closeLn = fence.partner;
+  } else if (fence.role === "close" && range.head === caret.from) {
+    openLn = fence.partner;
     closeLn = caret.number;
-    for (let i = caret.number - 1; i >= 1; i--) {
-      const t = doc.line(i).text;
-      if (FENCE_RE.test(t)) { openLn = i; break; }
-      if (t.trim() !== "") return false;
-    }
   } else {
-    return false; // mid-fence (e.g. editing the info string) → don't touch
+    return false;
   }
-  if (openLn === -1 || closeLn === -1 || closeLn <= openLn) return false;
+  for (let i = openLn + 1; i < closeLn; i++) {
+    if (doc.line(i).text.trim() !== "") return false;
+  }
 
   const from = doc.line(openLn).from;
   const to = Math.min(doc.length, doc.line(closeLn).to + 1);

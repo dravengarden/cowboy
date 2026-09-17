@@ -32,6 +32,7 @@ import {
   obsidianSheetTransform,
 } from "./obsidianSheetMotion";
 import { useBackdropDismiss } from "./useBackdropDismiss";
+import { isImeKeyEvent } from "./imeKey";
 
 const Z = 1250;
 const PROJECTION_MS = 110;
@@ -298,7 +299,8 @@ export function ObsidianSheet({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") dismiss();
+      // Escape inside an IME transaction cancels the marked text, not the sheet.
+      if (e.key === "Escape" && !isImeKeyEvent(e)) dismiss();
     };
     globalThis.addEventListener("keydown", onKey);
     return () => globalThis.removeEventListener("keydown", onKey);

@@ -6,8 +6,6 @@
 import { ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import type { SyntaxNode } from '@lezer/common';
 import {
-  EditorSelection,
-  Prec,
   StateEffect,
   StateField,
   type Extension,
@@ -19,7 +17,6 @@ import {
   EditorView,
   ViewPlugin,
   WidgetType,
-  keymap,
   type DecorationSet,
   type ViewUpdate,
 } from '@codemirror/view';
@@ -805,12 +802,28 @@ function indexOfUnconsumed(
 const inlinePreviewPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    // LOCAL: set while native IME composition deferred a rebuild.
+    composingRebuildPending = false;
 
     constructor(view: EditorView) {
       this.decorations = buildInlineDecorations(view);
     }
 
     update(update: ViewUpdate) {
+      // LOCAL: Obsidian's live-preview plugin only maps its decorations while
+      // the view is composing and rebuilds after composition ends. Replacing
+      // decorations under marked text (e.g. a reveal/hide flip) moves the IME
+      // anchor and leaves latin fragments behind.
+      if (update.view.composing) {
+        if (update.docChanged) {
+          this.decorations = this.decorations.map(update.changes);
+        }
+        this.composingRebuildPending = true;
+        return;
+      }
+      const composingRebuild = this.composingRebuildPending;
+      this.composingRebuildPending = false;
+
       const prevFrozen = update.startState.field(previewFrozenField);
       const nextFrozen = update.state.field(previewFrozenField);
       const justUnfroze = prevFrozen && !nextFrozen;
@@ -824,7 +837,9 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(
       // heightmap ("No tile at position …" → broken scrollIntoView). The
       // freeze only needs to suppress the *selection*-driven reveal that
       // makes a click jitter; typing should reveal syntax as normal.
-      if (nextFrozen && !justUnfroze && !update.docChanged) return;
+      if (
+        nextFrozen && !justUnfroze && !update.docChanged && !composingRebuild
+      ) return;
 
       // Tree-growth effect: background parser advanced past where
       // we last walked. For docs large enough that the initial
@@ -851,6 +866,7 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(
       // single-digit ms for typical atoms.
       if (
         justUnfroze ||
+        composingRebuild ||
         update.docChanged ||
         update.selectionSet ||
         update.focusChanged ||
@@ -865,73 +881,10 @@ const inlinePreviewPlugin = ViewPlugin.fromClass(
   },
 );
 
-// Tight-continuation Enter for bullet lists.
-//
-// Why we override the default: @codemirror/lang-markdown's
-// `insertNewlineContinueMarkup` uses the syntax tree to decide whether a
-// list is "loose" (blank lines between items) and, if so, inserts a
-// blank line as part of the continuation. That inference bleeds in when
-// you start a new list adjacent to an existing one — lezer sees both as
-// siblings in a loose list, and the new item sprouts a blank line the
-// user didn't intend. In our inline-preview mode loose vs tight lists
-// look identical anyway, so we always continue tight.
-function insertTightListItem(view: EditorView): boolean {
-  const { state } = view;
-  const sel = state.selection.main;
-  if (!sel.empty) return false;
-  const from = sel.from;
-  const line = state.doc.lineAt(from);
-
-  const tree = syntaxTree(state);
-  let cursor = tree.resolveInner(from, -1).cursor();
-  let inBulletList = false;
-  for (;;) {
-    if (cursor.name === 'BulletList') {
-      inBulletList = true;
-      break;
-    }
-    if (!cursor.parent()) break;
-  }
-  if (!inBulletList) return false;
-
-  const lineText = state.doc.sliceString(line.from, line.to);
-  const prefix = lineText.match(/^(\s*)([-*+])(\s+)/);
-  if (!prefix) return false;
-
-  const [whole, indent, marker] = prefix;
-  const rest = lineText.slice(whole.length);
-
-  const taskMatch = rest.match(/^(\[[ xX]\])(\s*)/);
-  const taskPrefixLen = taskMatch ? taskMatch[0].length : 0;
-  const contentAfterPrefix = rest.slice(taskPrefixLen);
-
-  if (!contentAfterPrefix.trim()) {
-    const depth = Math.floor(indent.length / 2);
-    if (depth >= 1) {
-      const outerIndent = indent.slice(0, indent.length - 2);
-      const continuation = taskMatch ? `${marker} [ ] ` : `${marker} `;
-      const replacement = `${outerIndent}${continuation}`;
-      view.dispatch({
-        changes: { from: line.from, to: line.to, insert: replacement },
-        selection: EditorSelection.cursor(line.from + replacement.length),
-      });
-    } else {
-      view.dispatch({
-        changes: { from: line.from, to: line.to, insert: '' },
-        selection: EditorSelection.cursor(line.from),
-      });
-    }
-    return true;
-  }
-
-  const continuation = taskMatch ? `${marker} [ ] ` : `${marker} `;
-  const insert = `\n${indent}${continuation}`;
-  view.dispatch({
-    changes: { from, to: from, insert },
-    selection: EditorSelection.cursor(from + insert.length),
-  });
-  return true;
-}
+// LOCAL: upstream's Prec.highest tight-list Enter (`insertTightListItem`)
+// is removed. Cowboy's composer uses Obsidian's list Enter in both live preview
+// and Source mode (web/src/composer/markdownEditing.ts); the upstream version
+// duplicated the marker when Enter was pressed at the start of an item.
 
 function makeLinkClickHandler(onLinkClick: (url: string) => void): Extension {
   return EditorView.domEventHandlers({
@@ -977,10 +930,5 @@ export function inlinePreview(config: InlinePreviewConfig = {}): Extension {
     freezeMousePlugin,
     treeProgressPlugin,
     makeLinkClickHandler(onLinkClick),
-    // Prec.highest to beat @codemirror/lang-markdown's own Enter
-    // handler, which is registered internally by the `markdown()`
-    // extension (not just via the exported markdownKeymap) and
-    // otherwise wins precedence.
-    Prec.highest(keymap.of([{ key: 'Enter', run: insertTightListItem }])),
   ];
 }

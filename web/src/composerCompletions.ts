@@ -60,18 +60,28 @@ export function fileCompletionSource(
 // when the slash token starts at the very beginning of the input. Options come
 // from the agent-advertised `availableCommands` (read fresh via the thunk so a
 // late `available_commands_update` is reflected). (Plan Step 9.)
+//
+// Like Obsidian's slash suggest, a second `/` ends the query: `/tmp/x` is a
+// path. Matching is the same case-insensitive substring filter as the native
+// touch picker, so both engines offer the same commands for the same text;
+// CM6's fuzzy filter used to offer `/test-mcp-plugin` for a typed `/tmp`.
 export function slashCompletionSource(
   commands: () => AvailableCommand[],
   onSelect?: (command: string) => void,
 ): (context: CompletionContext) => CompletionResult | null {
   return (context: CompletionContext): CompletionResult | null => {
-    const match = context.matchBefore(/^\/\S*/);
+    const match = context.matchBefore(/^\/[^\s/]*/);
     if (!match || match.from !== 0) return null;
-    const cmds = commands();
+    if (context.state.sliceDoc(match.to, match.to + 1) === "/") return null;
+    const query = match.text.slice(1).toLowerCase();
+    const cmds = commands().filter((c) =>
+      c.name.toLowerCase().includes(query)
+    );
     if (cmds.length === 0) return null;
     return {
       from: match.from,
       to: match.to,
+      filter: false,
       options: cmds.map((c) => ({
         label: `/${c.name}`,
         detail: c.description,

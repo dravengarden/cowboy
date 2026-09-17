@@ -105,6 +105,22 @@ re-syncable. As of the `eba2066` vendoring, the local edits are:
    Pencil must remain entirely native so CM state updates cannot cancel iOS's
    long-press Paste/Select menu.
 
+8. **No decoration rebuild during composition** (`inline-preview.ts`,
+   `inlinePreviewPlugin.update`): while `view.composing`, map the existing
+   decorations through the change and rebuild once composition ends. This is
+   Obsidian's live-preview behavior; replacing decorations under marked text
+   moves the IME anchor (PITFALLS #109). Re-apply on every sync.
+
+9. **Tight-list Enter removed** (`inline-preview.ts`): upstream's
+   `Prec.highest` `insertTightListItem` keymap and function are deleted.
+   Cowboy binds Obsidian's list Enter in both live preview and Source mode
+   (`web/src/composer/markdownEditing.ts`); upstream duplicated the marker when
+   Enter was pressed at the start of an item. Do not re-add it on sync.
+
+`edit-helpers.ts` is kept verbatim but no longer wired: Cowboy uses
+`web/src/composer/obsidianAutoPair.ts` instead of `extendEmphasisPair` and
+`autoCloseCodeFence` (PITFALLS #109).
+
 The CSS contents are unmodified.
 
 ## Sync workflow (run this to port an upstream fix)

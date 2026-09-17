@@ -15,24 +15,26 @@ import {
 } from "@codemirror/view";
 import { type Extension, Prec } from "@codemirror/state";
 import {
+  acceptCompletion,
   autocompletion,
+  closeCompletion,
   completionKeymap,
+  completionStatus,
   startCompletion,
 } from "@codemirror/autocomplete";
 import {
   defaultKeymap,
   history,
   historyKeymap,
-  indentLess,
-  indentMore,
   redo,
   undo,
 } from "@codemirror/commands";
+import { indentUnit } from "@codemirror/language";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { useComposerSourceMode } from "./composerSourceMode";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { isImeKeyEvent, isImeProtectedInput } from "./imeKey";
+import { isImeProtectedInput } from "./imeKey";
 import {
   deleteEmptyCodeFenceBackward,
   deleteTokenBackward,
@@ -67,6 +69,30 @@ import { mobileEmptyLineCaretRepair } from "./composer/mobileEmptyLineCaret";
 import { mobileLineBreakCaretTelemetry } from "./composer/mobileLineBreakCaretTelemetry";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { composerInputDebugExtension } from "./composer/composerInputDebug";
+import {
+  markdownLinkForPastedUrl,
+  normalizeClipboardText,
+  pastedTextBeatsFiles,
+} from "./composer/clipboardPastePolicy";
+import { iosLineStartDashRepair } from "./composer/obsidianAutoPair";
+import { readWebClipboard } from "./composer/webClipboard";
+import { hasNativeClipboardBridge } from "./composer/clipboardPort";
+import { isAppleTouchDevice } from "./keyboardGeometry";
+import {
+  cycleHeading,
+  indentLines,
+  insertCodeBlock,
+  insertMarkdownLink,
+  outdentLines,
+  setHeading,
+  toggleChecklist,
+} from "./composer/markdownEditing";
+import {
+  inlineFormatCommand,
+  linePrefixCommand,
+  type MarkdownEditCommand,
+  runMarkdownEdit,
+} from "./composer/markdownEditingCommands";
 
 export interface ComposerEditorSelection {
   anchor: number;
@@ -86,7 +112,8 @@ export interface ComposerEditorHandle {
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
   focusSelection: (selection: ComposerEditorSelection) => void;
-  /** Whether the current editor mode may delegate Escape to Cowboy chrome. */
+  /** Whether Escape may go to Cowboy chrome: no visible picker, and (with Vim)
+   * plain Normal mode. */
   escapeBelongsToApp: () => boolean;
   // Focus AND place the caret at the very end of the document — used when
   // opening an existing draft/queued message for editing, so you continue from
@@ -125,34 +152,40 @@ export interface ComposerEditorHandle {
   // Typed `/`, `/dir`, and paths deliberately have no command intent.
   consumeSelectedSlashCommand: () => string | null;
   // Markdown toolbar actions (the fullscreen keyboard toolbar). Both editor
-  // engines transform the same literal Markdown document: CM6 dispatches a
-  // transaction, while the native touch textarea preserves its UIKit selection.
+  // engines apply the same Obsidian command implementations
+  // (composer/markdownEditing.ts): CM6 dispatches one transaction, while the
+  // native touch textarea applies one undoable edit and keeps UIKit selection.
   /// Wrap the selection (or insert the marker pair at the caret) — bold `**`,
   /// italic `*`, inline code `` ` ``.
   wrap: (before: string, after: string) => void;
-  /// Toggle a symmetric inline marker on the selection (Obsidian "Toggle bold"):
-  /// strip the marker if the selection is already wrapped in it, else wrap. Used
-  /// for bold `**`, italic `*`, strikethrough `~~`, highlight `==`, code `` ` ``.
+  /// Obsidian's formatting toggle for the marker's format — bold `**`, italic
+  /// `*`, strikethrough `~~`, highlight `==`, code `` ` ``, math `$`, comment
+  /// `%%`: wraps the word at a caret, removes an enclosing span, or steps over
+  /// the closing marker.
   toggleWrap: (marker: string) => void;
-  /// Indent / outdent the current line(s) — list nesting (CM6 indentMore/Less).
+  /// Obsidian's quote-aware indent / outdent of every selected line.
   indent: () => void;
   outdent: () => void;
-  /// Toggle a line-start prefix on the caret's line — list `- `, quote `> `.
+  /// Obsidian's list/quote toggle for `- `, `1. `, `- [ ] ` or `> ` on every
+  /// selected line (converting between list kinds).
   toggleLinePrefix: (prefix: string) => void;
-  /// Cycle the caret line's heading level: none → `# ` → `## ` → `### ` → none.
+  /// Cycle the heading level of the selected lines: none → 1 → 2 → 3 → none.
   cycleHeading: () => void;
-  /// Set the caret line's heading to an exact level (1–6); `0` removes the
-  /// heading. Drives the Obsidian-style "Set as heading N" / "Remove heading".
+  /// Set the selected lines' heading to an exact level (1–6); `0` removes it.
   setHeading: (level: number) => void;
-  /// Flip the caret line's task checkbox `[ ]` ↔ `[x]` (no-op off a task line).
+  /// Obsidian's checklist status cycle: plain/list → `[ ]` → `[x]` → `[ ]`.
   toggleCheckbox: () => void;
-  /// Insert a `[selection](url)` link with `url` pre-selected for typing.
+  /// Obsidian's link insert: `[|]()`, or `[selection](|)`.
   insertLink: () => void;
-  /// Wrap the selection (or the caret) in a fenced ``` code block.
+  /// Wrap the selected lines in a fenced ``` code block.
   insertCodeBlock: () => void;
   /// Undo / redo (the toolbar's history buttons).
   undo: () => void;
   redo: () => void;
+}
+
+function completionListVisible(view: EditorView): boolean {
+  return view.dom.querySelector(".cm-tooltip-autocomplete") !== null;
 }
 
 function revealFocusedSelection(view: EditorView): void {
@@ -432,6 +465,16 @@ export const ComposerEditor = forwardRef<
     [],
   );
 
+  const runViewCommand = (
+    command: MarkdownEditCommand,
+    userEvent?: string,
+  ): void => {
+    const view = cmRef.current?.view;
+    if (!view) return;
+    runMarkdownEdit(view, command, userEvent);
+    view.focus();
+  };
+
   useImperativeHandle(ref, () => ({
     focus: (): void => cmRef.current?.view?.focus(),
     hasFocus: (): boolean => cmRef.current?.view?.hasFocus ?? false,
@@ -462,6 +505,9 @@ export const ComposerEditor = forwardRef<
     },
     escapeBelongsToApp: (): boolean => {
       const view = cmRef.current?.view;
+      // A visible completion list owns Escape first, as Obsidian's suggest
+      // does; a surrounding capture must not open its discard dialog.
+      if (view && completionListVisible(view)) return false;
       const state = view
         ? vimApiRef.current?.getCM(view)?.state?.vim
         : undefined;
@@ -490,17 +536,22 @@ export const ComposerEditor = forwardRef<
       capturedSelection?: ComposerEditorSelection,
     ): void => {
       const view = cmRef.current?.view;
-      if (!view || text.length === 0) return;
+      // CM6 splits "\r\n" into one line break, so a raw CRLF length would put
+      // the caret past the inserted text (or past the document end, throwing).
+      const insert = normalizeClipboardText(text);
+      if (!view || insert.length === 0) return;
       const selection = capturedSelection ?? view.state.selection.main;
       const clamp = (position: number): number =>
         Math.max(0, Math.min(position, view.state.doc.length));
       const from = Math.min(clamp(selection.anchor), clamp(selection.head));
       const to = Math.max(clamp(selection.anchor), clamp(selection.head));
-      const caret = from + text.length;
+      const caret = from + insert.length;
       view.dispatch({
-        changes: { from, to, insert: text },
+        changes: { from, to, insert },
         selection: { anchor: caret },
         scrollIntoView: true,
+        // Never join a paste with adjacent typing in one undo step.
+        userEvent: "input.paste",
       });
       view.focus();
     },
@@ -527,6 +578,7 @@ export const ComposerEditor = forwardRef<
         changes: { from: edit.from, to: edit.to, insert: edit.insert },
         selection: { anchor: edit.caret },
         scrollIntoView: true,
+        userEvent: "input.paste",
       });
       view.focus();
     },
@@ -581,155 +633,42 @@ export const ComposerEditor = forwardRef<
       });
       view.focus();
     },
+    // Toolbar Markdown commands share Obsidian's pure implementations with
+    // the native touch textarea (composer/markdownEditing.ts), so both engines
+    // produce the same document for the same tap.
     toggleWrap: (marker: string): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const { from, to } = view.state.selection.main;
-      const m = marker.length;
-      const sel = view.state.sliceDoc(from, to);
-      // Already-wrapped, two ways: the selection itself is `**text**`, OR the
-      // markers sit just OUTSIDE the selection (the user selected only the inner
-      // text). Strip whichever applies; else wrap. Obsidian's "Toggle bold".
-      if (sel.length >= 2 * m && sel.startsWith(marker) && sel.endsWith(marker)) {
-        const inner = sel.slice(m, sel.length - m);
-        view.dispatch({
-          changes: { from, to, insert: inner },
-          selection: { anchor: from, head: from + inner.length },
-        });
-        view.focus();
-        return;
-      }
-      const outerFrom = from - m;
-      const outerTo = to + m;
-      if (
-        outerFrom >= 0 && outerTo <= view.state.doc.length &&
-        view.state.sliceDoc(outerFrom, from) === marker &&
-        view.state.sliceDoc(to, outerTo) === marker
-      ) {
-        view.dispatch({
-          changes: [
-            { from: outerFrom, to: from, insert: "" },
-            { from: to, to: outerTo, insert: "" },
-          ],
-          selection: { anchor: outerFrom, head: outerFrom + sel.length },
-        });
-        view.focus();
-        return;
-      }
-      view.dispatch({
-        changes: { from, to, insert: marker + sel + marker },
-        selection: from === to
-          ? { anchor: from + m }
-          : { anchor: from + m, head: from + m + sel.length },
-      });
-      view.focus();
+      const command = inlineFormatCommand(marker);
+      if (command) runViewCommand(command);
     },
     indent: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      indentMore(view);
-      view.focus();
+      runViewCommand((doc, selection) =>
+        indentLines(doc, selection, view.state.facet(indentUnit))
+      , "input.indent");
     },
     outdent: (): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      indentLess(view);
-      view.focus();
+      runViewCommand((doc, selection) =>
+        outdentLines(
+          doc,
+          selection,
+          view.state.facet(indentUnit),
+          view.state.tabSize,
+        )
+      , "delete.dedent");
     },
     toggleLinePrefix: (prefix: string): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const head = view.state.selection.main.head;
-      const line = view.state.doc.lineAt(head);
-      const has = line.text.startsWith(prefix);
-      // Move the caret WITH the marker so you keep typing the line's content
-      // after it (without this, inserting `> `/`- ` left the caret before the
-      // marker — "光标跑到 > 前面").
-      view.dispatch(
-        has
-          ? {
-            changes: { from: line.from, to: line.from + prefix.length, insert: "" },
-            selection: { anchor: Math.max(line.from, head - prefix.length) },
-          }
-          : {
-            changes: { from: line.from, insert: prefix },
-            selection: { anchor: head + prefix.length },
-          },
-      );
-      view.focus();
+      const command = linePrefixCommand(prefix);
+      if (command) runViewCommand(command);
     },
-    cycleHeading: (): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const head = view.state.selection.main.head;
-      const line = view.state.doc.lineAt(head);
-      const m = /^(#{1,6})\s/.exec(line.text);
-      const level = m?.[1]?.length ?? 0;
-      const next = level >= 3 ? 0 : level + 1; // none → # → ## → ### → none
-      const stripLen = m?.[0]?.length ?? 0;
-      const insert = next === 0 ? "" : `${"#".repeat(next)} `;
-      // Shift the caret by the marker's length change so it stays with the text.
-      view.dispatch({
-        changes: { from: line.from, to: line.from + stripLen, insert },
-        selection: { anchor: Math.max(line.from, head + insert.length - stripLen) },
-      });
-      view.focus();
-    },
-    setHeading: (level: number): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const head = view.state.selection.main.head;
-      const line = view.state.doc.lineAt(head);
-      const m = /^(#{1,6})\s/.exec(line.text);
-      const stripLen = m?.[0]?.length ?? 0;
-      // 0 (or out of range low) → strip to plain text; otherwise set exactly
-      // `level` hashes, clamped to the GFM max of 6.
-      const insert = level <= 0 ? "" : `${"#".repeat(Math.min(level, 6))} `;
-      view.dispatch({
-        changes: { from: line.from, to: line.from + stripLen, insert },
-        selection: { anchor: Math.max(line.from, head + insert.length - stripLen) },
-      });
-      view.focus();
-    },
-    toggleCheckbox: (): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const head = view.state.selection.main.head;
-      const line = view.state.doc.lineAt(head);
-      // Flip the checkbox state in place; do nothing if the line isn't a task.
-      const m = /^(\s*[-*+]\s+)\[([ xX])\]/.exec(line.text);
-      if (m?.[1] === undefined || m[2] === undefined) return;
-      const boxAt = line.from + m[1].length + 1; // the char inside the brackets
-      const checked = m[2] !== " ";
-      view.dispatch({
-        changes: { from: boxAt, to: boxAt + 1, insert: checked ? " " : "x" },
-      });
-      view.focus();
-    },
-    insertLink: (): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const { from, to } = view.state.selection.main;
-      const label = view.state.sliceDoc(from, to) || "text";
-      const md = `[${label}](url)`;
-      const urlAt = from + 1 + label.length + 2; // past "](" → start of "url"
-      view.dispatch({
-        changes: { from, to, insert: md },
-        selection: { anchor: urlAt, head: urlAt + 3 }, // select "url" to overtype
-      });
-      view.focus();
-    },
-    insertCodeBlock: (): void => {
-      const view = cmRef.current?.view;
-      if (!view) return;
-      const { from, to } = view.state.selection.main;
-      const sel = view.state.sliceDoc(from, to);
-      view.dispatch({
-        changes: { from, to, insert: `\`\`\`\n${sel}\n\`\`\`` },
-        selection: { anchor: from + 4 + sel.length }, // end of the content line
-      });
-      view.focus();
-    },
+    cycleHeading: (): void => runViewCommand(cycleHeading),
+    setHeading: (level: number): void =>
+      runViewCommand((doc, selection) => setHeading(doc, selection, level)),
+    toggleCheckbox: (): void => runViewCommand(toggleChecklist),
+    insertLink: (): void => runViewCommand(insertMarkdownLink),
+    insertCodeBlock: (): void => runViewCommand(insertCodeBlock),
     undo: (): void => {
       const view = cmRef.current?.view;
       if (view) {
@@ -786,21 +725,58 @@ export const ComposerEditor = forwardRef<
           globalThis.requestAnimationFrame(() => revealFocusedSelection(view));
           return false;
         },
-        paste: (event): boolean => {
+        // Obsidian's paste order: rich text (unless its HTML is only the copied
+        // picture) → a URL over a selection becomes a Markdown link → files →
+        // plain text.
+        paste: (event, view): boolean => {
           const cb = event.clipboardData;
           if (!cb) return false;
-          const files = clipboardFiles(cb);
+          const text = cb.getData("text/plain") || cb.getData("text/uri-list");
+          const files = pastedTextBeatsFiles(cb) ? [] : clipboardFiles(cb);
+          const consumesFiles = files.length > 0 && !!onPasteFilesRef.current;
           if (touchInput) {
             reportMobileNativePasteEvent({
               surface: "cm6",
               clipboard: cb,
               fileCount: files.length,
-              consumed: files.length > 0 && !!onPasteFilesRef.current,
+              consumed: consumesFiles,
             });
           }
-          if (files.length === 0 || !onPasteFilesRef.current) return false;
+          const main = view.state.selection.main;
+          const link = files.length === 0 && !view.composing
+            ? markdownLinkForPastedUrl(
+              view.state.sliceDoc(main.from, main.to),
+              text,
+            )
+            : null;
+          if (link !== null) {
+            event.preventDefault();
+            view.dispatch({
+              changes: { from: main.from, to: main.to, insert: link },
+              selection: { anchor: main.from + link.length },
+              scrollIntoView: true,
+              userEvent: "input.paste",
+            });
+            return true;
+          }
+          if (consumesFiles) {
+            event.preventDefault();
+            onPasteFilesRef.current?.(files);
+            return true;
+          }
+          if (text !== "" || files.length > 0) return false;
+          // CM6's stock paste replaces the selection with the empty string
+          // when a payload carries nothing readable (an iOS keyboard-shelf
+          // photo often arrives as an empty DataTransfer). Keep the selection;
+          // a touch browser/PWA may still read an image from the same gesture,
+          // as the native textarea does. The native shell has its own bridge.
           event.preventDefault();
-          onPasteFilesRef.current(files);
+          const onPasteFiles = onPasteFilesRef.current;
+          if (touchInput && onPasteFiles && !hasNativeClipboardBridge()) {
+            void readWebClipboard().then((contents) => {
+              if (contents.files.length > 0) onPasteFiles(contents.files);
+            });
+          }
           return true;
         },
         // Desktop file drop takes the paste path at the drop point. CM6's
@@ -845,6 +821,54 @@ export const ComposerEditor = forwardRef<
         ? [mobileEmptyLineCaretRepair, mobileLineBreakCaretTelemetry]
         : []),
       composerInputDebugExtension(touchInput ? "mobile" : "desktop"),
+      // CM6 defaults the editable to spellcheck/autocorrect/autocapitalize
+      // off. Obsidian turns all three on, and the touch composer's native
+      // textarea has them on by default, so promoting a message to CM6 used to
+      // silently drop QuickType, autocapitalization and double-space period
+      // mid-message. Constant for the editor lifetime: changing attributes
+      // later is a reconfigure, which must never span native composition.
+      // Desktop keeps OS autocorrect off (WKWebView honors it, unlike
+      // Obsidian's Electron) so paths and commands are never rewritten.
+      EditorView.contentAttributes.of(
+        touchInput
+          ? { spellcheck: "true", autocorrect: "on", autocapitalize: "on" }
+          : { spellcheck: "true" },
+      ),
+      ...(touchInput && isAppleTouchDevice(globalThis.navigator ?? {})
+        ? [iosLineStartDashRepair]
+        : []),
+      // Obsidian's EditorSuggest owns Enter/Tab/arrows for as long as its list
+      // is on screen. CM6 keeps a stale list visible but disabled while an
+      // async `@file` query refreshes, and completionKeymap then lets Enter
+      // fall through to a newline (or ArrowDown move the caret). Tab accepts,
+      // as it does in Obsidian's link suggest, instead of leaving the editor.
+      Prec.highest(keymap.of([
+        ...["Enter", "ArrowUp", "ArrowDown"].map((key) => ({
+          key,
+          run: (view: EditorView): boolean =>
+            completionStatus(view.state) === "pending" &&
+            completionListVisible(view),
+        })),
+        {
+          key: "Tab",
+          run: (view: EditorView): boolean =>
+            acceptCompletion(view) ||
+            (completionStatus(view.state) === "pending" &&
+              completionListVisible(view)),
+        },
+        {
+          // Escape closes a visible list only. A pending or fully filtered
+          // query has nothing on screen, so close it silently and let the
+          // same Escape reach Cowboy's surface (collapse, discard, stop).
+          key: "Escape",
+          run: (view: EditorView): boolean => {
+            if (completionStatus(view.state) === null) return false;
+            const visible = completionListVisible(view);
+            closeCompletion(view);
+            return visible;
+          },
+        },
+      ])),
       autocompletion({
         override: [
           fileCompletionSource(sessionId),
@@ -868,9 +892,20 @@ export const ComposerEditor = forwardRef<
       //   ⌃⏎ / Alt+⏎ (draft chord): save the current text as a draft.
       Prec.highest(
         EditorView.domEventHandlers({
-          keydown: (e): boolean => {
+          keydown: (e, view): boolean => {
+            // CM6 already withholds key events during composition (and for
+            // Safari's post-compositionend Enter), so like Obsidian this
+            // handler only checks the live composition state. An idle macOS
+            // CJK input source still labels a physical ⌘⏎ as keyCode 229 /
+            // `Process` (pitfall #96); that is a chord, not IME input, and
+            // treating it as IME fell through to defaultKeymap's Mod-Enter
+            // blank line instead of sending.
+            const enter = e.key === "Enter" ||
+              ((e.key === "Process" || e.keyCode === 229) &&
+                (e.code === "Enter" || e.code === "NumpadEnter") &&
+                (hasDraftMod(e) || hasSendMod(e)));
             if (
-              e.key !== "Enter" || e.shiftKey || isImeKeyEvent(e)
+              !enter || e.shiftKey || e.isComposing || view.composing
             ) return false;
             if (hasDraftMod(e)) {
               e.preventDefault();

@@ -73,12 +73,11 @@ Deno.test("source mode omits the live-preview engine, keeping every other extens
   // Everything below lives OUTSIDE the branch, i.e. in both modes.
   for (
     const shared of [
-      "markdown({ base: markdownLanguage",
+      "markdown({",
       "atomicMarkdownSyntax",
       "atomicEditorTheme",
-      "closeBrackets()",
-      "extendEmphasisPair",
-      "autoCloseCodeFence",
+      "obsidianAutoPair",
+      "obsidianMarkdownKeymap",
       "highlightActiveLine()",
       "EditorView.lineWrapping",
     ]

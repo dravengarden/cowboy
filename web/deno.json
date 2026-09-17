@@ -20,6 +20,6 @@
     "preview": "node node_modules/.bin/vite preview",
     "typecheck": "node node_modules/.bin/tsc --noEmit",
     "lint": "node_modules/.bin/oxlint --ignore-pattern public/wasm_exec.js",
-    "test": "deno test --no-check --sloppy-imports --allow-read --allow-env=NODE_ENV src/"
+    "test": "deno test --no-check --sloppy-imports --allow-read --allow-env=NODE_ENV,LOG src/"
   }
 }
