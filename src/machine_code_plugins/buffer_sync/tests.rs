@@ -337,6 +337,41 @@ async fn a_new_connection_never_adopts_an_old_operation_even_on_the_same_site() 
 }
 
 #[tokio::test]
+async fn ordinary_buffer_requests_expire_only_inert_synchronization_fences() {
+    let fixture = Fixture::new("sync-ok").await;
+    let id = fixture.prepare().await.operation;
+    let entry = fixture.host.buffer_sync.registry.lock().active[&id].clone();
+    entry.lock().await.until = Some(Instant::now());
+    fixture.release().await.unwrap();
+    assert!(!fixture.home.join("sync-applies").exists());
+    assert_eq!(fixture.host.live_generation_count().await, 0);
+    assert_eq!(
+        fixture
+            .act(Action::Query { operation: id })
+            .await
+            .unwrap()
+            .state,
+        State::Retired {}
+    );
+
+    let fixture = Fixture::new("sync-lost").await;
+    let id = fixture.prepare().await.operation;
+    assert!(
+        fixture
+            .act(Action::Apply {
+                operation: id.clone()
+            })
+            .await
+            .is_err()
+    );
+    // Even an erroneously elapsed clock field cannot expire a possible effect.
+    let entry = fixture.host.buffer_sync.registry.lock().active[&id].clone();
+    entry.lock().await.until = Some(Instant::now());
+    assert!(fixture.release().await.is_err());
+    assert_eq!(fixture.count("sync-applies"), 1);
+}
+
+#[tokio::test]
 async fn only_inert_preparations_expire_and_original_ids_never_reopen_paths() {
     let fixture = Fixture::new("sync-ok").await;
     let id = fixture.prepare().await.operation;

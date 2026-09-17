@@ -1,6 +1,7 @@
 //! Byte-preserving relay: hold an actual correlated reply, never synthesize it.
 use super::*;
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Notify, watch};
 
 #[derive(Clone, Default, Serialize)]
@@ -10,6 +11,7 @@ pub(super) struct Counts {
     pub commands: BTreeMap<String, u32>,
     pub replies: u32,
     pub held_replies: u32,
+    pub discarded_replies: u32,
     pub cuts: u32,
 }
 
@@ -18,6 +20,7 @@ pub(super) struct Gate {
     reached: Arc<Notify>,
     resume: Arc<Notify>,
     budget: Duration,
+    discarded: Arc<AtomicBool>,
 }
 impl Gate {
     pub async fn held(&self) -> Result<(), Failure> {
@@ -27,6 +30,10 @@ impl Gate {
     }
     pub fn release(&self) {
         self.resume.notify_one();
+    }
+    pub fn discard(&self) {
+        self.discarded.store(true, Ordering::Release);
+        self.release();
     }
 }
 
@@ -130,6 +137,12 @@ impl Proxy {
                                 observed.lock().failure = Some(Failure::Timeout);
                                 break;
                             }
+                            if gate.discarded.load(Ordering::Acquire) {
+                                // Drop only this actual correlated reply. Never
+                                // manufacture failure/success or shorten a timeout.
+                                observed.lock().counts.discarded_replies += 1;
+                                continue;
+                            }
                         }
                         Ok(None) => {}
                     }
@@ -171,12 +184,15 @@ impl Proxy {
                     "readBufferLease",
                     "releaseBufferLease",
                     "installationStep",
+                    "codeSyncApply",
+                    "codeSyncRetire",
                 ]
                 .contains(&kind),
         )?;
         let gate = Gate {
             reached: Arc::default(),
             resume: Arc::default(),
+            discarded: Arc::default(),
             // Installation includes two signed executable probes and a native
             // readiness probe; it has the product's original 90-second budget.
             // The shorter ordinary read deadline is not an install deadline.
@@ -236,6 +252,21 @@ fn inspect(
 
 fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Failure> {
     match command {
+        MachineCommand::CodeBufferSync {
+            request_id,
+            request,
+        } => {
+            use crate::machine_protocol::code_buffer_sync::Action;
+            request.validate().map_err(|_| Failure::WrongObservation)?;
+            check(request.service_id == SERVICE && request.machine_id == MACHINE)?;
+            let kind = match request.action {
+                Action::Prepare { .. } => "codeSyncPrepare",
+                Action::Apply { .. } => "codeSyncApply",
+                Action::Query { .. } => "codeSyncQuery",
+                Action::Retire { .. } => "codeSyncRetire",
+            };
+            record.command(request_id, kind)
+        }
         MachineCommand::RefreshInventory { .. } => Ok(()),
         MachineCommand::ObservePluginInstallation { request_id, query } => {
             check(
@@ -324,8 +355,8 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
                 && hello.machine_id == MACHINE
                 && hello.challenge_signature.is_some()
                 && hello.encryption_public_key.is_some()
-                && hello.min_protocol <= 19
-                && hello.max_protocol >= 19 =>
+                && hello.min_protocol <= 20
+                && hello.max_protocol >= 20 =>
         {
             record.generation = Some(
                 hello
@@ -340,7 +371,7 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
             record.configured = false;
         }
         MachineFrame::Welcome {
-            protocol: 19,
+            protocol: 20,
             desired_components,
             ..
         } if !from_machine && desired_components.is_empty() => record.counts.connections += 1,

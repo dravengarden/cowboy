@@ -147,6 +147,7 @@ impl CodeRuntimeHost {
             ),
             "buffer synchronization requires separate core authority"
         );
+        self.buffer_sync.expire_inert();
         let reservation = match buffer_leases::Command::parse(payload)? {
             Some(command) if command.is_prepare() => Some(self.buffer_leases.reserve().await?),
             Some(command) => {

@@ -142,6 +142,12 @@ impl Registry {
 }
 
 impl Operations {
+    /// Ordinary buffer use must also release expired effect-free reservations.
+    /// No timer or unrelated request may dispose of a possible Apply outcome.
+    pub(super) fn expire_inert(&self) {
+        self.registry.lock().expire();
+    }
+
     pub(super) async fn execute(
         &self,
         invocation: CodeBufferSyncInvocation,

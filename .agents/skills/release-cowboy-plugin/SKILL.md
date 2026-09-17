@@ -304,9 +304,15 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  eight checks, including live authenticated Code installation into an empty
+  eleven checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
-  uninstall/path removal, connection replacement and Controller restart.
+  uninstall/path removal, connection replacement and Controller restart. The
+  protocol-20 Service synchronization extension also requires actual shared-owner
+  refusal, explicit preparation/confirmation across uninstall, loss of one real
+  Apply reply through the normal timeout, original-ID observation without replay
+  and separately completed retirement. Require receipt schema v3; a historical
+  eight-check v2 result does not accept synchronization. See
+  `docs/plugin-service-buffer-sync.md`.
   Restart refusal is not restoration; fixture teardown is not native recovery.
   See `docs/plugin-code-connected-conformance.md`. This changes no production
   account, installation, runtime generation or component and does not authorize

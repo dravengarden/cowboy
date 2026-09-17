@@ -10,6 +10,7 @@ use remote::Action;
 mod reads;
 mod registry;
 mod remote;
+mod synchronization;
 pub(super) use registry::Owners;
 
 #[derive(Clone)]
@@ -79,6 +80,7 @@ fn router() -> Router<Context> {
             "/api/code/buffers/{id}/read",
             post(reads::read).layer(DefaultBodyLimit::max(512)),
         )
+        .merge(synchronization::routes())
 }
 
 fn response(result: Result<Snapshot, StatusCode>) -> Response {

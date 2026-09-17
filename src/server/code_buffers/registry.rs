@@ -64,6 +64,7 @@ struct Entry {
     busy: bool,
     open_attempted: bool,
     release_attempted: bool,
+    synchronizing: Arc<AtomicBool>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -102,6 +103,7 @@ impl Slots {
 }
 
 pub(in crate::server) struct Owners {
+    pub(super) synchronizations: Arc<super::synchronization::registry::Operations>,
     slots: Mutex<Slots>,
     capacity: Arc<Semaphore>,
     job_capacity: Arc<Semaphore>,
@@ -112,6 +114,7 @@ pub(in crate::server) struct Owners {
 impl Default for Owners {
     fn default() -> Self {
         Self {
+            synchronizations: Arc::default(),
             slots: Mutex::new(Slots {
                 instance: uuid::Uuid::new_v4().simple().to_string(),
                 last_id: 0,
@@ -177,6 +180,7 @@ impl Owners {
                 busy: false,
                 open_attempted: false,
                 release_attempted: false,
+                synchronizing: Arc::new(AtomicBool::new(false)),
                 _permit: reservation.permit,
             },
         );
@@ -192,6 +196,7 @@ impl Owners {
         if self.closed.load(Ordering::Acquire) {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
+        self.synchronizations.expire();
         let mut slots = self.slots.lock();
         slots.expire();
         if slots
@@ -214,6 +219,9 @@ impl Owners {
             .get_mut(id)
             .filter(|entry| entry.binding.user == user)
             .ok_or(StatusCode::NOT_FOUND)?;
+        if action != Action::Query && entry.synchronizing.load(Ordering::Acquire) {
+            return Err(StatusCode::CONFLICT);
+        }
         if entry.busy
             || (action == Action::Open && entry.open_attempted)
             || (action == Action::Release && entry.release_attempted)
@@ -272,6 +280,7 @@ impl Owners {
         if self.closed.load(Ordering::Acquire) {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
+        self.synchronizations.expire();
         let mut slots = self.slots.lock();
         slots.expire();
         let entry = slots
@@ -279,7 +288,11 @@ impl Owners {
             .get_mut(id)
             .filter(|entry| entry.binding.user == user)
             .ok_or(StatusCode::NOT_FOUND)?;
-        if entry.busy || entry.state != LeaseState::Open || entry.release_attempted {
+        if entry.busy
+            || entry.state != LeaseState::Open
+            || entry.release_attempted
+            || entry.synchronizing.load(Ordering::Acquire)
+        {
             return Err(StatusCode::CONFLICT);
         }
         let permit = self
@@ -296,10 +309,55 @@ impl Owners {
         })
     }
 
+    pub(super) fn synchronization_owner(
+        &self,
+        user: &str,
+        id: &str,
+    ) -> Result<(Binding, SyncFence), StatusCode> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        self.synchronizations.expire();
+        let mut slots = self.slots.lock();
+        slots.expire();
+        let entry = slots
+            .active
+            .get(id)
+            .filter(|entry| entry.binding.user == user)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        // A query reporting Open is not our admitted open. Never let an inert
+        // buffer reservation expire while an effect borrows its ownership.
+        if entry.busy
+            || entry.state != LeaseState::Open
+            || !entry.open_attempted
+            || entry.until.is_some()
+            || entry.release_attempted
+            || entry.synchronizing.load(Ordering::Acquire)
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        entry.synchronizing.store(true, Ordering::Release);
+        Ok((
+            entry.binding.clone(),
+            SyncFence(Arc::clone(&entry.synchronizing)),
+        ))
+    }
+
     pub(in crate::server) async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
+        self.synchronizations.close();
         let mut tasks = std::mem::take(&mut *self.tasks.lock());
         tasks.shutdown().await;
+    }
+}
+
+/// Retained by one finite synchronization, not by its HTTP observer. Drop only
+/// after an inert preparation ends or exact terminal evidence clears the fence.
+pub(super) struct SyncFence(Arc<AtomicBool>);
+
+impl Drop for SyncFence {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 

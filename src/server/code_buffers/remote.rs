@@ -8,19 +8,7 @@ use serde_json::{Value, json};
 use crate::code_buffer_read;
 use crate::machine_control::{ConnectionToken, MachineControl};
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct NativeRef {
-    instance: String,
-    id: String,
-}
-
-fn hex(value: &str, len: usize) -> bool {
-    value.len() == len
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
+pub(super) use crate::machine_protocol::code_buffer_sync::BufferRef as NativeRef;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,12 +36,7 @@ impl Reply {
             reply.kind == "bufferLease" && reply.api_version == 1,
             "unsupported buffer reply"
         );
-        ensure!(
-            hex(&reply.lease.instance, 32)
-                && hex(&reply.lease.id, 16)
-                && reply.lease.id != "0000000000000000",
-            "invalid native buffer reference"
-        );
+        reply.lease.validate()?;
         Ok(reply)
     }
 }

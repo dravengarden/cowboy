@@ -8,6 +8,7 @@ mod exercise;
 mod fixture;
 mod installation;
 mod proxy;
+mod synchronization;
 
 const SESSION: &str = "sess-901";
 const TEXT: &str = "a🙂z\nowned native buffer\n";
@@ -196,7 +197,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v2",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v3",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -219,7 +220,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             "production_roles_policies_accounts_installation_and_activation",
             "review_integration_browser_storage_and_supported_devices",
             "nonempty_language_servers_or_atomic_diagnostics_freshness",
-            "disk_native_synchronization_and_owned_navigation_destinations",
+            "dirty_buffer_override_independent_restoration_and_owned_navigation_destinations",
             "abandoned_browser_restart_restoration_and_post_effect_recovery",
             "agent_authentication_sessions_and_native_worker_generation_upgrade",
             "physical_power_loss_general_graph_state_leases_and_refactor_completion",
@@ -227,7 +228,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 8;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 11;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,

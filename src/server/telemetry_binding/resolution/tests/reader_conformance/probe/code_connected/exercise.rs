@@ -4,7 +4,7 @@ use reqwest::{Method, StatusCode};
 fn target() -> Value {
     json!({"sessionId":SESSION,"path":"fixture.txt"})
 }
-fn endpoint(id: &str) -> String {
+pub(super) fn endpoint(id: &str) -> String {
     format!("/api/code/buffers/{id}")
 }
 fn content(text: &str, kind: &str) -> Value {
@@ -46,7 +46,12 @@ async fn settled(pair: &Pair<'_>, id: &str, state: &str) -> Result<(), Failure> 
     .await
     .map_err(|_| Failure::Timeout)?
 }
-async fn reads(pair: &Pair<'_>, id: &str, text: &str, mismatch: bool) -> Result<(), Failure> {
+pub(super) async fn reads(
+    pair: &Pair<'_>,
+    id: &str,
+    text: &str,
+    mismatch: bool,
+) -> Result<(), Failure> {
     for kind in ["language", "symbols", "hover"] {
         let body = content(text, kind);
         let value = pair
@@ -76,7 +81,7 @@ async fn reads(pair: &Pair<'_>, id: &str, text: &str, mismatch: bool) -> Result<
 }
 
 /// Dispose only the HTTP observer after the REAL native reply reaches the relay.
-async fn cancel(
+pub(super) async fn cancel(
     pair: &Pair<'_>,
     gate: &proxy::Gate,
     method: Method,
@@ -178,6 +183,10 @@ pub(super) async fn run(
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
 
+    *stage = "synchronization_preparation";
+    let sync = synchronization::prepare(pair).await?;
+    checks.push("explicit_synchronization_authentication_shared_owner_refusal_and_local_fence");
+
     *stage = "uninstall_preview";
     let plugin = format!("/api/machines/{MACHINE}/plugins/zed");
     let plan = pair
@@ -195,6 +204,10 @@ pub(super) async fn run(
         )
         .await?;
     check(uninstalled["phase"] == "completed" && uninstalled["deleted_session_ids"] == json!([]))?;
+    *stage = "synchronization_after_uninstall";
+    let sync = synchronization::finish(pair, sync).await?;
+    checks.push("lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall");
+    checks.push("synchronization_retirement_drains_after_cancelled_http_without_replay");
     *stage = "removed_paths";
     std::fs::remove_file(pair.root.join("workspace/fixture.txt")).map_err(|_| Failure::Setup)?;
     std::fs::rename(
@@ -206,6 +219,13 @@ pub(super) async fn run(
     checks.push("http_uninstall_and_missing_paths_preserve_original_native_reads");
 
     *stage = "cancelled_release";
+    let prior_releases = pair
+        .proxy
+        .counts()?
+        .commands
+        .get("releaseBufferLease")
+        .copied()
+        .unwrap_or(0);
     let gate = pair.proxy.hold("releaseBufferLease")?;
     cancel(pair, &gate, Method::DELETE, &endpoint(&second), json!({})).await?;
     let pending = pair
@@ -216,7 +236,7 @@ pub(super) async fn run(
     gate.release();
     settled(pair, &second, "released").await?;
     operation(pair, Method::DELETE, &second, "released").await?;
-    check(pair.proxy.counts()?.commands.get("releaseBufferLease") == Some(&2))?;
+    check(pair.proxy.counts()?.commands.get("releaseBufferLease") == Some(&(prior_releases + 1)))?;
     reads(pair, &retained, TEXT, false).await?;
     checks.push("cancelled_release_observed_once_and_independent_owner_retained");
 
@@ -224,6 +244,7 @@ pub(super) async fn run(
     let commands = pair.proxy.counts()?.commands;
     pair.proxy.cut()?;
     pair.connected(2).await?;
+    synchronization::replacement_refused(pair, &sync).await?;
     let observed = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
@@ -252,6 +273,11 @@ pub(super) async fn run(
     let missing = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
+        .await?;
+    check(missing.status == StatusCode::NOT_FOUND)?;
+    let missing = pair
+        .http
+        .call(Method::GET, &synchronization::endpoint(&sync), None)
         .await?;
     check(missing.status == StatusCode::NOT_FOUND)?;
     check(pair.proxy.counts()?.commands == commands)?;

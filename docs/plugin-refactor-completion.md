@@ -253,6 +253,16 @@ and accepting a production effect are different milestones.
   uninstall, eight connected Code regressions and six Nix checks. Publication,
   installation and Machine activation remain separate; no Service confirmation
   endpoint, ordinary Review integration or recovery is enabled.
+- [Service synchronization continuations](plugin-service-buffer-sync.md) add
+  explicit original-owner preparation and fresh product confirmation on protocol
+  20, with typed Site-bound transport, one-use Apply, independently owned jobs,
+  conservative uncertainty and path-free original-ID cleanup. Authority and
+  Session/connection checks cannot be replaced by serialized IDs. Ordinary
+  buffer admission now clears expired inert Machine preparations too, without
+  clearing possible effects. Browser synchronization ownership/presentation,
+  ordinary Review, signed Plugin rollout, separate Machine maintenance and
+  independent restoration remain required. Candidate and production acceptance
+  are recorded separately; source endpoints alone do not complete those exits.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

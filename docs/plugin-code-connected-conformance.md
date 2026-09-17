@@ -45,7 +45,8 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Eight checks cover (receipt schema `...code-buffer-connected-conformance/v2`):
+Eleven checks cover (receipt schema `...code-buffer-connected-conformance/v3`,
+requiring Machine protocol 20 and the Zed `1.9.0` ownership-support probe):
 
 1. Anonymous installation refusal, actual signed Code installation, cancelled
    HTTP observation after the Machine receipt, durable completion and duplicate
@@ -62,6 +63,17 @@ Eight checks cover (receipt schema `...code-buffer-connected-conformance/v2`):
 7. Cancelled release, terminal original-ID observation and no duplicate effect.
 8. Same-Machine reconnect cannot adopt the old connection; Controller restart
    cannot restore an old process-local resource ID or claim it released.
+9. Real product authentication for explicit synchronization, two actual native
+   owners refusing preparation, and Service-local read/release exclusion after
+   the other owner explicitly releases.
+10. Prepare before HTTP uninstall, Apply on the retained original process
+    afterward, discard one actual Apply reply, and wait the normal 40-second
+    transport timeout. Duplicate Apply never dispatches again; original-ID Query
+    establishes the exact applied content, and original-owner content reads agree.
+11. Cancel HTTP retirement observation after holding its actual native reply;
+    local completion and duplicate requests cannot resend retirement. A distinct
+    preparation also refuses old authority after connection replacement and
+    becomes unavailable, not adopted or retired, after Controller restart.
 
 The last case deliberately leaves unresolved native ownership. Teardown kills
 only fixture executables and removes their validated private runtime directories;
@@ -71,7 +83,7 @@ reloaded into a dirty/shared buffer. Plaintext has no LSP, so empty native hover
 is dispatch/ownership evidence, not nonempty language intelligence or fresh
 atomic diagnostics.
 
-Still separate: actual Review orchestration, explicit content synchronization,
+Still separate: actual Review orchestration, browser synchronization ownership,
 navigation destination ownership, Machine maintenance and signed Code release
 publication/installation, supported devices, abandoned-browser/restart recovery,
 independent restoration and general graph/state leases. This test-only change
@@ -83,3 +95,5 @@ separate complete source gate. The later
 [installation acceptance](releases/plugin-process-cleanup-2026-09-16.md) adds two
 eight-group runs against the core cleanup candidates and removes the pre-seeded
 installation shortcut. Neither record changes the exclusions above.
+The protocol-20 [Service synchronization extension](plugin-service-buffer-sync.md)
+adds the three new groups; historical v2 receipts do not accept them.

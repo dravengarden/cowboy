@@ -4186,7 +4186,10 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/telemetry/binding" || path.starts_with("/api/telemetry/binding/") {
         return RouteAuth::ProductOrAdminOperator;
     }
-    if path == "/api/code/buffers" || path.starts_with("/api/code/buffers/") {
+    if path == "/api/code/buffers"
+        || path.starts_with("/api/code/buffers/")
+        || path.starts_with("/api/code/buffer-synchronizations/")
+    {
         return RouteAuth::ProductOperator;
     }
     if path == "/ws" {

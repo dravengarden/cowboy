@@ -9,6 +9,8 @@ Machine/Zed acceptance. It consumes the independently verified
 [Machine/native candidate](plugin-native-buffer-leases.md).
 The additive [owned observation API](plugin-owned-buffer-reads.md) now implements
 diagnostic and symbol reads; its rollout remains separately recorded.
+The separate [synchronization API](plugin-service-buffer-sync.md) adds finite
+original-owner preparation/confirmation, without changing ordinary Review.
 
 ## Fixed core ownership
 

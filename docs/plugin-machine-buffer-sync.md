@@ -30,9 +30,11 @@ satisfy it, even though it reports native protocol 1.
 The generic adapter route still refuses both private effect commands before
 selecting a runtime, including an injected worktree. A support reply, read lease,
 content hash, signed installation or serialized purpose is not a Machine
-invocation. A future Service executor must independently capture and continuously
-check its Product Operator, Session incarnation and original connection before
-sending this command. No new HTTP endpoint or browser call site is added here.
+invocation. The additive [Service executor](plugin-service-buffer-sync.md)
+independently captures and checks its Product Operator, Session incarnation and
+original connection before sending this command. That implementation and its
+HTTP gates are separate from this Machine candidate; ordinary Review and browser
+synchronization call sites remain unchanged.
 
 ## Finite operation lifetime
 
