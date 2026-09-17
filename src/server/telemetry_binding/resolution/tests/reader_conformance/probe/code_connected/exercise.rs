@@ -120,6 +120,9 @@ pub(super) async fn run(
         .get(&format!("/api/code/sessions/{SESSION}/manifest"))
         .await?;
     check(manifest["language"]["state"] == "ready")?;
+    // Actual Controller selection, not a browser-invented feature flag. This
+    // remains advisory; each following owner request rechecks its own authority.
+    check(manifest["bufferMode"] == "owned")?;
     checks.push("real_login_enrollment_and_effect_free_unready_refusal");
 
     *stage = "cancelled_open";

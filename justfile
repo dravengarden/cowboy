@@ -84,6 +84,10 @@ code-buffer-cleanup-browser-conformance BROWSER:
 code-buffer-sync-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" code-buffer-sync' conformance "{{BROWSER}}"
 
+# Actual Review owner hook / content and Outline consumers, isolated fixture HTTP.
+review-code-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-code' conformance "{{BROWSER}}"
+
 idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts

@@ -341,12 +341,18 @@ and accepting a production effect are different milestones.
 
 ## Code work still required
 
+The [ordinary Review source consumer](plugin-review-owned-consumer.md) now selects
+owned language/Outline/hover and explicit refresh preparation from a protocol-20
+Service observation. It retains content/owner lifetimes without legacy fallback;
+protocol-19 Machines remain on their pre-cutover route. This is not owned
+navigation, diff integration, native activation or supported-device acceptance.
+
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Connect ordinary Review to retained core buffer owners, explicit disk/native synchronization with dirty/shared-buffer authority, and owned navigation destinations | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read |
+| P4 / Code consumer | Complete owned navigation destinations and diff-coordinate integration beyond the ordinary source consumer; independently activate/accept the protocol-20 Machine and exact native pair | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 

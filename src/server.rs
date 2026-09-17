@@ -15132,6 +15132,7 @@ struct CodeManifestResponse {
     worktree: Option<String>,
     change_count: usize,
     language: CodeLanguageCapabilities,
+    buffer_mode: code_buffers::ReviewMode,
 }
 
 #[derive(Debug, Serialize)]
@@ -15833,11 +15834,12 @@ async fn api_code_manifest(
         } else {
             "unavailable"
         };
+        let buffer_mode = code_buffers::review_mode(&state.machine_control, &context.scope);
         // Capability fields are part of this cached representation. Bump the
         // contract tag whenever that shape grows so installed Mobile clients do
         // not retain an older 304-backed manifest after a deploy.
         let etag = format!(
-            "\"code-manifest-v3-{}-{language_state}\"",
+            "\"code-manifest-v4-{}-{language_state}-{buffer_mode:?}\"",
             manifest.revision
         );
         const MANIFEST_CACHE_CONTROL: &str = "private, max-age=0, must-revalidate";
@@ -15864,6 +15866,7 @@ async fn api_code_manifest(
             branch: manifest.branch,
             worktree: manifest.worktree,
             change_count: manifest.change_count,
+            buffer_mode,
             language: CodeLanguageCapabilities {
                 provider: if language_ready { "zed" } else { "none" },
                 state: language_state,

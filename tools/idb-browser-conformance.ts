@@ -9,7 +9,7 @@ if (
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
-  suite !== "code-buffer-sync"
+  suite !== "code-buffer-sync" && suite !== "review-code"
 ) {
   throw new Error("unknown suite");
 }
@@ -31,6 +31,8 @@ const entry = suite === "idb"
   ? "runCodeBufferCleanupBrowserConformance"
   : suite === "code-buffer-sync"
   ? "runCodeBufferSynchronizationBrowserConformance"
+  : suite === "review-code"
+  ? "runReviewCodeBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(

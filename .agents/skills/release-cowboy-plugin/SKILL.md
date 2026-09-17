@@ -325,6 +325,14 @@ In addition, require all applicable Provider gates below:
   core owner and React surface. Read `docs/plugin-browser-buffer-sync.md`;
   synthetic HTTP/browser evidence never replaces the connected native gate,
   actual Review integration or supported-device acceptance.
+  Review source-consumer changes additionally run `just
+  review-code-browser-conformance <absolute-firefox>` and the connected gate
+  against the candidate Controller (including its actual manifest selection).
+  Check displayed LF equality, incomplete-file refusal, cancelled queued/active
+  reads, retained original cleanup and content-change fencing of old Apply
+  confirmations. `bufferMode` is selection, not authority; never downgrade an
+  already-owned view. This gate is not owned navigation/diff integration or
+  supported-device acceptance. See `docs/plugin-review-owned-consumer.md`.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog

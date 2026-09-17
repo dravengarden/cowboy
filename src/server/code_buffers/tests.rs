@@ -5,6 +5,40 @@ use crate::machine_protocol::{MachineCommand, MachineEvent};
 use serde_json::{Value, json};
 
 #[tokio::test]
+async fn review_selection_is_effect_free_and_requires_the_connected_machine_floor() {
+    let mut fixture = Fixture::new();
+    let scope = CodeReadScope::Session(fixture.context.hub.session_code_scope("session").unwrap());
+    let control = &fixture.context.machine_control;
+    assert_eq!(review_mode(control, &scope), ReviewMode::Legacy);
+    for (protocol, mode, wire) in [
+        (20, ReviewMode::Owned, "owned"),
+        (19, ReviewMode::Legacy, "legacy"),
+    ] {
+        let (sender, mut commands) = mpsc::unbounded_channel();
+        let connection = control.install(
+            "machine".into(),
+            "same-epoch".into(),
+            false,
+            protocol,
+            sender,
+        );
+        assert_eq!(review_mode(control, &scope), mode);
+        assert_eq!(serde_json::to_value(mode).unwrap(), json!(wire));
+        assert!(commands.try_recv().is_err());
+        drop(connection);
+    }
+    assert!(fixture.commands.try_recv().is_err());
+    assert_eq!(
+        review_mode(&MachineControl::default(), &scope),
+        ReviewMode::Unavailable
+    );
+    let hub = Hub::new();
+    create(&hub, "local");
+    let local = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+    assert_eq!(review_mode(control, &local), ReviewMode::Legacy);
+}
+
+#[tokio::test]
 async fn lifecycle_matches_browser_wire_fixture() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../contracts/code-buffer-client.fixture.json"

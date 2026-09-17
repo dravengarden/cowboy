@@ -13,6 +13,33 @@ mod remote;
 mod synchronization;
 pub(super) use registry::Owners;
 
+/// Consumer selection only, never a native capability or an execution grant.
+/// Protocol 20 is the independently activated synchronization routing floor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReviewMode {
+    Legacy,
+    Owned,
+    Unavailable,
+}
+
+pub(super) fn review_mode(control: &MachineControl, scope: &CodeReadScope) -> ReviewMode {
+    let CodeReadScope::Session(scope) = scope else {
+        return ReviewMode::Legacy;
+    };
+    if scope.machine_id() == "local" {
+        return ReviewMode::Legacy;
+    }
+    let Ok(connection) = control.operation_connection(scope.machine_id()) else {
+        return ReviewMode::Unavailable;
+    };
+    if control.supports_code_buffer_sync(&connection) {
+        ReviewMode::Owned
+    } else {
+        ReviewMode::Legacy
+    }
+}
+
 #[derive(Clone)]
 struct Context {
     service_id: String,

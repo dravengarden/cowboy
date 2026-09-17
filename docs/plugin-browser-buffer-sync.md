@@ -4,7 +4,9 @@ Core Web now owns typed continuations for the [Service synchronization API](plug
 Its [verified Web-only delivery](releases/browser-buffer-sync-2026-09-17.md)
 is published and active with all sixteen observed workers retained.
 This is not an installable Plugin, a generic DAG executor or an additional
-native grant. Ordinary Review has not been switched to this API. The resident
+native grant. The later [Review source consumer](plugin-review-owned-consumer.md)
+can prepare this continuation after protocol-20 selection; it cannot Apply as a
+read side effect. The resident
 Machine and installed Code Plugin still require their independent acceptance
 and maintenance/installation boundaries.
 

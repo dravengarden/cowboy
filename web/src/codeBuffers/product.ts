@@ -50,5 +50,6 @@ export function createProductCodeBuffers(
 }
 
 // Shared across Review mounts; construction has no transport or storage effect.
-// The ordinary Review consumer is deliberately not switched by this prerequisite.
+// Review selects this only from the Service's owned-mode observation, never as
+// a retry/fallback after a legacy request or through serialized resource IDs.
 export const productCodeBuffers = createProductCodeBuffers(productSyncDatabase);

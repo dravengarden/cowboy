@@ -1,7 +1,7 @@
 import {
   AccountTreeOutlined,
-  CodeOutlined,
   Clear,
+  CodeOutlined,
   DataObjectOutlined,
   Search,
 } from "@mui/icons-material";
@@ -21,7 +21,11 @@ import { alpha, type Theme } from "@mui/material/styles";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { navigationHaptic } from "../../haptic";
 import { Sheet } from "../../Sheet";
-import { type CodeDocumentSymbol, fetchCodeOutline } from "./codeApi";
+import {
+  type CodeDocumentSymbol,
+  type CodeOutline,
+  fetchCodeOutline,
+} from "./codeApi";
 import {
   activeOutlineRow,
   filterOutline,
@@ -77,7 +81,9 @@ function SymbolCategoryIcon({
 }): React.JSX.Element {
   if (category === "module") return <AccountTreeOutlined />;
   if (category === "type") return <DataObjectOutlined />;
-  if (category === "function") return <SymbolGlyph fontSize={17}>λ</SymbolGlyph>;
+  if (category === "function") {
+    return <SymbolGlyph fontSize={17}>λ</SymbolGlyph>;
+  }
   if (category === "method") return <CodeOutlined />;
   // Field / property / key: a hollow square, not array brackets. Nix attrs
   // like pname are named slots, not lists.
@@ -147,6 +153,8 @@ export function ReviewOutline({
   path,
   currentLine,
   onSelect,
+  owned,
+  documentIdentity,
 }: {
   open: boolean;
   onClose: () => void;
@@ -154,21 +162,50 @@ export function ReviewOutline({
   path: string;
   currentLine?: number | undefined;
   onSelect: (line: number) => void;
+  documentIdentity?: unknown;
+  owned?: {
+    identity: unknown;
+    read: (observer: AbortSignal) => Promise<CodeOutline>;
+  } | undefined;
 }): React.JSX.Element {
-  const [symbols, setSymbols] = useState<CodeDocumentSymbol[]>([]);
+  const [observed, setObserved] = useState<{
+    sessionId: string;
+    path: string;
+    identity: unknown;
+    owned: boolean;
+    symbols: CodeDocumentSymbol[];
+  }>();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const activeRef = useRef<HTMLDivElement | null>(null);
+  const ownedRead = useRef(owned?.read);
+  ownedRead.current = owned?.read;
+  const usingOwned = owned !== undefined;
+  const identity = usingOwned ? owned.identity : documentIdentity;
 
   useEffect(() => {
     if (!open) return undefined;
     const controller = new AbortController();
     setLoading(true);
     setError(false);
+    setObserved(undefined);
     setQuery("");
-    void fetchCodeOutline(sessionId, path, controller.signal)
-      .then((value) => setSymbols(value.symbols))
+    const request = usingOwned
+      ? ownedRead.current!(controller.signal)
+      : fetchCodeOutline(sessionId, path, controller.signal);
+    void request
+      .then((value) => {
+        if (!controller.signal.aborted) {
+          setObserved({
+            sessionId,
+            path,
+            identity,
+            owned: usingOwned,
+            symbols: value.symbols,
+          });
+        }
+      })
       .catch(() => {
         if (!controller.signal.aborted) setError(true);
       })
@@ -176,9 +213,16 @@ export function ReviewOutline({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [open, path, sessionId]);
+  }, [open, path, sessionId, usingOwned, identity]);
 
-  const rows = useMemo(() => flattenOutline(symbols), [symbols]);
+  const rows = useMemo(
+    () =>
+      observed?.sessionId === sessionId && observed.path === path &&
+        observed.identity === identity && observed.owned === usingOwned
+        ? flattenOutline(observed.symbols)
+        : [],
+    [observed, sessionId, path, identity, usingOwned],
+  );
   const active = useMemo(
     () => activeOutlineRow(rows, currentLine),
     [currentLine, rows],
@@ -372,8 +416,7 @@ export function ReviewOutline({
                             variant="caption"
                             fontWeight={700}
                             sx={{
-                              color: (theme) =>
-                                categoryColor(theme, category),
+                              color: (theme) => categoryColor(theme, category),
                             }}
                           >
                             {symbolKindLabel(row.symbol.kind)}

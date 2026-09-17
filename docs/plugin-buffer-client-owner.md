@@ -7,10 +7,10 @@ not an installable Plugin, a public SDK grant or a second resource lifecycle.
 
 Status: source implementation and isolated browser acceptance, now connected
 to the [core product identity lifetime](plugin-buffer-product-context.md).
-Ordinary Review does **not** import this client yet; its existing buffer/language
-calls, Machine generation and installed Code Plugin remain unchanged. The core
-lifetime integration needs a Web release, not a Controller restart or Review
-cutover.
+The later [Review source consumer](plugin-review-owned-consumer.md) imports it
+only after an explicit Service-owned protocol-20 selection. Protocol-19,
+local/workspace and diff consumers remain on the pre-cutover route; no owned
+attempt falls back. Native rollout and supported-device acceptance stay separate.
 
 ## Ownership, not React mount lifetime
 

@@ -96,6 +96,12 @@ import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
+import { type ReviewBufferMode, reviewBufferMode } from "./ownedReviewBuffer";
+import {
+  reviewDisplayText,
+  useOwnedReviewBuffer,
+} from "./useOwnedReviewBuffer";
+import { ReviewCodeStatus } from "./ReviewCodeStatus";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import { resolveReviewLink } from "./reviewLinkTarget";
 import { ReviewMediaPreview } from "./ReviewMediaPreview";
@@ -423,6 +429,12 @@ function DocumentView({
   rememberScrollPosition,
   onMarkdownLink,
   previewAnchor,
+  bufferMode,
+  dataRevision,
+  outlineOpen,
+  onOutlineClose,
+  outlineLine,
+  onOutlineSelect,
 }: {
   sessionId: string;
   target: Exclude<ReviewTarget, { kind: "changes" }>;
@@ -447,6 +459,12 @@ function DocumentView({
   /** A heading to land on once THIS document is rendered — either a same-file
    *  `#hash` or the tail of a `other.md#hash` that is still loading. */
   previewAnchor?: { path: string; hash: string; id: number } | undefined;
+  bufferMode: ReviewBufferMode | undefined;
+  dataRevision: number;
+  outlineOpen: boolean;
+  onOutlineClose: () => void;
+  outlineLine: number | undefined;
+  onOutlineSelect: (line: number) => void;
 }): React.JSX.Element {
   const surface = useSurfaceProfile();
   const settings = useReviewSettings();
@@ -491,6 +509,20 @@ function DocumentView({
   >();
   const hoverController = useRef<AbortController | undefined>(undefined);
   const navigationController = useRef<AbortController | undefined>(undefined);
+  const usingOwned = bufferMode === "owned" && target.kind === "source";
+  const displayText = useMemo(
+    () => usingOwned ? reviewDisplayText(text) : text,
+    [usingOwned, text],
+  );
+  const owned = useOwnedReviewBuffer(
+    sessionId,
+    target.path,
+    usingOwned && !mediaPreview,
+    !loading && !error && loadedPath === target.path && !truncated &&
+      !limited && !nextCursor
+      ? displayText
+      : undefined,
+  );
   const fileRetry = useRef<{ key: string; count: number }>({
     key: "",
     count: 0,
@@ -516,7 +548,8 @@ function DocumentView({
   const appliedAnchor = useRef(0);
   useLayoutEffect(() => {
     if (
-      !previewAnchor || !markdownPreview || previewAnchor.path !== target.path ||
+      !previewAnchor || !markdownPreview ||
+      previewAnchor.path !== target.path ||
       loadedPath !== target.path || appliedAnchor.current === previewAnchor.id
     ) return undefined;
     const frame = globalThis.requestAnimationFrame(() => {
@@ -621,6 +654,7 @@ function DocumentView({
     candidates: CodeInspectCandidate[] = [],
     autoFallback = true,
   ): void => {
+    if (!bufferMode || bufferMode === "unavailable") return;
     if (target.kind === "diff" && target.scope !== "unstaged") return;
     setInspectTarget(point);
     setInspectCandidates(candidates);
@@ -642,13 +676,19 @@ function DocumentView({
     ];
     void (async () => {
       for (const [index, candidate] of ordered.entries()) {
-        const value = await fetchCodeHover(
-          sessionId,
-          target.path,
-          candidate.row,
-          candidate.column,
-          controller.signal,
-        );
+        const value = usingOwned
+          ? await owned.hover(
+            candidate.row,
+            candidate.column,
+            controller.signal,
+          )
+          : await fetchCodeHover(
+            sessionId,
+            target.path,
+            candidate.row,
+            candidate.column,
+            controller.signal,
+          );
         if (controller.signal.aborted) return;
         if (value.contents.length > 0 || index === ordered.length - 1) {
           setInspectTarget(candidate);
@@ -661,12 +701,28 @@ function DocumentView({
       if (!controller.signal.aborted) {
         setHover({ apiVersion: 1, path: target.path, contents: [] });
         setHoverError(true);
-        onBufferUnavailable();
+        if (!usingOwned) onBufferUnavailable();
       }
     }).finally(() => {
       if (!controller.signal.aborted) setHoverLoading(false);
     });
-  }, [onBufferUnavailable, sessionId, target]);
+  }, [
+    onBufferUnavailable,
+    sessionId,
+    target,
+    usingOwned,
+    owned.hover,
+    bufferMode,
+  ]);
+
+  useEffect(() => {
+    // Positional popovers are observations of ONE displayed snapshot.
+    hoverController.current?.abort();
+    navigationController.current?.abort();
+    setHoverOpen(false);
+    setHover(undefined);
+    setNavigation([]);
+  }, [sessionId, target.path, displayText, usingOwned]);
 
   const inspectCandidatesOrPoint = useCallback((
     candidates: CodeInspectCandidate[],
@@ -710,9 +766,19 @@ function DocumentView({
   useEffect(() => {
     navigationController.current?.abort();
     setNavigationResults({});
-    setNavigationAvailability(checkingSymbolNavigation());
+    setNavigationAvailability(
+      usingOwned
+        ? {
+          definition: "unavailable",
+          declaration: "unavailable",
+          typeDefinition: "unavailable",
+          implementation: "unavailable",
+          references: "unavailable",
+        }
+        : checkingSymbolNavigation(),
+    );
     if (
-      !hoverOpen || !inspectTarget ||
+      usingOwned || !hoverOpen || !inspectTarget ||
       (target.kind === "diff" && target.scope !== "unstaged")
     ) return undefined;
     const controller = new AbortController();
@@ -752,6 +818,7 @@ function DocumentView({
     target.kind,
     target.path,
     target.kind === "diff" ? target.scope : undefined,
+    usingOwned,
   ]);
 
   const navigate = useCallback((kind: CodeNavigationKind): void => {
@@ -811,6 +878,7 @@ function DocumentView({
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
     void request.then((result) => {
+      if (controller.signal.aborted) return;
       fileRetry.current = {
         key: `${sessionId}:${target.kind}:${target.path}`,
         count: 0,
@@ -848,6 +916,7 @@ function DocumentView({
         }
       }
     }).catch((reason) => {
+      if (controller.signal.aborted) return;
       if (reason instanceof DOMException && reason.name === "AbortError") {
         return;
       }
@@ -890,6 +959,7 @@ function DocumentView({
     mediaPreview,
     onRevision,
     reloadKey,
+    dataRevision,
   ]);
 
   // A remote Machine or its adapter can reconnect after the bounded initial
@@ -930,6 +1000,7 @@ function DocumentView({
       );
     void request
       .then((page) => {
+        if (controller.signal.aborted) return;
         if (page.revision !== revision) {
           throw new Error("Document revision changed");
         }
@@ -942,6 +1013,7 @@ function DocumentView({
         }
       })
       .catch((reason) => {
+        if (controller.signal.aborted) return;
         if (reason instanceof DOMException && reason.name === "AbortError") {
           return;
         }
@@ -1455,6 +1527,21 @@ function DocumentView({
           )}
         </Stack>
       )}
+      {usingOwned && !mediaPreview && <ReviewCodeStatus intelligence={owned} />}
+      {target.kind === "source" && (
+        <ReviewOutline
+          open={outlineOpen}
+          onClose={onOutlineClose}
+          sessionId={sessionId}
+          path={target.path}
+          currentLine={outlineLine}
+          documentIdentity={displayText}
+          onSelect={onOutlineSelect}
+          owned={bufferMode !== "legacy"
+            ? { identity: owned.identity, read: owned.outline }
+            : undefined}
+        />
+      )}
       <Box
         ref={outerScrollRef}
         data-mobile-overflow-layer={markdownPreview ||
@@ -1490,7 +1577,12 @@ function DocumentView({
             />
           )
           : previewKind === "mermaid"
-          ? <MermaidDiagram key={`${sessionId}:${target.path}`} source={text} />
+          ? (
+            <MermaidDiagram
+              key={`${sessionId}:${target.path}`}
+              source={displayText}
+            />
+          )
           : markdownPreview
           ? (
             <Box
@@ -1526,7 +1618,7 @@ function DocumentView({
               }}
             >
               <Markdown
-                text={text}
+                text={displayText}
                 touchWrap
                 onLinkClick={onMarkdownLink}
               />
@@ -1541,7 +1633,7 @@ function DocumentView({
               }
             >
               <CodeViewer
-                text={text}
+                text={displayText}
                 kind={target.kind}
                 path={target.path}
                 softWrap={settings.softWrap}
@@ -1556,13 +1648,14 @@ function DocumentView({
                   ? target.revealRequestId
                   : undefined}
                 languageData={target.kind === "source"
-                  ? languageData
+                  ? usingOwned ? owned.language : languageData
                   : undefined}
                 diagnostics={settings.diagnostics}
                 inlayHints={settings.inlayHints}
                 semanticHighlighting={settings.semanticHighlighting}
-                onInspect={target.kind === "source" ||
-                    (target.kind === "diff" && target.scope === "unstaged")
+                onInspect={bufferMode && bufferMode !== "unavailable" &&
+                    (target.kind === "source" ||
+                      (target.kind === "diff" && target.scope === "unstaged"))
                   ? inspectCandidatesOrPoint
                   : undefined}
                 onVisibleLine={target.kind === "source"
@@ -1734,6 +1827,12 @@ export function ReviewApp({
     head: string | undefined;
   }>();
   const [languageData, setLanguageData] = useState<CodeLanguage>();
+  const [bufferSelection, setBufferSelection] = useState<
+    { sessionId: string; mode: ReviewBufferMode }
+  >();
+  const bufferMode = bufferSelection?.sessionId === workspace?.sessionId
+    ? bufferSelection?.mode
+    : undefined;
   const [tabs, setTabs] = useState<ReviewTab[]>([]);
   const tabScrollPositions = useRef(new Map<string, unknown>());
   const readScrollPosition = useCallback(
@@ -1789,7 +1888,8 @@ export function ReviewApp({
   useEffect(() => {
     if (
       !workspace?.sessionId ||
-      !leasedPath
+      !leasedPath || !bufferMode || bufferMode === "unavailable" ||
+      (bufferMode === "owned" && target.kind === "source")
     ) {
       setLanguageData(undefined);
       return undefined;
@@ -1855,6 +1955,8 @@ export function ReviewApp({
     dataRevision,
     leasedPath,
     workspace?.sessionId,
+    bufferMode,
+    target.kind,
   ]);
 
   useEffect(() => {
@@ -1865,6 +1967,7 @@ export function ReviewApp({
     setRepositoryContext(undefined);
     setGitQueue([]);
     setReviewLanguageCapabilities(undefined);
+    setBufferSelection(undefined);
   }, [workspace?.sessionId]);
 
   useEffect(() => {
@@ -1885,8 +1988,19 @@ export function ReviewApp({
     const refreshManifest = (): void => {
       controller?.abort();
       controller = new AbortController();
-      void fetchCodeManifest(workspace.sessionId, controller.signal)
+      const observer = controller;
+      void fetchCodeManifest(workspace.sessionId, observer.signal)
         .then((manifest) => {
+          if (observer.signal.aborted) return undefined;
+          setBufferSelection((current) => ({
+            sessionId: workspace.sessionId,
+            mode: reviewBufferMode(
+              current?.sessionId === workspace.sessionId
+                ? current.mode
+                : undefined,
+              manifest.bufferMode,
+            ),
+          }));
           setChangeCount(manifest.changeCount);
           setRepositoryContext({
             project: manifest.project,
@@ -1901,9 +2015,10 @@ export function ReviewApp({
             invalidateDiffCache(workspace.sessionId);
             setDataRevision((value) => value + 1);
           }
-          return fetchCodeChanges(workspace.sessionId, controller?.signal);
+          return fetchCodeChanges(workspace.sessionId, observer.signal);
         })
         .then((changes) => {
+          if (observer.signal.aborted || !changes) return;
           setGitQueue(reviewQueue(groupGitChanges(changes.changes)));
         })
         // The ordinary tree/changes error surfaces remain authoritative.
@@ -2813,7 +2928,24 @@ export function ReviewApp({
           )
           : (
             <DocumentView
+              key={`${workspace.sessionId}:${target.kind}:${target.path}:${
+                target.kind === "diff" ? target.scope : "source"
+              }`}
               sessionId={workspace.sessionId}
+              bufferMode={bufferMode}
+              dataRevision={dataRevision}
+              outlineOpen={outlineOpen}
+              onOutlineClose={() => setOutlineOpen(false)}
+              outlineLine={syncedReview.positions?.[target.path]?.line}
+              onOutlineSelect={(line) => {
+                setMarkdownPreview(false);
+                setSourceTarget({
+                  kind: "source",
+                  path: target.path,
+                  revealLine: line,
+                  revealRequestId: ++revealRangeId.current,
+                });
+              }}
               target={target}
               onRevision={setCurrentRevision}
               markdownPreview={target.kind === "source" &&
@@ -2885,24 +3017,6 @@ export function ReviewApp({
               }}
             />
           )}
-        {workspace && target.kind === "source" && (
-          <ReviewOutline
-            open={outlineOpen}
-            onClose={() => setOutlineOpen(false)}
-            sessionId={workspace.sessionId}
-            path={target.path}
-            currentLine={syncedReview.positions?.[target.path]?.line}
-            onSelect={(line) => {
-              setMarkdownPreview(false);
-              setSourceTarget({
-                kind: "source",
-                path: target.path,
-                revealLine: line,
-                revealRequestId: ++revealRangeId.current,
-              });
-            }}
-          />
-        )}
         <Box
           data-mobile-backdrop-chrome="true"
           sx={{

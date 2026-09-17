@@ -49,6 +49,8 @@ export interface CodeManifest {
   worktree?: string;
   changeCount: number;
   language: CodeLanguageCapabilities;
+  /** Absent only on a pre-cutover Controller. Selection precedes any open. */
+  bufferMode?: "legacy" | "owned" | "unavailable";
 }
 
 export interface GitCommitSummary {
