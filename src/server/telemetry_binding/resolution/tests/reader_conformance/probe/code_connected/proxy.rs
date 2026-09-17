@@ -471,6 +471,10 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
         "bufferLanguage",
         "prepareBufferSync",
         "bufferSync",
+        "bufferNavigationSupport",
+        "prepareBufferNavigation",
+        "bufferNavigation",
+        "prepareNavigationBuffer",
     ] {
         let command = MachineCommand::AdapterRequest {
             request_id: "id".into(),
@@ -480,7 +484,7 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
         assert!(command_frame(command, &mut Record::default()).is_err());
     }
     assert!(Record::default().reply("unrequested").is_err());
-    for protocol in [18, 19, 21] {
+    for protocol in [18, 19, 20, 22] {
         assert!(
             handshake(
                 MachineFrame::Welcome {
@@ -497,7 +501,7 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
     }
     handshake(
         MachineFrame::Welcome {
-            protocol: 20,
+            protocol: 21,
             controller_epoch: 1,
             heartbeat_interval_ms: 1000,
             desired_components: vec![],
