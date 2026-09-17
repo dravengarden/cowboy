@@ -4255,11 +4255,19 @@ export function Transcript({
         lingeringOptimisticRef.current.messages,
         fromStore,
         presentedTimeline,
+        presentedTimeline !== timeline,
       );
       lingeringOptimisticRef.current = { sessionId, messages: merged };
       return merged;
     },
-    [pendingMessages, presentedTimeline, sessionId, visibleItemKeys, liveTail],
+    [
+      pendingMessages,
+      presentedTimeline,
+      timeline,
+      sessionId,
+      visibleItemKeys,
+      liveTail,
+    ],
   );
   const optimisticCmids = useMemo(() => {
     const ids = new Set<string>();

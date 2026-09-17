@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import type { Envelope } from "./protocol.ts";
 import {
   confirmedImageSrc,
+  envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
   rememberSendImagePreviews,
   retainUnpresentedOptimistic,
@@ -91,20 +92,64 @@ Deno.test("a tagged but unrenderable image echo cannot replace the overlay", () 
 Deno.test("unpresented overlays linger until the presented timeline can replace them", () => {
   const overlay = { cmid: "c1", attachments: [] as { isImage?: boolean }[] };
   assertEquals(
-    retainUnpresentedOptimistic([overlay], [], []),
+    retainUnpresentedOptimistic([overlay], [], [], true),
     [overlay],
   );
   assertEquals(
     retainUnpresentedOptimistic([overlay], [], [
       envelope(1, "text", "c1"),
-    ]),
+    ], true),
     [],
   );
   assertEquals(
     retainUnpresentedOptimistic([overlay], [overlay], [
       envelope(1, "text", "c1"),
-    ]),
+    ], true),
     [overlay],
+  );
+});
+
+Deno.test("a live presentation follows the store even when the echo lost its cmid", () => {
+  // The daemon persists echoes without the live-only cmid. Once the renderer
+  // shows the canonical timeline, a retired overlay must not linger and hide
+  // the next human prompt behind a repainted copy of this one.
+  const overlay = { cmid: "c1", attachments: [{ isImage: true }] };
+  const untagged = [envelope(1, "image"), envelope(2, "text")];
+  assertEquals(retainUnpresentedOptimistic([overlay], [], untagged, true), [
+    overlay,
+  ]);
+  assertEquals(retainUnpresentedOptimistic([overlay], [], untagged, false), []);
+});
+
+Deno.test("only agent work after the echo proves the whole prompt was echoed", () => {
+  const update = (sessionUpdate: string): Envelope => ({
+    session_id: "s1",
+    seq: 3,
+    kind: "update",
+    update: { sessionUpdate },
+  });
+  assertEquals(envelopeCompletesPromptEcho(envelope(2, "text")), false);
+  assertEquals(
+    envelopeCompletesPromptEcho({
+      session_id: "s1",
+      seq: 3,
+      kind: "lifecycle",
+      status: "busy",
+      detail: null,
+    }),
+    false,
+  );
+  assertEquals(envelopeCompletesPromptEcho(update("usage_update")), false);
+  assertEquals(envelopeCompletesPromptEcho(update("agent_message_chunk")), true);
+  assertEquals(envelopeCompletesPromptEcho(update("tool_call")), true);
+  assertEquals(
+    envelopeCompletesPromptEcho({
+      session_id: "s1",
+      seq: 3,
+      kind: "turn_end",
+      stop_reason: "Cancelled",
+    }),
+    true,
   );
 });
 

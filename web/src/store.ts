@@ -20,6 +20,7 @@ import { createSyncShutdown } from "./syncShutdown";
 import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import {
+  envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
   rememberSendImagePreviews,
 } from "./sendImagePreviews";
@@ -1482,6 +1483,24 @@ function handle(msg: Outbound): void {
           timelines.get(env.session_id) ?? [],
         );
       }
+      // The cmid tag is live-only (persisted history carries none), so the
+      // timeline copy of an echo is not a reliable readiness witness. Remember
+      // that this device's prompt was echoed; the turn's first agent work
+      // proves every block landed. Retire the overlay there, or it keeps hiding
+      // the newest human row and repaints this prompt as still sending.
+      if (
+        cmid !== undefined && env.kind === "update" &&
+        env.update.sessionUpdate === "user_message_chunk" &&
+        optimisticMessages.get(env.session_id)?.some((message) => message.cmid === cmid)
+      ) {
+        echoedOptimisticCmids.add(cmid);
+      } else if (echoedOptimisticCmids.size > 0 && envelopeCompletesPromptEcho(env)) {
+        optimisticMessages = reconcileOptimistic(
+          optimisticMessages,
+          env.session_id,
+          echoedOptimisticCmids,
+        );
+      }
       setState({
         ...state,
         // Live fan-out covers every running session. Only the MRU working set
@@ -2430,6 +2449,9 @@ const SILENT_QUEUE_MUTATORS = new Set([
 // Stops commitQueue from resurrecting the same bubble before the queue patch
 // confirms the hide mutation.
 const suppressedInFlight = new Set<string>();
+// Transcript overlays whose tagged user echo arrived but could not replace them
+// yet. The turn's first agent work retires them (see the `event` reducer).
+const echoedOptimisticCmids = new Set<string>();
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
   const args = m.args as { id?: string; row?: QueuedMessage };
@@ -3103,6 +3125,7 @@ function reconcileOptimistic(
     if (m.cmid !== undefined && serverCmids.has(m.cmid)) {
       clearOptTimers(m.cmid);
       suppressedInFlight.add(m.cmid);
+      echoedOptimisticCmids.delete(m.cmid);
       return false;
     }
     return true;

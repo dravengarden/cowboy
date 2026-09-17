@@ -91,7 +91,21 @@ Deno.test("confirmed user rows stay hidden while the optimistic image bubble is 
   assert(transcript.includes("overlayHidesTailHumanKey"));
   assert(transcript.includes("applySendImagePreviews(chunks, cmid)"));
   assert(transcript.includes("retainUnpresentedOptimistic("));
+  assert(transcript.includes("presentedTimeline !== timeline,"));
   assert(transcript.includes("hasNewerLiveUserItem("));
+});
+
+Deno.test("an echoed transcript send retires once its turn starts working", async () => {
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  const start = store.indexOf('case "event": {');
+  const end = store.indexOf('case "config_options": {', start);
+  assert(start >= 0 && end > start);
+  const body = store.slice(start, end);
+  const remember = body.indexOf("echoedOptimisticCmids.add(cmid)");
+  const retire = body.indexOf("envelopeCompletesPromptEcho(env)");
+  assert(body.indexOf("reconcileReadyOptimistic(") < remember);
+  assert(remember >= 0 && retire > remember);
+  assert(body.indexOf("setState({", retire) > retire);
 });
 
 Deno.test("failed transcript sends offer return to the list they left", () => {

@@ -1,5 +1,6 @@
 import { type Attachment, isLoadablePreviewUrl } from "./attachments";
 import type { Envelope } from "./protocol";
+import { isTurnActivityUpdate } from "./turnWaiting";
 
 const previewsByCmid = new Map<string, string[]>();
 
@@ -125,9 +126,23 @@ export function promptEchoReadyToReplaceOptimistic(
   return renderable && images >= needed;
 }
 
+/** The daemon echoes every block of a prompt before the provider starts that
+ * turn, so agent work after a tagged echo proves the whole prompt has already
+ * been echoed. Lifecycle frames can interleave between echo blocks and do not
+ * count. */
+export function envelopeCompletesPromptEcho(env: Envelope): boolean {
+  if (env.kind === "turn_end" || env.kind === "permission_request") return true;
+  return env.kind === "update" &&
+    env.update.sessionUpdate !== "user_message_chunk" &&
+    isTurnActivityUpdate(env.update.sessionUpdate);
+}
+
 /** Keep a local send visible until the *presented* timeline can replace it.
  * Canonical echo can drop the store overlay while Transcript is still frozen
- * for a swipe/scroll, which is the disappear-then-reappear hole. */
+ * for a swipe/scroll, which is the disappear-then-reappear hole. Once the
+ * renderer presents the canonical timeline again the store is authoritative:
+ * a copy kept past that point hides the newest human row and repaints an
+ * already-answered prompt at the bottom of the transcript. */
 export function retainUnpresentedOptimistic<
   T extends {
     cmid?: string;
@@ -137,7 +152,9 @@ export function retainUnpresentedOptimistic<
   previous: readonly T[],
   fromStore: readonly T[],
   presentedTimeline: readonly Envelope[],
+  presentationFrozen: boolean,
 ): readonly T[] {
+  if (!presentationFrozen) return fromStore;
   const fromStoreIds = new Set(
     fromStore.flatMap((message) =>
       message.cmid === undefined ? [] : [message.cmid]
