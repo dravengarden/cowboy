@@ -38,7 +38,8 @@ sending this command. No new HTTP endpoint or browser call site is added here.
 
 Machine core issues its own monotonically allocated operation ID under a random
 process instance, distinct from both the read lease and private adapter ticket.
-It retains the original connection owner, exact native process and desired text.
+It retains the original connection owner, exact native process and desired text
+identity.
 Follow-up commands cannot change those inputs or resolve another installation,
 even after uninstall, path removal, runtime death or connection replacement.
 
@@ -76,8 +77,11 @@ against two actual owners (refused), releases one, continues across uninstall,
 synchronizes exact text, reads through the native mirror floor and retires the
 original operation. These are disposable fixtures, not production authority.
 
-Before activation, run the complete pinned gate and the exact portable
-adapter/server native gates. Before Service/Review cutover, additionally accept
+The [candidate acceptance](releases/machine-buffer-sync-candidate-2026-09-17.md)
+records the complete pinned gate, immutable Machine/portable-runtime builds,
+actual original-process synchronization and eight connected Code regressions.
+It is not signed Plugin publication, installation or Machine activation. Before
+Service/Review cutover, additionally accept
 the actual Controller/Machine HTTP chain, independent Product authorization,
 consumer cancellation/content changes, owned navigation destinations and
 supported clients. A reconnect cannot recover this operation's old authority;

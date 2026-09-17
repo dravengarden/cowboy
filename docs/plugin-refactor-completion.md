@@ -248,8 +248,11 @@ and accepting a production effect are different milestones.
   One-use Apply, unknown exclusion, original-process retention and bounded
   observation/retirement are implemented. Source tests cover cancellation,
   connection/queued-authority loss, malformed replies, capacity and runtime death.
-  Immutable runtime acceptance and activation remain separate; no Service
-  confirmation endpoint, ordinary Review integration or recovery is enabled.
+  Its [candidate acceptance](releases/machine-buffer-sync-candidate-2026-09-17.md)
+  passes the complete gate, exact static native/core synchronization across
+  uninstall, eight connected Code regressions and six Nix checks. Publication,
+  installation and Machine activation remain separate; no Service confirmation
+  endpoint, ordinary Review integration or recovery is enabled.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
