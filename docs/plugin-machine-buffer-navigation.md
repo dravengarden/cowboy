@@ -87,6 +87,11 @@ Machine reference is not principal/Session authority.
 
 ## Verification and remaining boundary
 
+The [candidate acceptance](releases/machine-navigation-candidate-2026-09-17.md)
+records exact immutable inputs, complete source gates and all three process
+gates. It distinguishes the synthetic navigation authority from the older
+Controller's eleven connected buffer regressions and production acceptance.
+
 Focused core tests exercise closed codecs and Site/protocol checks, actual
 connection loss, queued command/prepare expiry, cancellation, duplicate/unknown
 outcomes, original-runtime death, bounded capacity, source release/synchronization

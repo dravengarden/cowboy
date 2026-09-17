@@ -335,7 +335,12 @@ and accepting a production effect are different milestones.
   Exact destination reservations join the ordinary buffer lifecycle/capacity,
   with saved lookup after observer loss and no path/installation reselection.
   Zed `1.12.0` adds the distinct actual-pair support probe; native dependencies
-  are unchanged. Service/principal/Session authority, public navigation,
+  are unchanged. Its [candidate acceptance](releases/machine-navigation-candidate-2026-09-17.md)
+  records 22 new core tests, complete gates, static native and signed-lifecycle
+  nonempty-LSP acceptance, and eleven connected buffer regressions. Independent
+  review also closed expired inert synchronization fences blocking direct
+  navigation; uncertain effects remain retained. Service/principal/Session
+  authority, public navigation,
   native allocation budgets, independent recovery and production rollout remain
   separate; this is not completion of the Code-consumer or general DAG exits.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
