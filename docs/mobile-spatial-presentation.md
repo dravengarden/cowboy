@@ -309,7 +309,15 @@ Wrap off is the reader's choice of sideways reading over swipe cost, like
 wrap-off source: a swipe from prose still drives the drawer/pager, but a
 document with many really-overflowing blocks makes it heavier. It is a
 separate preference from source `softWrap` so either can change without
-the other. Toggling captures the top reading block from the synchronous
+the other.
+
+Vertical scroll must stay native in both modes. The preview scroller
+declares `touch-action: pan-y pinch-zoom` like Transcript; without it iOS
+waits for the drawer/pager non-passive `touchmove` recognizers before
+starting the pan, and a flick lags the finger. WebKit restarts
+touch-action at each scroll container, so wrap-off `pre`, table wrappers,
+and display math declare `pan-x pan-y pinch-zoom`; a vertical flick that
+starts on them is native too. Toggling captures the top reading block from the synchronous
 store notification and restores it after the reflow.
 
 A large Markdown document in wrap-on mode is peek content like wrap-on

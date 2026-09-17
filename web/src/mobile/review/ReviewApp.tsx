@@ -1836,6 +1836,12 @@ export function DocumentView({
               mediaPreview || settings.softWrap
             ? "auto"
             : "hidden",
+          // The drawer and pager own non-passive touchmove recognizers on
+          // ancestors. Without an axis contract iOS waits for them before it
+          // starts this native scroll, so a vertical flick lags the finger.
+          // Same contract as Transcript and the Review lists; horizontal
+          // drags still reach the recognizers.
+          ...(outerScrollable && { touchAction: "pan-y pinch-zoom" }),
         }}
         onScroll={outerScrollable
           ? (event) => {
@@ -1895,6 +1901,15 @@ export function DocumentView({
                   borderColor: "divider",
                   my: 2,
                 },
+                // A sideways-scrolling block is its own scroll container, so
+                // WebKit restarts touch-action there and a vertical flick that
+                // starts on code or a table would wait for the recognizers
+                // again. Declare both native axes on those blocks.
+                ...(!settings.markdownSoftWrap && {
+                  "& pre, & [data-markdown-table-scroll], & .katex-display": {
+                    touchAction: "pan-x pan-y pinch-zoom",
+                  },
+                }),
               }}
             >
               {
