@@ -1766,7 +1766,8 @@ export function DocumentView({
           )}
         </Stack>
       )}
-      {usingOwned && !mediaPreview && <ReviewCodeStatus intelligence={owned} />}
+      {usingOwned && !mediaPreview && !markdownPreview &&
+        previewKind !== "mermaid" && <ReviewCodeStatus intelligence={owned} />}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}

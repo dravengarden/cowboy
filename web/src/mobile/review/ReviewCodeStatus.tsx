@@ -1,119 +1,102 @@
-import { Alert, Box, Button, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, Typography } from "@mui/material";
 import { openAppSettings } from "../../appSettings";
 import type { OwnedReviewIntelligence } from "./useOwnedReviewBuffer";
 
+const action = {
+  textTransform: "none",
+  fontWeight: 600,
+  minWidth: 0,
+  px: 1,
+  whiteSpace: "nowrap",
+} as const;
+
 /** Paint-only chrome; no inner compositor promotion in the Review peek.
- *  Routine states stay a quiet caption. States that need the reader's decision
- *  use a flat standard Alert: tint and icon only, no elevation or transform. */
+ *  Routine states take no space. A state that needs the reader is one flat
+ *  row: tint and icon only, no elevation or transform. The data attribute is
+ *  always present for diagnostics and the browser conformance fixture. */
 export function ReviewCodeStatus(
   { intelligence }: { intelligence: OwnedReviewIntelligence },
 ) {
   const { status } = intelligence;
-  const button = { textTransform: "none", fontWeight: 600 } as const;
-  const checkAgain = (
-    <Button
-      size="small"
-      color="inherit"
-      onClick={intelligence.check}
-      sx={button}
-    >
-      Check again
-    </Button>
-  );
-  if (status === "checking" || status === "ready" || status === "incomplete") {
+  if (
+    status === "checking" || status === "ready" || status === "incomplete"
+  ) {
     return (
-      <Stack
+      <Box
+        component="span"
         data-review-code-status={status}
-        direction="row"
-        alignItems="center"
-        spacing={1}
-        sx={{ px: 2, py: 0.5, flexShrink: 0, minHeight: 36 }}
-      >
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ flex: 1, minWidth: 0 }}
-        >
-          {status === "checking"
-            ? "Checking Code intelligence…"
-            : status === "ready"
-            ? "Code intelligence matches this file · diagnostics as last reported."
-            : "Code intelligence needs a complete text file of at most 4 MiB."}
-        </Typography>
-        {status === "ready" && (
-          <Button size="small" onClick={intelligence.check} sx={button}>
-            Check again
-          </Button>
-        )}
-      </Stack>
+        sx={{ display: "none" }}
+      />
     );
   }
-  const [severity, title, detail] = status === "mismatch"
+  const [severity, summary, detail] = status === "mismatch"
     ? [
       "warning",
-      "Code intelligence has an older copy of this file.",
-      "Diagnostics and symbols are hidden until it matches the text shown here.",
+      "Code intelligence is out of date · diagnostics hidden",
+      "Code intelligence has an older copy of this file. Diagnostics and symbols stay hidden until it matches the text shown here.",
     ] as const
     : status === "synchronization"
     ? [
       "info",
-      "Reload from disk is prepared, not applied.",
-      "Confirm it in Settings → About → Code synchronization, then check again.",
+      "Reload prepared · confirm in Settings → About",
+      "Reload from disk is prepared, not applied. Confirm it in Settings → About → Code synchronization, then check again.",
     ] as const
     : [
       "info",
-      "Code intelligence is unavailable for this file.",
-      "Nothing was reopened or retried automatically.",
+      "Code intelligence unavailable",
+      "Code intelligence is unavailable for this file. Nothing was reopened or retried automatically.",
     ] as const;
   return (
-    <Box data-review-code-status={status} sx={{ flexShrink: 0 }}>
-      <Alert
-        severity={severity}
-        sx={{
-          borderRadius: 0,
-          px: 2,
-          py: 0.25,
-          alignItems: "flex-start",
-          "& .MuiAlert-message": { minWidth: 0, flex: 1, py: 0.75 },
-          "& .MuiAlert-icon": { py: 0.875 },
-        }}
-      >
-        <Typography variant="body2" fontWeight={600}>{title}</Typography>
-        <Typography variant="caption" component="p" sx={{ opacity: 0.85 }}>
-          {detail}
-        </Typography>
-        <Stack
-          direction="row"
-          useFlexGap
-          flexWrap="wrap"
-          spacing={1}
-          sx={{ mt: 0.5, ml: -0.75 }}
-        >
+    <Alert
+      data-review-code-status={status}
+      severity={severity}
+      action={
+        <>
           {status === "mismatch" && (
             <Button
               size="small"
               color="inherit"
-              variant="outlined"
               onClick={intelligence.prepareRefresh}
-              sx={button}
+              sx={action}
             >
-              Reload from disk…
+              Reload…
             </Button>
           )}
           {status === "synchronization" && (
             <Button
               size="small"
               color="inherit"
-              variant="outlined"
               onClick={() => openAppSettings({ tab: "info", section: "code" })}
-              sx={button}
+              sx={action}
             >
-              Confirm in Settings
+              Confirm
             </Button>
           )}
-          {checkAgain}
-        </Stack>
-      </Alert>
-    </Box>
+          <Button
+            size="small"
+            color="inherit"
+            onClick={intelligence.check}
+            sx={{ ...action, fontWeight: 500, opacity: 0.8 }}
+          >
+            Check
+          </Button>
+        </>
+      }
+      sx={{
+        flexShrink: 0,
+        borderRadius: 0,
+        minHeight: 40,
+        px: 1.5,
+        py: 0,
+        alignItems: "center",
+        "& .MuiAlert-icon": { py: 0, mr: 1, fontSize: "1.125rem" },
+        "& .MuiAlert-message": { py: 0, minWidth: 0, flex: 1 },
+        "& .MuiAlert-action": { py: 0, mr: -0.5, pl: 1, alignItems: "center" },
+      }}
+    >
+      <Typography variant="body2" noWrap title={detail}>
+        {summary}
+      </Typography>
+    </Alert>
   );
 }
