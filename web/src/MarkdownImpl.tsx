@@ -4,7 +4,8 @@
 //
 // Mobile-first concerns:
 // - Code blocks `overflow-x: auto` so they never stretch the bubble width.
-// - Tables get `display: block; overflow-x: auto` for the same reason.
+// - Tables sit in an `overflow-x: auto` wrapper for the same reason, except
+//   in touch-wrapped documents, which fit them instead (markdownTableFit.ts).
 // - Long URLs `word-break` so they don't push the bubble off-screen.
 //
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
@@ -51,6 +52,7 @@ import {
 } from "./codeRendering";
 import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
 import { normalizeMarkdownMath } from "./markdownMath";
+import { bindMarkdownTableFit, markdownTableFitSx } from "./markdownTableFit";
 
 // Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
 // cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
@@ -630,6 +632,18 @@ const MarkdownImpl = memo(function MarkdownImpl({
   const dark = theme.palette.mode === "dark" || invert;
   const codeTheme = dark ? oneDark : oneLight;
   const renderedText = useMemo(() => normalizeMarkdownMath(text), [text]);
+  // Touch-wrapped documents live inside a swiping peek: fit tables to the
+  // column rather than giving each one a nested iOS ScrollView. `noSsr` reads
+  // the query on the first render, so a large document is not re-rendered
+  // just to learn it is on a touch screen.
+  const coarse = useMediaQuery("(hover:none), (pointer:coarse)", { noSsr: true });
+  const fitTables = touchWrap && coarse;
+  const rootRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!fitTables || !root) return undefined;
+    return bindMarkdownTableFit(root);
+  }, [fitTables, renderedText]);
 
   // Images render as capped thumbnails in the bubble; tapping opens the shared
   // fullscreen lightbox. Gallery = this message's images (per-message scope), so
@@ -814,7 +828,9 @@ const MarkdownImpl = memo(function MarkdownImpl({
   return (
     <>
       <Box
+        ref={rootRef}
         sx={{
+          ...(fitTables && markdownTableFitSx),
           wordBreak: "break-word",
           "& :first-child": { mt: 0 },
           "& :last-child": { mb: 0 },
