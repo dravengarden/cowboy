@@ -36,6 +36,12 @@ only the source's original native worktree; external/dependency worktrees are
 explicitly refused. The complete result is validated before local target pins
 are installed. It never reports truncated or partially valid success.
 
+The result may precede Zed's asynchronous target State/last Chunk. Before
+capture, a bounded five-second wait observes only those original native IDs,
+rechecking the source epoch. Missing shares, stream loss or timeout retain
+Unknown; no fallback open or LSP retry fills the gap. Target-count limits are
+checked before waiting, and incomplete/invalid mirrors cannot become success.
+
 Native navigation shares targets but does not register them with language
 servers. Execute now registers each newly retained native ID once, with one
 five-second budget for the complete registration set. Existing native-ID owners

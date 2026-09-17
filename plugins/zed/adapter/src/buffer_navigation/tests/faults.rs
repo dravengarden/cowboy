@@ -1,6 +1,72 @@
 use super::*;
 
 #[tokio::test]
+async fn navigation_reply_can_precede_the_original_target_state_and_last_chunk() {
+    let mut f = Fixture::new().await;
+    let nav = f.prepare().await;
+    let task = f.spawn(action(&nav, Action::Execute));
+    let request = f.outbound.recv().await.unwrap();
+    coordinate_queries::reply(&f.zed, request, definitions(&[8])).await;
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    assert!(f.outbound.try_recv().is_err());
+    f.zed.buffer_files.write().await.insert(
+        8,
+        proto::File {
+            worktree_id: 1,
+            path: "target".into(),
+            ..Default::default()
+        },
+    );
+    // Leave a valid native base pending, then separately deliver its last chunk.
+    f.zed
+        .diagnostics
+        .lock()
+        .unwrap()
+        .observe(&proto::envelope::Payload::CreateBufferForPeer(
+            proto::CreateBufferForPeer {
+                variant: Some(proto::create_buffer_for_peer::Variant::State(
+                    proto::BufferState {
+                        id: 8,
+                        base_text: "a🙂z\n".into(),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+    f.zed.events.send(proto::Envelope::default()).unwrap();
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    assert!(f.outbound.try_recv().is_err());
+    let chunk = proto::envelope::Payload::CreateBufferForPeer(proto::CreateBufferForPeer {
+        variant: Some(proto::create_buffer_for_peer::Variant::Chunk(
+            proto::BufferChunk {
+                buffer_id: 8,
+                is_last: true,
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    });
+    f.zed.diagnostics.lock().unwrap().observe(&chunk);
+    f.zed
+        .events
+        .send(proto::Envelope {
+            payload: Some(chunk),
+            ..Default::default()
+        })
+        .unwrap();
+    ack_registration(&f.zed, f.outbound.recv().await.unwrap()).await;
+    assert!(matches!(
+        state(task.await.unwrap().unwrap()),
+        State::Retained { .. }
+    ));
+    assert!(f.outbound.try_recv().is_err());
+    f.request(action(&nav, Action::Release)).await.unwrap();
+}
+
+#[tokio::test]
 async fn target_registration_is_one_use_and_retains_unknown_pins_on_failure() {
     for case in 0..3 {
         let mut f = Fixture::new().await;

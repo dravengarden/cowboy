@@ -13,6 +13,15 @@ pub(super) async fn retain(
     zed: &Zed,
 ) -> Result<(Vec<Target>, Vec<u64>)> {
     let locations = locations(responses, slot.kind)?;
+    let native_ids: HashSet<_> = locations
+        .iter()
+        .map(|location| location.buffer_id)
+        .collect();
+    ensure!(
+        native_ids.len() <= MAX_TARGETS && !native_ids.contains(&0),
+        "native navigation targets exceed limits or have invalid IDs"
+    );
+    wait_for_initial_shares(slot, &native_ids, zed).await?;
     let files = zed.buffer_files.read().await;
     let worktrees = zed.worktree_paths.read().await;
     let cache = zed.diagnostics.lock().expect("diagnostic cache poisoned");
@@ -26,7 +35,6 @@ pub(super) async fn retain(
     );
     let mut targets = Vec::with_capacity(locations.len());
     let mut additions: HashMap<Key, (u64, Vec<BufferVersionEntry>)> = HashMap::new();
-    let mut native_ids = HashSet::new();
     for location in locations {
         let file = files
             .get(&location.buffer_id)
@@ -60,11 +68,6 @@ pub(super) async fn retain(
                 "navigation path aliases distinct native buffers"
             );
         }
-        native_ids.insert(location.buffer_id);
-        ensure!(
-            native_ids.len() <= MAX_TARGETS,
-            "native navigation targets exceed limits"
-        );
         let start = location.start.context("native navigation start missing")?;
         let end = location.end.unwrap_or_else(|| start.clone());
         let (start, end) = cache.range(location.buffer_id, &start, &end)?;
@@ -107,6 +110,30 @@ pub(super) async fn retain(
             .insert(BufferOwner::Navigation(id));
     }
     Ok((targets, unregistered))
+}
+
+async fn wait_for_initial_shares(slot: &Slot, ids: &HashSet<u64>, zed: &Zed) -> Result<()> {
+    // Zed's create_buffer_for_peer shares asynchronously. An LSP result can
+    // precede its target State/last Chunk. Subscribe before checking the cache;
+    // wakeups are hints, never evidence or permission to open/retry a pathname.
+    let mut events = zed.events.subscribe();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            {
+                let cache = zed.diagnostics.lock().expect("diagnostic cache poisoned");
+                cache.check(slot.remote_id, slot.position.revision)?;
+                if ids.iter().all(|id| cache.initial_share_complete(*id)) {
+                    return anyhow::Ok(());
+                }
+            }
+            events
+                .recv()
+                .await
+                .context("native navigation share stream unavailable")?;
+        }
+    })
+    .await
+    .context("native navigation initial share timed out")?
 }
 
 fn locations(

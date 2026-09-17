@@ -247,6 +247,10 @@ impl Cache {
         Ok(self.buffers[&id].revision)
     }
 
+    pub(crate) fn initial_share_complete(&self, id: u64) -> bool {
+        self.buffers.get(&id).is_some_and(|buffer| buffer.shared)
+    }
+
     pub(crate) fn version(&self, id: u64) -> Result<Vec<BufferVersionEntry>> {
         Ok(self.text(id)?.version())
     }
