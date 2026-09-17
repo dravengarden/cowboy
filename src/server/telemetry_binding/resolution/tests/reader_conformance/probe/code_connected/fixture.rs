@@ -146,9 +146,7 @@ pub(super) async fn seed(
     machine.enable_installation_tracking().await?;
     let password = super::super::super::connected::seed_operator(root, &machine).await?;
     private_write(&root.join("workspace/fixture.txt"), TEXT.as_bytes())?;
-    // Seed before the native worktree scan. Creating an unindexed file after
-    // Ready can replace its native File identity while a preparation is held;
-    // that must correctly refuse Apply, not serve as the stable-source case.
+    // Both source files belong to the initial native worktree scan.
     private_write(
         &root.join("workspace/sync.txt"),
         synchronization::ORIGINAL.as_bytes(),

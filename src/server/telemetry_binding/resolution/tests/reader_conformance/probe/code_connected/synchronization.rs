@@ -1,8 +1,9 @@
 //! Real authenticated finite synchronization through all four supplied layers.
 use super::*;
 use reqwest::{Method, StatusCode};
+use std::io::Write as _;
 
-pub(super) const ORIGINAL: &str = "old🙂buffer\n";
+pub(super) const ORIGINAL: &str = "old🙂synchronized buffer\n";
 const DESIRED: &str = "new🙂synchronized buffer\n";
 
 pub(super) struct Prepared {
@@ -18,6 +19,31 @@ fn request() -> Value {
     json!({"purpose":"refresh_from_disk","content":{
         "sha256":sha256(DESIRED.as_bytes()),"utf8Bytes":DESIRED.len()
     }})
+}
+
+fn change_content(root: &Path) -> Result<(), Failure> {
+    // Model changed bytes with unchanged file identity, size and mtime. This
+    // isolates explicit content synchronization from the native filesystem
+    // watcher's competing metadata update/reload; neither a stat match nor a
+    // read may manufacture content equality. All conditional native checks stay
+    // enabled, and the actual supplied processes still read the changed bytes.
+    check(ORIGINAL.len() == DESIRED.len())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(root.join("workspace/sync.txt"))
+        .map_err(|_| Failure::Setup)?;
+    let modified = file
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .map_err(|_| Failure::Setup)?;
+    file.write_all(DESIRED.as_bytes())
+        .and_then(|()| file.set_modified(modified))
+        .map_err(|_| Failure::Setup)?;
+    check(
+        file.metadata().is_ok_and(|metadata| {
+            metadata.len() == DESIRED.len() as u64 && metadata.modified().ok() == Some(modified)
+        }),
+    )
 }
 
 fn snapshot(value: &Value, resource: &str, state: &str) -> Result<String, Failure> {
@@ -90,7 +116,7 @@ pub(super) async fn prepare(pair: &Pair<'_>) -> Result<Prepared, Failure> {
     let resource = buffer(pair).await?;
     let peer = buffer(pair).await?;
     exercise::reads(pair, &resource, ORIGINAL, false).await?;
-    std::fs::write(pair.root.join("workspace/sync.txt"), DESIRED).map_err(|_| Failure::Setup)?;
+    change_content(pair.root)?;
     let path = format!("{}/synchronizations", exercise::endpoint(&resource));
     Http::new(pair.address)?
         .denied(Method::POST, &path, Some(request()))
