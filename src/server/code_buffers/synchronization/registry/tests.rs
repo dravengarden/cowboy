@@ -106,6 +106,34 @@ fn authority_loss_before_dispatch_preserves_preparation_but_not_its_deadline() {
 }
 
 #[test]
+fn completed_observation_keeps_job_exclusion_until_its_authority_check_drops() {
+    let fixture = fixture(20);
+    let prepared = insert(&fixture, 1);
+    let operations = &fixture.context.code_buffers.synchronizations;
+    let id = &prepared.operation_id;
+    let query = job(operations, id, Action::Query);
+    query.begin().unwrap();
+    assert!(!query.finish(NativeState::Prepared {}).unwrap().pending);
+    // The HTTP response still owns the query while rechecking permission.
+    // No successor can enter whose exclusion an older Job's Drop could erase.
+    for action in [Action::Apply, Action::Query, Action::Retire] {
+        assert!(saved(operations, id, action).pending);
+    }
+    drop(query);
+    let apply = job(operations, id, Action::Apply);
+    apply.begin().unwrap();
+    assert!(!apply.finish(applied()).unwrap().pending);
+    for action in [Action::Apply, Action::Query, Action::Retire] {
+        assert!(saved(operations, id, action).pending);
+    }
+    drop(apply);
+    assert!(!saved(operations, id, Action::Query).pending);
+    let retire = job(operations, id, Action::Retire);
+    retire.begin().unwrap();
+    retire.finish(NativeState::Retired {}).unwrap();
+}
+
+#[test]
 fn unknown_queries_never_rearm_or_dispose_of_an_attempt_and_retirement_does_not_replay() {
     let fixture = fixture(20);
     let prepared = insert(&fixture, 1);

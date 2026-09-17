@@ -325,11 +325,16 @@ impl Job {
             return Ok(slots.retire(&self.id, State::Retired {}));
         }
         entry.state = observed;
-        entry.busy = false;
         if entry.state.terminal() {
             entry.fence = None;
         }
-        Ok(entry.snapshot(&self.id))
+        // The job is still owned through the final asynchronous authority
+        // check. Only its Drop may reopen admission: clearing busy here would
+        // let a successor enter, then this older Drop clear the successor's
+        // exclusion. The completed observation itself is no longer pending.
+        let mut snapshot = entry.snapshot(&self.id);
+        snapshot.pending = false;
+        Ok(snapshot)
     }
 }
 
