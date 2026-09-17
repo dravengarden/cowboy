@@ -11,6 +11,11 @@ pub(super) struct Prepared {
     operation: String,
 }
 
+pub(super) struct Retired {
+    resource: String,
+    operation: String,
+}
+
 pub(super) fn endpoint(operation: &str) -> String {
     format!("/api/code/buffer-synchronizations/{operation}")
 }
@@ -170,7 +175,7 @@ pub(super) async fn finish(
     pair: &Pair<'_>,
     prepared: Prepared,
     stage: &mut &'static str,
-) -> Result<String, Failure> {
+) -> Result<Retired, Failure> {
     let Prepared {
         resource,
         operation,
@@ -232,9 +237,20 @@ pub(super) async fn finish(
     snapshot(&duplicate, &resource, "retired")?;
     check(pair.proxy.counts()?.commands.get("codeSyncRetire") == Some(&1))?;
 
+    Ok(Retired {
+        resource,
+        operation,
+    })
+}
+
+pub(super) async fn next_inert(pair: &Pair<'_>, retired: Retired) -> Result<String, Failure> {
+    let Retired {
+        resource,
+        operation,
+    } = retired;
     // Keep a distinct inert continuation for real connection/restart refusal.
-    // Its original resource/process remains owned after uninstall too.
-    *stage = "synchronization_next_inert_operation";
+    // Admit only AFTER navigation handoff: even an inert native sync owns the
+    // process-wide admission guard and must exclude new destination acquisition.
     let value = pair
         .http
         .post(

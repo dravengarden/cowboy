@@ -214,6 +214,8 @@ pub(super) async fn run(
     checks.push("lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall");
     checks.push("synchronization_retirement_drains_after_cancelled_http_without_replay");
     let navigation = navigation::handoff(pair, navigation, stage, checks).await?;
+    *stage = "synchronization_next_inert_operation";
+    let sync = synchronization::next_inert(pair, sync).await?;
     *stage = "removed_paths";
     std::fs::remove_file(pair.root.join("workspace/fixture.txt")).map_err(|_| Failure::Setup)?;
     std::fs::rename(
