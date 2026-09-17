@@ -8,7 +8,13 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 struct Client(PathBuf);
 
 fn target_text() -> String {
-    format!("{A}{}🙂tail\n", "x".repeat(65_535 - A.len()))
+    let padding = 65_535 - A.len();
+    // Keep the real server's 20,000-character LSP line limit intact.
+    format!(
+        "{A}{}{}🙂tail\n",
+        "// x\n".repeat(padding / 5),
+        " ".repeat(padding % 5)
+    )
 }
 
 impl Client {

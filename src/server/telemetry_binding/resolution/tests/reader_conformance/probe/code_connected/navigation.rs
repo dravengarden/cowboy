@@ -9,7 +9,13 @@ const B: &str = "// b🙂q\npub struct Target;\n";
 
 fn target_text() -> String {
     // The next Unicode scalar straddles the fixed 64 KiB page boundary.
-    format!("{A}{}🙂tail\n", "x".repeat(65_535 - A.len()))
+    let padding = 65_535 - A.len();
+    // Preserve native LSP line-length admission rather than changing its policy.
+    format!(
+        "{A}{}{}🙂tail\n",
+        "// x\n".repeat(padding / 5),
+        " ".repeat(padding % 5)
+    )
 }
 
 pub(super) struct Retained {
