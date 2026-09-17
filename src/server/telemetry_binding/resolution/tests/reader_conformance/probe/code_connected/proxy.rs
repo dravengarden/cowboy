@@ -450,6 +450,8 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
         "bufferHover",
         "reloadBuffers",
         "bufferLanguage",
+        "prepareBufferSync",
+        "bufferSync",
     ] {
         let command = MachineCommand::AdapterRequest {
             request_id: "id".into(),
@@ -459,7 +461,7 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
         assert!(command_frame(command, &mut Record::default()).is_err());
     }
     assert!(Record::default().reply("unrequested").is_err());
-    for protocol in [18, 20] {
+    for protocol in [18, 19, 21] {
         assert!(
             handshake(
                 MachineFrame::Welcome {
@@ -474,4 +476,58 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
             .is_err()
         );
     }
+    handshake(
+        MachineFrame::Welcome {
+            protocol: 20,
+            controller_epoch: 1,
+            heartbeat_interval_ms: 1000,
+            desired_components: vec![],
+        },
+        false,
+        &mut Record::default(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn relay_synchronization_is_closed_site_bound_and_never_generic_forwarding() {
+    use crate::machine_protocol::code_buffer_sync::{Action, BufferRef, Content, Purpose, Request};
+    let mut request = Request {
+        service_id: SERVICE.into(),
+        machine_id: MACHINE.into(),
+        action: Action::Prepare {
+            lease: BufferRef {
+                instance: "a".repeat(32),
+                id: "0000000000000001".into(),
+            },
+            purpose: Purpose::RefreshFromDisk,
+            content: Content {
+                sha256: "b".repeat(64),
+                utf8_bytes: 1,
+            },
+        },
+    };
+    let mut record = Record::default();
+    command_frame(
+        MachineCommand::CodeBufferSync {
+            request_id: "owned-sync".into(),
+            request: Box::new(request.clone()),
+        },
+        &mut record,
+    )
+    .unwrap();
+    assert_eq!(record.counts.commands.get("codeSyncPrepare"), Some(&1));
+    assert!(record.reply("owned-sync").unwrap().is_none());
+    request.machine_id = "other".into();
+    assert!(
+        command_frame(
+            MachineCommand::CodeBufferSync {
+                request_id: "wrong-machine".into(),
+                request: Box::new(request),
+            },
+            &mut record
+        )
+        .is_err()
+    );
+    assert!(record.pending.is_empty());
 }
