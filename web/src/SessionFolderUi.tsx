@@ -48,6 +48,7 @@ import {
   type SessionFoldersValue,
 } from "./sessionFolders";
 import { Sheet } from "./Sheet";
+import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useDialogFocus, useDialogInputFocus } from "./useDialogInputFocus";
 
@@ -196,6 +197,11 @@ export function FolderNameShell({
   // Mounted with flushSync inside the opening tap so iOS raises the keyboard
   // for the real input (the same contract as RenameSessionShell).
   useDialogInputFocus(inputRef, desktop);
+  useSheetKeyboardDiagnostics(
+    "session-folder-name",
+    !desktop,
+    () => inputRef.current?.closest("[role='dialog']") ?? null,
+  );
   const normalized = normalizeSessionFolderName(value);
   const canSave = normalized !== null && normalized !== initial;
   const submit = (): void => {
