@@ -114,8 +114,8 @@ nix develop .#native-android -c bash -c '
   bash tools/sign-android-apk.sh /absolute/dist/native-shell/android-<rev>.<nonce>/receipt.json'
 ```
 
-It re-verifies the APK digest, 16 KB page-aligns, signs with APK Signature
-Scheme v2/v3, verifies the result and writes `signing-receipt.json` with the
+It re-verifies the APK digest, 16 KB page-aligns, signs (apksigner selects APK
+Signature Scheme v3 for minSdk 29), verifies the result and writes `signing-receipt.json` with the
 signed APK digest and certificate SHA-256. The keystore and password file stay
 outside every checkout (Hawk: `~/.local/share/cowboy-android-signing/`, mode
 0700). Every future update must be signed with the same key; back it up.
