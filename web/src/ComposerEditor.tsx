@@ -34,7 +34,6 @@ import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
 import { useComposerSourceMode } from "./composerSourceMode";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { isImeProtectedInput } from "./imeKey";
 import {
   deleteEmptyCodeFenceBackward,
   deleteTokenBackward,
@@ -999,35 +998,14 @@ export const ComposerEditor = forwardRef<
           ? [{ key: "Enter", run: moveCaretOffImageLine }]
           : []),
       ])),
-      // SOFT-KEYBOARD path (iOS/Android): a phone's Backspace emits NO `keydown`
-      // — it fires `beforeinput` with inputType "deleteContentBackward", which the
-      // keymap above never sees. Without this, an inline image / @-token / empty
-      // pair is UNDELETABLE on a phone (CM6's native atomic-range delete no-ops on
-      // the block-image line, and the trailing-line filter re-adds it). Route the
-      // SAME chain from beforeinput; only preventDefault when a handler actually
-      // consumed the delete, so normal char-deletion falls through untouched. On a
-      // physical keyboard the keymap already handled + preventDefaulted the keydown,
-      // so no beforeinput fires here — no double delete.
-      Prec.high(
-        EditorView.domEventHandlers({
-          beforeinput: (e, view): boolean => {
-            if (isImeProtectedInput(e, view.composing)) return false;
-            if (
-              touchInput &&
-              (e.inputType === "insertLineBreak" ||
-                e.inputType === "insertParagraph") &&
-              moveCaretOffImageLine(view)
-            ) {
-              e.preventDefault();
-              return true;
-            }
-            if (e.inputType !== "deleteContentBackward") return false;
-            if (!backspaceChain(view)) return false;
-            e.preventDefault();
-            return true;
-          },
-        }),
-      ),
+      // No `beforeinput` Backspace channel, like Obsidian. CM6 already routes a
+      // soft-keyboard Backspace/Enter to keymaps: iOS fires a real keydown that
+      // CM6 parks as `pendingIOSKey` and replays into the keymap once the
+      // native edit mutates the DOM (Android Chrome: `delayAndroidKey` from
+      // beforeinput). Consuming the beforeinput here left that parked key
+      // alive, and CM6's 250ms fallback replayed it as a second Backspace:
+      // one soft-keyboard press deleted an @-token plus the character before
+      // it, and skipped the image ring confirmation (PITFALLS #12, #109).
       // Escape belongs to Vim until it reaches plain Normal mode: Insert exits
       // to Normal, Visual clears its selection, and pending operators/prefixes
       // cancel. Only a later Normal-mode Escape may reach Cowboy's active

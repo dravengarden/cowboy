@@ -5,6 +5,7 @@ import { indentLess, indentMore, insertNewline } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
+import { selectionOnImageLandingLine } from "./inlineImageCaretPolicy";
 import {
   continueMarkdownList,
   type EditorTextSelection,
@@ -58,7 +59,13 @@ function indentUnitText(view: EditorView): string {
 export const obsidianMarkdownKeymap = Prec.high(keymap.of([
   {
     key: "Enter",
-    run: (view) => runMarkdownEdit(view, continueMarkdownList),
+    // Obsidian dedents an indentation-only line rather than breaking it. The
+    // whitespace landing line under a pasted image (pitfall #69) must keep
+    // breaking on Return, as it did before the port; defaultKeymap's
+    // insertNewlineAndIndent then drops the space and adds the line.
+    run: (view) =>
+      !selectionOnImageLandingLine(view.state) &&
+      runMarkdownEdit(view, continueMarkdownList),
     shift: (view) =>
       runMarkdownEdit(view, newlineAndIndentOnly) || insertNewline(view),
   },

@@ -54,8 +54,11 @@ Deno.test("touch host swap waits out the iOS compositionend hold", () => {
   );
 });
 
-Deno.test("CM6 backspace does not steal iOS IME composition deletes", () => {
-  assertEquals(editorSource.includes("isImeProtectedInput(e, view.composing)"), true);
+Deno.test("CM6 backspace is keymap-only and never steals IME composition deletes", () => {
+  // CM6 replays a parked iOS soft-keyboard key into the keymap itself. A
+  // beforeinput delete channel made that replay a second Backspace (#12).
+  assertEquals(editorSource.includes('"deleteContentBackward"'), false);
+  assertEquals(editorSource.includes("beforeinput:"), false);
   assertEquals(
     editorSource.includes("view.composing ? false : backspaceChain(view)"),
     true,

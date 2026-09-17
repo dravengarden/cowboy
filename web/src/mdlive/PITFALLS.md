@@ -240,25 +240,29 @@ here says otherwise.
     for a non-empty range; empty selection keeps the configured toolbar. This
     changes toolbar chrome only and never rebuilds CM6 state or composition.
 
-12. **A phone soft keyboard can't delete an inline image / @-token / empty pair
-    ("输入框无法用删除键删除图片").** The custom Backspace handlers
-    (`deleteImageTokenBackward` — the two-stage image delete — plus the empty-pair,
-    code-fence, and @-token deleters) are CM6 **keymap `{key:"Backspace"}`**
-    bindings, i.e. keydown-only. iOS/Android soft keyboards emit **no Backspace
-    `keydown`** — they fire `beforeinput` with `inputType:"deleteContentBackward"`,
-    which a keymap never sees. So on a phone those handlers never run; for a block
-    image CM6's native atomic-range delete then no-ops (the `inlineImageTrailingLine`
-    filter re-adds the line it removed) → the picture is undeletable from the
-    keyboard. **Fix (`ComposerEditor.tsx`):** hoist the four deleters into one
-    `backspaceChain(view)` and run it from BOTH channels — the existing `Prec.high`
-    keymap (physical keyboard) AND a new `Prec.high EditorView.domEventHandlers({
-    beforeinput })` that catches `deleteContentBackward` and `preventDefault`s ONLY
-    when a handler actually consumed the delete (normal char-deletion falls
-    through). No double-delete on desktop: the keymap already `preventDefault`s the
-    keydown, so no `beforeinput` follows. Same soft-keyboard gap would hit any
-    future keymap-only editing command. **Status: fix verified headlessly through
-    the beforeinput channel** (Playwright: a synthetic `deleteContentBackward`
-    removes the image after the fix, no-ops before it; keydown path unchanged).
+12. **Soft-keyboard Backspace reaches keymaps through CM6's own key
+    replay; never add a `beforeinput` delete channel.** The custom Backspace
+    handlers (`deleteImageTokenBackward` — the two-stage image delete — plus
+    the empty-pair, code-fence, and @-token deleters) are one
+    `backspaceChain` bound as a CM6 **keymap** `{key:"Backspace"}`. That is
+    enough on phones, exactly as it is for Obsidian: iOS fires a real
+    `keydown` (keyCode 8) which CM6 parks as `pendingIOSKey` and replays
+    into the keymap as soon as the native edit mutates the DOM
+    (`applyDOMChangeInner` → `flushIOSKey`), discarding the DOM change; a
+    250ms timer replays it if no DOM change arrives. Android Chrome routes
+    `beforeinput` through `delayAndroidKey` to the same keymap.
+
+    An earlier version (v190–v1703) also ran the chain from a
+    `Prec.high EditorView.domEventHandlers({beforeinput})` on
+    `deleteContentBackward`, believing phones emit no Backspace keydown.
+    Simulator iOS 26.5 telemetry (2026-09-17, pitfall #109) showed the real
+    effect: when that handler consumed the event, no DOM change followed, the
+    parked key survived, and CM6's 250ms fallback replayed Backspace into the
+    keymap. One press deleted an @-token AND the character before it, deleted
+    an empty `**|**` pair plus a character, and skipped the image ring: a
+    single Backspace on the landing line removed the picture outright. The
+    channel is removed; only the keymap remains. Do not reintroduce a
+    beforeinput delete/Enter path — it double-fires on iOS by construction.
     Deleting the final token also changes the hybrid editor owner from CM6 back
     to the native textarea. A plain React replacement leaves `BODY` focused and
     collapses the keyboard. `PlatformComposerEditor` must snapshot the post-delete
@@ -1072,9 +1076,9 @@ fullscreen editor:
       focus after insertion. Repeat with an image supplied by the Screenshot/IME
       shelf so the provider data/file fallback is exercised (pitfall #59).
 - [ ] Attach a photo, put the caret below it, press the SOFT-keyboard Backspace
-      twice — the image is ringed then deleted, the token-free native textarea
-      inherits the exact caret, and the keyboard stays open (pitfall #12;
-      keydown-only handlers don't fire on a phone, so this is the beforeinput path).
+      twice — the image is ringed then deleted (never on the first press), the
+      token-free native textarea inherits the exact caret, and the keyboard
+      stays open (pitfall #12; the keymap runs through CM6's iOS key replay).
 - [ ] Headings/bold/italic/code/list render (inactive line) + reveal (active line).
 - [ ] Native iOS Pinyin: type unmarked latin, tap a candidate in the
       system bar — the Chinese word commits and composition continues.
@@ -1724,7 +1728,13 @@ Desktop Vim + IME checks:
       Range has `caret_height=0` and a negative `caret_top`.
     - Software-keyboard Return is `beforeinput insertLineBreak` then
       a delayed `keydown Enter` (~250ms). HID / Simulator hardware
-      Return is only `keydown Enter`.
+      Return is only `keydown Enter`. 2026-09-17: that delayed Enter is
+      not iOS — it is CM6's `pendingIOSKey` replay (`keydown()` parks
+      the real Enter; `flushIOSKey` replays it into the keymap when the
+      native edit mutates the DOM, else a 250ms timer does). Cancelling
+      the native `insertLineBreak` therefore always yields the timer
+      replay, and any Enter handled at beforeinput time runs twice
+      (pitfall #12). Whoever reopens #69 must model that replay.
     - When `insertLineBreak` is not preventDefaulted, `line_height`
       grows 14→28 or 88→102 (`<br>` in the current node) while
       `document_lines` stays put until CM6 later writes `\n`.
@@ -2494,6 +2504,15 @@ Desktop Vim + IME checks:
       would make the toolbar and `@`/`/` picker dead; Chrome commits the
       composition on a value write. `clear()` no longer refocuses after
       delivery.
+    - **Soft-keyboard Backspace** no longer has a `beforeinput` channel
+      (pitfall #12): CM6 replays the parked iOS key into the keymap, and the
+      old channel made one press delete an @-token plus a character, an empty
+      pair plus a character, and an inline image without its ring.
+    - **Image landing line.** Obsidian's list Enter dedents an
+      indentation-only line instead of breaking it. The `\n ` landing line
+      under a pasted image (#69) is such a line, so the first Return only
+      removed the space; `obsidianMarkdownKeymap` skips the Obsidian command
+      there and lets `insertNewlineAndIndent` break the line as before.
     - **Fence auto-close** tests the line text, not lezer node starts: a line
       typed under a paragraph is that paragraph's continuation in lezer, so
       `text:` then ``` would never close.
@@ -2536,6 +2555,17 @@ Desktop Vim + IME checks:
       The native picker gained arrow/Enter/Tab selection, opens only from
       typing (never from focus or a long-press selection), and in fullscreen
       follows the caret line instead of rendering under the status bar.
+
+    Simulator evidence (iPhone 17, iOS 26.5, Safari, 2026-09-17; real
+    software-keyboard taps via AXe, native Simplified Pinyin): candidate tap,
+    space select, mid-composition Backspace, partial commit with leftover
+    pinyin, Return during composition, `@` query narrowing while composing,
+    Return accepting the native picker, toolbar Bold blocked while composing
+    and promoting to CM6 after commit, pinyin inside `**…**`, on a new line,
+    beside an `@` chip and over a selection, CM6 autocorrect / double-space
+    period / autocapitalize, keymap-only Backspace for tokens, pairs and the
+    two-stage image delete, and the fullscreen picker beside the caret all
+    pass. Not covered: WeType, physical iPhone caret paint (#69), Android.
 
     Not ported (recorded decisions): HTML→Markdown paste, drop of files onto a
     touch CM6 editor, numbered-list renumbering on arbitrary edits, and

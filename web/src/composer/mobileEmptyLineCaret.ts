@@ -17,7 +17,7 @@ import {
   selectionOnEmptyLineAfterImage,
   selectionOnEmptyLineInImageChain,
 } from "./inlineImageCaretPolicy";
-import { isImeInputType } from "../imeKey";
+import { isImeProtectedInput } from "../imeKey";
 import { reportClientLog } from "../observability";
 
 export const MOBILE_EMPTY_LINE_CARET_ANCHOR_CLASS =
@@ -259,8 +259,10 @@ export const mobileEmptyLineCaretRepair = [
         const input = event as InputEvent;
         // Candidate confirmation is insertReplacementText /
         // insertFromComposition. preventDefault here is the
-        // "tapped the suggestion, the word vanished" bug.
-        if (isImeInputType(input.inputType)) return;
+        // "tapped the suggestion, the word vanished" bug. A line break
+        // requested while native marked text is still open belongs to the
+        // IME as well (it commits the composition), so never cancel it.
+        if (isImeProtectedInput(input, this.view.composing)) return;
         if (
           !shouldPreventNativeMobileLineBreak(input.inputType, this.view.state)
         ) {

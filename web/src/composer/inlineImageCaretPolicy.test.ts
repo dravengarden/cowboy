@@ -5,6 +5,7 @@ import {
   emptyLinePositionsAfterImages,
   selectionOnEmptyLineAfterImage,
   selectionOnEmptyLineInImageChain,
+  selectionOnImageLandingLine,
   selectionOnLoneImageLine,
 } from "./inlineImageCaretPolicy";
 
@@ -38,4 +39,15 @@ Deno.test("Return on an image line is a normal line break", () => {
   });
   assertEquals(selectionOnEmptyLineAfterImage(laterEmpty), false);
   assertEquals(selectionOnEmptyLineInImageChain(laterEmpty), true);
+});
+
+Deno.test("the whitespace landing line under a lone image keeps breaking on Return", () => {
+  const token = "![p.png](cowboy-att:p1)";
+  const state = (doc: string, at: number): EditorState =>
+    EditorState.create({ doc, selection: { anchor: at } });
+  assertEquals(selectionOnImageLandingLine(state(`${token}\n `, token.length + 2)), true);
+  assertEquals(selectionOnImageLandingLine(state(`${token}\n`, token.length + 1)), true);
+  assertEquals(selectionOnImageLandingLine(state(`${token}\n x`, token.length + 2)), false);
+  assertEquals(selectionOnImageLandingLine(state(`abc\n `, 5)), false);
+  assertEquals(selectionOnImageLandingLine(state(`${token}\n `, token.length)), false);
 });

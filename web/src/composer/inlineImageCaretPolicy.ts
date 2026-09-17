@@ -70,3 +70,18 @@ export function caretOffImageLineSpec(_state: EditorState): {
 export function moveCaretOffImageLine(_view: EditorView): boolean {
   return false;
 }
+
+/**
+ * True when a collapsed caret sits on the whitespace-only landing line that
+ * image insertion leaves under a lone image token (`token\n `). Obsidian's
+ * list Enter dedents an indentation-only line instead of breaking it; that
+ * landing space exists for iOS caret geometry, so Return must still break
+ * the line there.
+ */
+export function selectionOnImageLandingLine(state: EditorState): boolean {
+  const selection = state.selection.main;
+  if (!selection.empty) return false;
+  const line = state.doc.lineAt(selection.head);
+  return line.number > 1 && line.text.trim() === "" &&
+    isLoneImageTokenLine(state.doc.line(line.number - 1).text);
+}
