@@ -22,7 +22,11 @@ import { insertNativeInlineImages } from "./composer/mobileCompactEditorPolicy";
 import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
-import { imeOwnsEditable, isImeKeyEvent } from "./imeKey";
+import {
+  IME_COMPOSITION_END_HOLD_MS,
+  imeOwnsEditable,
+  isImeKeyEvent,
+} from "./imeKey";
 import { withoutNativeComposition } from "./composer/nativeComposition";
 import { isAppleTouchDevice } from "./keyboardGeometry";
 import type { AvailableCommand } from "./protocol";
@@ -267,6 +271,24 @@ export const ComposerTextarea = forwardRef<
   // toolbar and picker dead; Chrome commits the composition on a value write.
   const nativeImeBlocksWrites = (): boolean =>
     isAppleTouchDevice(globalThis.navigator ?? {}) && nativeImeOwns();
+  // Explicit actions (Send, Clear all, dock Paste) that arrive under the iOS
+  // IME: commit a live composition first (pitfall #110), let the short
+  // post-compositionend hold (#84) pass, then write with the IME idle.
+  const runOutsideNativeIme = (then: () => void): void => {
+    const ta = inputRef.current;
+    if (!ta || !nativeImeBlocksWrites()) {
+      then();
+      return;
+    }
+    if (composingRef.current) {
+      withoutNativeComposition(ta, true, () => runOutsideNativeIme(then));
+      return;
+    }
+    globalThis.setTimeout(
+      () => runOutsideNativeIme(then),
+      IME_COMPOSITION_END_HOLD_MS,
+    );
+  };
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -554,14 +576,9 @@ export const ComposerTextarea = forwardRef<
   // still UIKit's first responder when this runs. Commit literal Markdown and
   // its selection synchronously; a delayed selection write after React paints
   // is enough to reset an iPad keyboard/selection transaction.
-  const applyTextEdit = (
-    edit: NativeTextEdit,
-    { afterComposition = false }: { afterComposition?: boolean } = {},
-  ): void => {
+  const applyTextEdit = (edit: NativeTextEdit): void => {
     // Never write the textarea while the iOS IME owns it (pitfalls #83/#84).
-    // A caller that already committed the composition (#110) may write inside
-    // the short post-compositionend hold.
-    if (!afterComposition && nativeImeBlocksWrites()) return;
+    if (nativeImeBlocksWrites()) return;
     const ta = inputRef.current;
     ta?.focus();
     if (ta) writeUndoableNativeEdit(ta, edit);
@@ -701,13 +718,10 @@ export const ComposerTextarea = forwardRef<
           ta?.selectionStart ?? current.length;
         const head = capturedSelection?.head ??
           ta?.selectionEnd ?? anchor;
-        applyTextEdit(replaceNativeSelection(current, anchor, head, insert), {
-          afterComposition: true,
-        });
+        applyTextEdit(replaceNativeSelection(current, anchor, head, insert));
       };
       // Dock Paste is explicit: commit live marked text, then insert.
-      if (ta) withoutNativeComposition(ta, nativeImeOwns(), paste);
-      else paste();
+      runOutsideNativeIme(paste);
     },
     // Clearing runs after an asynchronous delivery acknowledgement, when the
     // Mobile keyboard has already been released on purpose. Do not refocus.
@@ -727,8 +741,7 @@ export const ComposerTextarea = forwardRef<
         setTrigger(null);
         if (ta) publishSelection(ta);
       };
-      if (ta) withoutNativeComposition(ta, composingRef.current, doClear);
-      else doClear();
+      runOutsideNativeIme(doClear);
     },
     consumeSelectedSlashCommand: (): string | null => {
       const command = selectedSlashCommandRef.current;

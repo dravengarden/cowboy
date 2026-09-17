@@ -13,6 +13,8 @@
 // from that event (after the editor's own handlers) or after a short fallback
 // when no event arrives.
 
+import { isAppleTouchDevice } from "../keyboardGeometry";
+
 export const NATIVE_COMPOSITION_END_FALLBACK_MS = 250;
 
 export function afterNativeCompositionEnds(
@@ -20,6 +22,14 @@ export function afterNativeCompositionEnds(
   then: () => void,
   fallbackMs = NATIVE_COMPOSITION_END_FALLBACK_MS,
 ): void {
+  // `blur()` on an element that does not own focus is a no-op, so nothing
+  // would ever end the composition; waiting would only delay the rewrite
+  // without protecting it. (WKWebView can park `activeElement` on BODY under
+  // a live composition, pitfall #45.)
+  if (editable.ownerDocument.activeElement !== editable) {
+    then();
+    return;
+  }
   let done = false;
   let timer = 0;
   const finish = (): void => {
@@ -38,15 +48,21 @@ export function afterNativeCompositionEnds(
   editable.blur();
 }
 
-/** Run `then` now, or after the live composition has been committed. */
+/**
+ * Run `then` now, or after the live composition has been committed. Only
+ * Apple touch WebKit needs the commit: Chrome Android finishes a Gboard
+ * composition itself when the DOM is rewritten, and blurring there would
+ * collapse the keyboard. `then(deferred)` tells the caller whether the
+ * editable state may have changed since the call.
+ */
 export function withoutNativeComposition(
   editable: HTMLElement,
   composing: boolean,
-  then: () => void,
+  then: (deferred: boolean) => void,
 ): void {
-  if (!composing) {
-    then();
+  if (!composing || !isAppleTouchDevice(globalThis.navigator ?? {})) {
+    then(false);
     return;
   }
-  afterNativeCompositionEnds(editable, then);
+  afterNativeCompositionEnds(editable, () => then(true));
 }

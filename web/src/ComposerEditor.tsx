@@ -245,9 +245,9 @@ function deleteEmptyMarkerPairBackward(view: EditorView): boolean {
 
 // The custom Backspace chain, by SPECIFICITY: empty marker pair → inline-image
 // token → empty code fence → @/​/ token. Each no-ops (false) when it doesn't
-// apply, so order is safe; returns true once one consumes the delete. Shared by
-// BOTH delete channels — the keymap (physical keyboard `keydown`) and the
-// beforeinput handler (phone soft keyboards, which emit no Backspace keydown).
+// apply, so order is safe; returns true once one consumes the delete. Bound
+// once, as a keymap: CM6 replays soft-keyboard Backspace into keymaps itself
+// (iOS `pendingIOSKey`, Android `delayAndroidKey`), see PITFALLS #12.
 // Inline-image sits after the @-token deliberately: its token contains spaces,
 // so the @-token regex can't match it.
 function backspaceChain(view: EditorView): boolean {
@@ -477,11 +477,19 @@ export const ComposerEditor = forwardRef<
   // compositionend (composer/nativeComposition.ts). Typing and toolbar
   // commands never reach this: the accessory buttons keep focus and
   // Obsidian-style commands are ignored while composing.
-  const afterTouchComposition = (view: EditorView, then: () => void): void => {
+  const afterTouchComposition = (
+    view: EditorView,
+    then: (deferred: boolean) => void,
+  ): void => {
     withoutNativeComposition(
       view.contentDOM,
       touchInput && view.compositionStarted,
-      then,
+      (deferred) => {
+        // The editor may have been unmounted or swapped (image-token demotion)
+        // during the wait; a destroyed view swallows dispatches silently.
+        if (deferred && cmRef.current?.view !== view) return;
+        then(deferred);
+      },
     );
   };
 
@@ -564,8 +572,13 @@ export const ComposerEditor = forwardRef<
       // the caret past the inserted text (or past the document end, throwing).
       const insert = normalizeClipboardText(text);
       if (!view || insert.length === 0) return;
-      afterTouchComposition(view, () => {
-        const selection = capturedSelection ?? view.state.selection.main;
+      afterTouchComposition(view, (deferred) => {
+        // A committed composition (and any autocorrection committed with it)
+        // can change the document, so a range captured before the wait is
+        // stale; the refocused editor's own selection is the caret then.
+        const selection = deferred
+          ? view.state.selection.main
+          : capturedSelection ?? view.state.selection.main;
         const clamp = (position: number): number =>
           Math.max(0, Math.min(position, view.state.doc.length));
         const from = Math.min(clamp(selection.anchor), clamp(selection.head));
@@ -593,8 +606,10 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (!view || attachments.length === 0) return;
       attachments.forEach(registerInlineAttachment);
-      afterTouchComposition(view, () => {
-        const selection = capturedSelection ?? view.state.selection.main;
+      afterTouchComposition(view, (deferred) => {
+        const selection = deferred
+          ? view.state.selection.main
+          : capturedSelection ?? view.state.selection.main;
         const edit = inlineImagePasteInsertion(
           view.state.doc.toString(),
           selection.anchor,
