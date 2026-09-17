@@ -5570,8 +5570,11 @@ mod tests {
                 serde_json::json!({"kind":"content","content":changed_content,"result":{"kind":"mismatch"}})
             );
         }
-        let synchronization = code_sync_conformance::prepare(&store, &worktree).await;
         let navigation = code_navigation_conformance::prepare(&store, navigation_root).await;
+        // The live native synchronization reservation intentionally blocks
+        // new acquisition process-wide, including on another worktree. Retain
+        // navigation first, then settle synchronization before destination Open.
+        let synchronization = code_sync_conformance::prepare(&store, &worktree).await;
         store
             .uninstall("zed", &release.artifact_digest)
             .await
