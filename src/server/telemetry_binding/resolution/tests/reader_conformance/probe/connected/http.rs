@@ -26,6 +26,46 @@ impl Reply {
     }
 }
 
+#[test]
+fn only_original_text_reads_allow_a_json_escaped_native_page() {
+    let text = json!({"kind":"text"});
+    let path = "/api/code/buffers/original/read";
+    let limit = response_limit(&Method::POST, path, Some(&text));
+    assert_eq!(limit, 512 * 1024);
+    let escaped = serde_json::to_vec(&json!({"text":"\0".repeat(65_536)})).unwrap();
+    assert!(escaped.len() > 64 * 1024 && escaped.len() < limit);
+    for other in [
+        "/api/code/buffers",
+        "/api/code/buffers//read",
+        "/api/code/buffers/one/two/read",
+        "/api/code/navigations/original/read",
+        "/api/telemetry/binding",
+    ] {
+        assert_eq!(response_limit(&Method::POST, other, Some(&text)), 64 * 1024);
+    }
+    assert_eq!(response_limit(&Method::GET, path, Some(&text)), 64 * 1024);
+    assert_eq!(response_limit(&Method::POST, path, None), 64 * 1024);
+    assert_eq!(
+        response_limit(&Method::POST, path, Some(&json!({"kind":"content"}))),
+        64 * 1024
+    );
+}
+
+fn response_limit(method: &Method, path: &str, body: Option<&Value>) -> usize {
+    let original_read = path
+        .strip_prefix("/api/code/buffers/")
+        .and_then(|rest| rest.strip_suffix("/read"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'));
+    if method == Method::POST && original_read && body.is_some_and(|value| value["kind"] == "text")
+    {
+        // A 64 KiB UTF-8 page needs room for JSON escaping and the envelope.
+        // Match the core browser's bound; other fixture APIs keep their limit.
+        512 * 1024
+    } else {
+        64 * 1024
+    }
+}
+
 impl Http {
     pub fn new(address: std::net::SocketAddr) -> Result<Self, Failure> {
         Self::with_timeout(address, Duration::from_secs(60))
@@ -62,6 +102,7 @@ impl Http {
         path: &str,
         body: Option<Value>,
     ) -> Result<Reply, Failure> {
+        let max_bytes = response_limit(&method, path, body.as_ref());
         let started = std::time::Instant::now();
         *self.last.lock() = Some(HttpObservation {
             status: None,
@@ -124,7 +165,7 @@ impl Http {
             .await
             .map_err(|_| Failure::WrongObservation)?
         {
-            if bytes.len() + chunk.len() > 64 * 1024 {
+            if bytes.len() + chunk.len() > max_bytes {
                 return Err(Failure::WrongObservation);
             }
             bytes.extend_from_slice(&chunk);

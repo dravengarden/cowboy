@@ -390,6 +390,7 @@ pub(super) async fn after_path_removal(
                 .as_array()
                 .is_some_and(|contents| !contents.is_empty()),
     )?;
+    *stage = "navigation_destination_text_start";
     let first = pair
         .http
         .post(
@@ -409,6 +410,7 @@ pub(super) async fn after_path_removal(
             && page["nextOffset"] == 65_535
             && page["text"] == complete[..65_535],
     )?;
+    *stage = "navigation_destination_text_continue";
     let second = pair.http.post(&path, json!({"kind":"text","content":expected,"page":{"kind":"continue","offset":65_535,"snapshot":page["snapshot"]}})).await?;
     check(
         second["resourceId"] == target
