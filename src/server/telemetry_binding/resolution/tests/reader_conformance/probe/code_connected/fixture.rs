@@ -146,6 +146,13 @@ pub(super) async fn seed(
     machine.enable_installation_tracking().await?;
     let password = super::super::super::connected::seed_operator(root, &machine).await?;
     private_write(&root.join("workspace/fixture.txt"), TEXT.as_bytes())?;
+    // Seed before the native worktree scan. Creating an unindexed file after
+    // Ready can replace its native File identity while a preparation is held;
+    // that must correctly refuse Apply, not serve as the stable-source case.
+    private_write(
+        &root.join("workspace/sync.txt"),
+        synchronization::ORIGINAL.as_bytes(),
+    )?;
     // Seed a stopped owned Session before startup, never fake a native worker.
     let session: crate::core::SessionMeta = serde_json::from_value(json!({
         "id":SESSION,"provider":"codex","machine_id":MACHINE,"workspace_id":"fixture",

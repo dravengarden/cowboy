@@ -2,7 +2,7 @@
 use super::*;
 use reqwest::{Method, StatusCode};
 
-const ORIGINAL: &str = "old🙂buffer\n";
+pub(super) const ORIGINAL: &str = "old🙂buffer\n";
 const DESIRED: &str = "new🙂synchronized buffer\n";
 
 pub(super) struct Prepared {
@@ -87,7 +87,6 @@ async fn fenced(pair: &Pair<'_>, resource: &str) -> Result<(), Failure> {
 }
 
 pub(super) async fn prepare(pair: &Pair<'_>) -> Result<Prepared, Failure> {
-    std::fs::write(pair.root.join("workspace/sync.txt"), ORIGINAL).map_err(|_| Failure::Setup)?;
     let resource = buffer(pair).await?;
     let peer = buffer(pair).await?;
     exercise::reads(pair, &resource, ORIGINAL, false).await?;
