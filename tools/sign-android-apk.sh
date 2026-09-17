@@ -56,8 +56,9 @@ with tempfile.TemporaryDirectory(dir=out_dir) as work:
     # apksigner is a `#!/bin/bash` wrapper, which a NixOS host does not provide.
     subprocess.run(["bash", str(tools / "apksigner"), "sign",
         "--ks", os.environ["COWBOY_ANDROID_KEYSTORE"], "--ks-key-alias", alias,
+        # A PKCS12 key shares the store password. Naming the same file for
+        # --key-pass would make apksigner read a second, missing line.
         "--ks-pass", "file:" + os.environ["COWBOY_ANDROID_KEYSTORE_PASSWORD_FILE"],
-        "--key-pass", "file:" + os.environ["COWBOY_ANDROID_KEYSTORE_PASSWORD_FILE"],
         "--out", str(signed), str(aligned)], check=True)
 verify = subprocess.run(["bash", str(tools / "apksigner"), "verify", "--verbose", "--print-certs", str(signed)],
     check=True, capture_output=True, text=True).stdout
