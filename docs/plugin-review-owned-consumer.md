@@ -87,3 +87,8 @@ and exact Zed pair remain disposable fixture processes. It does not install or
 activate those components on a registered Machine, establish real LSP freshness,
 recover abandoned owners or accept a physical device. Preserve all existing
 browser ownership, product-context, synchronization and cleanup regressions.
+
+The [2026-09-17 Controller/Web delivery](releases/review-owned-consumer-2026-09-17.md)
+records the complete gate, 44 browser cases, two actual eleven-group process
+runs and production continuity. The active protocol-19 Machine and Zed 1.8
+were not upgraded; conditional consumer delivery is not their native cutover.

@@ -280,8 +280,18 @@ and accepting a production effect are different milestones.
   cover these boundaries. Its [Web-only release](releases/browser-buffer-sync-2026-09-17.md)
   passed the full gate and 38 browser cases, is published and active, and
   retained all 16 observed workers plus four native Code processes. This does
-  not switch ordinary Review or activate a Machine/Code Plugin; production end-to-end synchronization, navigation,
+  not itself switch ordinary Review or activate a Machine/Code Plugin; production end-to-end synchronization, navigation,
   independent recovery and supported-device acceptance remain separate.
+- The [ordinary Review source consumer](plugin-review-owned-consumer.md) now
+  selects core-owned language, hover and Outline from a protocol-20 Service
+  observation. Exact displayed LF content, serialized/cancellation-safe reads,
+  original-ID Open checks, explicit refresh preparation and stale Apply fencing
+  share one owner without legacy fallback. Its
+  [Controller/Web delivery](releases/review-owned-consumer-2026-09-17.md) passes
+  the full gate, 44 browser cases, two actual eleven-group process runs and Nix
+  checks; all 16 original workers and four Code processes survive activation.
+  The production protocol-19 Machine and Zed 1.8 remain unchanged, so owned
+  navigation/diff integration and native/device cutover are still separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -346,6 +356,8 @@ owned language/Outline/hover and explicit refresh preparation from a protocol-20
 Service observation. It retains content/owner lifetimes without legacy fallback;
 protocol-19 Machines remain on their pre-cutover route. This is not owned
 navigation, diff integration, native activation or supported-device acceptance.
+The [Controller/Web release](releases/review-owned-consumer-2026-09-17.md) records
+the exact accepted artifacts and bounded production continuity observations.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
