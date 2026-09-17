@@ -5,8 +5,6 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -17,7 +15,7 @@ import org.json.JSONObject
 // Provider authentication browser for the Android shell. It implements the
 // same page contract as the iOS shell (web/src/openExternal.ts, bridge v2):
 // `__cowboyOpenAuthenticationBrowser(url)`, `__cowboyCloseAuthenticationBrowser()`
-// and the opened / open-failed / closed window events.
+// and the opened / open-failed window events.
 //
 // Without it the remote UI treats Android as a plain browser and navigates the
 // shell's only WebView to the Provider. That path has no busy state, so a
@@ -30,13 +28,18 @@ import org.json.JSONObject
 // androidx.browser, whose dependency the generated Gradle project does not
 // carry. It opens in Cowboy's task, above MainActivity (launchMode singleTask),
 // so relaunching MainActivity dismisses it.
+//
+// Returning to Cowboy is not reported as a close. Chrome lets the user minimize
+// a Custom Tab into picture-in-picture, which resumes MainActivity exactly like
+// closing the tab, and a sessionless Custom Tab gets no callback to tell them
+// apart. Cancelling on resume would discard a sign-in the user is still
+// completing, so the page keeps its explicit Cancel and a resume only emits
+// `cowboy:native-resume`.
 internal class AuthenticationBrowser(
   private val activity: Activity,
   private val origin: String,
 ) {
-  private val handler = Handler(Looper.getMainLooper())
   private var open = false
-  private var generation = 0
   private var covered = false
   private var resumed = false
   private var reply: JavaScriptReplyProxy? = null
@@ -70,22 +73,13 @@ internal class AuthenticationBrowser(
     if (open) covered = true
   }
 
-  // Returning to Cowboy while the browser is still open means the user closed
-  // the Custom Tab (Close or Back). Report it only after a grace period: the
-  // WebView was hidden and throttled, so a handoff that completed just before
-  // the close may still be delivering its ready event. That path closes the
-  // browser itself, which cancels this pending notification.
+  // The WebView was hidden and throttled while the browser covered it. Wake the
+  // page so resume-driven reconciliation (passkeys, update checks) runs now.
   fun onResume() {
     resumed = true
-    if (!open || !covered) return
+    if (!covered) return
     covered = false
-    val closing = generation
-    handler.postDelayed({
-      if (open && generation == closing) {
-        open = false
-        post(CLOSED_EVENT)
-      }
-    }, CLOSE_GRACE_MS)
+    post(RESUMED_EVENT)
   }
 
   private fun open(rawUrl: String, replyProxy: JavaScriptReplyProxy) {
@@ -109,17 +103,15 @@ internal class AuthenticationBrowser(
     }
     open = true
     covered = false
-    generation += 1
     post(OPENED_EVENT)
   }
 
-  // A programmatic close belongs to a completed or abandoned web flow, so it
-  // never reports a user close. When the browser still covers Cowboy, bring
-  // MainActivity back; singleTask finishes the Custom Tab above it.
+  // A programmatic close belongs to a completed or abandoned web flow. When the
+  // browser still covers Cowboy, bring MainActivity back; singleTask finishes
+  // the Custom Tab above it.
   private fun close() {
     if (!open) return
     open = false
-    generation += 1
     if (resumed) return
     val intent = Intent(activity, activity.javaClass)
       .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -134,8 +126,7 @@ internal class AuthenticationBrowser(
     const val BRIDGE = "cowboyAndroidAuthenticationBrowser"
     const val OPENED_EVENT = "cowboy:native-authentication-browser-opened"
     const val OPEN_FAILED_EVENT = "cowboy:native-authentication-browser-open-failed"
-    const val CLOSED_EVENT = "cowboy:native-authentication-browser-closed"
-    const val CLOSE_GRACE_MS = 1_500L
+    const val RESUMED_EVENT = "cowboy:native-resume"
     const val EXTRA_SESSION = "android.support.customtabs.extra.SESSION"
     const val EXTRA_SHARE_STATE = "androidx.browser.customtabs.extra.SHARE_STATE"
     const val SHARE_STATE_OFF = 2
@@ -146,7 +137,7 @@ internal class AuthenticationBrowser(
         const bridge = globalThis.$BRIDGE;
         if (!bridge) return;
         const events = new Set([
-          "$OPENED_EVENT", "$OPEN_FAILED_EVENT", "$CLOSED_EVENT",
+          "$OPENED_EVENT", "$OPEN_FAILED_EVENT", "$RESUMED_EVENT",
         ]);
         bridge.addEventListener("message", (event) => {
           if (events.has(event.data)) globalThis.dispatchEvent(new Event(event.data));
