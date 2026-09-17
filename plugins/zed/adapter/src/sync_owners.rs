@@ -108,6 +108,13 @@ pub(super) fn ensure_admission(active: &HashMap<Key, BufferLease>) -> Result<()>
     // unrelated already-open reads and releases remain available.
     for buffer in active.values() {
         ensure_readable(buffer)?;
+        ensure!(
+            !buffer
+                .lease_ids
+                .iter()
+                .any(|owner| matches!(owner, BufferOwner::NavigationPending(_))),
+            "unresolved navigation prevents native admission"
+        );
     }
     Ok(())
 }

@@ -143,9 +143,15 @@ impl CodeRuntimeHost {
         ensure!(
             !matches!(
                 payload["type"].as_str(),
-                Some("prepareBufferSync" | "bufferSync")
+                Some(
+                    "prepareBufferSync"
+                        | "bufferSync"
+                        | "prepareBufferNavigation"
+                        | "bufferNavigation"
+                        | "readBufferNavigation"
+                )
             ),
-            "buffer synchronization requires separate core authority"
+            "private buffer operations require separate core authority"
         );
         self.buffer_sync.expire_inert();
         let reservation = match buffer_leases::Command::parse(payload)? {
@@ -471,7 +477,13 @@ mod tests {
     #[tokio::test]
     async fn private_sync_cannot_use_generic_rpc_or_a_read_lease_as_authority() {
         let host = CodeRuntimeHost::default();
-        for kind in ["prepareBufferSync", "bufferSync"] {
+        for kind in [
+            "prepareBufferSync",
+            "bufferSync",
+            "prepareBufferNavigation",
+            "bufferNavigation",
+            "readBufferNavigation",
+        ] {
             for extra_path in [false, true] {
                 let mut request = json!({"type":kind,"purpose":"refresh_from_disk",
                     "lease":{"instance":"a".repeat(32),"id":"0000000000000001"}});

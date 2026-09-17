@@ -302,6 +302,14 @@ and accepting a production effect are different milestones.
   all 16 workers and two observed Code processes survive activation. The already
   deployed protocol-20 Machine is unchanged, and production Zed remains 1.8.
   Native, cross-file navigation and device acceptance remain separate.
+- [Owned native navigation](plugin-owned-navigation.md) adds a Zed `1.10.0`
+  source candidate with preallocated group identities, one-use native queries,
+  exact target ID/content/epoch retention, path-free local release and conservative
+  Unknown admission fences. Same-native-ID aliases now prevent premature peer
+  closure. Generic Machine forwarding refuses the three private commands before
+  selecting a runtime. This is not a Service/Web navigation cutover, verified
+  native cleanup, independent recovery or production native-generation acceptance;
+  original-runtime routing and actual nonempty-LSP consumer acceptance remain open.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

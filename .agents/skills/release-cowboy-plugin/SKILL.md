@@ -299,6 +299,14 @@ In addition, require all applicable Provider gates below:
   `docs/plugin-buffer-sync-owners.md`. Keep private socket purpose declarations
   distinct from core grants; generic Machine Code forwarding must not enable
   these effects before an accepted authority/routing continuation exists.
+  Owned navigation changes additionally require the bounded acquisition,
+  original-target/content/epoch, disconnected observer, cancellation/Unknown,
+  alias release and generic-forwarding refusal tests in
+  `docs/plugin-owned-navigation.md`. The isolated native sync harness covers
+  all five real plaintext navigation query kinds and retained source release;
+  its empty results do not accept nonempty LSP destinations or a public consumer.
+  Keep Machine/Service/Web routing closed until separate acquisition authority,
+  exact-runtime handoff and connected nonempty-target acceptance exist.
   Before a core owned-buffer/Review cutover, additionally run
   `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
   It connects supplied immutable Controller/Machine releases and the exact

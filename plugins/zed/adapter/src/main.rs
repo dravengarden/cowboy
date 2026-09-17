@@ -15,6 +15,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock, broadcast, mpsc, oneshot};
 
 mod buffer_leases;
+mod buffer_navigation;
 mod content_reads;
 #[cfg(test)]
 mod coordinate_queries;
@@ -69,6 +70,22 @@ enum Request {
     BufferSync {
         operation: sync_owners::OperationRef,
         action: sync_owners::Action,
+    },
+    PrepareBufferNavigation {
+        lease: buffer_leases::LeaseRef,
+        content: content_reads::Content,
+        position: content_reads::Point,
+        kind: NavigationKind,
+    },
+    BufferNavigation {
+        navigation: buffer_navigation::NavigationRef,
+        action: buffer_navigation::Action,
+    },
+    ReadBufferNavigation {
+        navigation: buffer_navigation::NavigationRef,
+        destination: u32,
+        content: content_reads::Content,
+        query: content_reads::Query,
     },
     EnsureWorktree {
         path: PathBuf,
@@ -136,6 +153,17 @@ enum Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 enum Response {
+    OwnedBufferNavigation {
+        api_version: u8,
+        navigation: buffer_navigation::NavigationRef,
+        state: buffer_navigation::State,
+    },
+    BufferNavigationRead {
+        api_version: u8,
+        navigation: buffer_navigation::NavigationRef,
+        destination: u32,
+        result: content_reads::Output,
+    },
     BufferSyncOwnerSupport {
         api_version: u8,
         protocol: u8,
@@ -243,6 +271,8 @@ struct BufferLease {
 enum BufferOwner {
     Legacy(String),
     Owned(u64),
+    Navigation(u64),
+    NavigationPending(u64),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -324,6 +354,7 @@ struct BufferState {
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
     leases: Mutex<buffer_leases::Registry>,
     syncs: Mutex<sync_owners::Registry>,
+    navigations: Mutex<buffer_navigation::Registry>,
 }
 type BufferFiles = Arc<RwLock<HashMap<u64, proto::File>>>;
 type WorktreePaths = Arc<RwLock<HashMap<u64, PathBuf>>>;
@@ -1397,6 +1428,11 @@ async fn respond(
                 .act(operation, action, buffers, zed)
                 .await?
         }
+        request @ (Request::PrepareBufferNavigation { .. }
+        | Request::BufferNavigation { .. }
+        | Request::ReadBufferNavigation { .. }) => {
+            buffer_navigation::respond(request, buffers, zed).await?
+        }
         Request::EnsureWorktree { path, trusted } => {
             ensure_worktree(path, trusted, false, worktrees, zed).await?
         }
@@ -1790,9 +1826,19 @@ async fn close_buffer_at(
     buffers: &Buffers,
     zed: Option<&Zed>,
 ) -> Result<Response> {
-    let key = (worktree.clone(), path.clone());
     let mut all = buffers.active.write().await;
-    let Some(lease) = all.get_mut(&key) else {
+    close_buffer_locked(worktree, path, &owner, &mut all, zed)
+}
+
+fn close_buffer_locked(
+    worktree: PathBuf,
+    path: PathBuf,
+    owner: &BufferOwner,
+    all: &mut HashMap<(PathBuf, PathBuf), BufferLease>,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    let key = (worktree.clone(), path.clone());
+    let Some(lease) = all.get(&key) else {
         anyhow::ensure!(
             matches!(owner, BufferOwner::Legacy(_)),
             "owned native buffer is not retained"
@@ -1807,17 +1853,26 @@ async fn close_buffer_at(
         });
     };
     anyhow::ensure!(
-        matches!(owner, BufferOwner::Legacy(_)) || lease.lease_ids.contains(&owner),
+        matches!(owner, BufferOwner::Legacy(_)) || lease.lease_ids.contains(owner),
         "native buffer owner changed"
     );
     sync_owners::ensure_readable(lease)?;
-    let last = lease.lease_ids.len() == 1 && lease.lease_ids.contains(&owner);
-    if last && let Some(zed) = zed {
+    let last = lease.lease_ids.len() == 1 && lease.lease_ids.contains(owner);
+    // Overlapping worktrees/native aliases may share an ID under another key.
+    // Releasing one path must not invalidate a peer's exact retained resource.
+    let last_native = last
+        && !all.iter().any(|(other_key, other)| {
+            other_key != &key && other.remote_id == lease.remote_id && !other.lease_ids.is_empty()
+        });
+    if last_native && let Some(zed) = zed {
         // Keep local ownership if the owned native transport rejects enqueue.
         // This protocol has no native CloseBuffer ACK; enqueue is not recovery.
         zed.close_buffer(lease.remote_id)?;
     }
-    lease.lease_ids.remove(&owner);
+    let lease = all
+        .get_mut(&key)
+        .expect("original buffer held through release");
+    lease.lease_ids.remove(owner);
     let leases = lease.lease_ids.len();
     let response = Response::Buffer {
         api_version: ADAPTER_VERSION,

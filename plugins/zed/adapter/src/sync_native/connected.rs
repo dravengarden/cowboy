@@ -421,6 +421,7 @@ async fn native_process_child() {
     native_edits_and_close_refuse(&zed, &instance, &workspace, worktree).await;
     native_source_bounds_and_lost_reply(&zed, &instance, &workspace, worktree).await;
     crate::sync_owners::connected::exercise(&zed, &workspace).await;
+    crate::buffer_navigation::connected::exercise(&zed, &workspace).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"

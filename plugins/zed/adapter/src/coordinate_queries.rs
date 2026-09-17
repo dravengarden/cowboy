@@ -4,7 +4,7 @@ use coordinates::tests::{peer, wire};
 
 mod content;
 
-async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
+pub(crate) async fn fixture() -> (Arc<ZedRuntime>, mpsc::UnboundedReceiver<proto::Envelope>) {
     let (outbound, receiver) = mpsc::unbounded_channel();
     let mut child = Command::new("true").spawn().unwrap();
     child.wait().await.unwrap();
@@ -59,7 +59,7 @@ fn edit(zed: &ZedRuntime) {
         ));
 }
 
-async fn reply(
+pub(crate) async fn reply(
     zed: &ZedRuntime,
     envelope: proto::Envelope,
     responses: Vec<proto::LspResponse>,

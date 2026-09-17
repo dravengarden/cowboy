@@ -251,6 +251,10 @@ impl Cache {
         Ok(self.text(id)?.version())
     }
 
+    pub(crate) fn content(&self, id: u64) -> Result<crate::content_reads::Content> {
+        Ok(self.text(id)?.content().clone())
+    }
+
     pub(crate) fn check(&self, id: u64, revision: u64) -> Result<()> {
         ensure!(
             self.revision(id)? == revision,
