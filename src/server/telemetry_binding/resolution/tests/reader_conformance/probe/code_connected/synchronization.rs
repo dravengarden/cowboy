@@ -22,8 +22,9 @@ fn request() -> Value {
 
 fn snapshot(value: &Value, resource: &str, state: &str) -> Result<String, Failure> {
     eprintln!(
-        "Code synchronization observation: expected={state}, actual={:?}, pending={:?}",
+        "Code synchronization observation: expected={state}, actual={:?}, reason={:?}, pending={:?}",
         value["state"]["kind"].as_str(),
+        value["state"]["reason"].as_str(),
         value["pending"].as_bool(),
     );
     let id = value["operationId"]
