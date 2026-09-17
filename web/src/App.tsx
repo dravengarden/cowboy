@@ -736,11 +736,13 @@ function SessionList({
     // region entry never lands on a hidden row.
     const revealSession = (sessionId: string): void =>
         setFolderCollapsed(foldersRevealing(tree, sessionFolders, sessionId), false);
+    const foldersHydrated = sessionFolders.folders.length > 0;
     useEffect(() => {
         if (activeId) revealSession(activeId);
-        // Only the active session id triggers a reveal; a later manual collapse
-        // of its folder must stick.
-    }, [activeId]);
+        // Only a new active session (or the folder tree's first arrival after a
+        // reload) triggers a reveal; a later manual collapse of its folder
+        // must stick.
+    }, [activeId, foldersHydrated]);
     // A drop (or an Order-mode step) hands back the visible row keys in their
     // new order. A moved session lands in the container of the row above it
     // (a folder header files into that folder) and the flat session order is

@@ -133,7 +133,7 @@ Deno.test("placement is explicit, project binding is derived, remove lifts to th
   value = m.create(value, { id: "f-c", name: "C", parent: "f-b" });
   value = m.place(value, { session_ids: ["s1", "s2"], folder: "f-b" });
   value = m.place(value, { session_ids: ["s2"], folder: null });
-  assertEquals(value.placement, { s1: "f-b" });
+  assertEquals(value.placement, { s1: "f-b", s2: "" });
   assertStrictEquals(
     m.place(value, { session_ids: ["s1"], folder: "f-none" }),
     value,
@@ -145,6 +145,9 @@ Deno.test("placement is explicit, project binding is derived, remove lifts to th
   assertEquals(effectiveSessionFolder(filed, value), "f-b");
   assertEquals(effectiveSessionFolder(derived, value), "f-b");
   assertEquals(effectiveSessionFolder(loose, value), null);
+  // An explicit top-level placement wins over the project binding.
+  const pinnedOut = session("s2", "garden");
+  assertEquals(effectiveSessionFolder(pinnedOut, value), null);
   assertEquals(
     unboundProjectLabels(
       [filed, derived, loose, session("s5", "other")],
@@ -158,10 +161,10 @@ Deno.test("placement is explicit, project binding is derived, remove lifts to th
 
   value = m.remove(value, { id: "f-b" });
   assertEquals(ids(value, "f-a"), ["f-c"]);
-  assertEquals(value.placement, { s1: "f-a" });
+  assertEquals(value.placement, { s1: "f-a", s2: "" });
   assertEquals(effectiveSessionFolder(derived, value), null);
   value = m.remove(value, { id: "f-a" });
   assertEquals(ids(value, null), ["f-c"]);
-  assertEquals(value.placement, {});
+  assertEquals(value.placement, { s1: "", s2: "" });
   assertStrictEquals(m.remove(value, { id: "f-a" }), value);
 });

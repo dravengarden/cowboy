@@ -51,12 +51,13 @@ reconnect, projected per principal.
 - A folder is user-owned, named, nested (`parent`, `null` = root), ordered
   among its siblings (`position`), and optionally **bound to a project**
   (`project`, unique per user).
-- `placement` holds only *explicit* moves. The **effective folder** of a
-  session is derived on the client: `placement[id]` if that folder exists;
-  otherwise the folder bound to `sessionProjectLabel(session)`; otherwise the
-  root. Renaming, nesting or moving a bound folder therefore never orphans
-  sessions, and a new session of a bound project appears in its folder with
-  no write.
+- `placement` holds only *explicit* moves; the empty string is the explicit
+  top level. The **effective folder** of a session is derived on the client:
+  the top level when `placement[id]` is `""`; `placement[id]` if that folder
+  exists; otherwise the folder bound to `sessionProjectLabel(session)`;
+  otherwise the root. Renaming, nesting or moving a bound folder therefore
+  never orphans sessions, a new session of a bound project appears in its
+  folder with no write, and "Move to → Top level" still beats the binding.
 - Session order stays the existing global `"order"` array. A folder shows its
   sessions in that order filtered to its members; reordering inside a folder
   submits only that folder's ids, which `merge_session_order` permutes in
@@ -82,7 +83,7 @@ reconnect, projected per principal.
 | `move` | `{id, parent}` | rejects cycles (folder into itself or a descendant); appends last among new siblings |
 | `reorder` | `{parent, order: [id]}` | sibling permutation, same semantics as session order |
 | `bind` | `{id, project \| null}` | unique per owner; `null` unbinds |
-| `place` | `{session_ids: [id], folder \| null}` | explicit placement; `null` = root; unknown session ids are dropped by projection |
+| `place` | `{session_ids: [id], folder \| null}` | explicit placement; `null` = explicit top level (stored as `""`); unknown session ids are dropped by projection |
 | `remove` | `{id}` | children and explicit placements move to the parent |
 
 The arbiter validates before consuming the mutation id, dedupes retries, applies

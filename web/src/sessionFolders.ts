@@ -17,9 +17,14 @@ export interface SessionFolder {
   readonly project: string | null;
 }
 
+/** Placement value for "explicitly at the top level" (the Controller's
+ *  `TOP_LEVEL`). Distinct from no placement: it overrides a project binding. */
+export const TOP_LEVEL_PLACEMENT = "";
+
 export interface SessionFoldersValue {
   readonly folders: readonly SessionFolder[];
-  /** Explicit placements only: session id → folder id. */
+  /** Explicit placements only: session id → folder id, or
+   *  `TOP_LEVEL_PLACEMENT`. */
   readonly placement: Readonly<Record<string, string>>;
 }
 
@@ -103,14 +108,16 @@ export function projectFolderIndex(
   return index;
 }
 
-/** The folder a session shows in: its explicit placement when that folder
- *  still exists, else the folder bound to its project, else the root. */
+/** The folder a session shows in: its explicit placement (a folder that still
+ *  exists, or the top level), else the folder bound to its project, else the
+ *  root. */
 export function effectiveSessionFolder(
   session: SessionMeta,
   value: SessionFoldersValue,
   projects: ReadonlyMap<string, string> = projectFolderIndex(value),
 ): string | null {
   const placed = value.placement[session.id];
+  if (placed === TOP_LEVEL_PLACEMENT) return null;
   if (placed && sessionFolderById(value, placed)) return placed;
   const project = sessionProjectLabel(session);
   return (project && projects.get(project)) || null;
@@ -240,9 +247,10 @@ export const sessionFolderMutators = {
   ): SessionFoldersValue => {
     if (a.folder && !sessionFolderById(value, a.folder)) return value;
     const placement: Record<string, string> = { ...value.placement };
+    // `null` is an explicit top-level placement: it must win over a project
+    // binding, or "Move to → Top level" would silently do nothing.
     for (const id of a.session_ids) {
-      if (a.folder) placement[id] = a.folder;
-      else delete placement[id];
+      placement[id] = a.folder ?? TOP_LEVEL_PLACEMENT;
     }
     return { folders: value.folders, placement };
   },
@@ -262,8 +270,9 @@ export const sessionFolderMutators = {
     );
     const placement: Record<string, string> = {};
     for (const [session, folder] of Object.entries(value.placement)) {
-      if (folder !== a.id) placement[session] = folder;
-      else if (removed.parent) placement[session] = removed.parent;
+      placement[session] = folder !== a.id
+        ? folder
+        : removed.parent ?? TOP_LEVEL_PLACEMENT;
     }
     return { folders: [...folders].sort(byPosition), placement };
   },

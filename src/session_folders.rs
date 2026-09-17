@@ -19,6 +19,11 @@ const FOLDER_KEY_MAX_BYTES: usize = 200;
 /// Folders one owner may hold; the sidebar is a shelf, not a file system.
 pub const FOLDER_CAP: usize = 512;
 
+/// Placement value for "explicitly at the top level". Distinct from having no
+/// placement at all: a session of a project-bound folder files itself there
+/// unless the user moved it out, and "out to the top level" must stick.
+pub const TOP_LEVEL: &str = "";
+
 /// The owner slot of a folder: a product user id, or `None` while product auth
 /// is disabled (every folder is then shared by the single local user).
 pub type FolderOwner = Option<String>;
@@ -166,14 +171,15 @@ impl SessionFolders {
     }
 
     /// The `"folders"` sync value: every folder (with its owner, for the
-    /// projection) and every placement that still points at a live folder.
+    /// projection) and every placement that still points at a live folder or
+    /// at the explicit top level.
     #[must_use]
     pub fn value(&self) -> serde_json::Value {
         let ids: HashSet<&str> = self.folders.iter().map(|f| f.id.as_str()).collect();
         let mut placement: Vec<(&String, &String)> = self
             .placement
             .iter()
-            .filter(|(_, folder)| ids.contains(folder.as_str()))
+            .filter(|(_, folder)| *folder == TOP_LEVEL || ids.contains(folder.as_str()))
             .collect();
         placement.sort();
         serde_json::json!({
@@ -420,17 +426,13 @@ impl SessionFolders {
             .filter(|id| !id.is_empty())
             .map(str::to_owned)
             .collect();
+        // `folder: null` is an explicit top-level placement, not "unplaced":
+        // it must override a project binding that would file the session.
+        let target = folder.unwrap_or_else(|| TOP_LEVEL.to_owned());
         let mut placements = Vec::with_capacity(session_ids.len());
         for session_id in session_ids {
-            match folder.as_deref() {
-                Some(id) => {
-                    self.placement.insert(session_id.clone(), id.to_owned());
-                }
-                None => {
-                    self.placement.remove(&session_id);
-                }
-            }
-            placements.push((session_id, folder.clone()));
+            self.placement.insert(session_id.clone(), target.clone());
+            placements.push((session_id, Some(target.clone())));
         }
         Ok(FolderEffects {
             replaced_owner: None,
@@ -470,16 +472,10 @@ impl SessionFolders {
             .map(|(session, _)| session.clone())
             .collect();
         moved.sort();
+        let target = parent.clone().unwrap_or_else(|| TOP_LEVEL.to_owned());
         for session_id in moved {
-            match parent.as_deref() {
-                Some(target) => {
-                    self.placement.insert(session_id.clone(), target.to_owned());
-                }
-                None => {
-                    self.placement.remove(&session_id);
-                }
-            }
-            placements.push((session_id, parent.clone()));
+            self.placement.insert(session_id.clone(), target.clone());
+            placements.push((session_id, Some(target.clone())));
         }
         self.folders
             .sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
@@ -533,7 +529,7 @@ pub fn project_folders_value(
                     visible_sessions.contains(session.as_str())
                         && folder
                             .as_str()
-                            .is_some_and(|folder| kept_ids.contains(folder))
+                            .is_some_and(|folder| folder == TOP_LEVEL || kept_ids.contains(folder))
                 })
                 .map(|(session, folder)| (session.clone(), folder.clone()))
                 .collect()
@@ -783,9 +779,14 @@ mod tests {
                 &serde_json::json!({"session_ids": ["s2"], "folder": null}),
             )
             .unwrap();
-        assert_eq!(effects.placements, vec![("s2".to_owned(), None)]);
+        // Moving to the top level is an explicit placement, so it survives a
+        // project binding that would otherwise file the session.
+        assert_eq!(
+            effects.placements,
+            vec![("s2".to_owned(), Some(String::new()))]
+        );
         assert_eq!(folders.value()["placement"]["s1"], "f-b");
-        assert!(folders.value()["placement"].get("s2").is_none());
+        assert_eq!(folders.value()["placement"]["s2"], "");
         assert_eq!(
             folders
                 .apply(
@@ -814,10 +815,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             effects.placements,
-            vec![("s1".to_owned(), None), ("s3".to_owned(), None)]
+            vec![
+                ("s1".to_owned(), Some(String::new())),
+                ("s3".to_owned(), Some(String::new()))
+            ]
         );
         assert_eq!(ids_under(&folders, None), vec!["f-c"]);
-        assert!(folders.value()["placement"].as_object().unwrap().is_empty());
+        assert_eq!(
+            folders.value()["placement"],
+            serde_json::json!({"s1": "", "s2": "", "s3": ""})
+        );
         assert_eq!(
             folders
                 .apply(&local(), "remove", &serde_json::json!({"id": "f-a"}))
