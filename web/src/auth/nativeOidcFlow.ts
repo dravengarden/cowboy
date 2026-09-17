@@ -1,4 +1,3 @@
-import { isNativeShell } from "../nativeShell";
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
@@ -21,8 +20,12 @@ const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1_000;
 
 type NativeOidcEventStatus = "ready" | "failed" | "unavailable";
 
+/** The native flow needs only a shell-installed authentication browser. The
+ * keyboard-oriented `__cowboyNativeShell` flag is iOS-specific: the Android
+ * shell installs this bridge without adopting the iOS keyboard, clipboard, and
+ * passkey contracts that flag also selects. */
 export function nativeOidcFlowSupported(): boolean {
-  return isNativeShell() && hasNativeAuthenticationBrowser();
+  return hasNativeAuthenticationBrowser();
 }
 
 export function browserOidcFlowSupported(): boolean {

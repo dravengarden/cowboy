@@ -8,6 +8,7 @@ import {
 import {
   browserOidcFlowSupported,
   nativeOidcEventsUrl,
+  nativeOidcFlowSupported,
   nativeOidcStartUrl,
   runBrowserOidc,
   runNativeOidc,
@@ -81,6 +82,26 @@ Deno.test("native OIDC WebSocket URL contains no PKCE proof", () => {
   assertEquals(url.search, "");
   assertEquals(url.username, "");
   assertEquals(url.password, "");
+});
+
+Deno.test("native OIDC follows the authentication browser bridge, not the iOS keyboard flag", () => {
+  const root = globalThis as typeof globalThis & {
+    __cowboyNativeShell?: boolean;
+    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+  };
+  try {
+    assertEquals(nativeOidcFlowSupported(), false);
+    // The iOS keyboard flag alone must not select a flow that has no browser.
+    root.__cowboyNativeShell = true;
+    assertEquals(nativeOidcFlowSupported(), false);
+    // The Android shell installs only the authentication browser bridge.
+    delete root.__cowboyNativeShell;
+    root.__cowboyOpenAuthenticationBrowser = () => true;
+    assertEquals(nativeOidcFlowSupported(), true);
+  } finally {
+    delete root.__cowboyNativeShell;
+    delete root.__cowboyOpenAuthenticationBrowser;
+  }
 });
 
 Deno.test("closing the native browser cancels the local OIDC handoff", async () => {

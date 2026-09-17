@@ -20,6 +20,7 @@ import androidx.webkit.WebViewFeature
 // project; the builder overlays this owned source onto every generated project.
 class MainActivity : TauriActivity() {
   private lateinit var content: View
+  private val authenticationBrowser = AuthenticationBrowser(this, COWBOY_ORIGIN)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -31,6 +32,17 @@ class MainActivity : TauriActivity() {
 
   override fun onWebViewCreate(webView: WebView) {
     followThemeColor(webView)
+    authenticationBrowser.install(webView)
+  }
+
+  override fun onPause() {
+    super.onPause()
+    authenticationBrowser.onPause()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    authenticationBrowser.onResume()
   }
 
   // Android 15+ always draws apps edge-to-edge, so the WebView would sit under

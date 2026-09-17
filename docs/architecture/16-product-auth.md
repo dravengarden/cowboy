@@ -74,11 +74,13 @@ Cowboy uses Authorization Code flow with two independent PKCE boundaries:
   reverse-domain `xyz.stormbird.cowboy.manager://auth/callback` URL. The app
   rejects HTTP redirects and never receives or stores a
   Cardea token or client private key.
-- The iOS Cowboy shell never navigates its sole `WKWebView` to Cardea. It opens
-  the provider in a system Safari sheet with independent S256 code and handoff
-  challenges. Safari owns only the five-minute OIDC transaction cookie; after
-  approval the callback marks the bounded handoff ready and redirects to a
-  fixed, no-store completion page. The original Cowboy window waits for a
+- The native Cowboy shells never navigate their sole WebView to Cardea. iOS
+  opens the provider in a system Safari sheet and Android in a Custom Tab, both
+  through the same page bridge (`__cowboyOpenAuthenticationBrowser`, version 2),
+  with independent S256 code and handoff challenges. The system browser owns
+  only the five-minute OIDC transaction cookie; after approval the callback
+  marks the bounded handoff ready and redirects to a fixed, no-store completion
+  page. The original Cowboy window waits for a
   provider-scoped WebSocket invalidation and then performs exactly one exchange
   with both retained random secrets before Controller issues product and
   optional admin cookies into that window. The handoff is single-use and a denial,

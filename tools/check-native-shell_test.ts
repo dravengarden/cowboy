@@ -131,6 +131,13 @@ for (
       "extend the generated TauriActivity",
     ],
     [
+      "Android without an authentication browser",
+      "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+      "authenticationBrowser.install(webView)",
+      "",
+      "install the authentication browser",
+    ],
+    [
       "unscoped IPC",
       "tauri/capabilities/remote-haptics.json",
       "https://cowboy.stormbird.xyz/*",

@@ -156,6 +156,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       "apple/Sources/cowboy-app/CowboyDevBridge.swift",
       "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",
       "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+      "android/app/src/main/java/top/thundersparrow/cowboy/AuthenticationBrowser.kt",
     ]
   ) await read(path);
   // Android: SDK Manager-owned components are pinned exactly, the Tauri
@@ -187,13 +188,19 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     ]),
     "unexpected Android ABI inventory",
   );
+  const androidActivity = await read(
+    "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+  );
   requireValue(
-    /class MainActivity : TauriActivity\(\)/.test(
-      await read(
-        "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
-      ),
-    ),
+    /class MainActivity : TauriActivity\(\)/.test(androidActivity),
     "Android activity must extend the generated TauriActivity",
+  );
+  // Without the authentication browser the remote UI navigates the only
+  // WebView to the Provider, where repeated taps exhaust OIDC transactions.
+  requireValue(
+    androidActivity.includes("authenticationBrowser.install(webView)") &&
+      androidActivity.includes("authenticationBrowser.onResume()"),
+    "Android activity must install the authentication browser",
   );
   const project = await read("apple/project.yml");
   requireValue(

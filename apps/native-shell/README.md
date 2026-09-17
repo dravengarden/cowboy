@@ -127,6 +127,15 @@ remote UI has no Android safe-area contract, so without this the page renders
 under the status bar and the keyboard covers the Composer. Emulator smoke
 checks run on Hawk with the SDK emulator through `android-fhs`.
 
+`AuthenticationBrowser.kt` installs the iOS shell's page contract for Provider
+sign-in (`__cowboyOpenAuthenticationBrowser`, bridge version 2) through an
+origin-scoped `WebMessageListener`. Cardea and Provider pages open in a Custom
+Tab inside Cowboy's task while the WebView keeps waiting on the PKCE-bound
+handoff; completion relaunches the `singleTask` activity to dismiss the tab. A
+user close is reported after a short grace period so a handoff that finished
+while the WebView was hidden still wins. Without this bridge the remote UI
+would navigate the only WebView to the Provider with no busy state.
+
 ## Acceptance
 
 `just native-plugin-conformance` on a Mac compiles both production Objective-C
