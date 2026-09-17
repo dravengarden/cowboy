@@ -101,7 +101,7 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
   view = mount(apply.source);
   try {
     view.expand();
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
     check(
       document.body.textContent?.includes("cannot automatically undo"),
@@ -110,9 +110,9 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
     button("Cancel").click();
     await dismissed();
     check(apply.calls.length === 3, "cancel applied");
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
-    const confirm = button("Refresh native buffer");
+    const confirm = button("Reload from disk");
     confirm.click();
     confirm.click();
     await until(() => apply.calls.length === 4);
@@ -126,11 +126,11 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
     view.expand();
     check(!apply.calls[3]!.init.signal!.aborted, "unmount cancelled Apply");
     check(
-      !hasButton("Review refresh…", view.container),
+      !hasButton("Reload from disk…", view.container),
       "in-flight Apply offered replay",
     );
     apply.reply(3, syncWire(appliedState));
-    await until(() => view.text().includes("Refresh confirmed"));
+    await until(() => view.text().includes("Reload confirmed"));
     check(
       Number(apply.calls.length) === 4,
       "late completion or remount repeated Apply",
@@ -158,7 +158,7 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
       "private exception displayed",
     );
     check(
-      !hasButton("Review refresh…", view.container) &&
+      !hasButton("Reload from disk…", view.container) &&
         !hasButton("Retire operation…", view.container),
       "uncertainty offered effect or disposal",
     );
@@ -210,9 +210,9 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
   view = mount(ended.source);
   try {
     view.expand();
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
-    const confirm = button("Refresh native buffer");
+    const confirm = button("Reload from disk");
     ended.context.abort();
     confirm.click(); // same stack, before React redacts
     await dismissed();
@@ -240,13 +240,13 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
   view = mount(stale.source);
   try {
     view.expand();
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
     const query = stale.operation.observe();
     stale.reply(3, syncWire());
     await query;
-    await until(() => button("Refresh native buffer").disabled);
-    button("Refresh native buffer").click();
+    await until(() => button("Reload from disk").disabled);
+    button("Reload from disk").click();
     check(stale.calls.length === 4, "observation renewed old preview");
     check(
       document.body.textContent?.includes("state changed"),
@@ -254,9 +254,9 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
     );
     button("Cancel").click();
     await dismissed();
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
-    const confirm = button("Refresh native buffer");
+    const confirm = button("Reload from disk");
     const closed = stale.owner.close();
     confirm.click();
     await closed;
@@ -282,7 +282,7 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
   try {
     view.expand();
     check(
-      !hasButton("Review refresh…", view.container),
+      !hasButton("Reload from disk…", view.container),
       "closed view's late preparation can Apply",
     );
     button("Retire operation…", view.container).click();
@@ -365,7 +365,7 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
   view = mount(replacement.source);
   try {
     view.expand();
-    button("Review refresh…", view.container).click();
+    button("Reload from disk…", view.container).click();
     await dialog();
     const retirement = replacement.operation.confirm(
       replacement.operation.preview("retire"),
@@ -387,7 +387,7 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
     await until(() => view.text().includes("Synchronization 2"));
     check(replacement.calls.length === 6, "replacement renewed a stale Apply");
     const buttons = [...document.querySelectorAll("button")].filter((node) =>
-      node.textContent === "Refresh native buffer"
+      node.textContent === "Reload from disk"
     );
     check(
       buttons.every((node) => node.disabled),

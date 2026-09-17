@@ -262,7 +262,7 @@ export async function runReviewCodeBrowserConformance(): Promise<string[]> {
       "partial files cannot request positions or retain language results; mismatch stays explicit without native reload or reopen",
     );
 
-    click("Review refresh…");
+    click("Reload from disk…");
     await calls(9);
     check(
       f.calls[8]!.init.method === "POST" &&
@@ -292,7 +292,7 @@ export async function runReviewCodeBrowserConformance(): Promise<string[]> {
       once: true,
     });
     try {
-      click("Open Code synchronization");
+      click("Confirm in Settings");
     } finally {
       globalThis.removeEventListener(OPEN_APP_SETTINGS_EVENT, settings);
     }

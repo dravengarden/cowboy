@@ -86,9 +86,9 @@ Context end removes those private labels and fences stale confirmations before
 React renders the redaction. Construction, mount, expansion, pagination and
 remount do not discover a dataset, access storage or issue HTTP.
 
-Check synchronization is distinct from both Review refresh and Retire operation.
+Check synchronization is distinct from both Reload from disk and Retire operation.
 Both mutations use the shared core `ConfirmSheet`, name the exact captured
-target and explain their limits. A native refresh does not write the source
+target and explain their limits. A native reload does not write the source
 file and has no automatic undo. Retirement is not buffer release, Session
 closure or post-effect restoration. Unknown operations cannot be hidden through
 a dismiss/forget action. Replacing the projection requires an explicit remount;

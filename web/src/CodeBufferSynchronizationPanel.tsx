@@ -28,13 +28,13 @@ const labels = {
   context_lost: "Original access ended",
   retirement_uncertain: "Retirement not confirmed — status checks only",
   unavailable: "Current status unavailable — check the original operation",
-  unknown: "Outcome unknown — do not repeat or undo the refresh",
+  unknown: "Outcome unknown — do not repeat or undo the reload",
   pending: "Operation pending — no new action was queued",
-  prepared: "Prepared only — native text has not been refreshed",
-  applied: "Refresh confirmed — retire this operation before continuing",
-  changed: "Refresh refused — text or ownership changed",
-  source: "Refresh refused — disk source unavailable or unsuitable",
-  shared: "Refresh refused — another owner shares the native buffer",
+  prepared: "Prepared only — the native buffer has not been reloaded",
+  applied: "Reload confirmed — retire this operation before continuing",
+  changed: "Reload refused — text or ownership changed",
+  source: "Reload refused — disk source unavailable or unsuitable",
+  shared: "Reload refused — another owner shares the native buffer",
 } satisfies Record<SynchronizationStatus, string>;
 const PAGE_SIZE = 5;
 interface Selection {
@@ -125,7 +125,7 @@ function SynchronizationPanel(
             {snapshot.contextLost && (
               <Alert severity="warning">
                 Original access ended. Details and actions are hidden. Missing
-                access is not proof that a refresh or retirement completed.
+                access is not proof that a reload or retirement completed.
               </Alert>
             )}
             {message && !snapshot.contextLost && (
@@ -171,7 +171,7 @@ function SynchronizationPanel(
                     </Button>
                     {row.canApply && (
                       <Button onClick={() => preview(row, "apply")}>
-                        Review refresh…
+                        Reload from disk…
                       </Button>
                     )}
                     {row.canRetire && (
@@ -214,7 +214,7 @@ function SynchronizationPanel(
         open={selected !== null && !snapshot.contextLost}
         onClose={() => setSelected(null)}
         title={selected?.action === "apply"
-          ? "Refresh native code buffer?"
+          ? "Reload native code buffer from disk?"
           : "Retire synchronization?"}
         actions={
           <>
@@ -233,7 +233,7 @@ function SynchronizationPanel(
               }}
             >
               {selected?.action === "apply"
-                ? "Refresh native buffer"
+                ? "Reload from disk"
                 : "Retire synchronization"}
             </Button>
           </>
@@ -251,8 +251,8 @@ function SynchronizationPanel(
             </Typography>
             <Typography variant="body2">
               {selected.action === "apply"
-                ? "Refresh only this original native buffer from disk, and only if the disk matches this captured text. Dirty, changed or shared buffers are refused. This does not write the file or grant later edits. It cannot automatically undo an applied refresh."
-                : "Retire only this original prepared or completed operation. This does not undo a refresh, delete a file or release its buffer. Pending and unknown effects cannot be discarded."}
+                ? "Reload only this original native buffer from disk, and only if the disk matches this captured text. Dirty, changed or shared buffers are refused. This does not write the file or grant later edits. It cannot automatically undo an applied reload."
+                : "Retire only this original prepared or completed operation. This does not undo a reload, delete a file or release its buffer. Pending and unknown effects cannot be discarded."}
             </Typography>
             {!confirmable && (
               <Alert severity="info">

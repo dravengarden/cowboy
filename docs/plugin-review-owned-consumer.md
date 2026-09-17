@@ -58,17 +58,20 @@ manifest revision change reloads disk text without reopening an owned buffer.
 The open vector remains a lower bound; diagnostics remain last-observed, not
 an atomic LSP snapshot.
 
-Mismatch is explicit, never an empty success or hidden reload. **Check Code**
+Mismatch is explicit, never an empty success or hidden reload. Review shows it
+as a warning; routine checking, matched and incomplete states stay a quiet
+caption. **Check again**
 may explicitly observe the original buffer before a new conditional language
 read. Initial Open uncertainty can be checked on the original ID,
 without retrying Open or recreating a failed/unobserved preparation.
-**Review refresh…** only prepares synchronization against the exact
+**Reload from disk…** only prepares synchronization against the exact
 displayed content. Settings → About owns the existing separate Apply/retirement
-confirmation. No read, content change or unmount applies, retires or undoes it.
+confirmation, reached through **Confirm in Settings**. No read, content change
+or unmount applies, retires or undoes it.
 Abandoning text during/after preparation closes the source owner immediately,
 including before the preparation ID arrives, so an old Settings confirmation
 cannot Apply. The original synchronization remains retained for explicit
-observation/retirement. This refresh is not filesystem writeback or an undo.
+observation/retirement. This reload is not filesystem writeback or an undo.
 
 ## Evidence boundaries
 
