@@ -1874,6 +1874,8 @@ Desktop Vim + IME checks:
        new physical probe shows `caretRect` bound to that `<img>`.
     4. Do not start another input-event patch unless that physical
        IME probe gives a new structural reason.
+    5. The physical WeType event grammar and a Simulator plan for it are
+       recorded in pitfall #111; that is the probe to build first.
 
     Re-open only with a new structural hypothesis and a physical
     iPhone probe. Rebase `origin/main` before any next caret change.
@@ -2616,3 +2618,54 @@ Desktop Vim + IME checks:
     WKWebView moves `activeElement` to `BODY` during a live composition
     (#45), and the reset would let the `[value]` layout effect rewrite marked
     text (#83).
+
+111. **WeType (微信键盘) has its own event grammar; the Simulator's native
+    keyboards never produce it.** Mined from the physical iPhone's
+    `composer_input_debug` telemetry (VictoriaLogs, 2026-09-08 → 09-17,
+    ~44k samples, keyboard identity is not logged). Three shapes appear:
+
+    - Native Pinyin (also what the Simulator produces):
+      `insertCompositionText* → deleteCompositionText* →
+      insertFromComposition* → compositionend`. Rare on the phone (94
+      samples, 09-14/15 only).
+    - WeType with marked text (dominant 09-08 → 09-13): `compositionstart* →
+      insertCompositionText* … → deleteCompositionText* (≈250–600 ms after the
+      candidate tap) → compositionend → keydown(non-safe key) →
+      insertText(whole word, composing=false)`. The keydown and the
+      insertText occasionally swap order.
+    - WeType without marked text (dominant from 09-14; 09-16: 671 inserts,
+      0 composition events): no composition at all, only
+      `keydown(non-safe key) → insertText(whole word)`. The pinyin buffer
+      stays inside the keyboard.
+
+    Return from WeType in CM6 looked like `keydown(Enter) [2 lines] →
+    cm6_doc [3 lines] → beforeinput:insertLineBreak → cm6_doc [4 lines]`: the
+    document grew BEFORE the native line break, then grew again. Likely
+    mechanism, not yet proven: a third-party keyboard's Enter keydown does not
+    carry keyCode 13, so CM6 never parks it as `pendingIOSKey` (pitfall #12)
+    and the keymap breaks the line at keydown, while the keyboard's
+    `insertText("\n")` still inserts natively. This may be the WeType half of
+    #69's "one Return bounces twice" and would not be image-specific.
+    `composerInputDebug` does not record `keyCode`; adding it (an integer,
+    no privacy cost) is the cheapest way to settle this from the phone.
+
+    WeType itself cannot run on the Simulator: it is an App Store keyboard
+    extension (no store in the Simulator; the IPA is device-platform and
+    FairPlay-encrypted, and converting it would circumvent DRM). What can:
+
+    1. A repository-owned probe keyboard extension (XcodeGen spec, built for
+       the Simulator, installed with `simctl install` and enabled through
+       Settings). It shares WeType's only channel, `UITextDocumentProxy`:
+       `setMarkedText` per key plus unmark + `insertText(word)` for the
+       marked-text grammar, plain `insertText(word)` for the direct grammar,
+       `insertText("\n")` for Return, `deleteBackward()` for Backspace, and a
+       scripted-replay entry so the matrix runs unattended. Calibrate it until
+       the harness event log matches the phone windows above, then run the
+       matrix (Return double-break first, Backspace through chips, Send/Clear
+       during composition, `@` query, image landing line).
+    2. Physical Debug-mode captures (pitfall #68) of fixed WeType sequences —
+       one word, two Returns, Backspace — as the ground truth for 1.
+    3. Optional cross-check with an open-source Rime keyboard (Hamster) built
+       from source; a real third-party IME, but not WeType's grammar.
+
+    Recorded 2026-09-17 and deliberately not pursued in that session.
