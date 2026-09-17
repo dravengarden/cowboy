@@ -169,6 +169,44 @@ mod tests {
         assert!(probe.validate(Duration::from_secs(5)).await.is_err());
     }
 
+    /// The shared credential store is what makes one refresh lock cover every
+    /// auth generation. Accept a new native CLI only while it still reads
+    /// credentials from that directory instead of its private config home.
+    #[tokio::test]
+    #[ignore = "requires an explicit immutable native CLI; uses synthetic credentials only"]
+    async fn native_claude_shared_credential_store_conformance() {
+        let cli: PathBuf = std::env::var_os("COWBOY_TEST_AUTH_PROBE_CLI")
+            .expect("explicit native CLI")
+            .into();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let shared = root.path().join("shared");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        fs::create_dir_all(&shared).unwrap();
+        let valid = br#"{"claudeAiOauth":{"accessToken":"synthetic-access","refreshToken":"synthetic-refresh","expiresAt":4102444800000,"scopes":["user:inference"],"subscriptionType":"max"}}"#;
+        fs::write(shared.join(".credentials.json"), valid).unwrap();
+        let status = |store: Option<&Path>| {
+            let mut command = std::process::Command::new(&cli);
+            command
+                .args(["auth", "status", "--json"])
+                .env_clear()
+                .env("HOME", &home)
+                .env("PATH", std::env::var("PATH").unwrap_or_default())
+                .current_dir(&home)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            if let Some(store) = store {
+                command.env("CLAUDE_SECURESTORAGE_CONFIG_DIR", store);
+            }
+            command.status().unwrap().success()
+        };
+        // Credentials only in the shared store: honoured through the variable,
+        // invisible without it.
+        assert!(status(Some(&shared)));
+        assert!(!status(None));
+    }
+
     #[tokio::test]
     async fn refresh_probe_checks_exact_snapshot_and_rejects_signed_out_state() {
         let root = tempfile::tempdir().unwrap();

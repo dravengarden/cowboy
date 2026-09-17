@@ -240,11 +240,34 @@ class Worker:
                 destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 destination.write_text("cowboy-conformance-not-a-credential")
                 destination.chmod(0o600)
+        # The Machine binds the one credential directory every auth generation
+        # shares, so a Provider CLI locks its own token refresh there. Bind a
+        # hermetic fixture directory with the same shape; an unbound Provider
+        # that declares this correctly refuses to launch.
+        credential_directories = {}
+        declared = {credential["bundle_key"]: credential["relative_path"]
+                    for credential in candidate.manifest["authentication"]["credential_files"]}
+        for value in list(candidate.manifest["runtime"]["environment"].values()) + \
+                list(candidate.manifest["runtime"]["arguments"]):
+            if not isinstance(value, dict) or value.get("source") != "credential_directory":
+                continue
+            bundle_key = value["bundle_key"]
+            require(bundle_key in declared, "credential directory names an undeclared credential")
+            path = PurePosixPath(declared[bundle_key])
+            require(not path.is_absolute() and ".." not in path.parts, "unsafe credential fixture path")
+            destination = private_home.joinpath(*path.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if not destination.exists():
+                destination.write_text("cowboy-conformance-not-a-credential")
+                destination.chmod(0o600)
+            credential_directories[bundle_key] = str(destination.parent)
         environment.update({
             "COWBOY_PROVIDER_PACKAGE_PATH": str(candidate.package_path),
             "COWBOY_PROVIDER_COMPONENT_COMMANDS": json.dumps(candidate.commands),
             "RUST_LOG": "info",
         })
+        if credential_directories:
+            environment["COWBOY_PROVIDER_CREDENTIAL_DIRECTORIES"] = json.dumps(credential_directories)
         workspace = root / "workspace"
         workspace.mkdir()
         self.log = (root / "worker.log").open("w+")

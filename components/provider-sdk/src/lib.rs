@@ -785,6 +785,18 @@ pub enum RuntimeBinding {
         #[serde(default)]
         suffix: String,
     },
+    /// Directory of a projected credential file. Every auth-generation runtime
+    /// home shares one credential source, so a CLI that coordinates its own
+    /// token refresh through a lock beside those credentials must be pointed
+    /// at that shared directory. Without it each generation locks its own
+    /// private home and concurrent refreshes race a single-use refresh token.
+    CredentialDirectory {
+        bundle_key: String,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        suffix: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2211,6 +2223,13 @@ impl RuntimeContract {
                         "runtime value references an unknown sidecar"
                     );
                 }
+                RuntimeValue::Binding(RuntimeBinding::CredentialDirectory {
+                    bundle_key, ..
+                }) => {
+                    // The declared credential file is linked in
+                    // `validate_auth_runtime_link`, which sees both contracts.
+                    validate_id(bundle_key, "credential directory bundle key")?;
+                }
             }
         }
         for platform in &self.platforms {
@@ -2259,6 +2278,14 @@ impl RuntimeBinding {
                 suffix,
             } => {
                 validate_id(sidecar, "runtime sidecar binding")?;
+                (prefix, suffix)
+            }
+            Self::CredentialDirectory {
+                bundle_key,
+                prefix,
+                suffix,
+            } => {
+                validate_id(bundle_key, "runtime credential directory binding")?;
                 (prefix, suffix)
             }
         };
@@ -2509,6 +2536,23 @@ fn validate_auth_runtime_link(
                 })
             }),
             "authentication executor component is unavailable on a supported platform"
+        );
+    }
+    for value in runtime.arguments.iter().chain(runtime.environment.values()) {
+        let RuntimeValue::Binding(RuntimeBinding::CredentialDirectory { bundle_key, .. }) = value
+        else {
+            continue;
+        };
+        ensure!(
+            authentication.required,
+            "credential directory binding needs an authenticated Provider"
+        );
+        ensure!(
+            authentication
+                .credential_files
+                .iter()
+                .any(|file| file.bundle_key == *bundle_key),
+            "credential directory binding references an undeclared credential file"
         );
     }
     let mut sidecar_auth_environment = BTreeSet::new();
@@ -4168,6 +4212,61 @@ mod tests {
         unknown_profile["runtime"]["behavior"]["permission"] =
             serde_json::Value::String("provider_specific_magic".to_owned());
         assert!(serde_json::from_value::<StandardProviderSource>(unknown_profile).is_err());
+    }
+
+    #[test]
+    fn credential_directory_binding_requires_a_declared_credential_file() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/claude-code/provider.json"))
+                .unwrap();
+        let package = build_package(source.clone().compile().unwrap()).unwrap();
+        // Concurrent sessions live in private auth-generation homes but share
+        // one credential file. The CLI locks its refresh beside the
+        // credentials, so it must be bound to that shared directory.
+        let bound = package
+            .manifest
+            .runtime
+            .environment
+            .get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+            .unwrap();
+        let RuntimeValue::Binding(RuntimeBinding::CredentialDirectory { bundle_key, .. }) = bound
+        else {
+            panic!("the shared credential store is not a credential directory binding");
+        };
+        assert_eq!(bundle_key, "credentials_json");
+        assert!(
+            package
+                .manifest
+                .authentication
+                .credential_files
+                .iter()
+                .any(|file| file.bundle_key == *bundle_key)
+        );
+
+        let mut undeclared = source.clone().compile().unwrap();
+        undeclared.runtime.environment.insert(
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR".to_owned(),
+            RuntimeValue::Binding(RuntimeBinding::CredentialDirectory {
+                bundle_key: "absent_bundle".to_owned(),
+                prefix: String::new(),
+                suffix: String::new(),
+            }),
+        );
+        assert!(
+            build_package(undeclared)
+                .unwrap_err()
+                .to_string()
+                .contains("undeclared credential file")
+        );
+
+        let mut unauthenticated = source.compile().unwrap();
+        unauthenticated.authentication.required = false;
+        assert!(
+            build_package(unauthenticated)
+                .unwrap_err()
+                .to_string()
+                .contains("authenticated Provider")
+        );
     }
 
     #[test]

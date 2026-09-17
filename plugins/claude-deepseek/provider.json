@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.18",
+  "version": "3.1.19",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.10",
+  "sdk_version": "3.1.11",
   "display": {
     "name": "Claude Code · DeepSeek",
     "vendor": "DeepSeek",
