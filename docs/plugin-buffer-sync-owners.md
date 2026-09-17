@@ -78,10 +78,12 @@ native request, and cleanup after path removal.
 Run the complete pinned gate, `just zed-native-sync-conformance <server>`,
 `just zed-plugin-conformance <adapter> <server>` and the connected core Code
 gate against the exact release pair. No production activation is implied by
-the source tests. Service synchronization authority, Product/Session authority-loss
-handling, acceptance/activation of the Machine continuation, Review integration, owned navigation destinations,
+the source tests. The separate [Service continuation](plugin-service-buffer-sync.md)
+now supplies finite product confirmation and Product/Session authority-loss
+handling, with an accepted Controller-only rollout. Machine activation, exact
+signed `1.9.0` installation, Review integration, owned navigation destinations,
 independent post-effect recovery and supported-device acceptance remain open.
-The purpose enum is a closed request declaration, not that missing authority.
+The purpose enum is still a closed request declaration, not core authority.
 Before core admission, an exact original adapter must explicitly establish
 support for this ownership contract. Native protocol-1 support alone also
 describes `1.7.0`; it cannot prove adapter exclusion or authorize synchronization.

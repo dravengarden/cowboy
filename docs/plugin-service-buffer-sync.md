@@ -103,6 +103,12 @@ content reads and cancellation-safe retirement. It also refuses old operations
 after connection/Controller replacement. Fixture signatures, accounts and
 teardown are not production authorization or recovery evidence.
 
+The [accepted Controller-only rollout](releases/service-buffer-sync-2026-09-17.md)
+records two successful 11-check runs against exact immutable inputs, the full
+gate and bounded production process continuity. The resident protocol-19
+Machine and installed Zed were not upgraded, so this is not production
+end-to-end synchronization or a browser/Review cutover.
+
 Still separate: a typed browser synchronization owner and confirmation/unknown
 presentation, ordinary Review content/position lifetimes, owned navigation
 destinations, signed Plugin installation, explicit Machine maintenance and

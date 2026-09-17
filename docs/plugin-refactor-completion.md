@@ -251,18 +251,24 @@ and accepting a production effect are different milestones.
   Its [candidate acceptance](releases/machine-buffer-sync-candidate-2026-09-17.md)
   passes the complete gate, exact static native/core synchronization across
   uninstall, eight connected Code regressions and six Nix checks. Publication,
-  installation and Machine activation remain separate; no Service confirmation
-  endpoint, ordinary Review integration or recovery is enabled.
+  installation and Machine activation remain separate. That earlier candidate
+  did not supply Service confirmation; the following slice adds it. Ordinary
+  Review integration and independent recovery are still not enabled.
 - [Service synchronization continuations](plugin-service-buffer-sync.md) add
   explicit original-owner preparation and fresh product confirmation on protocol
   20, with typed Site-bound transport, one-use Apply, independently owned jobs,
   conservative uncertainty and path-free original-ID cleanup. Authority and
   Session/connection checks cannot be replaced by serialized IDs. Ordinary
   buffer admission now clears expired inert Machine preparations too, without
-  clearing possible effects. Browser synchronization ownership/presentation,
+  clearing possible effects. Response-authorization job exclusion also prevents
+  an older Drop from reopening a successor's admission. Its
+  [Controller-only rollout](releases/service-buffer-sync-2026-09-17.md) passes
+  the complete gate, two actual 11-flow immutable process runs and all eight Nix
+  checks; 15 original workers and four native Code processes survive activation.
+  The resident Machine and installed Zed remain unchanged, so this is not
+  production end-to-end synchronization. Browser ownership/presentation,
   ordinary Review, signed Plugin rollout, separate Machine maintenance and
-  independent restoration remain required. Candidate and production acceptance
-  are recorded separately; source endpoints alone do not complete those exits.
+  independent restoration remain required.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

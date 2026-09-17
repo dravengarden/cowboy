@@ -82,9 +82,11 @@ original operation. These are disposable fixtures, not production authority.
 The [candidate acceptance](releases/machine-buffer-sync-candidate-2026-09-17.md)
 records the complete pinned gate, immutable Machine/portable-runtime builds,
 actual original-process synchronization and eight connected Code regressions.
-It is not signed Plugin publication, installation or Machine activation. Before
-Service/Review cutover, additionally accept
-the actual Controller/Machine HTTP chain, independent Product authorization,
+It is not signed Plugin publication, installation or Machine activation. The
+[subsequent Service rollout](releases/service-buffer-sync-2026-09-17.md) accepts
+the actual Controller/Machine HTTP chain and independent Product confirmation
+against these immutable candidates, without activating the resident Machine or
+installing the Plugin. Production Review still needs that separate rollout,
 consumer cancellation/content changes, owned navigation destinations and
 supported clients. A reconnect cannot recover this operation's old authority;
 independent recovery is still required. See the

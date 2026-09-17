@@ -140,13 +140,16 @@ and a separate synchronization operation identity. It refuses shared native IDs,
 retains exclusion through Pending/Unknown, and never resends Apply. Its private
 socket purpose declaration is **not** a core grant. The accompanying verified
 Machine candidate explicitly rejects these commands on its generic Code route;
-that candidate awaits separate maintenance. No Controller/Web effect or
-Review consumer is enabled. Core purpose/authority and original-generation
-routing were the next prerequisite. The source now adds the separate
+that candidate awaits separate maintenance. Core purpose/authority and original-generation
+routing were the next prerequisite. The source adds the separate
 [protocol-20 Machine continuation](plugin-machine-buffer-sync.md), requiring
-the Zed `1.9.0` candidate's own exclusion-support probe. Service confirmation,
-consumer integration and actual activation remain required. Read leases and content hashes remain insufficient,
-and no fallback to legacy reload is permitted.
+the Zed `1.9.0` candidate's own exclusion-support probe. The
+[Service confirmation executor](plugin-service-buffer-sync.md) is now verified
+and active in a Controller-only release, including two actual 11-flow HTTP
+acceptance runs. It does not activate the required Machine/Zed pair or enable
+ordinary Review. Consumer integration and separate native rollout remain
+required. Read leases and content hashes remain insufficient, and no fallback
+to legacy reload is permitted.
 
 Both exact static releases passed the eight-group connected Code gate and were
 installed through the normal Plugin installer. The earlier `1.7.0` release's
