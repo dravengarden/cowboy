@@ -238,12 +238,7 @@
       # Nixpkgs uses the official immutable static CDN for exactly this reason.
       # Patch only the vendoring helper inside the FOD; Cargo.lock checksums and
       # the aggregate cargo hash remain fully enforced.
-      cowboy-cargo-deps = rustPlatform.fetchCargoVendor {
-        pname = "cowboy";
-        version = "0.1.0";
-        src = cowboy-src;
-        hash = "sha256-XLJ/dn7rhomu2ds+l6Fhc2+mLd01moQFkwXR64I0Djc=";
-        preBuild = ''
+      staticCratesVendorPatch = ''
           vendor_util="$(command -v fetch-cargo-vendor-util-v2 || command -v fetch-cargo-vendor-util)"
           if grep -q "https://crates.io/api/v1/crates/" "$vendor_util"; then
             patched_util="$TMPDIR/cargo-vendor-bin/$(basename "$vendor_util")"
@@ -257,6 +252,13 @@
             export PATH="$(dirname "$patched_util"):$PATH"
           fi
         '';
+
+      cowboy-cargo-deps = rustPlatform.fetchCargoVendor {
+        pname = "cowboy";
+        version = "0.1.0";
+        src = cowboy-src;
+        hash = "sha256-XLJ/dn7rhomu2ds+l6Fhc2+mLd01moQFkwXR64I0Djc=";
+        preBuild = staticCratesVendorPatch;
       };
 
       # API/control plane + detached ACP worker. The SPA is served from a
@@ -593,7 +595,67 @@
           cowboy-zed-integration cowboy-zed-adapter cowboy-zed-server;
       };
 
-      devShells.${system}.default = pkgs.mkShell {
+      # Android native-shell builds on Linux. The Rust and Tauri CLI versions
+      # come from apps/native-shell/toolchain.json, so the shell cannot drift
+      # from the Apple pins. The Android SDK/NDK stay owned by Android Studio's
+      # SDK Manager (ANDROID_HOME, NDK_HOME); the builder verifies their exact
+      # versions instead of vendoring them into Nix.
+      devShells.${system} = {
+      native-android = let
+        nativeToolchain = builtins.fromJSON
+          (builtins.readFile ./apps/native-shell/toolchain.json);
+        androidRust = pkgs.rust-bin.stable.${nativeToolchain.rust}.minimal.override {
+          targets = map (abi: abi.rustTarget) nativeToolchain.android.abis;
+        };
+        # nixpkgs trails the pinned CLI; build the exact crates.io release with
+        # its published lockfile. Update both hashes with the toolchain pin.
+        # crates.io's download API rejects Nix fetchers (see
+        # staticCratesVendorPatch), so read the immutable static CDN directly.
+        tauriCliSrc = pkgs.runCommand "tauri-cli-${nativeToolchain.tauriCli}-source" {
+          crate = pkgs.fetchurl {
+            url = "https://static.crates.io/crates/tauri-cli/tauri-cli-${nativeToolchain.tauriCli}.crate";
+            hash = "sha256-LaQKekLq4/dOtHg+eDeODYzoSsgljhwSNEN1VgnNMnc=";
+          };
+        } ''
+          mkdir "$out"
+          tar -xzf "$crate" -C "$out" --strip-components=1
+        '';
+        tauriCli = rustPlatform.buildRustPackage {
+          pname = "tauri-cli";
+          version = nativeToolchain.tauriCli;
+          src = tauriCliSrc;
+          cargoDeps = rustPlatform.fetchCargoVendor {
+            pname = "tauri-cli";
+            version = nativeToolchain.tauriCli;
+            src = tauriCliSrc;
+            hash = "sha256-3ZKnrr6fKS1xmBoNlkh4WhXQHoV8DmxCRRZirN0hUrg=";
+            preBuild = staticCratesVendorPatch;
+          };
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = [ pkgs.openssl pkgs.bzip2 pkgs.xz pkgs.zstd ];
+          doCheck = false;
+        };
+      in pkgs.mkShell {
+        COWBOY_NATIVE_ANDROID_SHELL = "1";
+        JAVA_HOME = "${pkgs.jdk21}/lib/openjdk";
+        nativeBuildInputs = [
+          androidRust
+          tauriCli
+          pkgs.jdk21
+          deno
+          pkgs.python3
+          pkgs.git
+          pkgs.gnutar
+          pkgs.just
+          pkgs.jq
+          pkgs.unzip
+        ];
+        shellHook = ''
+          echo "cowboy native-android shell — $(rustc --version), $(cargo tauri --version)"
+        '';
+      };
+
+      default = pkgs.mkShell {
         # See the controller package note above. This only affects C build
         # scripts; rustc keeps the profile selected by Cargo.
         CFLAGS = "-O1";
@@ -633,6 +695,7 @@
           sccache --version >/dev/null 2>&1 && echo "sccache: $(sccache --version)"
           deno --version 2>/dev/null | head -1
         '';
+      };
       };
     };
 }

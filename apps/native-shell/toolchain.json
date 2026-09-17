@@ -28,6 +28,29 @@
   "sourceProvenance": {
     "repository": "https://github.com/dravengarden/cowboy",
     "revision": "627e63288fee0cdfdacebfcd04f1180d62f5e356",
-    "paths": ["src-tauri", "loader", "tools/check-keyboard-geometry.sh", "tools/cowboy-keyboard-geometry-test.c"]
+    "paths": [
+      "src-tauri",
+      "loader",
+      "tools/check-keyboard-geometry.sh",
+      "tools/cowboy-keyboard-geometry-test.c"
+    ]
+  },
+  "android": {
+    "ndk": "30.0.16248370",
+    "platform": "android-36",
+    "buildTools": "36.0.0",
+    "minSdk": 29,
+    "abis": [
+      {
+        "name": "arm64-v8a",
+        "tauriTarget": "aarch64",
+        "rustTarget": "aarch64-linux-android"
+      },
+      {
+        "name": "x86_64",
+        "tauriTarget": "x86_64",
+        "rustTarget": "x86_64-linux-android"
+      }
+    ]
   }
 }

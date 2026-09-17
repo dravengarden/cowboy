@@ -110,6 +110,27 @@ for (
       "personal signing team",
     ],
     [
+      "unpinned Android NDK",
+      "toolchain.json",
+      '"ndk": "30.0.16248370"',
+      '"ndk": "latest"',
+      "exact pins",
+    ],
+    [
+      "Android minSdk drift",
+      "tauri/tauri.conf.json",
+      '"minSdkVersion": 29',
+      '"minSdkVersion": 24',
+      "minSdk differs",
+    ],
+    [
+      "template Android activity",
+      "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+      "class MainActivity : TauriActivity()",
+      "class MainActivity : android.app.Activity()",
+      "extend the generated TauriActivity",
+    ],
+    [
       "unscoped IPC",
       "tauri/capabilities/remote-haptics.json",
       "https://cowboy.stormbird.xyz/*",

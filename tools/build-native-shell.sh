@@ -17,19 +17,137 @@ if [ "${1:-}" = --receipt-path ]; then
   }
 fi
 if [ "$#" != 0 ]; then
-  echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios} [--debug] [--receipt-path /absolute/new.json]" >&2
+  echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios|android|android-emu} [--debug] [--receipt-path /absolute/new.json]" >&2
   exit 2
 fi
-case "$native_platform" in macos|ios-sim|ios) ;; *) echo "unknown native platform" >&2; exit 2;; esac
+case "$native_platform" in macos|ios-sim|ios|android|android-emu) ;; *) echo "unknown native platform" >&2; exit 2;; esac
 native_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$native_repo"
-test "$(uname -s)" = Darwin || { echo "Apple builds require a Mac with Xcode" >&2; exit 1; }
-test "$(uname -m)" = arm64 || { echo "This build entry targets an arm64 Mac" >&2; exit 1; }
+case "$native_platform" in
+  android*)
+    test "$(uname -s)" = Linux || { echo "Android builds run on a Linux build host" >&2; exit 1; }
+    test "${COWBOY_NATIVE_ANDROID_SHELL:-}" = 1 || {
+      echo "Run Android builds inside: nix develop .#native-android" >&2; exit 1;
+    }
+    ;;
+  *)
+    test "$(uname -s)" = Darwin || { echo "Apple builds require a Mac with Xcode" >&2; exit 1; }
+    test "$(uname -m)" = arm64 || { echo "This build entry targets an arm64 Mac" >&2; exit 1; }
+    ;;
+esac
 test -z "$(git status --porcelain)" || { echo "Native builds require clean, committed source" >&2; exit 1; }
 native_revision="$(git rev-parse HEAD)"
 deno run --allow-read tools/check-native-shell.ts
 native_rust="$(python3 -c 'import json; print(json.load(open("apps/native-shell/toolchain.json"))["rust"])')"
 native_cli="$(python3 -c 'import json; print(json.load(open("apps/native-shell/toolchain.json"))["tauriCli"])')"
+case "$native_platform" in android*)
+  # The native-android Nix shell provides the pinned rustc/Android targets and
+  # Tauri CLI. The SDK/NDK remain SDK Manager-owned; require their exact pins.
+  test "$(rustc --version | cut -d ' ' -f 2)" = "$native_rust" || {
+    echo "Expected rustc $native_rust from the native-android shell" >&2; exit 1;
+  }
+  test "$(cargo tauri --version)" = "tauri-cli $native_cli" || {
+    echo "Expected tauri-cli $native_cli from the native-android shell" >&2; exit 1;
+  }
+  : "${ANDROID_HOME:?Set ANDROID_HOME to the SDK Manager-owned Android SDK}"
+  native_android() { python3 -c 'import json,sys; print(json.load(open("apps/native-shell/toolchain.json"))["android"][sys.argv[1]])' "$1"; }
+  native_ndk="$(native_android ndk)"
+  native_sdk_platform="$(native_android platform)"
+  native_build_tools="$(native_android buildTools)"
+  export NDK_HOME="$ANDROID_HOME/ndk/$native_ndk"
+  grep -Fxq "Pkg.Revision = $native_ndk" "$NDK_HOME/source.properties" || {
+    echo "Install NDK $native_ndk with the SDK Manager" >&2; exit 1;
+  }
+  test -f "$ANDROID_HOME/platforms/$native_sdk_platform/android.jar" || {
+    echo "Install platforms;$native_sdk_platform with the SDK Manager" >&2; exit 1;
+  }
+  test -x "$ANDROID_HOME/build-tools/$native_build_tools/aapt2" || {
+    echo "Install build-tools;$native_build_tools with the SDK Manager" >&2; exit 1;
+  }
+  native_abi=arm64-v8a
+  if [ "$native_platform" = android-emu ]; then native_abi=x86_64; fi
+  read -r native_tauri_target native_rust_target < <(python3 -c 'import json,sys
+for abi in json.load(open("apps/native-shell/toolchain.json"))["android"]["abis"]:
+    if abi["name"] == sys.argv[1]: print(abi["tauriTarget"], abi["rustTarget"])' "$native_abi")
+  test -d "$(rustc --print sysroot)/lib/rustlib/$native_rust_target" || {
+    echo "The native-android shell lacks Rust target $native_rust_target" >&2; exit 1;
+  }
+  # Signing is a separate release step. Never let an inherited keystore or
+  # Tauri updater key sign this build-only artifact.
+  unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD TAURI_CONFIG
+  unset TAURI_ANDROID_KEYSTORE_PATH TAURI_ANDROID_KEYSTORE_PASSWORD ANDROID_KEYSTORE
+  unset CARGO_TARGET_DIR RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+  export LANG=C.UTF-8
+  mkdir -p dist/native-shell
+  native_build="$(mktemp -d "$native_repo/dist/native-shell/$native_platform-${native_revision:0:12}.XXXXXX")"
+  echo "Native build directory: $native_build"
+  native_source="$native_build/apps/native-shell"
+  mkdir -p "$native_source"
+  git archive "$native_revision:apps/native-shell" | tar -xf - -C "$native_source"
+  export CARGO_TARGET_DIR="$native_build/target"
+  cd "$native_source/tauri"
+  # The Gradle project itself is generated, but every handwritten Kotlin source
+  # and resource comes from this commit.
+  cargo tauri android init --ci --skip-targets-install
+  cp -R ../android/app/src/. gen/android/app/src/
+  cargo tauri android build --apk --target "$native_tauri_target" "${native_flags[@]}"
+  native_apk="$native_source/tauri/gen/android/app/build/outputs/apk/universal/$native_profile/app-universal-$native_profile.apk"
+  if [ "$native_profile" = release ]; then
+    native_apk="${native_apk%.apk}-unsigned.apk"
+  fi
+  test -f "$native_apk" || { echo "Build returned no APK at its exact output path: $native_apk" >&2; exit 1; }
+  cmp "$native_source/tauri/Cargo.lock" "$native_repo/apps/native-shell/tauri/Cargo.lock"
+  python3 - "$native_apk" "$native_revision" "$native_platform" "$native_profile" "$native_build" "$native_report_target" "$native_abi" <<'PY'
+import hashlib, json, os, pathlib, re, subprocess, sys
+apk, revision, platform, profile, build, receipt_target, abi = sys.argv[1:]
+apk, build = pathlib.Path(apk), pathlib.Path(build)
+native = build / "apps/native-shell"
+toolchain = json.loads((native / "toolchain.json").read_text())
+android = toolchain["android"]
+sdk = pathlib.Path(os.environ["ANDROID_HOME"])
+aapt2 = sdk / "build-tools" / android["buildTools"] / "aapt2"
+badging = subprocess.check_output([str(aapt2), "dump", "badging", str(apk)], text=True)
+def field(pattern):
+    match = re.search(pattern, badging, re.M)
+    if not match:
+        raise SystemExit("APK badging lacks " + pattern)
+    return match.group(1)
+package = field(r"^package: name='([^']+)'")
+if package != "top.thundersparrow.cowboy":
+    raise SystemExit("Unexpected Android application id: " + package)
+min_sdk = int(field(r"^(?:minSdkVersion|sdkVersion):'(\d+)'"))
+if min_sdk != android["minSdk"]:
+    raise SystemExit(f"APK minSdk {min_sdk} differs from pinned {android['minSdk']}")
+abis = field(r"^native-code: (.+)$").replace("'", "").split()
+if abis != [abi]:
+    raise SystemExit(f"APK native code {abis} differs from requested {abi}")
+gen = native / "tauri/gen/android"
+gradle = re.search(r"gradle-([0-9.]+)-", (gen / "gradle/wrapper/gradle-wrapper.properties").read_text()).group(1)
+agp = re.search(r"com\.android\.tools\.build:gradle:([0-9.]+)", (gen / "buildSrc/build.gradle.kts").read_text() + (gen / "build.gradle.kts").read_text()).group(1)
+apksigner = sdk / "build-tools" / android["buildTools"] / "apksigner"
+signing = "unsigned"
+if subprocess.run([str(apksigner), "verify", str(apk)], capture_output=True).returncode == 0:
+    signing = "android-debug-keystore" if profile == "debug" else "signed"
+report = dict(source_revision=revision, platform=platform, profile=profile, abi=abi,
+    apk=str(apk), apk_sha256=hashlib.sha256(apk.read_bytes()).hexdigest(),
+    application_id=package, version_code=int(field(r"versionCode='(\d+)'")),
+    version_name=field(r"versionName='([^']*)'"), min_sdk=min_sdk,
+    target_sdk=int(field(r"^targetSdkVersion:'(\d+)'")),
+    lock_sha256=hashlib.sha256((native / "tauri/Cargo.lock").read_bytes()).hexdigest(),
+    toolchain=toolchain, gradle=gradle, android_gradle_plugin=agp,
+    ndk=android["ndk"], java=subprocess.run(["java", "-version"], capture_output=True, text=True).stderr.splitlines()[0],
+    rustc=subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip(),
+    tauri_cli=subprocess.check_output(["cargo", "tauri", "--version"], text=True).strip(),
+    signing=signing, installed=False, real_login="not_checked", physical_device="not_checked")
+(build / "receipt.json").write_text(json.dumps(report, indent=2) + "\n")
+if receipt_target:
+    with pathlib.Path(receipt_target).open("x") as receipt:
+        receipt.write(json.dumps(report, indent=2) + "\n")
+print(json.dumps(report, indent=2))
+PY
+  exit 0
+  ;;
+esac
 native_xcodegen="$(python3 -c 'import json; print(json.load(open("apps/native-shell/toolchain.json"))["xcodegen"])')"
 # Select a preinstalled toolchain explicitly; never install an ambient latest.
 rustup toolchain list | grep -Fq "$native_rust-aarch64-apple-darwin" || {

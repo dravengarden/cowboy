@@ -155,8 +155,46 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       "apple/Sources/cowboy-app/CowboyKeyboardGeometry.h",
       "apple/Sources/cowboy-app/CowboyDevBridge.swift",
       "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
     ]
   ) await read(path);
+  // Android: SDK Manager-owned components are pinned exactly, the Tauri
+  // config agrees with the pin, and the generated activity is replaced by the
+  // owned Kotlin source rather than Tauri's template.
+  const android = toolchain.android;
+  requireValue(
+    typeof android?.ndk === "string" &&
+      /^\d+\.\d+\.\d+$/.test(android.ndk) &&
+      /^android-\d+$/.test(android.platform) &&
+      /^\d+\.\d+\.\d+$/.test(android.buildTools),
+    "Android SDK components need exact pins",
+  );
+  requireValue(
+    config.bundle.android?.minSdkVersion === android.minSdk,
+    "Android minSdk differs from the toolchain pin",
+  );
+  requireValue(
+    JSON.stringify(
+      (android.abis as {
+        name: string;
+        tauriTarget: string;
+        rustTarget: string;
+      }[])
+        .map((abi) => [abi.name, abi.tauriTarget, abi.rustTarget]),
+    ) === JSON.stringify([
+      ["arm64-v8a", "aarch64", "aarch64-linux-android"],
+      ["x86_64", "x86_64", "x86_64-linux-android"],
+    ]),
+    "unexpected Android ABI inventory",
+  );
+  requireValue(
+    /class MainActivity : TauriActivity\(\)/.test(
+      await read(
+        "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
+      ),
+    ),
+    "Android activity must extend the generated TauriActivity",
+  );
   const project = await read("apple/project.yml");
   requireValue(
     !/DEVELOPMENT_TEAM:/.test(project),
