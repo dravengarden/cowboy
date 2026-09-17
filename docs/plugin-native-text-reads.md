@@ -6,6 +6,11 @@ ordinary buffer owner. This adds no open, reload, synchronization, navigation
 acquisition, installation or second resource lifecycle. Private server `1.0.0`
 and every upstream dependency pin are unchanged.
 
+The [candidate acceptance](releases/native-text-reads-candidate-2026-09-18.md)
+records the clean source gate, exact native and Controller/Machine artifacts,
+two successful v5 connected runs and the separate browser-owner acceptance.
+It does not publish, install or activate those candidates.
+
 ## Closed original-owner protocol
 
 `POST /api/code/buffers/{resourceId}/read` additionally accepts:

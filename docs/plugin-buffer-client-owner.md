@@ -15,6 +15,12 @@ separately validated complete-content coordinate projection; staged/history
 views cannot borrow current-file positions. Native rollout and supported-device
 acceptance stay separate.
 
+The later [native text reader](plugin-native-text-reads.md) adds
+`owner.readText(identity, observer)` on this same original opened owner. It
+returns a complete verified `CapturedContent` or an explicit mismatch/stale
+observation, never partial pages or a replacement path read. It does not add a
+navigation destination-import API or connect an ordinary Review destination view.
+
 ## Ownership, not React mount lifetime
 
 `createOwnedCodeBuffers({ context })` creates a bounded registry for one core

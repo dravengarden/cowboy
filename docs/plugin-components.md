@@ -166,7 +166,7 @@ Scoped release 3.10.0 records app-shell 1.1.2's Android system-haptic bridge
 after integrating the native-shell change. No component or Plugin depends on
 app-shell, so the release changes only that component; existing Plugin source,
 versions and component-release pins remain unchanged. The matrix snapshots the
-current independently released Plugins without rewriting historical entries.
+current independently versioned Plugins without rewriting historical entries.
 This metadata repair does not publish a Catalog or activate a native shell.
 
 Run:

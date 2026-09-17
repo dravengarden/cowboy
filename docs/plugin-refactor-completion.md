@@ -356,6 +356,18 @@ and accepting a production effect are different milestones.
   Controller/Machine and two successful 17-check connected runs.
   Full destination views, native budgets, Web integration, rollout and recovery
   remain separate.
+- [Complete original native text](plugin-native-text-reads.md) adds the finite
+  Zed `1.13.0` reader through Machine, Service and the typed browser owner.
+  Bounded UTF-8 pages retain the original owner/revision, refuse content or
+  snapshot changes and never reopen a path. The browser returns only a complete
+  SHA-256-verified capture, drains cancellation and stops further page admission.
+  Its [candidate acceptance](releases/native-text-reads-candidate-2026-09-18.md)
+  passes the complete source gate, static native and temporary signed-lifecycle
+  gates, 49 isolated browser cases and two v5 connected runs with all 18 checks.
+  These include two-page Unicode reads after uninstall, parent release and path
+  removal. Navigation acquisition remains default closed; this reader does not
+  supply the intended Review destination owner/view, native allocation bounds,
+  production rollout, supported-device acceptance or independent recovery.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -431,7 +443,7 @@ record exact accepted artifacts and bounded production continuity observations.
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Complete native destination views and Web navigation beyond the accepted finite Service handoff and source/working-diff consumers; independently accept the deployed Machine and exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
+| P4 / Code consumer | Web navigation ownership and complete destination views beyond the accepted finite Service handoff, original-native-text reader and source/working-diff consumers; native acquisition bounds and independent acceptance of the deployed Machine/exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; pre-acquisition resource budgets and supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
