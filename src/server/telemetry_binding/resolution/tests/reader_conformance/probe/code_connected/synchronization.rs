@@ -39,11 +39,9 @@ fn change_content(root: &Path) -> Result<(), Failure> {
     file.write_all(DESIRED.as_bytes())
         .and_then(|()| file.set_modified(modified))
         .map_err(|_| Failure::Setup)?;
-    check(
-        file.metadata().is_ok_and(|metadata| {
-            metadata.len() == DESIRED.len() as u64 && metadata.modified().ok() == Some(modified)
-        }),
-    )
+    check(file.metadata().is_ok_and(|metadata| {
+        metadata.len() == DESIRED.len() as u64 && metadata.modified().ok() == Some(modified)
+    }))
 }
 
 fn snapshot(value: &Value, resource: &str, state: &str) -> Result<String, Failure> {

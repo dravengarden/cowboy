@@ -70,6 +70,10 @@ requiring Machine protocol 20 and the Zed `1.9.0` ownership-support probe):
     afterward, discard one actual Apply reply, and wait the normal 40-second
     transport timeout. Duplicate Apply never dispatches again; original-ID Query
     establishes the exact applied content, and original-owner content reads agree.
+    The source edit preserves size and mtime to isolate explicit synchronization
+    from competing native metadata/reload events. Real changed bytes, not stat
+    equality, must cross the supplied native process; all conditional checks
+    remain enabled. A changed native preparation is a refusal, not success.
 11. Cancel HTTP retirement observation after holding its actual native reply;
     local completion and duplicate requests cannot resend retirement. A distinct
     preparation also refuses old authority after connection replacement and
