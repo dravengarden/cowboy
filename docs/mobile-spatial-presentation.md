@@ -111,6 +111,8 @@ Do **not** add, inside those trees, a descendant that self-promotes:
 - `will-change: transform` at rest on a descendant
 - `backdrop-filter` toggled on swipe claim
 - `-webkit-overflow-scrolling: touch` on wrap-on code
+- an `overflow-x: auto` box that really overflows (Markdown table
+  wrappers, wide `pre`) in touch-wrapped Review Markdown — see §4.2
 - `setState` on `touchstart` or swipe claim
 
 Selected chrome is paint-only: background and color. If a control needs a
@@ -292,6 +294,30 @@ Retries that failed and must not return:
 Do not change wrap-off into a workspace swipe. Horizontal reading of a
 wide file owns that bar.
 
+## 4.2 Review Markdown
+
+A large Markdown document (README, handbook) is peek content like wrap-on
+source and must not contain nested horizontal ScrollViews. iOS WebKit backs
+every overflow box that really scrolls with its own UIScrollView, on screen
+or not, and re-commits each one on every tracking frame of the drawer or
+pager. A 2,450-line handbook with fifty wide tables had fifty of them and
+hitched, while prose READMEs of similar length stayed silky. A swipe starting
+on such a table was also a native table pan (`hasHorizontalScroller`), not a
+workspace swipe.
+
+`<Markdown touchWrap>` on a coarse pointer therefore fits tables to the
+column (`web/src/markdownTableFit.ts`): the wrapper is `overflow-x: clip`
+(not a scroll container), cells wrap at words, and a table whose longest
+words still overflow steps to a compact font and only then breaks anywhere.
+Fitting runs on mount, on a text change, and when the column width changes
+— never on the swipe path, since a translate does not change layout width.
+Fenced code already wraps under the same flag. The transcript and Desktop
+keep native table scrolling.
+
+Do not restore a horizontally scrolling table wrapper in touch-wrapped
+Markdown, and do not toggle table overflow on swipe claim: that rebuilds
+the scrolling tree on the first tracking frames.
+
 ## 5. Hit testing and chrome freeze
 
 Flatten exists to make a swipe cheap. It must not disable the rail.
@@ -392,6 +418,7 @@ because those surfaces *contain* the blur.
 | Rail offset, dim progress, settle curve | `web/src/mobileDrawerMotion.ts` |
 | Standing peek layer, prepare flatten, rail hit, close layer | `web/src/mobilePresentationMotion.ts` |
 | Wrap-on Review workspace swipe | `web/src/mobileCodeSurface.ts`, `CodeViewer.tsx` |
+| Review Markdown tables without nested ScrollViews | `web/src/markdownTableFit.ts`, `MarkdownImpl.tsx` |
 | Live-row recycle | `web/src/transcriptLiveWindow.ts` |
 | Column-reverse transcript; pause ref (no `setState` on finger-down) | `web/src/Transcript.tsx` |
 | Event-tail recycle | `store.releaseFollowedHistory` |
