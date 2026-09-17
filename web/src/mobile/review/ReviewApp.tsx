@@ -118,7 +118,9 @@ import { MermaidDiagram } from "./MermaidDiagram";
 import { isReviewMediaPath, reviewPreviewKind } from "./reviewPreview";
 import type { ReviewMode } from "./reviewMode";
 import {
+  readReviewSettings,
   setReviewLanguageCapabilities,
+  subscribeReviewSettings,
   updateReviewSettings,
   useReviewSettings,
 } from "./reviewSettings";
@@ -591,6 +593,22 @@ export function DocumentView({
   const outerScrollable = markdownPreview || previewKind === "mermaid" ||
     mediaPreview || settings.softWrap;
   const outerAnchor = useRef<TextScrollAnchor | undefined>(undefined);
+  // Toggling Markdown wrap reflows every code block and table. The store
+  // notifies synchronously, before React replaces the old layout, so the
+  // reading anchor is captured here and restored after the reflow below.
+  const markdownPreviewRef = useRef(markdownPreview);
+  markdownPreviewRef.current = markdownPreview;
+  useEffect(() => {
+    let wrap = readReviewSettings().markdownSoftWrap;
+    return subscribeReviewSettings(() => {
+      const next = readReviewSettings().markdownSoftWrap;
+      if (next === wrap) return;
+      wrap = next;
+      const scroller = outerScrollRef.current;
+      if (!markdownPreviewRef.current || !scroller) return;
+      outerAnchor.current = captureTextScrollAnchor(scroller);
+    });
+  }, []);
   const documentState = useRef({
     loading,
     error,
@@ -1072,7 +1090,7 @@ export function DocumentView({
     // Highlighted code blocks and diagrams can settle one frame later.
     const frame = globalThis.requestAnimationFrame(restore);
     return () => globalThis.cancelAnimationFrame(frame);
-  }, [outerScrollKey, rememberScrollPosition, text]);
+  }, [outerScrollKey, rememberScrollPosition, settings.markdownSoftWrap, text]);
 
   // A worktree revision covers every file. Revalidate THIS document in the
   // background and only touch the screen when its own revision changed.
@@ -1879,9 +1897,14 @@ export function DocumentView({
                 },
               }}
             >
+              {
+                /* Off by default: code blocks and tables scroll natively.
+                   On fits them to the column, so the peek holds no nested
+                   iOS ScrollViews (docs/mobile-spatial-presentation.md 4.2). */
+              }
               <Markdown
                 text={displayText}
-                touchWrap
+                touchWrap={settings.markdownSoftWrap}
                 onLinkClick={onMarkdownLink}
               />
             </Box>
@@ -3378,22 +3401,37 @@ export function ReviewApp({
               >
                 <ChatBubbleOutline />
               </IconButton>
-              {target.kind !== "changes" && !(
-                target.kind === "source" &&
-                isMarkdownReviewPath(target.path) &&
-                markdownPreview
-              ) && (
-                <IconButton
-                  aria-label={settings.softWrap
-                    ? "Disable line wrapping"
-                    : "Enable line wrapping"}
-                  color={settings.softWrap ? "primary" : "default"}
-                  onClick={() =>
-                    updateReviewSettings({ softWrap: !settings.softWrap })}
-                >
-                  <WrapText />
-                </IconButton>
-              )}
+              {target.kind === "source" &&
+                  isMarkdownReviewPath(target.path) && markdownPreview
+                ? (
+                  // Same slot as source wrap, but its own preference: the
+                  // preview defaults to sideways-scrolling code and tables.
+                  <IconButton
+                    aria-label={settings.markdownSoftWrap
+                      ? "Scroll Markdown code and tables sideways"
+                      : "Wrap Markdown code and tables"}
+                    aria-pressed={settings.markdownSoftWrap}
+                    color={settings.markdownSoftWrap ? "primary" : "default"}
+                    onClick={() =>
+                      updateReviewSettings({
+                        markdownSoftWrap: !settings.markdownSoftWrap,
+                      })}
+                  >
+                    <WrapText />
+                  </IconButton>
+                )
+                : target.kind !== "changes" && (
+                  <IconButton
+                    aria-label={settings.softWrap
+                      ? "Disable line wrapping"
+                      : "Enable line wrapping"}
+                    color={settings.softWrap ? "primary" : "default"}
+                    onClick={() =>
+                      updateReviewSettings({ softWrap: !settings.softWrap })}
+                  >
+                    <WrapText />
+                  </IconButton>
+                )}
               {target.kind === "source" && isMarkdownReviewPath(target.path) &&
                 (
                   <IconButton

@@ -4,6 +4,9 @@ export const REVIEW_CODE_FONT_SIZES = [6, 7, 8, 10, 12, 14, 16, 18] as const;
 export interface ReviewSettings {
   readonly codeFontSize: number;
   readonly softWrap: boolean;
+  /** Markdown preview code blocks and tables. Off keeps them horizontally
+   *  scrollable; on fits them to the phone width. */
+  readonly markdownSoftWrap: boolean;
   readonly contextLines: number;
   readonly showWhitespaceChanges: boolean;
   readonly diagnostics: boolean;
@@ -14,6 +17,7 @@ export interface ReviewSettings {
 export const DEFAULT_REVIEW_SETTINGS: ReviewSettings = {
   codeFontSize: 8,
   softWrap: false,
+  markdownSoftWrap: false,
   contextLines: 6,
   showWhitespaceChanges: true,
   diagnostics: true,
@@ -80,6 +84,10 @@ export function normalizeReviewSettings(value: unknown): ReviewSettings {
     softWrap: booleanOrDefault(
       raw.softWrap,
       DEFAULT_REVIEW_SETTINGS.softWrap,
+    ),
+    markdownSoftWrap: booleanOrDefault(
+      raw.markdownSoftWrap,
+      DEFAULT_REVIEW_SETTINGS.markdownSoftWrap,
     ),
     contextLines: presetOrDefault(
       raw.contextLines,

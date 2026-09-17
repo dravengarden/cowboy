@@ -36,6 +36,7 @@ Deno.test("review settings retain code-review-specific choices", () => {
     normalizeReviewSettings({
       codeFontSize: 16,
       softWrap: true,
+      markdownSoftWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
       diagnostics: false,
@@ -45,12 +46,27 @@ Deno.test("review settings retain code-review-specific choices", () => {
     {
       codeFontSize: 16,
       softWrap: true,
+      markdownSoftWrap: true,
       contextLines: -1,
       showWhitespaceChanges: false,
       diagnostics: false,
       inlayHints: true,
       semanticHighlighting: false,
     },
+  );
+});
+
+Deno.test("Markdown preview scrolls code and tables sideways by default", () => {
+  assertEquals(DEFAULT_REVIEW_SETTINGS.markdownSoftWrap, false);
+  // Stored settings from before the preference existed keep the default.
+  assertEquals(
+    loadReviewSettings({ codeFontSize: 12, softWrap: true }).markdownSoftWrap,
+    false,
+  );
+  // Independent of source soft wrap in both directions.
+  assertEquals(
+    normalizeReviewSettings({ softWrap: false, markdownSoftWrap: true }),
+    { ...DEFAULT_REVIEW_SETTINGS, markdownSoftWrap: true },
   );
 });
 
@@ -69,6 +85,7 @@ Deno.test("review settings reject stale or malformed values", () => {
       codeFontSize: 99,
       lineHeight: "wide",
       softWrap: "yes",
+      markdownSoftWrap: 1,
       contextLines: 5,
       diagnostics: null,
     }),

@@ -27,6 +27,15 @@ export function useReviewSettings(): ReviewSettings {
   return useStore(reviewSettingsStore);
 }
 
+/** Synchronous change notification, delivered before React re-renders. */
+export function subscribeReviewSettings(listener: () => void): () => void {
+  return reviewSettingsStore.subscribe(listener);
+}
+
+export function readReviewSettings(): ReviewSettings {
+  return reviewSettingsStore.get();
+}
+
 export function updateReviewSettings(
   patch: Partial<ReviewSettings>,
 ): void {

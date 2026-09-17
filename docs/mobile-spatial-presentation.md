@@ -112,7 +112,7 @@ Do **not** add, inside those trees, a descendant that self-promotes:
 - `backdrop-filter` toggled on swipe claim
 - `-webkit-overflow-scrolling: touch` on wrap-on code
 - an `overflow-x: auto` box that really overflows (Markdown table
-  wrappers, wide `pre`) in touch-wrapped Review Markdown — see §4.2
+  wrappers, wide `pre`) in wrap-on Review Markdown — see §4.2
 - `setState` on `touchstart` or swipe claim
 
 Selected chrome is paint-only: background and color. If a control needs a
@@ -296,7 +296,23 @@ wide file owns that bar.
 
 ## 4.2 Review Markdown
 
-A large Markdown document (README, handbook) is peek content like wrap-on
+Markdown preview has the same two modes as source, under its own
+preference (`markdownSoftWrap`, Review Settings and the bottom-bar wrap
+button while previewing):
+
+| Mode | Default | Code blocks and tables | Horizontal gesture on a block |
+|---|---|---|---|
+| Wrap off | yes | Native horizontal scroll | Pans the block |
+| Wrap on | no | Fit to the column | Workspace swipe |
+
+Wrap off is the reader's choice of sideways reading over swipe cost, like
+wrap-off source: a swipe from prose still drives the drawer/pager, but a
+document with many really-overflowing blocks makes it heavier. It is a
+separate preference from source `softWrap` so either can change without
+the other. Toggling captures the top reading block from the synchronous
+store notification and restores it after the reflow.
+
+A large Markdown document in wrap-on mode is peek content like wrap-on
 source and must not contain nested horizontal ScrollViews. iOS WebKit backs
 every overflow box that really scrolls with its own UIScrollView, on screen
 or not, and re-commits each one on every tracking frame of the drawer or
@@ -315,8 +331,9 @@ Fenced code already wraps under the same flag. The transcript and Desktop
 keep native table scrolling.
 
 Do not restore a horizontally scrolling table wrapper in touch-wrapped
-Markdown, and do not toggle table overflow on swipe claim: that rebuilds
-the scrolling tree on the first tracking frames.
+Markdown, and do not toggle table or code overflow on swipe claim in either
+mode: that rebuilds the scrolling tree on the first tracking frames. The
+symbol hover sheet always wraps; it is not the document.
 
 ## 5. Hit testing and chrome freeze
 

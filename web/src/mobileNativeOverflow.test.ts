@@ -25,6 +25,17 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(transcript.includes('touchAction: "pan-y pinch-zoom"'));
 });
 
+Deno.test("Review Markdown wrap is a separate preference in the source wrap slot", () => {
+  assert(reviewApp.includes("touchWrap={settings.markdownSoftWrap}"));
+  assert(reviewApp.includes("markdownSoftWrap: !settings.markdownSoftWrap"));
+  assert(reviewApp.includes('"Wrap Markdown code and tables"'));
+  // Reflow keeps the reader on the same block.
+  assert(reviewApp.includes("subscribeReviewSettings("));
+  assert(reviewApp.includes("settings.markdownSoftWrap, text]"));
+  // The symbol sheet is not the document; its hover Markdown still wraps.
+  assert(reviewApp.includes("<Markdown text={block.text} touchWrap />"));
+});
+
 Deno.test("wrap-on Review source keeps live CodeMirror for workspace swipe", () => {
   assert(codeViewer.includes("bindCodeViewerSwipeFreeze"));
   assert(codeViewer.includes('data-mobile-code-layer="true"'));

@@ -103,6 +103,13 @@ export function ReviewSettingsContent({
           checked={settings.softWrap}
           onChange={(softWrap): void => updateReviewSettings({ softWrap })}
         />
+        <SettingToggle
+          label="Wrap Markdown preview"
+          description="Fit code blocks and tables to the phone width instead of scrolling them sideways"
+          checked={settings.markdownSoftWrap}
+          onChange={(markdownSoftWrap): void =>
+            updateReviewSettings({ markdownSoftWrap })}
+        />
       </Stack>
 
       <Divider />
