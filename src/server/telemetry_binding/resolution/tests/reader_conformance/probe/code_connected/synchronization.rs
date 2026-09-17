@@ -21,6 +21,11 @@ fn request() -> Value {
 }
 
 fn snapshot(value: &Value, resource: &str, state: &str) -> Result<String, Failure> {
+    eprintln!(
+        "Code synchronization observation: expected={state}, actual={:?}, pending={:?}",
+        value["state"]["kind"].as_str(),
+        value["pending"].as_bool(),
+    );
     let id = value["operationId"]
         .as_str()
         .ok_or(Failure::WrongObservation)?;
@@ -137,7 +142,11 @@ async fn settled(pair: &Pair<'_>, operation: &str, method: Method) -> Result<Val
     .map_err(|_| Failure::Timeout)?
 }
 
-pub(super) async fn finish(pair: &Pair<'_>, prepared: Prepared) -> Result<String, Failure> {
+pub(super) async fn finish(
+    pair: &Pair<'_>,
+    prepared: Prepared,
+    stage: &mut &'static str,
+) -> Result<String, Failure> {
     let Prepared {
         resource,
         operation,
@@ -146,10 +155,12 @@ pub(super) async fn finish(pair: &Pair<'_>, prepared: Prepared) -> Result<String
     exercise::cancel(pair, &gate, Method::PUT, &endpoint(&operation), json!({})).await?;
     fenced(pair, &resource).await?;
     gate.discard();
+    *stage = "synchronization_lost_apply_reply";
     let unknown = settled(pair, &operation, Method::PUT).await?;
     snapshot(&unknown, &resource, "unknown")?;
     fenced(pair, &resource).await?;
     check(pair.proxy.counts()?.commands.get("codeSyncApply") == Some(&1))?;
+    *stage = "synchronization_original_id_query";
     let observed = pair.http.get(&endpoint(&operation)).await?;
     snapshot(&observed, &resource, "applied")?;
     check(
@@ -164,9 +175,11 @@ pub(super) async fn finish(pair: &Pair<'_>, prepared: Prepared) -> Result<String
         .ok()?;
     check(duplicate == observed)?;
     check(pair.proxy.counts()?.commands.get("codeSyncApply") == Some(&1))?;
+    *stage = "synchronization_exact_content";
     exercise::reads(pair, &resource, DESIRED, false).await?;
     exercise::reads(pair, &resource, ORIGINAL, true).await?;
 
+    *stage = "synchronization_retirement";
     let gate = pair.proxy.hold("codeSyncRetire")?;
     exercise::cancel(
         pair,
@@ -197,6 +210,7 @@ pub(super) async fn finish(pair: &Pair<'_>, prepared: Prepared) -> Result<String
 
     // Keep a distinct inert continuation for real connection/restart refusal.
     // Its original resource/process remains owned after uninstall too.
+    *stage = "synchronization_next_inert_operation";
     let value = pair
         .http
         .post(

@@ -205,7 +205,7 @@ pub(super) async fn run(
         .await?;
     check(uninstalled["phase"] == "completed" && uninstalled["deleted_session_ids"] == json!([]))?;
     *stage = "synchronization_after_uninstall";
-    let sync = synchronization::finish(pair, sync).await?;
+    let sync = synchronization::finish(pair, sync, stage).await?;
     checks.push("lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall");
     checks.push("synchronization_retirement_drains_after_cancelled_http_without_replay");
     *stage = "removed_paths";
