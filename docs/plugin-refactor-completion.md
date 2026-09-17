@@ -319,10 +319,15 @@ and accepting a production effect are different milestones.
   target. Atomic handoff performs no native/path I/O and survives parent release;
   cancelled waits, lost replies, equal-content ABA and capacity retain their
   original identities. A real nonempty stdio-LSP fixture exposed and now covers
-  missing native target registration. Newly retained targets register once as
-  part of Execute, with failure retaining Unknown and original pins. This is
-  not core acquisition authority, Machine/Service/Web navigation routing, a native
-  allocation budget, independent recovery or a production rollout.
+  missing native target registration, and the static-pair gate exposed locations
+  arriving before their asynchronous target shares. Execute waits for the exact
+  original shares and registers newly retained targets once, with failure
+  retaining Unknown and original pins. Its
+  [candidate acceptance](releases/owned-navigation-handoff-2026-09-17.md) passes
+  four nonempty-LSP static-pair runs, temporary signed lifecycle, all eleven
+  connected regressions and complete source gates after integrating main. This
+  is not core acquisition authority, Machine/Service/Web navigation routing, a
+  native allocation budget, independent recovery or a production rollout.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
