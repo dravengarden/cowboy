@@ -16,6 +16,38 @@ import type {
 } from "./synchronizationProjection.ts";
 import type { ResourceId } from "./protocol.ts";
 import type { SynchronizationId } from "./synchronizationProtocol.ts";
+import type { NavigationId } from "./navigationProtocol.ts";
+import type { OwnedNavigation } from "./navigation.ts";
+import type { CodeBufferNavigations } from "./navigationProjection.ts";
+
+export function navigationTypes(
+  owner: OwnedCodeBuffer,
+  captured: CapturedContent,
+  operation: OwnedNavigation,
+  source: CodeBufferNavigations,
+  resource: ResourceId,
+  synchronization: SynchronizationId,
+) {
+  owner.prepareNavigation(
+    // @ts-expect-error a hash or display path cannot forge a captured full text
+    { path: "target" },
+    { row: 0, column: 0 },
+    "definition",
+  );
+  // @ts-expect-error finite navigation kinds, not a generic effect executor
+  owner.prepareNavigation(captured, { row: 0, column: 0 }, "write_file");
+  // @ts-expect-error source and navigation namespaces are disjoint
+  const wrongSource: NavigationId = resource;
+  // @ts-expect-error synchronization and navigation namespaces are disjoint
+  const wrongSync: NavigationId = synchronization;
+  // @ts-expect-error serialized IDs are not original process-local UI handles
+  source.inspect(operation.view().observation.navigationId);
+  // @ts-expect-error recovery projection cannot acquire anything
+  source.execute({});
+  // @ts-expect-error no path-based or serialized destination adoption API
+  operation.openDestination("target");
+  return { wrongSource, wrongSync };
+}
 
 export async function nativeTextTypes(
   owner: OwnedCodeBuffer,

@@ -348,10 +348,18 @@ In addition, require all applicable Provider gates below:
   hashing and cancellation-without-next-page gates in
   `docs/plugin-native-text-reads.md`. The connected v5 extension must read a
   multi-page destination after parent/path removal; v4 does not accept it.
-  Run `just code-buffer-browser-conformance <absolute-firefox>` for all eleven
+  Run `just code-buffer-browser-conformance <absolute-firefox>` for all eighteen
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not
   accept an intended navigation view, native acquisition budget or device.
+  Browser navigation continuation changes additionally require the shared actual
+  Service/Web wire fixture and all seven navigation cases in that owner suite.
+  Check original Open intent, pre-dispatch group capacity, one-use Execute,
+  observer cancellation, source cleanup fencing, query-only lost Execute/Release,
+  exact 202 no-admission handling and identity-loss redaction. Refuse unsolicited
+  destination IDs; this finite continuation is not destination handoff, intended
+  Review consumer acceptance or native pre-allocation budgets. See
+  `docs/plugin-browser-buffer-navigation.md`. Keep production acquisition closed.
   See `docs/plugin-service-buffer-navigation.md` and
   `docs/plugin-service-buffer-sync.md`.
   Restart refusal is not restoration; fixture teardown is not native recovery.

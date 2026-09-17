@@ -1,7 +1,7 @@
 # Plugin refactor completion ledger
 
 Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
-and current code on 2026-09-17. This is the current exit checklist, not a list of
+and current code on 2026-09-18. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
 
@@ -368,6 +368,17 @@ and accepting a production effect are different milestones.
   removal. Navigation acquisition remains default closed; this reader does not
   supply the intended Review destination owner/view, native allocation bounds,
   production rollout, supported-device acceptance or independent recovery.
+- [Browser navigation continuation](plugin-browser-buffer-navigation.md) adds
+  core original-source preparation, one-use Execute, query-only uncertainty and
+  separately observed Release. Source cleanup cannot bypass a retained group;
+  bounded local capacity includes pending preparation, and only inert expiry or
+  actual group release frees a slot. Closed Rust/Web wire evidence, disjoint
+  types and a passive recovery projection reject imported destination IDs and
+  redact ended identity labels. Its
+  [candidate record](releases/browser-navigation-candidate-2026-09-18.md) covers
+  source gates and the eighteen-case browser owner suite. Destination handoff,
+  intended Review views, native budgets, production activation and independent
+  recovery remain separate; acquisition is still default closed.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -443,7 +454,7 @@ record exact accepted artifacts and bounded production continuity observations.
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Web navigation ownership and complete destination views beyond the accepted finite Service handoff, original-native-text reader and source/working-diff consumers; native acquisition bounds and independent acceptance of the deployed Machine/exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; pre-acquisition resource budgets and supported-client native acceptance |
+| P4 / Code consumer | Browser destination preparation/adoption and complete intended destination views beyond the finite browser navigation continuation, Service handoff, original-native-text reader and source/working-diff consumers; native acquisition bounds and independent acceptance of the deployed Machine/exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; pre-acquisition resource budgets and supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 

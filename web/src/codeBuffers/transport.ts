@@ -23,11 +23,13 @@ export function createTransport(options: TransportOptions) {
       method: "POST" | "PUT" | "GET" | "DELETE",
       body: unknown,
       limit: number,
-      surface: "buffers" | "buffer-synchronizations" = "buffers",
+      surface: "buffers" | "buffer-synchronizations" | "navigations" =
+        "buffers",
     ) {
       check();
       requireValue(
-        surface === "buffers" || surface === "buffer-synchronizations",
+        surface === "buffers" || surface === "buffer-synchronizations" ||
+          surface === "navigations",
       );
       const controller = new AbortController();
       const abort = () => controller.abort();

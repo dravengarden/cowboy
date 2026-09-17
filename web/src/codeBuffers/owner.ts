@@ -18,6 +18,7 @@ import {
   decodeSnapshot,
   type Failure,
   type Observation,
+  type Point,
   type ReadKind,
   requireValue,
   type ResourceId,
@@ -35,8 +36,21 @@ import {
 } from "./synchronization.ts";
 import { decodeSynchronization } from "./synchronizationProtocol.ts";
 import { readCompleteText, textIdentity, type TextRead } from "./text.ts";
+import { type OwnedNavigation, ownNavigation } from "./navigation.ts";
+import {
+  decodeNavigation,
+  type NavigationKind,
+  navigationRequest,
+} from "./navigationProtocol.ts";
 
-type Job = "prepare" | "open" | "observe" | "read" | "release" | "synchronize";
+type Job =
+  | "prepare"
+  | "open"
+  | "observe"
+  | "read"
+  | "release"
+  | "synchronize"
+  | "navigate";
 export interface BufferTarget {
   readonly sessionId: string;
   readonly path: string;
@@ -56,6 +70,8 @@ export interface OwnerView {
   readonly failure: Failure | undefined;
   /** A synchronization must be explicitly retired before releasing this owner. */
   readonly synchronizing: boolean;
+  /** Original navigation must end explicitly before source reads or release. */
+  readonly navigating: boolean;
 }
 export type CloseResult =
   | { readonly kind: "unopened" }
@@ -84,19 +100,40 @@ export interface OwnedCodeBuffer {
     observer?: AbortSignal,
   ): Promise<OwnedSynchronization>;
   synchronization(): OwnedSynchronization | undefined;
+  /** Effect-free preparation only; Execute is a separate original-owner action. */
+  prepareNavigation(
+    content: CapturedContent,
+    position: Point,
+    query: NavigationKind,
+    observer?: AbortSignal,
+  ): Promise<OwnedNavigation>;
+  navigation(): OwnedNavigation | undefined;
   /** One bounded cleanup pass. Retained is NOT closed or automatically retried. */
   close(): Promise<CloseResult>;
 }
 
 const MAX_OWNERS = 64;
+const MAX_NAVIGATIONS = 32;
 
 export function createOwnedCodeBuffers(options: TransportOptions) {
   const context = options.context;
   const transport = createTransport({ ...options, context });
   const monitor = createCleanupMonitor(context);
+  let navigations = 0;
+  const reserveNavigation = () => {
+    if (navigations >= MAX_NAVIGATIONS) throw new BufferClientError("capacity");
+    ++navigations;
+    let reserved = true;
+    return () => {
+      if (!reserved) return;
+      reserved = false;
+      --navigations;
+    };
+  };
   return Object.freeze({
     cleanup: monitor.store,
     synchronizations: monitor.synchronizations,
+    navigations: monitor.navigations,
     /** No restore(id), import, serialization, LRU or automatic account adoption. */
     reserve(target: BufferTarget): OwnedCodeBuffer {
       transport.check();
@@ -114,6 +151,7 @@ export function createOwnedCodeBuffers(options: TransportOptions) {
         transport,
         () => monitor.retire(owner),
         monitor.changed,
+        reserveNavigation,
       );
       monitor.add(owner, captured);
       return owner;
@@ -130,6 +168,7 @@ function createOwner(
   transport: ReturnType<typeof createTransport>,
   retire: () => void,
   changed: () => void,
+  reserveNavigation: () => () => void,
 ): OwnedCodeBuffer {
   let phase: OwnerView["phase"] = "reserved";
   let id: ResourceId | undefined;
@@ -143,6 +182,7 @@ function createOwner(
   let job: { kind: Job; settled: Promise<void> } | undefined;
   let cleanup: Promise<CloseResult> | undefined;
   let synchronization: OwnedSynchronization | undefined;
+  let navigation: OwnedNavigation | undefined;
   function unavailable(kind: Failure): never {
     throw new BufferClientError(kind);
   }
@@ -203,7 +243,7 @@ function createOwner(
   };
   const observe = async (observer?: AbortSignal): Promise<Snapshot> => {
     check(observer);
-    if (synchronization) unavailable("state");
+    if (synchronization || navigation) unavailable("state");
     if (phase === "released" && last) return Promise.resolve(last);
     resource();
     return observePromise(perform("observe", () => snapshot("GET")), observer);
@@ -220,8 +260,10 @@ function createOwner(
     if (phase === "released") {
       return Object.freeze({ kind: "released", resourceId: id });
     }
-    // No hidden synchronization Apply, Query or Retire during view cleanup.
-    if (synchronization) return Object.freeze({ kind: "retained", owner });
+    // No hidden synchronization or navigation actions during view cleanup.
+    if (synchronization || navigation) {
+      return Object.freeze({ kind: "retained", owner });
+    }
     try {
       transport.check();
       if (!fresh || last?.pending || last?.state === "unknown" || releaseSent) {
@@ -265,6 +307,7 @@ function createOwner(
         contextLost: context.aborted,
         failure,
         synchronizing: !!synchronization || job?.kind === "synchronize",
+        navigating: !!navigation || job?.kind === "navigate",
       }),
     async prepare(observer?: AbortSignal) {
       check(observer);
@@ -308,7 +351,7 @@ function createOwner(
       check(observer);
       if (kind !== "language" && kind !== "symbols") unavailable("protocol");
       if (
-        closing || synchronization || releaseSent || !fresh ||
+        closing || synchronization || navigation || releaseSent || !fresh ||
         last?.state !== "open" ||
         last.pending
       ) unavailable("state");
@@ -336,7 +379,7 @@ function createOwner(
     ): Promise<ContentObservation<Q["kind"]>> {
       check(observer);
       if (
-        closing || synchronization || releaseSent || !fresh ||
+        closing || synchronization || navigation || releaseSent || !fresh ||
         last?.state !== "open" ||
         last.pending
       ) unavailable("state");
@@ -369,7 +412,7 @@ function createOwner(
     ): Promise<TextRead> {
       check(observer);
       if (
-        closing || synchronization || releaseSent || !fresh ||
+        closing || synchronization || navigation || releaseSent || !fresh ||
         last?.state !== "open" || last.pending
       ) unavailable("state");
       const current = resource();
@@ -400,7 +443,8 @@ function createOwner(
     ) {
       check(observer);
       if (
-        synchronization || closing || releaseSent || !openSent || !fresh ||
+        synchronization || navigation || closing || releaseSent || !openSent ||
+        !fresh ||
         last?.state !== "open" || last.pending
       ) unavailable("state");
       const identity = capturedIdentity(content);
@@ -455,6 +499,73 @@ function createOwner(
       );
     },
     synchronization: () => synchronization,
+    async prepareNavigation(
+      content: CapturedContent,
+      position: Point,
+      query: NavigationKind,
+      observer?: AbortSignal,
+    ) {
+      check(observer);
+      if (
+        navigation || synchronization || closing || releaseSent || !openSent ||
+        !fresh ||
+        last?.state !== "open" || last.pending
+      ) unavailable("state");
+      const request = navigationRequest(content, position, query);
+      const current = resource();
+      // Count pending preparations too. Never evict or expire an uncertain effect.
+      const free = reserveNavigation();
+      return observePromise(
+        perform("navigate", async () => {
+          fresh = false;
+          try {
+            const reply = await transport.request(
+              `/${current}/navigations`,
+              "POST",
+              request,
+              2 * 1024 * 1024,
+            );
+            const prepared = decodeNavigation(
+              reply.value,
+              reply.status,
+              current,
+              request,
+            );
+            requireValue(prepared.state === "prepared" && !prepared.pending);
+            transport.check();
+            const owned = ownNavigation(prepared, {
+              context,
+              check,
+              busy: () => !!job || !!cleanup,
+              closing: () => closing,
+              perform: (effect) => perform("navigate", effect),
+              request: (method) =>
+                transport.request(
+                  `/${prepared.navigationId}`,
+                  method,
+                  {},
+                  2 * 1024 * 1024,
+                  "navigations",
+                ),
+              changed,
+              retired: () => {
+                if (navigation === owned) navigation = undefined;
+                free();
+                fresh = false;
+              },
+            });
+            navigation = owned;
+            changed();
+            return owned;
+          } catch (error) {
+            free(); // unobserved preparation is effect-free; never Execute here
+            throw error;
+          }
+        }),
+        observer,
+      );
+    },
+    navigation: () => navigation,
     close() {
       closing = true;
       if (cleanup) return cleanup;

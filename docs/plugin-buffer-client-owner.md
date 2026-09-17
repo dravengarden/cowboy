@@ -154,3 +154,8 @@ ordinary cleanup while synchronization remains unresolved. Never
 mix new owner cleanup with old path-based open/read calls or silently downgrade
 an unsupported host. Independent post-effect recovery and browser-abandonment
 cleanup remain separate exits in the [completion ledger](plugin-refactor-completion.md).
+
+The subsequent [browser navigation continuation](plugin-browser-buffer-navigation.md)
+adds bounded, original-source Prepare/Execute/Query/Release ownership with a
+separate recovery projection. It does not yet adopt destination preparations or
+enable an intended Review destination view; production acquisition stays closed.

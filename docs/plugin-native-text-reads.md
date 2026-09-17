@@ -95,8 +95,9 @@ reads. It cannot treat a historical location as current native authority.
 handler/codec and browser tests. Deterministic tests cover UTF-8 page boundaries,
 empty/maximal content, owner/revision ABA, incomplete history, malformed/stalled
 pages, final digest mismatch, cancellation/cleanup and authority loss. The
-existing browser-owner gate adds three actual browser/WebCrypto/stream cases;
-it now requires eleven results.
+existing browser-owner gate adds three actual browser/WebCrypto/stream cases.
+Those eleven results are now part of the eighteen-case owner suite, extended by
+the separate [browser navigation continuation](plugin-browser-buffer-navigation.md).
 
 The static native-pair gate reads a two-page Unicode target after parent release
 and source/target deletion. The signed temporary lifecycle gate also reads
@@ -107,7 +108,7 @@ new read. These are disposable fixtures, not a production installation or an
 actual Review destination view.
 
 Service navigation acquisition remains default closed. The intended Web
-navigation owner/view, native pre-acquisition resource budget, signed rollout,
+destination handoff/view, native pre-acquisition resource budget, signed rollout,
 supported-device acceptance and independent recovery remain separate exits.
 No running Controller, Machine, native process or installed Plugin is replaced
 merely by adding this reader.

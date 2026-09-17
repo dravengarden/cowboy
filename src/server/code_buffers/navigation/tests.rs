@@ -96,6 +96,7 @@ fn opened_as(fixture: &Fixture, user: &str) -> String {
 }
 
 mod authority;
+mod client_wire;
 
 async fn command(fixture: &mut Fixture) -> MachineCommand {
     tokio::time::timeout(std::time::Duration::from_secs(3), fixture.commands.recv())
