@@ -20,6 +20,8 @@ const MAX_LEASES: usize = 1_024;
 const PREPARE_TTL: Duration = Duration::from_secs(30);
 type Key = (String, LeaseRef);
 
+mod navigation;
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub(super) enum Command {
@@ -382,7 +384,7 @@ impl Routes {
         Ok(response)
     }
 
-    pub(super) async fn sync_target(&self, lease: &LeaseRef) -> Result<SyncTarget> {
+    pub(super) async fn retained_target(&self, lease: &LeaseRef) -> Result<RetainedTarget> {
         let registry = self.registry.lock().await;
         let entry = registry
             .entries
@@ -392,7 +394,7 @@ impl Routes {
             entry.state == State::Open && entry.until.is_none(),
             "original buffer is not open"
         );
-        Ok(SyncTarget {
+        Ok(RetainedTarget {
             runtime: Arc::clone(&entry.runtime),
             route: Arc::clone(&entry.route),
             marker: Arc::clone(&entry.sync),
@@ -404,7 +406,7 @@ impl Routes {
     pub(super) async fn sync_fence(
         &self,
         lease: &LeaseRef,
-        target: &SyncTarget,
+        target: &RetainedTarget,
     ) -> Result<SyncFence> {
         let registry = self.registry.lock().await;
         let entry = registry
@@ -428,7 +430,7 @@ impl Routes {
     }
 }
 
-pub(super) struct SyncTarget {
+pub(super) struct RetainedTarget {
     pub runtime: Arc<RunningCodeRuntime>,
     pub route: Arc<Mutex<WorktreeRoute>>,
     marker: Arc<AtomicBool>,

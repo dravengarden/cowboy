@@ -89,6 +89,10 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
     let client = Client(socket);
     // Health is handled only after the adapter has started its exact server.
     client.request(Request::Health).await;
+    assert_eq!(
+        client.request(Request::BufferNavigationSupport {}).await,
+        json!({"type":"bufferNavigationSupport","api_version":1,"protocol":1})
+    );
     exercise(&client, &root).await;
     child.kill().await.unwrap();
     // The owning PID namespace, not this kill or local Released, owns final

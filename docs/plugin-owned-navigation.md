@@ -10,6 +10,11 @@ The `1.11.0` candidate adds exact destination handoff and fixes native target
 registration, discovered by running a nonempty stdio LSP against the actual
 server. It remains private; no Service/Web navigation API is enabled.
 
+The `1.12.0` source candidate adds an exact-pair support probe for the separate
+[Machine core continuation](plugin-machine-buffer-navigation.md). That protocol-21
+path owns original connection/runtime routing and destination reservations;
+generic forwarding and the Service/Web consumer remain closed.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete
@@ -111,8 +116,9 @@ Rust enum, so a failed handoff cannot fall through to path-based open.
 
 The Machine source explicitly refuses all four private commands before generic
 runtime selection. Neither a read lease nor an optional worktree field can
-bypass that check. No Machine protocol, Service endpoint, Web/native bridge or
-shared component contract is added. The private adapter and consuming Zed Plugin
+bypass that check. The separate protocol-21 Machine continuation does not relax
+this check or enable a Service endpoint, Web/native bridge or shared component
+contract. The private adapter and consuming Zed Plugin
 are versioned together; server `1.0.0`, upstream Zed revision and all dependency
 pins remain unchanged. Historical component-registry entries are untouched.
 
@@ -139,8 +145,8 @@ independent recovery. Plaintext alone still proves no nonempty destinations.
 
 Before exposing navigation, still required:
 
-- Original-generation Machine routing with core-issued acquisition authority,
-  bounded handoff/cleanup and disconnect/uninstall acceptance.
+- Accept the Machine continuation through an enrolled original-connection
+  consumer, including its authority, bounded handoff/cleanup and native budget.
 - Service/principal/Session ownership and client destination scopes, with
   complete text/position binding and no legacy fallback or automatic target
   synchronization.

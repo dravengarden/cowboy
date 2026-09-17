@@ -340,7 +340,9 @@ zed-plugin-runtime-build ARTIFACT_BASE:
     deno run --allow-read --allow-write --allow-run plugins/zed/runtime/build.ts "{{ARTIFACT_BASE}}"
 
 zed-plugin-conformance ADAPTER SERVER:
-    COWBOY_TEST_ZED_ADAPTER="{{ADAPTER}}" COWBOY_TEST_ZED_SERVER="{{SERVER}}" cargo test --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact
+    cargo build --offline --locked --manifest-path plugins/zed/adapter/Cargo.toml --example navigation_lsp
+    cargo test --locked --all-features --lib --no-run
+    unshare --user --map-current-user --keep-caps --net --pid --fork --mount-proc bash -euc 'ip link set lo up; mount -t tmpfs -o ro,nosuid,nodev,noexec none /sys/fs/cgroup; export COWBOY_TEST_ZED_ADAPTER="$1" COWBOY_TEST_ZED_SERVER="$2"; exec cargo test --offline --locked --all-features --lib machine_plugins::tests::released_zed_runtime_installs_and_drains -- --ignored --exact --nocapture' conformance "{{ADAPTER}}" "{{SERVER}}"
 
 # Actual private native conditional effect, isolated from ordinary Zed and the
 # live Machine. No network, host PID visibility or writable cgroup hierarchy.

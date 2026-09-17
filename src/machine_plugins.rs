@@ -10,6 +10,8 @@
 mod auth_refresh;
 pub(crate) mod auth_watch;
 #[cfg(test)]
+mod code_navigation_conformance;
+#[cfg(test)]
 mod code_sync_conformance;
 mod installation;
 mod operations;
@@ -18,6 +20,7 @@ use crate::machine_protocol::plugin_install::InstallPhase;
 use installation::InstallGuard;
 
 pub(crate) use operations::lease::{CodeBufferSyncInvocation, CodeBufferSyncOwner};
+pub(crate) use operations::lease::{CodeNavigationInvocation, CodeNavigationOwner};
 pub(crate) use operations::{UninstallAccess, lease::PluginExecutionScope};
 pub(crate) use telemetry::managed::ManagedExportInvocation;
 pub(crate) use telemetry::{PluginHostInvocation, PluginHostRequest};
@@ -808,6 +811,13 @@ impl MachinePluginStore {
                 .join(digest_generation_name(digest)?)
                 .join("home"),
         }))
+    }
+
+    pub(crate) async fn navigate_code_buffer(
+        &self,
+        invocation: CodeNavigationInvocation,
+    ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
+        self.code_runtimes.navigate(invocation).await
     }
 
     pub(crate) async fn synchronize_code_buffer(
@@ -5462,6 +5472,8 @@ mod tests {
             .unwrap();
         assert_eq!(installed.generation_digest, release.artifact_digest);
         server.await.unwrap();
+        let navigation_root =
+            code_navigation_conformance::configure(&store, &release.artifact_digest, &root);
         let worktree = root.join("worktree");
         fs::create_dir_all(&worktree).unwrap();
         fs::write(worktree.join("fixture.txt"), "real isolated Zed buffer\n").unwrap();
@@ -5559,12 +5571,14 @@ mod tests {
             );
         }
         let synchronization = code_sync_conformance::prepare(&store, &worktree).await;
+        let navigation = code_navigation_conformance::prepare(&store, navigation_root).await;
         store
             .uninstall("zed", &release.artifact_digest)
             .await
             .unwrap();
         assert!(store.inventory().unwrap().is_empty());
         code_sync_conformance::finish(&store, synchronization).await;
+        code_navigation_conformance::finish(&store, navigation).await;
         let other = serde_json::json!({"type": "openWorktree", "path": root, "trusted": true});
         assert!(
             store

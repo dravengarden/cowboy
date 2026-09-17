@@ -7,6 +7,26 @@ use tokio::sync::mpsc;
 mod faults;
 mod handoff;
 
+#[tokio::test]
+async fn navigation_support_is_closed_and_requires_the_actual_native_pair() {
+    assert!(
+        serde_json::from_value::<Request>(serde_json::json!({
+            "type":"bufferNavigationSupport","authorized":true
+        }))
+        .is_err()
+    );
+    assert!(
+        respond(
+            Request::BufferNavigationSupport {},
+            &Arc::default(),
+            &Arc::default(),
+            None
+        )
+        .await
+        .is_err()
+    );
+}
+
 struct Fixture {
     root: PathBuf,
     worktrees: Worktrees,

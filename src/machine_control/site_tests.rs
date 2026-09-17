@@ -177,3 +177,44 @@ fn synchronization_cannot_cross_a_site_or_older_machine_protocol_boundary() {
         }
     }
 }
+
+#[test]
+fn navigation_cannot_cross_a_site_or_older_machine_protocol_boundary() {
+    for protocol in [20, 21] {
+        let root = tempfile::tempdir().unwrap();
+        let control =
+            MachineControl::new(crate::service_identity::load_or_create(root.path()).unwrap());
+        let (tx, mut commands) = mpsc::unbounded_channel();
+        let token = control.install("machine".into(), "epoch".into(), false, protocol, tx);
+        for (service, machine) in [
+            (control.service.as_str().to_owned(), "machine"),
+            (format!("svc-{}", "f".repeat(32)), "machine"),
+            (control.service.as_str().to_owned(), "other"),
+        ] {
+            let request = serde_json::from_value(serde_json::json!({
+                "service_id":service,"machine_id":machine,"action":{"kind":"query",
+                "navigation":{"instance":"a".repeat(32),"id":"navigation:0000000000000001"}}
+            }))
+            .unwrap();
+            let command = MachineCommand::CodeBufferNavigation {
+                request_id: "navigation-site".into(),
+                request: Box::new(request),
+            };
+            let expected =
+                protocol == 21 && service == control.service.as_str() && machine == "machine";
+            assert_eq!(control.send("machine", command.clone()).is_ok(), expected);
+            assert_eq!(commands.try_recv().is_ok(), expected);
+            let result = control.begin_request(
+                "machine",
+                "navigation-site",
+                command,
+                ReplyKind::Adapter,
+                Some(RequestBinding::Connection(&token)),
+            );
+            assert_eq!(result.is_ok(), expected);
+            assert_eq!(commands.try_recv().is_ok(), expected);
+            drop(result);
+            assert!(control.live.read().pending.is_empty());
+        }
+    }
+}

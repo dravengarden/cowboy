@@ -328,6 +328,16 @@ and accepting a production effect are different milestones.
   connected regressions and complete source gates after integrating main. This
   is not core acquisition authority, Machine/Service/Web navigation routing, a
   native allocation budget, independent recovery or a production rollout.
+- [Machine navigation continuation](plugin-machine-buffer-navigation.md) adds
+  protocol-21 Site/connection-bound acquisition and exact-runtime route ownership.
+  Its separate `navigation:` identities retain one-use execution, query-only
+  uncertainty and release, bounded inert expiry and historical target evidence.
+  Exact destination reservations join the ordinary buffer lifecycle/capacity,
+  with saved lookup after observer loss and no path/installation reselection.
+  Zed `1.12.0` adds the distinct actual-pair support probe; native dependencies
+  are unchanged. Service/principal/Session authority, public navigation,
+  native allocation budgets, independent recovery and production rollout remain
+  separate; this is not completion of the Code-consumer or general DAG exits.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

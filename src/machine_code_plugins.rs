@@ -21,7 +21,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
 mod buffer_leases;
+mod buffer_navigation;
 mod buffer_sync;
+#[cfg(test)]
+mod navigation_fixture;
 #[cfg(test)]
 mod sync_fixture;
 
@@ -62,6 +65,7 @@ struct WorktreeRoute {
     worktree_leases: u64,
     buffers: BTreeSet<(String, String)>,
     owned_buffers: BTreeSet<buffer_leases::LeaseRef>,
+    owned_navigations: BTreeSet<crate::machine_protocol::code_buffer_navigation::NavigationRef>,
 }
 
 impl WorktreeRoute {
@@ -99,7 +103,10 @@ impl WorktreeRoute {
     }
 
     fn is_idle(&self) -> bool {
-        self.worktree_leases == 0 && self.buffers.is_empty() && self.owned_buffers.is_empty()
+        self.worktree_leases == 0
+            && self.buffers.is_empty()
+            && self.owned_buffers.is_empty()
+            && self.owned_navigations.is_empty()
     }
 }
 
@@ -108,12 +115,21 @@ pub(crate) struct CodeRuntimeHost {
     routes: Mutex<WorktreeRoutes>,
     engines: Mutex<BTreeMap<(String, String), Weak<RunningCodeRuntime>>>,
     buffer_leases: buffer_leases::Routes,
+    buffer_navigation: buffer_navigation::Operations,
     buffer_sync: buffer_sync::Operations,
 }
 
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
 
 impl CodeRuntimeHost {
+    pub(crate) async fn navigate(
+        &self,
+        invocation: crate::machine_plugins::CodeNavigationInvocation,
+    ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
+        self.buffer_navigation
+            .execute(invocation, &self.buffer_leases)
+            .await
+    }
     pub(crate) async fn synchronize(
         &self,
         invocation: crate::machine_plugins::CodeBufferSyncInvocation,
@@ -155,6 +171,7 @@ impl CodeRuntimeHost {
             "private buffer operations require separate core authority"
         );
         self.buffer_sync.expire_inert();
+        self.buffer_navigation.expire_inert();
         let reservation = match buffer_leases::Command::parse(payload)? {
             Some(command) if command.is_prepare() => Some(self.buffer_leases.reserve().await?),
             Some(command) => {
@@ -596,6 +613,7 @@ mod tests {
             .unwrap();
         let mut owned = BTreeMap::new();
         let mut synchronization = super::sync_fixture::Fixture::default();
+        let mut navigation = super::navigation_fixture::Fixture::default();
         let mut next_lease = 0_u64;
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
@@ -605,6 +623,14 @@ mod tests {
                 .unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
             let kind = request["type"].as_str().unwrap();
+            if let Some(response) =
+                navigation.reply(&request, &home, generation, &mut owned, &mut next_lease)
+            {
+                if let Some(response) = response {
+                    let _ = writeln!(stream, "{response}");
+                }
+                continue;
+            }
             if let Some(response) = synchronization.reply(&request, &home, generation) {
                 if let Some(response) = response {
                     let _ = writeln!(stream, "{response}");

@@ -1756,6 +1756,26 @@ fn handle_machine_command(
     } = context;
     let query_only = matches!(&command, MachineCommand::QueryPluginUninstallStep { .. });
     match command {
+        MachineCommand::CodeBufferNavigation {
+            request_id,
+            request,
+        } => {
+            let invocation = execution.code_navigation(*request);
+            tokio::spawn(async move {
+                let result = async {
+                    Ok::<_, anyhow::Error>(serde_json::to_value(
+                        providers.navigate_code_buffer(invocation?).await?,
+                    )?)
+                }
+                .await;
+                let _ = events.send(MachineEvent::AdapterResponse {
+                    request_id,
+                    accepted: result.is_ok(),
+                    payload: result.ok(),
+                    detail: None,
+                });
+            });
+        }
         MachineCommand::CodeBufferSync {
             request_id,
             request,

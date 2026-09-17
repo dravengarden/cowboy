@@ -62,6 +62,7 @@ enum Request {
     Health,
     NativeSyncSupport,
     BufferSyncOwnerSupport {},
+    BufferNavigationSupport {},
     PrepareBufferSync {
         lease: buffer_leases::LeaseRef,
         purpose: sync_owners::Purpose,
@@ -170,6 +171,10 @@ enum Response {
         result: content_reads::Output,
     },
     BufferSyncOwnerSupport {
+        api_version: u8,
+        protocol: u8,
+    },
+    BufferNavigationSupport {
         api_version: u8,
         protocol: u8,
     },
@@ -1425,6 +1430,15 @@ async fn respond(
         },
         Request::NativeSyncSupport => sync_native::support(zed).await?,
         Request::BufferSyncOwnerSupport {} => sync_owners::support(zed).await?,
+        Request::BufferNavigationSupport {} => {
+            // Probe the actual pair; health or an older synchronization reply
+            // does not establish this adapter's acquisition/handoff contract.
+            sync_native::support(zed).await?;
+            Response::BufferNavigationSupport {
+                api_version: ADAPTER_VERSION,
+                protocol: 1,
+            }
+        }
         Request::PrepareBufferSync {
             lease,
             purpose,

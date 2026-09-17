@@ -311,8 +311,18 @@ In addition, require all applicable Provider gates below:
   The deterministic test-only stdio LSP is not production language semantics,
   a native allocation budget, general close acknowledgement or a public consumer;
   the historical plaintext-only result accepts no nonempty LSP destinations.
-  Keep Machine/Service/Web routing closed until separate acquisition authority,
-  exact-runtime core handoff and connected consumer acceptance exist.
+  Keep generic forwarding and Service/Web navigation closed until separate
+  acquisition authority, exact-runtime core handoff and connected consumer
+  acceptance exist. Machine continuation changes additionally require protocol-21
+  Site and connection checks, queued expiry/revocation, one-use execution,
+  Unknown/ReleaseUnknown retention, original-runtime loss, bounded capacity and
+  ordinary destination-route ownership tests in
+  `docs/plugin-machine-buffer-navigation.md`. The signed temporary lifecycle
+  gate now runs a test-only nonempty LSP in isolated network/PID namespaces:
+  prepare destinations before uninstall, open them on the original runtime
+  afterward, and read/release after parent/path removal. Synthetic core authority
+  does not accept an enrolled Service/browser consumer, native acquisition
+  budgets or independent recovery.
   Before a core owned-buffer/Review cutover, additionally run
   `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
   It connects supplied immutable Controller/Machine releases and the exact

@@ -20,7 +20,7 @@ const PREPARE_TTL: Duration = Duration::from_secs(30);
 
 struct Slot {
     owner: CodeBufferSyncOwner,
-    target: Option<buffer_leases::SyncTarget>,
+    target: Option<buffer_leases::RetainedTarget>,
     fence: Option<buffer_leases::SyncFence>,
     native: OperationRef,
     content: Content,
@@ -185,7 +185,7 @@ impl Operations {
                 (registry.allocate()?, permit)
             };
             let until = Instant::now() + PREPARE_TTL;
-            let target = leases.sync_target(lease).await?;
+            let target = leases.retained_target(lease).await?;
             let route = Arc::clone(&target.route);
             let _route = route.lock().await;
             invocation.remaining()?;

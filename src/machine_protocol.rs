@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod code_buffer_navigation;
 pub mod code_buffer_sync;
 pub mod installation_revision;
 pub mod plugin_install;
@@ -18,7 +19,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 20;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 21;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -45,6 +46,8 @@ pub const PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION: u16 = 19;
 /// Original-generation buffer synchronization through a separate core command.
 /// Negotiation alone grants no effect and does not enable a Review consumer.
 pub const CODE_BUFFER_SYNC_PROTOCOL_VERSION: u16 = 20;
+/// Separate original-generation navigation acquisition, never generic forwarding.
+pub const CODE_BUFFER_NAVIGATION_PROTOCOL_VERSION: u16 = 21;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -792,6 +795,10 @@ pub enum MachineCommand {
         request_id: String,
         request: Box<code_buffer_sync::Request>,
     },
+    CodeBufferNavigation {
+        request_id: String,
+        request: Box<code_buffer_navigation::Request>,
+    },
     /// Execute one signed host operation against the active exact Plugin and
     /// authentication generation on this Machine.
     InvokePluginHost {
@@ -818,6 +825,7 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            Self::CodeBufferNavigation { .. } => CODE_BUFFER_NAVIGATION_PROTOCOL_VERSION,
             Self::CodeBufferSync { .. } => CODE_BUFFER_SYNC_PROTOCOL_VERSION,
             Self::QueryTelemetryRecoveryAudit { .. } => TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
             Self::ExportBoundTelemetry { .. } => TELEMETRY_BOUND_EXPORT_PROTOCOL_VERSION,
