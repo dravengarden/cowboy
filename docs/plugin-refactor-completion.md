@@ -339,10 +339,10 @@ and accepting a production effect are different milestones.
   records 22 new core tests, complete gates, static native and signed-lifecycle
   nonempty-LSP acceptance, and eleven connected buffer regressions. Independent
   review also closed expired inert synchronization fences blocking direct
-  navigation; uncertain effects remain retained. Service/principal/Session
-  authority, public navigation,
-  native allocation budgets, independent recovery and production rollout remain
-  separate; this is not completion of the Code-consumer or general DAG exits.
+  navigation; uncertain effects remain retained. That milestone leaves
+  Service/principal/Session authority to the subsequent candidate below.
+  Public cutover, native allocation budgets, independent recovery and production
+  rollout remain separate; neither completes the Code-consumer or general DAG exits.
 - [Service navigation continuation](plugin-service-buffer-navigation.md) adds
   default-closed, product Operator/Session-bound acquisition on protocol 21.
   Original connection and one-use outcome records survive HTTP observer loss;
@@ -350,7 +350,10 @@ and accepting a production effect are different milestones.
   ordinary buffer owner without implicit Open or path fallback, retaining its
   original capacity/TTL through uncertainty. The connected gate advances to v4
   and 17 required checks, including nonempty Unicode navigation, lost replies,
-  handoff after uninstall and independent reads after parent/path removal.
+  handoff after uninstall and independent reads after parent/path removal. Its
+  [candidate acceptance](releases/service-navigation-candidate-2026-09-17.md)
+  records the complete final source gate, unchanged exact native pair, supplied
+  Controller/Machine and two successful 17-check connected runs.
   Full destination views, native budgets, Web integration, rollout and recovery
   remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
@@ -428,7 +431,7 @@ record exact accepted artifacts and bounded production continuity observations.
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Complete owned navigation destinations beyond the source/working-diff consumers; independently accept the deployed Machine and exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
+| P4 / Code consumer | Complete native destination views and Web navigation beyond the accepted finite Service handoff and source/working-diff consumers; independently accept the deployed Machine and exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 

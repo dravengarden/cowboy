@@ -126,3 +126,7 @@ adds the three new groups; historical v2 receipts do not accept them.
 The protocol-21 [Service navigation extension](plugin-service-buffer-navigation.md)
 adds checks 12–17. The isolated Controller opts into its private candidate policy;
 the production default remains closed. Historical v3 receipts do not accept it.
+Its [candidate acceptance](releases/service-navigation-candidate-2026-09-17.md)
+records two complete v4 runs and the exact immutable inputs. The distinct inert
+sync used for reconnect testing is created only after the navigation handoff
+and parent release have completed; its process-wide guard is never bypassed.

@@ -96,6 +96,11 @@ plus an explicit test-only stdio LSP with nonempty Unicode answers. It discards
 actual acquisition/release replies and waits the original transport timeout;
 it does not manufacture control/native observations.
 
+The [candidate acceptance](releases/service-navigation-candidate-2026-09-17.md)
+records the exact immutable Controller/Machine/native inputs, complete source
+gate and two successful 17-check connected runs. It also records the failed
+fixture attempts and the corrected synchronization/handoff ordering.
+
 This does not implement full native destination text/view consumption, Web or
 native-shell navigation, global pre-allocation bounds, independently authorized
 post-effect recovery or cross-restart restoration. Native/OS isolation limits,
