@@ -1,11 +1,14 @@
 package top.thundersparrow.cowboy
 
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
@@ -15,7 +18,7 @@ import org.json.JSONObject
 // Provider authentication browser for the Android shell. It implements the
 // same page contract as the iOS shell (web/src/openExternal.ts, bridge v2):
 // `__cowboyOpenAuthenticationBrowser(url)`, `__cowboyCloseAuthenticationBrowser()`
-// and the opened / open-failed window events.
+// and the opened / open-failed / closed window events.
 //
 // Without it the remote UI treats Android as a plain browser and navigates the
 // shell's only WebView to the Provider. That path has no busy state, so a
@@ -29,20 +32,29 @@ import org.json.JSONObject
 // carry. It opens in Cowboy's task, above MainActivity (launchMode singleTask),
 // so relaunching MainActivity dismisses it.
 //
-// Returning to Cowboy is not reported as a close. Chrome lets the user minimize
-// a Custom Tab into picture-in-picture, which resumes MainActivity exactly like
-// closing the tab, and a sessionless Custom Tab gets no callback to tell them
-// apart. Cancelling on resume would discard a sign-in the user is still
-// completing, so the page keeps its explicit Cancel and a resume only emits
-// `cowboy:native-resume`.
+// It is a partial (bottom-sheet) Custom Tab so Cowboy stays visible. A
+// full-screen tab leaves Cowboy's process cached, and Android's cached-app
+// freezer then stops both the app and its WebView renderer: the page never
+// receives the ready handoff event and cannot dismiss the tab. Chrome honours
+// the partial height only for tabs started for a result, which also reports
+// when the tab actually finishes. Resuming MainActivity alone is not a close:
+// Chrome can minimize a tab into picture-in-picture.
 internal class AuthenticationBrowser(
-  private val activity: Activity,
+  private val activity: ComponentActivity,
   private val origin: String,
 ) {
+  private val handler = Handler(Looper.getMainLooper())
   private var open = false
+  private var generation = 0
   private var covered = false
   private var resumed = false
   private var reply: JavaScriptReplyProxy? = null
+
+  // Registered at construction, before the activity is created, as the
+  // Activity Result API requires.
+  private val launcher = activity.registerForActivityResult(
+    ActivityResultContracts.StartActivityForResult(),
+  ) { onBrowserFinished() }
 
   fun install(webView: WebView) {
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
@@ -89,20 +101,24 @@ internal class AuthenticationBrowser(
       post(OPEN_FAILED_EVENT)
       return
     }
+    val height = (activity.resources.displayMetrics.heightPixels * SHEET_HEIGHT_FRACTION).toInt()
     val intent = Intent(Intent.ACTION_VIEW, uri)
       .addCategory(Intent.CATEGORY_BROWSABLE)
       // A session extra, even a null binder, is what asks the browser for a
       // Custom Tab. Browsers without Custom Tabs open the URL normally.
       .putExtras(Bundle().apply { putBinder(EXTRA_SESSION, null) })
       .putExtra(EXTRA_SHARE_STATE, SHARE_STATE_OFF)
+      .putExtra(EXTRA_INITIAL_ACTIVITY_HEIGHT_PX, height)
+      .putExtra(EXTRA_ACTIVITY_HEIGHT_RESIZE_BEHAVIOR, ACTIVITY_HEIGHT_ADJUSTABLE)
     try {
-      activity.startActivity(intent)
+      launcher.launch(intent)
     } catch (_: ActivityNotFoundException) {
       post(OPEN_FAILED_EVENT)
       return
     }
     open = true
     covered = false
+    generation += 1
     post(OPENED_EVENT)
   }
 
@@ -112,10 +128,26 @@ internal class AuthenticationBrowser(
   private fun close() {
     if (!open) return
     open = false
+    generation += 1
     if (resumed) return
     val intent = Intent(activity, activity.javaClass)
       .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     runCatching { activity.startActivity(intent) }
+  }
+
+  // The tab finished without a programmatic close: the user closed it. Report
+  // it after a grace period, because a handoff that completed just before the
+  // close may still be delivering its ready event; that path closes the
+  // browser itself and cancels this notification.
+  private fun onBrowserFinished() {
+    if (!open) return
+    val finished = generation
+    handler.postDelayed({
+      if (open && generation == finished) {
+        open = false
+        post(CLOSED_EVENT)
+      }
+    }, CLOSE_GRACE_MS)
   }
 
   private fun post(event: String) {
@@ -126,18 +158,26 @@ internal class AuthenticationBrowser(
     const val BRIDGE = "cowboyAndroidAuthenticationBrowser"
     const val OPENED_EVENT = "cowboy:native-authentication-browser-opened"
     const val OPEN_FAILED_EVENT = "cowboy:native-authentication-browser-open-failed"
+    const val CLOSED_EVENT = "cowboy:native-authentication-browser-closed"
     const val RESUMED_EVENT = "cowboy:native-resume"
+    const val CLOSE_GRACE_MS = 1_500L
+    const val SHEET_HEIGHT_FRACTION = 0.9
     const val EXTRA_SESSION = "android.support.customtabs.extra.SESSION"
     const val EXTRA_SHARE_STATE = "androidx.browser.customtabs.extra.SHARE_STATE"
     const val SHARE_STATE_OFF = 2
+    const val EXTRA_INITIAL_ACTIVITY_HEIGHT_PX =
+      "androidx.browser.customtabs.extra.INITIAL_ACTIVITY_HEIGHT_PX"
+    const val EXTRA_ACTIVITY_HEIGHT_RESIZE_BEHAVIOR =
+      "androidx.browser.customtabs.extra.ACTIVITY_HEIGHT_RESIZE_BEHAVIOR"
+    const val ACTIVITY_HEIGHT_ADJUSTABLE = 1
     // Page-world functions and event relay. Native replies are limited to the
-    // three lifecycle event names; nothing else is dispatched into the page.
+    // lifecycle event names below; nothing else is dispatched into the page.
     val SCRIPT = """
       (() => {
         const bridge = globalThis.$BRIDGE;
         if (!bridge) return;
         const events = new Set([
-          "$OPENED_EVENT", "$OPEN_FAILED_EVENT", "$RESUMED_EVENT",
+          "$OPENED_EVENT", "$OPEN_FAILED_EVENT", "$CLOSED_EVENT", "$RESUMED_EVENT",
         ]);
         bridge.addEventListener("message", (event) => {
           if (events.has(event.data)) globalThis.dispatchEvent(new Event(event.data));

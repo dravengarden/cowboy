@@ -132,10 +132,11 @@ sign-in (`__cowboyOpenAuthenticationBrowser`, bridge version 2) through an
 origin-scoped `WebMessageListener`. Cardea and Provider pages open in a Custom
 Tab inside Cowboy's task while the WebView keeps waiting on the PKCE-bound
 handoff; completion relaunches the `singleTask` activity to dismiss the tab.
-Returning to Cowboy is never treated as a close, because Chrome can minimize a
-Custom Tab into picture-in-picture indistinguishably; the page keeps its
-explicit Cancel. Without this bridge the remote UI would navigate the only
-WebView to the Provider with no busy state.
+The tab is a partial bottom sheet so Cowboy stays visible: behind a full-screen
+tab Android's cached-app freezer stops the app and its WebView renderer, and
+the page never sees the ready handoff. Only the tab finishing (its activity
+result) is a user close; minimizing the tab is not. Without this bridge the
+remote UI would navigate the only WebView to the Provider with no busy state.
 
 ## Acceptance
 
