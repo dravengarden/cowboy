@@ -23,6 +23,7 @@ import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { imeOwnsEditable, isImeKeyEvent } from "./imeKey";
+import { isAppleTouchDevice } from "./keyboardGeometry";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
@@ -260,6 +261,11 @@ export const ComposerTextarea = forwardRef<
       compositionEndedAtRef.current,
       Date.now(),
     );
+  // The #83/#84 write hold is an iOS UIKit marked-text rule. Android keyboards
+  // (Gboard) keep every word in composition, where a held write would make the
+  // toolbar and picker dead; Chrome commits the composition on a value write.
+  const nativeImeBlocksWrites = (): boolean =>
+    isAppleTouchDevice(globalThis.navigator ?? {}) && nativeImeOwns();
   const selectedSlashCommandRef = useRef<string | null>(null);
   const [trigger, setTrigger] = useState<Trigger | null>(null);
   const [options, setOptions] = useState<PickerOption[]>([]);
@@ -321,7 +327,7 @@ export const ComposerTextarea = forwardRef<
       vv?.removeEventListener("resize", measure);
       vv?.removeEventListener("scroll", measure);
     };
-  }, [pickerOpen, value, expanded]);
+  }, [pickerOpen, value, expanded, trigger]);
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
 
@@ -548,8 +554,8 @@ export const ComposerTextarea = forwardRef<
   // its selection synchronously; a delayed selection write after React paints
   // is enough to reset an iPad keyboard/selection transaction.
   const applyTextEdit = (edit: NativeTextEdit): void => {
-    // Never write the textarea while the IME owns it (pitfalls #83/#84).
-    if (nativeImeOwns()) return;
+    // Never write the textarea while the iOS IME owns it (pitfalls #83/#84).
+    if (nativeImeBlocksWrites()) return;
     const ta = inputRef.current;
     ta?.focus();
     if (ta) writeUndoableNativeEdit(ta, edit);
@@ -604,7 +610,7 @@ export const ComposerTextarea = forwardRef<
   // the textarea focused, so move the live native caret synchronously and do not
   // schedule a post-render selection write.
   const applyOption = (option: PickerOption): void => {
-    if (!trigger || nativeImeOwns()) return;
+    if (!trigger || nativeImeBlocksWrites()) return;
     const { apply } = option;
     const current = currentTextSelection();
     const end = trigger.from + 1 + trigger.query.length;
@@ -951,13 +957,12 @@ export const ComposerTextarea = forwardRef<
             composingRef.current = true;
           }
           onChange(e.target.value);
-          // Marked text is not a query yet; compositionend syncs the result.
-          if (!composingRef.current) {
-            sync(
-              e.target.value,
-              e.target.selectionStart ?? e.target.value.length,
-            );
-          }
+          // Like Obsidian's suggest, the query follows composing text too:
+          // Android keyboards compose every word.
+          sync(
+            e.target.value,
+            e.target.selectionStart ?? e.target.value.length,
+          );
           rememberSelection(e.target as HTMLTextAreaElement);
         }}
         onCompositionStart={(e): void => {

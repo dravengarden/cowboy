@@ -1,7 +1,7 @@
 // CodeMirror adapters for the shared Obsidian Markdown commands in
 // markdownEditing.ts. The native touch textarea applies the same pure edits, so
 // both composer engines produce identical documents for the same action.
-import { insertNewline } from "@codemirror/commands";
+import { indentLess, indentMore, insertNewline } from "@codemirror/commands";
 import { indentUnit } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { type EditorView, keymap } from "@codemirror/view";
@@ -31,7 +31,10 @@ export function runMarkdownEdit(
   command: MarkdownEditCommand,
   userEvent = "input.type",
 ): boolean {
-  if (view.state.readOnly) return false;
+  // The shared commands edit one range; leave multi-cursor edits to CM6.
+  if (view.state.readOnly || view.state.selection.ranges.length > 1) {
+    return false;
+  }
   const { anchor, head } = view.state.selection.main;
   const edit = command(view.state.doc.toString(), { anchor, head });
   if (!edit) return false;
@@ -62,6 +65,7 @@ export const obsidianMarkdownKeymap = Prec.high(keymap.of([
   {
     key: "Tab",
     run: (view) => {
+      if (view.state.selection.ranges.length > 1) return indentMore(view);
       runMarkdownEdit(
         view,
         (doc, selection) => indentLines(doc, selection, indentUnitText(view)),
@@ -70,6 +74,7 @@ export const obsidianMarkdownKeymap = Prec.high(keymap.of([
       return true;
     },
     shift: (view) => {
+      if (view.state.selection.ranges.length > 1) return indentLess(view);
       runMarkdownEdit(
         view,
         (doc, selection) =>

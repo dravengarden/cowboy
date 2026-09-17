@@ -200,7 +200,8 @@ export function deleteEmptyCodeFenceBackward(view: EditorView): boolean {
   const { doc } = state;
   const caret = doc.lineAt(range.head);
   if (!FENCE_RE.test(caret.text)) return false;
-  const fence = fenceLines(doc).get(caret.number);
+  const fences = fenceLines(doc);
+  const fence = fences.get(caret.number);
   if (!fence || fence.partner < 0) return false;
 
   let openLn = -1;
@@ -208,7 +209,10 @@ export function deleteEmptyCodeFenceBackward(view: EditorView): boolean {
   if (fence.role === "open" && fence.bare && range.head === caret.to) {
     openLn = caret.number;
     closeLn = fence.partner;
-  } else if (fence.role === "close" && range.head === caret.from) {
+  } else if (
+    fence.role === "close" && range.head === caret.from &&
+    fences.get(fence.partner)?.bare === true
+  ) {
     openLn = fence.partner;
     closeLn = caret.number;
   } else {

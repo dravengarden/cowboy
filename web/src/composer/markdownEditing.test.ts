@@ -291,8 +291,11 @@ table("bold toggles on a caret", inline("bold"), [
   // inserted. Local deviation: the touching closer is kept (Obsidian's literal
   // math removed it and left an unbalanced `**foo**|**`).
   ["**foo**|", "**foo****|**"],
-  // Obsidian quirk: caret after the opening marker re-wraps the same word.
-  ["**|bold**", "**|bold**"],
+  // Wrapping never deletes a neighbouring span's closing delimiter.
+  ["**bar**«foo»", "**bar****«foo»**"],
+  // Local deviation: a caret after the opening marker removes the span
+  // (Obsidian re-wrapped the same word, a no-op).
+  ["**|bold**", "|bold"],
 ]);
 
 table("bold toggles on a selection", inline("bold"), [

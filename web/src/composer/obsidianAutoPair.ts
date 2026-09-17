@@ -131,6 +131,16 @@ function closingMarkAt(state: EditorState, pos: number, token: string): boolean 
     parent.from < node.from && state.sliceDoc(pos, pos + 1) === token;
 }
 
+// Obsidian asks whether the two backticks start a syntax node. Its line-based
+// HyperMD tokens say yes at the start of any line; lezer instead treats a line
+// typed under a paragraph as that paragraph's continuation. Test the line text:
+// only list/quote/indent markup may precede the backticks.
+function fenceCanStartAt(state: EditorState, pos: number): boolean {
+  const line = state.doc.lineAt(pos);
+  const before = line.text.slice(0, pos - line.from);
+  return LIST_PREFIX.exec(before)?.[0].length === before.length;
+}
+
 // List/quote continuation indent for the closing fence of a new code block.
 function fenceIndent(state: EditorState, pos: number): string {
   const match = LIST_PREFIX.exec(state.doc.lineAt(pos).text);
@@ -291,7 +301,7 @@ function handleSame(
     } else if (
       allowTriple &&
       state.sliceDoc(pos - 2 * token.length, pos) === token + token &&
-      nodeStart(state, pos - 2 * token.length) &&
+      fenceCanStartAt(state, pos - 2 * token.length) &&
       !insideFencedCodeBeforeLine(state, state.doc.lineAt(pos).number)
     ) {
       const insert = `${token}\n${fenceIndent(state, range.from)}${

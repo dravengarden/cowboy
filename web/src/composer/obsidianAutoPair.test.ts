@@ -116,6 +116,11 @@ Deno.test("three backticks open a fenced block with list indentation", () => {
   assertEquals(typeAll("|", "```"), "```|\n```");
   assertEquals(typeAll("- |", "```"), "- ```|\n  ```");
   assertEquals(typeAll("> |", "```"), "> ```|\n> ```");
+  // A fence typed under a paragraph or list line still closes (lezer reads
+  // that line as paragraph continuation, Obsidian's tokens do not).
+  assertEquals(typeAll("Here is the log:\n|", "```"), "Here is the log:\n```|\n```");
+  assertEquals(typeAll("- a\n  |", "```"), "- a\n  ```|\n  ```");
+  assertEquals(typeAll("foo |", "```"), "foo ```|");
   // A manual closing fence inside an open block stays literal.
   assertEquals(typeAll("```\ncode\n|", "```"), "```\ncode\n```|");
 });

@@ -184,6 +184,9 @@ export interface ComposerEditorHandle {
   redo: () => void;
 }
 
+// Just above @codemirror/autocomplete's default 75ms interactionDelay.
+const COMPLETION_ACCEPT_DELAY_MS = 90;
+
 function completionListVisible(view: EditorView): boolean {
   return view.dom.querySelector(".cm-tooltip-autocomplete") !== null;
 }
@@ -376,6 +379,7 @@ export const ComposerEditor = forwardRef<
   const expandedHeight = heightPx > 0 ? `min(${String(heightPx)}px, 82vh)` : "48vh";
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   const selectedSlashCommandRef = useRef<string | null>(null);
+  const acceptCompletionWhenReadyRef = useRef(false);
   // Keep latest callbacks/data in refs so the (memoized) extensions never go
   // stale without rebuilding the editor state on every keystroke.
   const onSubmitRef = useRef(onSubmit);
@@ -508,6 +512,10 @@ export const ComposerEditor = forwardRef<
       // A visible completion list owns Escape first, as Obsidian's suggest
       // does; a surrounding capture must not open its discard dialog.
       if (view && completionListVisible(view)) return false;
+      // A pending or fully filtered query has nothing on screen. The app is
+      // about to own this Escape, so end the query now; otherwise it could
+      // open its list over the app's dialog.
+      if (view && completionStatus(view.state) !== null) closeCompletion(view);
       const state = view
         ? vimApiRef.current?.getCM(view)?.state?.vim
         : undefined;
@@ -710,6 +718,22 @@ export const ComposerEditor = forwardRef<
         if (u.selectionSet || u.docChanged) {
           onSelectionChangeRef.current?.(!u.state.selection.main.empty);
         }
+        if (acceptCompletionWhenReadyRef.current) {
+          const status = completionStatus(u.state);
+          if (u.docChanged || u.selectionSet || status === null) {
+            acceptCompletionWhenReadyRef.current = false;
+          } else if (status === "active") {
+            acceptCompletionWhenReadyRef.current = false;
+            // Outside the update cycle, after CM6's interaction delay for a
+            // freshly opened list.
+            const view = u.view;
+            globalThis.setTimeout(() => {
+              if (completionStatus(view.state) === "active") {
+                acceptCompletion(view);
+              }
+            }, COMPLETION_ACCEPT_DELAY_MS);
+          }
+        }
       }),
       // Clipboard paste of image / file blobs (a screenshot, a copied image)
       // is lifted out to the composer as attachments; only a files-bearing
@@ -843,7 +867,21 @@ export const ComposerEditor = forwardRef<
       // fall through to a newline (or ArrowDown move the caret). Tab accepts,
       // as it does in Obsidian's link suggest, instead of leaving the editor.
       Prec.highest(keymap.of([
-        ...["Enter", "ArrowUp", "ArrowDown"].map((key) => ({
+        {
+          // Obsidian's Enter picks the highlighted suggestion even while its
+          // list refreshes. CM6 cannot accept a disabled list, so accept as
+          // soon as the refreshed list arrives (see the update listener).
+          key: "Enter",
+          run: (view: EditorView): boolean => {
+            if (
+              completionStatus(view.state) !== "pending" ||
+              !completionListVisible(view)
+            ) return false;
+            acceptCompletionWhenReadyRef.current = true;
+            return true;
+          },
+        },
+        ...["ArrowUp", "ArrowDown"].map((key) => ({
           key,
           run: (view: EditorView): boolean =>
             completionStatus(view.state) === "pending" &&

@@ -2489,7 +2489,14 @@ Desktop Vim + IME checks:
       anything typed before it. Toolbar and picker edits now replace only the
       changed span through `execCommand("insertText")` in the same gesture
       (value write remains the fallback) and never run while the IME owns the
-      textarea (#83/#84). `clear()` no longer refocuses after delivery.
+      textarea on iOS (#83/#84). That hold is a UIKit marked-text rule only:
+      Android keyboards keep every word in composition, so applying it there
+      would make the toolbar and `@`/`/` picker dead; Chrome commits the
+      composition on a value write. `clear()` no longer refocuses after
+      delivery.
+    - **Fence auto-close** tests the line text, not lezer node starts: a line
+      typed under a paragraph is that paragraph's continuation in lezer, so
+      `text:` then ``` would never close.
     - **Code-fence Backspace** only removes an exact empty pair found by
       CommonMark fence pairing; it used to delete a block whose info string was
       being edited and to merge adjacent blocks.
@@ -2521,8 +2528,10 @@ Desktop Vim + IME checks:
       with typing. HTML→Markdown conversion (Obsidian's turndown) is not ported.
     - **Pickers.** Like Obsidian's EditorSuggest, a visible list owns
       Enter/Tab/arrows even while an async `@file` refresh marks it pending;
-      Tab accepts; Escape closes only a visible list and otherwise reaches the
-      surface, including the Desktop Queue/Draft discard capture. `/` queries
+      Enter pressed while it refreshes accepts the highlighted option once the
+      refreshed list arrives; Tab accepts; Escape closes only a visible list and
+      otherwise ends the hidden query and reaches the surface, including the
+      Desktop Queue/Draft discard capture. `/` queries
       stop at a second slash and use the same substring filter in both engines.
       The native picker gained arrow/Enter/Tab selection, opens only from
       typing (never from focus or a long-press selection), and in fullscreen

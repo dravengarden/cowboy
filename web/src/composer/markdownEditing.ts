@@ -904,7 +904,13 @@ function isFormatActive(
       }
       continue;
     }
-    const probe = start > line.from ? start - 1 : start;
+    let probe = start > line.from ? start - 1 : start;
+    // Local deviation: a caret right after an opening delimiter (`**|bold**`)
+    // probes the text it precedes, so the toggle removes the span instead of
+    // re-wrapping the same word.
+    if (probe < line.to && model.formatting[probe] && start < line.to && !model.formatting[start]) {
+      probe = start;
+    }
     if (probe >= line.to) return false;
     if (model.formatting[probe]) continue;
     if (!model.inside[probe]) return false;
@@ -1037,12 +1043,16 @@ export function toggleInlineFormat(
       wrapTo = clamp(content.to, start, end);
     }
     if (empty || wrapFrom !== wrapTo) {
-      // Local deviation: an empty pair at a caret with no word must not also
-      // delete a delimiter that merely touches the caret. Obsidian's literal
-      // math turns `**foo**|` into the unbalanced `**foo**|**`.
-      if (wrapFrom !== wrapTo) {
-        changes.push(...removeFormatMarks(doc, model, { from: wrapFrom, to: wrapTo }, spec));
-      }
+      // Local deviation: wrapping strips only delimiters INSIDE the new span.
+      // Obsidian's inclusive lookup also deletes a neighbouring span's closer
+      // that merely touches it (`**bar**<foo>` → `**bar**foo**`, and
+      // `**foo**|` → `**foo**|**`), leaving unbalanced markup.
+      const inner = model.marks.filter((mark) =>
+        mark.from >= wrapFrom && mark.to <= wrapTo
+      );
+      changes.push(
+        ...removeFormatMarks(doc, { ...model, marks: inner }, { from: wrapFrom, to: wrapTo }, spec),
+      );
       changes.push(
         { from: wrapFrom, to: wrapFrom, insert: spec.marker },
         { from: wrapTo, to: wrapTo, insert: spec.marker },
