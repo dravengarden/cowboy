@@ -282,3 +282,43 @@ Deno.test("Review abandoning text during synchronization preparation fences late
   assertEquals(f.calls.length, 3);
   assertEquals(original.view().synchronizing, true);
 });
+
+for (const initial of ["lost", "pending"] as const) {
+  Deno.test(`Review explicit Check observes an initial ${initial} Open without replay`, async () => {
+    const f = fixture();
+    await f.owner.close();
+    const reader = createReviewBuffer({
+      ready: () => Promise.resolve(f.registry),
+    }, { sessionId: "s", path: "a.rs" });
+    const first = reader.read(text, { kind: "language" }, signal());
+    const rejected = assertRejects(
+      () => first,
+      BufferClientError,
+      initial === "lost" ? "transport" : "state",
+    );
+    await f.advance(1);
+    f.reply(0, wire("prepared"));
+    await f.advance(2);
+    if (initial === "lost") {
+      f.calls[1]!.result.reject(new Error("lost open observation"));
+    } else f.reply(1, wire("prepared", ID, true), 202);
+    await rejected;
+    const checked = reader.read(text, { kind: "language" }, signal(), true);
+    await f.advance(3);
+    assertEquals(f.calls[2]!.init.method, "GET");
+    assertEquals(f.calls[2]!.url, `/api/code/buffers/${ID}`);
+    f.reply(2, wire("open"));
+    await f.advance(4);
+    f.reply(3, observed());
+    await checked;
+    assertEquals(
+      f.calls.filter((call) => call.init.method === "PUT").length,
+      1,
+    );
+    const next = reader.read(text, { kind: "symbols" }, signal());
+    await f.advance(5);
+    f.reply(4, observed("symbols"));
+    await next;
+    await finish({ ...f, reader }, 5);
+  });
+}

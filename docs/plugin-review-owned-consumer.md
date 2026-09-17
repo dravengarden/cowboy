@@ -60,7 +60,9 @@ an atomic LSP snapshot.
 
 Mismatch is explicit, never an empty success or hidden reload. **Check Code**
 may explicitly observe the original buffer before a new conditional language
-read. **Review refresh…** only prepares synchronization against the exact
+read. Initial Open uncertainty can be checked on the original ID,
+without retrying Open or recreating a failed/unobserved preparation.
+**Review refresh…** only prepares synchronization against the exact
 displayed content. Settings → About owns the existing separate Apply/retirement
 confirmation. No read, content change or unmount applies, retires or undoes it.
 Abandoning text during/after preparation closes the source owner immediately,

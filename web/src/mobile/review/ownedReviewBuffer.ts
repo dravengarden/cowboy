@@ -39,6 +39,8 @@ export function createReviewBuffer(
   const target = Object.freeze({ ...input });
   const lifetime = new AbortController();
   let owner: OwnedCodeBuffer | undefined;
+  let openAttempted = false;
+  let observedInitialOpen = false;
   let queued = 0;
   let tail: Promise<unknown> = Promise.resolve();
   let refreshObserver:
@@ -75,6 +77,7 @@ export function createReviewBuffer(
     if (prepared.pending || prepared.state !== "prepared") {
       throw new BufferClientError("state");
     }
+    openAttempted = true;
     const opened = await owner.open();
     check();
     if (opened.pending || opened.state !== "open") {
@@ -88,6 +91,7 @@ export function createReviewBuffer(
   function run<T>(
     action: (owner: OwnedCodeBuffer) => Promise<T>,
     signal: AbortSignal,
+    inspectInitialOpen = false,
   ): Promise<T> {
     try {
       check(signal);
@@ -98,7 +102,15 @@ export function createReviewBuffer(
     queued++;
     const task = tail.then(async () => {
       check(signal);
-      const original = await ready;
+      const original = await ready.catch((error: unknown) => {
+        // Only an explicit Check may inspect an originally attempted Open.
+        // Failed/unobserved preparation cannot be recreated or acquire an ID.
+        if (
+          (!inspectInitialOpen && !observedInitialOpen) || !openAttempted ||
+          !owner
+        ) throw error;
+        return owner;
+      });
       check(signal);
       // Do NOT pass the view's signal into this owned borrow: queue exclusion
       // lasts until the actual continuation drains, not until a waiter leaves.
@@ -121,13 +133,26 @@ export function createReviewBuffer(
     ) {
       // Capture mutable caller positions before waiting behind an existing read.
       const capturedQuery = structuredClone(query);
-      return run(async (original) => {
-        // Only the explicit Check action requests reconciliation. A read or
-        // mismatch never reloads, reopens, retires synchronization or retries.
-        if (reconcile && !original.view().fresh) await original.observe();
-        check(signal);
-        return original.readContent(content, capturedQuery);
-      }, signal);
+      return run(
+        async (original) => {
+          // Only the explicit Check action requests reconciliation. A read or
+          // mismatch never reloads, reopens, retires synchronization or retries.
+          const view = original.view();
+          if (
+            reconcile &&
+            (!view.fresh || view.observation?.state !== "open" ||
+              view.observation.pending)
+          ) {
+            const observed = await original.observe();
+            observedInitialOpen = observed.state === "open" &&
+              !observed.pending;
+          }
+          check(signal);
+          return original.readContent(content, capturedQuery);
+        },
+        signal,
+        reconcile,
+      );
     },
     prepareRefresh(content: CapturedContent, signal: AbortSignal) {
       return run(async (original) => {
