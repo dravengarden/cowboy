@@ -310,6 +310,10 @@ and accepting a production effect are different milestones.
   selecting a runtime. This is not a Service/Web navigation cutover, verified
   native cleanup, independent recovery or production native-generation acceptance;
   original-runtime routing and actual nonempty-LSP consumer acceptance remain open.
+  Its [candidate acceptance](releases/owned-navigation-candidate-2026-09-17.md)
+  passes the full gate, static builds, signed temporary lifecycle and all eleven
+  connected Code regressions; the actual plaintext navigation gate does not
+  establish nonempty-LSP acquisition, native allocation bounds or recovery.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

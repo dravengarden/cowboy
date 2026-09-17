@@ -99,3 +99,7 @@ This source candidate does not publish a signed Catalog release, install a
 Plugin or authorize resident Machine maintenance. General DAG execution, state
 leases and independent recovery remain in the
 [completion ledger](plugin-refactor-completion.md).
+
+The [candidate acceptance](releases/owned-navigation-candidate-2026-09-17.md)
+records exact immutable artifacts, full source gates and connected regressions,
+including the remaining native allocation and ambiguous-outcome boundary.
