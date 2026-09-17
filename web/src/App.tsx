@@ -161,6 +161,7 @@ import {
     withFoldersCollapsed,
 } from "./SessionFolderUi";
 import { useDialogInputFocus } from "./useDialogInputFocus";
+import { useSheetKeyboardDiagnostics } from "./sheetKeyboardDiagnostics";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
@@ -6949,6 +6950,12 @@ function RenameSessionShell({
     // raise iOS's software keyboard for a newly mounted field; on Desktop it
     // claims the field again after the dialog's focus trap has settled.
     useDialogInputFocus(inputRef, desktop);
+    // The control sample for the folder name prompt (sheetKeyboardDiagnostics).
+    useSheetKeyboardDiagnostics(
+        "session-rename",
+        !desktop,
+        () => inputRef.current?.closest("[role='dialog']") ?? null,
+    );
     const trimmed = value.trim();
     const canSave = trimmed.length > 0 && trimmed !== session.title;
     const submit = (): void => {
