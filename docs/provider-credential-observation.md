@@ -68,3 +68,32 @@ when accepting a new native CLI's authentication probe semantics.
 Release verification must separately establish the installed watcher count,
 Service generation advancement, agreement of credential projections and native
 session recovery. A green isolated test is not evidence of those live effects.
+
+## Hawk acceptance, 2026-09-17
+
+Code revision `60ab09c0f47bf840288e369b95d661430fde8e9c` passed
+`just check-compact`, final Rust Clippy/tests, and the native CLI conformance
+test. The final Rust run passed 1,429 tests; the standalone Machine passed 340.
+The complete gate also passed 1,730 Web tests and the disposable PostgreSQL
+tests. An additional network-isolated native probe left both future-expiry and
+expired synthetic credential files unchanged.
+
+The Machine component receipt recorded `outcome=succeeded`, `phase=committed`
+at 08:23:25 UTC. The release is
+`/nix/store/x94byxm885i96dsw5rmcxb9v0pn0hpg5-cowboy-machine-release`; the ACP
+generation remained `worker-c7f0635a1884fdd1ac6c`.
+
+The new watcher installed 217 directory watches, rising to 220 when the Service
+advanced Claude authentication from generation 5 to 6. All six runtime
+projections matched the new immutable Service materialization. The invalid
+cleared-token snapshots were rejected, and the surviving valid rotation was
+promoted without another login. Native `auth status --json` returned success
+and `loggedIn=true` for both previously failed projections.
+
+One pre-existing crashed worker required a scoped restart after its crash
+diagnostic had been lost; its original native session resumed and the Controller
+recorded `recovery_outcome=session_running` at 08:25:59 UTC. This change does not
+alter crash-diagnostic retention. `/healthz` and `/version` returned HTTP 200.
+The next natural eight-hour upstream refresh was not part of this immediate
+postflight; atomic replacement after watch installation is covered by the
+native filesystem regression test.
