@@ -140,6 +140,13 @@ Cowboy. Only the tab finishing (its activity
 result) is a user close; minimizing the tab is not. Without this bridge the
 remote UI would navigate the only WebView to the Provider with no busy state.
 
+`NativeHaptics.kt` gives the remote UI `__cowboyNativeHaptic(kind)` and maps
+selection, impact and notification haptics to `View.performHapticFeedback`
+(tick, click, confirm and reject effects that follow the system touch-feedback
+setting). The Tauri haptics plugin's Android side plays 40-60 ms raw vibrator
+waveforms per tap, which feels like a buzzing motor; it remains only as the
+fallback for older page bundles.
+
 ## Acceptance
 
 `just native-plugin-conformance` on a Mac compiles both production Objective-C

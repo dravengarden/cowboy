@@ -21,6 +21,7 @@ import androidx.webkit.WebViewFeature
 class MainActivity : TauriActivity() {
   private lateinit var content: View
   private val authenticationBrowser = AuthenticationBrowser(this, COWBOY_ORIGIN)
+  private val nativeHaptics = NativeHaptics(COWBOY_ORIGIN)
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -33,6 +34,7 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     followThemeColor(webView)
     authenticationBrowser.install(webView)
+    nativeHaptics.install(webView)
   }
 
   override fun onPause() {
