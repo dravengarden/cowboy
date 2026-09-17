@@ -3,10 +3,19 @@
 // name prompt, the Move-to / Bind-project pickers and the delete confirm.
 // The tree itself is rendered by SessionList; these are its transient layers.
 //
-// Every sheet here is portalled to <body>. SessionList lives inside the Mobile
-// drawer layer (a transformed, overflow-hidden compositor layer stacked under
-// the page peek), so an inline `position: fixed` sheet would be laid out
-// against the drawer, clipped to its width and painted beneath the page.
+// Every sheet here is portalled to the host App renders beside the session
+// Rename/Delete shells (`SESSION_FOLDER_SHEET_HOST`), never inline and never
+// to <body>:
+// - SessionList lives inside the Mobile drawer layer (a transformed,
+//   overflow-hidden compositor layer stacked under the page peek), so an
+//   inline `position: fixed` sheet is laid out against the drawer, clipped to
+//   its width and painted beneath the page (physical iPhone, 2026-09-17).
+// - A <body>-level compact sheet escapes the keyboard-resized app box: on a
+//   physical iPad the name prompt sat behind the keyboard and dismissing it
+//   left the page lifted a second keyboard height (2026-09-17). Only cover
+//   sheets, which pin to --vv-height/--vv-offset, may live on <body>.
+// The Rename shell's mount point is the one placement proven on devices, so
+// the folder sheets share its exact ancestry.
 
 import {
   Button,
@@ -26,6 +35,7 @@ import {
 } from "@mui/icons-material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { useNavbarAtBottom } from "./navbarSettings";
@@ -40,6 +50,18 @@ import {
 import { Sheet } from "./Sheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useDialogFocus, useDialogInputFocus } from "./useDialogInputFocus";
+
+/** Attribute of the mount point App renders beside the Rename shell. */
+export const SESSION_FOLDER_SHEET_HOST = "data-session-folder-sheets";
+
+/** Render in App's root beside the session shells. A React portal commits in
+ *  the same pass, so a prompt's in-tap focus (iOS keyboard) still holds. */
+function InAppRoot({ children }: { children: ReactNode }): ReactNode {
+  const host = globalThis.document?.querySelector(
+    `[${SESSION_FOLDER_SHEET_HOST}]`,
+  );
+  return host ? createPortal(children, host) : children;
+}
 
 const COLLAPSED_KEY = "cowboy:session-folders:collapsed";
 
@@ -181,58 +203,64 @@ export function FolderNameShell({
   };
   useConfirmEnter(desktop, submit, { suppressBareEnter: false });
   return (
-    <Sheet
-      portal
-      forceSheet={navbarAtBottom}
-      open
-      onClose={onClose}
-      title={title}
-      mobileDismiss="none"
-      actions={
-        <>
-          <Button onClick={onClose} color="inherit">
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button
-            onClick={submit}
-            onKeyDown={(e): void => {
-              if (
-                desktop && e.key === "Enter" && !e.metaKey && !e.ctrlKey &&
-                !isImeKeyEvent(e.nativeEvent)
-              ) e.preventDefault();
-            }}
-            variant="contained"
-            disabled={!canSave}
-          >
-            {confirmLabel}
-            <Kbd
-              keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={canSave ? "available" : "inactive"}
-            />
-          </Button>
-        </>
-      }
-    >
-      <TextField
-        fullWidth
-        inputRef={inputRef}
-        label="Folder name"
-        value={value}
-        onChange={(e): void => setValue(e.target.value)}
-        onKeyDown={(e): void => {
-          if (
-            e.key === "Enter" && !e.shiftKey && !isImeKeyEvent(e.nativeEvent)
-          ) {
-            e.preventDefault();
-            if (!desktop) submit();
-          }
-        }}
-        sx={{ mt: 1 }}
-        helperText={helperText}
-      />
-      {extra}
-    </Sheet>
+    <InAppRoot>
+      <Sheet
+        forceSheet={navbarAtBottom}
+        open
+        onClose={onClose}
+        title={title}
+        mobileDismiss="none"
+        actions={
+          <>
+            <Button onClick={onClose} color="inherit">
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <Button
+              onClick={submit}
+              onKeyDown={(e): void => {
+                if (
+                  desktop && e.key === "Enter" && !e.metaKey && !e.ctrlKey &&
+                  !isImeKeyEvent(e.nativeEvent)
+                ) e.preventDefault();
+              }}
+              variant="contained"
+              disabled={!canSave}
+            >
+              {confirmLabel}
+              <Kbd
+                keys={`${MOD_LABEL}${ENTER_LABEL}`}
+                availability={canSave ? "available" : "inactive"}
+              />
+            </Button>
+          </>
+        }
+      >
+        <TextField
+          fullWidth
+          inputRef={inputRef}
+          label="Folder name"
+          // A folder is not a contact: without this iOS reads "name" and
+          // raises the AutoFill Contact bar, which also regrows the keyboard
+          // after it has been presented (physical iPad, 2026-09-17).
+          autoComplete="off"
+          name="cowboy-session-folder"
+          value={value}
+          onChange={(e): void => setValue(e.target.value)}
+          onKeyDown={(e): void => {
+            if (
+              e.key === "Enter" && !e.shiftKey && !isImeKeyEvent(e.nativeEvent)
+            ) {
+              e.preventDefault();
+              if (!desktop) submit();
+            }
+          }}
+          sx={{ mt: 1 }}
+          helperText={helperText}
+        />
+        {extra}
+      </Sheet>
+    </InAppRoot>
   );
 }
 
@@ -269,78 +297,79 @@ export function FolderPickerShell({
     desktop,
   );
   return (
-    <Sheet
-      portal
-      forceSheet={navbarAtBottom}
-      open
-      onClose={onClose}
-      title={title}
-      mobileDismiss="none"
-      actions={
-        <>
-          {onNewFolder && (
-            <Button onClick={onNewFolder} color="inherit">
-              New folder…
+    <InAppRoot>
+      <Sheet
+        forceSheet={navbarAtBottom}
+        open
+        onClose={onClose}
+        title={title}
+        mobileDismiss="none"
+        actions={
+          <>
+            {onNewFolder && (
+              <Button onClick={onNewFolder} color="inherit">
+                New folder…
+              </Button>
+            )}
+            <Button onClick={onClose} color="inherit">
+              Cancel
+              <Kbd keys="Esc" />
             </Button>
-          )}
-          <Button onClick={onClose} color="inherit">
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-        </>
-      }
-    >
-      <List
-        dense
-        ref={listRef}
-        onKeyDown={pickerKeyDown}
-        sx={{ maxHeight: "min(60vh, 480px)", overflowY: "auto", mx: -1 }}
+          </>
+        }
       >
-        <ListItemButton
-          data-folder-pick=""
-          selected={current === null}
-          onClick={(): void => onPick(null)}
+        <List
+          dense
+          ref={listRef}
+          onKeyDown={pickerKeyDown}
+          sx={{ maxHeight: "min(60vh, 480px)", overflowY: "auto", mx: -1 }}
         >
-          <ListItemIcon sx={{ minWidth: 36 }}>
-            {current === null ? <CheckIcon /> : <ViewListOutlined />}
-          </ListItemIcon>
-          <ListItemText primary="Top level" />
-        </ListItemButton>
-        {rows.map(({ folder, depth }) => {
-          const isCurrent = folder.id === current;
-          return (
-            <ListItemButton
-              key={folder.id}
-              data-folder-pick={folder.id}
-              selected={isCurrent}
-              onClick={(): void => onPick(folder.id)}
-              sx={{ pl: 2 + depth * 2.5 }}
-            >
-              <ListItemIcon sx={{ minWidth: 36 }}>
-                {isCurrent ? <CheckIcon /> : <FolderOutlined />}
-              </ListItemIcon>
-              <ListItemText
-                primary={folder.name}
-                secondary={folder.project ?? undefined}
-                slotProps={{
-                  primary: { noWrap: true },
-                  secondary: { noWrap: true, variant: "caption" },
-                }}
-              />
-            </ListItemButton>
-          );
-        })}
-        {rows.length === 0 && (
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ px: 2, py: 1.5 }}
+          <ListItemButton
+            data-folder-pick=""
+            selected={current === null}
+            onClick={(): void => onPick(null)}
           >
-            No folders yet.
-          </Typography>
-        )}
-      </List>
-    </Sheet>
+            <ListItemIcon sx={{ minWidth: 36 }}>
+              {current === null ? <CheckIcon /> : <ViewListOutlined />}
+            </ListItemIcon>
+            <ListItemText primary="Top level" />
+          </ListItemButton>
+          {rows.map(({ folder, depth }) => {
+            const isCurrent = folder.id === current;
+            return (
+              <ListItemButton
+                key={folder.id}
+                data-folder-pick={folder.id}
+                selected={isCurrent}
+                onClick={(): void => onPick(folder.id)}
+                sx={{ pl: 2 + depth * 2.5 }}
+              >
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                  {isCurrent ? <CheckIcon /> : <FolderOutlined />}
+                </ListItemIcon>
+                <ListItemText
+                  primary={folder.name}
+                  secondary={folder.project ?? undefined}
+                  slotProps={{
+                    primary: { noWrap: true },
+                    secondary: { noWrap: true, variant: "caption" },
+                  }}
+                />
+              </ListItemButton>
+            );
+          })}
+          {rows.length === 0 && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ px: 2, py: 1.5 }}
+            >
+              No folders yet.
+            </Typography>
+          )}
+        </List>
+      </Sheet>
+    </InAppRoot>
   );
 }
 
@@ -370,70 +399,71 @@ export function ProjectPickerShell({
     desktop,
   );
   return (
-    <Sheet
-      portal
-      forceSheet={navbarAtBottom}
-      open
-      onClose={onClose}
-      title={`Bind ${folder.name} to a project`}
-      mobileDismiss="none"
-      actions={
-        <Button onClick={onClose} color="inherit">
-          Cancel
-          <Kbd keys="Esc" />
-        </Button>
-      }
-    >
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Sessions of the bound project appear in this folder automatically,
-        unless they were moved somewhere else by hand.
-      </Typography>
-      <List
-        dense
-        ref={listRef}
-        onKeyDown={pickerKeyDown}
-        sx={{ maxHeight: "min(60vh, 480px)", overflowY: "auto", mx: -1 }}
+    <InAppRoot>
+      <Sheet
+        forceSheet={navbarAtBottom}
+        open
+        onClose={onClose}
+        title={`Bind ${folder.name} to a project`}
+        mobileDismiss="none"
+        actions={
+          <Button onClick={onClose} color="inherit">
+            Cancel
+            <Kbd keys="Esc" />
+          </Button>
+        }
       >
-        <ListItemButton
-          data-folder-pick=""
-          selected={folder.project === null}
-          onClick={(): void => onPick(null)}
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          Sessions of the bound project appear in this folder automatically,
+          unless they were moved somewhere else by hand.
+        </Typography>
+        <List
+          dense
+          ref={listRef}
+          onKeyDown={pickerKeyDown}
+          sx={{ maxHeight: "min(60vh, 480px)", overflowY: "auto", mx: -1 }}
         >
-          <ListItemIcon sx={{ minWidth: 36 }}>
-            {folder.project === null ? <CheckIcon /> : <LabelOutlined />}
-          </ListItemIcon>
-          <ListItemText primary="No project" />
-        </ListItemButton>
-        {options.map((label) => {
-          const isCurrent = label === folder.project;
-          return (
-            <ListItemButton
-              key={label}
-              data-folder-pick={label}
-              selected={isCurrent}
-              onClick={(): void => onPick(label)}
-            >
-              <ListItemIcon sx={{ minWidth: 36 }}>
-                {isCurrent ? <CheckIcon /> : <LabelOutlined />}
-              </ListItemIcon>
-              <ListItemText
-                primary={label}
-                slotProps={{ primary: { noWrap: true } }}
-              />
-            </ListItemButton>
-          );
-        })}
-        {options.length === 0 && (
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ px: 2, py: 1.5 }}
+          <ListItemButton
+            data-folder-pick=""
+            selected={folder.project === null}
+            onClick={(): void => onPick(null)}
           >
-            No project labels among the current sessions.
-          </Typography>
-        )}
-      </List>
-    </Sheet>
+            <ListItemIcon sx={{ minWidth: 36 }}>
+              {folder.project === null ? <CheckIcon /> : <LabelOutlined />}
+            </ListItemIcon>
+            <ListItemText primary="No project" />
+          </ListItemButton>
+          {options.map((label) => {
+            const isCurrent = label === folder.project;
+            return (
+              <ListItemButton
+                key={label}
+                data-folder-pick={label}
+                selected={isCurrent}
+                onClick={(): void => onPick(label)}
+              >
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                  {isCurrent ? <CheckIcon /> : <LabelOutlined />}
+                </ListItemIcon>
+                <ListItemText
+                  primary={label}
+                  slotProps={{ primary: { noWrap: true } }}
+                />
+              </ListItemButton>
+            );
+          })}
+          {options.length === 0 && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ px: 2, py: 1.5 }}
+            >
+              No project labels among the current sessions.
+            </Typography>
+          )}
+        </List>
+      </Sheet>
+    </InAppRoot>
   );
 }
 
@@ -455,40 +485,41 @@ export function DeleteFolderShell({
   useConfirmEnter(true, onConfirm);
   const target = destination ? `"${destination}"` : "the top level";
   return (
-    <Sheet
-      portal
-      forceSheet={navbarAtBottom}
-      open
-      onClose={onClose}
-      title={`Delete folder "${folder.name}"?`}
-      mobileDismiss="none"
-      actions={
-        <>
-          <Button onClick={onClose} color="inherit">
-            Cancel
-            <Kbd keys="Esc" />
-          </Button>
-          <Button onClick={onConfirm} color="error" variant="contained">
-            Delete folder
-            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
-          </Button>
-        </>
-      }
-    >
-      <Stack spacing={1}>
-        <Typography variant="body2" color="text.secondary">
-          {sessionCount === 0
-            ? `Nothing is deleted but the folder; its subfolders move to ${target}.`
-            : `No session is deleted. Its ${sessionCount} ${
-              sessionCount === 1 ? "session" : "sessions"
-            } and any subfolders move to ${target}.`}
-        </Typography>
-        {folder.project && (
-          <Typography variant="caption" color="text.secondary">
-            Sessions of "{folder.project}" stop filing themselves here.
+    <InAppRoot>
+      <Sheet
+        forceSheet={navbarAtBottom}
+        open
+        onClose={onClose}
+        title={`Delete folder "${folder.name}"?`}
+        mobileDismiss="none"
+        actions={
+          <>
+            <Button onClick={onClose} color="inherit">
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+            <Button onClick={onConfirm} color="error" variant="contained">
+              Delete folder
+              <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
+            </Button>
+          </>
+        }
+      >
+        <Stack spacing={1}>
+          <Typography variant="body2" color="text.secondary">
+            {sessionCount === 0
+              ? `Nothing is deleted but the folder; its subfolders move to ${target}.`
+              : `No session is deleted. Its ${sessionCount} ${
+                sessionCount === 1 ? "session" : "sessions"
+              } and any subfolders move to ${target}.`}
           </Typography>
-        )}
-      </Stack>
-    </Sheet>
+          {folder.project && (
+            <Typography variant="caption" color="text.secondary">
+              Sessions of "{folder.project}" stop filing themselves here.
+            </Typography>
+          )}
+        </Stack>
+      </Sheet>
+    </InAppRoot>
   );
 }

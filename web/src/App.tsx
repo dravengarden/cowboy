@@ -156,6 +156,7 @@ import {
     FolderNameShell,
     FolderPickerShell,
     ProjectPickerShell,
+    SESSION_FOLDER_SHEET_HOST,
     useCollapsedSessionFolders,
     withFoldersCollapsed,
 } from "./SessionFolderUi";
@@ -4537,6 +4538,10 @@ export function App({
                     setPendingDelete(null);
                 }}
             />
+            {/* Folder sheets opened from inside the Sessions list mount here,
+                beside the session shells: outside the Mobile drawer layer and
+                inside the keyboard-resized app box (see SessionFolderUi). */}
+            <div {...{ [SESSION_FOLDER_SHEET_HOST]: "" }} />
             {pendingRename && (
                 <RenameSessionShell
                     session={pendingRename}
