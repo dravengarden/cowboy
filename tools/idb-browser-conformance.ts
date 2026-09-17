@@ -9,7 +9,8 @@ if (
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
-  suite !== "code-buffer-sync" && suite !== "review-code"
+  suite !== "code-buffer-sync" && suite !== "review-code" &&
+  suite !== "review-document-refresh"
 ) {
   throw new Error("unknown suite");
 }
@@ -33,6 +34,8 @@ const entry = suite === "idb"
   ? "runCodeBufferSynchronizationBrowserConformance"
   : suite === "review-code"
   ? "runReviewCodeBrowserConformance"
+  : suite === "review-document-refresh"
+  ? "runReviewDocumentRefreshBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
@@ -160,6 +163,8 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         ? 8
         : suite === "idb-outbox"
         ? 16
+        : suite === "review-document-refresh"
+        ? 5
         : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {

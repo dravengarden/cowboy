@@ -9,7 +9,8 @@ if (
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
-  suite !== "code-buffer-sync" && suite !== "review-code"
+  suite !== "code-buffer-sync" && suite !== "review-code" &&
+  suite !== "review-document-refresh"
 ) {
   throw new Error("unknown suite");
 }
@@ -27,7 +28,7 @@ await build({
         suite === "plugin-lifecycle" || suite === "settings-recovery" ||
         suite === "code-buffers" || suite === "code-buffer-context" ||
         suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
-        suite === "review-code"
+        suite === "review-code" || suite === "review-document-refresh"
         ? "development"
         : "production",
     ),
@@ -80,6 +81,8 @@ await build({
           ? "../web/src/codeBufferSynchronizationBrowserConformance.tsx"
           : suite === "review-code"
           ? "../web/src/reviewCodeBrowserConformance.tsx"
+          : suite === "review-document-refresh"
+          ? "../web/src/reviewDocumentRefreshBrowserConformance.tsx"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",
@@ -89,5 +92,10 @@ await build({
       formats: ["es"],
       fileName: () => "fixture.js",
     },
+    // The runner serves exactly one module. Review's lazy Markdown and
+    // CodeMirror boundaries must therefore live inside it.
+    ...(suite === "review-document-refresh"
+      ? { rollupOptions: { output: { codeSplitting: false } } }
+      : {}),
   },
 });

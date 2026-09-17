@@ -438,7 +438,8 @@ type TabCloseRequest =
   | { kind: "others"; key: string; anchor: HTMLElement }
   | { kind: "all"; anchor: HTMLElement };
 
-function DocumentView({
+// Exported for the synthetic-HTTP browser conformance fixture only.
+export function DocumentView({
   sessionId,
   target,
   onRevision,
