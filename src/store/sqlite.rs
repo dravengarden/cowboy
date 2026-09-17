@@ -374,6 +374,7 @@ struct SqliteSessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
+    folder_id: Option<String>,
     owner_user_id: Option<String>,
     owner_username: Option<String>,
 }
@@ -2255,7 +2256,7 @@ impl SqliteStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, \
+             config_options, config_preferences, mobile_review_state, folder_id, \
              owner_user_id, \
              (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at_ms IS NULL \
@@ -2317,6 +2318,7 @@ impl SqliteStorage {
                 serde_json::json!({})
             };
             let mobile_review_state = row.mobile_review_state.clone();
+            let folder_id = row.folder_id.clone();
             output.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
@@ -2328,6 +2330,7 @@ impl SqliteStorage {
                 config_options,
                 config_preferences,
                 mobile_review_state,
+                folder_id,
             });
         }
         Ok(output)
@@ -5103,6 +5106,102 @@ impl SqliteStorage {
             .commit()
             .await
             .context("commit SQLite session order")?;
+        Ok(())
+    }
+
+    pub(super) async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
+        let rows: Vec<SessionFolderRow> = sqlx::query_as(
+            "SELECT id, owner_user_id, name, parent_id, project, position \
+             FROM session_folders ORDER BY position ASC, created_at_ms ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT SQLite session_folders")?;
+        Ok(rows
+            .into_iter()
+            .map(SessionFolderRow::into_folder)
+            .collect())
+    }
+
+    pub(super) async fn replace_session_folders(
+        &self,
+        owner_user_id: Option<&str>,
+        folders: &[SessionFolder],
+    ) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin SQLite session-folders transaction")?;
+        let timestamp = now_ms();
+        // `IS` compares NULL owners as equal, unlike `=`.
+        let existing: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM session_folders WHERE owner_user_id IS ?1")
+                .bind(owner_user_id)
+                .fetch_all(&mut *transaction)
+                .await
+                .context("SELECT SQLite session_folders ids")?;
+        for stale in existing
+            .iter()
+            .filter(|id| !folders.iter().any(|folder| &folder.id == *id))
+        {
+            sqlx::query("DELETE FROM session_folders WHERE id = ?1")
+                .bind(stale)
+                .execute(&mut *transaction)
+                .await
+                .with_context(|| format!("DELETE SQLite session_folder {stale}"))?;
+        }
+        for folder in folders {
+            sqlx::query(
+                "INSERT INTO session_folders \
+                 (id, owner_user_id, name, parent_id, project, position, created_at_ms, updated_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) \
+                 ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
+                 name = excluded.name, parent_id = excluded.parent_id, \
+                 project = excluded.project, position = excluded.position, \
+                 updated_at_ms = excluded.updated_at_ms",
+            )
+            .bind(&folder.id)
+            .bind(folder.owner_user_id.as_deref())
+            .bind(&folder.name)
+            .bind(folder.parent.as_deref())
+            .bind(folder.project.as_deref())
+            .bind(folder.position)
+            .bind(timestamp)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| format!("UPSERT SQLite session_folder {}", folder.id))?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("commit SQLite session folders")?;
+        Ok(())
+    }
+
+    pub(super) async fn update_session_placement(
+        &self,
+        placements: &[(String, Option<String>)],
+    ) -> Result<()> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("begin SQLite session-placement transaction")?;
+        let timestamp = now_ms();
+        for (session_id, folder_id) in placements {
+            sqlx::query("UPDATE sessions SET folder_id = ?1, updated_at_ms = ?2 WHERE id = ?3")
+                .bind(folder_id.as_deref())
+                .bind(timestamp)
+                .bind(session_id)
+                .execute(&mut *transaction)
+                .await
+                .with_context(|| format!("UPDATE SQLite folder_id for {session_id}"))?;
+        }
+        transaction
+            .commit()
+            .await
+            .context("commit SQLite session placement")?;
         Ok(())
     }
 

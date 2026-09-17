@@ -576,6 +576,8 @@ pub struct RestoredSession {
     /// recreated. Defaults are seeded for newly-created OpenAI sessions.
     pub config_preferences: serde_json::Value,
     pub mobile_review_state: serde_json::Value,
+    /// Explicit sidebar folder placement (`sessions.folder_id`).
+    pub folder_id: Option<String>,
 }
 
 /// Per-session info for the UI's session-info dialog — the metadata plus the
@@ -1258,6 +1260,16 @@ pub enum StoreWrite {
     UpdateSessionOrder {
         order: Vec<String>,
     },
+    /// Persist one owner's whole sidebar folder set (bounded by
+    /// `session_folders::FOLDER_CAP`, so a whole-set write beats deltas).
+    ReplaceSessionFolders {
+        owner_user_id: crate::session_folders::FolderOwner,
+        folders: Vec<crate::session_folders::SessionFolder>,
+    },
+    /// Persist explicit sidebar placements (`None` = back to the root).
+    UpdateSessionPlacement {
+        placements: Vec<(String, Option<String>)>,
+    },
     /// Persist one session's Mobile-only code-review workspace state.
     UpdateMobileReviewState {
         session_id: String,
@@ -1399,6 +1411,9 @@ struct HubInner {
     artifacts: Mutex<Option<crate::artifacts::ArtifactStore>>,
     /// Insertion order of session ids, so the list view is stable.
     order: Mutex<Vec<String>>,
+    /// Sessions-sidebar folder tree + explicit placements, the typed truth
+    /// behind the `"folders"` sync state (`docs/sessions-folders.md`).
+    folders: Mutex<crate::session_folders::SessionFolders>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
     /// One immutable frame is shared by the Web Push observer and every socket:
@@ -1580,6 +1595,7 @@ impl Hub {
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
                 order: Mutex::new(Vec::new()),
+                folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 tx,
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
@@ -1783,6 +1799,12 @@ impl Hub {
         self.restore_impl(sessions, &[], true);
     }
 
+    /// Restore the persisted sidebar folder tree. Session placements ride on
+    /// each [`RestoredSession::folder_id`] instead.
+    pub fn restore_session_folders(&self, folders: Vec<crate::session_folders::SessionFolder>) {
+        self.inner.folders.lock().set_folders(folders);
+    }
+
     /// Restore persisted sessions while reconciling detached runtime workers.
     /// A persisted `Busy` row is interrupted only when no matching live worker
     /// exists. This prevents a control-plane deploy from generating a false
@@ -1837,6 +1859,7 @@ impl Hub {
         // id; a duplicate (corruption from the old counter-reset bug) gets a fresh
         // one past `max_qid`.
         let mut seen: HashSet<String> = HashSet::new();
+        let mut placements: Vec<(String, String)> = Vec::new();
         {
             let mut sessions_lock = self.inner.sessions.lock();
             let mut order = self.inner.order.lock();
@@ -1853,6 +1876,7 @@ impl Hub {
                     config_options,
                     mut config_preferences,
                     mobile_review_state,
+                    folder_id,
                 } = r;
                 let mut healed = false;
                 let queue_len = queue.len();
@@ -1967,7 +1991,16 @@ impl Hub {
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
                     },
                 );
+                if let Some(folder_id) = folder_id {
+                    placements.push((id.clone(), folder_id));
+                }
                 order.push(id);
+            }
+        }
+        {
+            let mut folders = self.inner.folders.lock();
+            for (session_id, folder_id) in placements {
+                folders.restore_placement(session_id, folder_id);
             }
         }
         // For each interrupted session: persist the corrected status AND append a
@@ -2480,6 +2513,7 @@ impl Hub {
             let mut order = self.inner.order.lock();
             let removed = sessions.remove(session_id).is_some();
             order.retain(|id| id != session_id);
+            self.inner.folders.lock().forget_session(session_id);
             if removed {
                 self.inner.history_reducer.lock().clear_session(session_id);
             }
@@ -2656,6 +2690,40 @@ impl Hub {
         }
     }
 
+    /// Apply a sidebar-folders mutation to the typed tree and persist what it
+    /// changed: the owner's whole folder set and any explicit placements.
+    /// Mirror of [`Self::apply_reorder`]; the sync channel carries the value.
+    fn apply_folders(
+        &self,
+        actor: &crate::session_folders::FolderActor,
+        mutation: &str,
+        args: &serde_json::Value,
+    ) -> Result<(), String> {
+        let (effects, folders) = {
+            let mut state = self.inner.folders.lock();
+            let effects = state.apply(actor, mutation, args)?;
+            let folders = effects
+                .replaced_owner
+                .as_ref()
+                .map(|owner| state.folders_of(owner.as_deref()));
+            (effects, folders)
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            if let (Some(owner_user_id), Some(folders)) = (effects.replaced_owner, folders) {
+                let _ = tx.send(StoreWrite::ReplaceSessionFolders {
+                    owner_user_id,
+                    folders,
+                });
+            }
+            if !effects.placements.is_empty() {
+                let _ = tx.send(StoreWrite::UpdateSessionPlacement {
+                    placements: effects.placements,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn apply_mobile_review(
         &self,
         session_id: &str,
@@ -2821,6 +2889,7 @@ impl Hub {
                         .collect(),
                 )
             }
+            "folders" => self.inner.folders.lock().value(),
             _ if state.starts_with("mobile-review:") => {
                 let session_id = &state["mobile-review:".len()..];
                 let sessions = self.inner.sessions.lock();
@@ -2831,6 +2900,16 @@ impl Hub {
             }
             _ => serde_json::Value::Null,
         }
+    }
+
+    /// Whether `id` was already applied for `state` (a retried delivery), without
+    /// consuming it.
+    fn sync_already_seen(&self, state: &str, id: &str) -> bool {
+        self.inner
+            .sync
+            .lock()
+            .get(state)
+            .is_some_and(|entry| entry.seen.contains(id))
     }
 
     /// Record `id` as seen for `state`; returns true if it's NEW (first delivery).
@@ -2892,6 +2971,25 @@ impl Hub {
         name: &str,
         args: &serde_json::Value,
     ) -> Result<(), String> {
+        self.sync_apply_as(
+            &crate::session_folders::FolderActor::local(),
+            state,
+            id,
+            name,
+            args,
+        )
+    }
+
+    /// [`Self::sync_apply`] on behalf of a product principal: `actor` scopes
+    /// the `"folders"` state to the principal's own tree.
+    pub fn sync_apply_as(
+        &self,
+        actor: &crate::session_folders::FolderActor,
+        state: &str,
+        id: String,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Result<(), String> {
         enum Op {
             Rename {
                 session_id: String,
@@ -2899,6 +2997,10 @@ impl Hub {
             },
             Reorder {
                 order: Vec<String>,
+            },
+            Folders {
+                mutation: String,
+                args: serde_json::Value,
             },
             MobileReview {
                 session_id: String,
@@ -2934,6 +3036,20 @@ impl Hub {
                     .collect();
                 Op::Reorder { order }
             }
+            ("folders", name) => {
+                // A retried delivery must not be re-validated against the state
+                // it already changed ("folder id already exists").
+                if self.sync_already_seen(state, &id) {
+                    return Ok(());
+                }
+                // Dry-run against a copy so a rejected mutation never consumes
+                // its id: the client keeps the error, not a silent no-op retry.
+                self.inner.folders.lock().clone().apply(actor, name, args)?;
+                Op::Folders {
+                    mutation: name.to_owned(),
+                    args: args.clone(),
+                }
+            }
             (state, name) if state.starts_with("mobile-review:") => {
                 let session_id = state["mobile-review:".len()..].to_owned();
                 if session_id.is_empty() || !self.inner.sessions.lock().contains_key(&session_id) {
@@ -2966,6 +3082,7 @@ impl Hub {
         match op {
             Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
             Op::Reorder { order } => self.apply_reorder(&order),
+            Op::Folders { mutation, args } => self.apply_folders(actor, &mutation, &args)?,
             Op::MobileReview {
                 session_id,
                 mutation,
@@ -2996,8 +3113,9 @@ impl Hub {
                 .filter(|(s, _)| !s.starts_with("queue:") && !s.starts_with("mobile-review:"))
                 .map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect()))
                 .collect();
-            // Guarantee title + order are present even when untouched this lifetime.
-            for state in ["title", "order"] {
+            // Guarantee title + order + folders are present even when untouched
+            // this lifetime.
+            for state in ["title", "order", "folders"] {
                 if !out.iter().any(|(s, _, _)| s == state) {
                     let version = reg.get(state).map_or(0, |e| e.version);
                     out.push((state.to_owned(), version, Vec::new()));
@@ -5263,6 +5381,29 @@ mod config_preference_tests {
 mod runtime_reconciliation_tests {
     use super::*;
 
+    #[test]
+    fn restore_rehydrates_folder_placements_into_the_live_tree() {
+        let hub = Hub::new();
+        hub.restore_session_folders(vec![crate::session_folders::SessionFolder {
+            id: "f-a".to_owned(),
+            owner_user_id: None,
+            name: "A".to_owned(),
+            parent: None,
+            position: 0,
+            project: None,
+        }]);
+        let mut filed = restored_busy("filed");
+        filed.folder_id = Some("f-a".to_owned());
+        let mut loose = restored_busy("loose");
+        loose.folder_id = Some("f-gone".to_owned());
+        hub.restore_reconciling_runtime(vec![filed, loose]);
+        let value = hub.sync_value("folders");
+        assert_eq!(value["folders"][0]["id"], "f-a");
+        assert_eq!(value["placement"]["filed"], "f-a");
+        // A placement into a vanished folder degrades to the root.
+        assert!(value["placement"].get("loose").is_none());
+    }
+
     fn restored_busy(id: &str) -> RestoredSession {
         RestoredSession {
             meta: SessionMeta {
@@ -5299,6 +5440,7 @@ mod runtime_reconciliation_tests {
             config_options: None,
             config_preferences: serde_json::json!({}),
             mobile_review_state: serde_json::Value::Null,
+            folder_id: None,
         }
     }
 
@@ -5592,6 +5734,80 @@ mod core_tests {
         assert_eq!(
             value["positions"]["strategies/README.md"]["revision"],
             "abc123"
+        );
+    }
+
+    #[test]
+    fn folders_sync_is_arbitrated_idempotent_and_seeded_on_resync() {
+        let hub = hub_with_session("filed");
+        hub.sync_apply(
+            "folders",
+            "f1".to_owned(),
+            "create",
+            &serde_json::json!({"id": "f-a", "name": "Cowboy", "project": "cowboy"}),
+        )
+        .unwrap();
+        // A retried delivery is a no-op, not a second folder.
+        hub.sync_apply(
+            "folders",
+            "f1".to_owned(),
+            "create",
+            &serde_json::json!({"id": "f-a", "name": "Retry"}),
+        )
+        .unwrap();
+        hub.sync_apply(
+            "folders",
+            "f2".to_owned(),
+            "place",
+            &serde_json::json!({"session_ids": ["filed"], "folder": "f-a"}),
+        )
+        .unwrap();
+        let value = hub.sync_value("folders");
+        assert_eq!(value["folders"].as_array().unwrap().len(), 1);
+        assert_eq!(value["folders"][0]["name"], "Cowboy");
+        assert_eq!(value["folders"][0]["project"], "cowboy");
+        assert_eq!(value["placement"]["filed"], "f-a");
+
+        // A rejected mutation leaves its id unconsumed, so the corrected retry
+        // under the same id still applies.
+        assert_eq!(
+            hub.sync_apply(
+                "folders",
+                "f3".to_owned(),
+                "create",
+                &serde_json::json!({"id": "f-b", "name": "   "}),
+            )
+            .unwrap_err(),
+            "folder name cannot be empty"
+        );
+        hub.sync_apply(
+            "folders",
+            "f3".to_owned(),
+            "create",
+            &serde_json::json!({"id": "f-b", "name": "B", "parent": "f-a"}),
+        )
+        .unwrap();
+        assert_eq!(hub.sync_value("folders")["folders"][1]["parent"], "f-a");
+        assert_eq!(
+            hub.sync_apply(
+                "folders",
+                "f4".to_owned(),
+                "explode",
+                &serde_json::json!({})
+            )
+            .unwrap_err(),
+            "unknown folders mutation explode"
+        );
+
+        assert!(hub.sync_resync().iter().any(|message| matches!(
+            message,
+            super::Outbound::SyncPatch { state, resync: true, .. } if state == "folders"
+        )));
+        assert!(hub.delete_session("filed"));
+        assert!(
+            hub.sync_value("folders")["placement"]
+                .get("filed")
+                .is_none()
         );
     }
 

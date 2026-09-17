@@ -50,6 +50,7 @@ use crate::core::{
     Envelope, Event, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, Status,
     bound_history_page, question_summary_title,
 };
+use crate::session_folders::SessionFolder;
 
 fn valid_machine_id(value: &str) -> bool {
     !value.is_empty()
@@ -416,6 +417,8 @@ pub struct LoadedSession {
     pub config_preferences: serde_json::Value,
     /// Mobile-only code-review workspace state, shared across iPhone/iPad clients.
     pub mobile_review_state: serde_json::Value,
+    /// Explicit sidebar folder placement (`sessions.folder_id`), if any.
+    pub folder_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1605,6 +1608,25 @@ impl Store {
         value: &serde_json::Value,
     ) -> Result<()> {
         dispatch_storage!(self, update_mobile_review_state(session_id, value))
+    }
+
+    pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
+        dispatch_storage!(self, load_session_folders())
+    }
+
+    pub async fn replace_session_folders(
+        &self,
+        owner_user_id: Option<&str>,
+        folders: &[SessionFolder],
+    ) -> Result<()> {
+        dispatch_storage!(self, replace_session_folders(owner_user_id, folders))
+    }
+
+    pub async fn update_session_placement(
+        &self,
+        placements: &[(String, Option<String>)],
+    ) -> Result<()> {
+        dispatch_storage!(self, update_session_placement(placements))
     }
 
     pub async fn upsert_event_batch(
@@ -3159,7 +3181,7 @@ impl PostgresStorage {
              provider_auth_generation, provider_behavior, machine_id, workspace_id, workspace_name, workspace_source_path, \
              cwd, title, origin, status, agent_session_id, \
              system, next_seq, queue, drafts, \
-             config_options, config_preferences, mobile_review_state, \
+             config_options, config_preferences, mobile_review_state, folder_id, \
              owner_user_id, \
              (SELECT username FROM users WHERE users.id = sessions.owner_user_id) AS owner_username \
              FROM sessions WHERE deleted_at IS NULL ORDER BY position ASC NULLS LAST, created_at ASC",
@@ -3251,6 +3273,7 @@ impl PostgresStorage {
                 serde_json::json!({})
             };
             let mobile_review_state = row.mobile_review_state.clone();
+            let folder_id = row.folder_id.clone();
             out.push(LoadedSession {
                 meta: row.into_meta(),
                 events,
@@ -3262,6 +3285,7 @@ impl PostgresStorage {
                 config_options,
                 config_preferences,
                 mobile_review_state,
+                folder_id,
             });
         }
         Ok(out)
@@ -5917,6 +5941,94 @@ impl PostgresStorage {
         Ok(())
     }
 
+    /// Every persisted sidebar folder (all owners), oldest first within a
+    /// position; the Hub re-sorts per owner.
+    ///
+    /// # Errors
+    /// If the SELECT fails.
+    pub async fn load_session_folders(&self) -> Result<Vec<SessionFolder>> {
+        let rows: Vec<SessionFolderRow> = sqlx::query_as::<_, SessionFolderRow>(
+            "SELECT id, owner_user_id, name, parent_id, project, position \
+             FROM session_folders ORDER BY position ASC, created_at ASC, id ASC",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT session_folders")?;
+        Ok(rows
+            .into_iter()
+            .map(SessionFolderRow::into_folder)
+            .collect())
+    }
+
+    /// Persist one owner's whole sidebar folder set: upsert every folder, then
+    /// drop the owner's rows that left the set. The set is bounded by
+    /// `session_folders::FOLDER_CAP`, so a whole-set write beats deltas.
+    ///
+    /// # Errors
+    /// If the transaction or a statement fails.
+    pub async fn replace_session_folders(
+        &self,
+        owner_user_id: Option<&str>,
+        folders: &[SessionFolder],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        let keep: Vec<String> = folders.iter().map(|folder| folder.id.clone()).collect();
+        sqlx::query(
+            "DELETE FROM session_folders \
+             WHERE owner_user_id IS NOT DISTINCT FROM $1 AND id <> ALL($2)",
+        )
+        .bind(owner_user_id)
+        .bind(&keep)
+        .execute(&mut *tx)
+        .await
+        .context("DELETE stale session_folders")?;
+        for folder in folders {
+            sqlx::query(
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, project, position) \
+                 VALUES ($1, $2, $3, $4, $5, $6) \
+                 ON CONFLICT (id) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
+                 name = excluded.name, parent_id = excluded.parent_id, \
+                 project = excluded.project, position = excluded.position, updated_at = now()",
+            )
+            .bind(&folder.id)
+            .bind(folder.owner_user_id.as_deref())
+            .bind(&folder.name)
+            .bind(folder.parent.as_deref())
+            .bind(folder.project.as_deref())
+            .bind(folder.position)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT session_folder {}", folder.id))?;
+        }
+        tx.commit()
+            .await
+            .context("commit replace_session_folders")?;
+        Ok(())
+    }
+
+    /// Persist explicit sidebar placements; `None` clears one back to the root.
+    ///
+    /// # Errors
+    /// If the transaction or an UPDATE fails.
+    pub async fn update_session_placement(
+        &self,
+        placements: &[(String, Option<String>)],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin tx")?;
+        for (session_id, folder_id) in placements {
+            sqlx::query("UPDATE sessions SET folder_id = $1, updated_at = now() WHERE id = $2")
+                .bind(folder_id.as_deref())
+                .bind(session_id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("UPDATE folder_id for {session_id}"))?;
+        }
+        tx.commit()
+            .await
+            .context("commit update_session_placement")?;
+        Ok(())
+    }
+
     /// SOFT-delete a session: mark `deleted_at` so it vanishes from the UI (the
     /// in-memory Hub already dropped it, and `load_all` skips it) but its rows
     /// linger for the retention window before [`Self::purge_deleted`] hard-drops
@@ -8530,6 +8642,29 @@ impl UsageAggregate {
 // --- row types ---------------------------------------------------------------
 
 #[derive(sqlx::FromRow)]
+struct SessionFolderRow {
+    id: String,
+    owner_user_id: Option<String>,
+    name: String,
+    parent_id: Option<String>,
+    project: Option<String>,
+    position: i64,
+}
+
+impl SessionFolderRow {
+    fn into_folder(self) -> SessionFolder {
+        SessionFolder {
+            id: self.id,
+            owner_user_id: self.owner_user_id,
+            name: self.name,
+            parent: self.parent_id,
+            position: self.position,
+            project: self.project,
+        }
+    }
+}
+
+#[derive(sqlx::FromRow)]
 struct SessionRow {
     id: String,
     provider: String,
@@ -8553,6 +8688,7 @@ struct SessionRow {
     config_options: Option<serde_json::Value>,
     config_preferences: serde_json::Value,
     mobile_review_state: serde_json::Value,
+    folder_id: Option<String>,
     owner_user_id: Option<String>,
     owner_username: Option<String>,
 }
@@ -9783,6 +9919,46 @@ mod storage_contract_tests {
         store
             .update_session_order(&[companion_id.clone(), session_id.to_owned()])
             .await?;
+        let folder = |id: &str, parent: Option<&str>, position: i64| SessionFolder {
+            id: id.to_owned(),
+            owner_user_id: None,
+            name: format!("Folder {id}"),
+            parent: parent.map(str::to_owned),
+            position,
+            project: (id == "f-root").then(|| "cowboy".to_owned()),
+        };
+        store
+            .replace_session_folders(
+                None,
+                &[
+                    folder("f-root", None, 0),
+                    folder("f-child", Some("f-root"), 0),
+                    folder("f-stale", None, 1),
+                ],
+            )
+            .await?;
+        let mut renamed = folder("f-child", Some("f-root"), 0);
+        renamed.name = "Child renamed".to_owned();
+        // A whole-set write drops the owner's rows that left the set and only
+        // touches that owner's slot.
+        store
+            .replace_session_folders(None, &[folder("f-root", None, 0), renamed])
+            .await?;
+        store
+            .replace_session_folders(
+                Some("user-b"),
+                &[SessionFolder {
+                    owner_user_id: Some("user-b".to_owned()),
+                    ..folder("f-b", None, 0)
+                }],
+            )
+            .await?;
+        store
+            .update_session_placement(&[
+                (session_id.to_owned(), Some("f-child".to_owned())),
+                (companion_id.clone(), None),
+            ])
+            .await?;
 
         let loaded = store.load_all().await?;
         assert_eq!(
@@ -9813,6 +9989,22 @@ mod storage_contract_tests {
         );
         assert_eq!(restored.config_preferences["model"], "gpt-test");
         assert_eq!(restored.mobile_review_state["mode"], "code");
+        assert_eq!(restored.folder_id.as_deref(), Some("f-child"));
+        assert!(
+            loaded
+                .iter()
+                .find(|loaded| loaded.meta.id == companion_id)
+                .is_some_and(|companion| companion.folder_id.is_none())
+        );
+        let mut folders = store.load_session_folders().await?;
+        folders.sort_by(|a, b| a.id.cmp(&b.id));
+        let folder_ids: Vec<&str> = folders.iter().map(|folder| folder.id.as_str()).collect();
+        assert_eq!(folder_ids, vec!["f-b", "f-child", "f-root"]);
+        assert_eq!(folders[0].owner_user_id.as_deref(), Some("user-b"));
+        assert_eq!(folders[1].name, "Child renamed");
+        assert_eq!(folders[1].parent.as_deref(), Some("f-root"));
+        assert!(folders[2].owner_user_id.is_none());
+        assert_eq!(folders[2].project.as_deref(), Some("cowboy"));
 
         let mut reloaded = restored.meta.clone();
         reloaded.provider_version = "new-version".to_owned();

@@ -99,6 +99,7 @@ primary phone/desktop product path.
 - [`desktop-efficiency-redesign.md`](desktop-efficiency-redesign.md) — Desktop information density and interaction contract
 - [`explore-transcript-design.md`](explore-transcript-design.md) — Explore's read-only transcript projection
 - [`mobile-spatial-presentation.md`](mobile-spatial-presentation.md) — Jank-free drawers, pager, transcript, CodeMirror, iPhone PWA status material, iPad standalone chrome, and iOS compositor contract
+- [`sessions-folders.md`](sessions-folders.md) — Sessions sidebar folders: synced tree with project binding, Mobile and Desktop UX, keyboard contract
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
 - [`plugin-packages.md`](plugin-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages

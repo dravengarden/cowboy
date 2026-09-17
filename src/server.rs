@@ -55,6 +55,7 @@ use crate::product_auth::{ProductPrincipal, WS_AUTH_REQUIRED_CLOSE_CODE};
 use crate::remote_runtime::{RemoteBootstrap, RemoteRuntime};
 use crate::runtime::RuntimeHealth;
 use crate::runtime_router::RuntimeRouter;
+use crate::session_folders::{FolderActor, project_folders_value};
 use crate::store::{ActiveClientRelease, Store};
 use crate::supervisor::Supervisor;
 use crate::usage::UsageService;
@@ -978,6 +979,11 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                 .await
                 .context("loading persisted auth settings")?;
             hub.load_settings(settings);
+            let folders = store
+                .load_session_folders()
+                .await
+                .context("loading session folders")?;
+            hub.restore_session_folders(folders);
             // Warm restore — sessions + events come back exactly as the daemon
             // left them, so on a fresh process every WS client's first snapshot
             // is correct.
@@ -995,6 +1001,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
                     config_options: ls.config_options,
                     config_preferences: ls.config_preferences,
                     mobile_review_state: ls.mobile_review_state,
+                    folder_id: ls.folder_id,
                 })
                 .collect();
             let restored_count = restored.len();
@@ -2251,6 +2258,17 @@ async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Result<
             drafts,
         } => store.update_pending(session_id, queue, drafts).await,
         StoreWrite::UpdateSessionOrder { order } => store.update_session_order(order).await,
+        StoreWrite::ReplaceSessionFolders {
+            owner_user_id,
+            folders,
+        } => {
+            store
+                .replace_session_folders(owner_user_id.as_deref(), folders)
+                .await
+        }
+        StoreWrite::UpdateSessionPlacement { placements } => {
+            store.update_session_placement(placements).await
+        }
         StoreWrite::UpdateMobileReviewState { session_id, value } => {
             store.update_mobile_review_state(session_id, value).await
         }
@@ -17632,6 +17650,14 @@ fn project_outbound(
                     confirmed,
                     resync,
                 })
+            } else if state == "folders" {
+                Some(Outbound::SyncPatch {
+                    value: project_folders_value(value, visible, |owner| principal.can_see(owner)),
+                    state,
+                    version,
+                    confirmed,
+                    resync,
+                })
             } else if let Some(session_id) = session_id_from_sync_state(&state) {
                 session_is_visible(hub, principal, session_id).then_some(Outbound::SyncPatch {
                     state,
@@ -18904,6 +18930,42 @@ fn apply_inbound_sync(
             &serde_json::json!({ "order": filtered }),
         );
     }
+    if sync_state == "folders" {
+        if !principal.can_reorder() {
+            return Err("viewers cannot organize sessions".to_owned());
+        }
+        let actor = folder_actor(state, principal);
+        if name == "place" {
+            // Only sessions the principal may mutate get filed; the rest of the
+            // batch is dropped rather than rejected, so one foreign id cannot
+            // block a whole move.
+            let session_ids = args
+                .get("session_ids")
+                .and_then(serde_json::Value::as_array)
+                .ok_or("place: missing session_ids")?;
+            let allowed: Vec<String> = session_ids
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|session_id| {
+                    state.hub.session_info(session_id).is_some_and(|info| {
+                        principal.can_mutate(info.meta.owner_user_id.as_deref())
+                    })
+                })
+                .map(str::to_owned)
+                .collect();
+            return state.hub.sync_apply_as(
+                &actor,
+                sync_state,
+                id,
+                name,
+                &serde_json::json!({
+                    "session_ids": allowed,
+                    "folder": args.get("folder").cloned().unwrap_or(serde_json::Value::Null),
+                }),
+            );
+        }
+        return state.hub.sync_apply_as(&actor, sync_state, id, name, args);
+    }
     if sync_state == "title" {
         let session_id = args
             .get("session_id")
@@ -18929,6 +18991,17 @@ fn apply_inbound_sync(
         return state.hub.sync_apply(sync_state, id, name, args);
     }
     Err(format!("unknown sync mutation {sync_state}/{name}"))
+}
+
+/// The folder tree a principal organizes: their own while product auth is on,
+/// the shared unowned tree while it is off (mirroring session ownership).
+fn folder_actor(state: &AppState, principal: &ProductPrincipal) -> FolderActor {
+    FolderActor {
+        user_id: state
+            .product_auth_enabled
+            .then(|| principal.user_id.clone()),
+        sees_all: principal.sees_every_session(),
+    }
 }
 
 fn apply_visible_reorder(

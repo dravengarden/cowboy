@@ -154,6 +154,8 @@ mod scheduler;
 mod server;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod service_identity;
+#[cfg(feature = "full")]
+mod session_folders;
 #[cfg(feature = "machine-host")]
 mod session_workspace;
 #[cfg(feature = "full")]
