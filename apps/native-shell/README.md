@@ -101,8 +101,24 @@ Like the Apple entry, each build stages only this Git revision, regenerates
 the Gradle project with `cargo tauri android init`, overlays `android/` and
 records a receipt with the APK digest, application id, SDK levels, ABI,
 Gradle, Android Gradle Plugin, NDK and signing state. Debug APKs carry the
-local Android debug keystore; release APKs are unsigned. Release signing,
-installation, real login and physical-device acceptance remain separate steps.
+local Android debug keystore; release APKs are unsigned. Installation, real
+login and physical-device acceptance remain separate steps.
+
+Sideload signing is its own step and accepts only an exact release receipt:
+
+```sh
+nix develop .#native-android -c bash -c '
+  export ANDROID_HOME=$HOME/Android/Sdk
+  export COWBOY_ANDROID_KEYSTORE=$HOME/.local/share/cowboy-android-signing/release.jks
+  export COWBOY_ANDROID_KEYSTORE_PASSWORD_FILE=$HOME/.local/share/cowboy-android-signing/release.password
+  bash tools/sign-android-apk.sh /absolute/dist/native-shell/android-<rev>.<nonce>/receipt.json'
+```
+
+It re-verifies the APK digest, 16 KB page-aligns, signs with APK Signature
+Scheme v2/v3, verifies the result and writes `signing-receipt.json` with the
+signed APK digest and certificate SHA-256. The keystore and password file stay
+outside every checkout (Hawk: `~/.local/share/cowboy-android-signing/`, mode
+0700). Every future update must be signed with the same key; back it up.
 
 `android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt` keeps
 Tauri's edge-to-edge window but applies system bar, display cutout and IME

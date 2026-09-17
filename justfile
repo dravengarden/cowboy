@@ -149,7 +149,7 @@ native-shell-check:
     deno test --allow-read --allow-write --allow-run --allow-env=PATH tools/check-native-shell_test.ts tools/native-shell-probe_test.ts
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     deno run --allow-read tools/check-native-shell.ts
-    bash -n tools/build-native-shell.sh tools/cowboysim.sh tools/cowboysim-remote.sh
+    bash -n tools/build-native-shell.sh tools/sign-android-apk.sh tools/cowboysim.sh tools/cowboysim-remote.sh
     bash tools/check-keyboard-geometry.sh
     cargo metadata --locked --no-deps --format-version 1 --manifest-path apps/native-shell/tauri/Cargo.toml >/dev/null
 
@@ -158,6 +158,10 @@ native-shell-build PLATFORM="ios-sim" *ARGS:
     bash tools/build-native-shell.sh {{PLATFORM}} {{ARGS}}
 
 # Sign a disposable copy and launch it only in an exclusively-created Simulator.
+# Sign an unsigned Android release APK from its build receipt (native-android shell).
+native-shell-sign-android RECEIPT *ARGS:
+    bash tools/sign-android-apk.sh "{{RECEIPT}}" {{ARGS}}
+
 native-shell-smoke RECEIPT *ARGS:
     python3 tools/native_shell_smoke.py "{{RECEIPT}}" {{ARGS}}
 
