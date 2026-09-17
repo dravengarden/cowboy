@@ -186,7 +186,7 @@ pub(super) async fn run(
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
 
-    let navigation = navigation::prepare(pair, stage, checks).await?;
+    let navigation = navigation::prepare(pair, &second, stage, checks).await?;
 
     *stage = "synchronization_preparation";
     let sync = synchronization::prepare(pair).await?;

@@ -126,6 +126,7 @@ fn events(root: &Path) -> Result<Vec<Value>, Failure> {
 
 pub(super) async fn prepare(
     pair: &Pair<'_>,
+    plaintext_source: &str,
     stage: &mut &'static str,
     checks: &mut Vec<&'static str>,
 ) -> Result<Retained, Failure> {
@@ -262,11 +263,26 @@ pub(super) async fn prepare(
                 == 1,
         )?;
     }
-    let other = groups.pop().ok_or(Failure::WrongObservation)?;
     let group = groups.remove(0);
     for id in groups {
         operation(pair, &id, Method::DELETE, "released").await?;
     }
+    // Keep a separate EMPTY group for reconnect/restart refusal. Another
+    // nonempty group must not accidentally keep the tested destinations alive
+    // and mask a broken ordinary-owner handoff after the parent releases.
+    let prepared = pair
+        .http
+        .post(
+            &format!("{}/navigations", exercise::endpoint(plaintext_source)),
+            json!({"content":content(TEXT),"position":{"row":0,"column":0},"query":"definition"}),
+        )
+        .await?;
+    let other = prepared["navigationId"]
+        .as_str()
+        .ok_or(Failure::WrongObservation)?
+        .to_owned();
+    let empty = operation(pair, &other, Method::PUT, "retained").await?;
+    check(empty["locations"] == json!([]))?;
     let value = pair
         .http
         .call(
