@@ -6,6 +6,7 @@ import {
   EMPTY_SESSION_FOLDERS,
   folderAncestors,
   normalizeSessionFolderName,
+  planProjectFolders,
   sessionFolderMutators as m,
   type SessionFoldersValue,
   unboundProjectLabels,
@@ -116,6 +117,33 @@ Deno.test("bind keeps one folder per project", () => {
   value = m.bind(value, { id: "f-a", project: null });
   value = m.bind(value, { id: "f-b", project: "cowboy" });
   assertEquals(value.folders.map((folder) => folder.project), [null, "cowboy"]);
+});
+
+Deno.test("organizing by project adopts a same-named unbound folder before creating one", () => {
+  let value = m.create(EMPTY_SESSION_FOLDERS, {
+    id: "f-a",
+    name: " cowboy",
+    parent: null,
+  });
+  value = m.create(value, {
+    id: "f-b",
+    name: "Garden",
+    parent: null,
+    project: "Garden",
+  });
+  const plan = planProjectFolders(
+    [
+      session("s1", "Cowboy"),
+      session("s2", "Garden"),
+      session("s3", "Stormbird"),
+      session("s4"),
+    ],
+    value,
+  );
+  assertEquals(plan, {
+    bind: [{ id: "f-a", project: "Cowboy" }],
+    create: ["Stormbird"],
+  });
 });
 
 Deno.test("placement is explicit, project binding is derived, remove lifts to the parent", () => {

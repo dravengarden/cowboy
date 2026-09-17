@@ -3,6 +3,9 @@ import { assert, assertEquals } from "jsr:@std/assert";
 const appSource = await Deno.readTextFile(
   new URL("./App.tsx", import.meta.url),
 );
+const focusHookSource = await Deno.readTextFile(
+  new URL("./useDialogInputFocus.ts", import.meta.url),
+);
 
 Deno.test("session rename focuses its real input inside the initiating tap", () => {
   const menuClose = appSource.indexOf(
@@ -20,14 +23,29 @@ Deno.test("session rename focuses its real input inside the initiating tap", () 
   );
   assert(/\{pendingRename && \(\s*<RenameSessionShell/u.test(appSource));
 
+  // The shell delegates to the shared dialog-focus hook, whose first claim is
+  // synchronous inside a layout effect (the in-tap iOS contract); only the
+  // Desktop retry is deferred.
   const renameShell = appSource.indexOf("function RenameSessionShell(");
-  const layoutFocus = appSource.indexOf("useLayoutEffect(() => {", renameShell);
-  const focus = appSource.indexOf("inputRef.current?.focus();", layoutFocus);
-  const select = appSource.indexOf("inputRef.current?.select();", focus);
+  const hookUse = appSource.indexOf(
+    "useDialogInputFocus(inputRef, desktop);",
+    renameShell,
+  );
   assert(renameShell >= 0);
-  assert(layoutFocus > renameShell);
-  assert(focus > layoutFocus);
-  assert(select > focus);
+  assert(hookUse > renameShell);
+  const layoutFocus = focusHookSource.indexOf("useLayoutEffect(() => {");
+  const claim = focusHookSource.indexOf("claim();", layoutFocus);
+  const retryGate = focusHookSource.indexOf(
+    "if (!retry) return undefined;",
+    claim,
+  );
+  const deferred = focusHookSource.indexOf("requestAnimationFrame(", retryGate);
+  assert(layoutFocus >= 0);
+  assert(claim > layoutFocus);
+  assert(retryGate > claim);
+  assert(deferred > retryGate);
+  assert(focusHookSource.includes("target.focus({ preventScroll: true });"));
+  assert(focusHookSource.includes("target.select();"));
 
   const renameOpenerStart = appSource.indexOf(
     "onRequestRename={(s): void => {",

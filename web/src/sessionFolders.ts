@@ -278,6 +278,31 @@ export const sessionFolderMutators = {
   },
 } satisfies Mutators<SessionFoldersValue>;
 
+/**
+ * What "Organize by project" does for every project label no folder binds
+ * yet: adopt an unbound folder the user already named after the project
+ * (case-insensitive) instead of creating a twin, else create a bound folder.
+ */
+export function planProjectFolders(
+  sessions: readonly SessionMeta[],
+  value: SessionFoldersValue,
+): { bind: { id: string; project: string }[]; create: string[] } {
+  const bind: { id: string; project: string }[] = [];
+  const create: string[] = [];
+  const adopted = new Set<string>();
+  for (const label of unboundProjectLabels(sessions, value)) {
+    const match = value.folders.find((folder) =>
+      folder.project === null && !adopted.has(folder.id) &&
+      folder.name.trim().toLowerCase() === label.toLowerCase()
+    );
+    if (match) {
+      adopted.add(match.id);
+      bind.push({ id: match.id, project: label });
+    } else create.push(label);
+  }
+  return { bind, create };
+}
+
 /** Project labels present among `sessions` that no folder binds yet, in
  *  first-seen order. */
 export function unboundProjectLabels(

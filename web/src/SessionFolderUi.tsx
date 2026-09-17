@@ -19,13 +19,7 @@ import {
   LabelOutlined,
   ViewListOutlined,
 } from "@mui/icons-material";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -40,6 +34,7 @@ import {
 } from "./sessionFolders";
 import { Sheet } from "./Sheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { useDialogFocus, useDialogInputFocus } from "./useDialogInputFocus";
 
 const COLLAPSED_KEY = "cowboy:session-folders:collapsed";
 
@@ -170,12 +165,9 @@ export function FolderNameShell({
   const inputRef = useRef<HTMLInputElement>(null);
   const navbarAtBottom = useNavbarAtBottom();
   const desktop = useSurfaceProfile().kind === "desktop";
-  useLayoutEffect(() => {
-    // Mounted with flushSync inside the opening tap so iOS raises the keyboard
-    // for the real input (the same contract as RenameSessionShell).
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
+  // Mounted with flushSync inside the opening tap so iOS raises the keyboard
+  // for the real input (the same contract as RenameSessionShell).
+  useDialogInputFocus(inputRef, desktop);
   const normalized = normalizeSessionFolderName(value);
   const canSave = normalized !== null && normalized !== initial;
   const submit = (): void => {
@@ -257,18 +249,18 @@ export function FolderPickerShell({
   onClose: () => void;
 }): React.JSX.Element {
   const navbarAtBottom = useNavbarAtBottom();
+  const desktop = useSurfaceProfile().kind === "desktop";
   const rows = flattenFolders(value, exclude);
   const listRef = useRef<HTMLUListElement>(null);
-  useLayoutEffect(() => {
-    // Start on the current location so Enter is a no-op and j/k moves from
-    // where the item already lives.
-    const key = current ?? "";
-    const row = listRef.current?.querySelector<HTMLElement>(
-      `[data-folder-pick="${CSS.escape(key)}"]`,
-    );
-    (row ?? listRef.current?.querySelector<HTMLElement>("[data-folder-pick]"))
-      ?.focus({ preventScroll: true });
-  }, [current]);
+  // Start on the current location so Enter is a no-op and j/k moves from
+  // where the item already lives.
+  useDialogFocus(
+    () =>
+      listRef.current?.querySelector<HTMLElement>(
+        `[data-folder-pick="${CSS.escape(current ?? "")}"]`,
+      ) ?? listRef.current?.querySelector<HTMLElement>("[data-folder-pick]"),
+    desktop,
+  );
   return (
     <Sheet
       forceSheet={navbarAtBottom}
@@ -357,17 +349,18 @@ export function ProjectPickerShell({
   onClose: () => void;
 }): React.JSX.Element {
   const navbarAtBottom = useNavbarAtBottom();
+  const desktop = useSurfaceProfile().kind === "desktop";
   const listRef = useRef<HTMLUListElement>(null);
   const options = folder.project && !labels.includes(folder.project)
     ? [folder.project, ...labels]
     : labels;
-  useLayoutEffect(() => {
-    const row = listRef.current?.querySelector<HTMLElement>(
-      `[data-folder-pick="${CSS.escape(folder.project ?? "")}"]`,
-    );
-    (row ?? listRef.current?.querySelector<HTMLElement>("[data-folder-pick]"))
-      ?.focus({ preventScroll: true });
-  }, [folder.project]);
+  useDialogFocus(
+    () =>
+      listRef.current?.querySelector<HTMLElement>(
+        `[data-folder-pick="${CSS.escape(folder.project ?? "")}"]`,
+      ) ?? listRef.current?.querySelector<HTMLElement>("[data-folder-pick]"),
+    desktop,
+  );
   return (
     <Sheet
       forceSheet={navbarAtBottom}

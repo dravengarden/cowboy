@@ -159,6 +159,7 @@ import {
     useCollapsedSessionFolders,
     withFoldersCollapsed,
 } from "./SessionFolderUi";
+import { useDialogInputFocus } from "./useDialogInputFocus";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
@@ -1093,9 +1094,9 @@ function SessionList({
                 minHeight: 0,
             }}
         >
-            {!mobileDrawer && allowNewSession && <Box sx={{ p: 1 }}>
-                <Stack direction="row" spacing={0.75} alignItems="stretch">
-                <Button
+            {!mobileDrawer && <Box sx={{ p: 1 }}>
+                <Stack direction="row" spacing={0.75} alignItems="stretch" justifyContent="flex-end">
+                {allowNewSession && <Button
                     data-desktop-new-session={desktop ? "true" : undefined}
                     fullWidth
                     variant="outlined"
@@ -1110,7 +1111,7 @@ function SessionList({
                 >
                     New session
                     {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
-                </Button>
+                </Button>}
                 <IconButton
                     aria-label="Folders"
                     onClick={(e): void => setRootMenuEl(e.currentTarget)}
@@ -1785,7 +1786,7 @@ function SessionList({
                     <ListItemText
                         primary="Organize by project"
                         secondary={unboundProjects.length > 0
-                            ? `${String(unboundProjects.length)} new ${unboundProjects.length === 1 ? "folder" : "folders"}`
+                            ? `${String(unboundProjects.length)} ${unboundProjects.length === 1 ? "project" : "projects"} without a folder`
                             : "Every project has a folder"}
                     />
                 </MenuItem>
@@ -1883,7 +1884,7 @@ function SessionList({
                     open={!!folderMenu}
                     onClose={(): void => setFolderMenu(null)}
                     title="Folder"
-                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project ? ` · ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} sessions`}
+                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project && folderMenuFolder.project !== folderMenuFolder.name ? ` · project ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} sessions`}
                     width={560}
                     onShortcutKeyDown={(event): void => {
                         if (
@@ -6935,14 +6936,12 @@ function RenameSessionShell({
     const inputRef = useRef<HTMLInputElement>(null);
     const navbarAtBottom = useNavbarAtBottom();
     const desktop = useSurfaceProfile().kind === "desktop";
-    useLayoutEffect(() => {
-        // The opener mounts this component with flushSync after synchronously
-        // closing the action menu. This layout effect therefore focuses the real
-        // input inside the initiating tap, which is the only reliable way to
-        // raise iOS's software keyboard for a newly mounted field.
-        inputRef.current?.focus();
-        inputRef.current?.select();
-    }, []);
+    // The opener mounts this component with flushSync after synchronously
+    // closing the action menu. The hook's layout effect therefore focuses the
+    // real input inside the initiating tap, which is the only reliable way to
+    // raise iOS's software keyboard for a newly mounted field; on Desktop it
+    // claims the field again after the dialog's focus trap has settled.
+    useDialogInputFocus(inputRef, desktop);
     const trimmed = value.trim();
     const canSave = trimmed.length > 0 && trimmed !== session.title;
     const submit = (): void => {

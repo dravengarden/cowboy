@@ -90,9 +90,9 @@ import {
   EMPTY_SESSION_FOLDERS,
   folderIsWithin,
   normalizeSessionFolderName,
+  planProjectFolders,
   sessionFolderMutators,
   type SessionFoldersValue,
-  unboundProjectLabels,
 } from "./sessionFolders";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
@@ -2453,13 +2453,15 @@ export function removeSessionFolder(id: string): void {
   foldersSync.mutate("remove", { id });
 }
 
-/** One bound root folder per project label that has none yet. Writes no
- *  placements, so current and future sessions of each project file
- *  themselves. Returns how many folders were created. */
+/** One bound folder per project label that has none yet: an unbound folder
+ *  already named after the project is adopted, otherwise a root folder is
+ *  created. Writes no placements, so current and future sessions of each
+ *  project file themselves. Returns how many projects gained a folder. */
 export function organizeSessionsByProject(): number {
-  const labels = unboundProjectLabels(state.sessions, foldersSync.view());
-  for (const label of labels) createSessionFolder(label, null, label);
-  return labels.length;
+  const plan = planProjectFolders(state.sessions, foldersSync.view());
+  for (const { id, project } of plan.bind) bindSessionFolderProject(id, project);
+  for (const label of plan.create) createSessionFolder(label, null, label);
+  return plan.bind.length + plan.create.length;
 }
 
 /** Optimistic rename via the title-sync engine: instant local + send; re-sent on
