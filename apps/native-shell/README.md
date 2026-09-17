@@ -134,7 +134,9 @@ Tab inside Cowboy's task while the WebView keeps waiting on the PKCE-bound
 handoff; completion relaunches the `singleTask` activity to dismiss the tab.
 The tab is a partial bottom sheet so Cowboy stays visible: behind a full-screen
 tab Android's cached-app freezer stops the app and its WebView renderer, and
-the page never sees the ready handoff. Only the tab finishing (its activity
+the page never sees the ready handoff. For the same reason the WebView, which
+Tauri pauses with the activity, is resumed while the sheet covers a visible
+Cowboy. Only the tab finishing (its activity
 result) is a user close; minimizing the tab is not. Without this bridge the
 remote UI would navigate the only WebView to the Provider with no busy state.
 

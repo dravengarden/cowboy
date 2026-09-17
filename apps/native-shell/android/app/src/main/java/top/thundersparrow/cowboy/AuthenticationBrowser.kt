@@ -32,13 +32,18 @@ import org.json.JSONObject
 // carry. It opens in Cowboy's task, above MainActivity (launchMode singleTask),
 // so relaunching MainActivity dismisses it.
 //
-// It is a partial (bottom-sheet) Custom Tab so Cowboy stays visible. A
-// full-screen tab leaves Cowboy's process cached, and Android's cached-app
-// freezer then stops both the app and its WebView renderer: the page never
-// receives the ready handoff event and cannot dismiss the tab. Chrome honours
-// the partial height only for tabs started for a result, which also reports
-// when the tab actually finishes. Resuming MainActivity alone is not a close:
-// Chrome can minimize a tab into picture-in-picture.
+// The page must keep running while the tab is open, or it never receives the
+// ready handoff event and cannot dismiss the tab. Two things stop it:
+// - Behind a full-screen tab Cowboy's process is cached, and Android's
+//   cached-app freezer stops the app and its WebView renderer. The tab is
+//   therefore a partial (bottom sheet) Custom Tab, which keeps Cowboy visible.
+//   Chrome honours the partial height only for tabs started for a result,
+//   which also reports when the tab actually finishes.
+// - WryActivity pauses the WebView whenever MainActivity pauses; the hidden
+//   page is frozen about a minute later. While the sheet is open and Cowboy is
+//   still visible, the WebView is resumed again.
+// Resuming MainActivity alone is not a close: Chrome can minimize a tab into
+// picture-in-picture.
 internal class AuthenticationBrowser(
   private val activity: ComponentActivity,
   private val origin: String,
@@ -49,6 +54,7 @@ internal class AuthenticationBrowser(
   private var covered = false
   private var resumed = false
   private var reply: JavaScriptReplyProxy? = null
+  private var webView: WebView? = null
 
   // Registered at construction, before the activity is created, as the
   // Activity Result API requires.
@@ -57,6 +63,7 @@ internal class AuthenticationBrowser(
   ) { onBrowserFinished() }
 
   fun install(webView: WebView) {
+    this.webView = webView
     if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) ||
       !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
     ) return
@@ -80,9 +87,23 @@ internal class AuthenticationBrowser(
     WebViewCompat.addDocumentStartJavaScript(webView, SCRIPT, origins)
   }
 
+  // Called after WryActivity has paused the WebView.
   fun onPause() {
     resumed = false
-    if (open) covered = true
+    if (!open) return
+    covered = true
+    webView?.onResume()
+  }
+
+  // Cowboy is visible again behind the sheet, for example after the user
+  // switched to an authenticator app and back.
+  fun onStart() {
+    if (open && !resumed) webView?.onResume()
+  }
+
+  // Cowboy is no longer visible; let the WebView pause as it normally would.
+  fun onStop() {
+    if (open) webView?.onPause()
   }
 
   // The WebView was hidden and throttled while the browser covered it. Wake the

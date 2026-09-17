@@ -45,6 +45,16 @@ class MainActivity : TauriActivity() {
     authenticationBrowser.onResume()
   }
 
+  override fun onStart() {
+    super.onStart()
+    authenticationBrowser.onStart()
+  }
+
+  override fun onStop() {
+    super.onStop()
+    authenticationBrowser.onStop()
+  }
+
   // Android 15+ always draws apps edge-to-edge, so the WebView would sit under
   // the status bar, navigation bar, display cutout and IME. The remote Cowboy
   // UI lays out against its own viewport (`interactive-widget=resizes-content`)
