@@ -333,6 +333,13 @@ In addition, require all applicable Provider gates below:
   confirmations. `bufferMode` is selection, not authority; never downgrade an
   already-owned view. This gate is not owned navigation/diff integration or
   supported-device acceptance. See `docs/plugin-review-owned-consumer.md`.
+  Working-diff consumer changes also run `just review-diff-browser-conformance
+  <absolute-firefox>`. Require complete-file hashing, all-new-side-line/EOF
+  validation, actual CodeMirror old/new-line clicks, projection replacement even
+  for equal source, bounded original-context pagination and no legacy/native
+  refresh fallback. Staged/history views cannot borrow working-file positions.
+  See `docs/plugin-review-owned-diff.md`; this is not old-side snapshot or
+  navigation destination ownership.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog

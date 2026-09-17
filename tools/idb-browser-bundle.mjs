@@ -10,7 +10,7 @@ if (
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
-  suite !== "review-document-refresh"
+  suite !== "review-document-refresh" && suite !== "review-diff"
 ) {
   throw new Error("unknown suite");
 }
@@ -28,7 +28,8 @@ await build({
         suite === "plugin-lifecycle" || suite === "settings-recovery" ||
         suite === "code-buffers" || suite === "code-buffer-context" ||
         suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
-        suite === "review-code" || suite === "review-document-refresh"
+        suite === "review-code" || suite === "review-document-refresh" ||
+        suite === "review-diff"
         ? "development"
         : "production",
     ),
@@ -61,6 +62,11 @@ await build({
     outDir,
     emptyOutDir: false,
     minify: false,
+    // CodeMirror's language loaders otherwise extract shared static chunks.
+    // Keep the isolated runner's one served/hashed artifact, not an open file server.
+    ...(suite === "review-diff" || suite === "review-document-refresh"
+      ? { rolldownOptions: { output: { codeSplitting: false } } }
+      : {}),
     lib: {
       entry: new URL(
         suite === "provider-ui"
@@ -83,6 +89,8 @@ await build({
           ? "../web/src/reviewCodeBrowserConformance.tsx"
           : suite === "review-document-refresh"
           ? "../web/src/reviewDocumentRefreshBrowserConformance.tsx"
+          : suite === "review-diff"
+          ? "../web/src/reviewDiffBrowserConformance.tsx"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",
@@ -92,10 +100,5 @@ await build({
       formats: ["es"],
       fileName: () => "fixture.js",
     },
-    // The runner serves exactly one module. Review's lazy Markdown and
-    // CodeMirror boundaries must therefore live inside it.
-    ...(suite === "review-document-refresh"
-      ? { rollupOptions: { output: { codeSplitting: false } } }
-      : {}),
   },
 });

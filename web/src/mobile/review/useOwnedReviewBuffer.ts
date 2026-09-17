@@ -26,6 +26,7 @@ import {
   type ReviewBuffer,
   type ReviewBufferSource,
 } from "./ownedReviewBuffer.ts";
+export { reviewDisplayText } from "./reviewDisplayText.ts";
 
 export type ReviewCodeStatus =
   | "checking"
@@ -38,6 +39,7 @@ type Capture = {
   reader: ReviewBuffer;
   content: CapturedContent;
   signal: AbortSignal;
+  scope: object | undefined;
 };
 type Evidence = {
   capture: Capture;
@@ -52,17 +54,14 @@ function symbols(values: readonly DocumentSymbol[]): CodeDocumentSymbol[] {
   }));
 }
 
-/** The same LF text is handed to both CodeMirror and the content capture. */
-export function reviewDisplayText(text: string): string {
-  return text.replace(/\r\n?/g, "\n");
-}
-
 export function useOwnedReviewBuffer(
   sessionId: string,
   path: string,
   enabled: boolean,
   completeText: string | undefined,
   source: ReviewBufferSource = productCodeBuffers,
+  /** A diff projection can change while its complete current-file text agrees. */
+  contentScope?: object,
 ) {
   const [member, setMember] = useState<
     { sessionId: string; path: string; reader: ReviewBuffer }
@@ -88,6 +87,7 @@ export function useOwnedReviewBuffer(
   useLayoutEffect(() => () => contentObserver.current?.abort(), [
     reader,
     completeText,
+    contentScope,
   ]);
   useLayoutEffect(() => () => {
     void reader?.close();
@@ -100,17 +100,23 @@ export function useOwnedReviewBuffer(
     contentObserver.current = observer;
     void captureContent(completeText).then((content) => {
       if (!observer.signal.aborted) {
-        setCapture({ reader, content, signal: observer.signal });
+        setCapture({
+          reader,
+          content,
+          signal: observer.signal,
+          scope: contentScope,
+        });
       }
     }).catch(() => {
       if (!observer.signal.aborted) setCaptureFailed(completeText);
     });
     return () => observer.abort();
-  }, [reader, completeText]);
+  }, [reader, completeText, contentScope]);
 
   // Render-time equality suppresses old results even before effect cleanup.
   const current =
     capture?.reader === reader && capture?.content.text === completeText &&
+      capture?.scope === contentScope &&
       !capture?.signal.aborted
       ? capture
       : undefined;

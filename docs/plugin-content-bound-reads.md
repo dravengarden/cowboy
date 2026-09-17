@@ -77,6 +77,13 @@ finished a refresh against one atomic version. A later native/browser edit can
 invalidate a result after delivery. Consumers must end the displayed snapshot's
 observer and discard its results when changing what they display.
 
+The later [working-diff consumer](plugin-review-owned-diff.md) separately checks
+every displayed new-side line/range against complete current-file LF text before
+mapping its positions. It hashes that complete text, never a patch or fragment.
+Changing the projection ends the observer even when the complete text is equal.
+Staged/history/removed lines cannot borrow current-file positions; no atomic
+Git/native snapshot or old-side causal identity is inferred.
+
 Controller checks and borrows remain those of the original-owner read API:
 original user/credential/role, Session incarnation and authenticated Machine
 connection at both remote boundaries and response delivery. The distinct core

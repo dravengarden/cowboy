@@ -359,6 +359,7 @@ export default function CodeViewer({
   inlayHints,
   semanticHighlighting,
   onInspect,
+  mapDiffPoint,
   onVisibleLine,
   scrollRestoreKey,
   savedScrollTop,
@@ -380,6 +381,10 @@ export default function CodeViewer({
     candidates: CodeInspectCandidate[],
     anchor: { top: number; left: number },
   ) => void) | undefined;
+  /** An owned diff supplies its complete-content proof; null never falls back. */
+  mapDiffPoint?:
+    | ((row: number, column: number) => { row: number; column: number } | null)
+    | undefined;
   onVisibleLine?: ((line: number) => void) | undefined;
   scrollRestoreKey: string;
   savedScrollTop?: unknown;
@@ -706,6 +711,12 @@ export default function CodeViewer({
             if (offset === null) return false;
             const line = view.state.doc.lineAt(offset);
             const column = offset - line.from;
+            // A tap on an old-side/header row must not borrow a nearby new-side
+            // symbol merely because candidate ranking searches adjacent rows.
+            if (
+              kind === "diff" && mapDiffPoint &&
+              !mapDiffPoint(line.number - 1, column)
+            ) return false;
             const firstLine = Math.max(1, line.number - 5);
             const lastLine = Math.min(
               view.state.doc.lines,
@@ -755,11 +766,13 @@ export default function CodeViewer({
                     return [];
                   }
                   const sourcePoint = kind === "diff"
-                    ? diffPointToNewFile(
-                      text,
-                      candidateLine.number - 1,
-                      start,
-                    )
+                    ? mapDiffPoint
+                      ? mapDiffPoint(candidateLine.number - 1, start)
+                      : diffPointToNewFile(
+                        text,
+                        candidateLine.number - 1,
+                        start,
+                      )
                     : { row: candidateLine.number - 1, column: start };
                   return sourcePoint
                     ? [{
@@ -839,6 +852,7 @@ export default function CodeViewer({
     language,
     languageData,
     onInspect,
+    mapDiffPoint,
     onScrollTopChange,
     onVisibleLine,
     scrollRestoreKey,

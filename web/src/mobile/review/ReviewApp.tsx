@@ -102,6 +102,8 @@ import {
   useOwnedReviewBuffer,
 } from "./useOwnedReviewBuffer";
 import { ReviewCodeStatus } from "./ReviewCodeStatus";
+import { ReviewDiffCodeStatus } from "./ReviewDiffCodeStatus";
+import { useOwnedReviewDiff } from "./useOwnedReviewDiff";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
 import {
   captureTextScrollAnchor,
@@ -544,19 +546,31 @@ export function DocumentView({
   >();
   const hoverController = useRef<AbortController | undefined>(undefined);
   const navigationController = useRef<AbortController | undefined>(undefined);
-  const usingOwned = bufferMode === "owned" && target.kind === "source";
+  const usingOwned = bufferMode === "owned";
+  const isPatch = target.kind === "diff" && previewKind !== "mermaid";
   const displayText = useMemo(
     () => usingOwned ? reviewDisplayText(text) : text,
     [usingOwned, text],
   );
+  const completeText = !loading && !error && loadedPath === target.path &&
+      !truncated && !limited && !nextCursor
+    ? displayText
+    : undefined;
+  const diff = useOwnedReviewDiff(
+    sessionId,
+    target.path,
+    usingOwned && isPatch && !mediaPreview,
+    target.kind === "diff" ? target.scope : "unstaged",
+    completeText,
+  );
   const owned = useOwnedReviewBuffer(
     sessionId,
     target.path,
-    usingOwned && !mediaPreview,
-    !loading && !error && loadedPath === target.path && !truncated &&
-      !limited && !nextCursor
-      ? displayText
-      : undefined,
+    usingOwned && !mediaPreview && (target.kind === "source" ||
+      (isPatch && target.scope !== "staged")),
+    isPatch ? diff.projection?.source : completeText,
+    undefined,
+    isPatch ? diff.projection : undefined,
   );
   const fileRetry = useRef<{ key: string; count: number }>({
     key: "",
@@ -705,7 +719,10 @@ export function DocumentView({
     autoFallback = true,
   ): void => {
     if (!bufferMode || bufferMode === "unavailable") return;
-    if (target.kind === "diff" && target.scope !== "unstaged") return;
+    if (
+      target.kind === "diff" &&
+      (usingOwned ? !diff.projection : target.scope !== "unstaged")
+    ) return;
     setInspectTarget(point);
     setInspectCandidates(candidates);
     setNavigation([]);
@@ -763,16 +780,17 @@ export function DocumentView({
     usingOwned,
     owned.hover,
     bufferMode,
+    diff.projection,
   ]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Positional popovers are observations of ONE displayed snapshot.
     hoverController.current?.abort();
     navigationController.current?.abort();
     setHoverOpen(false);
     setHover(undefined);
     setNavigation([]);
-  }, [sessionId, target.path, displayText, usingOwned]);
+  }, [sessionId, target.path, displayText, usingOwned, diff.projection]);
 
   const inspectCandidatesOrPoint = useCallback((
     candidates: CodeInspectCandidate[],
@@ -1767,7 +1785,11 @@ export function DocumentView({
         </Stack>
       )}
       {usingOwned && !mediaPreview && !markdownPreview &&
-        previewKind !== "mermaid" && <ReviewCodeStatus intelligence={owned} />}
+        previewKind !== "mermaid" && (isPatch
+        ? <ReviewDiffCodeStatus diff={diff} intelligence={owned} />
+        : target.kind === "source" && (
+          <ReviewCodeStatus intelligence={owned} />
+        ))}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}
@@ -1895,9 +1917,12 @@ export function DocumentView({
                 semanticHighlighting={settings.semanticHighlighting}
                 onInspect={bufferMode && bufferMode !== "unavailable" &&
                     (target.kind === "source" ||
-                      (target.kind === "diff" && target.scope === "unstaged"))
+                      (target.kind === "diff" && (usingOwned
+                        ? !!diff.projection && !!owned.identity
+                        : target.scope === "unstaged")))
                   ? inspectCandidatesOrPoint
                   : undefined}
+                mapDiffPoint={usingOwned ? diff.point : undefined}
                 onVisibleLine={target.kind === "source"
                   ? persistVisibleLine
                   : undefined}
@@ -2129,7 +2154,7 @@ export function ReviewApp({
     if (
       !workspace?.sessionId ||
       !leasedPath || !bufferMode || bufferMode === "unavailable" ||
-      (bufferMode === "owned" && target.kind === "source")
+      bufferMode === "owned"
     ) {
       setLanguageData(undefined);
       return undefined;

@@ -292,6 +292,13 @@ and accepting a production effect are different milestones.
   checks; all 16 original workers and four Code processes survive activation.
   The production protocol-19 Machine and Zed 1.8 remain unchanged, so owned
   navigation/diff integration and native/device cutover are still separate.
+- [Owned working-diff reads](plugin-review-owned-diff.md) now validate complete
+  patches against bounded complete current-file text and map only exact new-side
+  UTF-16 positions. Projection replacement ends old observers even for equal
+  source text; deleted/header taps cannot borrow nearby symbols. Staged/history
+  views remain render-only, and no owned diff uses legacy resource operations or
+  prepares synchronization. Native, cross-file navigation and device acceptance
+  remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -355,7 +362,9 @@ The [ordinary Review source consumer](plugin-review-owned-consumer.md) now selec
 owned language/Outline/hover and explicit refresh preparation from a protocol-20
 Service observation. It retains content/owner lifetimes without legacy fallback;
 protocol-19 Machines remain on their pre-cutover route. This is not owned
-navigation, diff integration, native activation or supported-device acceptance.
+navigation, native activation or supported-device acceptance. The later
+[working-diff integration](plugin-review-owned-diff.md) supplies explicit
+complete-current-file projection without adopting staged/history coordinates.
 The [Controller/Web release](releases/review-owned-consumer-2026-09-17.md) records
 the exact accepted artifacts and bounded production continuity observations.
 
@@ -364,7 +373,7 @@ the exact accepted artifacts and bounded production continuity observations.
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Complete owned navigation destinations and diff-coordinate integration beyond the ordinary source consumer; independently activate/accept the protocol-20 Machine and exact native pair | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
+| P4 / Code consumer | Complete owned navigation destinations beyond the source/working-diff consumers; independently accept the deployed Machine and exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 

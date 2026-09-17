@@ -3,7 +3,7 @@
 The ordinary source-file Review now has a core-owned Code path. This is not a
 Plugin, an alternative resource registry, a Machine upgrade or a complete Code
 refactor. The [completion ledger](plugin-refactor-completion.md) still requires
-owned navigation destinations, diff-coordinate integration, native rollout and
+owned navigation destinations, native rollout and
 supported-device acceptance.
 
 ## Select before acquiring
@@ -26,8 +26,11 @@ switched by this release. Their separate maintenance and the signed Zed `1.9.0`
 installation remain required for the complete new native path.
 
 Source language, Outline and hover all use the same original core owner.
-Switching Session/path or source/diff presentation ends that consumer. Diff
-views remain explicitly legacy, never a fallback from an owned source read.
+Switching Session/path or source/diff presentation ends that consumer. The later
+[working-diff consumer](plugin-review-owned-diff.md) validates every new-side
+row against separately captured complete current-file text before positional
+reads on the same core API. Staged/history views are render-only in owned mode;
+no diff is a legacy fallback from an owned source read.
 The owned source consumer does not call path-based navigation: destination
 ownership is unfinished, so cross-file symbol navigation is unavailable in
 this mode. Local syntax coloring, source reading and Markdown links remain.

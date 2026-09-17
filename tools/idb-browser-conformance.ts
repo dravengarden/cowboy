@@ -10,7 +10,7 @@ if (
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
-  suite !== "review-document-refresh"
+  suite !== "review-document-refresh" && suite !== "review-diff"
 ) {
   throw new Error("unknown suite");
 }
@@ -36,6 +36,8 @@ const entry = suite === "idb"
   ? "runReviewCodeBrowserConformance"
   : suite === "review-document-refresh"
   ? "runReviewDocumentRefreshBrowserConformance"
+  : suite === "review-diff"
+  ? "runReviewDiffBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
@@ -92,9 +94,8 @@ try {
       if (request.method === "GET" && url.pathname === `/${token}`) {
         return new Response(
           `<!doctype html><script type="module">
-import { ${entry} } from "/fixture.js";
 let result;
-try { result = { ok: true, tests: await ${entry}() }; }
+try { const { ${entry} } = await import("/fixture.js"); result = { ok: true, tests: await ${entry}() }; }
 catch (error) { result = { ok: false, error: String(error) }; }
 await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) });
 </script>`,

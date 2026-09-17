@@ -9,8 +9,11 @@ Status: source implementation and isolated browser acceptance, now connected
 to the [core product identity lifetime](plugin-buffer-product-context.md).
 The later [Review source consumer](plugin-review-owned-consumer.md) imports it
 only after an explicit Service-owned protocol-20 selection. Protocol-19,
-local/workspace and diff consumers remain on the pre-cutover route; no owned
-attempt falls back. Native rollout and supported-device acceptance stay separate.
+local/workspace consumers remain on the pre-cutover route; no owned attempt
+falls back. The [working-diff consumer](plugin-review-owned-diff.md) adds a
+separately validated complete-content coordinate projection; staged/history
+views cannot borrow current-file positions. Native rollout and supported-device
+acceptance stay separate.
 
 ## Ownership, not React mount lifetime
 

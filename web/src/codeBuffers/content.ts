@@ -15,7 +15,8 @@ import {
 declare const captured: unique symbol;
 export interface CapturedContent {
   readonly [captured]: true;
-  /** Render this complete LF text; a page, diff hunk or disk ETag is not enough. */
+  /** Complete LF text behind the display (or its separately validated diff
+   * projection); hashing a page, patch or disk ETag is never enough. */
   readonly text: string;
 }
 export interface ContentIdentity {
