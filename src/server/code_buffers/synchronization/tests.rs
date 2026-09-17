@@ -3,6 +3,42 @@ use crate::machine_protocol::{MachineCommand, MachineEvent};
 use crate::server::code_buffers::tests::{Fixture, authenticated, json_response, native};
 use serde_json::{Value, json};
 
+#[test]
+fn browser_synchronization_fixture_matches_service_serialization() {
+    let content = Content {
+        sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into(),
+        utf8_bytes: 3,
+    };
+    let state = NativeState::Applied {
+        content: content.clone(),
+        version: vec![
+            VersionEntry {
+                replica_id: 0,
+                timestamp: 1,
+            },
+            VersionEntry {
+                replica_id: u16::MAX,
+                timestamp: u32::MAX,
+            },
+        ],
+    };
+    state.validate(&content).unwrap();
+    let snapshot = Snapshot {
+        api_version: 1,
+        operation_id: "sync-0123456789abcdef0123456789abcdef-0000000000000001".into(),
+        resource_id: "0123456789abcdef0123456789abcdef-0000000000000001".into(),
+        purpose: Purpose::RefreshFromDisk,
+        content,
+        state: State::from(state),
+        pending: false,
+    };
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/code-buffer-sync.fixture.json"
+    ))
+    .unwrap();
+    assert_eq!(serde_json::to_value(snapshot).unwrap(), expected);
+}
+
 pub(super) fn fixture(protocol: u16) -> Fixture {
     let mut fixture = Fixture::new();
     let directory = tempfile::tempdir().unwrap();

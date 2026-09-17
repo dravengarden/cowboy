@@ -269,6 +269,17 @@ and accepting a production effect are different milestones.
   production end-to-end synchronization. Browser ownership/presentation,
   ordinary Review, signed Plugin rollout, separate Machine maintenance and
   independent restoration remain required.
+- [Browser synchronization ownership](plugin-browser-buffer-sync.md) connects
+  the Service continuation to the actual core product identity lifetime and
+  bounded Settings presentation. Complete-text captures and one-use opaque
+  confirmation tokens bind the original buffer, content and observation;
+  cancellation, remount and stale confirmation cannot replay Apply. Unknown
+  effects fence ordinary buffer cleanup, terminal evidence is immutable, and
+  retirement is explicit rather than an undo. Closed Rust/Web wire fixtures,
+  focused unit/compile tests and an eight-case isolated React/browser gate
+  cover these boundaries. This does not switch ordinary Review or activate a
+  Machine/Code Plugin; production end-to-end synchronization, navigation,
+  independent recovery and supported-device acceptance remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

@@ -109,9 +109,10 @@ gate and bounded production process continuity. The resident protocol-19
 Machine and installed Zed were not upgraded, so this is not production
 end-to-end synchronization or a browser/Review cutover.
 
-Still separate: a typed browser synchronization owner and confirmation/unknown
-presentation, ordinary Review content/position lifetimes, owned navigation
+The [typed browser owner and confirmation/unknown surface](plugin-browser-buffer-sync.md)
+now implement the client continuation without switching ordinary Review.
+Still separate: ordinary Review content/position lifetimes, owned navigation
 destinations, signed Plugin installation, explicit Machine maintenance and
 supported-device acceptance. No browser call site, SDK grant, state-journal
-schema, host policy or public Plugin release changes in this slice. See the
+schema, host policy or public Plugin release changes in this Service slice. See the
 [completion ledger](plugin-refactor-completion.md).

@@ -317,6 +317,14 @@ In addition, require all applicable Provider gates below:
   See `docs/plugin-code-connected-conformance.md`. This changes no production
   account, installation, runtime generation or component and does not authorize
   a Machine upgrade, Review activation or physical-device acceptance.
+  Browser synchronization changes additionally require the shared Rust/Web
+  wire fixture and `just code-buffer-sync-browser-conformance <absolute-firefox>`
+  alongside the owner/content, product-context and cleanup browser regressions.
+  Check one-use confirmation, stale previews, unknown-result retention,
+  cancellation-safe retirement and ordinary-buffer exclusion using the actual
+  core owner and React surface. Read `docs/plugin-browser-buffer-sync.md`;
+  synthetic HTTP/browser evidence never replaces the connected native gate,
+  actual Review integration or supported-device acceptance.
 - Run the trusted Cowboy UI IR type checker; reject invalid component props,
   message payloads, reducers, state transitions, effects, capability use, or
   resource bounds. Require Rust package validation and TypeScript Catalog

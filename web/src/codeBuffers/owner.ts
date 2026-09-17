@@ -5,6 +5,7 @@ import { decodeObservation } from "./observations.ts";
 import { createCleanupMonitor } from "./cleanup.ts";
 import {
   type CapturedContent,
+  capturedIdentity,
   type ContentKind,
   type ContentObservation,
   type ContentQueries,
@@ -17,6 +18,7 @@ import {
   type Failure,
   type Observation,
   type ReadKind,
+  requireValue,
   type ResourceId,
   type Snapshot,
   text,
@@ -26,8 +28,13 @@ import {
   observePromise,
   type TransportOptions,
 } from "./transport.ts";
+import {
+  type OwnedSynchronization,
+  ownSynchronization,
+} from "./synchronization.ts";
+import { decodeSynchronization } from "./synchronizationProtocol.ts";
 
-type Job = "prepare" | "open" | "observe" | "read" | "release";
+type Job = "prepare" | "open" | "observe" | "read" | "release" | "synchronize";
 export interface BufferTarget {
   readonly sessionId: string;
   readonly path: string;
@@ -45,6 +52,8 @@ export interface OwnerView {
   readonly releaseAttempted: boolean;
   readonly contextLost: boolean;
   readonly failure: Failure | undefined;
+  /** A synchronization must be explicitly retired before releasing this owner. */
+  readonly synchronizing: boolean;
 }
 export type CloseResult =
   | { readonly kind: "unopened" }
@@ -65,6 +74,12 @@ export interface OwnedCodeBuffer {
     query: Q,
     observer?: AbortSignal,
   ): Promise<ContentObservation<Q["kind"]>>;
+  /** Effect-free native preparation, never Apply. Requires an originally opened owner. */
+  prepareSynchronization(
+    content: CapturedContent,
+    observer?: AbortSignal,
+  ): Promise<OwnedSynchronization>;
+  synchronization(): OwnedSynchronization | undefined;
   /** One bounded cleanup pass. Retained is NOT closed or automatically retried. */
   close(): Promise<CloseResult>;
 }
@@ -77,6 +92,7 @@ export function createOwnedCodeBuffers(options: TransportOptions) {
   const monitor = createCleanupMonitor(context);
   return Object.freeze({
     cleanup: monitor.store,
+    synchronizations: monitor.synchronizations,
     /** No restore(id), import, serialization, LRU or automatic account adoption. */
     reserve(target: BufferTarget): OwnedCodeBuffer {
       transport.check();
@@ -122,6 +138,7 @@ function createOwner(
   let releaseSent = false;
   let job: { kind: Job; settled: Promise<void> } | undefined;
   let cleanup: Promise<CloseResult> | undefined;
+  let synchronization: OwnedSynchronization | undefined;
   function unavailable(kind: Failure): never {
     throw new BufferClientError(kind);
   }
@@ -182,6 +199,7 @@ function createOwner(
   };
   const observe = async (observer?: AbortSignal): Promise<Snapshot> => {
     check(observer);
+    if (synchronization) unavailable("state");
     if (phase === "released" && last) return Promise.resolve(last);
     resource();
     return observePromise(perform("observe", () => snapshot("GET")), observer);
@@ -198,6 +216,8 @@ function createOwner(
     if (phase === "released") {
       return Object.freeze({ kind: "released", resourceId: id });
     }
+    // No hidden synchronization Apply, Query or Retire during view cleanup.
+    if (synchronization) return Object.freeze({ kind: "retained", owner });
     try {
       transport.check();
       if (!fresh || last?.pending || last?.state === "unknown" || releaseSent) {
@@ -240,6 +260,7 @@ function createOwner(
         releaseAttempted: releaseSent,
         contextLost: context.aborted,
         failure,
+        synchronizing: !!synchronization || job?.kind === "synchronize",
       }),
     async prepare(observer?: AbortSignal) {
       check(observer);
@@ -283,7 +304,8 @@ function createOwner(
       check(observer);
       if (kind !== "language" && kind !== "symbols") unavailable("protocol");
       if (
-        closing || releaseSent || !fresh || last?.state !== "open" ||
+        closing || synchronization || releaseSent || !fresh ||
+        last?.state !== "open" ||
         last.pending
       ) unavailable("state");
       const current = resource();
@@ -310,7 +332,8 @@ function createOwner(
     ): Promise<ContentObservation<Q["kind"]>> {
       check(observer);
       if (
-        closing || releaseSent || !fresh || last?.state !== "open" ||
+        closing || synchronization || releaseSent || !fresh ||
+        last?.state !== "open" ||
         last.pending
       ) unavailable("state");
       const current = resource();
@@ -336,6 +359,67 @@ function createOwner(
         observer,
       );
     },
+    async prepareSynchronization(
+      content: CapturedContent,
+      observer?: AbortSignal,
+    ) {
+      check(observer);
+      if (
+        synchronization || closing || releaseSent || !openSent || !fresh ||
+        last?.state !== "open" || last.pending
+      ) unavailable("state");
+      const identity = capturedIdentity(content);
+      // The native disk-sync primitive refuses BOM input; never normalize it.
+      requireValue(!content.text.startsWith("\uFEFF"));
+      const current = resource();
+      return observePromise(
+        perform("synchronize", async () => {
+          fresh = false; // old buffer observations cannot authorize subsequent reads
+          const reply = await transport.request(
+            `/${current}/synchronizations`,
+            "POST",
+            {
+              purpose: "refresh_from_disk",
+              content: identity,
+            },
+            16 * 1024,
+          );
+          const prepared = decodeSynchronization(
+            reply.value,
+            reply.status,
+            current,
+            identity,
+          );
+          requireValue(prepared.state.kind === "prepared" && !prepared.pending);
+          transport.check();
+          const owned = ownSynchronization(prepared, {
+            context,
+            check,
+            busy: () => !!job || !!cleanup,
+            closing: () => closing,
+            perform: (effect) => perform("synchronize", effect),
+            request: (method) =>
+              transport.request(
+                `/${prepared.operationId}`,
+                method,
+                {},
+                16 * 1024,
+                "buffer-synchronizations",
+              ),
+            changed,
+            retired: () => {
+              if (synchronization === owned) synchronization = undefined;
+              fresh = false; // a new explicit original-ID observation is required
+            },
+          });
+          synchronization = owned;
+          changed();
+          return owned;
+        }),
+        observer,
+      );
+    },
+    synchronization: () => synchronization,
     close() {
       closing = true;
       if (cleanup) return cleanup;

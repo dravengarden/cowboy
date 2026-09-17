@@ -26,6 +26,7 @@ const labels = {
   unavailable: "Current status unavailable",
   unknown: "Outcome unknown",
   pending: "Operation pending — cleanup was not queued",
+  synchronization: "Resolve and retire the original synchronization first",
   needs_cleanup: "Cleanup still required",
 } satisfies Record<CleanupStatus, string>;
 const PAGE_SIZE = 5;

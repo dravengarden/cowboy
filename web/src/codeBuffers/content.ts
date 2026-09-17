@@ -18,12 +18,19 @@ export interface CapturedContent {
   /** Render this complete LF text; a page, diff hunk or disk ETag is not enough. */
   readonly text: string;
 }
-interface ContentIdentity {
+export interface ContentIdentity {
   readonly sha256: string;
   readonly utf8Bytes: number;
 }
 const identities = new WeakMap<CapturedContent, ContentIdentity>();
 const MAX_TEXT = 4 * 1024 * 1024;
+
+/** A hash describes text; only a capture made in this lifetime supplies it. */
+export function capturedIdentity(snapshot: CapturedContent): ContentIdentity {
+  const content = identities.get(snapshot);
+  requireValue(content);
+  return content;
+}
 
 export async function captureContent(value: string): Promise<CapturedContent> {
   text(value, MAX_TEXT);
@@ -83,8 +90,7 @@ export function contentRequest<Q extends ContentQueries[ContentKind]>(
   snapshot: CapturedContent,
   query: Q,
 ): ContentRequest<Q["kind"]> {
-  const content = identities.get(snapshot);
-  requireValue(content);
+  const content = capturedIdentity(snapshot);
   let capturedQuery: ContentQueries[ContentKind];
   if (query.kind === "hover") {
     record(query, ["kind", "position"]);

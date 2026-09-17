@@ -100,12 +100,18 @@ Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a 
   const f = fixture();
   f.principal(undefined);
   const stop = f.product.cleanup.subscribe(() => {});
+  const stopSync = f.product.synchronizations.subscribe(() => {});
+  assertEquals(f.product.synchronizations.get(), {
+    contextLost: false,
+    rows: [],
+  });
   assertEquals(f.product.cleanup.get(), {
     contextLost: false,
     active: 0,
     rows: [],
   });
   stop();
+  stopSync();
   await assertRejects(() => f.product.ready(), BufferClientError);
   assertEquals(f.discoveries(), 0);
   assertEquals(f.calls, []);

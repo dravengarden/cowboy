@@ -83,8 +83,14 @@ The existing owner/content, product-context and Settings recovery browser gates
 remain separate regression checks. No account, normal browser profile or native
 Plugin is accessed by these fixtures.
 
-Still required: ordinary Review integration, explicit disk/native content
-synchronization and its own effect authority, navigation destination ownership,
+The [browser synchronization owner](plugin-browser-buffer-sync.md) now links
+explicit confirmation/unknown presentation to these same retained resources.
+An attached synchronization disables this panel's ordinary cleanup actions;
+only explicit original-operation retirement or Service-proven inert expiry
+removes that fence. No cleanup pass implicitly applies or retires a refresh.
+
+Still required: ordinary Review integration and production disk/native content
+synchronization acceptance, navigation destination ownership,
 independent Machine/Code rollout, abandoned-browser/restart recovery and
 supported device acceptance. A Settings cleanup pass is not generic Plugin
 compensation, restoration of file edits, durable native recovery or completion

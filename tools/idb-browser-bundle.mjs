@@ -8,7 +8,8 @@ if (
   suite !== "idb" && suite !== "idb-outbox" && suite !== "provider-ui" &&
   suite !== "provider-management" && suite !== "plugin-lifecycle" &&
   suite !== "settings-recovery" && suite !== "code-buffers" &&
-  suite !== "code-buffer-context" && suite !== "code-buffer-cleanup"
+  suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
+  suite !== "code-buffer-sync"
 ) {
   throw new Error("unknown suite");
 }
@@ -25,7 +26,7 @@ await build({
       suite === "provider-ui" || suite === "provider-management" ||
         suite === "plugin-lifecycle" || suite === "settings-recovery" ||
         suite === "code-buffers" || suite === "code-buffer-context" ||
-        suite === "code-buffer-cleanup"
+        suite === "code-buffer-cleanup" || suite === "code-buffer-sync"
         ? "development"
         : "production",
     ),
@@ -74,6 +75,8 @@ await build({
           ? "../web/src/codeBufferContextBrowserConformance.ts"
           : suite === "code-buffer-cleanup"
           ? "../web/src/codeBufferCleanupBrowserConformance.tsx"
+          : suite === "code-buffer-sync"
+          ? "../web/src/codeBufferSynchronizationBrowserConformance.tsx"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",

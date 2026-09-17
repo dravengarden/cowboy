@@ -2,6 +2,7 @@
 import type { ReadableStore } from "@cowboy/state-store/core";
 import type { BufferTarget, OwnedCodeBuffer, OwnerView } from "./owner.ts";
 import { BufferClientError } from "./protocol.ts";
+import { createSynchronizationProjection } from "./synchronizationProjection.ts";
 
 declare const cleanupHandle: unique symbol;
 export interface CleanupHandle {
@@ -14,6 +15,7 @@ export type CleanupStatus =
   | "unavailable"
   | "unknown"
   | "pending"
+  | "synchronization"
   | "needs_cleanup";
 export interface CleanupRow {
   readonly handle: CleanupHandle;
@@ -37,6 +39,7 @@ export interface CodeBufferCleanup extends ReadableStore<CleanupView> {
 function status(view: OwnerView): CleanupStatus {
   if (view.contextLost) return "context_lost";
   if (view.busy || view.cleaning) return "working";
+  if (view.synchronizing) return "synchronization";
   if (view.releaseAttempted) return "release_uncertain";
   if (view.failure || !view.fresh) return "unavailable";
   if (!view.observation || view.observation.state === "unknown") {
@@ -59,7 +62,9 @@ export function createCleanupMonitor(context: AbortSignal) {
   let cached: CleanupView | undefined;
   let queued = false;
   let watching = false;
+  let revision = 0;
   const changed = () => {
+    ++revision;
     cached = undefined;
     if (queued || !listeners.size) return;
     queued = true;
@@ -96,6 +101,7 @@ export function createCleanupMonitor(context: AbortSignal) {
     const view = owner.view();
     if (!view.closing || !view.resourceId) throw new BufferClientError("state");
     if (view.busy || view.cleaning) throw new BufferClientError("busy");
+    if (view.synchronizing) throw new BufferClientError("state");
     return owner;
   };
   const store: CodeBufferCleanup = Object.freeze({
@@ -116,8 +122,9 @@ export function createCleanupMonitor(context: AbortSignal) {
           ordinal: entry.ordinal,
           target: view.contextLost ? undefined : entry.target,
           status: status(view),
-          canInspect,
-          canContinue: canInspect && !view.releaseAttempted,
+          canInspect: canInspect && !view.synchronizing,
+          canContinue: canInspect && !view.synchronizing &&
+            !view.releaseAttempted,
         }));
       }
       cached = Object.freeze({
@@ -148,6 +155,11 @@ export function createCleanupMonitor(context: AbortSignal) {
   });
   return {
     store,
+    synchronizations: createSynchronizationProjection(context, {
+      subscribe: store.subscribe,
+      revision: () => revision,
+      entries: () => owners,
+    }),
     changed,
     size: () => owners.size,
     retained: () => Object.freeze([...owners.keys()]),

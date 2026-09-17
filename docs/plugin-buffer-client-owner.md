@@ -138,7 +138,10 @@ separate from ending remote authority. The [core Settings cleanup surface](plugi
 now presents unresolved owners without polling or replay. Before Review cutover,
 finish positional
 content/anchor semantics; accept and independently activate the exact Machine
-and Code Plugin; then test the actual consumer on supported devices. Never
+and Code Plugin; then test the actual consumer on supported devices. The
+[browser synchronization continuation](plugin-browser-buffer-sync.md) now binds
+explicit refresh confirmation and retirement to the same owner, and fences
+ordinary cleanup while synchronization remains unresolved. Never
 mix new owner cleanup with old path-based open/read calls or silently downgrade
 an unsupported host. Independent post-effect recovery and browser-abandonment
 cleanup remain separate exits in the [completion ledger](plugin-refactor-completion.md).

@@ -23,8 +23,12 @@ export function createTransport(options: TransportOptions) {
       method: "POST" | "PUT" | "GET" | "DELETE",
       body: unknown,
       limit: number,
+      surface: "buffers" | "buffer-synchronizations" = "buffers",
     ) {
       check();
+      requireValue(
+        surface === "buffers" || surface === "buffer-synchronizations",
+      );
       const controller = new AbortController();
       const abort = () => controller.abort();
       const interrupted = new Promise<never>((_resolve, reject) => {
@@ -38,7 +42,7 @@ export function createTransport(options: TransportOptions) {
       const timer = setTimeout(abort, timeout);
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
-        const sent = send(`/api/code/buffers${path}`, {
+        const sent = send(`/api/code/${surface}${path}`, {
           method,
           credentials: "same-origin",
           mode: "same-origin",
