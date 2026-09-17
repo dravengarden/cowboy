@@ -290,15 +290,18 @@ and accepting a production effect are different milestones.
   [Controller/Web delivery](releases/review-owned-consumer-2026-09-17.md) passes
   the full gate, 44 browser cases, two actual eleven-group process runs and Nix
   checks; all 16 original workers and four Code processes survive activation.
-  The production protocol-19 Machine and Zed 1.8 remain unchanged, so owned
-  navigation/diff integration and native/device cutover are still separate.
+  That delivery retained the then-protocol-19 Machine and Zed 1.8; it did not
+  accept native/device cutover or owned navigation/diff integration.
 - [Owned working-diff reads](plugin-review-owned-diff.md) now validate complete
   patches against bounded complete current-file text and map only exact new-side
   UTF-16 positions. Projection replacement ends old observers even for equal
   source text; deleted/header taps cannot borrow nearby symbols. Staged/history
   views remain render-only, and no owned diff uses legacy resource operations or
-  prepares synchronization. Native, cross-file navigation and device acceptance
-  remain separate.
+  prepares synchronization. Its [Web-only delivery](releases/review-owned-diff-2026-09-17.md)
+  passes the full gate, 55 browser cases and two eleven-group native runs;
+  all 16 workers and two observed Code processes survive activation. The already
+  deployed protocol-20 Machine is unchanged, and production Zed remains 1.8.
+  Native, cross-file navigation and device acceptance remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -365,8 +368,9 @@ protocol-19 Machines remain on their pre-cutover route. This is not owned
 navigation, native activation or supported-device acceptance. The later
 [working-diff integration](plugin-review-owned-diff.md) supplies explicit
 complete-current-file projection without adopting staged/history coordinates.
-The [Controller/Web release](releases/review-owned-consumer-2026-09-17.md) records
-the exact accepted artifacts and bounded production continuity observations.
+The [source Controller/Web release](releases/review-owned-consumer-2026-09-17.md)
+and later [working-diff Web release](releases/review-owned-diff-2026-09-17.md)
+record exact accepted artifacts and bounded production continuity observations.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
@@ -425,7 +429,11 @@ unconstrained workflow executor to hide these gaps.
   separately authorized Machine release, with exact connected acceptance and
   installed Zed 1.7.0 evidence. The [subsequent 1.8.0 Plugin-only upgrade](releases/zed-sync-owners-2026-09-16.md)
   retained that Machine and existing Code connections; its new explicit generic
-  synchronization guard is still a verified Machine candidate. Ordinary Review,
+  synchronization guard was then a verified Machine candidate. The later
+  [working-diff release observation](releases/review-owned-diff-2026-09-17.md)
+  records an already-active protocol-20 Machine and retained Zed 1.8, not
+  installation of the exact 1.9 native pair used by the owned-buffer gates.
+  Actual owned Review acceptance,
   independent recovery, other Machines and supported-device acceptance remain
   separate; a healthy Machine
   and installed Plugin do not establish those consumer exits.

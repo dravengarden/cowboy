@@ -21,9 +21,12 @@ Web waits for selection before acquiring either source buffer. A pre-cutover
 Controller with no field retains its existing route, while unknown explicit
 values fail closed. Once this mounted Session view observes Owned, later
 manifests cannot downgrade it. Unsupported native preparation/read/synchronization
-fails visibly without legacy fallback. Protocol-19 production Machines are not
-switched by this release. Their separate maintenance and the signed Zed `1.9.0`
-installation remain required for the complete new native path.
+fails visibly without legacy fallback. This consumer does not upgrade
+protocol-19 Machines or install the signed Zed `1.9.0` native pair; those are
+separate maintenance/installation boundaries. Hawk's later
+[working-diff release observation](releases/review-owned-diff-2026-09-17.md)
+records an already-active protocol-20 Machine, still with Zed 1.8. Manifest
+selection alone is not complete native-path acceptance.
 
 Source language, Outline and hover all use the same original core owner.
 Switching Session/path or source/diff presentation ends that consumer. The later
