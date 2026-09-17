@@ -126,7 +126,8 @@ gradle = re.search(r"gradle-([0-9.]+)-", (gen / "gradle/wrapper/gradle-wrapper.p
 agp = re.search(r"com\.android\.tools\.build:gradle:([0-9.]+)", (gen / "buildSrc/build.gradle.kts").read_text() + (gen / "build.gradle.kts").read_text()).group(1)
 apksigner = sdk / "build-tools" / android["buildTools"] / "apksigner"
 signing = "unsigned"
-if subprocess.run([str(apksigner), "verify", str(apk)], capture_output=True).returncode == 0:
+# apksigner is a `#!/bin/bash` wrapper, which a NixOS host does not provide.
+if subprocess.run(["bash", str(apksigner), "verify", str(apk)], capture_output=True).returncode == 0:
     signing = "android-debug-keystore" if profile == "debug" else "signed"
 report = dict(source_revision=revision, platform=platform, profile=profile, abi=abi,
     apk=str(apk), apk_sha256=hashlib.sha256(apk.read_bytes()).hexdigest(),
