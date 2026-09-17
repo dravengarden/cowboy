@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 mod faults;
+mod handoff;
 
 struct Fixture {
     root: PathBuf,
@@ -148,10 +149,17 @@ impl Fixture {
     }
 
     async fn execute(&mut self, navigation: &NavigationRef, ids: &[u64]) -> Result<Response> {
-        let task = self.spawn(action(navigation, Action::Execute));
+        let mut task = self.spawn(action(navigation, Action::Execute));
         let request = self.outbound.recv().await.unwrap();
         coordinate_queries::reply(&self.zed, request, definitions(ids)).await;
-        task.await.unwrap()
+        loop {
+            tokio::select! {
+                result = &mut task => return result.unwrap(),
+                message = self.outbound.recv() => {
+                    ack_registration(&self.zed, message.unwrap()).await;
+                }
+            }
+        }
     }
 
     fn aba(&self, id: u64) {
@@ -213,6 +221,26 @@ fn state(response: Response) -> State {
         panic!("wrong reply")
     };
     state
+}
+
+async fn ack_registration(zed: &Zed, message: proto::Envelope) {
+    assert!(matches!(
+        message.payload,
+        Some(proto::envelope::Payload::RegisterBufferWithLanguageServers(
+            _
+        ))
+    ));
+    zed.pending
+        .lock()
+        .await
+        .remove(&message.id)
+        .unwrap()
+        .send(proto::Envelope {
+            responding_to: Some(message.id),
+            payload: Some(proto::envelope::Payload::Ack(proto::Ack {})),
+            ..Default::default()
+        })
+        .unwrap();
 }
 
 #[tokio::test]
@@ -398,6 +426,7 @@ async fn disconnected_observer_keeps_one_saved_navigation_result() {
     let native = f.outbound.recv().await.unwrap();
     drop(client);
     coordinate_queries::reply(&f.zed, native, definitions(&[8])).await;
+    ack_registration(&f.zed, f.outbound.recv().await.unwrap()).await;
     assert!(task.await.unwrap().is_err());
     for action_kind in [Action::Query, Action::Execute] {
         assert!(matches!(

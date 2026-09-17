@@ -302,11 +302,17 @@ In addition, require all applicable Provider gates below:
   Owned navigation changes additionally require the bounded acquisition,
   original-target/content/epoch, disconnected observer, cancellation/Unknown,
   alias release and generic-forwarding refusal tests in
-  `docs/plugin-owned-navigation.md`. The isolated native sync harness covers
-  all five real plaintext navigation query kinds and retained source release;
-  its empty results do not accept nonempty LSP destinations or a public consumer.
+  `docs/plugin-owned-navigation.md`. Run `just zed-native-navigation-conformance
+  <immutable-adapter> <immutable-server>` for the final pair: all five nonempty
+  query kinds, exact UTF-16/content, target registration, one-use execution,
+  original-ID handoff after a lost reply, and independent target reads/releases
+  after parent/path removal. Also require registration-failure/Unknown retention
+  and handoff cancellation, ABA, capacity and parent-release refusal unit gates.
+  The deterministic test-only stdio LSP is not production language semantics,
+  a native allocation budget, general close acknowledgement or a public consumer;
+  the historical plaintext-only result accepts no nonempty LSP destinations.
   Keep Machine/Service/Web routing closed until separate acquisition authority,
-  exact-runtime handoff and connected nonempty-target acceptance exist.
+  exact-runtime core handoff and connected consumer acceptance exist.
   Before a core owned-buffer/Review cutover, additionally run
   `just code-buffer-connected-conformance <input.json> <new-receipt.json>`.
   It connects supplied immutable Controller/Machine releases and the exact

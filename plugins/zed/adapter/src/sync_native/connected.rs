@@ -29,7 +29,8 @@ fn immutable_native_sync() {
     }
     // Child-only environment: neither native startup nor tests can discover
     // ordinary Zed state, Git credentials, language tools or updater settings.
-    let status = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
         .args([
             "sync_native::connected::native_process_child",
             "--exact",
@@ -47,9 +48,13 @@ fn immutable_native_sync() {
         .env("PATH", "/nonexistent-cowboy-test-tools")
         .env("COWBOY_TEST_NATIVE_SYNC_SERVER", server)
         .env("COWBOY_TEST_NATIVE_SYNC_ROOT", &scratch.0)
-        .current_dir(&scratch.0)
-        .status()
-        .unwrap();
+        .current_dir(&scratch.0);
+    if let Some(adapter) = std::env::var_os("COWBOY_TEST_NATIVE_NAVIGATION_ADAPTER") {
+        let adapter = std::fs::canonicalize(adapter).unwrap();
+        assert!(adapter.starts_with("/nix/store") && adapter.is_file());
+        command.env("COWBOY_TEST_NATIVE_NAVIGATION_ADAPTER", adapter);
+    }
+    let status = command.status().unwrap();
     assert!(status.success(), "isolated native sync child failed");
 }
 
@@ -327,6 +332,7 @@ async fn restart_does_not_adopt_old_ticket(
 #[ignore = "private child of immutable_native_sync, not directly invocable"]
 async fn native_process_child() {
     let (root, server) = child_paths();
+    crate::buffer_navigation::connected_lsp::configure(&root);
     let workspace = root.join("worktree");
     let path = workspace.join("sample.txt");
     let old = "before🙂\n";
@@ -420,10 +426,17 @@ async fn native_process_child() {
     );
     native_edits_and_close_refuse(&zed, &instance, &workspace, worktree).await;
     native_source_bounds_and_lost_reply(&zed, &instance, &workspace, worktree).await;
-    crate::sync_owners::connected::exercise(&zed, &workspace).await;
-    crate::buffer_navigation::connected::exercise(&zed, &workspace).await;
+    owned_resources(&zed, &root).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
+    crate::buffer_navigation::connected_lsp::immutable_pair(&root, &server).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"
     );
+}
+
+async fn owned_resources(zed: &Zed, root: &Path) {
+    let workspace = root.join("worktree");
+    crate::sync_owners::connected::exercise(zed, &workspace).await;
+    crate::buffer_navigation::connected::exercise(zed, &workspace).await;
+    crate::buffer_navigation::connected_lsp::exercise(zed, root).await;
 }

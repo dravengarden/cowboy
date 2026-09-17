@@ -11,6 +11,39 @@ use serde::{Deserialize, Serialize};
 
 use super::{BufferOwner, Buffers, Response, WorktreeState, Worktrees, Zed};
 
+mod navigation;
+
+pub(super) async fn respond(
+    request: crate::Request,
+    worktrees: &Worktrees,
+    buffers: &Buffers,
+    zed: Option<&Zed>,
+) -> Result<Response> {
+    use crate::Request;
+    let mut registry = buffers.leases.lock().await;
+    match request {
+        Request::PrepareBuffer { worktree, path } => {
+            registry.prepare(worktree, path, worktrees).await
+        }
+        Request::PrepareNavigationBuffer {
+            navigation,
+            destination,
+            content,
+        } => {
+            registry
+                .prepare_navigation(navigation, destination, content, buffers, zed)
+                .await
+        }
+        Request::OpenBufferLease { lease } => registry.open(lease, worktrees, buffers, zed).await,
+        Request::ReleaseBufferLease { lease } => registry.release(lease, buffers, zed).await,
+        Request::QueryBufferLease { lease } => registry.query(lease),
+        Request::ReadBufferLease { lease, request } => {
+            registry.read(lease, request, buffers, zed).await
+        }
+        _ => anyhow::bail!("not an owned buffer request"),
+    }
+}
+
 // Kept private to the independently built Plugin. Core independently validates
 // the entire reply; the real-runtime conformance gate checks these two codecs.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -84,10 +117,19 @@ impl From<Phase> for LeaseState {
     }
 }
 
+enum Origin {
+    Path(Arc<()>),
+    Navigation {
+        navigation: super::buffer_navigation::NavigationRef,
+        destination: u32,
+        content: super::content_reads::Content,
+    },
+}
+
 struct Slot {
     worktree: PathBuf,
     path: PathBuf,
-    worktree_incarnation: Arc<()>,
+    origin: Origin,
     prepared_at: Instant,
     state: Phase,
 }
@@ -175,6 +217,21 @@ impl Registry {
             matches!(current.state, WorktreeState::Ready),
             "worktree is not ready"
         );
+        self.insert(Slot {
+            worktree,
+            path,
+            origin: Origin::Path(Arc::clone(&current.incarnation)),
+            prepared_at: Instant::now(),
+            state: Phase::Prepared,
+        })
+    }
+
+    fn insert(&mut self, slot: Slot) -> Result<Response> {
+        self.expire_prepared();
+        ensure!(
+            self.slots.len() < MAX_LEASES,
+            "native buffer lease capacity reached"
+        );
         if self.instance.is_none() {
             let mut bytes = [0_u8; 16];
             getrandom::fill(&mut bytes)
@@ -185,16 +242,7 @@ impl Registry {
             .last_id
             .checked_add(1)
             .context("buffer lease sequence exhausted")?;
-        self.slots.insert(
-            id,
-            Slot {
-                worktree,
-                path,
-                worktree_incarnation: Arc::clone(&current.incarnation),
-                prepared_at: Instant::now(),
-                state: Phase::Prepared,
-            },
-        );
+        self.slots.insert(id, slot);
         self.last_id = id;
         Ok(reply(
             LeaseRef {
@@ -231,6 +279,10 @@ impl Registry {
         if slot.state != Phase::Prepared {
             return Ok(reply(lease, slot.state.into()));
         }
+        let Origin::Path(worktree_incarnation) = &slot.origin else {
+            navigation::open(slot, id, buffers, zed).await?;
+            return Ok(reply(lease, LeaseState::Open));
+        };
         // Revalidate the captured target, never adopt a replacement worktree
         // or follow a changed symlink. Keep its incarnation alive through I/O.
         let key = super::buffer_key(slot.worktree.clone(), slot.path.clone()).await?;
@@ -243,7 +295,7 @@ impl Registry {
             .get(&slot.worktree)
             .context("worktree is no longer open")?;
         ensure!(
-            Arc::ptr_eq(&current.incarnation, &slot.worktree_incarnation)
+            Arc::ptr_eq(&current.incarnation, worktree_incarnation)
                 && matches!(current.state, WorktreeState::Ready),
             "buffer worktree incarnation changed"
         );

@@ -1,10 +1,14 @@
 # Owned native navigation candidate
 
-Zed `1.10.0` adds a private adapter resource primitive, not a public Code
+Zed `1.10.0` introduced a private adapter resource primitive, not a public Code
 navigation API. A native LSP definition/reference query may open target buffers;
 it is resource acquisition, not one more `content_read` variant. Ordinary owned
 Review navigation remains closed until separate core authority, original-runtime
 routing and a destination consumer are implemented and accepted.
+
+The `1.11.0` candidate adds exact destination handoff and fixes native target
+registration, discovered by running a nonempty stdio LSP against the actual
+server. It remains private; no Service/Web navigation API is enabled.
 
 ## Finite ownership contract
 
@@ -31,6 +35,15 @@ display metadata, never subsequent lookup authority. This first primitive admits
 only the source's original native worktree; external/dependency worktrees are
 explicitly refused. The complete result is validated before local target pins
 are installed. It never reports truncated or partially valid success.
+
+Native navigation shares targets but does not register them with language
+servers. Execute now registers each newly retained native ID once, with one
+five-second budget for the complete registration set. Existing native-ID owners
+and repeated locations do not trigger another registration. All target pins and
+evidence are saved before that await; a missing/invalid ACK, cancellation or late
+source/target epoch change keeps Unknown. Retained requires a final epoch check
+under the mirror lock. Registration is never hidden in a read. Its ACK is not a
+promise that every production language server has finished initialization.
 
 There are at most 32 live navigation groups, 256 result locations and 32
 distinct target native IDs per group. Duplicate locations share a resource pin.
@@ -66,9 +79,31 @@ ReleaseUnknown without replay. Native CloseBuffer has no acknowledgement, so
 Released means local pin removal and successful enqueue, **not verified native
 cleanup, filesystem restoration or post-effect recovery**.
 
+## Exact destination handoff
+
+`prepareNavigationBuffer` selects an original retained destination index and
+exact content identity. It reserves an ordinary buffer lease, without a native
+open, registration, file read or ownership change. That reservation shares the
+existing 1,024-slot capacity, 30-second inert expiry and non-recycled ID space.
+
+`openBufferLease` on this origin rechecks the original navigation group, target
+ID, content, epoch, owner and admission after waiting for locks. Final epoch
+validation, pin insertion and Open commit have no intervening await. A cancelled
+waiter remains effect-free; a lost socket reply can observe the same prepared ID
+as Open, without allocating a replacement. Parent release before Open refuses;
+a same-path/same-content later group cannot substitute for it. No pathname is
+re-resolved, even if source or target files disappeared.
+
+After Open, the ordinary owner is independent: the parent navigation group can
+release source and other targets, while that exact destination continues through
+the existing content-bound reads, fresh navigation preparation and explicit
+release. Handoff does not renew old navigation positions, supply target display
+text or grant synchronization. Source-path and navigation origins form a closed
+Rust enum, so a failed handoff cannot fall through to path-based open.
+
 ## Core boundary and acceptance
 
-The Machine source explicitly refuses all three private commands before generic
+The Machine source explicitly refuses all four private commands before generic
 runtime selection. Neither a read lease nor an optional worktree field can
 bypass that check. No Machine protocol, Service endpoint, Web/native bridge or
 shared component contract is added. The private adapter and consuming Zed Plugin
@@ -79,11 +114,22 @@ Deterministic private-transport tests cover nonempty targets, duplicate
 locations, source release/deletion, same-ID aliases, disconnected observers,
 cancellation, source/target edit-undo, capacity/expiry,
 malformed/foreign/oversized results and failed close enqueue. The existing
-isolated `zed-native-sync-conformance` harness also exercises all five actual
-native plaintext query kinds, one-use execution, retained source ownership,
-shared-owner sync refusal and path-free local release. Plaintext returns no
-destinations: this actual-process regression must not be reported as real
-nonempty language-server or cross-file consumer acceptance.
+isolated `zed-native-sync-conformance` harness exercises all five actual native
+plaintext query kinds and nonempty cross-file queries through a separately
+launched deterministic stdio LSP. It checks complete target content, non-BMP
+UTF-16 ranges, one-use execution, retained source ownership, shared-owner sync
+refusal, independent handoff with no native I/O and path-free read/release.
+
+`just zed-native-navigation-conformance <immutable-adapter> <immutable-server>`
+additionally drives the final static pair through its real private Unix socket.
+It discards an actual handoff reply, observes that original lease without
+resending Open, releases the parent after deleting source/target paths, reads
+the retained destination and checks each fixture document's one open/close.
+Both gates use disposable homes, closed environment, isolated network/PIDs and
+an explicit test-only LSP executable; no ambient language tools or downloads
+complete the fixture. Neither establishes production language semantics, a
+public consumer, universal close acknowledgements, native allocation bounds or
+independent recovery. Plaintext alone still proves no nonempty destinations.
 
 Before exposing navigation, still required:
 
@@ -92,7 +138,7 @@ Before exposing navigation, still required:
 - Service/principal/Session ownership and client destination scopes, with
   complete text/position binding and no legacy fallback or automatic target
   synchronization.
-- Actual nonempty LSP target acquisition/release, the connected consumer gate,
+- The connected consumer gate beyond the private nonempty-LSP fixture,
   separately accepted native rollout and supported-device tests.
 
 This source candidate does not publish a signed Catalog release, install a

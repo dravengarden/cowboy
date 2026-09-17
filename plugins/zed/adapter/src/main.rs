@@ -87,6 +87,11 @@ enum Request {
         content: content_reads::Content,
         query: content_reads::Query,
     },
+    PrepareNavigationBuffer {
+        navigation: buffer_navigation::NavigationRef,
+        destination: u32,
+        content: content_reads::Content,
+    },
     EnsureWorktree {
         path: PathBuf,
         trusted: bool,
@@ -786,6 +791,11 @@ impl ZedRuntime {
         // the peer must explicitly register that buffer with the headless
         // project's language servers. Without this request every later LSP
         // query is valid yet has no servers to answer it.
+        self.register_buffer(buffer_id).await?;
+        Ok((buffer_id, version))
+    }
+
+    async fn register_buffer(&self, buffer_id: u64) -> Result<()> {
         let response = self
             .request(proto::envelope::Payload::RegisterBufferWithLanguageServers(
                 proto::RegisterBufferWithLanguageServers {
@@ -798,7 +808,7 @@ impl ZedRuntime {
         if !matches!(response.payload, Some(proto::envelope::Payload::Ack(_))) {
             bail!("Zed returned the wrong RegisterBufferWithLanguageServers response");
         }
-        Ok((buffer_id, version))
+        Ok(())
     }
 
     fn close_buffer(&self, buffer_id: u64) -> Result<()> {
@@ -1450,38 +1460,13 @@ async fn respond(
             path,
             lease_id,
         } => close_buffer(worktree, path, lease_id, buffers, zed).await?,
-        Request::PrepareBuffer { worktree, path } => {
-            buffers
-                .leases
-                .lock()
-                .await
-                .prepare(worktree, path, worktrees)
-                .await?
-        }
-        Request::OpenBufferLease { lease } => {
-            buffers
-                .leases
-                .lock()
-                .await
-                .open(lease, worktrees, buffers, zed)
-                .await?
-        }
-        Request::ReleaseBufferLease { lease } => {
-            buffers
-                .leases
-                .lock()
-                .await
-                .release(lease, buffers, zed)
-                .await?
-        }
-        Request::QueryBufferLease { lease } => buffers.leases.lock().await.query(lease)?,
-        Request::ReadBufferLease { lease, request } => {
-            buffers
-                .leases
-                .lock()
-                .await
-                .read(lease, request, buffers, zed)
-                .await?
+        request @ (Request::PrepareBuffer { .. }
+        | Request::PrepareNavigationBuffer { .. }
+        | Request::OpenBufferLease { .. }
+        | Request::ReleaseBufferLease { .. }
+        | Request::QueryBufferLease { .. }
+        | Request::ReadBufferLease { .. }) => {
+            buffer_leases::respond(request, worktrees, buffers, zed).await?
         }
         Request::BufferLanguage { worktree, path } => {
             buffer_language(worktree, path, buffers, zed).await?

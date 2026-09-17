@@ -1,6 +1,61 @@
 use super::*;
 
 #[tokio::test]
+async fn target_registration_is_one_use_and_retains_unknown_pins_on_failure() {
+    for case in 0..3 {
+        let mut f = Fixture::new().await;
+        f.target(8, "target").await;
+        let nav = f.prepare().await;
+        let task = f.spawn(action(&nav, Action::Execute));
+        let request = f.outbound.recv().await.unwrap();
+        coordinate_queries::reply(&f.zed, request, definitions(&[8, 8])).await;
+        let registration = f.outbound.recv().await.unwrap();
+        match case {
+            0 => {
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+            }
+            1 => {
+                f.aba(8);
+                ack_registration(&f.zed, registration).await;
+                assert!(task.await.unwrap().is_err());
+            }
+            _ => {
+                f.zed
+                    .pending
+                    .lock()
+                    .await
+                    .remove(&registration.id)
+                    .unwrap()
+                    .send(proto::Envelope {
+                        payload: Some(proto::envelope::Payload::Error(proto::Error::default())),
+                        ..Default::default()
+                    })
+                    .unwrap();
+                assert!(task.await.unwrap().is_err());
+            }
+        }
+        for action_kind in [Action::Query, Action::Execute, Action::Release] {
+            assert!(matches!(
+                state(f.request(action(&nav, action_kind)).await.unwrap()),
+                State::Unknown
+            ));
+        }
+        let registry = f.buffers.navigations.lock().await;
+        assert_eq!(registry.slots[&1].targets.len(), 2);
+        assert_eq!(registry.slots[&1].targets[0].remote_id, 8);
+        let active = f.buffers.active.read().await;
+        assert!(crate::sync_owners::ensure_admission(&active).is_err());
+        assert!(
+            active[&(f.root.clone(), "target".into())]
+                .lease_ids
+                .contains(&BufferOwner::Navigation(1))
+        );
+        assert!(f.outbound.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn late_admission_rechecks_preparation_deadline_before_native_dispatch() {
     let mut f = Fixture::new().await;
     f.prepare().await;

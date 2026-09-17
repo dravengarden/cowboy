@@ -13,6 +13,8 @@ use crate::{BufferOwner, Buffers, NavigationKind, Response, Zed, buffer_leases, 
 
 #[cfg(test)]
 pub(crate) mod connected;
+#[cfg(test)]
+pub(crate) mod connected_lsp;
 mod targets;
 #[cfg(test)]
 mod tests;
@@ -58,11 +60,29 @@ pub(super) struct Location {
     end: crate::LanguagePoint,
 }
 
-struct Target {
-    key: Key,
-    remote_id: u64,
-    revision: u64,
+pub(super) struct Target {
+    pub(super) key: Key,
+    pub(super) remote_id: u64,
+    pub(super) revision: u64,
     location: Location,
+}
+
+impl Target {
+    pub(super) fn check_owner(
+        &self,
+        owner: u64,
+        active: &HashMap<Key, crate::BufferLease>,
+    ) -> Result<()> {
+        let buffer = active
+            .get(&self.key)
+            .context("original destination unavailable")?;
+        ensure!(
+            buffer.remote_id == self.remote_id
+                && buffer.lease_ids.contains(&BufferOwner::Navigation(owner)),
+            "original destination owner changed"
+        );
+        crate::sync_owners::ensure_readable(buffer)
+    }
 }
 
 enum Phase {
@@ -307,31 +327,10 @@ impl Registry {
         buffers: &Buffers,
         zed: Option<&Zed>,
     ) -> Result<Response> {
-        content.validate()?;
-        let id = self.resolve(&navigation)?;
-        let slot = self.slots.get(&id).context("navigation was released")?;
-        let Phase::Retained = slot.phase else {
-            anyhow::bail!("navigation does not retain destinations");
-        };
-        let target = slot
-            .targets
-            .get(usize::try_from(destination)?)
-            .context("unknown navigation destination")?;
-        ensure!(
-            content == target.location.content,
-            "navigation destination content changed"
-        );
+        let (id, target) = self.destination(&navigation, destination, &content)?;
         let zed = zed.context("native navigation unavailable")?;
         let active = buffers.active.read().await;
-        let buffer = active
-            .get(&target.key)
-            .context("original destination unavailable")?;
-        ensure!(
-            buffer.remote_id == target.remote_id
-                && buffer.lease_ids.contains(&BufferOwner::Navigation(id)),
-            "original destination owner changed"
-        );
-        crate::sync_owners::ensure_readable(buffer)?;
+        target.check_owner(id, &active)?;
         zed.diagnostics
             .lock()
             .expect("diagnostic cache poisoned")
@@ -348,6 +347,29 @@ impl Registry {
             destination,
             result,
         })
+    }
+
+    pub(super) fn destination(
+        &mut self,
+        navigation: &NavigationRef,
+        destination: u32,
+        content: &Content,
+    ) -> Result<(u64, &Target)> {
+        content.validate()?;
+        let id = self.resolve(navigation)?;
+        let slot = self.slots.get(&id).context("navigation was released")?;
+        let Phase::Retained = slot.phase else {
+            anyhow::bail!("navigation does not retain destinations");
+        };
+        let target = slot
+            .targets
+            .get(usize::try_from(destination)?)
+            .context("unknown navigation destination")?;
+        ensure!(
+            *content == target.location.content,
+            "navigation destination content changed"
+        );
+        Ok((id, target))
     }
 }
 
@@ -382,13 +404,29 @@ async fn execute(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
             slot.kind,
         ))
         .await?;
-    let targets = targets::retain(slot, id, responses, &mut active, zed).await?;
+    let (targets, unregistered) = targets::retain(slot, id, responses, &mut active, zed).await?;
+    // LSP navigation shares native buffers but does NOT register them for
+    // subsequent language reads. Registration is part of this one-use effect,
+    // never a read side effect. Save every pin before awaiting its native ACK.
+    slot.targets = targets;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for remote_id in unregistered {
+            zed.register_buffer(remote_id).await?;
+        }
+        anyhow::Ok(())
+    })
+    .await
+    .context("navigation target registration timed out")??;
+    let cache = zed.diagnostics.lock().expect("diagnostic cache poisoned");
+    cache.check(slot.remote_id, slot.position.revision)?;
+    for target in &slot.targets {
+        cache.check(target.remote_id, target.revision)?;
+    }
     let source = active
         .get_mut(&slot.key)
         .expect("source held through navigation");
     source.lease_ids.remove(&BufferOwner::NavigationPending(id));
     source.lease_ids.insert(BufferOwner::Navigation(id));
-    slot.targets = targets;
     slot.phase = Phase::Retained;
     Ok(())
 }

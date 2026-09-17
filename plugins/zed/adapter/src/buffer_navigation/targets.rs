@@ -11,7 +11,7 @@ pub(super) async fn retain(
     responses: Vec<proto::LspResponse>,
     active: &mut HashMap<Key, BufferLease>,
     zed: &Zed,
-) -> Result<Vec<Target>> {
+) -> Result<(Vec<Target>, Vec<u64>)> {
     let locations = locations(responses, slot.kind)?;
     let files = zed.buffer_files.read().await;
     let worktrees = zed.worktree_paths.read().await;
@@ -89,6 +89,11 @@ pub(super) async fn retain(
     }
     // All validation precedes mutation. active is held across native query
     // and capture, cache through commit: no close/sync/epoch gap is introduced.
+    let mut unregistered: Vec<_> = native_ids
+        .into_iter()
+        .filter(|id| !active.values().any(|buffer| buffer.remote_id == *id))
+        .collect();
+    unregistered.sort_unstable();
     for (key, (remote_id, version)) in additions {
         active
             .entry(key)
@@ -101,7 +106,7 @@ pub(super) async fn retain(
             .lease_ids
             .insert(BufferOwner::Navigation(id));
     }
-    Ok(targets)
+    Ok((targets, unregistered))
 }
 
 fn locations(

@@ -314,6 +314,15 @@ and accepting a production effect are different milestones.
   passes the full gate, static builds, signed temporary lifecycle and all eleven
   connected Code regressions; the actual plaintext navigation gate does not
   establish nonempty-LSP acquisition, native allocation bounds or recovery.
+- The Zed `1.11.0` [private handoff extension](plugin-owned-navigation.md#exact-destination-handoff)
+  adds a bounded ordinary-owner reservation from an exact retained navigation
+  target. Atomic handoff performs no native/path I/O and survives parent release;
+  cancelled waits, lost replies, equal-content ABA and capacity retain their
+  original identities. A real nonempty stdio-LSP fixture exposed and now covers
+  missing native target registration. Newly retained targets register once as
+  part of Execute, with failure retaining Unknown and original pins. This is
+  not core acquisition authority, Machine/Service/Web navigation routing, a native
+  allocation budget, independent recovery or a production rollout.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

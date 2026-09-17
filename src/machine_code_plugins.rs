@@ -149,6 +149,7 @@ impl CodeRuntimeHost {
                         | "prepareBufferNavigation"
                         | "bufferNavigation"
                         | "readBufferNavigation"
+                        | "prepareNavigationBuffer"
                 )
             ),
             "private buffer operations require separate core authority"
@@ -483,6 +484,7 @@ mod tests {
             "prepareBufferNavigation",
             "bufferNavigation",
             "readBufferNavigation",
+            "prepareNavigationBuffer",
         ] {
             for extra_path in [false, true] {
                 let mut request = json!({"type":kind,"purpose":"refresh_from_disk",
