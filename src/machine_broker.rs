@@ -5,7 +5,7 @@
 //! lets workers replay their unacknowledged outboxes after either side restarts.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::os::fd::FromRawFd as _;
+use std::os::fd::{AsFd as _, FromRawFd as _, OwnedFd};
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +28,10 @@ use crate::runtime_wire::{
 
 const WORKER_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(45);
 const WORKER_MONITOR_INTERVAL: Duration = Duration::from_secs(15);
+/// Bytes still queued on the broker side prove the worker kept writing and the
+/// broker fell behind. Isolating that worker cannot repair the broker, so wait
+/// this much longer before treating the connection as unrecoverable.
+const WORKER_BACKLOG_ISOLATION_LIMIT: Duration = Duration::from_secs(300);
 const CORE_COMMAND_QUEUE_CAPACITY: usize = 64;
 const TRANSIENT_UNIT_COLLECT_TIMEOUT: Duration = Duration::from_secs(10);
 const DIRECT_WORKER_GRACEFUL_STOP_TIMEOUT: Duration = Duration::from_secs(3);
@@ -223,6 +227,16 @@ struct WorkerPeer {
     tx: mpsc::UnboundedSender<Frame>,
     snapshot: WorkerSnapshot,
     last_seen: Instant,
+    /// Duplicate of the broker end of this connection, used only to measure
+    /// frames the worker already delivered but the broker has not read.
+    receive_probe: Option<Arc<OwnedFd>>,
+}
+
+/// Outcome of one heartbeat sweep.
+#[derive(Default)]
+struct StaleWorkers {
+    isolated: Vec<(String, WorkerPeer, String)>,
+    lagging: Vec<(String, u64, Duration)>,
 }
 
 struct WorkerRegistration {
@@ -436,6 +450,7 @@ impl Broker {
                 context_size: None,
                 pending_prompt_count: pending_prompts.get(&session_id).copied().unwrap_or(0),
                 drain_requested: false,
+                exit_detail: None,
             });
         }
         snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -677,22 +692,63 @@ impl Broker {
         None
     }
 
-    fn take_stale_workers(&self, timeout: Duration) -> Vec<(String, WorkerPeer)> {
+    fn attach_worker_receive_probe(
+        &self,
+        session_id: &str,
+        connection_id: u64,
+        socket: std::os::fd::BorrowedFd<'_>,
+    ) {
+        let probe = match socket.try_clone_to_owned() {
+            Ok(probe) => Arc::new(probe),
+            Err(error) => {
+                tracing::warn!(session = session_id, %error, "worker receive-queue probe unavailable");
+                return;
+            }
+        };
+        if let Some(worker) = self.workers.lock().get_mut(session_id)
+            && worker.connection_id == connection_id
+        {
+            worker.receive_probe = Some(probe);
+        }
+    }
+
+    fn take_stale_workers(&self, timeout: Duration, backlog_limit: Duration) -> StaleWorkers {
         let now = Instant::now();
         let mut workers = self.workers.lock();
-        let stale: Vec<String> = workers
-            .iter()
-            .filter(|(_, worker)| now.duration_since(worker.last_seen) >= timeout)
-            .map(|(session_id, _)| session_id.clone())
-            .collect();
-        stale
-            .into_iter()
-            .filter_map(|session_id| {
-                workers
-                    .remove(&session_id)
-                    .map(|worker| (session_id, worker))
-            })
-            .collect()
+        let mut sweep = StaleWorkers::default();
+        let mut stale = Vec::new();
+        for (session_id, worker) in workers.iter() {
+            let silent = now.duration_since(worker.last_seen);
+            if silent < timeout {
+                continue;
+            }
+            let unread = worker
+                .receive_probe
+                .as_deref()
+                .and_then(|probe| rustix::io::ioctl_fionread(probe).ok())
+                .unwrap_or(0);
+            let detail = if unread == 0 {
+                format!(
+                    "worker heartbeat timed out after {}s; Machine broker stopped the worker",
+                    silent.as_secs()
+                )
+            } else if silent < backlog_limit {
+                sweep.lagging.push((session_id.clone(), unread, silent));
+                continue;
+            } else {
+                format!(
+                    "Machine broker read timed out after {}s with {unread} bytes of worker output queued; stopped the worker",
+                    silent.as_secs()
+                )
+            };
+            stale.push((session_id.clone(), detail));
+        }
+        for (session_id, detail) in stale {
+            if let Some(worker) = workers.remove(&session_id) {
+                sweep.isolated.push((session_id, worker, detail));
+            }
+        }
+        sweep
     }
 
     fn update_snapshot(&self, mut snapshot: WorkerSnapshot, connection_id: u64) {
@@ -860,8 +916,10 @@ impl Broker {
                     context_size: None,
                     pending_prompt_count: 0,
                     drain_requested: !desired.is_empty() && generation != desired && !pinned,
+                    exit_detail: None,
                 },
                 last_seen: Instant::now(),
+                receive_probe: None,
             },
         );
         drop(workers);
@@ -1741,7 +1799,12 @@ impl Broker {
         );
     }
 
-    async fn worker_disconnected(self: &Arc<Self>, session_id: String, peer: WorkerPeer) {
+    async fn worker_disconnected(
+        self: &Arc<Self>,
+        session_id: String,
+        peer: WorkerPeer,
+        exit_detail: Option<String>,
+    ) {
         if !self.sessions.lock().contains_key(&session_id) {
             self.session_states.lock().remove(&session_id);
             self.pending_commands.lock().remove(&session_id);
@@ -1754,6 +1817,7 @@ impl Broker {
             snapshot.state = WorkerState::Crashed;
             snapshot.current_turn_id = None;
             snapshot.pending_permissions.clear();
+            snapshot.exit_detail = exit_detail;
             self.session_states
                 .lock()
                 .insert(session_id.clone(), WorkerState::Crashed);
@@ -2334,10 +2398,21 @@ async fn monitor_workers(broker: Arc<Broker>) {
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
-        for (session_id, peer) in broker.take_stale_workers(WORKER_HEARTBEAT_TIMEOUT) {
+        let sweep =
+            broker.take_stale_workers(WORKER_HEARTBEAT_TIMEOUT, WORKER_BACKLOG_ISOLATION_LIMIT);
+        for (session_id, unread_bytes, silent) in sweep.lagging {
+            tracing::warn!(
+                session = %session_id,
+                unread_bytes,
+                silent_seconds = silent.as_secs(),
+                "Machine broker has not consumed queued worker output; deferring heartbeat isolation"
+            );
+        }
+        for (session_id, peer, detail) in sweep.isolated {
             tracing::error!(
                 session = %session_id,
                 generation = %peer.snapshot.generation,
+                %detail,
                 "worker heartbeat timed out; isolating affected session"
             );
             let _ = peer.tx.send(Frame::WorkerCommand {
@@ -2371,7 +2446,9 @@ async fn monitor_workers(broker: Arc<Broker>) {
                 // its process (or Provider descendants) is still live.
                 broker.arm_direct_worker_stop(&session_id);
             }
-            broker.worker_disconnected(session_id, peer).await;
+            broker
+                .worker_disconnected(session_id, peer, Some(detail))
+                .await;
         }
     }
 }
@@ -2471,6 +2548,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
+            broker.attach_worker_receive_probe(&session_id, connection_id, reader.as_ref().as_fd());
             let lease = broker
                 .controller
                 .lock()
@@ -2499,7 +2577,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             )
             .await;
             if let Some(peer) = broker.remove_worker(&session_id, connection_id) {
-                broker.worker_disconnected(session_id, peer).await;
+                broker.worker_disconnected(session_id, peer, None).await;
             }
             worker_result?;
         }
@@ -3374,6 +3452,98 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn heartbeat_sweep_separates_broker_read_backlog_from_silent_workers() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: String::new(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        let mut sockets = Vec::new();
+        for (connection_id, session_id) in [(1, "sess-silent"), (2, "sess-lagging")] {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            broker
+                .register_worker(WorkerRegistration {
+                    session_id: session_id.to_owned(),
+                    epoch: format!("epoch-{connection_id}"),
+                    generation: "gen-1".to_owned(),
+                    executable: None,
+                    fallback_for: None,
+                    connection_id,
+                    tx,
+                })
+                .expect("register worker");
+            broker.sessions.lock().insert(
+                session_id.to_owned(),
+                StartSession {
+                    session_id: session_id.to_owned(),
+                    provider: "codex".to_owned(),
+                    provider_version: String::new(),
+                    provider_generation_digest: String::new(),
+                    provider_auth_generation: None,
+                    provider_behavior: None,
+                    cwd: "/tmp".to_owned(),
+                    agent_session_id: None,
+                    system: false,
+                    context_window: None,
+                    auto_compact_token_limit: None,
+                    cache_protection: None,
+                    generation: "gen-1".to_owned(),
+                    fallback_for: None,
+                    adopt_only: false,
+                },
+            );
+            let (broker_end, worker_end) = UnixStream::pair().expect("worker socket pair");
+            broker.attach_worker_receive_probe(session_id, connection_id, broker_end.as_fd());
+            broker
+                .workers
+                .lock()
+                .get_mut(session_id)
+                .expect("registered worker")
+                .last_seen = Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .expect("monotonic clock origin");
+            sockets.push((broker_end, worker_end));
+        }
+        // The lagging worker already delivered a frame the broker never read.
+        write_frame(&mut sockets[1].1, &Frame::Heartbeat)
+            .await
+            .expect("queue worker heartbeat");
+
+        let sweep = broker.take_stale_workers(Duration::from_secs(45), Duration::from_secs(300));
+        assert_eq!(sweep.lagging.len(), 1);
+        assert_eq!(sweep.lagging[0].0, "sess-lagging");
+        assert!(sweep.lagging[0].1 > 0);
+        assert!(broker.workers.lock().contains_key("sess-lagging"));
+        let [(session_id, peer, detail)] = <[_; 1]>::try_from(sweep.isolated).ok().unwrap();
+        assert_eq!(session_id, "sess-silent");
+        assert!(detail.starts_with("worker heartbeat timed out after 60s"));
+
+        let (controller_tx, mut controller_rx) = mpsc::unbounded_channel();
+        broker.install_controller(controller_tx);
+        broker
+            .worker_disconnected(session_id, peer, Some(detail.clone()))
+            .await;
+        let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
+            panic!("crashed worker snapshot");
+        };
+        assert_eq!(worker.state, WorkerState::Crashed);
+        assert_eq!(worker.exit_detail, Some(detail));
+
+        // A backlog that never drains is still bounded.
+        let sweep = broker.take_stale_workers(Duration::from_secs(45), Duration::from_secs(30));
+        assert!(sweep.lagging.is_empty());
+        let [(session_id, _, detail)] = <[_; 1]>::try_from(sweep.isolated).ok().unwrap();
+        assert_eq!(session_id, "sess-lagging");
+        assert!(detail.contains("bytes of worker output queued"));
+        assert!(broker.workers.lock().is_empty());
+    }
+
     #[test]
     fn reconnecting_worker_rebuilds_broker_launch_state() {
         let broker = Broker::new(MachineBrokerArgs {
@@ -3432,6 +3602,7 @@ mod tests {
                 context_size: None,
                 pending_prompt_count: 0,
                 drain_requested: false,
+                exit_detail: None,
             },
             1,
         );
@@ -4183,7 +4354,7 @@ mod tests {
         )
         .await;
         broker
-            .worker_disconnected("sess-reset-race".to_owned(), old_peer)
+            .worker_disconnected("sess-reset-race".to_owned(), old_peer, None)
             .await;
 
         assert!(broker.deleted_session_workspaces.lock().is_empty());
@@ -4709,7 +4880,7 @@ mod tests {
             .remove_worker("sess-connected-delete", 7)
             .expect("registered worker");
         broker
-            .worker_disconnected("sess-connected-delete".to_owned(), peer)
+            .worker_disconnected("sess-connected-delete".to_owned(), peer, None)
             .await;
         for _ in 0..100 {
             if broker.deleted_session_workspaces.lock().is_empty() {
@@ -4853,6 +5024,7 @@ mod tests {
                     context_size: None,
                     pending_prompt_count: 0,
                     drain_requested: false,
+                    exit_detail: None,
                 }),
             },
         )

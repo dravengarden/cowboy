@@ -1559,9 +1559,14 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     } else {
         worker_status(worker.state)
     };
+    let detail = recoverable_detail.or_else(|| {
+        (worker.state == WorkerState::Crashed)
+            .then(|| worker.exit_detail.clone())
+            .flatten()
+    });
     shared
         .hub
-        .project_runtime_status(&worker.session_id, status, recoverable_detail);
+        .project_runtime_status(&worker.session_id, status, detail);
     reconcile_idle_guard(shared, &worker.session_id, idle_guard);
     true
 }
@@ -2190,6 +2195,7 @@ mod tests {
             context_size: None,
             pending_prompt_count: 0,
             drain_requested: false,
+            exit_detail: None,
         }
     }
 
@@ -2526,6 +2532,23 @@ mod tests {
         assert!(!runtime.shared.pending.lock().contains_key(&prompt));
         assert!(!runtime.shared.sent.lock().contains(&prompt));
         assert!(!runtime.shared.config_startups.lock().contains("s"));
+    }
+
+    #[tokio::test]
+    async fn broker_exit_detail_explains_a_crashed_worker_snapshot() {
+        let hub = hub_with_stale_spark_preferences();
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.ensure(snapshot("s").launch.unwrap());
+        let detail = "worker heartbeat timed out after 45s; Machine broker stopped the worker";
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Crashed;
+        worker.current_turn_id = None;
+        worker.exit_detail = Some(detail.to_owned());
+
+        apply_snapshot(&runtime.shared, &worker);
+
+        assert_eq!(hub.status("s"), Some(Status::Crashed));
+        assert_eq!(hub.latest_crash_detail("s").as_deref(), Some(detail));
     }
 
     #[tokio::test]

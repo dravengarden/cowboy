@@ -75,6 +75,11 @@ pub struct WorkerSnapshot {
     pub pending_prompt_count: u64,
     #[serde(default)]
     pub drain_requested: bool,
+    /// Why Machine broker itself ended this worker, such as a heartbeat
+    /// isolation. Workers report their own failures through runtime events and
+    /// never set this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_detail: Option<String>,
 }
 
 impl WorkerSnapshot {

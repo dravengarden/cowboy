@@ -903,6 +903,7 @@ mod tests {
             context_size: None,
             pending_prompt_count: 0,
             drain_requested: false,
+            exit_detail: None,
         }
     }
 
