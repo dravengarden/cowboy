@@ -1,5 +1,6 @@
 import { InsertDriveFileOutlined, PictureAsPdfOutlined } from "@mui/icons-material";
 import { Box, Stack, Typography } from "@mui/material";
+import { MESSAGE_PREVIEW_MAX_WIDTH_PX } from "./messageBubble";
 
 const MIME_LABELS: Record<string, string> = {
   "application/pdf": "PDF",
@@ -43,7 +44,8 @@ export function TranscriptFileChip({
       title={name}
       sx={{
         width: "fit-content",
-        maxWidth: "min(360px, 100%)",
+        // `fit-content` already shrinks to a narrow bubble.
+        maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX,
         my: 0.5,
         py: 0.75,
         pl: 1,

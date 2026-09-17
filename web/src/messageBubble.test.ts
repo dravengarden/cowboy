@@ -43,3 +43,22 @@ Deno.test("confirmed and optimistic bubbles share the chat radius", async () => 
   assert(confirmed.includes('messageBubbleLayoutSx("assistant"'));
   assertEquals(confirmed.includes('maxWidth: { xs: "88%"'), false);
 });
+
+Deno.test("a sent screenshot or file does not stretch the user bubble", async () => {
+  const transcript = await Deno.readTextFile(
+    new URL("./Transcript.tsx", import.meta.url),
+  );
+  const chip = await Deno.readTextFile(
+    new URL("./TranscriptFileChip.tsx", import.meta.url),
+  );
+  // A percentage max-width is ignored while a fit-content bubble sizes itself;
+  // the cap must be the pixel constant, on the element the bubble measures.
+  assert(
+    transcript.includes(
+      'sx={{ maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX, my: 0.5, mx: "auto" }}',
+    ),
+  );
+  assert(chip.includes("maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX,"));
+  assertEquals(transcript.includes('maxWidth: "min(360px, 100%)"'), false);
+  assertEquals(chip.includes('maxWidth: "min(360px, 100%)"'), false);
+});

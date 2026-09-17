@@ -210,6 +210,7 @@ import {
 } from "./transcriptRestorePolicy";
 import { retainUnpresentedOptimistic } from "./sendImagePreviews";
 import {
+  MESSAGE_PREVIEW_MAX_WIDTH_PX,
   messageBubbleLayoutSx,
   messageBubbleSurfaceSx,
 } from "./messageBubble";
@@ -1166,33 +1167,41 @@ function TranscriptImage(
   const openTap = useReliableTouchTap<HTMLImageElement>(() => setOpen(true));
   return (
     <>
+      {
+        /* The pixel cap sits on this frame so the fit-content user bubble
+          honours it; the image only shrinks to the frame. */
+      }
       <Box
-        component="img"
-        src={src}
-        alt={alt}
-        loading={src.startsWith("data:") || src.startsWith("blob:")
-          ? undefined
-          : "lazy"}
-        {...openTap}
-        sx={{
-          maxWidth: "min(360px, 100%)",
-          // A portrait screenshot must remain a preview, not become a second
-          // full-height viewport inside the conversation. The shared lightbox
-          // owns full-resolution reading after a tap.
-          maxHeight: {
-            xs: "min(38dvh, 320px)",
-            sm: "min(48dvh, 420px)",
-            md: "min(55vh, 480px)",
-          },
-          objectFit: "contain",
-          display: "block",
-          borderRadius: 1,
-          my: 0.5,
-          mx: "auto",
-          cursor: "zoom-in",
-          touchAction: "manipulation",
-        }}
-      />
+        data-transcript-image-frame="true"
+        sx={{ maxWidth: MESSAGE_PREVIEW_MAX_WIDTH_PX, my: 0.5, mx: "auto" }}
+      >
+        <Box
+          component="img"
+          src={src}
+          alt={alt}
+          loading={src.startsWith("data:") || src.startsWith("blob:")
+            ? undefined
+            : "lazy"}
+          {...openTap}
+          sx={{
+            maxWidth: "100%",
+            // A portrait screenshot must remain a preview, not become a second
+            // full-height viewport inside the conversation. The shared lightbox
+            // owns full-resolution reading after a tap.
+            maxHeight: {
+              xs: "min(38dvh, 320px)",
+              sm: "min(48dvh, 420px)",
+              md: "min(55vh, 480px)",
+            },
+            objectFit: "contain",
+            display: "block",
+            borderRadius: 1,
+            mx: "auto",
+            cursor: "zoom-in",
+            touchAction: "manipulation",
+          }}
+        />
+      </Box>
       <ImageLightbox
         images={[{ src, alt }]}
         index={open ? 0 : null}

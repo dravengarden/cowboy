@@ -5,6 +5,12 @@ import { alpha, type Theme } from "@mui/material";
 export const MESSAGE_BUBBLE_RADIUS_PX = 18;
 export const MESSAGE_BUBBLE_TAIL_RADIUS_PX = 6;
 
+/** Widest image preview or file card inside a message. A pixel value, never a
+ * percentage: the user bubble is `width: fit-content`, and a percentage
+ * max-width is ignored while that width is computed, so a large screenshot
+ * would size the bubble by its natural width and fill the whole row. */
+export const MESSAGE_PREVIEW_MAX_WIDTH_PX = 360;
+
 export function messageBubbleBorderRadius(
   role: "user" | "assistant",
 ): string {
