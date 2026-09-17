@@ -23,6 +23,10 @@ Deno.test("Agent and Code scrollports keep native vertical momentum", () => {
   assert(reviewChanges.includes("...mobileNativeYScrollSx"));
   assert(codeViewer.includes("pan-y pinch-zoom"));
   assert(transcript.includes('touchAction: "pan-y pinch-zoom"'));
+  // Review document preview (Markdown, Mermaid, media, wrap-on source).
+  assert(reviewApp.includes('...(outerScrollable && { touchAction: "pan-y pinch-zoom" })'));
+  // Sideways-scrolling Markdown blocks restart touch-action in WebKit.
+  assert(reviewApp.includes('touchAction: "pan-x pan-y pinch-zoom"'));
 });
 
 Deno.test("Review Markdown wrap is a separate preference in the source wrap slot", () => {

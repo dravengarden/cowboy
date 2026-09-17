@@ -6,6 +6,9 @@
 // commands granted in its capability).
 //
 // Resolution order, best → worst:
+//   0. Shell haptic bridge (`__cowboyNativeHaptic`) — the Android shell maps each
+//      kind to the system's tuned click/tick effects. The Tauri plugin's Android
+//      side plays long raw vibrator waveforms that feel like a buzzing motor.
 //   1. Native Tauri haptics plugin — real OS haptics (UIImpactFeedbackGenerator on
 //      iOS). The ONLY reliable haptic on iOS: Safari/PWA has no Vibration API.
 //      Feature-detected through the injected IPC bridge — NO @tauri-apps import, so
@@ -28,6 +31,7 @@ interface TauriInternals {
 }
 type NativeSelectionBridge = Readonly<Record<string, unknown>>;
 const TAURI_INTERNALS_KEY = "__TAURI_INTERNALS__";
+const SHELL_HAPTIC_KEY = "__cowboyNativeHaptic";
 const PREPARE_SELECTION_KEY = "__nativePrepareSelectionHaptic";
 const FIRE_SELECTION_KEY = "__nativeSelectionHaptic";
 let preparedSelectionUntil = -Infinity;
@@ -72,6 +76,17 @@ function nativeHaptic(command: string, args?: unknown): boolean {
   }
 }
 
+// Hand a haptic kind ("selection", "impact:<style>", "notification:<type>") to a
+// shell-provided bridge. Returns true when the shell accepted it.
+function shellHaptic(kind: string): boolean {
+  try {
+    const bridge = (globalThis as Record<string, unknown>)[SHELL_HAPTIC_KEY];
+    return typeof bridge === "function" && bridge(kind) === true;
+  } catch {
+    return false;
+  }
+}
+
 function webVibrate(ms: number): void {
   try {
     const nav = globalThis.navigator;
@@ -99,6 +114,9 @@ export function haptic(style: HapticStyle = "medium"): void {
   if (!shouldFire()) {
     return;
   }
+  if (shellHaptic(`impact:${style}`)) {
+    return;
+  }
   if (nativeHaptic("plugin:haptics|impact_feedback", { style })) {
     return;
   }
@@ -109,6 +127,9 @@ export function haptic(style: HapticStyle = "medium"): void {
  *  needs you). iOS plays the distinct success/warning/error pattern. */
 export function notificationHaptic(type: HapticNotification): void {
   if (!shouldFire()) {
+    return;
+  }
+  if (shellHaptic(`notification:${type}`)) {
     return;
   }
   if (nativeHaptic("plugin:haptics|notification_feedback", { type })) {
@@ -143,6 +164,9 @@ export function selectionHaptic(): void {
   ) {
     preparedSelectionUntil = -Infinity;
     firePrepared();
+    return;
+  }
+  if (shellHaptic("selection")) {
     return;
   }
   if (nativeHaptic("plugin:haptics|selection_feedback")) {

@@ -157,6 +157,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       "apple/Assets.xcassets/AppIcon.appiconset/Contents.json",
       "android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt",
       "android/app/src/main/java/top/thundersparrow/cowboy/AuthenticationBrowser.kt",
+      "android/app/src/main/java/top/thundersparrow/cowboy/NativeHaptics.kt",
     ]
   ) await read(path);
   // Android: SDK Manager-owned components are pinned exactly, the Tauri
