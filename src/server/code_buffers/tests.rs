@@ -145,6 +145,7 @@ impl Fixture {
             hub: Hub::new(),
             machine_control: Arc::default(),
             code_buffers: Arc::default(),
+            code_navigation_admission: false,
             shutdown: receiver,
             product_auth_enabled: false,
             store: None,

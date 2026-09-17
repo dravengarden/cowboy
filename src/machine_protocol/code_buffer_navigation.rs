@@ -199,5 +199,36 @@ pub struct Snapshot {
     pub destinations: Vec<Destination>,
 }
 
+#[cfg_attr(not(feature = "full"), allow(dead_code))]
+impl Snapshot {
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(self.api_version == 1, "unsupported navigation observation");
+        self.navigation.validate()?;
+        validate_locations(&self.locations)?;
+        ensure!(
+            !matches!(self.phase, Phase::Prepared | Phase::Unknown)
+                || self.locations.is_empty() && self.destinations.is_empty(),
+            "unacquired navigation has targets"
+        );
+        ensure!(
+            self.destinations.len() <= self.locations.len(),
+            "too many destinations"
+        );
+        let mut previous = None;
+        let mut leases = std::collections::BTreeSet::new();
+        for destination in &self.destinations {
+            destination.lease.validate()?;
+            ensure!(
+                (destination.destination as usize) < self.locations.len()
+                    && previous.is_none_or(|value| value < destination.destination)
+                    && leases.insert(&destination.lease),
+                "invalid or duplicate navigation destination"
+            );
+            previous = Some(destination.destination);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests;

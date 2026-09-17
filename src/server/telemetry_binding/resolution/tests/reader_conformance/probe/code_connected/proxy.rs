@@ -186,6 +186,9 @@ impl Proxy {
                     "installationStep",
                     "codeSyncApply",
                     "codeSyncRetire",
+                    "codeNavigationExecute",
+                    "codeNavigationDestination",
+                    "codeNavigationRelease",
                 ]
                 .contains(&kind),
         )?;
@@ -252,6 +255,22 @@ fn inspect(
 
 fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Failure> {
     match command {
+        MachineCommand::CodeBufferNavigation {
+            request_id,
+            request,
+        } => {
+            use crate::machine_protocol::code_buffer_navigation::Action;
+            request.validate().map_err(|_| Failure::WrongObservation)?;
+            check(request.service_id == SERVICE && request.machine_id == MACHINE)?;
+            let kind = match request.action {
+                Action::Prepare { .. } => "codeNavigationPrepare",
+                Action::Execute { .. } => "codeNavigationExecute",
+                Action::Query { .. } => "codeNavigationQuery",
+                Action::Release { .. } => "codeNavigationRelease",
+                Action::PrepareDestination { .. } => "codeNavigationDestination",
+            };
+            record.command(request_id, kind)
+        }
         MachineCommand::CodeBufferSync {
             request_id,
             request,
@@ -355,8 +374,8 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
                 && hello.machine_id == MACHINE
                 && hello.challenge_signature.is_some()
                 && hello.encryption_public_key.is_some()
-                && hello.min_protocol <= 20
-                && hello.max_protocol >= 20 =>
+                && hello.min_protocol <= 21
+                && hello.max_protocol >= 21 =>
         {
             record.generation = Some(
                 hello
@@ -371,7 +390,7 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
             record.configured = false;
         }
         MachineFrame::Welcome {
-            protocol: 20,
+            protocol: 21,
             desired_components,
             ..
         } if !from_machine && desired_components.is_empty() => record.counts.connections += 1,

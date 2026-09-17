@@ -120,3 +120,33 @@ fn locations_are_complete_bounded_and_consistent_not_lookup_paths() {
     invalid.end.column = 3;
     assert!(validate_locations(&[invalid]).is_err());
 }
+
+#[test]
+fn navigation_receipts_are_closed_and_destinations_are_unique_original_indices() {
+    let value = json!({"api_version":1,"navigation":{"instance":"a".repeat(32),"id":"navigation:0000000000000001"},"phase":"retained",
+        "locations":[{"path":"target.rs","content":{"sha256":"b".repeat(64),"utf8Bytes":9},"start":{"row":0,"column":4},"end":{"row":0,"column":6}}],
+        "destinations":[{"destination":0,"lease":{"instance":"c".repeat(32),"id":"0000000000000001"}}]});
+    let snapshot: Snapshot = serde_json::from_value(value.clone()).unwrap();
+    snapshot.validate().unwrap();
+    let mut invalid = value.clone();
+    invalid["grant"] = json!(true);
+    assert!(serde_json::from_value::<Snapshot>(invalid).is_err());
+    for phase in [Phase::Prepared, Phase::Unknown] {
+        let mut invalid = snapshot.clone();
+        invalid.phase = phase;
+        assert!(invalid.validate().is_err());
+    }
+    let mut invalid = snapshot.clone();
+    invalid.destinations[0].destination = 1;
+    assert!(invalid.validate().is_err());
+    let mut invalid = snapshot.clone();
+    invalid.locations.push(invalid.locations[0].clone());
+    invalid.destinations.push(invalid.destinations[0].clone());
+    assert!(invalid.validate().is_err());
+    invalid.destinations[1].destination = 1;
+    assert!(invalid.validate().is_err());
+    invalid.destinations[1].lease.id = "0000000000000002".into();
+    invalid.validate().unwrap();
+    invalid.destinations.reverse();
+    assert!(invalid.validate().is_err());
+}

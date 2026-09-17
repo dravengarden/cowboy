@@ -104,6 +104,7 @@ impl Slots {
 
 pub(in crate::server) struct Owners {
     pub(super) synchronizations: Arc<super::synchronization::registry::Operations>,
+    pub(super) navigations: Arc<super::navigation::registry::Groups>,
     slots: Mutex<Slots>,
     capacity: Arc<Semaphore>,
     job_capacity: Arc<Semaphore>,
@@ -115,6 +116,7 @@ impl Default for Owners {
     fn default() -> Self {
         Self {
             synchronizations: Arc::default(),
+            navigations: Arc::default(),
             slots: Mutex::new(Slots {
                 instance: uuid::Uuid::new_v4().simple().to_string(),
                 last_id: 0,
@@ -136,6 +138,13 @@ pub(super) enum Admission {
 
 impl Owners {
     pub(super) fn reserve(&self) -> Result<Reservation, StatusCode> {
+        self.navigations.expire();
+        self.reserve_navigation()
+    }
+
+    // Called under the navigation lock after that registry's expiry pass.
+    // Never reverse the navigation -> ordinary owner lock order.
+    pub(super) fn reserve_navigation(&self) -> Result<Reservation, StatusCode> {
         if self.closed.load(Ordering::Acquire) {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
@@ -343,9 +352,30 @@ impl Owners {
         ))
     }
 
+    /// Navigation may borrow only a Service-admitted Open, not a peer's claim
+    /// about an inert reservation. The short borrow excludes release and sync.
+    pub(super) fn navigation_source(
+        self: &Arc<Self>,
+        user: &str,
+        id: &str,
+    ) -> Result<ReadJob, StatusCode> {
+        let job = self.admit_read(user, id)?;
+        let valid = self
+            .slots
+            .lock()
+            .active
+            .get(id)
+            .is_some_and(|entry| entry.open_attempted && entry.until.is_none());
+        if !valid {
+            return Err(StatusCode::CONFLICT);
+        }
+        Ok(job)
+    }
+
     pub(in crate::server) async fn shutdown(&self) {
         self.closed.store(true, Ordering::Release);
         self.synchronizations.close();
+        self.navigations.close();
         let mut tasks = std::mem::take(&mut *self.tasks.lock());
         tasks.shutdown().await;
     }

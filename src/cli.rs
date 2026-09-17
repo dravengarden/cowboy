@@ -370,6 +370,25 @@ pub struct ServeArgs {
     /// Private per-target binding/recovery admission; does not authorize exports.
     #[arg(long, env = "COWBOY_TELEMETRY_WRITER_POLICY")]
     pub telemetry_writer_policy: Option<PathBuf>,
+
+    /// Private candidate admission for owned navigation. Protocol support alone
+    /// does not enable acquisition; query/cleanup remain original-owner only.
+    #[arg(
+        long,
+        env = "COWBOY_CODE_NAVIGATION_ADMISSION",
+        value_enum,
+        default_value = "closed"
+    )]
+    pub code_navigation_admission: CodeNavigationAdmission,
+}
+
+/// Explicit private rollout policy, independent of Machine protocol support.
+#[cfg(feature = "full")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum CodeNavigationAdmission {
+    #[default]
+    Closed,
+    Candidate,
 }
 
 impl Cli {
@@ -736,6 +755,39 @@ mod tests {
         };
         assert_eq!(args.source, "postgresql:///cowboy");
         assert_eq!(args.destination, "sqlite:///tmp/cowboy.sqlite3");
+    }
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn navigation_policy_defaults_closed_and_requires_explicit_candidate() {
+        let Command::Serve(args) = Cli::try_parse_from(["cowboy", "serve"]).unwrap().command else {
+            panic!("serve");
+        };
+        assert_eq!(
+            args.code_navigation_admission,
+            super::CodeNavigationAdmission::Closed
+        );
+        let Command::Serve(args) = Cli::try_parse_from([
+            "cowboy",
+            "serve",
+            "--code-navigation-admission",
+            "candidate",
+        ])
+        .unwrap()
+        .command
+        else {
+            panic!("serve");
+        };
+        assert_eq!(
+            args.code_navigation_admission,
+            super::CodeNavigationAdmission::Candidate
+        );
+        for value in ["true", "enabled", "21"] {
+            assert!(
+                Cli::try_parse_from(["cowboy", "serve", "--code-navigation-admission", value])
+                    .is_err()
+            );
+        }
     }
 
     #[test]

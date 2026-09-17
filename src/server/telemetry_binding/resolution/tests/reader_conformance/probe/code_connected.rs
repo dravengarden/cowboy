@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 mod exercise;
 mod fixture;
 mod installation;
+mod navigation;
 mod proxy;
 mod synchronization;
 
@@ -61,6 +62,7 @@ struct Receipt {
     core_adapter: Binary,
     ssh_keygen: manifest::Executable,
     git: manifest::Executable,
+    test_lsp: Binary,
     package_sha256: Option<String>,
     release_sha256: Option<String>,
     stage: &'static str,
@@ -101,7 +103,9 @@ impl Pair<'_> {
             .arg("--core-security-config")
             .arg(self.root.join("core-security.json"))
             .arg("--plugin-catalog-dir")
-            .arg(self.root.join("catalog"));
+            .arg(self.root.join("catalog"))
+            .arg("--code-navigation-admission")
+            .arg("candidate");
         self.controller = Some(Running::spawn(&mut command)?);
         tokio::time::timeout(
             DEADLINE,
@@ -197,7 +201,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v3",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v4",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -207,6 +211,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
         core_adapter,
         ssh_keygen: manifest::ssh_keygen()?,
         git: manifest::tool("git")?,
+        test_lsp: navigation::executable()?,
         package_sha256: None,
         release_sha256: None,
         stage: "setup",
@@ -219,8 +224,8 @@ async fn immutable_connected_code_buffers() -> Result<()> {
         not_checked: [
             "production_roles_policies_accounts_installation_and_activation",
             "review_integration_browser_storage_and_supported_devices",
-            "nonempty_language_servers_or_atomic_diagnostics_freshness",
-            "dirty_buffer_override_independent_restoration_and_owned_navigation_destinations",
+            "real_language_implementation_or_atomic_diagnostics_freshness",
+            "dirty_buffer_override_independent_restoration_and_full_destination_view",
             "abandoned_browser_restart_restoration_and_post_effect_recovery",
             "agent_authentication_sessions_and_native_worker_generation_upgrade",
             "physical_power_loss_general_graph_state_leases_and_refactor_completion",
@@ -228,7 +233,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 11;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 17;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
@@ -271,7 +276,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         http: Http::with_timeout(address, Duration::from_secs(100))?,
     };
     drop(listener);
-    let result = tokio::time::timeout(Duration::from_secs(150), async {
+    let result = tokio::time::timeout(Duration::from_secs(270), async {
         receipt.stage = "authentication";
         pair.start_controller().await?;
         pair.http
@@ -293,6 +298,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         receipt.stage = "connected_installation";
         installation::run(&pair, &seeded.install).await?;
         receipt.checks.push("authenticated_code_installation");
+        navigation::configure(&pair, &seeded.install, &receipt.test_lsp)?;
         exercise::run(&mut pair, &mut receipt.stage, &mut receipt.checks).await
     })
     .await

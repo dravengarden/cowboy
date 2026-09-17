@@ -343,6 +343,16 @@ and accepting a production effect are different milestones.
   authority, public navigation,
   native allocation budgets, independent recovery and production rollout remain
   separate; this is not completion of the Code-consumer or general DAG exits.
+- [Service navigation continuation](plugin-service-buffer-navigation.md) adds
+  default-closed, product Operator/Session-bound acquisition on protocol 21.
+  Original connection and one-use outcome records survive HTTP observer loss;
+  unknown acquisition/release is query-only. Destination preparation enters the
+  ordinary buffer owner without implicit Open or path fallback, retaining its
+  original capacity/TTL through uncertainty. The connected gate advances to v4
+  and 17 required checks, including nonempty Unicode navigation, lost replies,
+  handoff after uninstall and independent reads after parent/path removal.
+  Full destination views, native budgets, Web integration, rollout and recovery
+  remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

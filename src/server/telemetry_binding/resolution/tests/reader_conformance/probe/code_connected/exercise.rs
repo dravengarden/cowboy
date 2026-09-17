@@ -186,6 +186,8 @@ pub(super) async fn run(
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
 
+    let navigation = navigation::prepare(pair, stage, checks).await?;
+
     *stage = "synchronization_preparation";
     let sync = synchronization::prepare(pair).await?;
     checks.push("explicit_synchronization_authentication_shared_owner_refusal_and_local_fence");
@@ -211,6 +213,7 @@ pub(super) async fn run(
     let sync = synchronization::finish(pair, sync, stage).await?;
     checks.push("lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall");
     checks.push("synchronization_retirement_drains_after_cancelled_http_without_replay");
+    let navigation = navigation::handoff(pair, navigation, stage, checks).await?;
     *stage = "removed_paths";
     std::fs::remove_file(pair.root.join("workspace/fixture.txt")).map_err(|_| Failure::Setup)?;
     std::fs::rename(
@@ -220,6 +223,7 @@ pub(super) async fn run(
     .map_err(|_| Failure::Setup)?;
     reads(pair, &second, TEXT, false).await?;
     checks.push("http_uninstall_and_missing_paths_preserve_original_native_reads");
+    navigation::after_path_removal(pair, &navigation, stage, checks).await?;
 
     *stage = "cancelled_release";
     let prior_releases = pair
@@ -248,6 +252,7 @@ pub(super) async fn run(
     pair.proxy.cut()?;
     pair.connected(2).await?;
     synchronization::replacement_refused(pair, &sync).await?;
+    navigation::unavailable(pair, &navigation, StatusCode::CONFLICT).await?;
     let observed = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
@@ -284,6 +289,8 @@ pub(super) async fn run(
         .await?;
     check(missing.status == StatusCode::NOT_FOUND)?;
     check(pair.proxy.counts()?.commands == commands)?;
+    navigation::unavailable(pair, &navigation, StatusCode::NOT_FOUND).await?;
+    checks.push("navigation_replacement_connection_and_restart_refuse_adoption");
     checks.push("replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id");
     Ok(())
 }

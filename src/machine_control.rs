@@ -14,6 +14,7 @@ use std::sync::{
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
+mod code_buffer_navigation;
 mod code_buffer_sync;
 mod installation;
 mod site;

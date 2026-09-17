@@ -109,8 +109,10 @@ protocol-21 Controller/Service/browser consumer. The separate static-pair and
 eleven-check connected-buffer regressions remain required.
 
 Generic forwarding still denies all four private navigation commands. No
-Service/principal/Session navigation executor, public endpoint, Web consumer or
-native bridge capability is enabled. The native query may allocate resources
+Web consumer or native bridge capability is enabled. The subsequent
+[Service candidate](plugin-service-buffer-navigation.md) supplies principal/Session
+ownership and destination handoff through a separate default-closed admission
+policy and protocol-21 connected gate. The native query may allocate resources
 before result limits reject it; global native allocation bounds, OS filesystem
 isolation and independent saved-query recovery remain unproved. Those gaps and
 consumer/device acceptance must be addressed before public cutover. General

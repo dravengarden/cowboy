@@ -7,6 +7,7 @@ use operator_approval::OperatorApproval;
 use registry::{Admission, Binding, Snapshot};
 use remote::Action;
 
+mod navigation;
 mod reads;
 mod registry;
 mod remote;
@@ -46,6 +47,7 @@ struct Context {
     hub: Hub,
     machine_control: Arc<MachineControl>,
     code_buffers: Arc<Owners>,
+    code_navigation_admission: bool,
     shutdown: watch::Receiver<bool>,
     product_auth_enabled: bool,
     store: Option<Store>,
@@ -82,6 +84,7 @@ pub(super) fn routes(state: &AppState) -> Router<Arc<AppState>> {
         hub: state.hub.clone(),
         machine_control: Arc::clone(&state.machine_control),
         code_buffers: Arc::clone(&state.code_buffers),
+        code_navigation_admission: state.code_navigation_admission,
         shutdown: state.shutdown.clone(),
         product_auth_enabled: state.product_auth_enabled,
         store: state.store.clone(),
@@ -108,6 +111,7 @@ fn router() -> Router<Context> {
             post(reads::read).layer(DefaultBodyLimit::max(512)),
         )
         .merge(synchronization::routes())
+        .merge(navigation::routes())
 }
 
 fn response(result: Result<Snapshot, StatusCode>) -> Response {

@@ -328,14 +328,22 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  eleven checks, including live authenticated Code installation into an empty
+  seventeen checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v3; a historical
-  eight-check v2 result does not accept synchronization. See
+  and separately completed retirement. Require receipt schema v4; historical
+  v2/v3 results do not accept Service navigation. The protocol-21 extension
+  also requires all five nonempty navigation kinds under actual product auth
+  and enrollment, lost real Execute/Release replies without replay, ordinary
+  destination handoff after uninstall, reads after parent release/path removal,
+  and replacement/restart refusal. The explicit hashed test-only stdio LSP is
+  never an ambient or packaged dependency. Its synthetic answers do not replace
+  intended-consumer/native budget/device acceptance. Keep private Service
+  navigation admission default closed; protocol 21 alone cannot enable it.
+  See `docs/plugin-service-buffer-navigation.md` and
   `docs/plugin-service-buffer-sync.md`.
   Restart refusal is not restoration; fixture teardown is not native recovery.
   See `docs/plugin-code-connected-conformance.md`. This changes no production

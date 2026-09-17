@@ -258,6 +258,7 @@ struct AppState {
     file_cursors: code_reads::file_pages::PageCursors,
     code_cache: crate::code_cache::CodeCache,
     code_buffers: Arc<code_buffers::Owners>,
+    code_navigation_admission: bool,
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
     web_push: Arc<WebPushService>,
@@ -1507,6 +1508,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             file_cursors: code_reads::file_pages::PageCursors::default(),
             code_cache,
             code_buffers: Arc::default(),
+            code_navigation_admission: args.code_navigation_admission
+                == crate::cli::CodeNavigationAdmission::Candidate,
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
             web_push,
@@ -4207,6 +4210,7 @@ fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/code/buffers"
         || path.starts_with("/api/code/buffers/")
         || path.starts_with("/api/code/buffer-synchronizations/")
+        || path.starts_with("/api/code/navigations/")
     {
         return RouteAuth::ProductOperator;
     }
