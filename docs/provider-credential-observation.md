@@ -1,0 +1,70 @@
+# Provider credential observation
+
+The Service owns credential generations. A Machine observes a changed runtime
+projection, submits a candidate against the signed generation it read, and
+converges to the Service's compare-and-swap winner. Runtime directories retain
+native session state; observers do not choose a winner by file timestamp or
+copy credentials between live sessions.
+
+## September 2026 failure
+
+On Hawk, a Claude runtime refreshed at 15:00 while other runtime generations
+retained the credential that expired at 15:05. Subsequent failures at 15:21 and
+15:42 cleared those generations' tokens. The Machine still held Service
+generation 5. Its recursive authentication watcher covered 169,194 directories
+under projected homes, including native history, caches and plugin trees.
+Filtering each notification rediscovered contracts through full runtime archive
+integrity verification. The queue was unbounded, and draining it had no bound.
+The Machine had accumulated more CPU time than elapsed wall time.
+
+A credential-file symlink alone is insufficient: native CLIs can save by
+renaming a temporary file over it. Existing tests preserved this candidate for
+Service reconciliation, but did not test the actual notification path amid
+unrelated native state. An additional failure was that structurally present
+credential files, including a CLI's signed-out document, could become candidates.
+
+## Boundaries
+
+- Watches are nonrecursive and limited to declared credential paths, their
+  ancestors and shallow Provider/generation discovery directories. Plans are
+  cached for event filtering. Access events and unrelated native files never
+  enqueue work. A capacity-one notification channel represents a rescan of
+  current state, not a queue of historical credential values.
+- Watch plans use authenticated package descriptors. Complete executable and
+  archive verification remains mandatory for installation, launch and native
+  probe execution. Credential observation does not need to reread those bytes.
+- A fixed debounce cannot be postponed by a continuous stream. A bounded
+  metadata reconciliation once per minute covers lost notifications and
+  directory recreation; it never walks a Provider home. Newly discovered
+  directories are watched before credentials are scanned.
+- The Controller connection owns and cancels its observation task. Blocking
+  filesystem and integrity work runs outside the async transport executor.
+- Each complete changed projection is considered independently. A missing
+  sibling cannot hide a valid rotation. A Plugin declaring a signed native
+  exit-status authentication probe must accept the exact candidate in a private
+  temporary home before promotion. The probe has no inherited Provider
+  credentials, discards output, has a deadline and is killed on cancellation.
+  Legacy releases and Plugins without this probe retain structural validation;
+  this is not a claim of upstream network authentication for every Provider.
+- Invalid candidates are excluded. While a valid candidate awaits CAS, failed
+  siblings cannot request restoration of the expired baseline over it. Pending
+  inventory is scoped to the generation actually submitted.
+
+## Verification
+
+`machine_cli::auth_watch` tests exercise native filesystem notifications,
+atomic symlink replacement, unrelated file traffic, directory recreation and
+connection cancellation. `machine_plugins::auth_watch` checks the bounded path
+plan. `machine_plugins::auth_refresh` checks isolated probe success, refusal and
+timeout. `noncanonical_refresh_survives_until_the_service_cas_wins` checks that
+a missing sibling cannot suppress a rotation and that the next Service bundle
+repairs all projections without touching native state.
+
+The ignored `native_claude_refresh_probe_conformance` accepts an explicit
+immutable CLI path in `COWBOY_TEST_AUTH_PROBE_CLI`. It uses only synthetic
+credentials in a disposable home and does not log in or run inference. Run it
+when accepting a new native CLI's authentication probe semantics.
+
+Release verification must separately establish the installed watcher count,
+Service generation advancement, agreement of credential projections and native
+session recovery. A green isolated test is not evidence of those live effects.

@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::{Context as _, bail};
 use clap::{Parser, ValueEnum};
 use futures::{SinkExt as _, StreamExt as _};
-use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
@@ -26,6 +25,7 @@ use crate::machine_protocol::{
     MachineHello, MachineWorkspace, Platform, ProviderMaterializationState,
 };
 
+mod auth_watch;
 mod installation;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
@@ -980,9 +980,11 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
     let plugin_execution =
         PluginExecutionScope::new(config.service_id.as_deref(), &config.machine_id);
-    let _provider_auth_watcher = (protocol >= 6)
-        .then(|| start_provider_auth_watcher(Arc::clone(&config.providers), event_tx.clone()))
-        .transpose()?;
+    let _provider_auth_watcher = if protocol >= 6 {
+        Some(auth_watch::start(Arc::clone(&config.providers), event_tx.clone()).await?)
+    } else {
+        None
+    };
     // Controller replay can also exceed a small frame-count bound while the
     // local broker socket is flushing one large command. Keep the WebSocket
     // read loop non-blocking; the writer timeout still fences a stalled broker
@@ -1108,56 +1110,33 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     result
 }
 
-fn start_provider_auth_watcher(
-    providers: Arc<MachinePluginStore>,
-    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
-) -> anyhow::Result<RecommendedWatcher> {
-    let (changes_tx, mut changes_rx) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = notify::recommended_watcher(move |change| {
-        let _ = changes_tx.send(change);
-    })
-    .context("creating Provider auth filesystem watcher")?;
-    watcher
-        .watch(&providers.auth_watch_root(), RecursiveMode::Recursive)
-        .context("watching Provider auth projections")?;
-
-    tokio::spawn(async move {
-        publish_provider_auth_observations(&providers, &events);
-        while let Some(change) = changes_rx.recv().await {
-            let event = match change {
-                Ok(event) => event,
-                Err(error) => {
-                    tracing::warn!(%error, "Provider auth filesystem watcher failed");
-                    continue;
-                }
-            };
-            if matches!(event.kind, EventKind::Access(_))
-                || !providers.auth_event_is_relevant(&event.paths)
-            {
-                continue;
-            }
-            // Provider CLIs commonly use a temporary file + rename. Wait for
-            // the complete atomic sequence and collapse its notifications so
-            // a partial credential can never be proposed to the Service.
-            tokio::time::sleep(Duration::from_millis(250)).await;
-            while changes_rx.try_recv().is_ok() {}
-            publish_provider_auth_observations(&providers, &events);
-        }
-    });
-    Ok(watcher)
-}
-
-fn publish_provider_auth_observations(
-    providers: &MachinePluginStore,
+async fn publish_provider_auth_observations(
+    providers: &Arc<MachinePluginStore>,
     events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    force_inventory: bool,
 ) {
-    let observations = providers.auth_refresh_observations();
-    let pending: BTreeSet<_> = observations
-        .candidates
-        .iter()
-        .map(|candidate| candidate.provider_id.clone())
-        .collect();
+    let store = Arc::clone(providers);
+    let Ok(mut observations) =
+        tokio::task::spawn_blocking(move || store.auth_refresh_observations()).await
+    else {
+        return;
+    };
+    if !force_inventory
+        && observations.candidates.is_empty()
+        && observations.failed_provider_ids.is_empty()
+    {
+        return;
+    }
+    let mut pending = BTreeMap::new();
     for (index, candidate) in observations.candidates.into_iter().enumerate() {
+        if let Err(error) = providers.validate_auth_refresh_candidate(&candidate).await {
+            observations
+                .failed_provider_ids
+                .insert(candidate.provider_id.clone());
+            tracing::warn!(provider = %candidate.provider_id, %error, "invalid credential refresh excluded from promotion");
+            continue;
+        }
+        pending.insert(candidate.provider_id.clone(), candidate.expected_generation);
         let request_id = format!(
             "provider-auth-refresh-{}-{}-{index}",
             std::process::id(),
@@ -1175,15 +1154,31 @@ fn publish_provider_auth_observations(
             bundle: candidate.bundle.values,
         });
     }
-    let mut plugins = providers.inventory().unwrap_or_default();
+    let store = Arc::clone(providers);
+    let mut plugins = match tokio::task::spawn_blocking(move || store.inventory()).await {
+        Ok(Ok(plugins)) => plugins,
+        error => {
+            tracing::warn!(
+                ?error,
+                "could not publish credential reconciliation inventory"
+            );
+            return;
+        }
+    };
     for plugin in &mut plugins {
-        if observations.failed_provider_ids.contains(&plugin.plugin_id) {
+        if observations.failed_provider_ids.contains(&plugin.plugin_id)
+            && !pending.contains_key(&plugin.plugin_id)
+        {
             plugin.materialization_state = ProviderMaterializationState::Failed;
             plugin.detail = Some(
                 "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
                     .to_owned(),
             );
-        } else if pending.contains(&plugin.plugin_id) {
+        } else if pending
+            .get(&plugin.plugin_id)
+            .copied()
+            .is_some_and(|generation| plugin.auth_generation == Some(generation))
+        {
             plugin.materialization_state = ProviderMaterializationState::Applying;
             plugin.detail = Some(
                 "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
@@ -2034,7 +2029,7 @@ fn handle_machine_command(
                         // projection via an atomic directory rename. Publish
                         // observations directly instead of relying on a
                         // platform-specific filesystem event shape.
-                        publish_provider_auth_observations(&providers, &events);
+                        publish_provider_auth_observations(&providers, &events, true).await;
                         if let Some(provider) = roll_provider {
                             let _ =
                                 runtime_commands.send(crate::runtime_wire::Frame::CoreCommand {

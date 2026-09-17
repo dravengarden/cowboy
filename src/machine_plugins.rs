@@ -7,6 +7,8 @@
 
 #![warn(clippy::pedantic)]
 
+mod auth_refresh;
+pub(crate) mod auth_watch;
 #[cfg(test)]
 mod code_sync_conformance;
 mod installation;
@@ -2197,6 +2199,22 @@ impl MachinePluginStore {
         digest: &str,
         content: &Path,
     ) -> Result<(ProviderPackage, AgentRuntimeBinding, PathBuf)> {
+        let (package, binding, path) =
+            Self::verified_legacy_provider_descriptor(provider_id, digest, content)?;
+        let target = matching_runtime_artifacts(&binding, &self.platform, &self.architecture)?;
+        let metadata = read_installed_runtime(content)?;
+        ensure!(
+            installed_runtime_matches(content, target, &metadata)?,
+            "retained legacy Provider runtime failed integrity verification"
+        );
+        Ok((package, binding, path))
+    }
+
+    fn verified_legacy_provider_descriptor(
+        provider_id: &str,
+        digest: &str,
+        content: &Path,
+    ) -> Result<(ProviderPackage, AgentRuntimeBinding, PathBuf)> {
         let path = content.join("package.cowboy-provider");
         let bytes = fs::read(&path)
             .with_context(|| format!("reading legacy Provider generation {}", path.display()))?;
@@ -2223,17 +2241,32 @@ impl MachinePluginStore {
             package.manifest.id == provider_id,
             "stored legacy Provider id mismatch"
         );
-        let target = matching_runtime_artifacts(&binding, &self.platform, &self.architecture)?;
-        let staging = target.clone();
-        let metadata = read_installed_runtime(content)?;
-        ensure!(
-            installed_runtime_matches(content, &staging, &metadata)?,
-            "retained legacy Provider runtime failed integrity verification"
-        );
         Ok((package, binding, path))
     }
 
     fn verified_plugin_generation(
+        &self,
+        plugin_id: &str,
+        digest: &str,
+    ) -> Result<(PluginPackage, cowboy_plugin_sdk::PluginRelease, PathBuf)> {
+        let (package, release, content) = self.verified_plugin_descriptor(plugin_id, digest)?;
+        let target = matching_plugin_runtime_artifacts(
+            &release.runtime_artifacts,
+            &self.platform,
+            &self.architecture,
+        )?;
+        let staging = provider_staging_projection(target);
+        let metadata = read_installed_runtime(&content)?;
+        ensure!(
+            installed_runtime_matches(&content, &staging, &metadata)?,
+            "retained Plugin runtime failed integrity verification"
+        );
+        Ok((package, release, content))
+    }
+
+    // Credential observation trusts the signed contract, not executable bytes.
+    // Launch and installation still verify the complete runtime above.
+    fn verified_plugin_descriptor(
         &self,
         plugin_id: &str,
         digest: &str,
@@ -2269,18 +2302,29 @@ impl MachinePluginStore {
             )?,
             "stored Plugin publisher signature is invalid"
         );
-        let target = matching_plugin_runtime_artifacts(
-            &release.runtime_artifacts,
-            &self.platform,
-            &self.architecture,
-        )?;
-        let staging = provider_staging_projection(target);
-        let metadata = read_installed_runtime(&content)?;
-        ensure!(
-            installed_runtime_matches(&content, &staging, &metadata)?,
-            "retained Plugin runtime failed integrity verification"
-        );
         Ok((package, release, content))
+    }
+
+    fn active_auth_package(&self, provider_id: &str) -> Result<Option<(ProviderPackage, String)>> {
+        let Some(generation) = read_link_name(&self.plugin_root(provider_id).join("active")) else {
+            return Ok(None);
+        };
+        let digest = format!("sha256:{generation}");
+        let content = self
+            .plugin_root(provider_id)
+            .join("generations")
+            .join(&generation)
+            .join("content");
+        if !content.join("package.cowboy-plugin").is_file() {
+            let (package, _, _) =
+                Self::verified_legacy_provider_descriptor(provider_id, &digest, &content)?;
+            return Ok(Some((package, digest)));
+        }
+        let (package, _, _) = self.verified_plugin_descriptor(provider_id, &digest)?;
+        Ok(package
+            .agent_provider()
+            .cloned()
+            .map(|package| (package, digest)))
     }
 
     fn activate(plugin_root: &Path, generation_name: &str) -> Result<ProviderActivationSnapshot> {
@@ -2353,16 +2397,6 @@ impl MachinePluginStore {
         self.auth_root.join("providers")
     }
 
-    /// Return whether a filesystem notification can affect a declared
-    /// compare-and-swap credential. Runtime logs and other Provider state are
-    /// deliberately excluded so ordinary agent activity never causes an auth
-    /// scan.
-    pub fn auth_event_is_relevant(&self, paths: &[PathBuf]) -> bool {
-        let root = self.auth_watch_root();
-        self.auth_credential_watch_paths()
-            .is_ok_and(|credentials| auth_event_paths_intersect(&root, &credentials, paths))
-    }
-
     /// Compare each writable Machine projection with its signed Service
     /// replica. Only a complete, contract-valid changed bundle is returned;
     /// missing or partially written credentials remain a failed
@@ -2380,7 +2414,10 @@ impl MachinePluginStore {
                 continue;
             }
             let provider_id = entry.file_name().to_string_lossy().into_owned();
-            match self.auth_refresh_candidates_for_provider(&provider_id) {
+            match self.auth_refresh_candidates_for_provider(
+                &provider_id,
+                &mut observations.failed_provider_ids,
+            ) {
                 Ok(mut candidates) => observations.candidates.append(&mut candidates),
                 Err(error) => {
                     observations.failed_provider_ids.insert(provider_id.clone());
@@ -2401,48 +2438,12 @@ impl MachinePluginStore {
         observations
     }
 
-    fn auth_credential_watch_paths(&self) -> Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-        let root = self.auth_watch_root();
-        if !root.is_dir() {
-            return Ok(paths);
-        }
-        for entry in fs::read_dir(root)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let provider_id = entry.file_name().to_string_lossy().into_owned();
-            let Some((package, _)) = self.active_package(&provider_id)? else {
-                continue;
-            };
-            if package.manifest.authentication.refresh != RefreshOwnership::CompareAndSwap {
-                continue;
-            }
-            let Some(envelope) = self.latest_auth_envelope(&provider_id)? else {
-                continue;
-            };
-            if envelope.action != ProviderAuthAction::Apply {
-                continue;
-            }
-            for generation in self.writable_auth_projection_generations(&package)? {
-                let home = generation.join("home");
-                for credential in &package.manifest.authentication.credential_files {
-                    let path = home.join(&credential.relative_path);
-                    ensure_within(&home, &path)?;
-                    paths.push(path);
-                }
-                paths.push(generation.join("environment.json"));
-            }
-        }
-        Ok(paths)
-    }
-
     fn auth_refresh_candidates_for_provider(
         &self,
         provider_id: &str,
+        failed: &mut BTreeSet<String>,
     ) -> Result<Vec<ProviderAuthRefreshCandidate>> {
-        let Some((package, generation_digest)) = self.active_package(provider_id)? else {
+        let Some((package, generation_digest)) = self.active_auth_package(provider_id)? else {
             return Ok(Vec::new());
         };
         let auth = &package.manifest.authentication;
@@ -2464,24 +2465,13 @@ impl MachinePluginStore {
             serde_json::from_slice(&self.encryption.open(&envelope)?)
                 .context("decoding signed Provider credential replica")?;
         validate_portable_bundle(auth, &baseline)?;
-        let mut seen = BTreeSet::new();
-        let mut candidates = Vec::new();
-        for generation in self.writable_auth_projection_generations(&package)? {
-            let metadata = read_materialization_metadata(&generation)?;
-            ensure!(
-                metadata.auth_contract_fingerprint
-                    == package.manifest.compatibility.auth_contract_fingerprint,
-                "Provider runtime projection uses a different auth contract"
-            );
-            let projected = projected_credential_bundle(auth, &generation, &baseline.method_id)?;
-            if projected == baseline {
-                continue;
-            }
-            let identity = serde_json::to_vec(&projected)?;
-            if !seen.insert(identity) {
-                continue;
-            }
-            candidates.push(ProviderAuthRefreshCandidate {
+        let (bundles, incomplete) = self.projected_refresh_bundles(&package, &baseline)?;
+        if incomplete {
+            failed.insert(provider_id.to_owned());
+        }
+        Ok(bundles
+            .into_iter()
+            .map(|bundle| ProviderAuthRefreshCandidate {
                 provider_id: provider_id.to_owned(),
                 expected_generation: envelope.auth_generation,
                 provider_version: package.manifest.version.clone(),
@@ -2491,10 +2481,49 @@ impl MachinePluginStore {
                     .compatibility
                     .auth_contract_fingerprint
                     .clone(),
-                bundle: projected,
-            });
+                bundle,
+            })
+            .collect())
+    }
+
+    fn projected_refresh_bundles(
+        &self,
+        package: &ProviderPackage,
+        baseline: &PortableCredentialBundle,
+    ) -> Result<(Vec<PortableCredentialBundle>, bool)> {
+        let auth = &package.manifest.authentication;
+        let mut incomplete = false;
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for generation in self.writable_auth_projection_generations(package)? {
+            let metadata = read_materialization_metadata(&generation)?;
+            ensure!(
+                metadata.auth_contract_fingerprint
+                    == package.manifest.compatibility.auth_contract_fingerprint,
+                "Provider runtime projection uses a different auth contract"
+            );
+            let projected = match projected_credential_bundle(
+                auth,
+                &generation,
+                &baseline.method_id,
+            ) {
+                Ok(projected) => projected,
+                Err(error) => {
+                    incomplete = true;
+                    tracing::warn!(provider = %package.manifest.id, %error, "incomplete runtime projection excluded from refresh");
+                    continue;
+                }
+            };
+            if projected == *baseline {
+                continue;
+            }
+            let identity = serde_json::to_vec(&projected)?;
+            if !seen.insert(identity) {
+                continue;
+            }
+            candidates.push(projected);
         }
-        Ok(candidates)
+        Ok((candidates, incomplete))
     }
 
     fn auth_candidate_root(&self, provider_id: &str) -> PathBuf {
@@ -2521,21 +2550,6 @@ impl MachinePluginStore {
         }
         Ok(())
     }
-}
-
-fn auth_event_paths_intersect(
-    root: &Path,
-    credentials: &[PathBuf],
-    changed_paths: &[PathBuf],
-) -> bool {
-    changed_paths.iter().any(|changed| {
-        changed.starts_with(root)
-            && credentials.iter().any(|credential| {
-                changed == credential
-                    || credential.starts_with(changed)
-                    || changed.parent() == credential.parent()
-            })
-    })
 }
 
 fn projected_credential_bundle(
@@ -5164,9 +5178,26 @@ mod tests {
         assert!(command.is_file());
         store.install(&desired).await.unwrap();
         atomic_write(&command, b"#!/bin/sh\nexit 0\n# tampered\n", 0o700).unwrap();
+        // Credential observation authenticates declarations without inspecting
+        // executable archives; execution admission still rejects these bytes.
+        assert!(store.active_auth_package("gemini").unwrap().is_some());
+        assert!(
+            store
+                .launch_context("gemini", &release.artifact_digest, Some(2))
+                .is_err()
+        );
         let error = store.install(&desired).await.unwrap_err();
         assert!(error.to_string().contains("integrity verification"));
         atomic_write(&command, &script, 0o700).unwrap();
+        let descriptor = store
+            .plugin_root("gemini")
+            .join("active/content/package.cowboy-plugin");
+        let original_descriptor = fs::read(&descriptor).unwrap();
+        let mut tampered_descriptor = original_descriptor.clone();
+        tampered_descriptor.push(b' ');
+        fs::write(&descriptor, tampered_descriptor).unwrap();
+        assert!(store.active_auth_package("gemini").is_err());
+        fs::write(&descriptor, original_descriptor).unwrap();
         store
             .uninstall("gemini", &release.artifact_digest)
             .await
@@ -5769,32 +5800,6 @@ mod tests {
     }
 
     #[test]
-    fn auth_events_include_atomic_generation_switches_but_exclude_other_state() {
-        let root = PathBuf::from("/state/provider-auth/providers");
-        let credential = root.join("grok/runtime/generations/3/home/.grok/auth.json");
-        assert!(auth_event_paths_intersect(
-            &root,
-            std::slice::from_ref(&credential),
-            std::slice::from_ref(&credential)
-        ));
-        assert!(auth_event_paths_intersect(
-            &root,
-            std::slice::from_ref(&credential),
-            &[credential.parent().unwrap().join(".auth.json.partial")]
-        ));
-        assert!(auth_event_paths_intersect(
-            &root,
-            std::slice::from_ref(&credential),
-            &[root.join("grok/runtime/generations/3")]
-        ));
-        assert!(!auth_event_paths_intersect(
-            &root,
-            std::slice::from_ref(&credential),
-            &[PathBuf::from("/state/plugins/grok/runtime.log")]
-        ));
-    }
-
-    #[test]
     fn legacy_provider_home_moves_runtime_state_without_copying_credentials() {
         use cowboy_provider_sdk::{StandardProviderSource, build_package};
 
@@ -6040,8 +6045,7 @@ mod tests {
         // A Provider may atomically replace a symlink instead of writing through
         // it. Preserve that complete refresh candidate until Service CAS resolves.
         let candidate = br#"{"account":{"key":"runtime-two-refreshed"}}"#;
-        fs::remove_file(&noncanonical).unwrap();
-        fs::write(&noncanonical, candidate).unwrap();
+        atomic_write(&noncanonical, candidate, 0o600).unwrap();
         store
             .materialize_bundle(&package, 2, &bundle_for(service_two))
             .unwrap();
@@ -6053,12 +6057,25 @@ mod tests {
                 .is_symlink()
         );
 
+        // An incomplete sibling must not discard the surviving rotation.
+        store
+            .ensure_runtime_projection(&package, 3, &bundle_for(service_two))
+            .unwrap();
+        let incomplete = runtime_root.join("3/home/.grok/auth.json");
+        fs::remove_file(&incomplete).unwrap();
+        let (candidates, failed) = store
+            .projected_refresh_bundles(&package, &bundle_for(service_two))
+            .unwrap();
+        assert!(failed);
+        assert_eq!(candidates, vec![bundle_for(candidate)]);
+
         let service_winner = br#"{"account":{"key":"service-three"}}"#;
         store
             .materialize_bundle(&package, 3, &bundle_for(service_winner))
             .unwrap();
         assert_eq!(fs::read(&canonical).unwrap(), service_winner);
         assert_eq!(fs::read(&noncanonical).unwrap(), service_winner);
+        assert_eq!(fs::read(&incomplete).unwrap(), service_winner);
         assert!(
             fs::symlink_metadata(&noncanonical)
                 .unwrap()
