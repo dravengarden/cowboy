@@ -2,6 +2,11 @@
 // rail (docs/sessions-folders.md): the per-device collapsed set, the folder
 // name prompt, the Move-to / Bind-project pickers and the delete confirm.
 // The tree itself is rendered by SessionList; these are its transient layers.
+//
+// Every sheet here is portalled to <body>. SessionList lives inside the Mobile
+// drawer layer (a transformed, overflow-hidden compositor layer stacked under
+// the page peek), so an inline `position: fixed` sheet would be laid out
+// against the drawer, clipped to its width and painted beneath the page.
 
 import {
   Button,
@@ -156,7 +161,8 @@ export function FolderNameShell({
   initial: string;
   confirmLabel: string;
   helperText?: string;
-  /** Secondary action rendered beside Cancel (Mobile "Organize by project"). */
+  /** Secondary action rendered under the field (Mobile "Organize by
+   *  project"); the action row keeps exactly Cancel + confirm. */
   extra?: ReactNode;
   onClose: () => void;
   onConfirm: (name: string) => void;
@@ -176,6 +182,7 @@ export function FolderNameShell({
   useConfirmEnter(desktop, submit, { suppressBareEnter: false });
   return (
     <Sheet
+      portal
       forceSheet={navbarAtBottom}
       open
       onClose={onClose}
@@ -183,7 +190,6 @@ export function FolderNameShell({
       mobileDismiss="none"
       actions={
         <>
-          {extra}
           <Button onClick={onClose} color="inherit">
             Cancel
             <Kbd keys="Esc" />
@@ -225,6 +231,7 @@ export function FolderNameShell({
         sx={{ mt: 1 }}
         helperText={helperText}
       />
+      {extra}
     </Sheet>
   );
 }
@@ -263,6 +270,7 @@ export function FolderPickerShell({
   );
   return (
     <Sheet
+      portal
       forceSheet={navbarAtBottom}
       open
       onClose={onClose}
@@ -363,6 +371,7 @@ export function ProjectPickerShell({
   );
   return (
     <Sheet
+      portal
       forceSheet={navbarAtBottom}
       open
       onClose={onClose}
@@ -447,6 +456,7 @@ export function DeleteFolderShell({
   const target = destination ? `"${destination}"` : "the top level";
   return (
     <Sheet
+      portal
       forceSheet={navbarAtBottom}
       open
       onClose={onClose}

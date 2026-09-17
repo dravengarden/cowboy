@@ -1968,14 +1968,16 @@ function SessionList({
                     extra={!desktop && namePrompt.mode === "create" && unboundProjects.length > 0
                         ? (
                             <Button
-                                color="inherit"
+                                fullWidth
+                                variant="text"
+                                startIcon={<LabelOutlined />}
                                 onClick={(): void => {
                                     organizeSessionsByProject();
                                     setNamePrompt(null);
                                 }}
-                                sx={{ mr: "auto" }}
+                                sx={{ mt: 1, justifyContent: "flex-start", textTransform: "none" }}
                             >
-                                By project ({unboundProjects.length})
+                                Organize by project instead ({unboundProjects.length} {unboundProjects.length === 1 ? "folder" : "folders"})
                             </Button>
                         )
                         : undefined}
