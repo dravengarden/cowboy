@@ -90,6 +90,11 @@ for abi in json.load(open("apps/native-shell/toolchain.json"))["android"]["abis"
   # and resource comes from this commit.
   cargo tauri android init --ci --skip-targets-install
   cp -R ../android/app/src/. gen/android/app/src/
+  # `android init` writes Tauri's placeholder launcher icons; install the
+  # committed Cowboy adaptive icon set and prove the replacement.
+  cp -R icons/android/. gen/android/app/src/main/res/
+  cmp icons/android/mipmap-xxxhdpi/ic_launcher_foreground.png \
+    gen/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png
   cargo tauri android build --apk --target "$native_tauri_target" "${native_flags[@]}"
   native_apk="$native_source/tauri/gen/android/app/build/outputs/apk/universal/$native_profile/app-universal-$native_profile.apk"
   if [ "$native_profile" = release ]; then
