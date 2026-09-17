@@ -45,8 +45,8 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Seventeen checks cover (receipt schema `...code-buffer-connected-conformance/v4`,
-requiring Machine protocol 21 and the Zed `1.12.0` navigation-support contract).
+Eighteen checks cover (receipt schema `...code-buffer-connected-conformance/v5`,
+requiring Machine protocol 21 and Zed `1.13.0` navigation/text support).
 Historical v3 receipts cover only the first eleven checks:
 
 1. Anonymous installation refusal, actual signed Code installation, cancelled
@@ -96,6 +96,10 @@ Historical v3 receipts cover only the first eleven checks:
     after parent release and worktree path removal.
 17. A separate retained navigation group refuses connection replacement and
     becomes unavailable after Controller restart, with no command or adoption.
+18. Complete original destination text is read through two native pages after
+    parent release and path removal. A non-BMP scalar straddles the 64 KiB boundary;
+    the original owner/content/snapshot, exact offsets and complete EOF agree.
+    Historical v4 receipts do not accept this text extension.
 
 The last case deliberately leaves unresolved native ownership. Teardown kills
 only fixture executables and removes their validated private runtime directories;
@@ -110,7 +114,7 @@ synchronization reservation; destination preparation follows completed sync
 and never renews an expired preparation.
 
 Still separate: actual Review orchestration, browser synchronization ownership,
-full native destination views, Machine maintenance and signed Code release
+intended native destination views, Machine maintenance and signed Code release
 publication/installation, supported devices, abandoned-browser/restart recovery,
 independent restoration and general graph/state leases. This test-only change
 does not require or authorize a production component restart.
@@ -130,3 +134,6 @@ Its [candidate acceptance](releases/service-navigation-candidate-2026-09-17.md)
 records two complete v4 runs and the exact immutable inputs. The distinct inert
 sync used for reconnect testing is created only after the navigation handoff
 and parent release have completed; its process-wide guard is never bypassed.
+The [native text reader](plugin-native-text-reads.md) adds check 18, a new
+core-only support probe and independent read validation without changing
+navigation admission or enabling its Web consumer.

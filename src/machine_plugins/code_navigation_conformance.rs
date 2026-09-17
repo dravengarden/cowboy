@@ -300,6 +300,18 @@ pub(super) async fn finish(store: &MachinePluginStore, prepared: Prepared) {
         read["result"]["result"]["contents"][0]["text"],
         "owned native destination fixture"
     );
+    let text = store
+        .code_request(
+            "zed",
+            &json!({"type":"readBufferLease","lease":destination,
+        "request":{"kind":"text","content":content,"page":{"kind":"start"}}}),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(text["result"]["result"]["kind"], "page");
+    assert_eq!(text["result"]["result"]["text"], A);
+    assert!(text["result"]["result"]["nextOffset"].is_null());
     store
         .code_request(
             "zed",

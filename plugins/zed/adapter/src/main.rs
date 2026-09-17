@@ -23,6 +23,7 @@ mod coordinates;
 mod diagnostics;
 mod sync_native;
 mod sync_owners;
+mod text_reads;
 
 const ADAPTER_VERSION: u8 = 1;
 const ZED_VERSION: &str = "1.13.0";

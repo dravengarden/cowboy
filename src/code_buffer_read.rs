@@ -3,7 +3,7 @@
 //! authority to interpret cursor positions. Content-bound reads independently
 //! compare the complete displayed text with the retained native buffer.
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -11,6 +11,8 @@ const MAX_REPLY_BYTES: usize = 2 * 1024 * 1024;
 
 mod content;
 pub(crate) use content::{Content, ContentOutput, Query};
+mod text;
+pub(crate) use text::{TextOutput, TextPage};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -18,6 +20,7 @@ pub(crate) enum Request {
     Language {},
     Symbols {},
     Content { content: Content, query: Query },
+    Text { content: Content, page: TextPage },
 }
 
 impl Request {
@@ -25,15 +28,18 @@ impl Request {
         if let Self::Content { content, .. } = self {
             content.validate()?;
         }
+        if let Self::Text { content, page } = self {
+            page.validate(content)?;
+        }
         Ok(())
     }
 
     #[cfg(feature = "full")]
     pub(crate) fn support_kind(&self) -> &'static str {
-        if matches!(self, Self::Content { .. }) {
-            "bufferLeaseContentSupport"
-        } else {
-            "bufferLeaseReadSupport"
+        match self {
+            Self::Content { .. } => "bufferLeaseContentSupport",
+            Self::Text { .. } => "bufferLeaseTextSupport",
+            Self::Language {} | Self::Symbols {} => "bufferLeaseReadSupport",
         }
     }
 }
@@ -103,6 +109,10 @@ pub(crate) enum Output {
         content: Content,
         result: ContentOutput,
     },
+    Text {
+        content: Content,
+        result: TextOutput,
+    },
 }
 
 impl Output {
@@ -122,6 +132,19 @@ impl Output {
                     "buffer read changed its content identity"
                 );
                 result.validate(query)?;
+            }
+            (
+                Request::Text { content, page },
+                Self::Text {
+                    content: observed,
+                    result,
+                },
+            ) => {
+                ensure!(
+                    &content == observed,
+                    "buffer text changed its content identity"
+                );
+                result.validate(&content, &page)?;
             }
             _ => anyhow::bail!("buffer read reply changed operation"),
         }

@@ -52,6 +52,39 @@ async fn read_support_and_invalid_requests_never_select_a_plugin() {
 }
 
 #[tokio::test]
+async fn text_support_and_malformed_pages_never_select_a_plugin() {
+    let host = CodeRuntimeHost::default();
+    let probe = json!({"type":"bufferLeaseTextSupport"});
+    assert_eq!(
+        host.request("fixture-code", &probe, || panic!("selected a Plugin"))
+            .await
+            .unwrap(),
+        json!({"type":"bufferLeaseTextSupport","api_version":1})
+    );
+    assert!(crate::machine_code_plugins::request_worktree(&probe).is_err());
+    let wire: Value = serde_json::from_str(include_str!(
+        "../../../plugins/zed/adapter/fixtures/text.json"
+    ))
+    .unwrap();
+    for page in [
+        json!({"kind":"start","path":"other"}),
+        json!({"kind":"continue","offset":0,"snapshot":"a".repeat(64)}),
+        json!({"kind":"continue","offset":1,"snapshot":"wrong"}),
+    ] {
+        let mut request = wire["request"].clone();
+        request["page"] = page;
+        let command = json!({"type":"readBufferLease","lease":{"instance":"a".repeat(32),"id":"0000000000000001"},"request":request});
+        assert!(Command::parse(&command).is_err());
+        assert!(
+            host.request("fixture-code", &command, || panic!("selected a Plugin"))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(host.live_generation_count().await, 0);
+}
+
+#[tokio::test]
 async fn content_support_is_pathless_core_only_and_content_is_validated_before_dispatch() {
     let host = CodeRuntimeHost::default();
     let probe = json!({"type":"bufferLeaseContentSupport"});

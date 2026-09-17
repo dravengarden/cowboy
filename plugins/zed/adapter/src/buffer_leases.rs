@@ -55,6 +55,10 @@ pub(super) enum ReadRequest {
         content: super::content_reads::Content,
         query: super::content_reads::Query,
     },
+    Text {
+        content: super::content_reads::Content,
+        page: super::text_reads::Page,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +80,10 @@ pub(super) enum ReadOutput {
     Content {
         content: super::content_reads::Content,
         result: super::content_reads::Output,
+    },
+    Text {
+        content: super::content_reads::Content,
+        result: super::text_reads::Output,
     },
 }
 
@@ -348,6 +356,9 @@ impl Registry {
         if let ReadRequest::Content { content, .. } = &request {
             content.validate()?;
         }
+        if let ReadRequest::Text { content, page } = &request {
+            page.validate(content)?;
+        }
         let id = self.resolve(&lease)?;
         let slot = self
             .slots
@@ -389,6 +400,15 @@ impl Registry {
                     .content_read(buffer.remote_id, &content, query)
                     .await?;
                 ReadOutput::Content { content, result }
+            }
+            ReadRequest::Text { content, page } => {
+                let result = zed
+                    .context("native text observations unavailable")?
+                    .diagnostics
+                    .lock()
+                    .expect("diagnostic cache poisoned")
+                    .text_read(buffer.remote_id, &lease, &content, &page)?;
+                ReadOutput::Text { content, result }
             }
         };
         Ok(Response::BufferLeaseRead {

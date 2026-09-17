@@ -14,6 +14,7 @@ import { captureContent, type CapturedContent } from "./codeBuffers/content.ts";
 import contentGolden from "../../plugins/zed/adapter/fixtures/content.json" with {
   type: "json",
 };
+import { runTextBrowserConformance } from "./codeBufferTextBrowserConformance.ts";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -225,6 +226,7 @@ export async function runCodeBufferBrowserConformance(): Promise<string[]> {
   const tests: string[] = [];
   await strictMode(tests);
   await contentLifetime(tests);
+  tests.push(...await runTextBrowserConformance());
   const pending = await opened();
   try {
     const close = pending.owner.close();

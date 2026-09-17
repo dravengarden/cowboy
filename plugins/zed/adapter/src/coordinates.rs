@@ -317,6 +317,21 @@ impl Mirror {
         })
     }
 
+    pub(crate) fn text_page(&self, offset: u32) -> Result<String> {
+        let start = usize::try_from(offset)?;
+        let rope = self.buffer.as_rope();
+        ensure!(
+            start <= rope.len() && rope.clip_offset(start, text::Bias::Left) == start,
+            "text page starts outside content or splits UTF-8"
+        );
+        let end = rope.clip_offset(
+            (start + crate::text_reads::MAX_PAGE_BYTES).min(rope.len()),
+            text::Bias::Left,
+        );
+        // Copy only the bounded page, not the complete buffer for every page.
+        Ok(rope.chunks_in_range(start..end).collect())
+    }
+
     pub(crate) fn offset(&self, wire: &proto::Anchor) -> Result<u64> {
         let id = self.buffer.remote_id();
         ensure!(

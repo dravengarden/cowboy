@@ -1,5 +1,9 @@
 /** Compile-only boundary tests, never imported by the product. */
-import type { CapturedContent, ContentObservation } from "./content.ts";
+import type {
+  CapturedContent,
+  ContentIdentity,
+  ContentObservation,
+} from "./content.ts";
 import type { OwnedCodeBuffer } from "./owner.ts";
 import type { CodeBufferCleanup } from "./cleanup.ts";
 import type {
@@ -12,6 +16,22 @@ import type {
 } from "./synchronizationProjection.ts";
 import type { ResourceId } from "./protocol.ts";
 import type { SynchronizationId } from "./synchronizationProtocol.ts";
+
+export async function nativeTextTypes(
+  owner: OwnedCodeBuffer,
+  identity: ContentIdentity,
+) {
+  // @ts-expect-error a path cannot select native text or create ownership
+  owner.readText({ path: "replacement" });
+  const result = await owner.readText(identity);
+  // @ts-expect-error partial/mismatch/stale observations cannot supply display text
+  const premature: CapturedContent = result.content;
+  if (result.kind === "complete") {
+    const complete: CapturedContent = result.content;
+    return { complete, premature };
+  }
+  return undefined;
+}
 
 export function synchronizationTypes(
   owner: OwnedCodeBuffer,

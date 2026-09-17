@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  seventeen checks, including live authenticated Code installation into an empty
+  eighteen checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v4; historical
+  and separately completed retirement. Require receipt schema v5; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -343,6 +343,15 @@ In addition, require all applicable Provider gates below:
   never an ambient or packaged dependency. Its synthetic answers do not replace
   intended-consumer/native budget/device acceptance. Keep private Service
   navigation admission default closed; protocol 21 alone cannot enable it.
+  Complete native-text changes additionally require the original-owner/revision
+  pagination, UTF-8 boundaries, edit/undo ABA, content mismatch, bounded complete
+  hashing and cancellation-without-next-page gates in
+  `docs/plugin-native-text-reads.md`. The connected v5 extension must read a
+  multi-page destination after parent/path removal; v4 does not accept it.
+  Run `just code-buffer-browser-conformance <absolute-firefox>` for all eleven
+  cases. No partial text, stale snapshot, timeout or old host may trigger a path
+  read, reload, automatic retry or implicit new owner. This reader does not
+  accept an intended navigation view, native acquisition budget or device.
   See `docs/plugin-service-buffer-navigation.md` and
   `docs/plugin-service-buffer-sync.md`.
   Restart refusal is not restoration; fixture teardown is not native recovery.

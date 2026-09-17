@@ -87,6 +87,7 @@
           ./contracts/code-buffer-client.fixture.json
           ./contracts/code-buffer-sync.fixture.json
           ./plugins/zed/adapter/fixtures/content.json
+          ./plugins/zed/adapter/fixtures/text.json
           ./tests/fixtures/otel-client.json
           ./tests/fixtures/composition-v1.json
           ./tests/fixtures/telemetry-resolution-surface.json
@@ -115,6 +116,7 @@
           ./src/code_buffer_read.rs
           ./src/code_buffer_read
           ./plugins/zed/adapter/fixtures/content.json
+          ./plugins/zed/adapter/fixtures/text.json
           ./src/first_party_sources.rs
           ./src/plugin_auth_probe.rs
           ./src/plugin_host.rs
@@ -468,6 +470,7 @@
         test -e ${cowboy-src}/plugins/codex/provider.json
         test -e ${cowboy-src}/plugins/zed/plugin.json
         test -e ${cowboy-src}/plugins/zed/adapter/fixtures/content.json
+        test -e ${cowboy-src}/plugins/zed/adapter/fixtures/text.json
         test ! -e ${cowboy-src}/plugins/zed/adapter/src/main.rs
         test -e ${cowboy-src}/build.rs
         test -e ${cowboy-src}/plugins/grok/host.json
@@ -488,7 +491,9 @@
         test -e ${machine-src}/src/first_party_sources.rs
         test -e ${machine-src}/src/plugin_process.rs
         test -e ${machine-src}/src/code_buffer_read/content.rs
+        test -e ${machine-src}/src/code_buffer_read/text.rs
         test -e ${machine-src}/plugins/zed/adapter/fixtures/content.json
+        test -e ${machine-src}/plugins/zed/adapter/fixtures/text.json
         test ! -e ${machine-src}/plugins/zed/adapter/src/main.rs
         test ! -e ${machine-src}/contracts/code-buffer-sync.fixture.json
         test -e ${machine-src}/plugins/gemini/provider.json

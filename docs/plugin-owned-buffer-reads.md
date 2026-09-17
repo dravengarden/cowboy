@@ -16,6 +16,9 @@ adds a distinct closed `content` request with conditional language/symbol/hover
 queries in private Zed `1.6.0`. Its body limit is 512 bytes. The unbound API
 described below retains its shapes and lower-bound semantics; content matching
 does not reload native buffers or enable ordinary Review.
+The later [native text reader](plugin-native-text-reads.md) adds a separate
+closed `text` read with owner/revision-bound pages and complete browser hashing;
+it never falls back to the filesystem or changes native ownership.
 
 The unbound `POST /api/code/buffers/{id}/read` requests are exactly:
 

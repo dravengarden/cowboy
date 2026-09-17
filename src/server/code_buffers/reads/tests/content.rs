@@ -9,24 +9,39 @@ fn fixture() -> Value {
 
 #[tokio::test]
 async fn content_handler_preserves_the_shared_wire_and_owner_without_exposing_native_references() {
-    for mismatch in [false, true] {
+    for (wire, support, mismatch) in [
+        (fixture(), "bufferLeaseContentSupport", false),
+        (fixture(), "bufferLeaseContentSupport", true),
+        (
+            serde_json::from_str(include_str!(
+                "../../../../../plugins/zed/adapter/fixtures/text.json"
+            ))
+            .unwrap(),
+            "bufferLeaseTextSupport",
+            false,
+        ),
+        (
+            serde_json::from_str(include_str!(
+                "../../../../../plugins/zed/adapter/fixtures/text.json"
+            ))
+            .unwrap(),
+            "bufferLeaseTextSupport",
+            true,
+        ),
+    ] {
         let (mut state, id) = opened().await;
-        let wire = fixture();
         let task = start(
             &state,
             &id,
             serde_json::from_value(wire["request"].clone()).unwrap(),
         );
         let probe = command(&mut state).await;
-        assert_eq!(
-            payload(&probe),
-            &json!({"type":"bufferLeaseContentSupport"})
-        );
+        assert_eq!(payload(&probe), &json!({"type":support}));
         reply(
             &state.context,
             &state.connection,
             probe,
-            json!({"type":"bufferLeaseContentSupport","api_version":1}),
+            json!({"type":support,"api_version":1}),
         );
         let command = command(&mut state).await;
         assert_eq!(
@@ -90,4 +105,28 @@ async fn old_content_host_refuses_without_fallback_and_invalid_content_sends_not
             .status(),
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn content_support_cannot_stand_in_for_native_text_support() {
+    let (mut state, id) = opened().await;
+    let wire: Value = serde_json::from_str(include_str!(
+        "../../../../../plugins/zed/adapter/fixtures/text.json"
+    ))
+    .unwrap();
+    let task = start(
+        &state,
+        &id,
+        serde_json::from_value(wire["request"].clone()).unwrap(),
+    );
+    let probe = command(&mut state).await;
+    assert_eq!(payload(&probe), &json!({"type":"bufferLeaseTextSupport"}));
+    reply(
+        &state.context,
+        &state.connection,
+        probe,
+        json!({"type":"bufferLeaseContentSupport","api_version":1}),
+    );
+    assert_eq!(task.await.unwrap().status(), StatusCode::NOT_IMPLEMENTED);
+    assert!(state.commands.try_recv().is_err());
 }

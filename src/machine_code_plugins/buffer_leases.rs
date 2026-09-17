@@ -28,6 +28,7 @@ pub(super) enum Command {
     BufferLeaseSupport {},
     BufferLeaseReadSupport {},
     BufferLeaseContentSupport {},
+    BufferLeaseTextSupport {},
     PrepareBuffer {
         worktree: String,
         path: String,
@@ -55,6 +56,7 @@ impl Command {
                 "bufferLeaseSupport"
                     | "bufferLeaseReadSupport"
                     | "bufferLeaseContentSupport"
+                    | "bufferLeaseTextSupport"
                     | "prepareBuffer"
                     | "openBufferLease"
                     | "releaseBufferLease"
@@ -69,7 +71,8 @@ impl Command {
         match &value {
             Self::BufferLeaseSupport {}
             | Self::BufferLeaseReadSupport {}
-            | Self::BufferLeaseContentSupport {} => {}
+            | Self::BufferLeaseContentSupport {}
+            | Self::BufferLeaseTextSupport {} => {}
             Self::PrepareBuffer { worktree, path } => ensure!(
                 worktree.len() <= 4_096 && path.len() <= 4_096,
                 "buffer path exceeds byte limit"
@@ -98,6 +101,7 @@ impl Command {
             Self::BufferLeaseSupport {}
             | Self::BufferLeaseReadSupport {}
             | Self::BufferLeaseContentSupport {}
+            | Self::BufferLeaseTextSupport {}
             | Self::PrepareBuffer { .. } => {
                 anyhow::bail!("buffer reference has not been prepared")
             }
@@ -299,6 +303,9 @@ impl Routes {
         }
         if matches!(command, Command::BufferLeaseContentSupport {}) {
             return Ok(serde_json::json!({"type":"bufferLeaseContentSupport", "api_version":1}));
+        }
+        if matches!(command, Command::BufferLeaseTextSupport {}) {
+            return Ok(serde_json::json!({"type":"bufferLeaseTextSupport", "api_version":1}));
         }
         self.reap_prepared().await;
         let key = (plugin_id.to_owned(), command.lease()?.clone());

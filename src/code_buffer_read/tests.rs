@@ -2,6 +2,7 @@ use super::*;
 use serde_json::json;
 
 mod content;
+mod text;
 
 fn language() -> Value {
     json!({"type":"bufferLeaseRead", "api_version":1, "lease":"original",

@@ -6,6 +6,7 @@ import { createCleanupMonitor } from "./cleanup.ts";
 import {
   type CapturedContent,
   capturedIdentity,
+  type ContentIdentity,
   type ContentKind,
   type ContentObservation,
   type ContentQueries,
@@ -33,6 +34,7 @@ import {
   ownSynchronization,
 } from "./synchronization.ts";
 import { decodeSynchronization } from "./synchronizationProtocol.ts";
+import { readCompleteText, textIdentity, type TextRead } from "./text.ts";
 
 type Job = "prepare" | "open" | "observe" | "read" | "release" | "synchronize";
 export interface BufferTarget {
@@ -74,6 +76,8 @@ export interface OwnedCodeBuffer {
     query: Q,
     observer?: AbortSignal,
   ): Promise<ContentObservation<Q["kind"]>>;
+  /** Native text only; no partial display, automatic retry, reload or path read. */
+  readText(content: ContentIdentity, observer?: AbortSignal): Promise<TextRead>;
   /** Effect-free native preparation, never Apply. Requires an originally opened owner. */
   prepareSynchronization(
     content: CapturedContent,
@@ -356,6 +360,37 @@ function createOwner(
           if (closing || observer?.aborted) unavailable("cancelled");
           return result;
         }),
+        observer,
+      );
+    },
+    async readText(
+      content: ContentIdentity,
+      observer?: AbortSignal,
+    ): Promise<TextRead> {
+      check(observer);
+      if (
+        closing || synchronization || releaseSent || !fresh ||
+        last?.state !== "open" || last.pending
+      ) unavailable("state");
+      const current = resource();
+      const expected = textIdentity(content);
+      return observePromise(
+        perform("read", () =>
+          readCompleteText(
+            current,
+            expected,
+            (request) =>
+              transport.request(
+                `/${current}/read`,
+                "POST",
+                request,
+                512 * 1024,
+              ),
+            () => {
+              transport.check();
+              if (closing || observer?.aborted) unavailable("cancelled");
+            },
+          )),
         observer,
       );
     },

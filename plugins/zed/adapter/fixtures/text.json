@@ -1,0 +1,29 @@
+{
+  "request": {
+    "kind": "text",
+    "content": {
+      "sha256": "1e0c92b4782cedba7c6b7149c796cc5f31a128c1b55d54999018fbefeebfc95e",
+      "utf8Bytes": 7
+    },
+    "page": { "kind": "start" }
+  },
+  "response": {
+    "apiVersion": 1,
+    "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+    "openedVersion": [{ "replicaId": 0, "timestamp": 1 }],
+    "result": {
+      "kind": "text",
+      "content": {
+        "sha256": "1e0c92b4782cedba7c6b7149c796cc5f31a128c1b55d54999018fbefeebfc95e",
+        "utf8Bytes": 7
+      },
+      "result": {
+        "kind": "page",
+        "snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "offset": 0,
+        "text": "a🙂z\n",
+        "nextOffset": null
+      }
+    }
+  }
+}

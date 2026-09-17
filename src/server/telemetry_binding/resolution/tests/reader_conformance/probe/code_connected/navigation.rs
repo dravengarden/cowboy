@@ -7,6 +7,11 @@ const SOURCE: &str = "fn source() { target(); }\n";
 const A: &str = "// a🙂z\npub fn target() {}\n";
 const B: &str = "// b🙂q\npub struct Target;\n";
 
+fn target_text() -> String {
+    // The next Unicode scalar straddles the fixed 64 KiB page boundary.
+    format!("{A}{}🙂tail\n", "x".repeat(65_535 - A.len()))
+}
+
 pub(super) struct Retained {
     group: String,
     other: String,
@@ -37,9 +42,10 @@ pub(super) fn executable() -> Result<Binary> {
 pub(super) fn seed(root: &Path) -> Result<()> {
     let workspace = root.join("workspace/lsp-worktree");
     std::fs::create_dir(&workspace)?;
+    let target = target_text();
     for (name, text) in [
         ("navigation.rs", SOURCE),
-        ("destination-a.rs", A),
+        ("destination-a.rs", target.as_str()),
         ("destination-b.rs", B),
     ] {
         private_write(&workspace.join(name), text.as_bytes())?;
@@ -221,9 +227,10 @@ pub(super) async fn prepare(
             .as_array()
             .ok_or(Failure::WrongObservation)?;
         check(locations.len() == 3)?;
+        let target = target_text();
         for location in locations {
             let text = match location["path"].as_str() {
-                Some("lsp-worktree/destination-a.rs") => A,
+                Some("lsp-worktree/destination-a.rs") => &target,
                 Some("lsp-worktree/destination-b.rs") => B,
                 _ => return Err(Failure::WrongObservation),
             };
@@ -310,7 +317,7 @@ pub(super) async fn handoff(
 ) -> Result<Retained, Failure> {
     *stage = "navigation_destination_after_uninstall";
     let path = format!("{}/destinations", endpoint(&retained.group));
-    let body = json!({"destination":retained.destination,"content":content(A)});
+    let body = json!({"destination":retained.destination,"content":content(&target_text())});
     let gate = pair.proxy.hold("codeNavigationDestination")?;
     exercise::cancel(pair, &gate, Method::POST, &path, body.clone()).await?;
     gate.release();
@@ -365,15 +372,48 @@ pub(super) async fn after_path_removal(
         .target
         .as_deref()
         .ok_or(Failure::WrongObservation)?;
-    let value = pair.http.post(&format!("{}/read", exercise::endpoint(target)), json!({"kind":"content","content":content(A),"query":{"kind":"hover","position":{"row":0,"column":4}}})).await?;
+    let complete = target_text();
+    let expected = content(&complete);
+    let path = format!("{}/read", exercise::endpoint(target));
+    let value = pair.http.post(&path, json!({"kind":"content","content":expected,"query":{"kind":"hover","position":{"row":0,"column":4}}})).await?;
     check(
         value["resourceId"] == target
-            && value["result"]["content"] == content(A)
+            && value["result"]["content"] == expected
             && value["result"]["result"]["kind"] == "hover"
             && value["result"]["result"]["contents"]
                 .as_array()
                 .is_some_and(|contents| !contents.is_empty()),
     )?;
+    let first = pair
+        .http
+        .post(
+            &path,
+            json!({"kind":"text","content":expected,"page":{"kind":"start"}}),
+        )
+        .await?;
+    check(
+        first["resourceId"] == target
+            && first["result"]["kind"] == "text"
+            && first["result"]["content"] == expected,
+    )?;
+    let page = &first["result"]["result"];
+    check(
+        page["kind"] == "page"
+            && page["offset"] == 0
+            && page["nextOffset"] == 65_535
+            && page["text"] == complete[..65_535],
+    )?;
+    let second = pair.http.post(&path, json!({"kind":"text","content":expected,"page":{"kind":"continue","offset":65_535,"snapshot":page["snapshot"]}})).await?;
+    check(
+        second["resourceId"] == target
+            && second["result"]["content"] == expected
+            && second["result"]["result"]["kind"] == "page"
+            && second["result"]["result"]["snapshot"] == page["snapshot"]
+            && second["result"]["result"]["offset"] == 65_535
+            && second["result"]["result"]["nextOffset"].is_null()
+            && second["result"]["result"]["text"] == "🙂tail\n",
+    )?;
+    checks.push("complete_native_destination_text_pages_after_parent_and_path_removal");
     let released = pair
         .http
         .call(Method::DELETE, &exercise::endpoint(target), Some(json!({})))

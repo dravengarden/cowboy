@@ -259,6 +259,10 @@ impl Cache {
         Ok(self.text(id)?.content().clone())
     }
 
+    pub(crate) fn text_page(&self, id: u64, offset: u32) -> Result<String> {
+        self.text(id)?.text_page(offset)
+    }
+
     pub(crate) fn check(&self, id: u64, revision: u64) -> Result<()> {
         ensure!(
             self.revision(id)? == revision,

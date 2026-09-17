@@ -7,6 +7,10 @@ use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _};
 
 struct Client(PathBuf);
 
+fn target_text() -> String {
+    format!("{A}{}🙂tail\n", "x".repeat(65_535 - A.len()))
+}
+
 impl Client {
     async fn request(&self, request: Request) -> Value {
         tokio::time::timeout(Duration::from_secs(15), async {
@@ -104,9 +108,10 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
 
 async fn exercise(client: &Client, root: &Path) {
     let workspace = root.join("lsp-worktree");
+    let target = target_text();
     for (name, text) in [
         ("navigation.rs", SOURCE),
-        ("destination-a.rs", A),
+        ("destination-a.rs", target.as_str()),
         ("destination-b.rs", B),
     ] {
         std::fs::write(workspace.join(name), text).unwrap();
@@ -142,6 +147,7 @@ async fn exercise(client: &Client, root: &Path) {
             action: Action::Release,
         })
         .await;
+    read_target_text(client, &handoff, &content, &target).await;
     let read = client
         .request(Request::ReadBufferLease {
             lease: handoff.clone(),
@@ -173,6 +179,41 @@ async fn exercise(client: &Client, root: &Path) {
         .request(Request::CloseWorktree { path: workspace })
         .await;
     check_closed(root).await;
+}
+
+async fn read_target_text(client: &Client, handoff: &LeaseRef, content: &Content, target: &str) {
+    let first = client
+        .request(Request::ReadBufferLease {
+            lease: handoff.clone(),
+            request: buffer_leases::ReadRequest::Text {
+                content: content.clone(),
+                page: crate::text_reads::Page::Start {},
+            },
+        })
+        .await;
+    let page = &first["result"]["result"];
+    assert_eq!(page["kind"], "page");
+    assert_eq!(page["text"], target[..65_535]);
+    assert_eq!(page["offset"], 0);
+    assert_eq!(page["nextOffset"], 65_535);
+    let second = client
+        .request(Request::ReadBufferLease {
+            lease: handoff.clone(),
+            request: buffer_leases::ReadRequest::Text {
+                content: content.clone(),
+                page: crate::text_reads::Page::Continue {
+                    offset: 65_535,
+                    snapshot: page["snapshot"].as_str().unwrap().into(),
+                },
+            },
+        })
+        .await;
+    let end = &second["result"]["result"];
+    assert_eq!(end["kind"], "page");
+    assert_eq!(end["snapshot"], page["snapshot"]);
+    assert_eq!(end["text"], "🙂tail\n");
+    assert_eq!(end["offset"], 65_535);
+    assert!(end["nextOffset"].is_null());
 }
 
 async fn lost_handoff_reply(
@@ -288,7 +329,11 @@ async fn acquire(client: &Client, root: &Path, lease: &LeaseRef) -> (NavigationR
             .await;
         assert_eq!(acquired["state"]["kind"], "retained");
         let locations = acquired["state"]["locations"].as_array().unwrap();
-        for (name, text) in [("destination-a.rs", A), ("destination-b.rs", B)] {
+        let target = target_text();
+        for (name, text) in [
+            ("destination-a.rs", target.as_str()),
+            ("destination-b.rs", B),
+        ] {
             let location = locations
                 .iter()
                 .find(|location| location["path"] == name)

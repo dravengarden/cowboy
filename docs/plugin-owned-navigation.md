@@ -15,6 +15,10 @@ The `1.12.0` source candidate adds an exact-pair support probe for the separate
 path owns original connection/runtime routing and destination reservations;
 generic forwarding and the Service/Web consumer remain closed.
 
+The `1.13.0` [native text reader](plugin-native-text-reads.md) supplies bounded
+complete-text observations through an explicitly opened ordinary destination
+owner. It does not enable the navigation consumer or renew old target positions.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete

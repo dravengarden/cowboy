@@ -327,6 +327,7 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                         "queryBufferLease",
                         "releaseBufferLease",
                         "bufferLeaseContentSupport",
+                        "bufferLeaseTextSupport",
                         "readBufferLease",
                     ]
                     .contains(&kind),
