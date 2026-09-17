@@ -78,6 +78,17 @@ const DesktopCommandContext = createContext<DesktopCommandContextValue | null>(
 );
 const DesktopListJumpContext = createContext<string | null>(null);
 
+// Sessions tree row commands (FOCUS.md, docs/sessions-folders.md). The row
+// decides what each means for a folder versus a session, so the provider only
+// names the intent on the focused item.
+const SESSIONS_ROW_EVENTS: Readonly<Record<string, string>> = {
+  h: "cowboy:desktop-tree-left",
+  s: "cowboy:desktop-session-settings",
+  m: "cowboy:desktop-session-move",
+  n: "cowboy:desktop-folder-new",
+  i: "cowboy:desktop-rename",
+};
+
 function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
   const horizontal = region?.dataset.desktopAxis === "horizontal";
   return [...(region?.querySelectorAll<HTMLElement>("[data-desktop-item]") ?? [])]
@@ -346,6 +357,21 @@ export function DesktopCommandProvider(
         const sessionsRegion = document.querySelector<HTMLElement>(
           "[data-desktop-region='sessions.list']",
         );
+        // The list owns slot numbering (flat session order, independent of
+        // folder folds) and cancels the event once it has switched.
+        const list = sessionsRegion?.querySelector<HTMLElement>("ul");
+        if (
+          list &&
+          !list.dispatchEvent(
+            new CustomEvent("cowboy:desktop-select-session", {
+              cancelable: true,
+              detail: { digit },
+            }),
+          )
+        ) {
+          workspace.focusRegion("sessions.list");
+          return;
+        }
         const sessions = visibleRegionItems(sessionsRegion);
         const slot = Number(digit);
         const session = sessions[slot === 0 ? 9 : slot - 1];
@@ -778,16 +804,36 @@ export function DesktopCommandProvider(
             }));
             return;
           }
-          if (sessionsList && key.toLowerCase() === "h" && !event.repeat) {
+          const rowEvent = sessionsList && !event.repeat
+            ? SESSIONS_ROW_EVENTS[key.toLowerCase()]
+            : undefined;
+          if (rowEvent) {
             const item = items[active];
             if (item) {
               event.preventDefault();
               event.stopPropagation();
-              item.dispatchEvent(new CustomEvent("cowboy:desktop-session-settings", {
-                bubbles: true,
-              }));
+              item.dispatchEvent(
+                new CustomEvent(rowEvent, { bubbles: true, cancelable: true }),
+              );
               return;
             }
+          }
+          if (
+            sessionsList && items[active]?.dataset.desktopFolderRow === "true" &&
+            (key === "Enter" || key.toLowerCase() === "l")
+          ) {
+            // A folder row expands on `l` and toggles on Enter; it never opens
+            // a session or hands focus to the Prompt editor.
+            event.preventDefault();
+            event.stopPropagation();
+            items[active]?.dispatchEvent(
+              new CustomEvent("cowboy:desktop-tree-right", {
+                bubbles: true,
+                cancelable: true,
+                detail: { toggle: key === "Enter" },
+              }),
+            );
+            return;
           }
           let next = -1;
           if (!pendingList) {

@@ -105,10 +105,14 @@ function regionHints(
       ];
     case "sessions.list":
       return [
-        { keys: "J/K", label: "Session" },
+        { keys: "J/K", label: "Row" },
         { keys: "GG/G", label: "First/last" },
-        { keys: "L/Enter", label: "Open prompt" },
-        { keys: "H", label: "Settings" },
+        { keys: "L/Enter", label: "Open" },
+        { keys: "H", label: "Collapse/up" },
+        { keys: "S", label: "Actions" },
+        { keys: "M", label: "Move to" },
+        { keys: "N", label: "New folder" },
+        { keys: "I", label: "Rename" },
         { keys: "O", label: "Order mode" },
       ];
     case "prompt.plan":

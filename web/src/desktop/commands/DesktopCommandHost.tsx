@@ -36,6 +36,31 @@ function DesktopCommandRegistration(
   return null;
 }
 
+function sessionsListElement(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    "[data-desktop-region='sessions.list'] ul",
+  );
+}
+
+function sessionsListMounted(): boolean {
+  return sessionsListElement() !== null;
+}
+
+/** Folder-wide Sessions actions run inside the list (docs/sessions-folders.md);
+ *  the focused row, if any, is the subject. */
+function dispatchSessionFolders(action: string): void {
+  const focused = document.activeElement instanceof HTMLElement
+    ? document.activeElement.closest<HTMLElement>("[data-desktop-item]")
+      ?.dataset.desktopItem ?? null
+    : null;
+  sessionsListElement()?.dispatchEvent(
+    new CustomEvent("cowboy:desktop-folders", {
+      cancelable: true,
+      detail: { action, row: focused },
+    }),
+  );
+}
+
 export function DesktopCommandHost({
   onNewSession,
   onOpenSettings,
@@ -101,6 +126,52 @@ export function DesktopCommandHost({
       group: "Session",
       sequence: [DESKTOP_WORKSPACE_PREFIX, DESKTOP_WORKSPACE_KEYS.newSession],
       run: onNewSession,
+    },
+    {
+      id: "session.folder.new",
+      title: "New Session Folder",
+      description: "Create a folder in the Sessions sidebar",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("newFolder"),
+    },
+    {
+      id: "session.moveToFolder",
+      title: "Move Session to Folder…",
+      description: "File the selected (or current) session into a folder",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("move"),
+    },
+    {
+      id: "session.folders.organize",
+      title: "Organize Sessions by Project",
+      description: "One folder per project; its sessions file themselves",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("organize"),
+    },
+    {
+      id: "session.folders.collapseAll",
+      title: "Collapse All Session Folders",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("collapseAll"),
+    },
+    {
+      id: "session.folders.expandAll",
+      title: "Expand All Session Folders",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("expandAll"),
+    },
+    {
+      id: "session.reveal",
+      title: "Reveal Current Session",
+      description: "Expand its folders and focus its row",
+      group: "Session",
+      when: sessionsListMounted,
+      run: () => dispatchSessionFolders("reveal"),
     },
     {
       id: "settings.open",

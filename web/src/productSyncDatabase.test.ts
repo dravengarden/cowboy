@@ -192,6 +192,27 @@ Deno.test("reconnect verifies the original Service and cannot follow a replaced 
   await owner.dispose();
 });
 
+Deno.test("the folders service scope is a closed key beside title and order", async () => {
+  const factory = new FakeIndexedDb();
+  const owner = createProductSyncDatabase(
+    () => "user-a",
+    async () => descriptor(),
+    { factory },
+  );
+  const record = owner.outbox<number>({ kind: "service", state: "folders" });
+  record.acceptLoadedSnapshot!(await record.load());
+  await record.save(snapshot("folders"));
+  assert(
+    [...factory.data.keys()].some((key) => key.endsWith(":service:folders")),
+  );
+  assertThrows(() =>
+    owner.outbox(
+      { kind: "service", state: "folder" } as unknown as ProductSyncScope,
+    )
+  );
+  await owner.dispose();
+});
+
 Deno.test("owned dataset inspection fails closed and runtime scopes cannot create arbitrary keys", async () => {
   const owner = createProductSyncDatabase(
     () => "user-a",

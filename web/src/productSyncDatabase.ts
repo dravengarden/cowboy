@@ -92,7 +92,10 @@ export async function discoverSyncDataset(user: string): Promise<SyncDataset> {
 }
 
 export type ProductSyncScope =
-  | { readonly kind: "service"; readonly state: "title" | "order" }
+  | {
+    readonly kind: "service";
+    readonly state: "title" | "order" | "folders";
+  }
   | {
     readonly kind: "session";
     readonly session: string;
@@ -101,7 +104,10 @@ export type ProductSyncScope =
 
 function suffix(scope: ProductSyncScope): string {
   if (scope.kind === "service") {
-    if (scope.state !== "title" && scope.state !== "order") invalid();
+    if (
+      scope.state !== "title" && scope.state !== "order" &&
+      scope.state !== "folders"
+    ) invalid();
     return `service:${scope.state}`;
   }
   if (

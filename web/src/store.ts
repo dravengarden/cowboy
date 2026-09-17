@@ -86,6 +86,14 @@ const telemetryOperations = new ClientOperations(
 );
 globalThis.addEventListener?.("cowboy:product-sign-out", () => telemetryOperations.clear());
 import { newUuid } from "./uuid";
+import {
+  EMPTY_SESSION_FOLDERS,
+  folderIsWithin,
+  normalizeSessionFolderName,
+  sessionFolderMutators,
+  type SessionFoldersValue,
+  unboundProjectLabels,
+} from "./sessionFolders";
 import { fireAlert, vibrateAlertOn } from "./turnNotify";
 import {
   acceptsMachineSnapshot,
@@ -216,6 +224,10 @@ export interface State {
   // converges on the arbiter's `sync_patch`. Ids absent here fall back to the
   // broadcast SessionMeta.title.
   titleOverrides: Record<string, string>;
+  // Sessions-sidebar folder tree + explicit placements from the "folders"
+  // state-sync channel (docs/sessions-folders.md). Overlaid onto the session
+  // list by `buildSessionTree` in the sidebar; never mutates `sessions`.
+  sessionFolders: SessionFoldersValue;
   // Mobile-only code-review workspace state. The daemon persists and syncs it
   // across Mobile clients; Desktop UI never reads or writes this field.
   mobileReviewStates: Record<string, MobileReviewState>;
@@ -243,6 +255,7 @@ let state: State = {
   drafts: new Map(),
   optimisticMessages: new Map(),
   titleOverrides: {},
+  sessionFolders: EMPTY_SESSION_FOLDERS,
   mobileReviewStates: {},
   deletingSessionIds: new Set(),
 };
@@ -2180,6 +2193,12 @@ function registerSync<T, M extends Mutators<T>>(
 
 const titleSync = registerSync<TitleMap, typeof titleMutators>("title", { kind: "service", state: "title" }, titleMutators, {});
 const orderSync = registerSync<OrderList, typeof orderMutators>("order", { kind: "service", state: "order" }, orderMutators, []);
+const foldersSync = registerSync<SessionFoldersValue, typeof sessionFolderMutators>(
+  "folders",
+  { kind: "service", state: "folders" },
+  sessionFolderMutators,
+  EMPTY_SESSION_FOLDERS,
+);
 
 export interface MobileReviewTabState {
   readonly path: string;
@@ -2379,7 +2398,68 @@ function deriveSessions(raw: SessionMeta[], titles: TitleMap, order: OrderList):
  *  and commit it. Called on a `sessions` broadcast and on any sync patch/mutate. */
 function commitSessions(): void {
   const titles = titleSync.view();
-  setState({ ...state, sessions: deriveSessions(rawSessions, titles, orderSync.view()), titleOverrides: titles });
+  setState({
+    ...state,
+    sessions: deriveSessions(rawSessions, titles, orderSync.view()),
+    titleOverrides: titles,
+    sessionFolders: foldersSync.view(),
+  });
+}
+
+// --- Sessions-sidebar folders (docs/sessions-folders.md) --------------------
+// Optimistic via the "folders" sync state, exactly like title/order: the local
+// reducer applies instantly, the arbiter validates and echoes a `sync_patch`.
+
+/** Create a folder under `parent` (`null` = root); returns its id, or `null`
+ *  when the name is empty. `project` binds the folder so that project's
+ *  sessions file themselves. */
+export function createSessionFolder(
+  name: string,
+  parent: string | null,
+  project: string | null = null,
+): string | null {
+  if (normalizeSessionFolderName(name) === null) return null;
+  const id = `f-${newUuid()}`;
+  foldersSync.mutate("create", { id, name, parent, project });
+  return id;
+}
+
+export function renameSessionFolder(id: string, name: string): void {
+  if (normalizeSessionFolderName(name) === null) return;
+  foldersSync.mutate("rename", { id, name });
+}
+
+export function moveSessionFolder(id: string, parent: string | null): void {
+  if (folderIsWithin(foldersSync.view(), parent, id)) return;
+  foldersSync.mutate("move", { id, parent });
+}
+
+export function reorderSessionFolders(parent: string | null, order: string[]): void {
+  foldersSync.mutate("reorder", { parent, order });
+}
+
+export function bindSessionFolderProject(id: string, project: string | null): void {
+  foldersSync.mutate("bind", { id, project });
+}
+
+/** File sessions into `folder` (`null` = back to the root). */
+export function placeSessions(sessionIds: readonly string[], folder: string | null): void {
+  if (sessionIds.length === 0) return;
+  foldersSync.mutate("place", { session_ids: [...sessionIds], folder });
+}
+
+/** Delete a folder; its subfolders and sessions move to its parent. */
+export function removeSessionFolder(id: string): void {
+  foldersSync.mutate("remove", { id });
+}
+
+/** One bound root folder per project label that has none yet. Writes no
+ *  placements, so current and future sessions of each project file
+ *  themselves. Returns how many folders were created. */
+export function organizeSessionsByProject(): number {
+  const labels = unboundProjectLabels(state.sessions, foldersSync.view());
+  for (const label of labels) createSessionFolder(label, null, label);
+  return labels.length;
 }
 
 /** Optimistic rename via the title-sync engine: instant local + send; re-sent on

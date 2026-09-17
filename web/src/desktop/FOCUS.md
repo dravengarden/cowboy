@@ -168,10 +168,21 @@ the continuation is optional.
 - `Enter`: default item action. In Sessions, `l` and `Enter` open the selected
   session and move focus to its Prompt editor; entering the Sessions region
   always starts on the currently open session.
+- Sessions is a folder tree (`docs/sessions-folders.md`); folder rows are
+  items like session rows. On a folder row `l` expands and `Enter` toggles.
+  `h` is the tree's left motion: it collapses an expanded folder, moves to the
+  parent from a collapsed one, collapses every folder from a top-level one,
+  and moves from a session row to its folder. `s` opens the row's actions
+  (the session Settings modal, or the folder actions modal), `m` opens Move
+  to…, `n` creates a folder (inside a folder, beside a session), and `i`
+  renames. All are region-scoped bare letters resolved from physical codes.
 - Sessions use `o` to enter or leave Order reorder mode. While pinned, `j/k`
-  moves the selected session instead of moving selection, and `Esc` releases
-  the mode. `h` opens the selected session's Settings directly; the trailing
-  three-dot menu retains secondary actions such as Rename and Delete.
+  moves the selected row instead of moving selection: a session that crosses a
+  folder header files into that folder, a folder moves among its siblings, and
+  `Esc` releases the mode. The trailing three-dot menu retains secondary
+  actions such as Rename, Move to folder and Delete.
+- `Alt/Option+1…0` number sessions by their flat order, never by the folded
+  view, and reveal a target hidden inside a collapsed folder.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list

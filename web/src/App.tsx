@@ -58,12 +58,17 @@ import {
     Circle,
     Close as CloseIcon,
     Code as CodeIcon,
+    CreateNewFolderOutlined,
     DeleteOutline,
     DragIndicator,
+    DriveFileMoveOutlined,
     DriveFileRenameOutline,
     ExpandLess,
     ExpandMore,
+    FolderOpenOutlined,
+    FolderOutlined,
     InfoOutlined,
+    LabelOutlined,
     Menu as MenuIcon,
     MoreVert,
     NotificationsOffOutlined,
@@ -114,16 +119,46 @@ import {
 } from "./protocol";
 import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
+    bindSessionFolderProject,
+    createSessionFolder,
     deleteSession,
     holdStorePresentation,
     markSessionHydrated,
+    moveSessionFolder,
     notify,
     openSession,
-    renameSession,
+    organizeSessionsByProject,
+    placeSessions,
     releaseInactiveHistory,
+    removeSessionFolder,
+    renameSession,
+    renameSessionFolder,
+    reorderSessionFolders,
     reorderSessions,
     useStoreSelector,
 } from "./store";
+import {
+    type SessionFolder,
+    sessionFolderById,
+    unboundProjectLabels,
+} from "./sessionFolders";
+import {
+    buildSessionTree,
+    dropTargetFolder,
+    folderIdFromRowKey,
+    foldersRevealing,
+    movedRowKey,
+    sessionTreeRowKey,
+    type SessionTreeRow,
+} from "./sessionTree";
+import {
+    DeleteFolderShell,
+    FolderNameShell,
+    FolderPickerShell,
+    ProjectPickerShell,
+    useCollapsedSessionFolders,
+    withFoldersCollapsed,
+} from "./SessionFolderUi";
 import { useSortable } from "./useSortable";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { useBackdropDismiss } from "./useBackdropDismiss";
@@ -531,11 +566,33 @@ const ReliableListItemButton = forwardRef<
     );
 });
 
+// Sessions-region row commands shared by the Desktop command layer (which
+// dispatches them as DOM events on the focused row) and the list's own
+// fallback key handler. See docs/sessions-folders.md and desktop/FOCUS.md.
+type SessionRowCommand = "open" | "left" | "settings" | "move" | "newFolder" | "rename";
+const SESSION_ROW_KEY_COMMANDS: Readonly<Record<string, SessionRowCommand>> = {
+    l: "open",
+    h: "left",
+    s: "settings",
+    m: "move",
+    n: "newFolder",
+    i: "rename",
+};
+const SESSION_ROW_EVENTS: Readonly<Record<string, SessionRowCommand>> = {
+    "cowboy:desktop-tree-right": "open",
+    "cowboy:desktop-tree-left": "left",
+    "cowboy:desktop-session-settings": "settings",
+    "cowboy:desktop-session-move": "move",
+    "cowboy:desktop-folder-new": "newFolder",
+    "cowboy:desktop-rename": "rename",
+};
+
 function SessionList({
     sessions,
     activeId,
     onPick,
     onNew,
+    onNewInFolder,
     onClose,
     onOpenSettings,
     onOpenAbout,
@@ -554,6 +611,8 @@ function SessionList({
     activeId: string | null;
     onPick: (id: string) => void;
     onNew: () => void;
+    /** "New session here" from a folder: the created session is filed there. */
+    onNewInFolder?: ((folder: string) => void) | undefined;
     onClose?: (() => void) | undefined;
     onOpenSettings?: (() => void) | undefined;
     onOpenAbout?: (() => void) | undefined;
@@ -617,14 +676,219 @@ function SessionList({
     };
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
-    const displayedSessions = mobileDrawer ? [...sessions].reverse() : sessions;
     const listRef = useRef<HTMLUListElement>(null);
+    // --- Folders (docs/sessions-folders.md) ---------------------------------
+    // The synced folder tree is overlaid on the display-ordered session list;
+    // Mobile keeps its newest-last direction inside every container. Collapse
+    // state is per device. The sortable runs over the visible tree rows: folder
+    // rows have no grip, so only sessions drag, but they still open the gap.
+    const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
+    const [collapsed, setCollapsed] = useCollapsedSessionFolders();
+    const tree = useMemo(
+        () =>
+            buildSessionTree(
+                mobileDrawer ? [...sessions].reverse() : sessions,
+                sessionFolders,
+                collapsed,
+            ),
+        [collapsed, mobileDrawer, sessionFolders, sessions],
+    );
+    const rowKeys = tree.rows.map(sessionTreeRowKey);
+    const rowByKey = new Map(tree.rows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
+    const [folderMenu, setFolderMenu] = useState<{ folder: SessionFolder; el: HTMLElement } | null>(null);
+    const [rootMenuEl, setRootMenuEl] = useState<HTMLElement | null>(null);
+    const [namePrompt, setNamePrompt] = useState<
+        { mode: "create"; parent: string | null } | { mode: "rename"; folder: SessionFolder } | null
+    >(null);
+    const [movePicker, setMovePicker] = useState<{ kind: "session" | "folder"; id: string } | null>(null);
+    const [projectPicker, setProjectPicker] = useState<SessionFolder | null>(null);
+    const [deleteFolder, setDeleteFolder] = useState<SessionFolder | null>(null);
+    const unboundProjects = unboundProjectLabels(sessions, sessionFolders);
+    const projectLabels = ((): string[] => {
+        const out: string[] = [];
+        for (const s of sessions) {
+            const label = sessionProjectLabel(s);
+            if (label && !out.includes(label)) out.push(label);
+        }
+        return out;
+    })();
+    const setFolderCollapsed = (ids: readonly string[], value: boolean): void =>
+        setCollapsed((previous) => withFoldersCollapsed(previous, ids, value));
+    const focusRow = (key: string): void => {
+        requestAnimationFrame(() =>
+            listRef.current?.querySelector<HTMLElement>(
+                `[data-desktop-item="${CSS.escape(key)}"]`,
+            )?.focus({ preventScroll: true })
+        );
+    };
+    const focusPrompt = (): void => {
+        requestAnimationFrame(() => {
+            const prompt = document.querySelector<HTMLElement>(
+                "[data-desktop-region='prompt.composer']",
+            );
+            const target = prompt?.querySelector<HTMLElement>(
+                "[data-vim-command-sink], .cm-content[contenteditable='true']",
+            );
+            target?.focus({ preventScroll: true });
+        });
+    };
+    // Expand a session's ancestors, so a push, a slot switch or a Desktop
+    // region entry never lands on a hidden row.
+    const revealSession = (sessionId: string): void =>
+        setFolderCollapsed(foldersRevealing(tree, sessionFolders, sessionId), false);
+    useEffect(() => {
+        if (activeId) revealSession(activeId);
+        // Only the active session id triggers a reveal; a later manual collapse
+        // of its folder must stick.
+    }, [activeId]);
+    // A drop (or an Order-mode step) hands back the visible row keys in their
+    // new order. A moved session lands in the container of the row above it
+    // (a folder header files into that folder) and the flat session order is
+    // re-submitted; a moved folder permutes its siblings only.
+    const applyRowOrder = (order: string[], movedKey: string | null): void => {
+        const moved = movedKey ? rowByKey.get(movedKey) : undefined;
+        if (!moved) return;
+        if (moved.kind === "folder") {
+            const siblings = order
+                .map((key) => rowByKey.get(key))
+                .filter((row): row is SessionTreeRow & { kind: "folder" } =>
+                    row?.kind === "folder" && row.folder.parent === moved.folder.parent
+                )
+                .map((row) => row.folder.id);
+            reorderSessionFolders(moved.folder.parent, siblings);
+            return;
+        }
+        const index = order.indexOf(movedKey ?? "");
+        const others = order
+            .filter((key) => key !== movedKey)
+            .map((key) => rowByKey.get(key))
+            .filter((row): row is SessionTreeRow => row !== undefined);
+        const target = dropTargetFolder(others, index);
+        if (target !== (tree.folderOf.get(moved.session.id) ?? null)) {
+            placeSessions([moved.session.id], target);
+        }
+        const sessionOrder = order
+            .map((key) => rowByKey.get(key))
+            .filter((row): row is SessionTreeRow & { kind: "session" } => row?.kind === "session")
+            .map((row) => row.session.id);
+        reorderSessions(mobileDrawer ? [...sessionOrder].reverse() : sessionOrder);
+    };
+    const applyRowOrderRef = useRef(applyRowOrder);
+    applyRowOrderRef.current = applyRowOrder;
     const sortable = useSortable({
-        ids: displayedSessions.map((s) => s.id),
+        ids: rowKeys,
         onReorder: (order): void =>
-            reorderSessions(mobileDrawer ? [...order].reverse() : order),
+            applyRowOrder(order, sortable.draggingId ?? movedRowKey(rowKeys, order)),
         scrollContainer: () => listRef.current,
     });
+    const runRowCommand = (
+        command: SessionRowCommand,
+        rowKey: string,
+        el: HTMLElement,
+        detail: { toggle?: boolean } = {},
+    ): void => {
+        const folderId = folderIdFromRowKey(rowKey);
+        const folder = folderId ? sessionFolderById(sessionFolders, folderId) : undefined;
+        const session = folderId ? undefined : byId.get(rowKey);
+        switch (command) {
+            case "open":
+                if (folder) {
+                    const isCollapsed = collapsed.has(folder.id);
+                    setFolderCollapsed([folder.id], detail.toggle ? !isCollapsed : false);
+                } else if (session) {
+                    setPinned(false);
+                    onPick(session.id);
+                    focusPrompt();
+                }
+                return;
+            case "left":
+                if (folder) {
+                    if (!collapsed.has(folder.id)) setFolderCollapsed([folder.id], true);
+                    else if (folder.parent) focusRow(`folder:${folder.parent}`);
+                    else setFolderCollapsed(sessionFolders.folders.map((f) => f.id), true);
+                } else if (session) {
+                    const parent = tree.folderOf.get(session.id) ?? null;
+                    if (parent) focusRow(`folder:${parent}`);
+                }
+                return;
+            case "settings":
+                if (folder) setFolderMenu({ folder, el });
+                else if (session) setMenuAnchor({ row: session, el });
+                return;
+            case "move":
+                if (folder) setMovePicker({ kind: "folder", id: folder.id });
+                else if (session) setMovePicker({ kind: "session", id: session.id });
+                return;
+            case "newFolder":
+                setNamePrompt({
+                    mode: "create",
+                    parent: folder ? folder.id : session ? tree.folderOf.get(session.id) ?? null : null,
+                });
+                return;
+            case "rename":
+                if (folder) setNamePrompt({ mode: "rename", folder });
+                else if (session) onRequestRename(session);
+                return;
+        }
+    };
+    const runRowCommandRef = useRef(runRowCommand);
+    runRowCommandRef.current = runRowCommand;
+    const selectSessionSlot = (digit: string): boolean => {
+        const slot = Number(digit);
+        const session = sessions[slot === 0 ? 9 : slot - 1];
+        if (!session) return false;
+        revealSession(session.id);
+        setPinned(false);
+        onPick(session.id);
+        focusRow(session.id);
+        return true;
+    };
+    const selectSessionSlotRef = useRef(selectSessionSlot);
+    selectSessionSlotRef.current = selectSessionSlot;
+    const runFoldersAction = (action: string, rowKey: string | null): void => {
+        const currentFolder = ((): string | null => {
+            if (!rowKey) return activeId ? tree.folderOf.get(activeId) ?? null : null;
+            return folderIdFromRowKey(rowKey) ?? tree.folderOf.get(rowKey) ?? null;
+        })();
+        switch (action) {
+            case "newFolder":
+                setNamePrompt({ mode: "create", parent: currentFolder });
+                return;
+            case "organize":
+                if (organizeSessionsByProject() === 0) notify("Every project already has a folder.");
+                return;
+            case "collapseAll":
+                setFolderCollapsed(sessionFolders.folders.map((f) => f.id), true);
+                return;
+            case "expandAll":
+                setFolderCollapsed(sessionFolders.folders.map((f) => f.id), false);
+                return;
+            case "reveal":
+                if (activeId) {
+                    revealSession(activeId);
+                    focusRow(activeId);
+                }
+                return;
+            case "move":
+                if (rowKey) {
+                    const folderId = folderIdFromRowKey(rowKey);
+                    setMovePicker(folderId ? { kind: "folder", id: folderId } : { kind: "session", id: rowKey });
+                } else if (activeId) setMovePicker({ kind: "session", id: activeId });
+                return;
+        }
+    };
+    const runFoldersActionRef = useRef(runFoldersAction);
+    runFoldersActionRef.current = runFoldersAction;
+    const openFolderName = (prompt: NonNullable<typeof namePrompt>): void => {
+        // Mount the name input inside the opening tap so iOS raises the keyboard
+        // (the RenameSessionShell contract).
+        flushSync(() => {
+            setFolderMenu(null);
+            setRootMenuEl(null);
+            setMovePicker(null);
+            setNamePrompt(prompt);
+        });
+    };
     const positionedMobileOpenRef = useRef(false);
     useLayoutEffect(() => {
         if (!mobileDrawer || !mobileDrawerOpen) {
@@ -685,7 +949,7 @@ function SessionList({
             const order = [...sortable.order];
             order.splice(current, 1);
             order.splice(next, 0, id);
-            reorderSessions(order);
+            applyRowOrderRef.current(order, id);
             requestAnimationFrame(() =>
                 list.querySelector<HTMLElement>(
                     `[data-desktop-item="${CSS.escape(id)}"]`,
@@ -698,19 +962,43 @@ function SessionList({
     useEffect(() => {
         const list = listRef.current;
         if (!list || !desktop) return undefined;
-        const onKeyboardSettings = (event: Event): void => {
+        // Row commands arrive from the Desktop command layer as DOM events on
+        // the focused row (h/l/s/m/n/i); folder-wide actions and Alt+digit slot
+        // switches arrive on the list itself.
+        const onRowCommand = (event: Event): void => {
+            const command = SESSION_ROW_EVENTS[event.type];
             const item = event.target instanceof Element
                 ? event.target.closest<HTMLElement>("[data-desktop-item]")
                 : null;
-            const session = item?.dataset.desktopItem
-                ? byId.get(item.dataset.desktopItem)
-                : undefined;
-            if (session) setMenuAnchor({ row: session, el: item ?? list });
+            const key = item?.dataset.desktopItem;
+            if (!command || !item || !key) return;
+            event.preventDefault();
+            runRowCommandRef.current(
+                command,
+                key,
+                item,
+                (event as CustomEvent<{ toggle?: boolean }>).detail ?? {},
+            );
         };
-        list.addEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
-        return () =>
-            list.removeEventListener("cowboy:desktop-session-settings", onKeyboardSettings);
-    }, [byId, desktop]);
+        const onFolders = (event: Event): void => {
+            const detail = (event as CustomEvent<{ action?: string; row?: string | null }>).detail;
+            if (!detail?.action) return;
+            event.preventDefault();
+            runFoldersActionRef.current(detail.action, detail.row ?? null);
+        };
+        const onSelectSlot = (event: Event): void => {
+            const digit = (event as CustomEvent<{ digit?: string }>).detail?.digit;
+            if (digit !== undefined && selectSessionSlotRef.current(digit)) event.preventDefault();
+        };
+        for (const type of Object.keys(SESSION_ROW_EVENTS)) list.addEventListener(type, onRowCommand);
+        list.addEventListener("cowboy:desktop-folders", onFolders);
+        list.addEventListener("cowboy:desktop-select-session", onSelectSlot);
+        return () => {
+            for (const type of Object.keys(SESSION_ROW_EVENTS)) list.removeEventListener(type, onRowCommand);
+            list.removeEventListener("cowboy:desktop-folders", onFolders);
+            list.removeEventListener("cowboy:desktop-select-session", onSelectSlot);
+        };
+    }, [desktop]);
     useEffect(() => {
         if (!desktop || !menuAnchor) return undefined;
         const frame = requestAnimationFrame(() => {
@@ -767,33 +1055,25 @@ function SessionList({
             setPinned(false);
             return;
         }
-        const session = row.dataset.desktopItem
-            ? byId.get(row.dataset.desktopItem)
-            : undefined;
-        if (key === "h" && session) {
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuAnchor({ row: session, el: row });
-            return;
-        }
-        if ((key === "l" || key === "Enter") && session) {
-            // Let a focused grip or kebab retain native Enter activation.
-            if (key === "Enter" && event.target !== row) return;
-            event.preventDefault();
-            event.stopPropagation();
-            setPinned(false);
-            onPick(session.id);
-            requestAnimationFrame(() => {
-                const prompt = document.querySelector<HTMLElement>(
-                    "[data-desktop-region='prompt.composer']",
-                );
-                const target = prompt?.querySelector<HTMLElement>(
-                    "[data-vim-command-sink], .cm-content[contenteditable='true']",
-                );
-                target?.focus({ preventScroll: true });
-            });
-        }
+        const rowKey = row.dataset.desktopItem;
+        const command = key === "Enter" ? "open" : SESSION_ROW_KEY_COMMANDS[key];
+        if (!rowKey || !command) return;
+        // Let a focused grip or kebab retain native Enter activation.
+        if (key === "Enter" && event.target !== row) return;
+        event.preventDefault();
+        event.stopPropagation();
+        runRowCommand(command, rowKey, row, { toggle: key === "Enter" });
     };
+    const folderDepthPl = (depth: number): string =>
+        `calc(max(env(safe-area-inset-left), 12px) + ${String(depth * 20)}px)`;
+    const folderDepthFinePl = (depth: number): string => `calc(6px + ${String(depth * 16)}px)`;
+    const folderMenuFolder = folderMenu?.folder ?? null;
+    const folderMenuCount = folderMenuFolder
+        ? tree.rows.find((r) => r.kind === "folder" && r.folder.id === folderMenuFolder.id)
+        : undefined;
+    const deleteFolderCount = deleteFolder
+        ? [...tree.folderOf.entries()].filter(([, f]) => f === deleteFolder.id).length
+        : 0;
     return (
         <Stack
             sx={{
@@ -812,6 +1092,7 @@ function SessionList({
             }}
         >
             {!mobileDrawer && allowNewSession && <Box sx={{ p: 1 }}>
+                <Stack direction="row" spacing={0.75} alignItems="stretch">
                 <Button
                     data-desktop-new-session={desktop ? "true" : undefined}
                     fullWidth
@@ -828,6 +1109,20 @@ function SessionList({
                     New session
                     {desktop && <DesktopShortcut shortcut={DESKTOP_SHORTCUTS.newSession} quiet />}
                 </Button>
+                <IconButton
+                    aria-label="Folders"
+                    onClick={(e): void => setRootMenuEl(e.currentTarget)}
+                    sx={{
+                        ...(desktop && desktopEmbeddedControlSx()),
+                        width: 48,
+                        minHeight: 48,
+                        borderRadius: 1.25,
+                        flexShrink: 0,
+                    }}
+                >
+                    <CreateNewFolderOutlined />
+                </IconButton>
+                </Stack>
                 {desktop && pinned && (
                     <Box
                         role="status"
@@ -892,10 +1187,122 @@ function SessionList({
                     },
                 }}
             >
-                {sortable.order.map((id, index) => {
-                    const s = byId.get(id);
-                    if (!s) return null;
+                {sortable.order.map((rowKey) => {
+                    const row = rowByKey.get(rowKey);
+                    if (!row) return null;
+                    if (row.kind === "folder") {
+                        const f = row.folder;
+                        return (
+                    <ReliableListItemButton
+                        key={rowKey}
+                        data-haptic="selection"
+                        data-desktop-item={rowKey}
+                        data-desktop-folder-row="true"
+                        data-desktop-pin-active={desktop && pinned ? "true" : undefined}
+                        aria-expanded={row.expanded}
+                        ref={sortable.registerItem(rowKey)}
+                        style={sortable.itemStyle(rowKey)}
+                        // Collapse chrome is paint-only (icon swap, no transform):
+                        // this row lives inside the Mobile swipe compositor.
+                        onActivate={(): void => setFolderCollapsed([f.id], row.expanded)}
+                        sx={{
+                            ...(desktop && desktopListItemSx()),
+                            pl: folderDepthPl(row.depth),
+                            pr: "max(env(safe-area-inset-right), 12px)",
+                            mx: 0.75,
+                            my: 0.25,
+                            "@media (pointer: fine) and (hover: hover)": {
+                                pl: folderDepthFinePl(row.depth),
+                                pr: 0.5,
+                                py: 0.25,
+                            },
+                        }}
+                    >
+                        <Box
+                            className="cowboy-session-grip"
+                            aria-hidden
+                            sx={{
+                                width: 44,
+                                height: 44,
+                                flexShrink: 0,
+                                display: "grid",
+                                placeItems: "center",
+                                color: "text.secondary",
+                            }}
+                        >
+                            {row.expanded
+                                ? <ExpandMore sx={{ fontSize: "1.5rem" }} />
+                                : <ChevronRight sx={{ fontSize: "1.5rem" }} />}
+                        </Box>
+                        {row.status
+                            ? <StatusDot status={row.status} sx={{ mr: 1 }} />
+                            : <Box aria-hidden sx={{ width: 10, height: 10, mr: 1, flexShrink: 0 }} />}
+                        <ListItemText
+                            primary={
+                                <Stack
+                                    direction="row"
+                                    spacing={0.75}
+                                    alignItems="center"
+                                    sx={{ minWidth: 0 }}
+                                >
+                                    {row.expanded
+                                        ? <FolderOpenOutlined fontSize="medium" sx={{ flexShrink: 0, color: "text.secondary" }} />
+                                        : <FolderOutlined fontSize="medium" sx={{ flexShrink: 0, color: "text.secondary" }} />}
+                                    <Typography
+                                        variant="body2"
+                                        noWrap
+                                        sx={{ minWidth: 0, fontWeight: 600 }}
+                                    >
+                                        {f.name}
+                                    </Typography>
+                                    {f.project && (
+                                        <Chip
+                                            size="small"
+                                            icon={<LabelOutlined sx={{ fontSize: "0.9rem !important" }} />}
+                                            label={f.project}
+                                            variant="outlined"
+                                            sx={{
+                                                height: "1.5rem",
+                                                maxWidth: "8rem",
+                                                fontSize: "0.75rem",
+                                                "& .MuiChip-label": {
+                                                    px: "0.5rem",
+                                                    overflow: "hidden",
+                                                    textOverflow: "ellipsis",
+                                                },
+                                            }}
+                                        />
+                                    )}
+                                    <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                                    >
+                                        {row.sessionCount}
+                                    </Typography>
+                                </Stack>
+                            }
+                            slotProps={{ primary: { component: "div" } }}
+                        />
+                        <IconButton
+                            className="cowboy-session-actions"
+                            aria-label={`folder actions ${f.name}`}
+                            onClick={(e): void => {
+                                e.stopPropagation();
+                                setFolderMenu({ folder: f, el: e.currentTarget });
+                            }}
+                            sx={{ ml: 0.5, width: 44, height: 44, flexShrink: 0, position: "relative" }}
+                        >
+                            <MoreVert sx={{ fontSize: "1.5rem" }} />
+                        </IconButton>
+                    </ReliableListItemButton>
+                        );
+                    }
+                    const s = row.session;
                     const deleting = deletingSessionIds.has(s.id);
+                    // Alt/Option+1…0 slots follow the flat session order, never
+                    // the folded view, so a fold cannot renumber a session.
+                    const slot = desktop ? sessions.indexOf(s) : -1;
                     return (
                     <ReliableListItemButton
                         key={s.id}
@@ -940,12 +1347,12 @@ function SessionList({
                                     bgcolor: (t) => alpha(t.palette.primary.main, 0.16),
                                 },
                             }),
-                            pl: "max(env(safe-area-inset-left), 12px)",
+                            pl: folderDepthPl(row.depth),
                             pr: "max(env(safe-area-inset-right), 12px)",
                             mx: 0.75,
                             my: 0.25,
                             "@media (pointer: fine) and (hover: hover)": {
-                                pl: 0.75,
+                                pl: folderDepthFinePl(row.depth),
                                 pr: 0.5,
                                 py: 0.25,
                             },
@@ -1045,10 +1452,10 @@ function SessionList({
                                 },
                             }}
                         />
-                        {desktop && index < 10 && (
+                        {desktop && slot >= 0 && slot < 10 && (
                             <Suspense fallback={null}>
                                 <DesktopSessionShortcut
-                                    digit={index === 9 ? "0" : String(index + 1)}
+                                    digit={slot === 9 ? "0" : String(slot + 1)}
                                     active={s.id === activeId}
                                     title={s.title}
                                 />
@@ -1114,14 +1521,22 @@ function SessionList({
                     }}
                 >
                     <MobileSheetActionGroup
-                        actions={allowNewSession
-                            ? [{
-                                key: "new",
-                                label: "New session",
-                                onPress: onNew,
-                                icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
-                            }]
-                            : []}
+                        actions={[
+                            ...(allowNewSession
+                                ? [{
+                                    key: "new",
+                                    label: "New session",
+                                    onPress: onNew,
+                                    icon: <Add aria-hidden sx={{ fontSize: "1.35em" }} />,
+                                }]
+                                : []),
+                            {
+                                key: "folder",
+                                label: "New folder",
+                                onPress: (): void => openFolderName({ mode: "create", parent: null }),
+                                icon: <CreateNewFolderOutlined aria-hidden sx={{ fontSize: "1.25em" }} />,
+                            },
+                        ]}
                     />
                     <MobileSheetActionGroup
                         actions={[
@@ -1194,6 +1609,17 @@ function SessionList({
                         <DriveFileRenameOutline fontSize="medium" />
                     </ListItemIcon>
                     <ListItemText primary="Rename" />
+                </MenuItem>
+                <MenuItem
+                    onClick={(): void => {
+                        if (menuAnchor) setMovePicker({ kind: "session", id: menuAnchor.row.id });
+                        setMenuAnchor(null);
+                    }}
+                >
+                    <ListItemIcon>
+                        <DriveFileMoveOutlined fontSize="medium" />
+                    </ListItemIcon>
+                    <ListItemText primary="Move to folder…" />
                 </MenuItem>
                 <MenuItem onClick={toggleMenuSessionNotifications}>
                     <ListItemIcon>
@@ -1301,6 +1727,10 @@ function SessionList({
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
                                 <Kbd keys="R" />
                             </Button>
+                            <Button data-session-shortcut="m" fullWidth startIcon={<DriveFileMoveOutlined />} onClick={(): void => { if (menuAnchor) setMovePicker({ kind: "session", id: menuAnchor.row.id }); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to folder…</Box>
+                                <Kbd keys="M" />
+                            </Button>
                             <Button data-session-shortcut="l" fullWidth startIcon={<RefreshIcon />} onClick={(): void => { if (menuAnchor) onRequestReload(menuAnchor.row); setMenuAnchor(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Reload</Box>
                                 <Kbd keys="L" />
@@ -1330,6 +1760,285 @@ function SessionList({
                             </Box>
                         </Box>
                 </DesktopModalShell>
+            )}
+            {/* --- Folder layers (docs/sessions-folders.md) --- */}
+            <Menu
+                anchorEl={rootMenuEl}
+                open={!!rootMenuEl}
+                onClose={(): void => setRootMenuEl(null)}
+                slotProps={{ paper: { sx: { minWidth: 220 } } }}
+            >
+                <MenuItem onClick={(): void => openFolderName({ mode: "create", parent: null })}>
+                    <ListItemIcon><CreateNewFolderOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="New folder…" />
+                </MenuItem>
+                <MenuItem
+                    disabled={unboundProjects.length === 0}
+                    onClick={(): void => {
+                        organizeSessionsByProject();
+                        setRootMenuEl(null);
+                    }}
+                >
+                    <ListItemIcon><LabelOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText
+                        primary="Organize by project"
+                        secondary={unboundProjects.length > 0
+                            ? `${String(unboundProjects.length)} new ${unboundProjects.length === 1 ? "folder" : "folders"}`
+                            : "Every project has a folder"}
+                    />
+                </MenuItem>
+                <Divider />
+                <MenuItem
+                    disabled={sessionFolders.folders.length === 0}
+                    onClick={(): void => {
+                        runFoldersAction("collapseAll", null);
+                        setRootMenuEl(null);
+                    }}
+                >
+                    <ListItemIcon><ExpandLess fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Collapse all" />
+                </MenuItem>
+                <MenuItem
+                    disabled={sessionFolders.folders.length === 0}
+                    onClick={(): void => {
+                        runFoldersAction("expandAll", null);
+                        setRootMenuEl(null);
+                    }}
+                >
+                    <ListItemIcon><ExpandMore fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Expand all" />
+                </MenuItem>
+            </Menu>
+            <Menu
+                sx={{ display: desktop ? "none" : undefined }}
+                anchorEl={folderMenu?.el ?? null}
+                open={!desktop && !!folderMenu}
+                onClose={(): void => setFolderMenu(null)}
+                slotProps={{ paper: { sx: { minWidth: 220 } } }}
+            >
+                {allowNewSession && onNewInFolder && (
+                    <MenuItem
+                        onClick={(): void => {
+                            if (folderMenuFolder) onNewInFolder(folderMenuFolder.id);
+                            setFolderMenu(null);
+                        }}
+                    >
+                        <ListItemIcon><Add fontSize="medium" /></ListItemIcon>
+                        <ListItemText primary="New session here" />
+                    </MenuItem>
+                )}
+                <MenuItem
+                    onClick={(): void => {
+                        if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id });
+                    }}
+                >
+                    <ListItemIcon><CreateNewFolderOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="New folder inside" />
+                </MenuItem>
+                <MenuItem
+                    onClick={(): void => {
+                        if (folderMenuFolder) openFolderName({ mode: "rename", folder: folderMenuFolder });
+                    }}
+                >
+                    <ListItemIcon><DriveFileRenameOutline fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Rename" />
+                </MenuItem>
+                <MenuItem
+                    onClick={(): void => {
+                        if (folderMenuFolder) setMovePicker({ kind: "folder", id: folderMenuFolder.id });
+                        setFolderMenu(null);
+                    }}
+                >
+                    <ListItemIcon><DriveFileMoveOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText primary="Move to…" />
+                </MenuItem>
+                <MenuItem
+                    onClick={(): void => {
+                        setProjectPicker(folderMenuFolder);
+                        setFolderMenu(null);
+                    }}
+                >
+                    <ListItemIcon><LabelOutlined fontSize="medium" /></ListItemIcon>
+                    <ListItemText
+                        primary={folderMenuFolder?.project ? "Change project…" : "Bind project…"}
+                        secondary={folderMenuFolder?.project ?? undefined}
+                    />
+                </MenuItem>
+                <Divider />
+                <MenuItem
+                    onClick={(): void => {
+                        setDeleteFolder(folderMenuFolder);
+                        setFolderMenu(null);
+                    }}
+                    sx={{ color: "error.main" }}
+                >
+                    <ListItemIcon><DeleteOutline fontSize="medium" color="error" /></ListItemIcon>
+                    <ListItemText primary="Delete folder" />
+                </MenuItem>
+            </Menu>
+            {desktop && (
+                <DesktopModalShell
+                    open={!!folderMenu}
+                    onClose={(): void => setFolderMenu(null)}
+                    title="Folder"
+                    description={`${folderMenuFolder?.name ?? ""}${folderMenuFolder?.project ? ` · ${folderMenuFolder.project}` : ""} · ${String(folderMenuCount?.kind === "folder" ? folderMenuCount.sessionCount : 0)} sessions`}
+                    width={560}
+                    onShortcutKeyDown={(event): void => {
+                        if (
+                            desktopImeOwnsKey(event.nativeEvent) ||
+                            event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+                        ) return;
+                        const key = workspaceCommandKey(event.nativeEvent).toLowerCase();
+                        const directAction = event.currentTarget.querySelector<HTMLButtonElement>(
+                            `[data-folder-shortcut="${key}"]`,
+                        );
+                        if (directAction) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            directAction.click();
+                            return;
+                        }
+                        if (key !== "j" && key !== "k") return;
+                        const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                            "[data-desktop-folder-actions] button:not(:disabled)",
+                        )];
+                        if (items.length === 0) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                        const next = current < 0
+                            ? 0
+                            : Math.max(0, Math.min(items.length - 1, current + (key === "j" ? 1 : -1)));
+                        items[next]?.focus();
+                    }}
+                    shortcutGroups={[
+                        {
+                            label: "Navigate",
+                            slots: [
+                                { shortcut: "J/K", label: "Move" },
+                                { shortcut: "Enter", label: "Select" },
+                            ],
+                        },
+                        { slots: [{ shortcut: "Esc", label: "Close" }] },
+                    ]}
+                >
+                    <Stack data-desktop-folder-actions spacing={0.5} sx={{ p: 2 }}>
+                        <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
+                        {allowNewSession && onNewInFolder && (
+                            <Button data-folder-shortcut="n" autoFocus fullWidth startIcon={<Add />} onClick={(): void => { if (folderMenuFolder) onNewInFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New session here</Box>
+                                <Kbd keys="N" />
+                            </Button>
+                        )}
+                        <Button data-folder-shortcut="f" fullWidth startIcon={<CreateNewFolderOutlined />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id }); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New folder inside</Box>
+                            <Kbd keys="F" />
+                        </Button>
+                        <Button data-folder-shortcut="r" fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "rename", folder: folderMenuFolder }); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
+                            <Kbd keys="R" />
+                        </Button>
+                        <Button data-folder-shortcut="m" fullWidth startIcon={<DriveFileMoveOutlined />} onClick={(): void => { if (folderMenuFolder) setMovePicker({ kind: "folder", id: folderMenuFolder.id }); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to…</Box>
+                            <Kbd keys="M" />
+                        </Button>
+                        <Button data-folder-shortcut="b" fullWidth startIcon={<LabelOutlined />} onClick={(): void => { setProjectPicker(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>{folderMenuFolder?.project ? `Project: ${folderMenuFolder.project}` : "Bind project…"}</Box>
+                            <Kbd keys="B" />
+                        </Button>
+                        <Divider sx={{ my: 0.5 }} />
+                        <Button data-folder-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { setDeleteFolder(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete folder</Box>
+                            <Kbd keys="X" />
+                        </Button>
+                    </Stack>
+                </DesktopModalShell>
+            )}
+            {namePrompt && (
+                <FolderNameShell
+                    title={namePrompt.mode === "rename" ? "Rename folder" : "New folder"}
+                    initial={namePrompt.mode === "rename" ? namePrompt.folder.name : ""}
+                    confirmLabel={namePrompt.mode === "rename" ? "Save" : "Create"}
+                    helperText={namePrompt.mode === "create" && namePrompt.parent
+                        ? `Inside "${sessionFolderById(sessionFolders, namePrompt.parent)?.name ?? ""}".`
+                        : "Sessions can be moved here from their menu, or file themselves when the folder is bound to a project."}
+                    extra={!desktop && namePrompt.mode === "create" && unboundProjects.length > 0
+                        ? (
+                            <Button
+                                color="inherit"
+                                onClick={(): void => {
+                                    organizeSessionsByProject();
+                                    setNamePrompt(null);
+                                }}
+                                sx={{ mr: "auto" }}
+                            >
+                                By project ({unboundProjects.length})
+                            </Button>
+                        )
+                        : undefined}
+                    onClose={(): void => setNamePrompt(null)}
+                    onConfirm={(name): void => {
+                        if (namePrompt.mode === "rename") renameSessionFolder(namePrompt.folder.id, name);
+                        else {
+                            const id = createSessionFolder(name, namePrompt.parent);
+                            if (id && namePrompt.parent) setFolderCollapsed([namePrompt.parent], false);
+                            if (id && desktop) focusRow(`folder:${id}`);
+                        }
+                        setNamePrompt(null);
+                    }}
+                />
+            )}
+            {movePicker && (
+                <FolderPickerShell
+                    title={movePicker.kind === "folder"
+                        ? `Move "${sessionFolderById(sessionFolders, movePicker.id)?.name ?? ""}" to`
+                        : `Move "${byId.get(movePicker.id)?.title ?? ""}" to`}
+                    value={sessionFolders}
+                    current={movePicker.kind === "folder"
+                        ? sessionFolderById(sessionFolders, movePicker.id)?.parent ?? null
+                        : tree.folderOf.get(movePicker.id) ?? null}
+                    exclude={movePicker.kind === "folder" ? movePicker.id : null}
+                    onPick={(folder): void => {
+                        if (movePicker.kind === "folder") moveSessionFolder(movePicker.id, folder);
+                        else placeSessions([movePicker.id], folder);
+                        if (folder) setFolderCollapsed([folder], false);
+                        setMovePicker(null);
+                        if (desktop) focusRow(movePicker.kind === "folder" ? `folder:${movePicker.id}` : movePicker.id);
+                    }}
+                    onNewFolder={(): void =>
+                        openFolderName({
+                            mode: "create",
+                            parent: movePicker.kind === "folder"
+                                ? sessionFolderById(sessionFolders, movePicker.id)?.parent ?? null
+                                : tree.folderOf.get(movePicker.id) ?? null,
+                        })}
+                    onClose={(): void => setMovePicker(null)}
+                />
+            )}
+            {projectPicker && (
+                <ProjectPickerShell
+                    folder={projectPicker}
+                    labels={projectLabels}
+                    onPick={(project): void => {
+                        bindSessionFolderProject(projectPicker.id, project);
+                        setProjectPicker(null);
+                    }}
+                    onClose={(): void => setProjectPicker(null)}
+                />
+            )}
+            {deleteFolder && (
+                <DeleteFolderShell
+                    folder={deleteFolder}
+                    sessionCount={deleteFolderCount}
+                    destination={deleteFolder.parent
+                        ? sessionFolderById(sessionFolders, deleteFolder.parent)?.name ?? null
+                        : null}
+                    onClose={(): void => setDeleteFolder(null)}
+                    onConfirm={(): void => {
+                        removeSessionFolder(deleteFolder.id);
+                        setDeleteFolder(null);
+                    }}
+                />
             )}
         </Stack>
     );
@@ -2278,6 +2987,8 @@ export function App({
     );
     // Same pattern for rename — single dialog instance prefilled with the
     // session's current title; Mobile/desktop shell split mirrors the rest.
+    // Folder a "New session here" request files its created session into.
+    const newSessionFolderRef = useRef<string | null>(null);
     const [pendingRename, setPendingRename] = useState<SessionMeta | null>(
         null,
     );
@@ -2464,6 +3175,10 @@ export function App({
             activeId={active?.id ?? null}
             onPick={pick}
             onNew={openNewSession}
+            onNewInFolder={(folder): void => {
+                newSessionFolderRef.current = folder;
+                openNewSession();
+            }}
             allowNewSession={canStartSession}
             onClose={mobile
                 ? (): void => settleMobileDrawerRef.current?.(false)
@@ -3784,7 +4499,10 @@ export function App({
 
             <NewSessionDialog
                 open={dialogOpen}
-                onClose={(): void => setDialogOpen(false)}
+                onClose={(): void => {
+                    newSessionFolderRef.current = null;
+                    setDialogOpen(false);
+                }}
                 onCreated={(session): void => {
                     // The daemon returns a durable Starting session before its
                     // Machine workspace and worker are ready. Select it now so
@@ -3793,6 +4511,10 @@ export function App({
                     // animation: the id already names a real persisted session.
                     setPendingCreatedSession(session);
                     setActiveId(session.id);
+                    if (newSessionFolderRef.current) {
+                        placeSessions([session.id], newSessionFolderRef.current);
+                        newSessionFolderRef.current = null;
+                    }
                     if (mobile && settleMobileDrawerRef.current) {
                         settleMobileDrawerRef.current(false, 0);
                     } else {
