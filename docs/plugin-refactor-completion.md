@@ -266,8 +266,8 @@ and accepting a production effect are different milestones.
   the complete gate, two actual 11-flow immutable process runs and all eight Nix
   checks; 15 original workers and four native Code processes survive activation.
   The resident Machine and installed Zed remain unchanged, so this is not
-  production end-to-end synchronization. Browser ownership/presentation,
-  ordinary Review, signed Plugin rollout, separate Machine maintenance and
+  production end-to-end synchronization. The browser follow-up below now adds
+  ownership/presentation; ordinary Review, signed Plugin rollout, separate Machine maintenance and
   independent restoration remain required.
 - [Browser synchronization ownership](plugin-browser-buffer-sync.md) connects
   the Service continuation to the actual core product identity lifetime and
@@ -277,8 +277,10 @@ and accepting a production effect are different milestones.
   effects fence ordinary buffer cleanup, terminal evidence is immutable, and
   retirement is explicit rather than an undo. Closed Rust/Web wire fixtures,
   focused unit/compile tests and an eight-case isolated React/browser gate
-  cover these boundaries. This does not switch ordinary Review or activate a
-  Machine/Code Plugin; production end-to-end synchronization, navigation,
+  cover these boundaries. Its [Web-only release](releases/browser-buffer-sync-2026-09-17.md)
+  passed the full gate and 38 browser cases, is published and active, and
+  retained all 16 observed workers plus four native Code processes. This does
+  not switch ordinary Review or activate a Machine/Code Plugin; production end-to-end synchronization, navigation,
   independent recovery and supported-device acceptance remain separate.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
