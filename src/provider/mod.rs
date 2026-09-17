@@ -492,11 +492,23 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         sidecar_urls.insert(sidecar.id.clone(), url);
     }
 
+    let bound_directories =
+        std::env::var(crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV).ok();
+    let credential_directories = bound_credential_directories(
+        &package.manifest.authentication,
+        bound_directories.as_deref(),
+    )?;
     let mut environment = HashMap::new();
     for (name, value) in &package.manifest.runtime.environment {
         environment.insert(
             name.clone(),
-            resolve_runtime_value(value, payload, &commands, &sidecar_urls)?,
+            resolve_runtime_value(
+                value,
+                payload,
+                &commands,
+                &sidecar_urls,
+                &credential_directories,
+            )?,
         );
     }
     let sidecar_auth: BTreeSet<_> = package
@@ -516,7 +528,15 @@ async fn prepare_package_launch(id: &str) -> Result<PreparedLaunch> {
         .runtime
         .arguments
         .iter()
-        .map(|value| resolve_runtime_value(value, payload, &commands, &sidecar_urls))
+        .map(|value| {
+            resolve_runtime_value(
+                value,
+                payload,
+                &commands,
+                &sidecar_urls,
+                &credential_directories,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     Ok(PreparedLaunch {
         spec: LaunchSpec {
@@ -609,11 +629,49 @@ fn component_command<'a>(
         .context("Provider runtime component command is not bound")
 }
 
+/// Credential directories bound by the Machine. Only declared credential
+/// files resolve, and each directory must be an existing absolute directory
+/// that actually holds that credential file: the shared refresh lock is only
+/// meaningful beside the credentials it protects.
+fn bound_credential_directories(
+    auth: &cowboy_provider_sdk::AuthenticationContract,
+    bound: Option<&str>,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let Some(raw) = bound else {
+        return Ok(BTreeMap::new());
+    };
+    let supplied: BTreeMap<String, String> =
+        serde_json::from_str(raw).context("decoding Machine Provider credential directories")?;
+    let mut directories = BTreeMap::new();
+    for (bundle_key, directory) in supplied {
+        let file = auth
+            .credential_files
+            .iter()
+            .find(|file| file.bundle_key == bundle_key)
+            .context("Machine bound an undeclared Provider credential directory")?;
+        let directory = PathBuf::from(directory);
+        ensure!(
+            directory.is_absolute() && directory.is_dir(),
+            "Provider credential directory is not an absolute directory"
+        );
+        let name = Path::new(&file.relative_path)
+            .file_name()
+            .context("declared Provider credential has no file name")?;
+        ensure!(
+            directory.join(name).symlink_metadata().is_ok(),
+            "Provider credential directory does not hold its credential file"
+        );
+        directories.insert(bundle_key, directory);
+    }
+    Ok(directories)
+}
+
 fn resolve_runtime_value(
     value: &RuntimeValue,
     payload: &PlatformPayload,
     commands: &BTreeMap<String, PathBuf>,
     sidecars: &BTreeMap<String, String>,
+    credential_directories: &BTreeMap<String, PathBuf>,
 ) -> Result<String> {
     let (prefix, value, suffix) = match value {
         RuntimeValue::Literal(value) => return Ok(value.clone()),
@@ -638,6 +696,21 @@ fn resolve_runtime_value(
                 .get(sidecar)
                 .with_context(|| format!("Provider sidecar {sidecar:?} is not ready"))?
                 .clone(),
+            suffix,
+        ),
+        RuntimeValue::Binding(RuntimeBinding::CredentialDirectory {
+            bundle_key,
+            prefix,
+            suffix,
+        }) => (
+            prefix,
+            credential_directories
+                .get(bundle_key)
+                .with_context(|| {
+                    format!("Provider credential directory {bundle_key:?} is not bound")
+                })?
+                .display()
+                .to_string(),
             suffix,
         ),
     };
@@ -1047,6 +1120,57 @@ mod tests {
                 .remove_environment_prefixes
                 .iter()
                 .any(|prefix| prefix == "CLAUDE_")
+        );
+    }
+
+    /// The CLI serializes its own token refresh through a lock beside its
+    /// credentials. Binding the shared credential directory is what stops two
+    /// auth generations from refreshing one single-use refresh token at once,
+    /// so an unusable binding must fail the launch rather than fall back to
+    /// the private generation home.
+    #[test]
+    fn credential_directory_binding_resolves_only_a_real_shared_store() {
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../plugins/claude-code/provider.json")).unwrap();
+        let manifest = source.compile().unwrap();
+        let auth = &manifest.authentication;
+        assert!(matches!(
+            manifest.runtime.environment.get("CLAUDE_SECURESTORAGE_CONFIG_DIR"),
+            Some(cowboy_provider_sdk::RuntimeValue::Binding(
+                cowboy_provider_sdk::RuntimeBinding::CredentialDirectory { bundle_key, .. },
+            )) if bundle_key == "credentials_json"
+        ));
+
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared/.claude");
+        std::fs::create_dir_all(&shared).unwrap();
+        let bound = |directory: &str| {
+            let raw = serde_json::json!({ "credentials_json": directory }).to_string();
+            super::bound_credential_directories(auth, Some(raw.as_str()))
+        };
+
+        // The declared file is missing: this is not the credential source.
+        assert!(bound(&shared.to_string_lossy()).is_err());
+        std::fs::write(shared.join(".credentials.json"), b"{}").unwrap();
+        assert_eq!(
+            bound(&shared.to_string_lossy()).unwrap()["credentials_json"],
+            shared
+        );
+        assert!(bound("relative/.claude").is_err());
+        assert!(bound(&root.path().join("absent").to_string_lossy()).is_err());
+        assert!(
+            super::bound_credential_directories(auth, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(super::bound_credential_directories(auth, Some("not json")).is_err());
+        // An undeclared bundle key cannot smuggle in another directory.
+        assert!(
+            super::bound_credential_directories(
+                auth,
+                Some(&serde_json::json!({ "other_key": shared.to_string_lossy() }).to_string()),
+            )
+            .is_err()
         );
     }
 

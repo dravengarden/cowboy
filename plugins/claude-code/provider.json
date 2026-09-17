@@ -1,9 +1,9 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.26",
+  "version": "3.1.27",
   "publisher": "cowboy-first-party",
-  "sdk_version": "3.1.10",
+  "sdk_version": "3.1.11",
   "display": {
     "name": "Claude Code",
     "vendor": "Anthropic",
@@ -183,7 +183,11 @@
         "source": "component_command",
         "component": { "kind": "provider_cli", "slot": "claude" }
       },
-      "CLAUDE_CODE_RETRY_WATCHDOG": "1"
+      "CLAUDE_CODE_RETRY_WATCHDOG": "1",
+      "CLAUDE_SECURESTORAGE_CONFIG_DIR": {
+        "source": "credential_directory",
+        "bundle_key": "credentials_json"
+      }
     },
     "remove_environment": [],
     "remove_environment_prefixes": ["ANTHROPIC_", "CLAUDE_"],

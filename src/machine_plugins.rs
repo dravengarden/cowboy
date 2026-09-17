@@ -1188,6 +1188,35 @@ impl MachinePluginStore {
             crate::provider_behavior::COMPONENT_COMMANDS_ENV.to_owned(),
             serde_json::to_string(&component_commands)?,
         );
+        // One credential source is shared by every auth-generation runtime
+        // home. Bind its directory so a Provider CLI locks and re-reads
+        // rotations there instead of inside its private generation home.
+        let credential_directories = self.credential_directories(&package)?;
+        if !credential_directories.is_empty() {
+            environment.insert(
+                crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
+                serde_json::to_string(&credential_directories)?,
+            );
+            // Plugin hosts (usage collectors) run the same authenticated CLI
+            // without the Provider runtime's value resolution, so resolve the
+            // Plugin's declared variables for them here too.
+            for (name, value) in &package.manifest.runtime.environment {
+                let cowboy_provider_sdk::RuntimeValue::Binding(
+                    cowboy_provider_sdk::RuntimeBinding::CredentialDirectory {
+                        bundle_key,
+                        prefix,
+                        suffix,
+                    },
+                ) = value
+                else {
+                    continue;
+                };
+                let directory = credential_directories
+                    .get(bundle_key)
+                    .context("Provider credential directory binding is unavailable")?;
+                environment.insert(name.clone(), format!("{prefix}{directory}{suffix}"));
+            }
+        }
         let mut provider_path = component_directories.into_iter().collect::<Vec<_>>();
         if let Some(inherited) = std::env::var_os("PATH") {
             provider_path.extend(std::env::split_paths(&inherited));
@@ -1214,6 +1243,39 @@ impl MachinePluginStore {
                 .clone(),
             home,
         })
+    }
+
+    /// Directory of each projected credential file in the one runtime
+    /// projection that owns the credential bytes. Historical generations link
+    /// their copies to it, so this is the single directory a Provider CLI may
+    /// use to serialize its own token refresh across live sessions.
+    fn credential_directories(
+        &self,
+        package: &ProviderPackage,
+    ) -> Result<BTreeMap<String, String>> {
+        let auth = &package.manifest.authentication;
+        if !auth.required || auth.credential_files.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let Some(canonical) = self.canonical_runtime_projection(package)? else {
+            return Ok(BTreeMap::new());
+        };
+        let home = canonical.join("home");
+        let mut directories = BTreeMap::new();
+        for credential in &auth.credential_files {
+            let path = home.join(&credential.relative_path);
+            ensure_within(&home, &path)?;
+            let directory = path
+                .parent()
+                .context("projected credential has no directory")?;
+            fs::create_dir_all(directory)?;
+            set_directory_chain_permissions(&home, directory)?;
+            directories.insert(
+                credential.bundle_key.clone(),
+                directory.to_string_lossy().into_owned(),
+            );
+        }
+        Ok(directories)
     }
 
     fn prepare_launch_auth_home(
@@ -5154,11 +5216,37 @@ mod tests {
             historical.environment["GEMINI_API_KEY"],
             "refreshed-fixture-api-key"
         );
-        let historical_home = historical.home.unwrap();
+        let historical_home = historical.home.clone().unwrap();
         assert_eq!(
             historical_home,
             auth_root.join("runtime/generations/1/home")
         );
+        // Auth-generation homes stay private, but their credentials are one
+        // file. A Provider CLI serializes its own token refresh through that
+        // directory, so every live generation must be bound to the same one:
+        // otherwise two generations refresh a single-use token concurrently
+        // and the loser's session fails to authenticate.
+        let shared_credentials = |context: &ProviderLaunchContext| -> BTreeMap<String, String> {
+            serde_json::from_str(
+                &context.environment[crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV],
+            )
+            .unwrap()
+        };
+        let historical_directories = shared_credentials(&historical);
+        assert_eq!(
+            historical_directories["oauth_creds_json"],
+            auth_root
+                .join("runtime/generations/1/home/.gemini")
+                .to_string_lossy()
+        );
+        let current = store
+            .launch_context("gemini", &release.artifact_digest, Some(2))
+            .unwrap();
+        assert_eq!(
+            current.home.as_ref().unwrap(),
+            &auth_root.join("runtime/generations/2/home")
+        );
+        assert_eq!(shared_credentials(&current), historical_directories);
         assert_eq!(
             fs::read(historical_home.join(".gemini/sessions/native-session.json")).unwrap(),
             b"legacy-native-session"

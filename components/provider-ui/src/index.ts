@@ -13,7 +13,7 @@ export const PROVIDER_UI_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_HOST_SCHEMA_MIN_VERSION = 1 as const;
 export const PROVIDER_HOST_SCHEMA_VERSION = 2 as const;
 export const PROVIDER_MACHINE_CONTRACT_VERSION = 4 as const;
-export const PROVIDER_SDK_VERSION = "3.1.10" as const;
+export const PROVIDER_SDK_VERSION = "3.1.11" as const;
 export {
   type TelemetryBackendContract,
   validateTelemetryBackendContract,
@@ -246,6 +246,14 @@ export type RuntimeValue =
   | {
     source: "sidecar_url";
     sidecar: string;
+    prefix?: string;
+    suffix?: string;
+  }
+  /** Directory of a declared credential file, shared by every auth-generation
+   * runtime home so a CLI can serialize its own token refresh there. */
+  | {
+    source: "credential_directory";
+    bundle_key: string;
     prefix?: string;
     suffix?: string;
   };
@@ -1229,6 +1237,21 @@ export function validateProviderManifest(
     if (value.source === "sidecar_url") {
       if (!sidecarIds.has(value.sidecar)) {
         throw new Error("Provider runtime value references an unknown sidecar");
+      }
+      continue;
+    }
+    if (value.source === "credential_directory") {
+      const auth = isRecord(authentication) ? authentication : {};
+      const declared = Array.isArray(auth.credential_files)
+        ? auth.credential_files as { bundle_key?: unknown }[]
+        : [];
+      if (
+        auth.required !== true ||
+        !declared.some((file) => file.bundle_key === value.bundle_key)
+      ) {
+        throw new Error(
+          "Provider credential directory references an undeclared credential file",
+        );
       }
       continue;
     }
@@ -2435,6 +2458,13 @@ function isRuntimeValue(value: unknown): value is RuntimeValue {
     return typeof value.sidecar === "string" && isIdentifier(value.sidecar) &&
       Object.keys(value).every((key) =>
         ["source", "sidecar", "prefix", "suffix"].includes(key)
+      );
+  }
+  if (value.source === "credential_directory") {
+    return typeof value.bundle_key === "string" &&
+      isIdentifier(value.bundle_key) &&
+      Object.keys(value).every((key) =>
+        ["source", "bundle_key", "prefix", "suffix"].includes(key)
       );
   }
   return value.source === "component_command" &&
