@@ -15,7 +15,10 @@ compiled into this thin client.
 - `apple/`: handwritten iOS keyboard, clipboard, haptic, Safari and Passkey
   bridges, launch resources, icons and the XcodeGen project specification.
   Generated Xcode projects and Rust outputs are never release inputs.
-- `toolchain.json`: explicit Rust, Tauri CLI and XcodeGen versions and provenance.
+- `android/`: handwritten Kotlin sources overlaid onto Tauri's generated Gradle
+  project. Generated Gradle projects and Rust outputs are never release inputs.
+- `toolchain.json`: explicit Rust, Tauri CLI, XcodeGen and Android SDK/NDK
+  versions and provenance.
 
 The shell sources were recovered selectively from this same repository's
 `tauri-shell` revision `627e63288fee0cdfdacebfcd04f1180d62f5e356`, not by merging
@@ -76,6 +79,37 @@ never overwritten. The SideStore workflow fetches the clean public Cowboy
 revision through Git into a fresh Mac task checkout, calls this entry, verifies
 the receipt and IPA digest on Hawk, and then publishes through its normal
 versioned source. The old external Mac shell is not a source or artifact fallback.
+
+## Android
+
+Android builds run on a Linux host (Hawk) inside the pinned shell:
+
+```sh
+nix develop .#native-android -c bash -c \
+  'ANDROID_HOME=$HOME/Android/Sdk bash tools/build-native-shell.sh android-emu --debug'
+nix develop .#native-android -c bash -c \
+  'ANDROID_HOME=$HOME/Android/Sdk bash tools/build-native-shell.sh android'
+```
+
+The shell supplies rustc and the Android Rust targets plus the exact Tauri
+CLI, all read from `toolchain.json`. The SDK, NDK, platform and build-tools are
+owned by Android Studio's SDK Manager; the builder verifies their pinned
+versions and never installs them. `android-emu` builds an x86_64 APK for the
+Android Emulator; `android` builds arm64-v8a for physical devices.
+
+Like the Apple entry, each build stages only this Git revision, regenerates
+the Gradle project with `cargo tauri android init`, overlays `android/` and
+records a receipt with the APK digest, application id, SDK levels, ABI,
+Gradle, Android Gradle Plugin, NDK and signing state. Debug APKs carry the
+local Android debug keystore; release APKs are unsigned. Release signing,
+installation, real login and physical-device acceptance remain separate steps.
+
+`android/app/src/main/java/top/thundersparrow/cowboy/MainActivity.kt` keeps
+Tauri's edge-to-edge window but applies system bar, display cutout and IME
+insets to the WebView container. Android 15+ forces edge-to-edge, and the
+remote UI has no Android safe-area contract, so without this the page renders
+under the status bar and the keyboard covers the Composer. Emulator smoke
+checks run on Hawk with the SDK emulator through `android-fhs`.
 
 ## Acceptance
 
