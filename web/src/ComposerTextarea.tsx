@@ -272,8 +272,10 @@ export const ComposerTextarea = forwardRef<
   const nativeImeBlocksWrites = (): boolean =>
     isAppleTouchDevice(globalThis.navigator ?? {}) && nativeImeOwns();
   // Explicit actions (Send, Clear all, dock Paste) that arrive under the iOS
-  // IME: commit a live composition first (pitfall #110), let the short
-  // post-compositionend hold (#84) pass, then write with the IME idle.
+  // IME: commit a live composition first (pitfall #110) and write right after
+  // its compositionend — that commit is complete, so the leftover-latin hold
+  // (#84) does not apply and waiting would let WebKit finish the blur. Only a
+  // write requested inside an ordinary post-compositionend hold waits it out.
   const runOutsideNativeIme = (then: () => void): void => {
     const ta = inputRef.current;
     if (!ta || !nativeImeBlocksWrites()) {
@@ -281,7 +283,7 @@ export const ComposerTextarea = forwardRef<
       return;
     }
     if (composingRef.current) {
-      withoutNativeComposition(ta, true, () => runOutsideNativeIme(then));
+      withoutNativeComposition(ta, true, then);
       return;
     }
     globalThis.setTimeout(
@@ -576,9 +578,14 @@ export const ComposerTextarea = forwardRef<
   // still UIKit's first responder when this runs. Commit literal Markdown and
   // its selection synchronously; a delayed selection write after React paints
   // is enough to reset an iPad keyboard/selection transaction.
-  const applyTextEdit = (edit: NativeTextEdit): void => {
+  const applyTextEdit = (
+    edit: NativeTextEdit,
+    { afterComposition = false }: { afterComposition?: boolean } = {},
+  ): void => {
     // Never write the textarea while the iOS IME owns it (pitfalls #83/#84).
-    if (nativeImeBlocksWrites()) return;
+    // A caller that just committed the composition itself (#110) writes
+    // inside the post-compositionend hold, before WebKit can finish the blur.
+    if (!afterComposition && nativeImeBlocksWrites()) return;
     const ta = inputRef.current;
     ta?.focus();
     if (ta) writeUndoableNativeEdit(ta, edit);
@@ -718,7 +725,10 @@ export const ComposerTextarea = forwardRef<
           ta?.selectionStart ?? current.length;
         const head = capturedSelection?.head ??
           ta?.selectionEnd ?? anchor;
-        applyTextEdit(replaceNativeSelection(current, anchor, head, insert));
+        applyTextEdit(
+          replaceNativeSelection(current, anchor, head, insert),
+          { afterComposition: true },
+        );
       };
       // Dock Paste is explicit: commit live marked text, then insert.
       runOutsideNativeIme(paste);
@@ -734,6 +744,8 @@ export const ComposerTextarea = forwardRef<
       selectedSlashCommandRef.current = null;
       const ta = inputRef.current;
       const doClear = (): void => {
+        // Write regardless of the post-compositionend hold: a deliberate
+        // commit has no leftover marked text (#110).
         if (ta && ta.value !== "") {
           writeUndoableNativeEdit(ta, { value: "", from: 0, to: 0 });
         }

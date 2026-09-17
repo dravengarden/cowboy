@@ -37,6 +37,11 @@ export function afterNativeCompositionEnds(
     done = true;
     editable.removeEventListener("compositionend", onEnd, true);
     if (timer !== 0) globalThis.clearTimeout(timer);
+    // WebKit refocuses the editable only transiently to insert the committed
+    // text and may complete the blur afterwards, which would drop the
+    // keyboard. This blur was part of the caller's explicit action, so the
+    // same action restores the focus it took.
+    if (editable.ownerDocument.activeElement !== editable) editable.focus();
     then();
   };
   const onEnd = (): void => {
