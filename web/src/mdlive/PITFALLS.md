@@ -2594,13 +2594,20 @@ Desktop Vim + IME checks:
 
     Blur is the clean exit on iOS: WebKit commits the marked text as typed,
     refocuses the editable to insert it, and fires `compositionend`
-    asynchronously — the software keyboard stays up. A synchronous
-    `blur()` + rewrite still kills the session, so
+    asynchronously — but its refocus is transient and it may finish the blur
+    afterwards. A synchronous `blur()` + rewrite still kills the session, so
     `composer/nativeComposition.ts` runs the rewrite from that
     `compositionend` (after the editor's own handler, via a microtask) or a
-    250ms fallback. Both hosts use it: CM6 for clear / insertText /
-    insertImages / deleteImage on touch, the native textarea for clear and
-    dock Paste. The textarea's own clear and image insertion additionally go
+    250ms fallback, restoring focus first because the same explicit action
+    took it. Apple touch only: Chrome Android finishes a Gboard composition
+    on a DOM write and would lose its keyboard to the blur. An editable that
+    does not own focus cannot be blurred, so the rewrite then runs at once.
+    Write right after that compositionend: the commit is complete, so the
+    leftover-latin hold (#84) does not apply, and waiting it out lets WebKit
+    finish the blur. Both hosts use it: CM6 for clear / insertText /
+    insertImages / deleteImage on touch (a deferred paste takes the
+    refocused editor's own selection and skips a swapped view), the native
+    textarea for clear and dock Paste. The textarea's own clear and image insertion additionally go
     through `execCommand`, which WebKit keeps in step with the IME (a
     Simulator experiment showed `execCommand("delete")` under marked text
     leaves the composition alive and consistent, while a value write does
