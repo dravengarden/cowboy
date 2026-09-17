@@ -530,7 +530,7 @@ Deno.test("native image and text paste action is shared by every mobile editor s
     4,
   );
   assertEquals(
-    textareaSource.includes("ta.focus();\n        writeNativeEdit(ta"),
+    textareaSource.includes("ta.focus();\n        // The editing command, not a value write: a paste can land while\n        // pinyin is still marked, and a value write kills the keyboard.\n        writeUndoableNativeEdit(ta"),
     true,
   );
 });

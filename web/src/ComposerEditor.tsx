@@ -77,6 +77,7 @@ import { iosLineStartDashRepair } from "./composer/obsidianAutoPair";
 import { readWebClipboard } from "./composer/webClipboard";
 import { hasNativeClipboardBridge } from "./composer/clipboardPort";
 import { isAppleTouchDevice } from "./keyboardGeometry";
+import { withoutNativeComposition } from "./composer/nativeComposition";
 import {
   cycleHeading,
   indentLines,
@@ -468,6 +469,22 @@ export const ComposerEditor = forwardRef<
     [],
   );
 
+  // iOS WebKit cannot survive a CM6 document rewrite under live marked text:
+  // the re-rendered content node strands the keyboard's composition and every
+  // later key is swallowed until the field is refocused (iOS 26 Simulator).
+  // Explicit actions that arrive mid-composition — Send/Clear all, dock Paste,
+  // image delete — therefore commit the composition first and run after its
+  // compositionend (composer/nativeComposition.ts). Typing and toolbar
+  // commands never reach this: the accessory buttons keep focus and
+  // Obsidian-style commands are ignored while composing.
+  const afterTouchComposition = (view: EditorView, then: () => void): void => {
+    withoutNativeComposition(
+      view.contentDOM,
+      touchInput && view.compositionStarted,
+      then,
+    );
+  };
+
   const runViewCommand = (
     command: MarkdownEditCommand,
     userEvent?: string,
@@ -547,20 +564,22 @@ export const ComposerEditor = forwardRef<
       // the caret past the inserted text (or past the document end, throwing).
       const insert = normalizeClipboardText(text);
       if (!view || insert.length === 0) return;
-      const selection = capturedSelection ?? view.state.selection.main;
-      const clamp = (position: number): number =>
-        Math.max(0, Math.min(position, view.state.doc.length));
-      const from = Math.min(clamp(selection.anchor), clamp(selection.head));
-      const to = Math.max(clamp(selection.anchor), clamp(selection.head));
-      const caret = from + insert.length;
-      view.dispatch({
-        changes: { from, to, insert },
-        selection: { anchor: caret },
-        scrollIntoView: true,
-        // Never join a paste with adjacent typing in one undo step.
-        userEvent: "input.paste",
+      afterTouchComposition(view, () => {
+        const selection = capturedSelection ?? view.state.selection.main;
+        const clamp = (position: number): number =>
+          Math.max(0, Math.min(position, view.state.doc.length));
+        const from = Math.min(clamp(selection.anchor), clamp(selection.head));
+        const to = Math.max(clamp(selection.anchor), clamp(selection.head));
+        const caret = from + insert.length;
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: caret },
+          scrollIntoView: true,
+          // Never join a paste with adjacent typing in one undo step.
+          userEvent: "input.paste",
+        });
+        view.focus();
       });
-      view.focus();
     },
     insertImage: (a: Attachment): void => {
       const view = cmRef.current?.view;
@@ -574,20 +593,22 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (!view || attachments.length === 0) return;
       attachments.forEach(registerInlineAttachment);
-      const selection = capturedSelection ?? view.state.selection.main;
-      const edit = inlineImagePasteInsertion(
-        view.state.doc.toString(),
-        selection.anchor,
-        selection.head,
-        attachments,
-      );
-      view.dispatch({
-        changes: { from: edit.from, to: edit.to, insert: edit.insert },
-        selection: { anchor: edit.caret },
-        scrollIntoView: true,
-        userEvent: "input.paste",
+      afterTouchComposition(view, () => {
+        const selection = capturedSelection ?? view.state.selection.main;
+        const edit = inlineImagePasteInsertion(
+          view.state.doc.toString(),
+          selection.anchor,
+          selection.head,
+          attachments,
+        );
+        view.dispatch({
+          changes: { from: edit.from, to: edit.to, insert: edit.insert },
+          selection: { anchor: edit.caret },
+          scrollIntoView: true,
+          userEvent: "input.paste",
+        });
+        view.focus();
       });
-      view.focus();
     },
     refreshImages: (): void => {
       cmRef.current?.view?.dispatch({ effects: refreshInlineImages.of(null) });
@@ -595,26 +616,28 @@ export const ComposerEditor = forwardRef<
     deleteImage: (id: string): void => {
       const view = cmRef.current?.view;
       if (!view) return;
-      removeImageTokenById(view, id);
+      afterTouchComposition(view, () => removeImageTokenById(view, id));
     },
     clear: (): void => {
       selectedSlashCommandRef.current = null;
       const view = cmRef.current?.view;
       if (!view) return;
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: "" },
-      });
-      // iOS repaint nudge. A keystroke makes WebKit repaint the contenteditable,
-      // but this PROGRAMMATIC empty doesn't — so after Send the just-sent text
-      // lingers on screen even though the doc is now empty (the .cm-content
-      // compositing layer isn't re-rasterized). Toggling opacity for one frame
-      // forces a repaint of the (now empty) content. Focus-preserving and
-      // layout-neutral, so the keyboard stays up and nothing reflows. No-op cost
-      // on desktop.
-      const content = view.contentDOM;
-      content.style.opacity = "0.999";
-      requestAnimationFrame(() => {
-        content.style.opacity = "";
+      afterTouchComposition(view, () => {
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: "" },
+        });
+        // iOS repaint nudge. A keystroke makes WebKit repaint the
+        // contenteditable, but this PROGRAMMATIC empty doesn't — so after Send
+        // the just-sent text lingers on screen even though the doc is now
+        // empty (the .cm-content compositing layer isn't re-rasterized).
+        // Toggling opacity for one frame forces a repaint of the (now empty)
+        // content. Focus-preserving and layout-neutral, so the keyboard stays
+        // up and nothing reflows. No-op cost on desktop.
+        const content = view.contentDOM;
+        content.style.opacity = "0.999";
+        requestAnimationFrame(() => {
+          content.style.opacity = "";
+        });
       });
     },
     consumeSelectedSlashCommand: (): string | null => {

@@ -1084,6 +1084,10 @@ fullscreen editor:
       system bar — the Chinese word commits and composition continues.
       Repeat after an inline image, and on the native textarea (no
       image / no complete markdown). WeChat IME still works (pitfall #80).
+- [ ] Type pinyin and leave it marked, then tap Send, Clear all, or dock
+      Paste (native textarea and CM6): the marked text commits, the action
+      applies, the keyboard stays up, and the next keys still type
+      (pitfall #110).
 
 Desktop (Chrome bridge) covers render + vim + desktop IME, but **cannot** prove
 #1–#3 — those are iOS-only.
@@ -2574,3 +2578,34 @@ Desktop Vim + IME checks:
     plus pinyin on a list/marker line, `**bold**` typed after Chinese text,
     toolbar Bold/List/Checklist then toolbar Undo in the native textarea, and a
     spreadsheet paste on Desktop.
+
+110. **An explicit rewrite under live iOS marked text must commit the
+    composition first.** Send, Clear all, dock Paste and image delete can
+    arrive while pinyin is still marked. Assigning `textarea.value`,
+    `setRangeText`, or dispatching a CM6 transaction that re-renders
+    `.cm-content` then removes the node WebKit's composition lives in
+    without any `compositionend`: the keyboard keeps its own composition
+    state, every later key arrives as a bare keydown with `isComposing`
+    and no text, and Cowboy's IME hold (`composingRef` /
+    `imeOwnsEditable`) stays true forever, so toolbar, picker and clear
+    writes are blocked until the field is refocused (iPad Air, iOS 26.5
+    Simulator, 2026-09-17). Obsidian never edits the document while
+    composing, so it has no equivalent path.
+
+    Blur is the clean exit on iOS: WebKit commits the marked text as typed,
+    refocuses the editable to insert it, and fires `compositionend`
+    asynchronously — the software keyboard stays up. A synchronous
+    `blur()` + rewrite still kills the session, so
+    `composer/nativeComposition.ts` runs the rewrite from that
+    `compositionend` (after the editor's own handler, via a microtask) or a
+    250ms fallback. Both hosts use it: CM6 for clear / insertText /
+    insertImages / deleteImage on touch, the native textarea for clear and
+    dock Paste. The textarea's own clear and image insertion additionally go
+    through `execCommand`, which WebKit keeps in step with the IME (a
+    Simulator experiment showed `execCommand("delete")` under marked text
+    leaves the composition alive and consistent, while a value write does
+    not). Toolbar and picker writes stay blocked while composing, as in
+    Obsidian. Do not "fix" the stuck hold by resetting it on `focusout`:
+    WKWebView moves `activeElement` to `BODY` during a live composition
+    (#45), and the reset would let the `[value]` layout effect rewrite marked
+    text (#83).

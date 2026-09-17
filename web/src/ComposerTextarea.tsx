@@ -23,6 +23,7 @@ import { attachComposerInputDebug } from "./composer/composerInputDebug";
 import { reportMobileNativePasteEvent } from "./composer/mobileNativePasteTelemetry";
 import { hasDraftMod, hasSendMod } from "./platform";
 import { imeOwnsEditable, isImeKeyEvent } from "./imeKey";
+import { withoutNativeComposition } from "./composer/nativeComposition";
 import { isAppleTouchDevice } from "./keyboardGeometry";
 import type { AvailableCommand } from "./protocol";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -553,9 +554,14 @@ export const ComposerTextarea = forwardRef<
   // still UIKit's first responder when this runs. Commit literal Markdown and
   // its selection synchronously; a delayed selection write after React paints
   // is enough to reset an iPad keyboard/selection transaction.
-  const applyTextEdit = (edit: NativeTextEdit): void => {
+  const applyTextEdit = (
+    edit: NativeTextEdit,
+    { afterComposition = false }: { afterComposition?: boolean } = {},
+  ): void => {
     // Never write the textarea while the iOS IME owns it (pitfalls #83/#84).
-    if (nativeImeBlocksWrites()) return;
+    // A caller that already committed the composition (#110) may write inside
+    // the short post-compositionend hold.
+    if (!afterComposition && nativeImeBlocksWrites()) return;
     const ta = inputRef.current;
     ta?.focus();
     if (ta) writeUndoableNativeEdit(ta, edit);
@@ -689,22 +695,40 @@ export const ComposerTextarea = forwardRef<
       const insert = normalizeClipboardText(text);
       if (insert.length === 0) return;
       const ta = inputRef.current;
-      const current = ta?.value ?? value;
-      const anchor = capturedSelection?.anchor ??
-        ta?.selectionStart ?? current.length;
-      const head = capturedSelection?.head ??
-        ta?.selectionEnd ?? anchor;
-      applyTextEdit(replaceNativeSelection(current, anchor, head, insert));
+      const paste = (): void => {
+        const current = ta?.value ?? value;
+        const anchor = capturedSelection?.anchor ??
+          ta?.selectionStart ?? current.length;
+        const head = capturedSelection?.head ??
+          ta?.selectionEnd ?? anchor;
+        applyTextEdit(replaceNativeSelection(current, anchor, head, insert), {
+          afterComposition: true,
+        });
+      };
+      // Dock Paste is explicit: commit live marked text, then insert.
+      if (ta) withoutNativeComposition(ta, nativeImeOwns(), paste);
+      else paste();
     },
     // Clearing runs after an asynchronous delivery acknowledgement, when the
     // Mobile keyboard has already been released on purpose. Do not refocus.
+    // Send and Clear all are explicit actions that may arrive while pinyin is
+    // still marked. Assigning `value` then wipes WebKit's composition node
+    // behind the IME's back and every later key is swallowed (iOS 26
+    // Simulator). Commit the composition first (composer/nativeComposition.ts)
+    // and clear through the editing command so Undo still works.
     clear: (): void => {
       selectedSlashCommandRef.current = null;
       const ta = inputRef.current;
-      if (ta && ta.value !== "") writeNativeEdit(ta, { value: "", from: 0, to: 0 });
-      onChange("");
-      setTrigger(null);
-      if (ta) publishSelection(ta);
+      const doClear = (): void => {
+        if (ta && ta.value !== "") {
+          writeUndoableNativeEdit(ta, { value: "", from: 0, to: 0 });
+        }
+        onChange("");
+        setTrigger(null);
+        if (ta) publishSelection(ta);
+      };
+      if (ta) withoutNativeComposition(ta, composingRef.current, doClear);
+      else doClear();
     },
     consumeSelectedSlashCommand: (): string | null => {
       const command = selectedSlashCommandRef.current;
@@ -724,7 +748,7 @@ export const ComposerTextarea = forwardRef<
       // Record before onChange schedules the render that replaces this textarea.
       onInlineImageInsertion?.(edit.caret, attachment.pending === true);
       if (ta) {
-        writeNativeEdit(ta, {
+        writeUndoableNativeEdit(ta, {
           value: edit.value,
           from: edit.caret,
           to: edit.caret,
@@ -759,7 +783,9 @@ export const ComposerTextarea = forwardRef<
         // the same textarea before the promotion render so the replacement CM6
         // inherits the still-open keyboard rather than needing delayed refocus.
         ta.focus();
-        writeNativeEdit(ta, {
+        // The editing command, not a value write: a paste can land while
+        // pinyin is still marked, and a value write kills the keyboard.
+        writeUndoableNativeEdit(ta, {
           value: edit.value,
           from: edit.caret,
           to: edit.caret,
