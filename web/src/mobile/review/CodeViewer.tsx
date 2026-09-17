@@ -18,6 +18,10 @@ import { Box, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  lineAnchorTarget,
+  type LineScrollAnchor,
+} from "./documentRefreshModel";
+import {
   HighlightStyle,
   type LanguageSupport,
   syntaxTree,
@@ -408,6 +412,55 @@ export default function CodeViewer({
     },
   );
   const [language, setLanguage] = useState<LanguageSupport | null>(null);
+  const lineAnchor = useRef<LineScrollAnchor | undefined>(undefined);
+  const anchoredText = useRef(text);
+
+  // A refreshed document replaces the whole editor text. Layout effects run
+  // before @uiw/react-codemirror's passive value sync, so the view still shows
+  // the previous snapshot here and its top line can be recorded.
+  useLayoutEffect(() => {
+    if (anchoredText.current === text) return;
+    anchoredText.current = text;
+    const view = editorRef.current;
+    if (!view || softWrap || view.state.doc.length === 0) {
+      lineAnchor.current = undefined;
+      return;
+    }
+    const height = view.scrollDOM.getBoundingClientRect().top -
+      view.documentTop;
+    const block = view.lineBlockAtHeight(height);
+    const line = view.state.doc.lineAt(block.from);
+    lineAnchor.current = {
+      line: line.number,
+      text: line.text,
+      offset: height - block.top,
+    };
+  }, [softWrap, text]);
+
+  useEffect(() => {
+    const view = editorRef.current;
+    const anchor = lineAnchor.current;
+    lineAnchor.current = undefined;
+    if (!view || !anchor || softWrap) return undefined;
+    const doc = view.state.doc;
+    const line = lineAnchorTarget(
+      doc.lines,
+      (number) => doc.line(number).text,
+      anchor,
+    );
+    const frame = globalThis.requestAnimationFrame(() => {
+      if (editorRef.current !== view) return;
+      const current = view.state.doc;
+      const block = view.lineBlockAt(
+        current.line(Math.min(line, current.lines)).from,
+      );
+      const height = view.scrollDOM.getBoundingClientRect().top -
+        view.documentTop;
+      view.scrollDOM.scrollTop += block.top + anchor.offset - height;
+      onScrollTopChange(scrollRestoreKey, view.scrollDOM.scrollTop);
+    });
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [onScrollTopChange, scrollRestoreKey, softWrap, text]);
 
   useEffect(() => {
     return () => {

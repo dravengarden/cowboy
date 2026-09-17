@@ -103,6 +103,13 @@ import {
 } from "./useOwnedReviewBuffer";
 import { ReviewCodeStatus } from "./ReviewCodeStatus";
 import { isMarkdownReviewPath } from "./reviewMarkdown";
+import {
+  captureTextScrollAnchor,
+  DOCUMENT_REFRESH_RESUME_GRACE_MS,
+  documentRefreshDecision,
+  restoreTextScrollAnchor,
+  type TextScrollAnchor,
+} from "./documentRefreshModel";
 import { resolveReviewLink } from "./reviewLinkTarget";
 import { ReviewMediaPreview } from "./ReviewMediaPreview";
 import { MermaidDiagram } from "./MermaidDiagram";
@@ -402,6 +409,25 @@ type ReviewTarget =
   };
 
 type SymbolPoint = { row: number; column: number };
+type LoadedReviewDocument =
+  | Awaited<ReturnType<typeof fetchCodeFile>>
+  | Awaited<ReturnType<typeof loadCodeDiff>>;
+type PendingDocumentUpdate =
+  | { kind: "content"; result: LoadedReviewDocument }
+  | { kind: "removed" };
+
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(
+    () => document.visibilityState === "visible",
+  );
+  useEffect(() => {
+    const update = (): void =>
+      setVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  return visible;
+}
 type CodeNavigationEntry = Extract<ReviewTarget, { kind: "source" }> & {
   symbol?: SymbolPoint;
   navigationRange?: Omit<CodeRevealRange, "id">;
@@ -431,6 +457,7 @@ function DocumentView({
   previewAnchor,
   bufferMode,
   dataRevision,
+  active,
   outlineOpen,
   onOutlineClose,
   outlineLine,
@@ -461,6 +488,9 @@ function DocumentView({
   previewAnchor?: { path: string; hash: string; id: number } | undefined;
   bufferMode: ReviewBufferMode | undefined;
   dataRevision: number;
+  /** Review is the foreground pane. A reader in front of the document is
+   *  asked before its text changes; otherwise refreshes apply in place. */
+  active: boolean;
   outlineOpen: boolean;
   onOutlineClose: () => void;
   outlineLine: number | undefined;
@@ -478,6 +508,10 @@ function DocumentView({
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [pendingUpdate, setPendingUpdate] = useState<PendingDocumentUpdate>();
+  const [refreshRetry, setRefreshRetry] = useState(0);
+  const pageVisible = usePageVisible();
+  const reading = active && pageVisible;
   const pageController = useRef<AbortController | undefined>(undefined);
   const [counts, setCounts] = useState<{ added: number; removed: number }>();
   const [loading, setLoading] = useState(true);
@@ -541,6 +575,21 @@ function DocumentView({
   const appliedOuterRestore = useRef<string | undefined>(undefined);
   const outerScrollable = markdownPreview || previewKind === "mermaid" ||
     mediaPreview || settings.softWrap;
+  const outerAnchor = useRef<TextScrollAnchor | undefined>(undefined);
+  const documentState = useRef({
+    loading,
+    error,
+    loadedPath,
+    revision,
+    text,
+  });
+  documentState.current = { loading, error, loadedPath, revision, text };
+  const readingRef = useRef(reading);
+  const autoApplyUntil = useRef(
+    performance.now() + DOCUMENT_REFRESH_RESUME_GRACE_MS,
+  );
+  const pendingRef = useRef(pendingUpdate);
+  pendingRef.current = pendingUpdate;
   // A `#heading` may arrive before the file it belongs to has loaded (a
   // cross-file `other.md#section`), so the scroll waits for THIS document to be
   // the one asked for and for its text to be on screen. Consumed by id, so the
@@ -848,6 +897,7 @@ function DocumentView({
   useEffect(() => {
     const controller = new AbortController();
     const diffTarget = target.kind === "diff" ? target : undefined;
+    setPendingUpdate(undefined);
     setLoading(true);
     setError(undefined);
     setText("");
@@ -959,8 +1009,149 @@ function DocumentView({
     mediaPreview,
     onRevision,
     reloadKey,
-    dataRevision,
   ]);
+
+  // Replace the displayed snapshot without unmounting the viewer, keeping the
+  // block at the top of the viewport where the reader left it.
+  const applyInPlace = useRef<(result: LoadedReviewDocument) => void>(
+    () => undefined,
+  );
+  applyInPlace.current = (result) => {
+    const scroller = outerScrollRef.current;
+    outerAnchor.current =
+      outerScrollable && scroller && result.text !== documentState.current.text
+        ? captureTextScrollAnchor(scroller)
+        : undefined;
+    pageController.current?.abort();
+    setLoadingMore(false);
+    setPendingUpdate(undefined);
+    setText(result.text);
+    setTruncated(result.truncated);
+    setRevision(result.revision);
+    setNextCursor(result.nextCursor);
+    setLimited(result.limited ?? false);
+    setLoadMoreError(false);
+    if ("added" in result) {
+      if (!result.nextCursor) onRevision(result.revision);
+      setCounts({ added: result.added, removed: result.removed });
+      const hunkCount = diffHunkLines(result.text).length;
+      setHunkIndex((index) => Math.min(index, Math.max(0, hunkCount - 1)));
+    }
+  };
+
+  useLayoutEffect(() => {
+    const anchor = outerAnchor.current;
+    const scroller = outerScrollRef.current;
+    if (!anchor || !scroller) return undefined;
+    outerAnchor.current = undefined;
+    const restore = (): void => {
+      if (restoreTextScrollAnchor(scroller, anchor)) {
+        rememberScrollPosition(outerScrollKey, scroller.scrollTop);
+      }
+    };
+    restore();
+    // Highlighted code blocks and diagrams can settle one frame later.
+    const frame = globalThis.requestAnimationFrame(restore);
+    return () => globalThis.cancelAnimationFrame(frame);
+  }, [outerScrollKey, rememberScrollPosition, text]);
+
+  // A worktree revision covers every file. Revalidate THIS document in the
+  // background and only touch the screen when its own revision changed.
+  const handledRefresh = useRef(`${dataRevision}:0`);
+  const refreshRetries = useRef({ dataRevision, count: 0 });
+  useEffect(() => {
+    const key = `${dataRevision}:${refreshRetry}`;
+    if (handledRefresh.current === key) return undefined;
+    handledRefresh.current = key;
+    if (refreshRetries.current.dataRevision !== dataRevision) {
+      refreshRetries.current = { dataRevision, count: 0 };
+    }
+    const current = documentState.current;
+    if (
+      mediaPreview || current.loading || current.error !== undefined ||
+      current.loadedPath !== target.path
+    ) {
+      setReloadKey((value) => value + 1);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const diffTarget = target.kind === "diff" ? target : undefined;
+    const request = diffTarget && previewKind !== "mermaid"
+      ? loadCodeDiff(
+        sessionId,
+        diffTarget.path,
+        settings.contextLines,
+        settings.showWhitespaceChanges,
+        diffTarget.scope,
+        controller.signal,
+      )
+      : fetchCodeFile(sessionId, target.path, controller.signal);
+    const unseen = (): boolean =>
+      !readingRef.current || performance.now() < autoApplyUntil.current;
+    void request.then((result) => {
+      if (controller.signal.aborted) return;
+      const decision = documentRefreshDecision({
+        currentRevision: documentState.current.revision,
+        nextRevision: result.revision,
+        currentText: documentState.current.text,
+        nextText: result.text,
+        reading: readingRef.current,
+        now: performance.now(),
+        autoApplyUntil: autoApplyUntil.current,
+      });
+      if (decision === "ignore") setPendingUpdate(undefined);
+      else if (decision === "apply") applyInPlace.current(result);
+      else setPendingUpdate({ kind: "content", result });
+    }).catch((reason) => {
+      if (controller.signal.aborted) return;
+      if (reason instanceof DOMException && reason.name === "AbortError") {
+        return;
+      }
+      const status = reason instanceof CodeApiError ? reason.status : undefined;
+      if (shouldCloseUnavailableSource(target.kind, status)) {
+        if (unseen()) {
+          mutateMobileReview(sessionId, "close", { path: target.path });
+        } else {
+          setPendingUpdate({ kind: "removed" });
+        }
+        return;
+      }
+      // Keep the current snapshot on screen. A snapshot race or reconnect
+      // retries briefly; the next worktree change revalidates again.
+      if (
+        isTransientCodeApiStatus(status) && refreshRetries.current.count < 2
+      ) {
+        refreshRetries.current.count += 1;
+        const delay = refreshRetries.current.count === 1 ? 400 : 1_200;
+        globalThis.setTimeout(() => {
+          if (!controller.signal.aborted) {
+            setRefreshRetry((value) => value + 1);
+          }
+        }, delay);
+      }
+    });
+    return () => controller.abort();
+  }, [dataRevision, refreshRetry]);
+
+  useEffect(() => {
+    const wasReading = readingRef.current;
+    readingRef.current = reading;
+    if (reading) {
+      // Returning to Review revalidates at once; that change was never seen.
+      if (!wasReading) {
+        autoApplyUntil.current = performance.now() +
+          DOCUMENT_REFRESH_RESUME_GRACE_MS;
+      }
+      return;
+    }
+    const pending = pendingRef.current;
+    if (!pending) return;
+    if (pending.kind === "removed") {
+      mutateMobileReview(sessionId, "close", { path: target.path });
+    } else {
+      applyInPlace.current(pending.result);
+    }
+  }, [reading]);
 
   // A remote Machine or its adapter can reconnect after the bounded initial
   // retries. Recover the preserved tab when the app becomes usable again so a
@@ -1457,7 +1648,54 @@ function DocumentView({
     </Stack>
   );
   return (
-    <Stack sx={{ flex: 1, minHeight: 0 }}>
+    <Stack sx={{ flex: 1, minHeight: 0, position: "relative" }}>
+      {pendingUpdate && (
+        <Box
+          role="status"
+          sx={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 16,
+            zIndex: 2,
+            mx: "auto",
+            width: "fit-content",
+            maxWidth: "calc(100% - 32px)",
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            pl: 1.75,
+            pr: 0.5,
+            py: 0.5,
+            borderRadius: 999,
+            border: 1,
+            borderColor: "divider",
+            bgcolor: "background.paper",
+          }}
+        >
+          <Typography variant="body2" color="text.secondary" noWrap>
+            {pendingUpdate.kind === "removed"
+              ? "This file was removed"
+              : "This file changed"}
+          </Typography>
+          <Button
+            size="small"
+            startIcon={pendingUpdate.kind === "content"
+              ? <Refresh fontSize="small" />
+              : undefined}
+            onClick={() => {
+              if (pendingUpdate.kind === "removed") {
+                mutateMobileReview(sessionId, "close", { path: target.path });
+              } else {
+                applyInPlace.current(pendingUpdate.result);
+              }
+            }}
+            sx={{ textTransform: "none", borderRadius: 999 }}
+          >
+            {pendingUpdate.kind === "removed" ? "Close" : "Refresh"}
+          </Button>
+        </Box>
+      )}
       {(truncated || counts || nextCursor || loadMoreError) && (
         <Stack
           direction="row"
@@ -2934,6 +3172,7 @@ export function ReviewApp({
               sessionId={workspace.sessionId}
               bufferMode={bufferMode}
               dataRevision={dataRevision}
+              active={active}
               outlineOpen={outlineOpen}
               onOutlineClose={() => setOutlineOpen(false)}
               outlineLine={syncedReview.positions?.[target.path]?.line}
