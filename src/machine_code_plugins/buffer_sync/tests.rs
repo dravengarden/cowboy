@@ -3,6 +3,7 @@ use crate::machine_code_plugins::{
     CodeRuntimeHost, CodeRuntimeSelection, PrivateRuntimeDirectory, tests::fixture_plan,
 };
 use crate::machine_plugins::PluginExecutionScope;
+use crate::machine_protocol::code_buffer_navigation as navigation;
 use crate::machine_protocol::code_buffer_sync::{BufferRef, Purpose, Request};
 
 struct Fixture {
@@ -79,6 +80,28 @@ impl Fixture {
 
     async fn act(&self, action: Action) -> Result<Snapshot> {
         self.host.synchronize(self.invocation(action)).await
+    }
+
+    fn navigation_preparation(&self) -> navigation::Action {
+        navigation::Action::Prepare {
+            lease: self.lease.clone(),
+            content: Content {
+                sha256: "c".repeat(64),
+                utf8_bytes: 4,
+            },
+            position: navigation::Point { row: 0, column: 1 },
+            query: navigation::Kind::Definition,
+        }
+    }
+
+    async fn navigate(&self, action: navigation::Action) -> Result<navigation::Snapshot> {
+        self.host
+            .navigate(self.scope.code_navigation(navigation::Request {
+                service_id: self.service.clone(),
+                machine_id: "hawk".into(),
+                action,
+            })?)
+            .await
     }
 
     async fn release(&self) -> Result<Value> {
@@ -334,6 +357,74 @@ async fn a_new_connection_never_adopts_an_old_operation_even_on_the_same_site() 
     assert!(!fixture.home.join("sync-applies").exists());
     fixture.act(Action::Retire { operation: id }).await.unwrap();
     fixture.release().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_navigation_expires_inert_sync_without_an_unrelated_buffer_request() {
+    for prepared_first in [false, true] {
+        let fixture = Fixture::new("sync-ok").await;
+        let action = if prepared_first {
+            navigation::Action::Execute {
+                navigation: fixture
+                    .navigate(fixture.navigation_preparation())
+                    .await
+                    .unwrap()
+                    .navigation,
+            }
+        } else {
+            fixture.navigation_preparation()
+        };
+        let id = fixture.prepare().await.operation;
+        let entry = fixture.host.buffer_sync.registry.lock().active[&id].clone();
+        entry.lock().await.until = Some(Instant::now());
+        // No generic buffer or synchronization call between expiry and this
+        // admission: both fresh preparation and existing Execute must work.
+        let observed = fixture.navigate(action).await.unwrap();
+        assert_eq!(
+            observed.phase,
+            if prepared_first {
+                navigation::Phase::Retained
+            } else {
+                navigation::Phase::Prepared
+            }
+        );
+        assert_eq!(entry.lock().await.state, State::Retired {});
+        assert!(!fixture.home.join("sync-applies").exists());
+        assert!(!fixture.home.join("sync-retires").exists());
+        fixture
+            .navigate(navigation::Action::Release {
+                navigation: observed.navigation,
+            })
+            .await
+            .unwrap();
+        fixture.release().await.unwrap();
+        assert_eq!(fixture.host.live_generation_count().await, 0);
+    }
+}
+
+#[tokio::test]
+async fn direct_navigation_cannot_expire_an_uncertain_synchronization_effect() {
+    let fixture = Fixture::new("sync-lost").await;
+    let id = fixture.prepare().await.operation;
+    assert!(
+        fixture
+            .act(Action::Apply {
+                operation: id.clone(),
+            })
+            .await
+            .is_err()
+    );
+    let entry = fixture.host.buffer_sync.registry.lock().active[&id].clone();
+    entry.lock().await.until = Some(Instant::now());
+    assert!(
+        fixture
+            .navigate(fixture.navigation_preparation())
+            .await
+            .is_err()
+    );
+    assert_eq!(entry.lock().await.state, State::Unknown {});
+    assert!(!fixture.home.join("nav-prepares").exists());
+    assert_eq!(fixture.count("sync-applies"), 1);
 }
 
 #[tokio::test]

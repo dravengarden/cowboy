@@ -126,6 +126,9 @@ impl CodeRuntimeHost {
         &self,
         invocation: crate::machine_plugins::CodeNavigationInvocation,
     ) -> Result<crate::machine_protocol::code_buffer_navigation::Snapshot> {
+        // Direct navigation must not depend on an unrelated ordinary request
+        // to clear an expired, effect-free synchronization reservation.
+        self.buffer_sync.expire_inert();
         self.buffer_navigation
             .execute(invocation, &self.buffer_leases)
             .await

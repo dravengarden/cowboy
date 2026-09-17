@@ -24,6 +24,9 @@ runtime, native ID, deadline or caller authorization flag. Core captures the
 retained original runtime and worktree route, rechecks the source after waiting,
 and requires that adapter's navigation/handoff support contract. Health or an
 older synchronization/native probe cannot substitute for it.
+Direct navigation also retires expired inert synchronization reservations before
+checking the source; it does not require an unrelated buffer request to clear
+that exclusion. Pending or unknown synchronization effects keep their fence.
 
 Core issues a separate random-instance, monotonic `navigation:` reference.
 Native `nav:` references stay Machine-private. The group pins its original
