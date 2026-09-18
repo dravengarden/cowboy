@@ -201,6 +201,35 @@ fn closed_response_schema_rejects_foreign_identity_and_impossible_state() {
     );
 }
 
+#[test]
+fn budget_refusal_is_correlated_and_cannot_carry_a_partial_result() {
+    let query = wire::CowboyBufferSync {
+        protocol: 1,
+        action: Action::Query as i32,
+        instance: vec![3; 16],
+        operation_id: 42,
+        ..Default::default()
+    };
+    let refused = wire::CowboyBufferSyncResponse {
+        operation_id: 42,
+        phase: Phase::Refused as i32,
+        refusal: Refusal::Budget as i32,
+        ..supported()
+    };
+    validate_response(&query, &refused).unwrap();
+    for case in 0..5 {
+        let mut bad = refused.clone();
+        match case {
+            0 => bad.content_bytes = 1,
+            1 => bad.content_sha256 = vec![0; 32],
+            2 => bad.refusal = 5,
+            3 => bad.operation_id += 1,
+            _ => bad.phase = Phase::Applied as i32,
+        }
+        assert!(validate_response(&query, &bad).is_err());
+    }
+}
+
 #[tokio::test]
 async fn malformed_requests_never_enter_native_queue() {
     let (zed, mut receiver) = fixture().await;

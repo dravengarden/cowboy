@@ -252,6 +252,7 @@ async fn cowboy_pending_survives_observation_loss_and_does_not_expire(cx: &mut T
     // admitted native task alive; no transport request owns its future.
     fixture.action(cx, ticket, Action::Apply).unwrap();
     ready.await.unwrap();
+    assert_eq!(cx.read(cowboy_replacement::in_use), 1);
     fixture.store.update(cx, |store, _| {
         store.cowboy_sync.records.get_mut(&ticket).unwrap().created = Instant::now() - PREPARE_TTL
     });
@@ -268,6 +269,79 @@ async fn cowboy_pending_survives_observation_loss_and_does_not_expire(cx: &mut T
         "after\n"
     );
     assert_eq!(fixture.action(cx, ticket, Action::Apply).unwrap(), result);
+    assert_eq!(cx.read(cowboy_replacement::in_use), 0);
+}
+
+#[gpui::test]
+async fn cowboy_sync_budget_refusal_is_terminal_and_not_a_replay_grant(cx: &mut TestAppContext) {
+    let fixture = Fixture::new(cx).await;
+    let ticket = fixture.prepare(cx).unwrap().operation_id;
+    let jobs = cx.update(|cx| {
+        (0..cowboy_replacement::MAX_JOBS)
+            .map(|_| cowboy_replacement::acquire(cx).unwrap())
+            .collect::<Vec<_>>()
+    });
+    let before = fixture.buffer.read_with(cx, |b, _| (b.text(), b.version()));
+    let refused = fixture.action(cx, ticket, Action::Apply).unwrap();
+    assert_eq!(refused.phase, Phase::Refused as i32);
+    assert_eq!(refused.refusal, Refusal::Budget as i32);
+    drop(jobs);
+    assert_eq!(fixture.action(cx, ticket, Action::Apply).unwrap(), refused);
+    assert_eq!(fixture.action(cx, ticket, Action::Query).unwrap(), refused);
+    assert_eq!(
+        fixture.buffer.read_with(cx, |b, _| (b.text(), b.version())),
+        before
+    );
+    assert_eq!(cx.read(cowboy_replacement::in_use), 0);
+    fixture.action(cx, ticket, Action::Retire).unwrap();
+}
+
+#[gpui::test]
+async fn cowboy_sync_history_refusal_does_not_mark_saved_or_prune(cx: &mut TestAppContext) {
+    let fixture = Fixture::new(cx).await;
+    fixture.buffer.update(cx, |buffer, cx| {
+        for i in 0..cowboy_replacement::MAX_OPERATIONS {
+            buffer.edit(
+                [(0..buffer.len(), if i % 2 == 0 { "a" } else { "b" })],
+                None,
+                cx,
+            );
+        }
+        // Isolate capacity from dirty-state refusal. This test does not write disk.
+        buffer.did_reload(buffer.version(), LineEnding::Unix, buffer.saved_mtime(), cx);
+    });
+    let expected = fixture.buffer.read_with(cx, |buffer, _| {
+        serialize_version(&buffer.version())
+            .into_iter()
+            .map(|v| proto::CowboyBufferSyncVersion {
+                replica_id: v.replica_id,
+                timestamp: v.timestamp,
+            })
+            .collect()
+    });
+    let fixture = Fixture {
+        expected,
+        ..fixture
+    };
+    let ticket = fixture.prepare(cx).unwrap().operation_id;
+    let before = fixture.buffer.read_with(cx, |b, _| {
+        (b.text(), b.version(), b.saved_version().clone())
+    });
+    fixture.action(cx, ticket, Action::Apply).unwrap();
+    cx.run_until_parked();
+    let refused = fixture.action(cx, ticket, Action::Query).unwrap();
+    assert_eq!(refused.phase, Phase::Refused as i32);
+    assert_eq!(refused.refusal, Refusal::Budget as i32);
+    assert_eq!(
+        fixture.buffer.read_with(cx, |b, _| (
+            b.text(),
+            b.version(),
+            b.saved_version().clone()
+        )),
+        before
+    );
+    assert_eq!(fixture.action(cx, ticket, Action::Apply).unwrap(), refused);
+    assert_eq!(cx.read(cowboy_replacement::in_use), 0);
 }
 
 #[gpui::test]

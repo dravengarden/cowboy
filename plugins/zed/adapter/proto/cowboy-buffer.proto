@@ -49,6 +49,7 @@ message CowboyBufferSyncResponse {
     CHANGED = 1;
     SOURCE = 2;
     SHARED = 3;
+    BUDGET = 4;
   }
   Refusal refusal = 8;
 }

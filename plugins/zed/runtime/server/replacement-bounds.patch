@@ -1,0 +1,207 @@
+diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
+--- a/crates/language/src/buffer.rs
++++ b/crates/language/src/buffer.rs
+@@ -458,8 +458,20 @@
+ 
+     /// Loads the file's contents from disk.
+     fn load_bytes(&self, cx: &App) -> Task<Result<Vec<u8>>>;
++
++    /// Private reload must retain admission inside the actual loader/result.
++    /// Other file implementations cannot silently substitute an uncharged load.
++    fn cowboy_load_bytes(
++        &self,
++        _job: cowboy_replacement::Job,
++        _cx: &App,
++    ) -> Task<Result<cowboy_replacement::Held<Vec<u8>>>> {
++        Task::ready(Err(anyhow!("private native replacement loader unavailable")))
++    }
+ }
+ 
++pub mod cowboy_replacement;
++
+ /// The auto-indent behavior associated with an editing operation.
+ /// For some editing operations, each affected line of text has its
+ /// indentation recomputed. For other operations, the entire block
+@@ -1659,22 +1671,23 @@
+         self.cowboy_reload_owner = Some(owner.clone());
+         self.reload_task = Some(cx.spawn(async move |this, cx| {
+             let result = async {
+-            let Some((new_mtime, load_bytes_task, current_encoding)) =
++            let (new_mtime, load_bytes_task, current_encoding) =
+                 this.update(cx, |this, cx| {
+-                    let file = this.file.as_ref()?.as_local()?;
+-                    Some((
++                    this.cowboy_check_replacement()?;
++                    let file = this.file.as_ref().and_then(|file| file.as_local())
++                        .ok_or_else(|| anyhow!("private native replacement has no local file"))?;
++                    let job = cowboy_replacement::acquire(cx)?;
++                    Ok::<_, anyhow::Error>((
+                         file.disk_state().mtime(),
+-                        file.load_bytes(cx),
++                        file.cowboy_load_bytes(job, cx),
+                         this.encoding,
+                     ))
+-                })?
+-            else {
+-                return Ok(());
+-            };
++                })??;
+ 
+             let target_encoding = force_encoding.unwrap_or(current_encoding);
+ 
+-            let bytes = load_bytes_task.await?;
++            let loaded = load_bytes_task.await?;
++            let bytes = loaded.value;
+             anyhow::ensure!(
+                 bytes.len() <= 4 * 1024 * 1024,
+                 "private native reload source exceeds budget"
+@@ -1711,16 +1724,16 @@
+                 "private native reload text exceeds budget"
+             );
+ 
+-            let diff = this.update(cx, |this, cx| this.diff(new_text, cx))?.await;
++            let replacement = this.update(cx, |this, cx| {
++                this.cowboy_diff(new_text, loaded.job, cx)
++            })??.await?;
+             this.update(cx, |this, cx| {
+-                if this.version() == diff.base_version {
+-                    this.finalize_last_transaction();
++                if this.version() == replacement.diff().base_version {
+                     let old_encoding = this.encoding;
+                     let old_has_bom = this.has_bom;
+-                    this.apply_diff(diff, cx);
++                    let transaction = this.cowboy_apply_replacement(replacement, cx)?;
+                     this.encoding = encoding_used;
+                     this.has_bom = has_bom;
+-                    let transaction = this.finalize_last_transaction().cloned();
+                     if let Some(ref txn) = transaction {
+                         if old_encoding != encoding_used || old_has_bom != has_bom {
+                             this.reload_with_encoding_txns
+@@ -1731,9 +1744,9 @@
+                     this.has_conflict = false;
+                     this.did_reload(this.version(), this.line_ending(), new_mtime, cx);
+                 } else {
+-                    if !diff.edits.is_empty()
++                    if !replacement.diff().edits.is_empty()
+                         || this
+-                            .edits_since::<usize>(&diff.base_version)
++                            .edits_since::<usize>(&replacement.diff().base_version)
+                             .next()
+                             .is_some()
+                     {
+@@ -1742,7 +1755,8 @@
+ 
+                     this.did_reload(prev_version, this.line_ending(), this.saved_mtime, cx);
+                 }
+-            })
++                Ok::<_, anyhow::Error>(())
++            })?
+             }.await;
+             // Clear a completed local task on every exit, including source,
+             // decode and no-file refusal. Do not mutate content/version or retry.
+diff --git a/crates/language/src/language.rs b/crates/language/src/language.rs
+--- a/crates/language/src/language.rs
++++ b/crates/language/src/language.rs
+@@ -7,6 +7,7 @@
+ //!
+ //! Notably we do *not* assign a single language to a single file; in real world a single file can consist of multiple programming languages - HTML is a good example of that - and `language` crate tends to reflect that status quo in its API.
+ mod buffer;
++pub use buffer::cowboy_replacement;
+ pub mod cowboy_buffer_budget;
+ mod diagnostic;
+ mod diagnostic_set;
+diff --git a/crates/language/src/text_diff.rs b/crates/language/src/text_diff.rs
+--- a/crates/language/src/text_diff.rs
++++ b/crates/language/src/text_diff.rs
+@@ -257,14 +257,36 @@
+     new_text: &str,
+     options: DiffOptions,
+ ) -> Vec<(Range<usize>, Arc<str>)> {
++    text_diff_with_limit(old_text, new_text, options, usize::MAX).unwrap()
++}
++
++/// Bound result allocations; exceeding the cap returns no partial edit list.
++pub(crate) fn cowboy_text_diff(
++    old_text: &str,
++    new_text: &str,
++    limit: usize,
++) -> Option<Vec<(Range<usize>, Arc<str>)>> {
++    text_diff_with_limit(old_text, new_text, DiffOptions::default(), limit)
++}
++
++fn text_diff_with_limit(
++    old_text: &str,
++    new_text: &str,
++    options: DiffOptions,
++    limit: usize,
++) -> Option<Vec<(Range<usize>, Arc<str>)>> {
+     let empty: Arc<str> = Arc::default();
+     let mut edits = Vec::new();
++    let mut exceeded = false;
+     let mut hunk_input = InternedInput::default();
+     let input = InternedInput::new(lines(old_text), lines(new_text));
+     diff_internal(&input, &mut |old_byte_range,
+                                 new_byte_range,
+                                 old_rows,
+                                 new_rows| {
++        if exceeded {
++            return;
++        }
+         if should_perform_word_diff_within_hunk(
+             &old_rows,
+             &old_byte_range,
+@@ -284,6 +306,10 @@
+                 options.language_scope.clone(),
+             ));
+             diff_internal(&hunk_input, &mut |old_byte_range, new_byte_range, _, _| {
++                if edits.len() == limit {
++                    exceeded = true;
++                    return;
++                }
+                 let old_byte_range =
+                     old_offset + old_byte_range.start..old_offset + old_byte_range.end;
+                 let new_byte_range =
+@@ -296,6 +322,10 @@
+                 edits.push((old_byte_range, replacement_text));
+             });
+         } else {
++            if edits.len() == limit {
++                exceeded = true;
++                return;
++            }
+             let replacement_text = if new_byte_range.is_empty() {
+                 empty.clone()
+             } else {
+@@ -304,7 +334,7 @@
+             edits.push((old_byte_range, replacement_text));
+         }
+     });
+-    edits
++    (!exceeded).then_some(edits)
+ }
+ 
+ pub fn apply_diff_patch(base_text: &str, patch: &str) -> Result<String, anyhow::Error> {
+diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
+--- a/crates/worktree/src/worktree.rs
++++ b/crates/worktree/src/worktree.rs
+@@ -3825,6 +3825,20 @@
+ }
+ 
+ impl language::LocalFile for File {
++    fn cowboy_load_bytes(
++        &self,
++        job: language::cowboy_replacement::Job,
++        cx: &App,
++    ) -> Task<Result<language::cowboy_replacement::Held<Vec<u8>>>> {
++        let worktree = self.worktree.read(cx).as_local().unwrap();
++        let abs_path = worktree.absolutize(&self.path);
++        let fs = worktree.fs.clone();
++        cx.background_spawn(async move {
++            let result = fs.cowboy_load_bytes_bounded(&abs_path, 4 * 1024 * 1024).await;
++            result.map(|bytes| job.hold(bytes))
++        })
++    }
++
+     fn abs_path(&self, cx: &App) -> PathBuf {
+         self.worktree.read(cx).absolutize(&self.path)
+     }

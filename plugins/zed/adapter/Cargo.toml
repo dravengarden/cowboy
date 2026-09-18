@@ -1,6 +1,6 @@
 [package]
 name = "cowboy-zed-adapter"
-version = "1.16.0"
+version = "1.17.0"
 edition = "2024"
 publish = false
 license = "GPL-3.0-or-later"

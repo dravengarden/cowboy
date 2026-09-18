@@ -4,7 +4,7 @@ use super::*;
 
 const ORIGINAL: &str = "retained🙂\n";
 
-async fn reload(zed: &ZedRuntime, buffer: u64) -> Result<proto::Envelope> {
+pub(super) async fn reload(zed: &ZedRuntime, buffer: u64) -> Result<proto::Envelope> {
     zed.request(proto::envelope::Payload::ReloadBuffers(
         proto::ReloadBuffers {
             project_id: proto::REMOTE_SERVER_PROJECT_ID,
