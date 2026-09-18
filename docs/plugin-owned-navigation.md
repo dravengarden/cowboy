@@ -25,6 +25,11 @@ framing before allocation and bounded actual file reads before native buffer
 construction. Aggregate acquisition and whole-query refusal remain unaccepted;
 this is not permission to open production navigation admission.
 
+The `1.14.0` source adds a separate [whole-query native route](plugin-native-navigation-budgets.md)
+with aggregate pre-acquisition location/target budgets, original-worktree-only
+opens and typed refusal. Its acceptance is separate from the `1.13.3` evidence;
+Unknown/recovery and production admission remain unchanged.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete

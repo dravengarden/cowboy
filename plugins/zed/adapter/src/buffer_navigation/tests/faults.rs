@@ -5,8 +5,8 @@ async fn navigation_reply_can_precede_the_original_target_state_and_last_chunk()
     let mut f = Fixture::new().await;
     let nav = f.prepare().await;
     let task = f.spawn(action(&nav, Action::Execute));
-    let request = f.outbound.recv().await.unwrap();
-    coordinate_queries::reply(&f.zed, request, definitions(&[8])).await;
+    let request = f.navigation.recv().await.unwrap();
+    f.reply_navigation(request, definitions(&[8]));
     tokio::task::yield_now().await;
     assert!(!task.is_finished());
     assert!(f.outbound.try_recv().is_err());
@@ -73,8 +73,8 @@ async fn target_registration_is_one_use_and_retains_unknown_pins_on_failure() {
         f.target(8, "target").await;
         let nav = f.prepare().await;
         let task = f.spawn(action(&nav, Action::Execute));
-        let request = f.outbound.recv().await.unwrap();
-        coordinate_queries::reply(&f.zed, request, definitions(&[8, 8])).await;
+        let request = f.navigation.recv().await.unwrap();
+        f.reply_navigation(request, definitions(&[8, 8]));
         let registration = f.outbound.recv().await.unwrap();
         match case {
             0 => {
@@ -174,7 +174,7 @@ async fn cancellation_is_unknown_and_fences_new_native_admission_without_replay(
     let mut f = Fixture::new().await;
     let nav = f.prepare().await;
     let task = f.spawn(action(&nav, Action::Execute));
-    f.outbound.recv().await.unwrap();
+    f.navigation.recv().await.unwrap();
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     f.buffers
@@ -208,9 +208,9 @@ async fn changed_source_during_native_query_retains_unknown_not_empty_success() 
     f.target(8, "target").await;
     let nav = f.prepare().await;
     let task = f.spawn(action(&nav, Action::Execute));
-    let request = f.outbound.recv().await.unwrap();
+    let request = f.navigation.recv().await.unwrap();
     f.aba(7);
-    coordinate_queries::reply(&f.zed, request, definitions(&[8])).await;
+    f.reply_navigation(request, definitions(&[8]));
     assert!(task.await.unwrap().is_err());
     assert!(matches!(
         state(f.request(action(&nav, Action::Query)).await.unwrap()),
@@ -238,7 +238,7 @@ async fn invalid_or_excessive_native_destinations_never_publish_partial_success(
             );
         }
         let task = f.spawn(action(&nav, Action::Execute));
-        let request = f.outbound.recv().await.unwrap();
+        let request = f.navigation.recv().await.unwrap();
         let mut responses = definitions(&[8]);
         match case {
             0 => f.zed.buffer_files.write().await.get_mut(&8).unwrap().path = "../outside".into(),
@@ -263,7 +263,7 @@ async fn invalid_or_excessive_native_destinations_never_publish_partial_success(
             }
             _ => {}
         }
-        coordinate_queries::reply(&f.zed, request, responses).await;
+        f.reply_navigation(request, responses);
         assert!(task.await.unwrap().is_err(), "case {case}");
         assert!(matches!(
             state(f.request(action(&nav, Action::Query)).await.unwrap()),

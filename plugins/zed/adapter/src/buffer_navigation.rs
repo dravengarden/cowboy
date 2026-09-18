@@ -396,14 +396,16 @@ async fn execute(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
     // admission fence BEFORE the first native await, including cancellation.
     source.lease_ids.insert(BufferOwner::NavigationPending(id));
     slot.phase = Phase::Unknown;
-    let responses = zed
-        .lsp_query(crate::navigation_request(
+    let responses = crate::navigation_native::query(
+        zed,
+        crate::navigation_request(
             slot.remote_id,
             &slot.position.version,
             slot.position.anchor.clone(),
             slot.kind,
-        ))
-        .await?;
+        ),
+    )
+    .await?;
     let (targets, unregistered) = targets::retain(slot, id, responses, &mut active, zed).await?;
     // LSP navigation shares native buffers but does NOT register them for
     // subsequent language reads. Registration is part of this one-use effect,

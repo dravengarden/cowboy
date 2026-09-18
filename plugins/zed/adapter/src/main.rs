@@ -21,6 +21,7 @@ mod content_reads;
 mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
+mod navigation_native;
 mod sync_native;
 mod sync_owners;
 mod text_reads;
@@ -1434,7 +1435,7 @@ async fn respond(
         Request::BufferNavigationSupport {} => {
             // Probe the actual pair; health or an older synchronization reply
             // does not establish this adapter's acquisition/handoff contract.
-            sync_native::support(zed).await?;
+            navigation_native::support(zed).await?;
             Response::BufferNavigationSupport {
                 api_version: ADAPTER_VERSION,
                 protocol: 1,

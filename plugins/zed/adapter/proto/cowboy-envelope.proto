@@ -1,4 +1,4 @@
-// GPL-3.0-or-later. Only the two private payload tags; ordinary messages keep
+// GPL-3.0-or-later. Only private payload tags; ordinary messages keep
 // using the exact upstream proto crate. Never combine the two payload codecs.
 syntax = "proto3";
 package zed.messages;
@@ -10,5 +10,7 @@ message CowboyBufferSyncEnvelope {
   oneof payload {
     CowboyBufferSync request = 1000;
     CowboyBufferSyncResponse response = 1001;
+    CowboyNavigation navigation_request = 1002;
+    CowboyNavigationResponse navigation_response = 1003;
   }
 }

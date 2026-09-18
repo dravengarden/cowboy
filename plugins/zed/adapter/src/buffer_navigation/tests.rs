@@ -1,6 +1,8 @@
 //! Deterministic private-transport tests, not a production LSP acceptance.
 use super::*;
+use crate::sync_native::wire;
 use crate::{Request, Worktrees, coordinate_queries, respond};
+use prost::Message as _;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -33,6 +35,7 @@ struct Fixture {
     buffers: Buffers,
     zed: Zed,
     outbound: mpsc::UnboundedReceiver<proto::Envelope>,
+    navigation: mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
     lease: buffer_leases::LeaseRef,
 }
 
@@ -80,7 +83,9 @@ impl Fixture {
             .get_mut(&(root.clone(), "source".into()))
             .unwrap()
             .remote_id = 7;
-        let (zed, outbound) = coordinate_queries::fixture().await;
+        let (mut zed, outbound) = coordinate_queries::fixture().await;
+        let (transport, navigation) = crate::sync_native::Transport::new();
+        Arc::get_mut(&mut zed).unwrap().sync = transport;
         zed.worktree_paths.write().await.insert(1, root.clone());
         zed.buffer_files.write().await.insert(
             7,
@@ -96,6 +101,7 @@ impl Fixture {
             buffers,
             zed,
             outbound,
+            navigation,
             lease,
         }
     }
@@ -170,8 +176,8 @@ impl Fixture {
 
     async fn execute(&mut self, navigation: &NavigationRef, ids: &[u64]) -> Result<Response> {
         let mut task = self.spawn(action(navigation, Action::Execute));
-        let request = self.outbound.recv().await.unwrap();
-        coordinate_queries::reply(&self.zed, request, definitions(ids)).await;
+        let request = self.navigation.recv().await.unwrap();
+        self.reply_navigation(request, definitions(ids));
         loop {
             tokio::select! {
                 result = &mut task => return result.unwrap(),
@@ -180,6 +186,37 @@ impl Fixture {
                 }
             }
         }
+    }
+
+    fn reply_navigation(
+        &self,
+        envelope: wire::CowboyBufferSyncEnvelope,
+        responses: Vec<proto::LspResponse>,
+    ) -> proto::LspQuery {
+        use wire::cowboy_buffer_sync_envelope::Payload;
+        let Some(Payload::NavigationRequest(request)) = envelope.payload else {
+            panic!("not a bounded navigation query")
+        };
+        let query = proto::LspQuery::decode(request.query.as_slice()).unwrap();
+        let reply = wire::CowboyBufferSyncEnvelope {
+            responding_to: Some(envelope.id),
+            payload: Some(Payload::NavigationResponse(
+                wire::CowboyNavigationResponse {
+                    protocol: 1,
+                    outcome: wire::cowboy_navigation_response::Outcome::Complete as i32,
+                    result: proto::LspQueryResponse {
+                        project_id: proto::REMOTE_SERVER_PROJECT_ID,
+                        responses,
+                        ..Default::default()
+                    }
+                    .encode_to_vec(),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(self.zed.sync.response(envelope.id, &reply.encode_to_vec()));
+        query
     }
 
     fn aba(&self, id: u64) {
@@ -443,9 +480,9 @@ async fn disconnected_observer_keeps_one_saved_navigation_result() {
     let mut request = serde_json::to_vec(&action(&nav, Action::Execute)).unwrap();
     request.push(b'\n');
     client.write_all(&request).await.unwrap();
-    let native = f.outbound.recv().await.unwrap();
+    let native = f.navigation.recv().await.unwrap();
     drop(client);
-    coordinate_queries::reply(&f.zed, native, definitions(&[8])).await;
+    f.reply_navigation(native, definitions(&[8]));
     ack_registration(&f.zed, f.outbound.recv().await.unwrap()).await;
     assert!(task.await.unwrap().is_err());
     for action_kind in [Action::Query, Action::Execute] {

@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.0.1";
+  version = "1.1.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ];
   postPatch = ''
@@ -49,20 +49,37 @@ in platform.buildRustPackage {
     cp ${./server/tests.rs} crates/project/src/buffer_store/cowboy_sync/tests.rs
     cp ${./server/cowboy_bounded.rs} crates/fs/src/cowboy_bounded.rs
     cp ${./server/cowboy_lsp_input.rs} crates/lsp/src/cowboy_lsp_input.rs
+    mkdir -p crates/project/src/lsp_store/cowboy_navigation
+    cp ${./server/cowboy_navigation.rs} crates/project/src/lsp_store/cowboy_navigation.rs
+    cp ${./server/navigation_tests.rs} crates/project/src/lsp_store/cowboy_navigation/tests.rs
     substituteInPlace crates/proto/proto/zed.proto \
       --replace-fail 'import "buffer.proto";' 'import "buffer.proto";
     import "cowboy-buffer.proto";' \
       --replace-fail 'oneof payload {' 'oneof payload {
         CowboyBufferSync cowboy_buffer_sync = 1000;
-        CowboyBufferSyncResponse cowboy_buffer_sync_response = 1001;'
+        CowboyBufferSyncResponse cowboy_buffer_sync_response = 1001;
+        CowboyNavigation cowboy_navigation = 1002;
+        CowboyNavigationResponse cowboy_navigation_response = 1003;'
     substituteInPlace crates/proto/src/proto.rs \
       --replace-fail '(ReloadBuffers, Foreground),' '(ReloadBuffers, Foreground),
         (CowboyBufferSync, Foreground),
-        (CowboyBufferSyncResponse, Foreground),' \
+        (CowboyBufferSyncResponse, Foreground),
+        (CowboyNavigation, Foreground),
+        (CowboyNavigationResponse, Foreground),' \
       --replace-fail '(ReloadBuffers, ReloadBuffersResponse),' '(ReloadBuffers, ReloadBuffersResponse),
-        (CowboyBufferSync, CowboyBufferSyncResponse),' \
+        (CowboyBufferSync, CowboyBufferSyncResponse),
+        (CowboyNavigation, CowboyNavigationResponse),' \
       --replace-fail '    ReloadBuffers,' '    ReloadBuffers,
-        CowboyBufferSync,'
+        CowboyBufferSync,
+        CowboyNavigation,'
+    substituteInPlace crates/project/src/lsp_store.rs \
+      --replace-fail 'pub struct LspStore {' 'mod cowboy_navigation;
+    pub struct LspStore {
+        cowboy_navigation: cowboy_navigation::State,' \
+      --replace-fail 'next_hint_id: Arc::default(),' 'next_hint_id: Arc::default(),
+            cowboy_navigation: Default::default(),' \
+      --replace-fail 'client.add_entity_request_handler(Self::handle_lsp_query);' 'client.add_entity_request_handler(Self::handle_lsp_query);
+        client.add_entity_request_handler(Self::handle_cowboy_navigation);'
     substituteInPlace crates/project/src/buffer_store.rs \
       --replace-fail '/// A set of open buffers.' 'mod cowboy_sync;
     /// A set of open buffers.' \

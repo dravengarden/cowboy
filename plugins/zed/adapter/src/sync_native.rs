@@ -14,7 +14,7 @@ use wire::cowboy_buffer_sync::Action;
 use wire::cowboy_buffer_sync_envelope::Payload;
 use wire::cowboy_buffer_sync_response::{Phase, Refusal};
 
-type ResponseSender = oneshot::Sender<Option<wire::CowboyBufferSyncResponse>>;
+type ResponseSender = oneshot::Sender<Option<Payload>>;
 type Pending = Arc<std::sync::Mutex<HashMap<u32, ResponseSender>>>;
 
 pub(super) async fn support(zed: Option<&Zed>) -> Result<Response> {
@@ -196,8 +196,10 @@ impl Transport {
                     return None;
                 }
                 match value.payload? {
-                    Payload::Response(response) => Some(response),
-                    Payload::Request(_) => None,
+                    response @ (Payload::Response(_) | Payload::NavigationResponse(_)) => {
+                        Some(response)
+                    }
+                    Payload::Request(_) | Payload::NavigationRequest(_) => None,
                 }
             });
         let _ = sender.send(response);
@@ -210,6 +212,17 @@ impl Transport {
         request: wire::CowboyBufferSync,
     ) -> Result<wire::CowboyBufferSyncResponse> {
         validate_request(&request)?;
+        let Payload::Response(response) = self
+            .exchange(zed, Payload::Request(request.clone()))
+            .await?
+        else {
+            anyhow::bail!("unexpected private native response kind");
+        };
+        validate_response(&request, &response)?;
+        Ok(response)
+    }
+
+    pub(super) async fn exchange(&self, zed: &ZedRuntime, payload: Payload) -> Result<Payload> {
         let id = zed
             .next_message_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
@@ -234,7 +247,7 @@ impl Transport {
                 .send(wire::CowboyBufferSyncEnvelope {
                     id,
                     responding_to: None,
-                    payload: Some(Payload::Request(request.clone())),
+                    payload: Some(payload),
                 })
                 .await
                 .context("native sync writer ended")?;
@@ -245,7 +258,6 @@ impl Transport {
         })
         .await
         .context("native sync observation timed out")??;
-        validate_response(&request, &response)?;
         Ok(response)
     }
 
