@@ -1,8 +1,34 @@
 import { assert, assertThrows } from "jsr:@std/assert@1.0.19";
 import {
+  validateCodeAdapterRuntime,
   validateIndependentPluginVersion,
   validateReleaseHistory,
 } from "./check-plugin-components.ts";
+
+Deno.test("a private Code adapter runtime pin must match the locally built version", () => {
+  const contract = (versions: string[]) => ({
+    id: "fixture-code",
+    version: "2.0.0",
+    runtime: {
+      components: [
+        ...versions.map((version) => ({
+          kind: "code_intelligence_adapter",
+          version,
+        })),
+        { kind: "code_intelligence_server", version: "1.0.0" },
+      ],
+    },
+  });
+  validateCodeAdapterRuntime(contract(["1.13.2"]), "1.13.2");
+  for (const versions of [["1.13.0"], [], ["1.13.2", "1.13.2"]]) {
+    assertThrows(
+      () => validateCodeAdapterRuntime(contract(versions), "1.13.2"),
+      Error,
+      "declared adapter runtime version mismatch",
+    );
+  }
+  validateCodeAdapterRuntime({ id: "legacy", version: "1.0.0" }, "1.0.0");
+});
 
 const component = {
   id: "cowboy.plugin-contract",

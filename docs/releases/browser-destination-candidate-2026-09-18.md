@@ -14,9 +14,20 @@ HTTP 202 no-admission or rearm group Release.
 
 Remote main was fast-forwarded from `4e92c84c` to `0caf9119` before implementation,
 preserving its credential-store/SDK and no-remote workspace changes. This slice
-changes no production Rust behavior, Machine protocol, native source/dependency
-or Plugin manifest. The added shared wire fixture belongs to Controller/test
+changes no production Rust behavior, Machine protocol or native algorithm/dependency.
+The added shared wire fixture belongs to Controller/test
 sources and is explicitly absent from the Machine source closure.
+
+Input review found a separate upstream release-pin defect: Plugin/adapter
+source `1.13.1` still declared private adapter runtime `1.13.0`. The package-owned
+builder would reject its Nix output, while the source gate missed that edge.
+An independent source candidate `1.13.2` aligns the manifest, contract, Cargo
+package/lock and private runtime version without rewriting the `1.13.1`
+release. The component baseline remains `3.11.0`, and the server stays `1.0.0`.
+The source gate now refuses missing, duplicate or stale private adapter pins.
+No native algorithm, protocol or dependency changes; no Catalog publication or
+Machine installation is implied. Final native acceptance uses matching bytes,
+not the mismatched intermediate `1.13.1` build.
 
 Acceptance is being completed from the committed implementation. Final source,
 browser, Nix and connected results will be recorded here before publication.

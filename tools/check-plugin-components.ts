@@ -33,6 +33,27 @@ interface PluginManifest {
   components: Array<{ id: string; version: string }>;
 }
 
+interface CodeContractIdentity {
+  id: string;
+  version: string;
+  runtime?: { components: Array<{ kind: string; version: string }> };
+}
+
+/** Local Rust builds must not be relabelled as a different private runtime. */
+export function validateCodeAdapterRuntime(
+  contract: CodeContractIdentity,
+  version: string,
+): void {
+  if (!contract.runtime) return; // historical schema-one contracts have no runtime
+  const adapters = contract.runtime.components.filter((component) =>
+    component.kind === "code_intelligence_adapter"
+  );
+  assert(
+    adapters.length === 1 && adapters[0]!.version === version,
+    `${contract.id}: declared adapter runtime version mismatch`,
+  );
+}
+
 export async function checkRepository(): Promise<void> {
   const registry = await readJson<ComponentRegistry>(
     "components/registry.json",
@@ -212,7 +233,7 @@ export async function checkRepository(): Promise<void> {
         dependencies.has("cowboy.code-intelligence"),
         `${pluginId}: missing code contract`,
       );
-      const contract = await readJson<{ id: string; version: string }>(
+      const contract = await readJson<CodeContractIdentity>(
         `plugins/${pluginId}/${manifest.entrypoint}`,
       );
       assert(
@@ -236,6 +257,7 @@ export async function checkRepository(): Promise<void> {
           packageBlock.includes(`version = "${manifest.version}"`),
           `${pluginId}: adapter package version mismatch`,
         );
+        validateCodeAdapterRuntime(contract, manifest.version);
       }
     } else {
       const contract = await readJson<{ id: string; version: string }>(
