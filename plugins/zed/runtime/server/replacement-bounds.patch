@@ -13,7 +13,7 @@ diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
 +        _job: cowboy_replacement::Job,
 +        _cx: &App,
 +    ) -> Task<Result<cowboy_replacement::Held<Vec<u8>>>> {
-+        Task::ready(Err(anyhow!("private native replacement loader unavailable")))
++        Task::ready(Err(anyhow::anyhow!("private native replacement loader unavailable")))
 +    }
  }
  
@@ -33,7 +33,7 @@ diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
 -                    Some((
 +                    this.cowboy_check_replacement()?;
 +                    let file = this.file.as_ref().and_then(|file| file.as_local())
-+                        .ok_or_else(|| anyhow!("private native replacement has no local file"))?;
++                        .ok_or_else(|| anyhow::anyhow!("private native replacement has no local file"))?;
 +                    let job = cowboy_replacement::acquire(cx)?;
 +                    Ok::<_, anyhow::Error>((
                          file.disk_state().mtime(),

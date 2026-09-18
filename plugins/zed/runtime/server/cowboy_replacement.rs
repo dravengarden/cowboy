@@ -131,7 +131,8 @@ impl Buffer {
                 return Err(Refusal::History);
             }
         }
-        if self.version().iter().take(MAX_VECTOR + 1).count() > MAX_VECTOR
+        if self.text.replica_id().as_u16() as usize >= MAX_VECTOR
+            || self.version().iter().take(MAX_VECTOR + 1).count() > MAX_VECTOR
             || self.text.deferred_ops_len() != 0
         {
             return Err(Refusal::History);
