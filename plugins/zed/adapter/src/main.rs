@@ -21,6 +21,7 @@ mod content_reads;
 mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
+mod native_close;
 mod native_open;
 mod navigation_native;
 mod sync_native;
@@ -278,6 +279,7 @@ struct BufferLease {
     remote_id: u64,
     version: Vec<BufferVersionEntry>,
     sync: Option<sync_owners::Fence>,
+    closing: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -728,6 +730,9 @@ impl ZedRuntime {
         Ok(())
     }
 
+    // Only native conformance fixtures deliberately exercise the historical
+    // upstream message. Product release must use native_close confirmation.
+    #[cfg(test)]
     fn close_buffer(&self, buffer_id: u64) -> Result<()> {
         let message = self.message(
             proto::envelope::Payload::CloseBuffer(proto::CloseBuffer {
@@ -1705,6 +1710,7 @@ async fn open_buffer_at(
                 remote_id,
                 version,
                 sync: None,
+                closing: false,
             },
         );
     }
@@ -1734,7 +1740,15 @@ async fn close_buffer(
 ) -> Result<Response> {
     validate_lease_id(&lease_id)?;
     let (worktree, path) = buffer_key(worktree, path).await?;
-    close_buffer_at(worktree, path, BufferOwner::Legacy(lease_id), buffers, zed).await
+    close_buffer_at(
+        worktree,
+        path,
+        BufferOwner::Legacy(lease_id),
+        buffers,
+        zed,
+        || {},
+    )
+    .await
 }
 
 // Release the already captured native resource. Do not resolve a filesystem
@@ -1745,18 +1759,9 @@ async fn close_buffer_at(
     owner: BufferOwner,
     buffers: &Buffers,
     zed: Option<&Zed>,
+    on_admit: impl FnOnce(),
 ) -> Result<Response> {
     let mut all = buffers.active.write().await;
-    close_buffer_locked(worktree, path, &owner, &mut all, zed)
-}
-
-fn close_buffer_locked(
-    worktree: PathBuf,
-    path: PathBuf,
-    owner: &BufferOwner,
-    all: &mut HashMap<(PathBuf, PathBuf), BufferLease>,
-    zed: Option<&Zed>,
-) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
     let Some(lease) = all.get(&key) else {
         anyhow::ensure!(
@@ -1772,28 +1777,7 @@ fn close_buffer_locked(
             version: Vec::new(),
         });
     };
-    anyhow::ensure!(
-        matches!(owner, BufferOwner::Legacy(_)) || lease.lease_ids.contains(owner),
-        "native buffer owner changed"
-    );
-    sync_owners::ensure_readable(lease)?;
-    let last = lease.lease_ids.len() == 1 && lease.lease_ids.contains(owner);
-    // Overlapping worktrees/native aliases may share an ID under another key.
-    // Releasing one path must not invalidate a peer's exact retained resource.
-    let last_native = last
-        && !all.iter().any(|(other_key, other)| {
-            other_key != &key && other.remote_id == lease.remote_id && !other.lease_ids.is_empty()
-        });
-    if last_native && let Some(zed) = zed {
-        // Keep local ownership if the owned native transport rejects enqueue.
-        // This protocol has no native CloseBuffer ACK; enqueue is not recovery.
-        zed.close_buffer(lease.remote_id)?;
-    }
-    let lease = all
-        .get_mut(&key)
-        .expect("original buffer held through release");
-    lease.lease_ids.remove(owner);
-    let leases = lease.lease_ids.len();
+    let leases = lease.lease_ids.len() - usize::from(lease.lease_ids.contains(&owner));
     let response = Response::Buffer {
         api_version: ADAPTER_VERSION,
         worktree,
@@ -1802,9 +1786,7 @@ fn close_buffer_locked(
         buffer_id: lease.remote_id,
         version: lease.version.clone(),
     };
-    if last {
-        all.remove(&key);
-    }
+    native_close::release(HashSet::from([key]), &owner, &mut all, zed, on_admit).await?;
     Ok(response)
 }
 

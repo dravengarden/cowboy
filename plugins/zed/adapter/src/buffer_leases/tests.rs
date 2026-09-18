@@ -1,6 +1,7 @@
 use super::*;
 use crate::{BufferState, Request, ensure_worktree, respond};
 
+mod native_close;
 mod native_open;
 mod reads;
 

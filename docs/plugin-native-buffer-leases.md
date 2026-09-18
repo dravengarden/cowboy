@@ -62,11 +62,14 @@ Open/ambiguous slots never expire or disappear under LRU pressure.
 
 Release uses the stored buffer key and owner, not `canonicalize` or a new
 worktree lookup. Deleting or renaming the file/worktree therefore cannot redirect
-it. A missing expected active owner is an error, not fabricated completion. The
-native Zed `CloseBuffer` protocol has no ACK: `released` proves local ownership
-removal and successful close enqueue when needed, **not** a verified native
-recovery transaction. Native transport rejection retains local ownership. It
-never undoes file edits, deletes source data or restores an Agent session.
+it. A missing expected active owner is an error, not fabricated completion.
+Historically, upstream `CloseBuffer` had no ACK and `released` proved only local
+pin removal and successful enqueue. The `1.15.0` candidate replaces that boundary
+with [original-peer native close confirmation](plugin-native-close-confirmation.md):
+last-owner removal requires the original native instance's complete close reply.
+Lost replies retain Unknown, pins and exclusion without replay. Shared-owner
+local release sends no native close. Neither version proves stopped background
+effects, undoes file edits, deletes source data or restores an Agent session.
 
 Native capacity is 1,024 outstanding references. Only effect-free preparations
 expire, after 30 seconds; expiry is checked on subsequent lease operations.

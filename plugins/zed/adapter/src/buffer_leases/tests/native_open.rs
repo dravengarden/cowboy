@@ -297,10 +297,8 @@ async fn unknown_legacy_open_blocks_new_acquisitions_but_not_existing_safe_reads
         ),
         LeaseState::Released
     );
-    assert!(matches!(
-        outbound.recv().await.unwrap().payload,
-        Some(proto::envelope::Payload::CloseBuffer(_))
-    ));
+    assert!(zed.diagnostics.lock().unwrap().revision(7).is_err());
+    assert!(outbound.try_recv().is_err());
     assert!(
         f.buffers.native_open.check().is_err(),
         "unrelated release cleared uncertainty"

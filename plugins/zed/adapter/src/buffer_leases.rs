@@ -325,7 +325,7 @@ impl Registry {
         zed: Option<&Zed>,
     ) -> Result<Response> {
         let id = self.resolve(&lease)?;
-        let Some(slot) = self.slots.get(&id) else {
+        let Some(slot) = self.slots.get_mut(&id) else {
             return Ok(reply(lease, LeaseState::Released));
         };
         match slot.state {
@@ -337,6 +337,7 @@ impl Registry {
                     BufferOwner::Owned(id),
                     buffers,
                     zed,
+                    || slot.state = Phase::Unknown,
                 )
                 .await?;
             }

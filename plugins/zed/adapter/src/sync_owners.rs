@@ -94,6 +94,7 @@ impl Fence {
 }
 
 pub(super) fn ensure_readable(buffer: &BufferLease) -> Result<()> {
+    ensure!(!buffer.closing, "original native peer close is unresolved");
     ensure!(
         !buffer.sync.as_ref().is_some_and(Fence::live),
         "original native buffer is reserved for synchronization"

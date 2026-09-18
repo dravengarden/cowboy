@@ -37,6 +37,11 @@ after an unobserved Open, including both destination handoff stages. Existing
 known reads/releases remain available. Private server `1.1.0` is unchanged;
 native close acknowledgement and independent recovery are still separate.
 
+The `1.15.0` [native close candidate](plugin-native-close-confirmation.md)
+selects private server `1.2.0` and confirms exact original-peer removal before
+reporting last-owner release. Lost native close replies remain uncertain with no
+replay; this does not add independent recovery or background-task quiescence.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete
@@ -107,11 +112,13 @@ destination view.
 Release uses captured keys/native IDs and removes only the group's source/target
 pins. It never canonicalizes a pathname, adopts a replacement or writes source
 files. Native-ID aliases are counted across active pathname entries: removing
-one entry cannot close another owner's native buffer. Last-owner local close
-enqueues run synchronously under the active-map lock. Transport failure retains
-ReleaseUnknown without replay. Native CloseBuffer has no acknowledgement, so
-Released means local pin removal and successful enqueue, **not verified native
-cleanup, filesystem restoration or post-effect recovery**.
+one entry cannot close another owner's native buffer. Since `1.15.0`, all
+last-owner IDs are submitted as one bounded native close batch under the active-
+map lock. Local pins are removed only after the original native instance echoes
+the exact complete set as Closed. Failure or lost observation retains every pin
+and ReleaseUnknown without replay. Earlier candidates confirmed enqueue only.
+Neither outcome proves background-effect drain, filesystem restoration or
+post-effect recovery; see the [close contract](plugin-native-close-confirmation.md).
 
 ## Exact destination handoff
 
@@ -145,7 +152,8 @@ separate gates. The private adapter and consuming Zed Plugin are versioned
 together.
 The `1.10`–`1.13.2` candidates retain server `1.0.0`; `1.13.3` selects the
 separate input-bounds server `1.0.1`; `1.14.0` selects the whole-query server
-`1.1.0`. The upstream Zed revision, all third-party dependency pins and historical
+`1.1.0`; `1.15.0` selects the close-confirmation server `1.2.0`.
+The upstream Zed revision, all third-party dependency pins and historical
 component-registry entries are untouched.
 
 Deterministic private-transport tests cover nonempty targets, duplicate

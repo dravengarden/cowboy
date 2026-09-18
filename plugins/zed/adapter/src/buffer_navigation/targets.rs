@@ -105,6 +105,7 @@ pub(super) async fn retain(
                 remote_id,
                 version,
                 sync: None,
+                closing: false,
             })
             .lease_ids
             .insert(BufferOwner::Navigation(id));

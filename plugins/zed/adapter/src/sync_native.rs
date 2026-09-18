@@ -144,6 +144,8 @@ fn validate_response(
 pub(super) struct Transport {
     outbound: mpsc::Sender<wire::CowboyBufferSyncEnvelope>,
     pending: Pending,
+    #[cfg(test)]
+    close_fault: std::sync::atomic::AtomicU8,
 }
 
 struct PendingGuard<'a> {
@@ -168,6 +170,8 @@ impl Transport {
             Arc::new(Self {
                 outbound,
                 pending: Arc::default(),
+                #[cfg(test)]
+                close_fault: std::sync::atomic::AtomicU8::new(0),
             }),
             receiver,
         )
@@ -204,8 +208,31 @@ impl Transport {
                     | Payload::CloseRequest(_) => None,
                 }
             });
+        // Test-only loss of an actual native acknowledgement, never a synthetic
+        // success or a production timeout override. Dropping the sender loses
+        // observation, not the already completed original native effect.
+        #[cfg(test)]
+        if matches!(response.as_ref(), Some(Payload::CloseResponse(value))
+            if value.outcome == wire::cowboy_close_buffers_response::Outcome::Closed as i32)
+            && self
+                .close_fault
+                .compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            return true;
+        }
         let _ = sender.send(response);
         true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn discard_next_close_response(&self) {
+        assert_eq!(self.close_fault.swap(1, Ordering::Relaxed), 0);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn discarded_close_response(&self) -> bool {
+        self.close_fault.load(Ordering::Relaxed) == 2
     }
 
     pub async fn request(

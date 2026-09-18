@@ -289,6 +289,7 @@ async fn invalid_or_excessive_native_destinations_never_publish_partial_success(
                     remote_id: 999,
                     version: vec![],
                     sync: None,
+                    closing: false,
                 },
             );
         }
@@ -405,31 +406,95 @@ async fn capacity_expiry_and_disjoint_ids_cannot_recover_or_replay_native_effect
 }
 
 #[tokio::test]
-async fn rejected_close_enqueue_keeps_release_uncertainty() {
+async fn native_close_refusal_keeps_release_uncertainty_without_partial_local_removal() {
     let mut f = Fixture::new().await;
     f.target(8, "target").await;
     let nav = f.prepare().await;
     f.execute(&nav, &[8]).await.unwrap();
-    f.outbound.close();
-    assert!(f.request(action(&nav, Action::Release)).await.is_err());
-    for action_kind in [Action::Release, Action::Execute, Action::Query] {
-        assert!(matches!(
-            state(f.request(action(&nav, action_kind)).await.unwrap()),
-            State::ReleaseUnknown
-        ));
-    }
-    assert!(
-        f.buffers
-            .active
-            .read()
-            .await
-            .contains_key(&(f.root.clone(), "target".into()))
+    let (transport, mut receiver) = crate::sync_native::Transport::new();
+    Arc::get_mut(&mut f.zed).unwrap().sync = transport;
+    let task = f.spawn(action(&nav, Action::Release));
+    crate::native_close::tests::reply(
+        &f.zed.sync,
+        receiver.recv().await.unwrap(),
+        wire::cowboy_close_buffers_response::Outcome::Supported,
     );
+    assert_eq!(
+        crate::native_close::tests::reply(
+            &f.zed.sync,
+            receiver.recv().await.unwrap(),
+            wire::cowboy_close_buffers_response::Outcome::Refused
+        ),
+        [8]
+    );
+    assert!(task.await.unwrap().is_err());
+    release_unknown(&f, &nav, &["target"]).await;
+    assert!(receiver.try_recv().is_err());
     let registry = f.buffers.navigations.lock().await;
     let saved = &registry.slots[&1].targets;
     assert_eq!(saved.len(), 1);
     assert_eq!(saved[0].remote_id, 8);
     assert_eq!(saved[0].key, (f.root.clone(), PathBuf::from("target")));
+}
+
+async fn release_unknown(f: &Fixture, nav: &NavigationRef, targets: &[&str]) {
+    for action_kind in [Action::Release, Action::Execute, Action::Query] {
+        assert!(matches!(
+            state(f.request(action(nav, action_kind)).await.unwrap()),
+            State::ReleaseUnknown
+        ));
+    }
+    let active = f.buffers.active.read().await;
+    let source = &active[&(f.root.clone(), "source".into())];
+    assert!(source.lease_ids.contains(&BufferOwner::Navigation(1)));
+    assert!(!source.closing);
+    for target in targets {
+        let buffer = &active[&(f.root.clone(), (*target).into())];
+        assert!(buffer.lease_ids.contains(&BufferOwner::Navigation(1)));
+        assert!(buffer.closing);
+        assert!(crate::sync_owners::ensure_readable(buffer).is_err());
+    }
+    assert!(crate::sync_owners::ensure_admission(&f.buffers, &active).is_err());
+}
+
+#[tokio::test]
+async fn cancelled_group_close_keeps_all_original_pins_and_late_reply_cannot_finish_it() {
+    use wire::cowboy_buffer_sync_envelope::Payload;
+    use wire::cowboy_close_buffers_response::Outcome;
+    let mut f = Fixture::new().await;
+    f.target(8, "first").await;
+    f.target(9, "second").await;
+    let nav = f.prepare().await;
+    f.execute(&nav, &[8, 9, 9]).await.unwrap();
+    let (transport, mut receiver) = crate::sync_native::Transport::new();
+    Arc::get_mut(&mut f.zed).unwrap().sync = transport;
+    let task = f.spawn(action(&nav, Action::Release));
+    crate::native_close::tests::reply(
+        &f.zed.sync,
+        receiver.recv().await.unwrap(),
+        Outcome::Supported,
+    );
+    let effect = receiver.recv().await.unwrap();
+    let Some(Payload::CloseRequest(request)) = effect.payload else {
+        panic!("not close")
+    };
+    assert_eq!(request.buffer_ids, [8, 9]);
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let late = wire::CowboyBufferSyncEnvelope {
+        responding_to: Some(effect.id),
+        payload: Some(Payload::CloseResponse(wire::CowboyCloseBuffersResponse {
+            protocol: 1,
+            instance: request.instance,
+            outcome: Outcome::Closed as i32,
+            buffer_ids: request.buffer_ids,
+        })),
+        ..Default::default()
+    };
+    assert!(!f.zed.sync.response(effect.id, &late.encode_to_vec()));
+    release_unknown(&f, &nav, &["first", "second"]).await;
+    assert!(receiver.try_recv().is_err());
+    assert!(f.outbound.try_recv().is_err());
 }
 
 #[test]

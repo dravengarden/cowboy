@@ -36,6 +36,7 @@ struct Fixture {
     zed: Zed,
     outbound: mpsc::UnboundedReceiver<proto::Envelope>,
     navigation: mpsc::Receiver<wire::CowboyBufferSyncEnvelope>,
+    closed: mpsc::UnboundedReceiver<Vec<u64>>,
     lease: buffer_leases::LeaseRef,
 }
 
@@ -84,7 +85,7 @@ impl Fixture {
             .unwrap()
             .remote_id = 7;
         let (mut zed, outbound) = coordinate_queries::fixture().await;
-        let (transport, navigation) = crate::sync_native::Transport::new();
+        let (transport, navigation, closed) = crate::native_close::tests::fixture();
         Arc::get_mut(&mut zed).unwrap().sync = transport;
         zed.worktree_paths.write().await.insert(1, root.clone());
         zed.buffer_files.write().await.insert(
@@ -102,6 +103,7 @@ impl Fixture {
             zed,
             outbound,
             navigation,
+            closed,
             lease,
         }
     }
@@ -322,10 +324,8 @@ async fn preparation_has_no_native_effect_and_source_release_cannot_be_retargete
     })
     .await
     .unwrap();
-    assert!(matches!(
-        f.outbound.recv().await.unwrap().payload,
-        Some(proto::envelope::Payload::CloseBuffer(_))
-    ));
+    assert_eq!(f.closed.recv().await.unwrap(), [7]);
+    assert!(f.outbound.try_recv().is_err());
     assert!(f.request(action(&nav, Action::Execute)).await.is_err());
     assert!(f.outbound.try_recv().is_err());
     assert!(matches!(
@@ -379,15 +379,9 @@ async fn original_targets_survive_source_close_and_deleted_paths_without_reopen(
         state(f.request(action(&nav, Action::Release)).await.unwrap()),
         State::Released
     ));
-    let mut closed = Vec::new();
-    while let Ok(message) = f.outbound.try_recv() {
-        let Some(proto::envelope::Payload::CloseBuffer(close)) = message.payload else {
-            panic!("reopened a path")
-        };
-        closed.push(close.buffer_id);
-    }
-    closed.sort_unstable();
-    assert_eq!(closed, [7, 8, 9]);
+    assert_eq!(f.closed.recv().await.unwrap(), [7, 8, 9]);
+    assert!(f.closed.try_recv().is_err());
+    assert!(f.outbound.try_recv().is_err());
     assert!(f.buffers.active.read().await.is_empty());
     assert!(matches!(
         state(f.request(action(&nav, Action::Release)).await.unwrap()),
@@ -408,6 +402,7 @@ async fn peer_and_alias_owners_are_not_closed_by_navigation_release() {
             remote_id: 8,
             version: vec![],
             sync: None,
+            closing: false,
         },
     );
     let nav = f.prepare().await;
@@ -421,15 +416,12 @@ async fn peer_and_alias_owners_are_not_closed_by_navigation_release() {
         BufferOwner::Owned(2),
         &f.buffers,
         Some(&f.zed),
+        || {},
     )
     .await
     .unwrap();
-    let Some(proto::envelope::Payload::CloseBuffer(close)) =
-        f.outbound.recv().await.unwrap().payload
-    else {
-        panic!("wrong close")
-    };
-    assert_eq!(close.buffer_id, 8);
+    assert_eq!(f.closed.recv().await.unwrap(), [8]);
+    assert!(f.outbound.try_recv().is_err());
     assert!(f.zed.diagnostics.lock().unwrap().revision(7).is_ok());
 }
 

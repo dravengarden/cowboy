@@ -555,4 +555,5 @@ async fn owned_resources(zed: &Zed, root: &Path) {
     crate::sync_owners::connected::exercise(zed, &workspace).await;
     crate::buffer_navigation::connected::exercise(zed, &workspace).await;
     crate::buffer_navigation::connected_lsp::exercise(zed, root).await;
+    crate::native_close::connected::exercise(zed, root).await;
 }

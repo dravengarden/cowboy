@@ -150,12 +150,8 @@ async fn independent_handoff_survives_group_release_and_can_navigate_again() {
     })
     .await
     .unwrap();
-    let Some(proto::envelope::Payload::CloseBuffer(close)) =
-        f.outbound.recv().await.unwrap().payload
-    else {
-        panic!("not close")
-    };
-    assert_eq!(close.buffer_id, 8);
+    assert_eq!(f.closed.recv().await.unwrap(), [8]);
+    assert!(f.outbound.try_recv().is_err());
     for lease in [first, second] {
         assert_eq!(
             lease_state(
@@ -174,7 +170,7 @@ async fn released_group_cannot_be_replaced_between_handoff_prepare_and_open() {
     let (mut f, nav) = fixture().await;
     let lease = prepare(&f, &nav).await;
     f.request(action(&nav, Action::Release)).await.unwrap();
-    f.outbound.recv().await.unwrap(); // original target CloseBuffer
+    assert_eq!(f.closed.recv().await.unwrap(), [8]);
     f.target(8, "target").await;
     let replacement = f.prepare().await;
     f.execute(&replacement, &[8]).await.unwrap();

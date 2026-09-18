@@ -453,19 +453,14 @@ async fn release(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
         );
         crate::sync_owners::ensure_readable(buffer)?;
     }
-    // No await after changing phase: local close enqueues and owner removal
-    // are synchronous. A transport failure retains uncertainty, not a replay.
-    slot.phase = Phase::ReleaseUnknown;
-    for ((worktree, path), _) in keys {
-        crate::close_buffer_locked(
-            worktree,
-            path,
-            &BufferOwner::Navigation(id),
-            &mut active,
-            Some(zed),
-        )?;
-    }
-    // Native CloseBuffer has no ACK. Released means our local pins/enqueues,
-    // not verified native recovery or restored filesystem state.
-    Ok(())
+    // One bounded native set, not a series that may release only a prefix.
+    // Confirmation is original peer removal, not LSP quiescence or recovery.
+    crate::native_close::release(
+        keys.into_keys().collect(),
+        &BufferOwner::Navigation(id),
+        &mut active,
+        Some(zed),
+        || slot.phase = Phase::ReleaseUnknown,
+    )
+    .await
 }

@@ -62,7 +62,7 @@ impl Fixture {
         let (outbound, _) = mpsc::unbounded_channel();
         let mut child = crate::Command::new("true").spawn().unwrap();
         child.wait().await.unwrap();
-        let (sync, receiver) = crate::sync_native::Transport::new();
+        let (sync, receiver, _) = crate::native_close::tests::fixture();
         let zed = Arc::new(crate::ZedRuntime {
             _child: crate::Mutex::new(child),
             outbound,
@@ -268,6 +268,7 @@ async fn shared_owners_and_same_native_id_aliases_refuse_before_native_dispatch(
             remote_id: 1,
             version: Vec::new(),
             sync: None,
+            closing: false,
         },
     );
     assert!(fixture.preparing().await.unwrap().is_err());
