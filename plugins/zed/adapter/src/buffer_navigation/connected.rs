@@ -126,7 +126,8 @@ async fn acquire(
     else {
         panic!("navigation not prepared")
     };
-    let before = zed.next_lsp_request_id.load(crate::Ordering::Relaxed);
+    let before = zed.next_message_id.load(crate::Ordering::Relaxed);
+    let legacy_before = zed.next_lsp_request_id.load(crate::Ordering::Relaxed);
     let Response::OwnedBufferNavigation {
         state: State::Retained { locations },
         ..
@@ -144,7 +145,7 @@ async fn acquire(
         "plaintext unexpectedly acquired a language server"
     );
     assert_eq!(
-        zed.next_lsp_request_id.load(crate::Ordering::Relaxed),
+        zed.next_message_id.load(crate::Ordering::Relaxed),
         before + 1
     );
     for action in [Action::Query, Action::Execute] {
@@ -156,8 +157,13 @@ async fn acquire(
         .unwrap();
     }
     assert_eq!(
-        zed.next_lsp_request_id.load(crate::Ordering::Relaxed),
+        zed.next_message_id.load(crate::Ordering::Relaxed),
         before + 1
+    );
+    assert_eq!(
+        zed.next_lsp_request_id.load(crate::Ordering::Relaxed),
+        legacy_before,
+        "owned navigation fell back to the unbounded upstream route"
     );
     navigation
 }
