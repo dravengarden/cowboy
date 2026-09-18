@@ -5,6 +5,9 @@ upstream revision and all third-party pins. This candidate fixes ordinary native
 Open ownership; it does not enable production navigation or introduce a new
 Plugin lifecycle, recovery grant or Machine maintenance operation.
 
+The [candidate acceptance](releases/native-open-once-candidate-2026-09-18.md)
+identifies the exact static pair, clean source and complete gate evidence.
+
 ## One acquisition, no implicit replacement
 
 One admitted native acquisition dispatches `OpenBufferByPath` once, observes its
