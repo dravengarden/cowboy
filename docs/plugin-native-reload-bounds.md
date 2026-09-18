@@ -6,6 +6,10 @@ upstream source and third-party dependencies. This candidate extends the
 reload path. It adds no operation, automatic reload, retry, recovery authority
 or production navigation admission.
 
+The [accepted candidate](releases/native-reload-bounds-candidate-2026-09-18.md)
+records exact source/artifacts, the full source gate, 24 native tests, final pair,
+temporary signed lifecycle, 18 connected v5 checks and 24 browser regressions.
+
 ## Gap and boundary
 
 Initial open and navigation-target acquisition already use a bounded descriptor
@@ -45,8 +49,9 @@ Owned reads still cannot call legacy reload to repair a content mismatch.
 The native build includes five GPUI regression groups using the actual
 Worktree/LocalFile and Buffer reload code: post-open raw growth, UTF-16 and
 forced single-byte expansion, binary input, exact 4 MiB acceptance, absent
-files, untitled buffers, replacement, reentrant observers and lost observers. Failure preserves the
-original version/text and permits a separately initiated later operation.
+files, untitled buffers, replacement, reentrant observers and lost observers.
+Failure preserves the original version/text and permits a separately initiated
+later operation.
 
 The isolated immutable-native gate sends actual reload RPCs for oversized,
 expanded, binary and symlink-replaced sources, observes actual refusal and
@@ -54,7 +59,8 @@ unchanged native mirrors/vectors/files, and tests completed-task cleanup through
 the native conditional-sync preparation check without sending Apply. Only the
 test fixture explicitly invokes legacy reload; no product read gains fallback.
 Final pair, signed temporary lifecycle, connected v5 and browser regression
-gates remain required; their evidence is separate from production activation.
+gates passed for the accepted candidate; their evidence is separate from
+production activation.
 
 This is a per-input bound, not a limit on total retained buffer/history,
 background concurrency, decoding scratch, process RSS or worktree scanning.

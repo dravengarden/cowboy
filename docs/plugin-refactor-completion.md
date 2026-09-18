@@ -416,6 +416,16 @@ and accepting a production effect are different milestones.
   signed lifecycle, all 18 connected v5 and 24 browser checks, plus the complete
   source/Nix gates. Source-test loss of a real native Closed reply remains
   Unknown; a completed upper-layer release still settles by original Query.
+- [Native reload input/cleanup](plugin-native-reload-bounds.md) advances the
+  candidate to Zed `1.15.1` / private server `1.2.1`. The existing reload route
+  now bounds actual raw reads and decoded text before diff/CRDT mutation, and
+  failed/no-file exits retire only their own completed task. Reentrant
+  replacement is protected by nonserialized invocation identity; no Unknown
+  owner, effect authority or read fallback changes. Its
+  [candidate acceptance](releases/native-reload-bounds-candidate-2026-09-18.md)
+  passes the complete source gate, 24 native tests, the exact static pair,
+  temporary signed lifecycle, all 18 connected v5 and 24 browser checks.
+  Global retained-history/background budgets and production rollout remain open.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
