@@ -47,6 +47,27 @@ Session history stays in each generation's own home; only the credential
 directory is shared. `native_claude_shared_credential_store_conformance`
 accepts a new native CLI only while it still honours that directory.
 
+### Hawk acceptance, 2026-09-18
+
+Revision `79137456` passed `just check-compact`, the plugin/provider gates, and
+both ignored native-CLI conformance tests against the installed 2.1.272 binary
+in a network-isolated namespace with synthetic credentials only.
+
+Controller and Machine releases activated first (`outcome=succeeded`,
+`phase=committed`; Machine under its maintenance boundary, worker generation
+`worker-9c07ddc149d208d345e5`). claude-code `3.1.27`
+(`sha256:d1991bf651012867940e3cccd39588d5f4dd890e872a93aacd920bfec7fcdb28`)
+was probed, signed, published and installed through operation
+`hawk-claude-code-3-1-27-shared-credential-store`; the Machine receipt is
+`applied` and Hawk reports it active with `replica_state=current`. Worker
+conformance covered coexistence with the retained 3.1.26 generation, and the
+account usage control returned live quota afterwards.
+
+CR-9 binds a session to its exact generation, so sessions created before this
+installation keep their private store until they are reloaded onto the
+installed release. Their CLIs still adopt a sibling's rotation when they
+re-read the shared file, but only same-generation locks protect them.
+
 ## Boundaries
 
 - Watches are nonrecursive and limited to declared credential paths, their
