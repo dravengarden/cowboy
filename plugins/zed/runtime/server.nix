@@ -88,7 +88,14 @@ in platform.buildRustPackage {
       --replace-fail 'project_search: Default::default(),' 'project_search: Default::default(),
             cowboy_sync: Default::default(),' \
       --replace-fail 'client.add_entity_request_handler(Self::handle_reload_buffers);' 'client.add_entity_request_handler(Self::handle_reload_buffers);
-        client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);'
+        client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);' \
+      --replace-fail '    pub fn has_shared_buffers(&self) -> bool {' '    pub(crate) fn cowboy_navigation_owner(&self, peer: proto::PeerId, buffer: &Entity<Buffer>, cx: &App) -> bool {
+            self.shared_buffers.get(&peer)
+                .and_then(|values| values.get(&buffer.read(cx).remote_id()))
+                .is_some_and(|shared| shared.buffer == *buffer)
+        }
+
+        pub fn has_shared_buffers(&self) -> bool {'
     substituteInPlace crates/language/src/buffer.rs \
       --replace-fail '    /// Reloads the contents of the buffer from disk.' '    /// Private Cowboy conditional-sync admission; caller rechecks in the mutation turn.
         pub fn cowboy_can_sync(&self) -> bool {

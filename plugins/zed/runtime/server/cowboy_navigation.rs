@@ -382,6 +382,10 @@ impl LspStore {
         let check = |this: &LspStore, cx: &App| -> Result<(), Refusal> {
             let source = buffer.read(cx);
             if source.version() != expected
+                || !this
+                    .buffer_store
+                    .read(cx)
+                    .cowboy_navigation_owner(sender, &buffer, cx)
                 || !source
                     .file()
                     .is_some_and(|current| Arc::ptr_eq(current, &file))
