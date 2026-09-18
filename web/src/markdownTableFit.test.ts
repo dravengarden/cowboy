@@ -11,7 +11,9 @@ const markdownImpl = await Deno.readTextFile(
 );
 
 /** A table whose laid-out width depends on its wrap step. */
-function fakeTable(widths: { words: number; compact: number; anywhere: number }) {
+function fakeTable(
+  widths: { words: number; compact: number; anywhere: number },
+) {
   const attributes = new Map<string, string>();
   const writes: string[] = [];
   return {
@@ -48,8 +50,14 @@ Deno.test("tables step from word wrap to compact before breaking anywhere", () =
   const anywhere = fakeTable({ words: 449, compact: 392, anywhere: 354 });
   fitMarkdownTables([fits, compact, anywhere]);
   assertEquals(fits.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE), undefined);
-  assertEquals(compact.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE), "compact");
-  assertEquals(anywhere.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE), "anywhere");
+  assertEquals(
+    compact.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE),
+    "compact",
+  );
+  assertEquals(
+    anywhere.attributes.get(MARKDOWN_TABLE_WRAP_ATTRIBUTE),
+    "anywhere",
+  );
 });
 
 Deno.test("a refit re-evaluates from word wrap after the column widens", () => {
@@ -81,4 +89,25 @@ Deno.test("only touch-wrapped Markdown on a coarse pointer fits its tables", () 
   // its identity stays module-scoped (see MarkdownTable).
   assert(markdownImpl.includes('overflowX: "auto"'));
   assert(markdownImpl.includes("table: MarkdownTable,"));
+});
+
+Deno.test("transcript prose scrolls wide code and tables instead of fitting them", async () => {
+  const transcript = await Deno.readTextFile(
+    new URL("./Transcript.tsx", import.meta.url),
+  );
+  assert(
+    transcript.includes(
+      "return <Markdown text={chunk.text} invert={invert} />;",
+    ),
+  );
+  assert(
+    transcript.includes(
+      '"& pre, & [data-markdown-table-scroll], & .katex-display": {\n            touchAction: "pan-x pan-y pinch-zoom",',
+    ),
+  );
+  const markdownImpl = await Deno.readTextFile(
+    new URL("./MarkdownImpl.tsx", import.meta.url),
+  );
+  assert(!markdownImpl.includes('whiteSpace: "nowrap" }}'));
+  assert(markdownImpl.includes("maxWidth: MARKDOWN_TABLE_CELL_MEASURE"));
 });

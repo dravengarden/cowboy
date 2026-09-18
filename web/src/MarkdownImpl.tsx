@@ -6,6 +6,9 @@
 // - Code blocks `overflow-x: auto` so they never stretch the bubble width.
 // - Tables sit in an `overflow-x: auto` wrapper for the same reason, except
 //   in touch-wrapped documents, which fit them instead (markdownTableFit.ts).
+//   Cells wrap at a readable measure, so a prose column neither squeezes its
+//   neighbours nor becomes one endless line; only a table wider than the
+//   column scrolls.
 // - Long URLs `word-break` so they don't push the bubble off-screen.
 //
 // Heavy stuff (Prism, language defs) is dynamic-imported by RSH on first
@@ -53,6 +56,7 @@ import {
 import { SHELL_COMMENT_PATTERN, SHELL_SYNTAX_LANGUAGE } from "./shellLanguage";
 import { normalizeMarkdownMath } from "./markdownMath";
 import { bindMarkdownTableFit, markdownTableFitSx } from "./markdownTableFit";
+import remarkLineBreakTags from "./markdownLineBreaks";
 
 // Extend Prism's Bash grammar inside the already-lazy Markdown bundle. Tool
 // cards only import SHELL_SYNTAX_LANGUAGE, so this semantic enhancement never
@@ -168,6 +172,12 @@ export function MarkdownTable({ children }: { children?: ReactNode }): React.JSX
   );
 }
 
+// Table layout ignores `max-width` on a cell itself, so the readable measure
+// lives on an inner block. Short cells keep their natural single-line width
+// (the table is `max-content`); a prose cell wraps at the measure. On a phone
+// `80vw` wins, so one long cell never needs more than a screen of panning.
+const MARKDOWN_TABLE_CELL_MEASURE = "min(36em, 80vw)";
+
 function MarkdownTableHead({ children }: { children?: ReactNode }): React.JSX.Element {
   return (
     <Box
@@ -178,10 +188,10 @@ function MarkdownTableHead({ children }: { children?: ReactNode }): React.JSX.El
         px: 1,
         py: 0.5,
         textAlign: "left",
-        whiteSpace: "nowrap",
+        verticalAlign: "top",
       }}
     >
-      {children}
+      <Box sx={{ maxWidth: MARKDOWN_TABLE_CELL_MEASURE }}>{children}</Box>
     </Box>
   );
 }
@@ -190,9 +200,9 @@ function MarkdownTableCell({ children }: { children?: ReactNode }): React.JSX.El
   return (
     <Box
       component="td"
-      sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, whiteSpace: "nowrap" }}
+      sx={{ border: 1, borderColor: "divider", px: 1, py: 0.5, verticalAlign: "top" }}
     >
-      {children}
+      <Box sx={{ maxWidth: MARKDOWN_TABLE_CELL_MEASURE }}>{children}</Box>
     </Box>
   );
 }
@@ -854,7 +864,7 @@ const MarkdownImpl = memo(function MarkdownImpl({
         }}
       >
         <ReactMarkdown
-          remarkPlugins={[remarkFrontmatter, remarkGfm, remarkMath]}
+          remarkPlugins={[remarkFrontmatter, remarkGfm, remarkMath, remarkLineBreakTags]}
           rehypePlugins={[rehypeKatex]}
           components={components}
         >
