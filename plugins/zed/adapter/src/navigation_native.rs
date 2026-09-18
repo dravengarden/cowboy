@@ -17,7 +17,7 @@ impl std::error::Error for NativeRefusal {}
 
 fn decode(
     probe: bool,
-    response: wire::CowboyNavigationResponse,
+    response: &wire::CowboyNavigationResponse,
 ) -> Result<Vec<proto::LspResponse>> {
     ensure!(
         response.protocol == 1,
@@ -76,7 +76,7 @@ async fn exchange(zed: &ZedRuntime, query: Vec<u8>) -> Result<Vec<proto::LspResp
     let Payload::NavigationResponse(response) = reply else {
         bail!("unexpected private navigation response kind");
     };
-    decode(probe, response)
+    decode(probe, &response)
 }
 
 pub(super) async fn support(zed: Option<&Zed>) -> Result<()> {
@@ -131,18 +131,18 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(
-                decode(false, reply.clone())
+                decode(false, &reply)
                     .unwrap_err()
                     .downcast_ref::<NativeRefusal>()
                     .unwrap()
                     .0,
                 reason
             );
-            assert!(decode(true, reply.clone()).is_err());
+            assert!(decode(true, &reply).is_err());
             assert!(
                 decode(
                     false,
-                    wire::CowboyNavigationResponse {
+                    &wire::CowboyNavigationResponse {
                         result: vec![1],
                         ..reply
                     }
@@ -159,8 +159,8 @@ mod tests {
             outcome: Outcome::Supported as i32,
             ..Default::default()
         };
-        assert!(decode(true, probe.clone()).is_ok());
-        assert!(decode(false, probe).is_err());
+        assert!(decode(true, &probe).is_ok());
+        assert!(decode(false, &probe).is_err());
         let complete = wire::CowboyNavigationResponse {
             protocol: 1,
             outcome: Outcome::Complete as i32,
@@ -171,12 +171,12 @@ mod tests {
             .encode_to_vec(),
             ..Default::default()
         };
-        assert!(decode(false, complete.clone()).unwrap().is_empty());
-        assert!(decode(true, complete.clone()).is_err());
+        assert!(decode(false, &complete).unwrap().is_empty());
+        assert!(decode(true, &complete).is_err());
         assert!(
             decode(
                 false,
-                wire::CowboyNavigationResponse {
+                &wire::CowboyNavigationResponse {
                     refusal: 99,
                     ..complete.clone()
                 }
@@ -186,7 +186,7 @@ mod tests {
         assert!(
             decode(
                 false,
-                wire::CowboyNavigationResponse {
+                &wire::CowboyNavigationResponse {
                     outcome: 99,
                     ..complete
                 }

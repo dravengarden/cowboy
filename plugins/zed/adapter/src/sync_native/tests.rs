@@ -326,42 +326,65 @@ async fn reader_rejects_mixed_upstream_private_reply_and_clears_disconnects() {
 
 #[tokio::test]
 async fn private_reply_survives_every_split_and_bytewise_framing() {
-    let bytes = encoded(1, supported());
-    for split in 0..=bytes.len() {
-        let (zed, mut receiver) = fixture().await;
-        let (read, mut write) = UnixStream::pair().unwrap();
-        let reader = tokio::spawn(read_messages(
-            read,
-            zed.outbound.clone(),
-            zed.pending.clone(),
-            zed.events.clone(),
-            zed.buffer_files.clone(),
-            zed.diagnostics.clone(),
-            zed.sync.clone(),
-        ));
-        let task = {
-            let zed = zed.clone();
-            tokio::spawn(async move { zed.sync.probe(&zed).await })
+    for navigation in [false, true] {
+        let bytes = if navigation {
+            wire::CowboyBufferSyncEnvelope {
+                responding_to: Some(1),
+                payload: Some(Payload::NavigationResponse(
+                    wire::CowboyNavigationResponse {
+                        protocol: 1,
+                        outcome: wire::cowboy_navigation_response::Outcome::Supported as i32,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }
+            .encode_to_vec()
+        } else {
+            encoded(1, supported())
         };
-        assert_eq!(receiver.recv().await.unwrap().id, 1);
-        for byte in u32::try_from(bytes.len()).unwrap().to_le_bytes() {
-            write.write_all(&[byte]).await.unwrap();
-            tokio::task::yield_now().await;
-        }
-        write.write_all(&bytes[..split]).await.unwrap();
-        for byte in &bytes[split..] {
-            write.write_all(&[*byte]).await.unwrap();
-            tokio::task::yield_now().await;
-        }
-        assert_eq!(
+        for split in 0..=bytes.len() {
+            let (zed, mut receiver) = fixture().await;
+            let (read, mut write) = UnixStream::pair().unwrap();
+            let reader = tokio::spawn(read_messages(
+                read,
+                zed.outbound.clone(),
+                zed.pending.clone(),
+                zed.events.clone(),
+                zed.buffer_files.clone(),
+                zed.diagnostics.clone(),
+                zed.sync.clone(),
+            ));
+            let task = {
+                let zed = zed.clone();
+                tokio::spawn(async move {
+                    if navigation {
+                        crate::navigation_native::support(Some(&zed)).await
+                    } else {
+                        zed.sync
+                            .probe(&zed)
+                            .await
+                            .map(|value| assert_eq!(value, [3; 16]))
+                    }
+                })
+            };
+            assert_eq!(receiver.recv().await.unwrap().id, 1);
+            for byte in u32::try_from(bytes.len()).unwrap().to_le_bytes() {
+                write.write_all(&[byte]).await.unwrap();
+                tokio::task::yield_now().await;
+            }
+            write.write_all(&bytes[..split]).await.unwrap();
+            for byte in &bytes[split..] {
+                write.write_all(&[*byte]).await.unwrap();
+                tokio::task::yield_now().await;
+            }
             tokio::time::timeout(Duration::from_secs(2), task)
                 .await
                 .unwrap()
                 .unwrap()
-                .unwrap(),
-            [3; 16]
-        );
-        drop(write);
-        reader.await.unwrap();
+                .unwrap();
+            drop(write);
+            reader.await.unwrap();
+        }
     }
 }

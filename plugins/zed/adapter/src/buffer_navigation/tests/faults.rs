@@ -44,7 +44,8 @@ async fn typed_native_refusal_never_becomes_empty_success_or_clears_unknown() {
         }
         assert!(f.navigation.try_recv().is_err());
         assert!(f.outbound.try_recv().is_err());
-        assert!(crate::sync_owners::ensure_admission(&f.buffers.active.read().await).is_err());
+        let active = f.buffers.active.read().await;
+        assert!(crate::sync_owners::ensure_admission(&active).is_err());
     }
 }
 

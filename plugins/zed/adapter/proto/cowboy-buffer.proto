@@ -53,9 +53,9 @@ message CowboyBufferSyncResponse {
   Refusal refusal = 8;
 }
 
-// Query bytes use the exact pinned LspQuery codec, restricted to the five
+// Query bytes use the exact pinned `LspQuery` codec, restricted to the five
 // navigation variants, no server selection and no request identity. Empty is
-// an effect-free probe. This route never falls back to upstream LspQuery.
+// an effect-free probe. This route never falls back to upstream `LspQuery`.
 message CowboyNavigation {
   uint64 project_id = 1;
   uint32 protocol = 2;
@@ -71,7 +71,7 @@ message CowboyNavigationResponse {
     REFUSED = 3;
   }
   Outcome outcome = 2;
-  // Complete pinned LspQueryResponse; absent on probe/refusal. Refusal is not
+  // Complete pinned `LspQueryResponse`; absent on probe/refusal. Refusal is not
   // evidence of no LSP side effects, no acquired buffers, or restored state.
   bytes result = 3;
   enum Refusal {
