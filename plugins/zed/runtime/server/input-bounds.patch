@@ -1,0 +1,100 @@
+diff --git a/crates/lsp/src/input_handler.rs b/crates/lsp/src/input_handler.rs
+--- a/crates/lsp/src/input_handler.rs
++++ b/crates/lsp/src/input_handler.rs
+@@ -1,3 +1,7 @@
++#[path = "cowboy_lsp_input.rs"]
++mod cowboy_input;
++use cowboy_input::read_headers;
++
+ use std::str;
+ use std::sync::Arc;
+ 
+@@ -4,18 +8,16 @@
+-use anyhow::{Context as _, Result};
++use anyhow::Result;
+ use collections::HashMap;
+ use futures::{
+-    AsyncBufReadExt, AsyncRead, AsyncReadExt as _, SinkExt as _,
++    AsyncRead, AsyncReadExt as _, SinkExt as _,
+     channel::mpsc::{Receiver, Sender, channel},
+     io::BufReader,
+ };
+ use gpui::{BackgroundExecutor, Task};
+ use log::warn;
+ use parking_lot::Mutex;
+ 
+ use crate::{
+-    AnyResponse, CONTENT_LEN_HEADER, IoHandler, IoKind, NotificationOrRequest, RequestId,
++    AnyResponse, IoHandler, IoKind, NotificationOrRequest, RequestId,
+     ResponseHandler,
+ };
+ 
+-const HEADER_DELIMITER: &[u8; 4] = b"\r\n\r\n";
+-
+@@ -32,23 +34,6 @@ pub struct LspStdoutHandler {
+     pub(super) incoming_messages: Receiver<NotificationOrRequest>,
+ }
+ 
+-async fn read_headers<Stdout>(reader: &mut BufReader<Stdout>, buffer: &mut Vec<u8>) -> Result<()>
+-where
+-    Stdout: AsyncRead + Unpin + Send + 'static,
+-{
+-    loop {
+-        if buffer.len() >= HEADER_DELIMITER.len()
+-            && buffer[(buffer.len() - HEADER_DELIMITER.len())..] == HEADER_DELIMITER[..]
+-        {
+-            return Ok(());
+-        }
+-
+-        if reader.read_until(b'\n', buffer).await? == 0 {
+-            anyhow::bail!("cannot read LSP message headers");
+-        }
+-    }
+-}
+-
+ impl LspStdoutHandler {
+     pub fn new<Input>(
+         stdout: Input,
+@@ -85,15 +70,7 @@ impl LspStdoutHandler {
+ 
+             read_headers(&mut stdout, &mut buffer).await?;
+ 
+-            let headers = std::str::from_utf8(&buffer)?;
+-
+-            let message_len = headers
+-                .split('\n')
+-                .find(|line| line.starts_with(CONTENT_LEN_HEADER))
+-                .and_then(|line| line.strip_prefix(CONTENT_LEN_HEADER))
+-                .with_context(|| format!("invalid LSP message header {headers:?}"))?
+-                .trim_end()
+-                .parse()?;
++            let message_len = cowboy_input::content_length(&buffer)?;
+ 
+             buffer.resize(message_len, 0);
+             stdout.read_exact(&mut buffer).await?;
+diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
+--- a/crates/worktree/src/worktree.rs
++++ b/crates/worktree/src/worktree.rs
+@@ -1669,6 +1669,7 @@ impl LocalWorktree {
+                 anyhow::bail!("File is too large to load");
+             }
+             let (text, encoding, has_bom) = decode_file_text(fs.as_ref(), &abs_path).await?;
++            anyhow::ensure!(text.len() <= 4 * 1024 * 1024, "private native text exceeds budget");
+             let is_writable = metadata.is_some_and(|metadata| metadata.is_writable);
+ 
+             let worktree = this.upgrade().context("worktree was dropped")?;
+@@ -7002,10 +7003,10 @@ async fn decode_file_text(
+     fs: &dyn Fs,
+     abs_path: &Path,
+ ) -> Result<(String, &'static Encoding, bool)> {
+-    let mut file = fs
+-        .open_sync(&abs_path)
+-        .await
+-        .with_context(|| format!("opening file {abs_path:?}"))?;
++    // The actual descriptor read, not an earlier pathname stat, owns the limit.
++    // The private Fs implementation rejects growth, symlinks and nonregulars.
++    let bytes = fs.cowboy_load_bytes_bounded(abs_path, 4 * 1024 * 1024).await?;
++    let mut file = std::io::Cursor::new(bytes);
+ 
+     // First, read the beginning of the file to determine its kind and encoding.
+     // We do not want to load an entire large blob into memory only to discard it.

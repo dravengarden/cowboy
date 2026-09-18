@@ -65,6 +65,23 @@ mod tests {
     }
 
     #[test]
+    fn cowboy_bounded_reader_consumes_only_one_overflow_byte() {
+        struct Growing(usize);
+        impl std::io::Read for Growing {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                bytes.fill(b'x');
+                self.0 += bytes.len();
+                Ok(bytes.len())
+            }
+        }
+        let mut growing = Growing(0);
+        assert!(read(&mut growing, 65_536).is_err());
+        assert_eq!(growing.0, 65_537);
+        assert_eq!(read(std::io::empty(), 0).unwrap(), b"");
+        assert!(read(&b"x"[..], 0).is_err());
+    }
+
+    #[test]
     fn cowboy_opened_descriptor_rejects_symlink_directory_and_oversized_source() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source");

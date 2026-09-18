@@ -19,6 +19,12 @@ The `1.13.0` [native text reader](plugin-native-text-reads.md) supplies bounded
 complete-text observations through an explicitly opened ordinary destination
 owner. It does not enable the navigation consumer or renew old target positions.
 
+The `1.13.3` source candidate selects private server `1.0.1` with
+[individual native input budgets](plugin-native-input-bounds.md): bounded LSP
+framing before allocation and bounded actual file reads before native buffer
+construction. Aggregate acquisition and whole-query refusal remain unaccepted;
+this is not permission to open production navigation admission.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete
@@ -122,9 +128,10 @@ The Machine source explicitly refuses all four private commands before generic
 runtime selection. Neither a read lease nor an optional worktree field can
 bypass that check. The separate protocol-21 Machine continuation does not relax
 this check or enable a Service endpoint, Web/native bridge or shared component
-contract. The private adapter and consuming Zed Plugin
-are versioned together; server `1.0.0`, upstream Zed revision and all dependency
-pins remain unchanged. Historical component-registry entries are untouched.
+contract. The private adapter and consuming Zed Plugin are versioned together.
+The `1.10`–`1.13.2` candidates retain server `1.0.0`; `1.13.3` selects the
+separate input-bounds server `1.0.1`. The upstream Zed revision, all third-party
+dependency pins and historical component-registry entries are untouched.
 
 Deterministic private-transport tests cover nonempty targets, duplicate
 locations, source release/deletion, same-ID aliases, disconnected observers,

@@ -38,16 +38,17 @@ let
   };
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
-  # First private distribution, not a claim to be an upstream Zed release.
-  version = "1.0.0";
+  # Private distribution version, not a claim to be an upstream Zed release.
+  version = "1.0.1";
   inherit src cargoDeps;
-  patches = [ ./server/dependencies.patch ];
+  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ];
   postPatch = ''
     cp ${../adapter/proto/cowboy-buffer.proto} crates/proto/proto/cowboy-buffer.proto
     mkdir -p crates/project/src/buffer_store/cowboy_sync
     cp ${./server/cowboy_sync.rs} crates/project/src/buffer_store/cowboy_sync.rs
     cp ${./server/tests.rs} crates/project/src/buffer_store/cowboy_sync/tests.rs
     cp ${./server/cowboy_bounded.rs} crates/fs/src/cowboy_bounded.rs
+    cp ${./server/cowboy_lsp_input.rs} crates/lsp/src/cowboy_lsp_input.rs
     substituteInPlace crates/proto/proto/zed.proto \
       --replace-fail 'import "buffer.proto";' 'import "buffer.proto";
     import "cowboy-buffer.proto";' \
@@ -97,8 +98,8 @@ in platform.buildRustPackage {
   # unification would introduce dynamic desktop dependencies into this target.
   cargoBuildFlags = [ "--package" "remote_server" "--bin" "remote_server" ];
   doCheck = true;
-  cargoTestFlags = [ "--package" "project" "--package" "fs" "--lib"
-    "--features" "project/test-support,fs/test-support" "cowboy_" ];
+  cargoTestFlags = [ "--package" "project" "--package" "fs" "--package" "lsp" "--lib"
+    "--features" "project/test-support,fs/test-support,lsp/test-support" "cowboy_" ];
   nativeBuildInputs = [ pkgs.cmake pkgs.perl pkgs.pkg-config pkgs.protobuf rustPlatform.bindgenHook ];
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER = "${pkgs.stdenv.cc}/bin/cc";
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS = "--cfg tokio_unstable -C target-feature=+crt-static -C force-frame-pointers=yes";

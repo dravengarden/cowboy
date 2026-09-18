@@ -254,6 +254,67 @@ async fn native_source_bounds_and_lost_reply(
     zed.close_buffer(buffer).unwrap();
 }
 
+async fn native_input_bounds(zed: &ZedRuntime, workspace: &Path, worktree: u64) {
+    const LIMIT: usize = 4 * 1024 * 1024;
+    let exact = workspace.join("input-exact.txt");
+    tokio::fs::write(&exact, vec![b'a'; LIMIT]).await.unwrap();
+    let (buffer, _) = zed
+        .open_buffer(worktree, Path::new("input-exact.txt"))
+        .await
+        .expect("the exact raw/decoded text limit must be inclusive");
+    assert_eq!(
+        zed.diagnostics
+            .lock()
+            .unwrap()
+            .content(buffer)
+            .unwrap()
+            .utf8_bytes,
+        u32::try_from(LIMIT).unwrap()
+    );
+    zed.close_buffer(buffer).unwrap();
+
+    let oversized = workspace.join("input-oversized.txt");
+    tokio::fs::write(&oversized, vec![b'a'; LIMIT + 1])
+        .await
+        .unwrap();
+    assert!(
+        zed.open_buffer(worktree, Path::new("input-oversized.txt"))
+            .await
+            .is_err(),
+        "oversized source must not become a native buffer"
+    );
+
+    // Raw bytes fit, but decoding to UTF-8 would exceed the native text limit.
+    let mut expanded = vec![0xff, 0xfe];
+    for _ in 0..1_500_000 {
+        expanded.extend_from_slice(&[0x00, 0x08]);
+    }
+    tokio::fs::write(workspace.join("input-expanded.txt"), &expanded)
+        .await
+        .unwrap();
+    assert!(
+        zed.open_buffer(worktree, Path::new("input-expanded.txt"))
+            .await
+            .is_err(),
+        "bounded source decoding must be checked before CRDT construction"
+    );
+    // Failure is not a runtime-wide crash and never mutates source bytes.
+    assert_eq!(
+        tokio::fs::metadata(&oversized).await.unwrap().len(),
+        (LIMIT + 1) as u64
+    );
+    assert_eq!(
+        tokio::fs::read(workspace.join("input-expanded.txt"))
+            .await
+            .unwrap(),
+        expanded
+    );
+    zed.sync.probe(zed).await.unwrap();
+    println!(
+        "native input bounds: inclusive 4 MiB, oversized raw/decoded refusal, unchanged files and live native probe passed"
+    );
+}
+
 fn child_paths() -> (PathBuf, PathBuf) {
     let root = PathBuf::from(
         std::env::var_os("COWBOY_TEST_NATIVE_SYNC_ROOT").expect("private child root"),
@@ -426,6 +487,7 @@ async fn native_process_child() {
     );
     native_edits_and_close_refuse(&zed, &instance, &workspace, worktree).await;
     native_source_bounds_and_lost_reply(&zed, &instance, &workspace, worktree).await;
+    native_input_bounds(&zed, &workspace, worktree).await;
     owned_resources(&zed, &root).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
     crate::buffer_navigation::connected_lsp::immutable_pair(&root, &server).await;
