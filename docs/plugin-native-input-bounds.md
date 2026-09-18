@@ -6,6 +6,11 @@ generation or permission to enable production navigation. Its finite change
 bounds individual native inputs **before** expensive allocation. It does not
 complete the [navigation acquisition budget](plugin-owned-navigation.md).
 
+The [candidate acceptance](releases/native-input-bounds-candidate-2026-09-18.md)
+records exact artifact hashes, the complete source gate, native filesystem/LSP
+tests, real pair and signed lifecycle gates, eighteen connected checks and
+twenty-four browser ownership regressions. No production component was activated.
+
 ## Actual input boundaries
 
 The pinned upstream LSP stdout reader previously used `read_until` on an
