@@ -67,3 +67,7 @@ background concurrency, decoding scratch, process RSS or worktree scanning.
 No independently authorized recovery, actual deployed generation replacement
 or supported-device acceptance follows. See the
 [completion ledger](plugin-refactor-completion.md).
+
+The subsequent [acquisition lifetime candidate](plugin-native-acquisition-budgets.md)
+bounds the number of initial loads and live acquired buffers across worktrees,
+without claiming to bound reload history or all background work.

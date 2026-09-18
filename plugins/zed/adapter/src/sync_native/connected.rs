@@ -2,6 +2,7 @@
 use super::*;
 use sha2::{Digest as _, Sha256};
 
+mod acquisition;
 mod reload;
 
 struct Scratch(PathBuf);
@@ -542,11 +543,10 @@ async fn native_process_child() {
             .await
             .is_err()
     );
-    native_edits_and_close_refuse(&zed, &instance, &workspace, worktree).await;
-    native_source_bounds_and_lost_reply(&zed, &instance, &workspace, worktree).await;
-    native_input_bounds(&zed, &workspace, worktree).await;
+    native_source_regressions(&zed, &instance, &workspace, worktree).await;
     owned_resources(&zed, &root).await;
     restart_does_not_adopt_old_ticket(&zed, &server, &root, &instance, id2).await;
+    acquisition::exercise(&server, &root).await;
     crate::buffer_navigation::connected_lsp::immutable_pair(&root, &server).await;
     println!(
         "native sync identity, edit/undo/close refusal, source validation and lost-reply checks passed"
@@ -559,4 +559,10 @@ async fn owned_resources(zed: &Zed, root: &Path) {
     crate::buffer_navigation::connected::exercise(zed, &workspace).await;
     crate::buffer_navigation::connected_lsp::exercise(zed, root).await;
     crate::native_close::connected::exercise(zed, root).await;
+}
+
+async fn native_source_regressions(zed: &Zed, instance: &[u8], workspace: &Path, worktree: u64) {
+    native_edits_and_close_refuse(zed, instance, workspace, worktree).await;
+    native_source_bounds_and_lost_reply(zed, instance, workspace, worktree).await;
+    native_input_bounds(zed, workspace, worktree).await;
 }

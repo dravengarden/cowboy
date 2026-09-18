@@ -12,6 +12,25 @@ struct Fixture {
     ids: Vec<u64>,
 }
 
+#[gpui::test]
+async fn cowboy_close_ack_does_not_return_acquisition_capacity(cx: &mut TestAppContext) {
+    use language::cowboy_buffer_budget::in_use;
+    let f = Fixture::new(cx).await;
+    assert_eq!(cx.update(|cx| in_use(cx)), 2);
+    let response = f.call(f.ids.clone(), PeerId::default(), cx).unwrap();
+    assert_eq!(response.outcome, Outcome::Closed as i32);
+    assert_eq!(f.retained(PeerId::default(), cx), 0);
+    // Other native handles still own these buffers after the complete ACK.
+    assert_eq!(cx.update(|cx| in_use(cx)), 2);
+    drop(f.buffers);
+    cx.update(|_| {});
+    assert_eq!(cx.update(|cx| in_use(cx)), 0);
+    f.store.read_with(cx, |store, _| {
+        assert!(store.opened_buffers.is_empty());
+        assert!(store.path_to_buffer_id.is_empty());
+    });
+}
+
 impl Fixture {
     async fn new(cx: &mut TestAppContext) -> Self {
         cx.update(|cx| {

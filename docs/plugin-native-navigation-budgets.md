@@ -57,6 +57,11 @@ retained buffers/history, decoding scratch, background LSP effects or filesystem
 worktree scanning. Cancellation/timeout of observation cannot prove that every
 background native load has ended.
 
+The subsequent [acquisition lifetime candidate](plugin-native-acquisition-budgets.md)
+adds a shared 64-slot limit before new local loads across all worktrees. Actual
+initial-load/CRDT results and live buffer entities retain those charges. It does
+not bound history, detached snapshots, all background work or process RSS.
+
 ## Refusal is not recovery
 
 The private response distinguishes Supported, Complete and Refused. Refused has

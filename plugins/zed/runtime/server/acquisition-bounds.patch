@@ -1,0 +1,187 @@
+diff --git a/crates/language/src/language.rs b/crates/language/src/language.rs
+--- a/crates/language/src/language.rs
++++ b/crates/language/src/language.rs
+@@ -10,1 +10,2 @@
+-mod buffer;
++mod buffer;
++pub mod cowboy_buffer_budget;
+diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
+--- a/crates/language/src/buffer.rs
++++ b/crates/language/src/buffer.rs
+@@ -140,2 +140,4 @@
+-    reload_with_encoding_txns: HashMap<TransactionId, (&'static Encoding, bool)>,
+-}
++    reload_with_encoding_txns: HashMap<TransactionId, (&'static Encoding, bool)>,
++    // Last field: the admitted buffer's own data drops before its charge.
++    cowboy_acquisition: Option<crate::cowboy_buffer_budget::Permit>,
++}
+@@ -1155,1 +1155,7 @@
+-    /// Returns the [`Capability`] of this buffer.
++    pub fn cowboy_with_acquisition(mut self, permit: crate::cowboy_buffer_budget::Permit) -> Self {
++        assert!(self.cowboy_acquisition.is_none());
++        self.cowboy_acquisition = Some(permit);
++        self
++    }
++
++    /// Returns the [`Capability`] of this buffer.
+@@ -1166,3 +1166,4 @@
+-        Self {
+-            saved_mtime,
+-            tree_sitter_data: Arc::new(tree_sitter_data),
++        Self {
++            cowboy_acquisition: None,
++            saved_mtime,
++            tree_sitter_data: Arc::new(tree_sitter_data),
+diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
+--- a/crates/worktree/src/worktree.rs
++++ b/crates/worktree/src/worktree.rs
+@@ -115,2 +115,4 @@
+-    pub is_writable: bool,
+-}
++    pub is_writable: bool,
++    // Retains admission while a completed task still owns the loaded text.
++    _cowboy_acquisition: Option<language::cowboy_buffer_budget::Permit>,
++}
+@@ -883,3 +883,21 @@
+-    pub fn load_file(&self, path: &RelPath, cx: &Context<Worktree>) -> Task<Result<LoadedFile>> {
+-        match self {
+-            Worktree::Local(this) => this.load_file(path, cx),
++    pub fn load_file(&self, path: &RelPath, cx: &Context<Worktree>) -> Task<Result<LoadedFile>> {
++        self.cowboy_load_file_inner(path, None, cx)
++    }
++
++    pub fn cowboy_load_file(
++        &self,
++        path: &RelPath,
++        permit: language::cowboy_buffer_budget::Permit,
++        cx: &Context<Worktree>,
++    ) -> Task<Result<LoadedFile>> {
++        self.cowboy_load_file_inner(path, Some(permit), cx)
++    }
++
++    fn cowboy_load_file_inner(
++        &self,
++        path: &RelPath,
++        permit: Option<language::cowboy_buffer_budget::Permit>,
++        cx: &Context<Worktree>,
++    ) -> Task<Result<LoadedFile>> {
++        match self {
++            Worktree::Local(this) => this.load_file(path, permit, cx),
+@@ -1649,1 +1649,6 @@
+-    fn load_file(&self, path: &RelPath, cx: &Context<Worktree>) -> Task<Result<LoadedFile>> {
++    fn load_file(
++        &self,
++        path: &RelPath,
++        cowboy_acquisition: Option<language::cowboy_buffer_budget::Permit>,
++        cx: &Context<Worktree>,
++    ) -> Task<Result<LoadedFile>> {
+@@ -1701,2 +1701,3 @@
+-            Ok(LoadedFile {
+-                file,
++            Ok(LoadedFile {
++                _cowboy_acquisition: cowboy_acquisition,
++                file,
+diff --git a/crates/project/src/buffer_store.rs b/crates/project/src/buffer_store.rs
+--- a/crates/project/src/buffer_store.rs
++++ b/crates/project/src/buffer_store.rs
+@@ -640,5 +640,8 @@
+-        path: Arc<RelPath>,
+-        worktree: Entity<Worktree>,
+-        cx: &mut Context<BufferStore>,
+-    ) -> Task<Result<Entity<Buffer>>> {
+-        let load_file = worktree.update(cx, |worktree, cx| worktree.load_file(path.as_ref(), cx));
++        path: Arc<RelPath>,
++        worktree: Entity<Worktree>,
++        permit: language::cowboy_buffer_budget::Permit,
++        cx: &mut Context<BufferStore>,
++    ) -> Task<Result<Entity<Buffer>>> {
++        let load_file = worktree.update(cx, |worktree, cx| {
++            worktree.cowboy_load_file(path.as_ref(), permit.clone(), cx)
++        });
+@@ -658,5 +658,7 @@
+-                    let text_buffer = cx
+-                        .background_spawn(async move {
+-                            text::Buffer::new(ReplicaId::LOCAL, buffer_id, loaded.text)
+-                        })
+-                        .await;
++                    let build_permit = permit.clone();
++                    let (text_buffer, build_permit) = cx
++                        .background_spawn(async move {
++                            // Keep the charge with the result too, not just the future.
++                            (text::Buffer::new(ReplicaId::LOCAL, buffer_id, loaded.text), build_permit)
++                        })
++                        .await;
+@@ -664,1 +664,2 @@
+-                        let mut buffer = Buffer::build(text_buffer, Some(loaded.file), capability);
++                        let mut buffer = Buffer::build(text_buffer, Some(loaded.file), capability)
++                            .cowboy_with_acquisition(build_permit);
+@@ -683,3 +683,3 @@
+-                        Capability::ReadWrite,
+-                    );
+-                    apply_initial_line_ending(&mut buffer, cx);
++                        Capability::ReadWrite,
++                    ).cowboy_with_acquisition(permit.clone());
++                    apply_initial_line_ending(&mut buffer, cx);
+@@ -728,7 +728,11 @@
+-    fn create_buffer(
+-        &self,
+-        language: Option<Arc<Language>>,
+-        project_searchable: bool,
+-        cx: &mut Context<BufferStore>,
+-    ) -> Task<Result<Entity<Buffer>>> {
+-        cx.spawn(async move |buffer_store, cx| {
++    fn create_buffer(
++        &self,
++        language: Option<Arc<Language>>,
++        project_searchable: bool,
++        cx: &mut Context<BufferStore>,
++    ) -> Task<Result<Entity<Buffer>>> {
++        let permit = match language::cowboy_buffer_budget::acquire(cx) {
++            Ok(permit) => permit,
++            Err(error) => return Task::ready(Err(error.into())),
++        };
++        cx.spawn(async move |buffer_store, cx| {
+@@ -736,2 +736,3 @@
+-                let mut buffer = Buffer::local("", cx)
+-                    .with_language(language.unwrap_or_else(|| language::PLAIN_TEXT.clone()), cx);
++                let mut buffer = Buffer::local("", cx)
++                    .cowboy_with_acquisition(permit)
++                    .with_language(language.unwrap_or_else(|| language::PLAIN_TEXT.clone()), cx);
+@@ -883,1 +883,8 @@
+-                    BufferStoreState::Local(this) => this.open_buffer(path, worktree, cx),
++                    BufferStoreState::Local(this) => {
++                        // Before I/O, task allocation or a loading_buffers entry.
++                        let permit = match language::cowboy_buffer_budget::acquire(cx) {
++                            Ok(permit) => permit,
++                            Err(error) => return Task::ready(Err(error.into())),
++                        };
++                        this.open_buffer(path, worktree, permit, cx)
++                    },
+@@ -975,7 +975,20 @@
+-        let handle = cx.entity().downgrade();
+-        buffer_entity.update(cx, move |_, cx| {
+-            cx.on_release(move |buffer, cx| {
+-                handle
+-                    .update(cx, |_, cx| {
+-                        cx.emit(BufferStoreEvent::BufferDropped(buffer.remote_id()))
+-                    })
++        let handle = cx.entity().downgrade();
++        let released_entity_id = buffer_entity.entity_id();
++        buffer_entity.update(cx, move |_, cx| {
++            cx.on_release(move |buffer, cx| {
++                handle
++                    .update(cx, |this, cx| {
++                        let id = buffer.remote_id();
++                        // An old entity's release cannot remove a replacement's indexes.
++                        if matches!(this.opened_buffers.get(&id),
++                            Some(OpenBuffer::Complete { buffer }) if buffer.entity_id() == released_entity_id)
++                        {
++                            this.opened_buffers.remove(&id);
++                            this.non_searchable_buffers.remove(&id);
++                            this.path_to_buffer_id.retain(|_, value| *value != id);
++                            if let Some(local) = this.as_local_mut() {
++                                local.local_buffer_ids_by_entry_id.retain(|_, value| *value != id);
++                            }
++                        }
++                        cx.emit(BufferStoreEvent::BufferDropped(id))
++                    })

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "zed",
-  "version": "1.15.1",
+  "version": "1.16.0",
   "component_release": "3.11.0",
   "publisher": "cowboy-first-party",
   "kind": "code_intelligence",

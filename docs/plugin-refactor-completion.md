@@ -426,6 +426,14 @@ and accepting a production effect are different milestones.
   passes the complete source gate, 24 native tests, the exact static pair,
   temporary signed lifecycle, all 18 connected v5 and 24 browser checks.
   Global retained-history/background budgets and production rollout remain open.
+- [Native acquisition lifetime budgets](plugin-native-acquisition-budgets.md)
+  advance the source candidate to Zed `1.16.0` / private server `1.3.0`.
+  One application-wide 64-slot pool covers local file/untitled loading and
+  live buffer entities across worktrees. Actual loader/CRDT results and buffers
+  retain shared charges, not Close ACKs or observers. Released weak indexes
+  are removed only for their original entity. Acceptance is recorded separately;
+  this is not a total byte/history/snapshot/background budget or production
+  navigation cutover.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
