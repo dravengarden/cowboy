@@ -34,11 +34,14 @@ import {
   announceProductSessionEnd,
   type AuthGateDecision,
   type AuthGateView,
+  cachedAuthDecision,
   classifyAuthStatus,
   deleteProductHistoryCache,
+  forgetAuthStatus,
   nextAuthStatusBackoffMs,
   nextReadyStatusAction,
   PRODUCT_AUTH_LOST_EVENT,
+  rememberAuthStatus,
   shouldMountProductApp,
 } from "./authStatus";
 import { ProductRecentAuthSheet } from "./ProductRecentAuthSheet";
@@ -337,6 +340,9 @@ export function ProductAuthGate({
   const attemptsRef = useRef(0);
   const meRef = useRef<ProductMe | null>(null);
   const generationRef = useRef(0);
+  const cachedIdentityRef = useRef(false);
+  const [cachedIdentity, setCachedIdentity] = useState(false);
+  const [pollTick, setPollTick] = useState(0);
   const recentAuthRef = useRef<
     {
       promise: Promise<ProductMe>;
@@ -359,13 +365,21 @@ export function ProductAuthGate({
       }
       if (meRef.current) {
         const action = nextReadyStatusAction(meRef.current, decision);
-        if (action === "stay") return;
+        if (action === "stay") {
+          if (cachedIdentityRef.current) attemptsRef.current += 1;
+          return;
+        }
         if (action === "update" && decision.me) {
           meRef.current = decision.me;
           setMe(decision.me);
           setView("ready");
+          if (!decision.cached && cachedIdentityRef.current) {
+            cachedIdentityRef.current = false;
+            setCachedIdentity(false);
+          }
           return;
         }
+        forgetAuthStatus();
         generationRef.current += 1;
         const ending = announceProductSessionEnd();
         await Promise.all([deleteProductHistoryCache(), ending]);
@@ -377,7 +391,11 @@ export function ProductAuthGate({
           setView("activating");
           return;
         }
-        attemptsRef.current = 0;
+        // A cached principal mounts the app from its local replica while the
+        // status probe keeps retrying in the background (see the poll effect).
+        attemptsRef.current = decision.cached ? attemptsRef.current + 1 : 0;
+        cachedIdentityRef.current = decision.cached === true;
+        setCachedIdentity(decision.cached === true);
         meRef.current = decision.me;
         setMe(decision.me);
         setView("ready");
@@ -409,8 +427,11 @@ export function ProductAuthGate({
       setAutomationPolicy(probe.body.automation);
     }
     const decision = classifyAuthStatus(probe);
+    if (probe.kind === "ok") rememberAuthStatus(probe.body);
     if (generation !== generationRef.current) return;
-    await applyDecision(decision);
+    // Cowboy unreachable: a still-valid cached principal opens the app on its
+    // local replica instead of a retry page. Contact later decides for real.
+    await applyDecision(meRef.current ? decision : cachedAuthDecision(decision) ?? decision);
   }, [applyDecision]);
 
   useEffect(() => {
@@ -431,12 +452,20 @@ export function ProductAuthGate({
   }, [loadStatus]);
 
   useEffect(() => {
-    if (view !== "activating" && view !== "retry") return;
+    if (view !== "activating" && view !== "retry" && !cachedIdentity) return;
     const timer = globalThis.setTimeout(() => {
       void loadStatus();
     }, nextAuthStatusBackoffMs(attemptsRef.current));
     return () => globalThis.clearTimeout(timer);
-  }, [view, loadStatus]);
+  }, [view, cachedIdentity, pollTick, loadStatus]);
+
+  // While mounted on a cached principal, keep probing until the server answers
+  // for real. Each timer fires `loadStatus`; a `stay` outcome re-arms it.
+  useEffect(() => {
+    if (!cachedIdentity) return undefined;
+    const timer = globalThis.setInterval(() => setPollTick((tick) => tick + 1), 15_000);
+    return () => globalThis.clearInterval(timer);
+  }, [cachedIdentity]);
 
   const handleAuthed = useCallback((next: ProductMe): void => {
     const generation = ++generationRef.current;
@@ -459,6 +488,7 @@ export function ProductAuthGate({
     providerLogout?: boolean;
   } = {}): Promise<void> => {
     generationRef.current += 1;
+    forgetAuthStatus();
     await signOutProductSession(options);
   }, []);
 

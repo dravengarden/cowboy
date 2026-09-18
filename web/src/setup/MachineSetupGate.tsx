@@ -1,7 +1,7 @@
-import { Box, CircularProgress, Stack, Typography } from "@mui/material";
+import { Box, Button, CircularProgress, Stack, Typography } from "@mui/material";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
-import { useStoreSelector } from "../store";
+import { retrySyncNow, useStoreSelector, useSyncStatus } from "../store";
 import { MachineSetupPage } from "./MachineSetupPage";
 import {
   needsMachineSetup,
@@ -46,7 +46,19 @@ export function MachineSetupGate({
     commit();
   }, [pushedMachines, pushedMachinesLoaded]);
 
+  // The only unavoidable blocking screen: nothing cached for this dataset and
+  // no answer from Cowboy yet (docs/offline-first-sync.md §Boot). Say so
+  // honestly once the wait is clearly not a fast connect.
+  const sync = useSyncStatus();
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (presented.loaded) return undefined;
+    const timer = globalThis.setTimeout(() => setSlow(true), 3000);
+    return () => globalThis.clearTimeout(timer);
+  }, [presented.loaded]);
+
   if (!presented.loaded) {
+    const unreachable = slow && (sync.phase === "offline" || sync.phase === "connecting");
     return (
       <Box
         sx={{
@@ -57,11 +69,29 @@ export function MachineSetupGate({
           color: "text.secondary",
         }}
       >
-        <Stack spacing={2} alignItems="center">
+        <Stack spacing={2} alignItems="center" sx={{ px: 3, textAlign: "center" }}>
           <CircularProgress size={28} color="inherit" />
           <Typography sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}>
             cowboy
           </Typography>
+          {unreachable && (
+            <>
+              <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
+                {sync.phase === "offline"
+                  ? "Cowboy is offline and this device has nothing cached yet."
+                  : "Still trying to reach Cowboy…"}
+              </Typography>
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                onClick={() => retrySyncNow()}
+                sx={{ borderRadius: 999, textTransform: "none" }}
+              >
+                Retry now
+              </Button>
+            </>
+          )}
         </Stack>
       </Box>
     );

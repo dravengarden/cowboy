@@ -1,7 +1,9 @@
 import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
 import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
-import { useStoreSelector } from "../store";
+import { useEffect, useState } from "react";
+import { retrySyncNow, useSyncStatus } from "../store";
+import { syncStatusDetail, syncStatusLabel, syncStatusTone } from "../syncStatus";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useComposerSourceMode } from "../composerSourceMode";
@@ -164,7 +166,16 @@ export function DesktopStatusLine({
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
   const projection = useExploreSessionState(sessionId).projection;
-  const connected = useStoreSelector((snapshot) => snapshot.connected);
+  const sync = useSyncStatus();
+  const syncLive = sync.phase === "live" && sync.outbox.held === 0;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (syncLive) return undefined;
+    const timer = globalThis.setInterval(() => setNow(Date.now()), 1000);
+    return () => globalThis.clearInterval(timer);
+  }, [syncLive]);
+  const syncLabel = syncStatusLabel(sync, now) ?? "LIVE";
+  const syncTone = syncStatusTone(sync.phase);
   const activeElement = document.activeElement instanceof Element
     ? document.activeElement
     : null;
@@ -377,10 +388,11 @@ export function DesktopStatusLine({
       <Stack direction="row" alignItems="center" divider={<Divider orientation="vertical" flexItem />}>
         <Segment label={status.toUpperCase()} tooltip="Session status" mono />
         <Segment
-          label={connected ? "CONNECTED" : "OFFLINE"}
-          color={connected ? "success.main" : "error.main"}
-          tooltip="Cowboy WebSocket connection"
+          label={syncLabel.toUpperCase()}
+          color={sync.phase === "live" && sync.outbox.held > 0 ? "warning.main" : `${syncTone}.main`}
+          tooltip={syncStatusDetail(sync, now)}
           mono
+          {...(syncLive ? {} : { onClick: (): void => retrySyncNow() })}
         />
         <Segment
           label={

@@ -8,6 +8,7 @@ import {
 import { NativeReleaseUpdatePrompt } from "@cowboy/app-shell";
 import { isAnyDetentSheetOpen } from "@cowboy/app-shell";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
+import { MobileSyncPill } from "../MobileSyncPill";
 import {
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
   obsidianDrawerAbandonsToScroll,
@@ -509,6 +510,7 @@ export function MobileProductShell({
       }}
     >
       <MobileConnectionBanner store={controlPlaneConnection} />
+      <MobileSyncPill />
       <NativeReleaseUpdatePrompt
         appId="top.thundersparrow.cowboy"
         manifestUrl="/native-release.json"

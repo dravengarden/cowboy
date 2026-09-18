@@ -12,11 +12,16 @@ import {
  * may discover a deploy while the user is reading or composing; silently
  * replacing that page is much more disruptive on a phone than on Desktop.
  * Keep the update visible and let the user choose the safe reload point.
+ *
+ * Connectivity itself is no longer a banner here: the sync status pill
+ * (`MobileSyncPill`) presents outages, reconnects and queued work, so this bar
+ * only ever carries the one decision a phone user must make.
  */
 export function MobileConnectionBanner(
   { store }: { readonly store: ConnectionStore },
 ): React.JSX.Element | null {
-  const banner = store.useConnectionBanner();
+  const rawBanner = store.useConnectionBanner();
+  const banner = rawBanner?.kind === "update" ? rawBanner : undefined;
   const isUpdate = banner?.kind === "update";
   const [readyVersion, setReadyVersion] = useState<string>();
   useEffect(() => {

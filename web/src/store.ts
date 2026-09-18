@@ -17,6 +17,9 @@ import {
 } from "@cowboy/state-sync";
 import { PRODUCT_SYNC_SUBPROTOCOL, ProductSyncDatasetChangedError, productSyncDatabase as syncDatabase, type ProductSyncScope, type SyncDataset } from "./productSyncDatabase";
 import { createSyncShutdown } from "./syncShutdown";
+import { createReplica, type ReplicaTail } from "./replica";
+import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
+import { deriveSyncStatus, type SyncStatus, type SyncStatusInput } from "./syncStatus";
 import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
 import { actionErrorMessage } from "./actionErrorMessage";
@@ -60,7 +63,7 @@ import {
   configOptionsMatchChanges,
 } from "./configOptionMutation";
 import { refreshProviderCatalog } from "./providerCatalogRegistry";
-import { pruneDrafts } from "./draftStore";
+import { getDraft, pruneDrafts } from "./draftStore";
 import {
   claimOrphanedPendingEdits,
   finishOrphanedPendingEdit,
@@ -236,6 +239,20 @@ export interface State {
   // disappeared from the authoritative list. Rows stay visible, disabled, and
   // busy until the sessions broadcast drops them or the acknowledgement times out.
   deletingSessionIds: ReadonlySet<string>;
+  // Where the rendered session list came from (docs/offline-first-sync.md).
+  // `replica` is the last list the Hub sent to this device, painted before the
+  // socket answers; `live` once the Hub broadcasts; `none` while nothing is known.
+  sessionsSource: "none" | "replica" | "live";
+  // When the replica list was recorded, while `sessionsSource` is `replica`.
+  replicaSyncedAt?: number;
+  // session_id → transcript provenance: drives the cached caption and guards
+  // a stale replica tail against a restarted transcript epoch.
+  transcriptSources: Map<string, TranscriptSource>;
+}
+
+export interface TranscriptSource {
+  readonly source: "replica" | "live";
+  readonly syncedAt: number;
 }
 
 let errorSeq = 0;
@@ -259,6 +276,8 @@ let state: State = {
   sessionFolders: EMPTY_SESSION_FOLDERS,
   mobileReviewStates: {},
   deletingSessionIds: new Set(),
+  sessionsSource: "none",
+  transcriptSources: new Map(),
 };
 // React reads only this published snapshot. `state` above remains canonical and
 // can advance at websocket speed; notification pacing and gesture holds publish
@@ -338,14 +357,16 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
   const timelines = new Map(state.timelines);
   const hydrated = new Set(state.hydrated);
   const pagination = new Map(state.pagination);
+  const transcriptSources = new Map(state.transcriptSources);
   let changed = false;
   for (const sessionId of evicted) {
     changed = timelines.delete(sessionId) || changed;
     changed = hydrated.delete(sessionId) || changed;
     changed = pagination.delete(sessionId) || changed;
+    changed = transcriptSources.delete(sessionId) || changed;
   }
   if (changed) {
-    setState({ ...state, timelines, hydrated, pagination });
+    setState({ ...state, timelines, hydrated, pagination, transcriptSources });
   }
 }
 
@@ -382,10 +403,16 @@ function clearReconnectTimer(): void {
   }
 }
 
-function abandonProductSocket(): Promise<void> {
+/** Why the product socket is being abandoned. Only an explicit sign-out forgets
+ * the local replica: an expired sign-in or a changed dataset keeps what this
+ * device painted until the user decides (docs/offline-first-sync.md). */
+type AbandonReason = "sign_out" | "auth_lost" | "dataset_changed";
+
+function abandonProductSocket(reason: AbandonReason): Promise<void> {
   productSessionAbandoned = true;
   syncDatabase.stopAdmission();
   productSessionPausedForAuth = false;
+  if (reason === "dataset_changed") datasetFenced = true;
   clearReconnectTimer();
   stopLiveness();
   const current = socket;
@@ -394,10 +421,19 @@ function abandonProductSocket(): Promise<void> {
   // Sign-out ends these local sync writers, not the Machine's sessions. Seal
   // synchronously so late IDB hydration / durable-send continuations cannot
   // publish into an abandoned product session. Existing outboxes are retained.
-  const closing = closeProductSync([...syncClients.values(), ...qClients.values()]);
+  // The replica joins the same barrier: it is discarded (sign-out) or sealed
+  // before the shared database closes, never written afterwards.
+  const replicaShutdown = {
+    dispose: (): Promise<void> =>
+      reason === "sign_out"
+        ? replica.discardAll().catch((error: unknown) => console.warn("replica discard failed", error))
+        : Promise.resolve(replica.seal()),
+  };
+  const closing = closeProductSync([...syncClients.values(), ...qClients.values(), replicaShutdown]);
   void closing.catch(() => console.warn("sync owner cleanup failed"));
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
+  publishSyncStatus();
   return closing;
 }
 
@@ -410,6 +446,7 @@ function pauseProductSocketForAuth(): void {
   socketReady = false;
   if (state.connected) setState({ ...state, connected: false });
   current?.close();
+  publishSyncStatus();
   globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
 }
 
@@ -455,7 +492,9 @@ function startLiveness(ws: WebSocket): void {
       Date.now() - lastMessageAt > STALE_MS
     ) {
       reconnectNow("liveness_stale");
+      return;
     }
+    publishSyncStatus(); // silence may have crossed the degraded threshold
   }, LIVENESS_CHECK_MS);
 }
 
@@ -495,6 +534,12 @@ function reconnectNow(reason: string): void {
   stale?.close();
   nextConnectReason = reason;
   openSocket();
+  publishSyncStatus();
+}
+
+/** User-driven retry from the sync status pill / status line. */
+export function retrySyncNow(): void {
+  reconnectNow("user_retry");
 }
 
 // Mobile suspends a backgrounded tab (freezing timers AND often killing the
@@ -532,9 +577,13 @@ if (typeof document !== "undefined") {
   };
   document.addEventListener("visibilitychange", recoverForeground);
   globalThis.addEventListener("pageshow", recoverForeground);
-  globalThis.addEventListener("online", () => reconnectNow("network_online"));
+  globalThis.addEventListener("online", () => {
+    publishSyncStatus();
+    reconnectNow("network_online");
+  });
+  globalThis.addEventListener("offline", publishSyncStatus);
   globalThis.addEventListener("cowboy:product-sign-out", (event) => {
-    const closing = abandonProductSocket();
+    const closing = abandonProductSocket("sign_out");
     if (event instanceof ProductSessionEndEvent) event.waitUntil(closing);
   });
   globalThis.addEventListener(
@@ -649,12 +698,14 @@ function setState(next: State): void {
   state = next;
   notifyCanonicalAcks();
   emit();
+  publishSyncStatus();
 }
 
 function setInteractiveState(next: State): void {
   state = next;
   notifyCanonicalAcks();
   emitInteractive();
+  publishSyncStatus();
 }
 
 const NETWORK_ACTION_TIMEOUT_MS = 10_000;
@@ -1311,8 +1362,11 @@ function handle(msg: Outbound): void {
       // `sessions` broadcast (status flip, new/deleted session). The overlays are
       // the client's source of truth for title + order.
       rawSessions = msg.sessions;
-      if (!state.sessionsLoaded) setState({ ...state, sessionsLoaded: true });
+      if (!state.sessionsLoaded || state.sessionsSource !== "live") {
+        setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
+      }
       commitSessions();
+      replica.recordSessions(msg.sessions);
       const machines = projectMachineOccupancy(state.machines, msg.sessions);
       if (machines !== state.machines) setState({ ...state, machines });
       // The list is authoritative: drop composer drafts for sessions that no
@@ -1322,21 +1376,24 @@ function handle(msg: Outbound): void {
       pruneDrafts(validSessions);
       prunePendingEdits(validSessions);
       retainTranscriptSessions(validSessions);
+      retainReplicaSessions(validSessions);
       break;
     }
     case "machines": {
       if (!acceptsMachineSnapshot(
         state.machinesRevision,
-        state.machinesLoaded,
+        state.machinesLoaded && machinesSource === "live",
         msg.revision,
         msg.resync === true,
       )) break;
+      machinesSource = "live";
       setState({
         ...state,
         machines: projectMachineOccupancy(msg.machines, state.sessions),
         machinesLoaded: true,
         machinesRevision: msg.revision,
       });
+      replica.recordMachines(msg.revision, msg.machines);
       break;
     }
     case "snapshot": {
@@ -1344,7 +1401,17 @@ function handle(msg: Outbound): void {
       // starts a fresh bootstrap; retaining this stale response would defeat the
       // cache bound and can overwrite a newer transcript epoch.
       if (!transcriptIsCached(msg.session_id)) break;
-      const existingTimeline = state.timelines.get(msg.session_id) ?? [];
+      let existingTimeline = state.timelines.get(msg.session_id) ?? [];
+      if (
+        state.transcriptSources.get(msg.session_id)?.source === "replica" &&
+        replicaTailConflicts(existingTimeline, msg.events)
+      ) {
+        // The cached tail belongs to another transcript epoch (cleared or
+        // restored elsewhere while this device was away). Never interleave two
+        // histories: drop the replica and start from the live snapshot.
+        discardReplicaTimeline(msg.session_id);
+        existingTimeline = [];
+      }
       const joinGap = snapshotJoinGap(existingTimeline, msg.events);
       const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
@@ -1382,7 +1449,9 @@ function handle(msg: Outbound): void {
         hydrated,
         pagination,
         optimisticMessages,
+        transcriptSources: markTranscriptLive(state.transcriptSources, msg.session_id),
       });
+      scheduleReplicaTail(msg.session_id, true);
       if (joinGap) {
         void fillSnapshotJoinGap(
           msg.session_id,
@@ -1529,6 +1598,9 @@ function handle(msg: Outbound): void {
       ) {
         releaseHistoryTail(env.session_id, INACTIVE_HISTORY_TAIL);
       }
+      // Checkpoint the replica on turn boundaries and lifecycle changes at
+      // once; streaming chunks coalesce into the debounced write.
+      if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
       break;
     }
     case "config_options": {
@@ -1539,6 +1611,7 @@ function handle(msg: Outbound): void {
       const next = new Map(state.configOptions);
       next.set(msg.session_id, msg.options);
       setState({ ...state, configOptions: next });
+      scheduleReplicaTail(msg.session_id, false);
       break;
     }
     case "sync_patch": {
@@ -1725,7 +1798,7 @@ async function probeProductAuth(): Promise<MeHandshake> {
 }
 
 function logoutProductSession(): void {
-  abandonProductSocket();
+  void abandonProductSocket("auth_lost");
   globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
 }
 
@@ -1736,11 +1809,14 @@ function scheduleReconnect(delay: number): void {
     delay_ms: delay,
     attempt: reconnectAttempts + 1,
   });
+  reconnectRetryAt = Date.now() + delay;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
+    reconnectRetryAt = undefined;
     nextConnectReason = "backoff";
     connect();
   }, delay);
+  publishSyncStatus();
 }
 
 // Restore local sync state once, concurrently with the authenticated socket.
@@ -1755,6 +1831,7 @@ function connect(): void {
   }
   didHydrate = true;
   openSocket();
+  void hydrateReplica();
   void syncDatabase.legacyRecords().then((keys) => {
     if (productSessionAbandoned) return;
     const announcement = legacyRecordsAnnouncement(keys);
@@ -1842,10 +1919,11 @@ function openSocket(): void {
     openingDataset = false;
     if (!productSessionAbandoned && !productSessionPausedForAuth) {
       if (error instanceof ProductSyncDatasetChangedError) {
-        void abandonProductSocket();
+        void abandonProductSocket("dataset_changed");
         notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
         return;
       }
+      outageFailures += 1;
       globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
       scheduleReconnect(conn.connectionLost());
     }
@@ -1931,6 +2009,8 @@ function openBoundSocket(dataset: SyncDataset): void {
     });
     outageStartedAt = undefined;
     reconnectAttempts = 0;
+    outageFailures = 0;
+    lastLiveAt = Date.now();
     setState({ ...state, connected: true });
     conn.connectionReady();
     // Agent options arrive over WS, while recommended presets come from the
@@ -1996,6 +2076,8 @@ function openBoundSocket(dataset: SyncDataset): void {
     socket = undefined;
     socketReady = false;
     stopLiveness();
+    if (ready) lastLiveAt = Date.now();
+    outageFailures += 1;
     setState({ ...state, connected: false });
     outageStartedAt ??= Date.now();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
@@ -2023,7 +2105,7 @@ function openBoundSocket(dataset: SyncDataset): void {
         probeProductAuth(),
       ]);
       if (datasetCheck.status === "rejected" && datasetCheck.reason instanceof ProductSyncDatasetChangedError) {
-        void abandonProductSocket();
+        void abandonProductSocket("dataset_changed");
         notify("The Service dataset changed. Reload before sending; existing local records are retained.", "error");
         return;
       }
@@ -2135,6 +2217,269 @@ interface SyncEntry {
 const syncClients = new Map<string, SyncEntry>();
 const closeProductSync = createSyncShutdown(syncDatabase);
 const syncBase = newCmid(); // namespaces mutation ids across states + this tab
+
+// --- Local replica (docs/offline-first-sync.md) -----------------------------
+// Last known server-derived state, painted before the socket answers. Every
+// value is a cache the next broadcast replaces; nothing here is ever sent.
+const replica = createReplica(syncDatabase, {
+  onError: (error) => console.warn("replica persistence failed", error),
+});
+let machinesSource: "none" | "replica" | "live" = "none";
+let retainedReplicaKey = "";
+let datasetFenced = false;
+let reconnectRetryAt: number | undefined;
+let outageFailures = 0;
+let lastLiveAt: number | undefined;
+
+function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> {
+  const { replicaSyncedAt: _replicaSyncedAt, ...rest } = current;
+  return rest;
+}
+
+/** Paint the last known session list, machines and (through `openSession`)
+ * the active transcript before the Hub answers. A live broadcast that arrives
+ * first wins; the replica never overwrites live state. */
+async function hydrateReplica(): Promise<void> {
+  const [sessionsResult, machinesResult] = await Promise.allSettled([
+    replica.loadSessions(),
+    replica.loadMachines(),
+  ]);
+  if (productSessionAbandoned) return;
+  if (
+    sessionsResult.status === "fulfilled" && sessionsResult.value !== null &&
+    state.sessionsSource === "none"
+  ) {
+    rawSessions = [...sessionsResult.value.sessions];
+    setState({
+      ...state,
+      sessionsLoaded: true,
+      sessionsSource: "replica",
+      replicaSyncedAt: sessionsResult.value.receivedAt,
+    });
+    lastLiveAt ??= sessionsResult.value.receivedAt;
+    commitSessions();
+  }
+  if (
+    machinesResult.status === "fulfilled" && machinesResult.value !== null &&
+    !state.machinesLoaded
+  ) {
+    machinesSource = "replica";
+    setState({
+      ...state,
+      machines: projectMachineOccupancy(machinesResult.value.machines, state.sessions),
+      machinesLoaded: true,
+      machinesRevision: machinesResult.value.revision,
+    });
+  }
+  publishSyncStatus();
+}
+
+/** Restore a session's cached tail when nothing live is known yet. Runs when
+ * a session is opened; the HTTP bootstrap then merges by seq on top. */
+async function restoreReplicaTail(sessionId: string): Promise<void> {
+  if (state.hydrated.has(sessionId)) return;
+  const epoch = transcriptEpoch.get(sessionId) ?? 0;
+  const tail = await replica.session(sessionId).loadTail();
+  if (
+    tail === null || productSessionAbandoned || state.hydrated.has(sessionId) ||
+    !transcriptIsCached(sessionId) || (transcriptEpoch.get(sessionId) ?? 0) !== epoch
+  ) return;
+  const existing = state.timelines.get(sessionId) ?? [];
+  // Live events may already have arrived for this session. A cached tail that
+  // disagrees with them belongs to another epoch and is simply skipped.
+  if (existing.length > 0 && replicaTailConflicts(tail.events, existing)) return;
+  const timelines = mergeEvents(state.timelines, sessionId, [...tail.events]);
+  const hydrated = new Set(state.hydrated).add(sessionId);
+  const pagination = state.pagination.has(sessionId)
+    ? state.pagination
+    : new Map(state.pagination).set(sessionId, {
+      reachedStart: tail.reachedStart,
+      loadingOlder: false,
+      beforeSeq: tail.events[0]?.seq ?? null,
+    });
+  const configOptions = tail.configOptions !== undefined && !state.configOptions.has(sessionId)
+    ? new Map(state.configOptions).set(sessionId, [...tail.configOptions])
+    : state.configOptions;
+  const transcriptSources = new Map(state.transcriptSources).set(sessionId, {
+    source: "replica",
+    syncedAt: tail.receivedAt,
+  });
+  setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
+}
+
+function discardReplicaTimeline(sessionId: string): void {
+  transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
+  completeQuestionPages.delete(sessionId);
+  const timelines = new Map(state.timelines);
+  timelines.delete(sessionId);
+  const hydrated = new Set(state.hydrated);
+  hydrated.delete(sessionId);
+  const pagination = new Map(state.pagination);
+  pagination.delete(sessionId);
+  const transcriptSources = new Map(state.transcriptSources);
+  transcriptSources.delete(sessionId);
+  setState({ ...state, timelines, hydrated, pagination, transcriptSources });
+}
+
+function markTranscriptLive(
+  sources: Map<string, TranscriptSource>,
+  sessionId: string,
+): Map<string, TranscriptSource> {
+  if (sources.get(sessionId)?.source === "live") return sources;
+  return new Map(sources).set(sessionId, { source: "live", syncedAt: Date.now() });
+}
+
+function buildReplicaTail(sessionId: string): ReplicaTail | null {
+  if (
+    !state.hydrated.has(sessionId) ||
+    state.transcriptSources.get(sessionId)?.source !== "live"
+  ) return null;
+  const timeline = state.timelines.get(sessionId);
+  if (timeline === undefined) return null;
+  const events = trimReplicaTail(timeline);
+  const pagination = state.pagination.get(sessionId);
+  const configOptions = state.configOptions.get(sessionId);
+  return {
+    receivedAt: Date.now(),
+    lastSeq: events[events.length - 1]?.seq ?? 0,
+    reachedStart: pagination?.reachedStart === true && events.length === timeline.length,
+    events,
+    ...(configOptions !== undefined ? { configOptions } : {}),
+  };
+}
+
+function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
+  if (productSessionAbandoned || !transcriptIsCached(sessionId)) return;
+  replica.session(sessionId).scheduleTail(() => buildReplicaTail(sessionId), { immediate });
+}
+
+function retainReplicaSessions(valid: ReadonlySet<string>): void {
+  const key = [...valid].sort().join("\n");
+  if (key === retainedReplicaKey) return;
+  retainedReplicaKey = key;
+  void replica.retainSessions(valid);
+}
+
+// --- Held deliveries -------------------------------------------------------
+// A row the user left unsent after a timeout must stay that way across a
+// reload. The outbox keeps the mutation; this record keeps the decision.
+function persistHeld(sessionId: string): void {
+  const client = qClients.get(sessionId);
+  if (client === undefined || productSessionAbandoned) return;
+  const held = client.pending().map((mutation) => mutation.id)
+    .filter((id) => qStatus.get(id) === "failed");
+  void replica.session(sessionId).saveDelivery({ held });
+}
+
+async function restoreHeld(sessionId: string): Promise<readonly string[]> {
+  const delivery = await replica.session(sessionId).loadDelivery();
+  if (delivery === null || productSessionAbandoned) return [];
+  for (const id of delivery.held) {
+    if (!qStatus.has(id)) qStatus.set(id, "failed");
+  }
+  return delivery.held;
+}
+
+function forgetSettledHeld(sessionId: string, held: readonly string[]): void {
+  const pending = new Set((qClients.get(sessionId)?.pending() ?? []).map((mutation) => mutation.id));
+  for (const id of held) {
+    if (!pending.has(id) && qStatus.get(id) === "failed") qStatus.delete(id);
+  }
+}
+
+// --- Sync status (docs/offline-first-sync.md §4) ----------------------------
+const syncStatusListeners = new Set<() => void>();
+
+function outboxSummary(): SyncStatusInput["outbox"] {
+  let pending = 0;
+  let held = 0;
+  const sessions: string[] = [];
+  for (const [sessionId, client] of qClients) {
+    let sessionPending = 0;
+    let sessionHeld = 0;
+    for (const mutation of client.pending()) {
+      if (qStatus.get(mutation.id) === "failed") sessionHeld += 1;
+      else sessionPending += 1;
+    }
+    if (sessionPending + sessionHeld > 0) sessions.push(sessionId);
+    pending += sessionPending;
+    held += sessionHeld;
+  }
+  return { pending, held, sessions };
+}
+
+function syncStatusInput(): SyncStatusInput {
+  const open = socket !== undefined && socket.readyState === WebSocket.OPEN;
+  const capacity = state.activeCapacity;
+  return {
+    connected: state.connected,
+    socket: socket === undefined ? "none" : open ? "open" : "connecting",
+    online: globalThis.navigator?.onLine ?? true,
+    attempts: outageFailures,
+    ...(reconnectRetryAt !== undefined ? { retryAt: reconnectRetryAt } : {}),
+    ...(capacity !== undefined ? { capacity: capacity.status } : {}),
+    ...(capacity?.position !== undefined && capacity.position !== null ? { position: capacity.position } : {}),
+    pausedForAuth: productSessionPausedForAuth,
+    fenced: datasetFenced,
+    silenceMs: open && lastMessageAt > 0 ? Math.max(0, Date.now() - lastMessageAt) : 0,
+    ...(lastLiveAt !== undefined ? { lastLiveAt } : {}),
+    outbox: outboxSummary(),
+    updateReady: false,
+  };
+}
+
+let syncStatus: SyncStatus | undefined;
+
+function currentSyncStatus(): SyncStatus {
+  syncStatus ??= deriveSyncStatus(syncStatusInput(), undefined, Date.now());
+  return syncStatus;
+}
+
+function publishSyncStatus(): void {
+  const next = deriveSyncStatus(syncStatusInput(), syncStatus, Date.now());
+  if (next === syncStatus) return;
+  syncStatus = next;
+  for (const listener of syncStatusListeners) listener();
+}
+
+function subscribeSyncStatus(listener: () => void): () => void {
+  syncStatusListeners.add(listener);
+  return () => {
+    syncStatusListeners.delete(listener);
+  };
+}
+
+/** One connectivity/sync status for every surface. Subscribing here never
+ * opens the product socket; the app's store subscription owns that. */
+export function useSyncStatus(): SyncStatus {
+  return useSyncExternalStore(subscribeSyncStatus, currentSyncStatus, currentSyncStatus);
+}
+
+export function getSyncStatus(): SyncStatus {
+  return currentSyncStatus();
+}
+
+/** Whether a client update may be applied right now without interrupting the
+ * user (docs/offline-first-sync.md §Update policy). */
+export function canApplyUpdateNow(): boolean {
+  for (const status of qStatus.values()) {
+    if (status === "committing" || status === "sending") return false;
+  }
+  if (openedSessionId !== undefined) {
+    const active = state.sessions.find((session) => session.id === openedSessionId);
+    if (active?.status === "busy" || active?.status === "starting") return false;
+    const draft = getDraft(openedSessionId);
+    if (draft.text.trim() !== "" || draft.attachments.length > 0) return false;
+  }
+  const focused = globalThis.document?.activeElement;
+  if (
+    focused instanceof HTMLElement && (
+      focused.isContentEditable || focused.tagName === "TEXTAREA" ||
+      focused.tagName === "INPUT"
+    )
+  ) return false;
+  return true;
+}
 
 /** Wire one synced state to the generic channel via the shared op-based tier
  *  (`replicatedStore`): instant optimistic mutate (auto-sent), patch fold,
@@ -2720,8 +3065,13 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
     qClients.set(sessionId, c);
     if (didHydrate) {
       const created = c;
-      void created.hydrate().then(() => {
-        if (!productSessionAbandoned && socketReady) created.resend();
+      // Restore held decisions before the outbox can be replayed: a row the
+      // user left unsent must not be resent by a reload.
+      void restoreHeld(sessionId).then((held) => created.hydrate().then(() => held)).then((held) => {
+        if (productSessionAbandoned) return;
+        forgetSettledHeld(sessionId, held);
+        commitQueue(sessionId);
+        if (socketReady) created.resend();
       }).catch(() => {
         if (!productSessionAbandoned) notify("Local queue could not be restored; check browser storage before sending.", "warning");
       });
@@ -2837,6 +3187,7 @@ function armQTimers(
       }
       if (changed) {
         commitQueue(sessionId);
+        persistHeld(sessionId);
       }
       clearOptTimers(mutationId);
     }, SEND_TIMEOUT_MS),
@@ -2977,6 +3328,7 @@ export function retryQueued(sessionId: string, cmid: string): void {
     const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
     if (echoCmid !== undefined && echoCmid !== cmid) qStatus.set(echoCmid, attempt.status);
     commitQueue(sessionId);
+    persistHeld(sessionId);
     if (attempt.armConfirmationTimeout) armQTimers(sessionId, cmid, echoCmid);
     return;
   }
@@ -3015,6 +3367,7 @@ export async function discardQueued(sessionId: string, cmid: string): Promise<vo
   clearOptTimers(cmid);
   qStatus.delete(cmid);
   commitQueue(sessionId);
+  persistHeld(sessionId);
 }
 
 function pendingNamed(
@@ -3295,6 +3648,7 @@ export function openSession(id: string): void {
   openedSessionId = id;
   touchTranscriptSession(id);
   send({ type: "open_session", session_id: id });
+  void restoreReplicaTail(id);
   void hydrateSession(id);
 }
 
@@ -3903,6 +4257,7 @@ if (typeof globalThis.addEventListener === "function") {
     for (const client of qClients.values()) {
       void client.flush().catch(() => undefined);
     }
+    void replica.flush().catch(() => undefined);
   };
   globalThis.addEventListener("pagehide", flushLocalState);
   globalThis.addEventListener("visibilitychange", () => {

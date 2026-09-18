@@ -208,6 +208,7 @@ import {
   shouldInterruptTranscriptViewportRestore,
   shouldShowBlockingTranscriptRestore,
 } from "./transcriptRestorePolicy";
+import { TranscriptCachedCaption } from "./TranscriptCachedCaption";
 import { retainUnpresentedOptimistic } from "./sendImagePreviews";
 import {
   MESSAGE_PREVIEW_MAX_WIDTH_PX,
@@ -5602,6 +5603,7 @@ export function Transcript({
                   pointerEvents: "none",
                 }}
               />
+              <TranscriptCachedCaption sessionId={sessionId} />
               {pageFooter}
               {shortContentAtTop && (
                 <Box

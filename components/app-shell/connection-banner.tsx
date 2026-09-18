@@ -265,12 +265,15 @@ function bannerPalette(kind: BannerKind): "warning" | "success" | "info" {
 }
 
 // Liveview's exact English labels. The update line shows its live 3→0 countdown.
-function bannerLabel(kind: BannerKind, secs: number): string {
+function bannerLabel(kind: BannerKind, secs: number, held: boolean): string {
   if (kind === "down") {
     return "Connection lost — reconnecting…";
   }
   if (kind === "reconnected") {
     return "Reconnected";
+  }
+  if (held) {
+    return "New version ready · reloading when idle";
   }
   return `New version · reloading in ${Math.max(0, secs)}s`;
 }
@@ -279,6 +282,13 @@ export interface ConnectionBannerProps {
   readonly store: ConnectionStore;
   /** Seconds the update bar counts down before reloading. Default 3. */
   readonly countdownSecs?: number;
+  /** Which banner kinds this surface renders. Default: all three. An app that
+   *  presents connectivity elsewhere (a status pill) keeps only `update`. */
+  readonly kinds?: readonly BannerKind[];
+  /** Whether the pending update may reload the page right now. While it
+   *  answers false the countdown holds at its start and the label says so; the
+   *  reload happens only after the gate has stayed open for the whole count. */
+  readonly canApplyUpdate?: () => boolean;
 }
 
 // Full-width overlay bar tracking the app's socket + build version. All three
@@ -291,16 +301,23 @@ export interface ConnectionBannerProps {
 //   - blue "update"        — a redeploy was detected; counts 3→0 and then clears
 //                            caches + hard-reloads into the new build on its own.
 export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
-  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS } = props;
-  const banner = store.useConnectionBanner();
+  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, kinds, canApplyUpdate } = props;
+  const rawBanner = store.useConnectionBanner();
+  const banner = rawBanner !== undefined && kinds !== undefined && !kinds.includes(rawBanner.kind)
+    ? undefined
+    : rawBanner;
   const isUpdate = banner?.kind === "update";
   const [secs, setSecs] = useState(countdownSecs);
+  const [held, setHeld] = useState(false);
 
   // Drive the update countdown (and only it). Resets whenever we're not on the
-  // update state so a later redeploy starts a fresh 3→0.
+  // update state so a later redeploy starts a fresh 3→0. While the surface says
+  // the user is busy (composing, sending, mid-turn) the count holds at its start
+  // and re-checks every second, so a reload never lands under their hands.
   useEffect(() => {
     if (!isUpdate) {
       setSecs(countdownSecs);
+      setHeld(false);
       return;
     }
     // 3 means three real seconds: show 3, 2, 1, then apply as the counter reaches
@@ -309,16 +326,20 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
       void store.applyUpdate();
       return;
     }
-    const t = setTimeout(() => setSecs((s) => s - 1), 1000);
+    const t = setTimeout(() => {
+      const allowed = canApplyUpdate === undefined || canApplyUpdate();
+      setHeld(!allowed);
+      setSecs((s) => (allowed ? s - 1 : countdownSecs));
+    }, 1000);
     return () => clearTimeout(t);
-  }, [isUpdate, secs, countdownSecs, store]);
+  }, [isUpdate, secs, countdownSecs, store, canApplyUpdate]);
 
   if (!banner) {
     return null;
   }
 
   const palette = bannerPalette(banner.kind);
-  const label = bannerLabel(banner.kind, secs);
+  const label = bannerLabel(banner.kind, secs, held);
 
   return (
     <Box

@@ -118,6 +118,41 @@ function suffix(scope: ProductSyncScope): string {
   return `session:${scope.session}:${scope.state}`;
 }
 
+/** Closed scopes for server-derived paint caches (docs/offline-first-sync.md).
+ * A cache is never an outbox: it holds the last value the Hub sent, so this
+ * device can open before the socket answers. */
+export type ProductCacheScope =
+  | {
+    readonly kind: "service";
+    readonly state: "sessions" | "machines";
+  }
+  | {
+    readonly kind: "session";
+    readonly session: string;
+    readonly state: "tail" | "delivery";
+  };
+
+const CACHE_SESSION_STATES = ["tail", "delivery"] as const;
+
+function cacheSuffix(scope: ProductCacheScope): string {
+  if (scope.kind === "service") {
+    if (scope.state !== "sessions" && scope.state !== "machines") invalid();
+    return `service:${scope.state}`;
+  }
+  if (
+    scope.kind !== "session" || typeof scope.session !== "string" ||
+    !/^[A-Za-z0-9_-]{1,128}$/.test(scope.session) ||
+    !CACHE_SESSION_STATES.includes(scope.state)
+  ) invalid();
+  return `session:${scope.session}:${scope.state}`;
+}
+
+export interface ProductCache<T> {
+  load(): Promise<T | null>;
+  save(value: T): Promise<void>;
+  discard(): Promise<void>;
+}
+
 export function createProductSyncDatabase(
   currentPrincipal: () => string | undefined,
   discover = discoverSyncDataset,
@@ -265,6 +300,77 @@ export function createProductSyncDatabase(
       )
         .map((key) => key.slice(start.length, -6))
         .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+    },
+    /** Borrow one paint cache. Like an outbox, an already-borrowed cache may
+     * finish its original dataset's writes after admission ends; it never
+     * rediscovers or adopts a new dataset. */
+    cache<T>(scope: ProductCacheScope): ProductCache<T> {
+      assertAdmission();
+      const localKey = cacheSuffix(scope);
+      let local: LocalPersistence<T> | undefined;
+      let key: string | undefined;
+      const acquire = async (): Promise<LocalPersistence<T>> => {
+        const identity = dataset ?? await ready();
+        assertCurrent();
+        key ??= `${prefix(identity)}${localKey}`;
+        local ??= owner.persistence<T>(key);
+        return local;
+      };
+      return {
+        load: async () => {
+          const record = await acquire();
+          const value = await record.load();
+          assertCurrent();
+          return value;
+        },
+        save: async (value) => {
+          const record = await acquire();
+          await record.save(value);
+          assertCurrent();
+        },
+        discard: async () => {
+          await acquire();
+          assertCurrent();
+          await owner.discard(key!);
+        },
+      };
+    },
+    /** Session ids that own a cache of `state` in this dataset. */
+    async cacheSessions(
+      state: (typeof CACHE_SESSION_STATES)[number],
+    ): Promise<string[]> {
+      const identity = dataset ?? await ready();
+      assertCurrent();
+      const keys = await owner.listKeys({ strict: true, limit: 4096 });
+      assertCurrent();
+      const start = `${prefix(identity)}session:`;
+      const end = `:${state}`;
+      return keys.filter((key) => key.startsWith(start) && key.endsWith(end))
+        .map((key) => key.slice(start.length, -end.length))
+        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+    },
+    /** Delete every paint cache of this dataset. Outboxes are untouched: a
+     * sign-out ends what this device shows, not what it still owes. */
+    async discardCaches(): Promise<void> {
+      const identity = dataset ?? await ready();
+      assertCurrent();
+      const keys = await owner.listKeys({ strict: true, limit: 4096 });
+      assertCurrent();
+      const start = prefix(identity);
+      const owned = keys.filter((key) =>
+        key.startsWith(start) && (
+          key === `${start}service:sessions` ||
+          key === `${start}service:machines` ||
+          CACHE_SESSION_STATES.some((state) =>
+            key.startsWith(`${start}session:`) && key.endsWith(`:${state}`)
+          )
+        )
+      );
+      const outcomes = await Promise.allSettled(
+        owned.map((key) => owner.discard(key)),
+      );
+      const failed = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
     },
     async legacyRecords(): Promise<string[]> {
       await ready();

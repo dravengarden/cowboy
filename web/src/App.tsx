@@ -120,6 +120,7 @@ import {
 import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
     bindSessionFolderProject,
+    canApplyUpdateNow,
     createSessionFolder,
     deleteSession,
     holdStorePresentation,
@@ -2673,6 +2674,9 @@ export function App({
     const sessions = useStoreSelector((snapshot) => snapshot.sessions);
     const lastError = useStoreSelector((snapshot) => snapshot.lastError);
     const sessionsLoaded = useStoreSelector((snapshot) => snapshot.sessionsLoaded);
+    // `replica` paints the last known list before the socket answers; only a
+    // `live` list is authoritative for pruning and "session gone" notices.
+    const sessionsSource = useStoreSelector((snapshot) => snapshot.sessionsSource);
     // The error notice is monotonically `seq`-stamped so the same message
     // text triggers the snackbar twice if it happens again. Tracking the
     // `seq` we've shown means we don't re-open after the user dismisses.
@@ -3035,9 +3039,9 @@ export function App({
         previousActiveRef.current = active?.id ?? null;
     }, [active?.id]);
     useEffect(() => {
-        if (!sessionsLoaded) return;
+        if (sessionsSource !== "live") return;
         retainTranscriptViewportSessions(new Set(sessions.map((session) => session.id)));
-    }, [sessions, sessionsLoaded]);
+    }, [sessions, sessionsSource]);
 
     // Persist the *resolved* focus so a reload reopens it. Keyed on `active.id`
     // (not raw `activeId`) so a stale stored id that fell back to sessions[0]
@@ -3054,7 +3058,7 @@ export function App({
     // list has arrived, if the id we persisted no longer names a live session,
     // warn the user (the view already fell back to sessions[0]). Runs once.
     useEffect(() => {
-        if (!sessionsLoaded || goneCheckedRef.current) return;
+        if (sessionsSource !== "live" || goneCheckedRef.current) return;
         goneCheckedRef.current = true;
         const restored = restoredFocusRef.current;
         if (restored && !sessions.some((s) => s.id === restored)) {
@@ -3063,7 +3067,7 @@ export function App({
                 "warning",
             );
         }
-    }, [sessionsLoaded, sessions]);
+    }, [sessionsSource, sessions]);
 
     // Self-heal the "stuck on the loading skeleton" case (a fresh load that raced
     // a daemon restart — the deploy window: SW reloads the tab while cowboy is
@@ -3071,10 +3075,12 @@ export function App({
     // arrived after a grace, reload ONCE — by then the daemon is back, so the
     // reload connects cleanly. A per-tab flag guards against a loop when the daemon
     // is genuinely down: the SECOND stall doesn't auto-reload (LoadingState's own
-    // 8s "reload" button takes over). Cleared the moment sessions load.
+    // 8s "reload" button takes over). Cleared the moment sessions load. A device
+    // that painted its local replica is not stuck: the sync status pill reports
+    // the reconnect instead, and nothing reloads under the user.
     useEffect(() => {
         const KEY = "cowboy:stall-reloaded";
-        if (sessionsLoaded) {
+        if (sessionsSource !== "none") {
             globalThis.sessionStorage.removeItem(KEY);
             return undefined;
         }
@@ -3085,7 +3091,7 @@ export function App({
             }
         }, 7000);
         return () => globalThis.clearTimeout(t);
-    }, [sessionsLoaded]);
+    }, [sessionsSource]);
 
     // Revive-on-open (design §7): tell the daemon which session is focused so it
     // warms that agent — reviving one whose agent died with a daemon restart —
@@ -3396,7 +3402,13 @@ export function App({
                 replace active mobile work. */}
             {surface === "desktop" && (
                 <>
-                    <ConnectionBanner store={controlPlaneConnection} />
+                    {/* Connectivity lives in the status line; the banner keeps
+                        only the update decision and never reloads mid-work. */}
+                    <ConnectionBanner
+                        store={controlPlaneConnection}
+                        kinds={["update"]}
+                        canApplyUpdate={canApplyUpdateNow}
+                    />
                     <NativeReleaseUpdatePrompt
                         appId="top.thundersparrow.cowboy"
                         manifestUrl="/native-release.json"
