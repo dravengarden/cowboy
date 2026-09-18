@@ -248,6 +248,10 @@ export function createReplica(
     onError,
   );
   const sessions = new Map<string, { replica: SessionReplica; writer: ReplicaWriter<ReplicaTail> }>();
+  // A load that fails is simply "nothing cached": the socket remains the
+  // authority and the next broadcast repopulates the cache. It is not reported
+  // through `onError`, because the common cause (no authenticated principal yet
+  // while the login page is showing) is not a persistence problem.
   const decodeWith = async <T>(
     cache: ProductCache<unknown>,
     decode: (value: unknown) => T | null,
@@ -255,8 +259,7 @@ export function createReplica(
     try {
       const value = await cache.load();
       return value === null ? null : decode(value);
-    } catch (error) {
-      onError(error);
+    } catch {
       return null;
     }
   };
