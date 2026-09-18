@@ -16,6 +16,9 @@ only its sealed replica and an installed Provider's private materialization.
 For a new Git-backed session, the host fetches the advertised repository's
 remote default branch and creates a worktree on the task-owned
 `cowboy/<session-id>` branch at `<state-root>/worktrees/<session-id>`.
+Repositories with no configured remotes instead start from committed `HEAD`;
+they need an initial commit and still receive an isolated task branch. Dirty
+source edits are not copied. Configured but unavailable remotes fail closed.
 Repeating preparation for the same session reuses that path without discarding
 edits; if the directory disappeared, the task branch restores it. Legacy
 detached worktrees are anchored on that branch only when doing so cannot

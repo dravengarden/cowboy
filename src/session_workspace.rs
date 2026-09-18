@@ -31,8 +31,9 @@ pub struct PreparedWorkspace {
 
 /// Prepare or reuse the checkout owned by one Cowboy session.
 ///
-/// Git-backed roots fail closed when their remote default branch cannot be
-/// fetched. Non-Git roots remain shared because Git cannot isolate them.
+/// Repositories without remotes use committed HEAD. Remote-backed roots fail
+/// closed when their remote default branch cannot be fetched. Non-Git roots
+/// remain shared because Git cannot isolate them.
 pub async fn prepare(
     request: PrepareWorkspaceRequest,
     worktree_root: &Path,
@@ -101,6 +102,14 @@ pub async fn prepare(
             )
             .await
             .context("resolving existing session branch")?,
+            None,
+            false,
+        )
+    } else if git_output(&repository, ["remote"]).await?.is_empty() {
+        (
+            git_output(&repository, ["rev-parse", "--verify", "HEAD^{commit}"])
+                .await
+                .context("local workspace needs an initial commit before it can be isolated")?,
             None,
             false,
         )
@@ -996,6 +1005,61 @@ mod tests {
             git_output(&divergent, ["rev-parse", "HEAD"]).await.unwrap(),
             detached_revision
         );
+    }
+
+    #[tokio::test]
+    async fn isolates_local_commits_and_preserves_dirty_source_and_session_edits() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.invalid"]);
+        let request = || PrepareWorkspaceRequest {
+            root: source.display().to_string(),
+            session_id: "sess-local".to_owned(),
+        };
+        assert!(
+            prepare(request(), &managed)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("initial commit")
+        );
+        std::fs::write(source.join("value.txt"), "committed").unwrap();
+        git(&source, &["add", "value.txt"]);
+        git(&source, &["commit", "-m", "initial"]);
+        std::fs::write(source.join("value.txt"), "unfinished").unwrap();
+        let prepared = prepare(request(), &managed).await.unwrap();
+        assert!(prepared.isolated && prepared.created);
+        assert_eq!(prepared.upstream_ref, None);
+        assert_eq!(
+            prepared.revision,
+            Some(git_output(&source, ["rev-parse", "HEAD"]).await.unwrap())
+        );
+        let value = Path::new(&prepared.path).join("value.txt");
+        assert_eq!(std::fs::read_to_string(&value).unwrap(), "committed");
+        assert_eq!(
+            std::fs::read_to_string(source.join("value.txt")).unwrap(),
+            "unfinished"
+        );
+        std::fs::write(&value, "session edit").unwrap();
+        assert!(!prepare(request(), &managed).await.unwrap().created);
+        assert_eq!(std::fs::read_to_string(&value).unwrap(), "session edit");
+
+        // A configured but unavailable remote must never fall back to local HEAD.
+        git(
+            &source,
+            &["remote", "add", "origin", "/nonexistent-cowboy-test-remote"],
+        );
+        let remote_request = || PrepareWorkspaceRequest {
+            root: source.display().to_string(),
+            session_id: "sess-remote".to_owned(),
+        };
+        assert!(prepare(remote_request(), &managed).await.is_err());
+        git(&source, &["remote", "rename", "origin", "upstream"]);
+        assert!(prepare(remote_request(), &managed).await.is_err());
+        assert!(!managed.join("sess-remote").exists());
     }
 
     #[tokio::test]

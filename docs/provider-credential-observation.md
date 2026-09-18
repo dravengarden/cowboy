@@ -49,6 +49,10 @@ credential files, including a CLI's signed-out document, could become candidates
 - Invalid candidates are excluded. While a valid candidate awaits CAS, failed
   siblings cannot request restoration of the expired baseline over it. Pending
   inventory is scoped to the generation actually submitted.
+- The Machine publishes that inventory before its refresh candidates. The
+  Controller must see the current Plugin version and auth generation before
+  validating a candidate; a trailing pending inventory could otherwise overwrite
+  a completed reconciliation and leave session creation disabled.
 
 ## Verification
 

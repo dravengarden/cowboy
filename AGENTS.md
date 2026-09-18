@@ -84,8 +84,10 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   metadata. Sharing the adapter executable is allowed; sharing its mutable
   instance state is not.
 - The Web New Session picker (`GET /api/workspaces`) lists stable source roots,
-  but a selected Machine must fetch the remote default branch and prepare or
-  reuse a session-owned worktree before starting the ACP worker. The legacy
+  but a selected Machine must fetch the remote default branch (or use committed
+  HEAD when no remotes are configured) and prepare or reuse a session-owned
+  worktree before starting the ACP worker. A configured remote that fails must
+  never fall back to local HEAD. The legacy
   WebSocket creation path fails closed. Direct API/ACP callers retain their
   caller-owned local workspace for compatibility. Never turn the stable
   checkout or `/etc/nixos` back into a Web task workspace.

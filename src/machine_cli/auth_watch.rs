@@ -129,6 +129,63 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn refresh_after_upgrade_advertises_matching_generation_before_candidate() {
+        let installed = |version: &str, digest: &str| {
+            serde_json::from_value::<crate::machine_protocol::PluginInventory>(serde_json::json!({
+                "plugin_id": "claude-code", "plugin_version": version,
+                "generation_digest": digest, "contract_fingerprint": "fixture",
+                "state": "active", "auth_generation": 8, "replica_state": "current",
+                "materialization_state": "applying"
+            }))
+            .unwrap()
+        };
+        let mut controller_inventory = vec![installed("old", "old-digest")];
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        super::super::publish_auth_refresh_events(
+            &tx,
+            vec![installed("new", "new-digest")],
+            vec![MachineEvent::ProviderAuthRefreshCandidate {
+                request_id: "refresh-fixture".into(),
+                provider_id: "claude-code".into(),
+                expected_generation: 8,
+                provider_version: "new".into(),
+                generation_digest: "new-digest".into(),
+                auth_contract_fingerprint: "fixture".into(),
+                portable_schema: "fixture".into(),
+                auth_method: "fixture".into(),
+                bundle: Default::default(),
+            }],
+        );
+        let mut accepted = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                MachineEvent::PluginInventory { plugins, .. } => controller_inventory = plugins,
+                MachineEvent::ProviderAuthRefreshCandidate {
+                    provider_version,
+                    generation_digest,
+                    expected_generation,
+                    ..
+                } => {
+                    let current = &mut controller_inventory[0];
+                    assert_eq!(current.plugin_version, provider_version);
+                    assert_eq!(current.generation_digest, generation_digest);
+                    assert_eq!(current.auth_generation, Some(expected_generation));
+                    // Model an immediate successful reconciliation. A trailing
+                    // Applying inventory must not overwrite this terminal state.
+                    current.materialization_state = ProviderMaterializationState::Current;
+                    accepted = true;
+                }
+                _ => panic!("unexpected refresh event"),
+            }
+        }
+        assert!(accepted);
+        assert_eq!(
+            controller_inventory[0].materialization_state,
+            ProviderMaterializationState::Current
+        );
+    }
+
     #[tokio::test]
     async fn authority_apply_publishes_inventory_even_without_a_refresh_candidate() {
         let root = tempfile::tempdir().unwrap();

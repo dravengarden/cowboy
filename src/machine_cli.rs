@@ -1128,6 +1128,7 @@ async fn publish_provider_auth_observations(
         return;
     }
     let mut pending = BTreeMap::new();
+    let mut refresh_events = Vec::new();
     for (index, candidate) in observations.candidates.into_iter().enumerate() {
         if let Err(error) = providers.validate_auth_refresh_candidate(&candidate).await {
             observations
@@ -1142,7 +1143,7 @@ async fn publish_provider_auth_observations(
             std::process::id(),
             unix_ms()
         );
-        let _ = events.send(MachineEvent::ProviderAuthRefreshCandidate {
+        refresh_events.push(MachineEvent::ProviderAuthRefreshCandidate {
             request_id,
             provider_id: candidate.provider_id,
             expected_generation: candidate.expected_generation,
@@ -1186,10 +1187,24 @@ async fn publish_provider_auth_observations(
             );
         }
     }
+    publish_auth_refresh_events(events, plugins, refresh_events);
+}
+
+fn publish_auth_refresh_events(
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    plugins: Vec<crate::machine_protocol::PluginInventory>,
+    refresh_events: Vec<MachineEvent>,
+) {
     let _ = events.send(MachineEvent::PluginInventory {
         plugins,
         observed_at_ms: unix_ms(),
     });
+    // The Controller validates a candidate against the last advertised Plugin
+    // generation. Publish that generation first, and never overwrite a fast
+    // reconciliation receipt with a later, stale Applying inventory.
+    for event in refresh_events {
+        let _ = events.send(event);
+    }
 }
 
 async fn collect_inventory(
