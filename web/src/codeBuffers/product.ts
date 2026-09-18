@@ -23,6 +23,7 @@ export function createProductCodeBuffers(
     /** Local-only projection; viewing it never discovers or opens resources. */
     cleanup: buffers.cleanup,
     synchronizations: buffers.synchronizations,
+    navigations: buffers.navigations,
     async ready(observer?: AbortSignal): Promise<typeof buffers> {
       check();
       if (observer?.aborted) throw new BufferClientError("cancelled");

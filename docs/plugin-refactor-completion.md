@@ -376,7 +376,8 @@ and accepting a production effect are different milestones.
   types and a passive recovery projection reject imported destination IDs and
   redact ended identity labels. Its
   [candidate record](releases/browser-navigation-candidate-2026-09-18.md) covers
-  source gates and the eighteen-case browser owner suite. Destination handoff,
+  complete source/Nix gates, 56 browser cases (18 in the owner suite) and all
+  18 connected v5 checks against the unchanged exact native pair. Destination handoff,
   intended Review views, native budgets, production activation and independent
   recovery remain separate; acquisition is still default closed.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`

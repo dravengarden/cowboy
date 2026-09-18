@@ -88,6 +88,7 @@ Deno.test("core buffer readiness reuses the bound dataset without opening storag
   assertEquals(f.discoveries(), 0);
   const [a, b] = await Promise.all([f.product.ready(), f.product.ready()]);
   assertEquals(a, b);
+  assert(f.product.navigations === a.navigations);
   assertEquals(await f.product.ready(), a);
   assertEquals(f.discoveries(), 1);
   assertEquals(f.factory.requests.length, 0);
@@ -101,6 +102,11 @@ Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a 
   f.principal(undefined);
   const stop = f.product.cleanup.subscribe(() => {});
   const stopSync = f.product.synchronizations.subscribe(() => {});
+  const stopNavigation = f.product.navigations.subscribe(() => {});
+  assertEquals(f.product.navigations.get(), {
+    contextLost: false,
+    rows: [],
+  });
   assertEquals(f.product.synchronizations.get(), {
     contextLost: false,
     rows: [],
@@ -112,6 +118,7 @@ Deno.test("unauthenticated discovery cannot construct a buffer owner or adopt a 
   });
   stop();
   stopSync();
+  stopNavigation();
   await assertRejects(() => f.product.ready(), BufferClientError);
   assertEquals(f.discoveries(), 0);
   assertEquals(f.calls, []);

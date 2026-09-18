@@ -75,8 +75,9 @@ This client has not requested any destination: nonempty `destinations` are
 therefore refused instead of silently importing ordinary owner IDs. Destination
 preparation/adoption needs its own typed continuation and capacity reservation.
 
-The passive `navigations` recovery store accepts only original in-memory handles
-for Query and group Release. It has no Execute, path lookup, durable import,
+The passive `navigations` recovery store, also exposed by `productCodeBuffers`
+without calling `ready()` or Service discovery, accepts only original in-memory
+handles for Query and group Release. It has no Execute, path lookup, durable import,
 polling or implicit cleanup. It projects status and the original source label,
 not private target locations, raw errors, hashes or native references. Ending
 the core identity synchronously redacts labels and fences actions. Ordinary
