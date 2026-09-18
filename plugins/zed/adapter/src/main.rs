@@ -21,6 +21,7 @@ mod content_reads;
 mod coordinate_queries;
 mod coordinates;
 mod diagnostics;
+mod native_open;
 mod navigation_native;
 mod sync_native;
 mod sync_owners;
@@ -364,6 +365,7 @@ type Buffers = Arc<BufferState>;
 #[derive(Default)]
 struct BufferState {
     active: RwLock<HashMap<(PathBuf, PathBuf), BufferLease>>,
+    native_open: native_open::Fence,
     leases: Mutex<buffer_leases::Registry>,
     syncs: Mutex<sync_owners::Registry>,
     navigations: Mutex<buffer_navigation::Registry>,
@@ -708,98 +710,6 @@ impl ZedRuntime {
             None,
         );
         self.send(message)
-    }
-
-    async fn open_buffer(
-        &self,
-        worktree_id: u64,
-        path: &Path,
-    ) -> Result<(u64, Vec<BufferVersionEntry>)> {
-        let mut opened = None;
-        for attempt in 0..2 {
-            let mut events = self.events.subscribe();
-            let response = self
-                .request(proto::envelope::Payload::OpenBufferByPath(
-                    proto::OpenBufferByPath {
-                        project_id: proto::REMOTE_SERVER_PROJECT_ID,
-                        worktree_id,
-                        path: path.to_string_lossy().into_owned(),
-                    },
-                ))
-                .await?;
-            let Some(proto::envelope::Payload::OpenBufferResponse(response)) = response.payload
-            else {
-                bail!("Zed returned the wrong OpenBufferByPath response");
-            };
-            let buffer_id = response.buffer_id;
-            let version = tokio::time::timeout(Duration::from_secs(5), async {
-                let mut version = HashMap::<u32, u32>::new();
-                let mut received_state = false;
-                loop {
-                    let envelope = events.recv().await?;
-                    let Some(proto::envelope::Payload::CreateBufferForPeer(message)) =
-                        envelope.payload
-                    else {
-                        continue;
-                    };
-                    match message.variant {
-                        Some(proto::create_buffer_for_peer::Variant::State(state))
-                            if state.id == buffer_id =>
-                        {
-                            received_state = true;
-                            merge_version(&mut version, state.saved_version);
-                        }
-                        Some(proto::create_buffer_for_peer::Variant::Chunk(chunk))
-                            if chunk.buffer_id == buffer_id && received_state =>
-                        {
-                            for operation in chunk.operations {
-                                merge_operation_version(&mut version, operation);
-                            }
-                            if chunk.is_last {
-                                let mut version = version
-                                    .into_iter()
-                                    .map(|(replica_id, timestamp)| BufferVersionEntry {
-                                        replica_id,
-                                        timestamp,
-                                    })
-                                    .collect::<Vec<_>>();
-                                version.sort_by_key(|entry| entry.replica_id);
-                                break anyhow::Ok(version);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            })
-            .await;
-            match version {
-                Ok(Ok(version)) => {
-                    opened = Some((buffer_id, version));
-                    break;
-                }
-                Ok(Err(error)) if attempt == 1 => {
-                    return Err(error).context("Zed did not publish the initial buffer state");
-                }
-                Err(error) if attempt == 1 => {
-                    return Err(error).context("Zed did not publish the initial buffer state");
-                }
-                Ok(Err(_)) | Err(_) => {
-                    // CloseBuffer is foreground work while OpenBufferByPath is
-                    // background work in Zed's protocol. Sending the close
-                    // before retrying therefore clears a stale shared-buffer
-                    // registration before the second open is handled.
-                    self.close_buffer(buffer_id)?;
-                }
-            }
-        }
-        let (buffer_id, version) =
-            opened.context("Zed did not publish the initial buffer state")?;
-        // Opening shares the buffer contents but, like Zed's own remote client,
-        // the peer must explicitly register that buffer with the headless
-        // project's language servers. Without this request every later LSP
-        // query is valid yet has no servers to answer it.
-        self.register_buffer(buffer_id).await?;
-        Ok((buffer_id, version))
     }
 
     async fn register_buffer(&self, buffer_id: u64) -> Result<()> {
@@ -1621,7 +1531,7 @@ async fn buffer_navigate(
     let (worktree, path) = buffer_key(worktree, path).await?;
     let all = buffers.active.read().await;
     // Native navigation may open a destination whose ID is not known yet.
-    sync_owners::ensure_admission(&all)?;
+    sync_owners::ensure_admission(buffers, &all)?;
     let lease = all
         .get(&(worktree.clone(), path.clone()))
         .context("buffer is not open")?;
@@ -1777,9 +1687,13 @@ async fn open_buffer_at(
 ) -> Result<Response> {
     let key = (worktree.clone(), path.clone());
     let mut all = buffers.active.write().await;
-    sync_owners::ensure_admission(&all)?;
+    sync_owners::ensure_admission(buffers, &all)?;
+    let mut attempt = None;
     if !all.contains_key(&key) {
         let (remote_id, version) = if let Some(zed) = zed {
+            // Arm before any native I/O. Cancellation or an error leaves the
+            // process-wide fence latched, even before the native ID is known.
+            attempt = Some(buffers.native_open.begin()?);
             zed.open_buffer(worktree_id, &path).await?
         } else {
             (u64::try_from(all.len() + 1)?, Vec::new())
@@ -1796,14 +1710,19 @@ async fn open_buffer_at(
     }
     let lease = all.get_mut(&key).expect("buffer was just inserted");
     lease.lease_ids.insert(owner);
-    Ok(Response::Buffer {
+    let response = Response::Buffer {
         api_version: ADAPTER_VERSION,
         worktree,
         path,
         leases: lease.lease_ids.len(),
         buffer_id: lease.remote_id,
         version: lease.version.clone(),
-    })
+    };
+    // No await between original-ID owner commit and ending its admission fence.
+    if let Some(attempt) = attempt {
+        attempt.complete();
+    }
+    Ok(response)
 }
 
 async fn close_buffer(

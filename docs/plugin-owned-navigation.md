@@ -31,6 +31,12 @@ opens and typed refusal. Its [candidate acceptance](releases/native-navigation-b
 is separate from the `1.13.3` evidence; Unknown/recovery and production admission
 remain unchanged.
 
+The `1.14.1` [single-use Open candidate](plugin-native-open-once.md) removes the
+ordinary Open path's implicit close/reopen fallback and fences new acquisition
+after an unobserved Open, including both destination handoff stages. Existing
+known reads/releases remain available. Private server `1.1.0` is unchanged;
+native close acknowledgement and independent recovery are still separate.
+
 ## Finite ownership contract
 
 `prepareBufferNavigation` accepts an existing open buffer lease, complete

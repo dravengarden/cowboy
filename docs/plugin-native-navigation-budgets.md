@@ -10,6 +10,11 @@ The [candidate record](releases/native-navigation-budgets-candidate-2026-09-18.m
 identifies the exact static pair, source and acceptance evidence. It is separate
 from the earlier single-input candidate and from any production rollout.
 
+The subsequent adapter-only `1.14.1` [single-use Open fix](plugin-native-open-once.md)
+retains this exact server. Ordinary acquisition uncertainty now also fences new
+navigation and handoff; neither a missing share nor a failed registration can
+trigger implicit close/reopen.
+
 ## Two-phase acquisition
 
 Only the five navigation query kinds are admitted. The input uses the pinned

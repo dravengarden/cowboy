@@ -37,6 +37,56 @@ async fn fixture() -> (Fixture, NavigationRef) {
 }
 
 #[tokio::test]
+async fn unknown_native_open_fences_both_handoff_stages_without_erasing_the_group() {
+    let (mut f, nav) = fixture().await;
+    let child = prepare(&f, &nav).await;
+    std::fs::write(f.root.join("uncertain"), "uncertain\n").unwrap();
+    let task = f.spawn(Request::OpenBuffer {
+        worktree: f.root.clone(),
+        path: "uncertain".into(),
+        lease_id: "unknown-open".into(),
+    });
+    let opening = f.outbound.recv().await.unwrap();
+    assert!(matches!(
+        opening.payload,
+        Some(proto::envelope::Payload::OpenBufferByPath(_))
+    ));
+    crate::native_open::tests::reply(&f.zed, &opening, crate::native_open::tests::ack()).await;
+    assert!(task.await.unwrap().is_err());
+    assert!(
+        f.request(Request::PrepareNavigationBuffer {
+            navigation: nav.clone(),
+            destination: 0,
+            content: f.content(8),
+        })
+        .await
+        .is_err()
+    );
+    assert!(
+        f.request(Request::OpenBufferLease {
+            lease: child.clone()
+        })
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        lease_state(
+            f.request(Request::QueryBufferLease { lease: child })
+                .await
+                .unwrap()
+        ),
+        LeaseState::Prepared
+    );
+    assert!(matches!(
+        state(f.request(action(&nav, Action::Query)).await.unwrap()),
+        State::Retained { .. }
+    ));
+    assert!(f.outbound.try_recv().is_err());
+    f.request(action(&nav, Action::Release)).await.unwrap();
+    assert!(f.buffers.native_open.check().is_err());
+}
+
+#[tokio::test]
 async fn independent_handoff_survives_group_release_and_can_navigate_again() {
     let (mut f, nav) = fixture().await;
     let first = prepare(&f, &nav).await;

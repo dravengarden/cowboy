@@ -171,7 +171,7 @@ pub(super) async fn prepare(
         "navigation capacity reached"
     );
     let active = buffers.active.read().await;
-    crate::sync_owners::ensure_admission(&active)?;
+    crate::sync_owners::ensure_admission(buffers, &active)?;
     let buffer = active
         .get(&key)
         .context("original native buffer unavailable")?;
@@ -379,7 +379,7 @@ async fn execute(slot: &mut Slot, id: u64, buffers: &Buffers, zed: &Zed) -> Resu
         slot.prepared_at.elapsed() < PREPARE_TTL,
         "navigation preparation expired while queued"
     );
-    crate::sync_owners::ensure_admission(&active)?;
+    crate::sync_owners::ensure_admission(buffers, &active)?;
     let source = active
         .get_mut(&slot.key)
         .context("original navigation source unavailable")?;

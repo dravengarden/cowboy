@@ -19,7 +19,7 @@ impl Registry {
         let mut navigations = buffers.navigations.lock().await;
         let (owner, target) = navigations.destination(&navigation, destination, &content)?;
         let active = buffers.active.read().await;
-        crate::sync_owners::ensure_admission(&active)?;
+        crate::sync_owners::ensure_admission(buffers, &active)?;
         target.check_owner(owner, &active)?;
         let cache = zed.diagnostics.lock().expect("diagnostic cache poisoned");
         cache.check(target.remote_id, target.revision)?;
@@ -59,7 +59,7 @@ pub(super) async fn open(
         slot.prepared_at.elapsed() < PREPARE_TTL,
         "buffer preparation expired while queued"
     );
-    crate::sync_owners::ensure_admission(&active)?;
+    crate::sync_owners::ensure_admission(buffers, &active)?;
     target.check_owner(owner, &active)?;
     ensure!(
         target.key == (slot.worktree.clone(), slot.path.clone()),

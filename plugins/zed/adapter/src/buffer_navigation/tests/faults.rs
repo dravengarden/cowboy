@@ -45,7 +45,7 @@ async fn typed_native_refusal_never_becomes_empty_success_or_clears_unknown() {
         assert!(f.navigation.try_recv().is_err());
         assert!(f.outbound.try_recv().is_err());
         let active = f.buffers.active.read().await;
-        assert!(crate::sync_owners::ensure_admission(&active).is_err());
+        assert!(crate::sync_owners::ensure_admission(&f.buffers, &active).is_err());
     }
 }
 
@@ -160,7 +160,7 @@ async fn target_registration_is_one_use_and_retains_unknown_pins_on_failure() {
         assert_eq!(registry.slots[&1].targets.len(), 2);
         assert_eq!(registry.slots[&1].targets[0].remote_id, 8);
         let active = f.buffers.active.read().await;
-        assert!(crate::sync_owners::ensure_admission(&active).is_err());
+        assert!(crate::sync_owners::ensure_admission(&f.buffers, &active).is_err());
         assert!(
             active[&(f.root.clone(), "target".into())]
                 .lease_ids
@@ -241,14 +241,18 @@ async fn cancellation_is_unknown_and_fences_new_native_admission_without_replay(
         ));
     }
     assert!(f.outbound.try_recv().is_err());
-    assert!(crate::sync_owners::ensure_admission(&*f.buffers.active.read().await).is_err());
+    assert!(
+        crate::sync_owners::ensure_admission(&f.buffers, &*f.buffers.active.read().await).is_err()
+    );
     f.request(Request::ReleaseBufferLease {
         lease: f.lease.clone(),
     })
     .await
     .unwrap();
     assert!(f.outbound.try_recv().is_err());
-    assert!(crate::sync_owners::ensure_admission(&*f.buffers.active.read().await).is_err());
+    assert!(
+        crate::sync_owners::ensure_admission(&f.buffers, &*f.buffers.active.read().await).is_err()
+    );
 }
 
 #[tokio::test]
@@ -266,7 +270,9 @@ async fn changed_source_during_native_query_retains_unknown_not_empty_success() 
         State::Unknown
     ));
     assert_eq!(f.buffers.active.read().await.len(), 1);
-    assert!(crate::sync_owners::ensure_admission(&*f.buffers.active.read().await).is_err());
+    assert!(
+        crate::sync_owners::ensure_admission(&f.buffers, &*f.buffers.active.read().await).is_err()
+    );
 }
 
 #[tokio::test]

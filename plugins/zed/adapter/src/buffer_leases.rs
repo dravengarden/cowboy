@@ -313,7 +313,7 @@ impl Registry {
         );
         // Synchronization preparation takes this same registry lock before
         // installing its fence. A local admission refusal has no open effect.
-        super::sync_owners::ensure_admission(&*buffers.active.read().await)?;
+        super::sync_owners::ensure_admission(buffers, &*buffers.active.read().await)?;
         open_prevalidated(slot, id, current.remote_id, buffers, zed).await?;
         Ok(reply(lease, LeaseState::Open))
     }

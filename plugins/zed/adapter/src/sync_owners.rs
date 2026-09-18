@@ -101,7 +101,11 @@ pub(super) fn ensure_readable(buffer: &BufferLease) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn ensure_admission(active: &HashMap<Key, BufferLease>) -> Result<()> {
+pub(super) fn ensure_admission(
+    buffers: &crate::BufferState,
+    active: &HashMap<Key, BufferLease>,
+) -> Result<()> {
+    buffers.native_open.check()?;
     // A path not in this map can alias an existing native ID (overlapping roots,
     // links, native canonicalization). Until that ID is known, do not issue an
     // OpenBuffer/navigation at all. This conservative gate is process-wide;
@@ -164,7 +168,7 @@ pub(super) async fn prepare(
         "synchronization capacity reached"
     );
     let mut active = buffers.active.write().await;
-    ensure_admission(&active)?;
+    ensure_admission(buffers, &active)?;
     let buffer = active
         .get(&key)
         .context("original native buffer unavailable")?;

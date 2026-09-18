@@ -323,6 +323,52 @@ async fn native_input_bounds(zed: &ZedRuntime, workspace: &Path, worktree: u64) 
     );
 }
 
+async fn duplicate_native_open_preserves_original_peer(
+    zed: &ZedRuntime,
+    worktree: u64,
+    buffer: u64,
+) {
+    let before = zed
+        .diagnostics
+        .lock()
+        .unwrap()
+        .position(buffer, 0, 0)
+        .unwrap();
+    // The real native store already shared this exact buffer to this peer, so
+    // another path open returns its ID without another initial State/Chunk.
+    // That missing stream is not permission to close the original owner's ID.
+    let error = zed
+        .open_buffer(worktree, Path::new("sample.txt"))
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("initial buffer state"),
+        "{error:#}"
+    );
+    zed.diagnostics
+        .lock()
+        .unwrap()
+        .check(buffer, before.revision)
+        .unwrap();
+    let result = crate::navigation_native::query(
+        zed,
+        crate::navigation_request(
+            buffer,
+            &before.version,
+            before.anchor,
+            NavigationKind::Definition,
+        ),
+    )
+    .await
+    .unwrap();
+    // This private query checks original native-peer ownership even for text
+    // with no language server. A health probe alone could not prove that.
+    assert!(result.is_empty());
+    println!(
+        "native repeated path open: real initial-share timeout, no close/reopen, unchanged mirror and original native peer ownership passed"
+    );
+}
+
 fn child_paths() -> (PathBuf, PathBuf) {
     let root = PathBuf::from(
         std::env::var_os("COWBOY_TEST_NATIVE_SYNC_ROOT").expect("private child root"),
@@ -404,8 +450,7 @@ async fn native_process_child() {
     crate::buffer_navigation::connected_lsp::configure(&root);
     let workspace = root.join("worktree");
     let path = workspace.join("sample.txt");
-    let old = "before🙂\n";
-    let new = "after汉字\n";
+    let (old, new) = ("before🙂\n", "after汉字\n");
     tokio::fs::write(&path, old).await.unwrap();
     let zed = Arc::new(
         ZedRuntime::start_with_disconnect(&server, &root.join("state"), || {})
@@ -418,6 +463,7 @@ async fn native_process_child() {
         .open_buffer(worktree, Path::new("sample.txt"))
         .await
         .unwrap();
+    duplicate_native_open_preserves_original_peer(&zed, worktree, buffer).await;
     let revision = zed.diagnostics.lock().unwrap().revision(buffer).unwrap();
     let id = prepare(&zed, &instance, buffer, &version, new.as_bytes())
         .await

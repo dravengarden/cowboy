@@ -19,6 +19,12 @@ fn target_text() -> String {
 
 impl Client {
     async fn request(&self, request: Request) -> Value {
+        let value = self.exchange(request).await;
+        assert_ne!(value["type"], "error", "private adapter refused: {value}");
+        value
+    }
+
+    async fn exchange(&self, request: Request) -> Value {
         tokio::time::timeout(Duration::from_secs(15), async {
             let mut stream = tokio::net::UnixStream::connect(&self.0).await.unwrap();
             let mut bytes = serde_json::to_vec(&request).unwrap();
@@ -31,9 +37,7 @@ impl Client {
                 .await
                 .unwrap();
             assert!(bytes.len() <= 4 * 1024 * 1024 && bytes.last() == Some(&b'\n'));
-            let value: Value = serde_json::from_slice(&bytes).unwrap();
-            assert_ne!(value["type"], "error", "private adapter refused: {value}");
-            value
+            serde_json::from_slice(&bytes).unwrap()
         })
         .await
         .expect("immutable adapter request timed out")
@@ -104,11 +108,135 @@ pub(crate) async fn immutable_pair(parent: &Path, server: &Path) {
         json!({"type":"bufferNavigationSupport","api_version":1,"protocol":1})
     );
     exercise(&client, &root).await;
+    failed_open_fences_replacement(&client, &root).await;
     child.kill().await.unwrap();
     // The owning PID namespace, not this kill or local Released, owns final
     // descendant teardown. No native close ACK or recovery is claimed here.
     println!(
         "immutable adapter/server socket: five nonempty LSP kinds, lost handoff reply, independent original-target read/release and no replay passed"
+    );
+}
+
+async fn prepared_buffer(client: &Client, workspace: &Path, path: &str) -> LeaseRef {
+    let response = client
+        .request(Request::PrepareBuffer {
+            worktree: workspace.into(),
+            path: path.into(),
+        })
+        .await;
+    assert_eq!(response["state"], "prepared");
+    serde_json::from_value(response["lease"].clone()).unwrap()
+}
+
+async fn failed_open_fences_replacement(client: &Client, root: &Path) {
+    let workspace = root.join("open-failure-worktree");
+    std::fs::create_dir(&workspace).unwrap();
+    let text = "known🙂\n";
+    std::fs::write(workspace.join("known.txt"), text).unwrap();
+    std::fs::write(
+        workspace.join("oversized.txt"),
+        vec![b'a'; 4 * 1024 * 1024 + 1],
+    )
+    .unwrap();
+    client
+        .request(Request::OpenWorktree {
+            path: workspace.clone(),
+            trusted: true,
+        })
+        .await;
+    let known = prepared_buffer(client, &workspace, "known.txt").await;
+    client
+        .request(Request::OpenBufferLease {
+            lease: known.clone(),
+        })
+        .await;
+    let uncertain = prepared_buffer(client, &workspace, "oversized.txt").await;
+    let refusal = client
+        .exchange(Request::OpenBufferLease {
+            lease: uncertain.clone(),
+        })
+        .await;
+    assert_eq!(refusal["type"], "error");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("bounded regular file")
+    );
+    // Fixing the fixture source cannot authorize replay or replacement adoption.
+    std::fs::write(workspace.join("oversized.txt"), "now small\n").unwrap();
+    for request in [
+        Request::QueryBufferLease {
+            lease: uncertain.clone(),
+        },
+        Request::OpenBufferLease {
+            lease: uncertain.clone(),
+        },
+        Request::ReleaseBufferLease {
+            lease: uncertain.clone(),
+        },
+    ] {
+        assert_eq!(client.request(request).await["state"], "unknown");
+    }
+    for path in ["oversized.txt", "known.txt"] {
+        let replacement = prepared_buffer(client, &workspace, path).await;
+        let refused = client
+            .exchange(Request::OpenBufferLease {
+                lease: replacement.clone(),
+            })
+            .await;
+        assert_eq!(refused["type"], "error");
+        assert!(
+            refused["message"]
+                .as_str()
+                .unwrap()
+                .contains("unresolved native open")
+        );
+        assert_eq!(
+            client
+                .request(Request::QueryBufferLease {
+                    lease: replacement.clone()
+                })
+                .await["state"],
+            "prepared"
+        );
+        client
+            .request(Request::ReleaseBufferLease { lease: replacement })
+            .await;
+    }
+    read_and_release_known_buffer(client, known, text).await;
+    assert_eq!(
+        client
+            .request(Request::QueryBufferLease { lease: uncertain })
+            .await["state"],
+        "unknown"
+    );
+    client.request(Request::BufferNavigationSupport {}).await;
+    println!(
+        "immutable socket native-open failure: real input refusal, original Unknown without replay, changed-source/known-key replacement refusal, retained independent text read/release passed (not recovery)"
+    );
+}
+
+async fn read_and_release_known_buffer(client: &Client, known: LeaseRef, text: &str) {
+    let content = crate::coordinates::Mirror::new(1, text)
+        .unwrap()
+        .content()
+        .clone();
+    let read = client
+        .request(Request::ReadBufferLease {
+            lease: known.clone(),
+            request: buffer_leases::ReadRequest::Text {
+                content,
+                page: crate::text_reads::Page::Start {},
+            },
+        })
+        .await;
+    assert_eq!(read["result"]["result"]["text"], text);
+    assert_eq!(
+        client
+            .request(Request::ReleaseBufferLease { lease: known })
+            .await["state"],
+        "released"
     );
 }
 
