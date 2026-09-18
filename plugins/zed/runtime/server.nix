@@ -39,9 +39,9 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.2.0";
+  version = "1.2.1";
   inherit src cargoDeps;
-  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ];
+  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ];
   postPatch = ''
     cp ${../adapter/proto/cowboy-buffer.proto} crates/proto/proto/cowboy-buffer.proto
     mkdir -p crates/project/src/buffer_store/cowboy_sync
@@ -50,6 +50,7 @@ in platform.buildRustPackage {
     mkdir -p crates/project/src/buffer_store/cowboy_close
     cp ${./server/cowboy_close.rs} crates/project/src/buffer_store/cowboy_close.rs
     cp ${./server/close_tests.rs} crates/project/src/buffer_store/cowboy_close/tests.rs
+    cp ${./server/reload_tests.rs} crates/project/src/buffer_store/cowboy_reload_tests.rs
     cp ${./server/cowboy_bounded.rs} crates/fs/src/cowboy_bounded.rs
     cp ${./server/cowboy_lsp_input.rs} crates/lsp/src/cowboy_lsp_input.rs
     mkdir -p crates/project/src/lsp_store/cowboy_navigation
@@ -92,6 +93,9 @@ in platform.buildRustPackage {
     substituteInPlace crates/project/src/buffer_store.rs \
       --replace-fail '/// A set of open buffers.' 'mod cowboy_sync;
     mod cowboy_close;
+    #[cfg(test)]
+    #[path = "buffer_store/cowboy_reload_tests.rs"]
+    mod cowboy_reload_tests;
     /// A set of open buffers.' \
       --replace-fail 'pub struct BufferStore {' 'pub struct BufferStore {
         cowboy_sync: cowboy_sync::State,

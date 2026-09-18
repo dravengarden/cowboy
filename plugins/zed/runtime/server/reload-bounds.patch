@@ -1,0 +1,87 @@
+diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
+--- a/crates/worktree/src/worktree.rs
++++ b/crates/worktree/src/worktree.rs
+@@ -3817,7 +3817,9 @@ impl language::LocalFile for File {
+         let worktree = self.worktree.read(cx).as_local().unwrap();
+         let abs_path = worktree.absolutize(&self.path);
+         let fs = worktree.fs.clone();
+-        cx.background_spawn(async move { fs.load_bytes(&abs_path).await })
++        cx.background_spawn(async move {
++            fs.cowboy_load_bytes_bounded(&abs_path, 4 * 1024 * 1024).await
++        })
+     }
+ }
+ 
+diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
+--- a/crates/language/src/buffer.rs
++++ b/crates/language/src/buffer.rs
+@@ -111,6 +111,7 @@ pub struct Buffer {
+     transaction_depth: usize,
+     was_dirty_before_starting_transaction: Option<bool>,
+     reload_task: Option<Task<Result<()>>>,
++    cowboy_reload_owner: Option<Arc<()>>,
+     language: Option<Arc<Language>>,
+     autoindent_requests: Vec<Arc<AutoindentRequest>>,
+     wait_for_autoindent_txs: Vec<oneshot::Sender<()>>>,
+@@ -1171,6 +1172,7 @@ impl Buffer {
+             saved_version: buffer.version(),
+             preview_version: buffer.version(),
+             reload_task: None,
++            cowboy_reload_owner: None,
+             transaction_depth: 0,
+             was_dirty_before_starting_transaction: None,
+             has_unsaved_edits: Cell::new((buffer.version(), false)),
+@@ -1645,6 +1647,9 @@ impl Buffer {
+         let prev_version = self.text.version();
+ 
++        let owner = Arc::new(());
++        self.cowboy_reload_owner = Some(owner.clone());
+         self.reload_task = Some(cx.spawn(async move |this, cx| {
++            let result = async {
+             let Some((new_mtime, load_bytes_task, current_encoding)) =
+                 this.update(cx, |this, cx| {
+                     let file = this.file.as_ref()?.as_local()?;
+@@ -1661,6 +1666,10 @@ impl Buffer {
+             let target_encoding = force_encoding.unwrap_or(current_encoding);
+ 
+             let bytes = load_bytes_task.await?;
++            anyhow::ensure!(
++                bytes.len() <= 4 * 1024 * 1024,
++                "private native reload source exceeds budget"
++            );
+ 
+             anyhow::ensure!(
+                 analyze_byte_content(&bytes) != ByteContent::Binary,
+@@ -1689,6 +1698,10 @@ impl Buffer {
+                 };
+                 (cow.into_owned(), actual_has_bom, used_enc)
+             };
++            anyhow::ensure!(
++                new_text.len() <= 4 * 1024 * 1024,
++                "private native reload text exceeds budget"
++            );
+ 
+             let diff = this.update(cx, |this, cx| this.diff(new_text, cx))?.await;
+             this.update(cx, |this, cx| {
+@@ -1720,9 +1733,19 @@ impl Buffer {
+ 
+                     this.did_reload(prev_version, this.line_ending(), this.saved_mtime, cx);
+                 }
+-
+-                this.reload_task.take();
+             })
++            }.await;
++            // Clear a completed local task on every exit, including source,
++            // decode and no-file refusal. Do not mutate content/version or retry.
++            // Only this invocation may retire its task, never a replacement
++            // installed by another caller or a reentrant observer.
++            this.update(cx, |this, _| {
++                if this.cowboy_reload_owner.as_ref().is_some_and(|v| Arc::ptr_eq(v, &owner)) {
++                    this.reload_task.take();
++                    this.cowboy_reload_owner = None;
++                }
++            })?;
++            result
+         }));
+         rx
+     }

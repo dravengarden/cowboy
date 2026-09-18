@@ -2,6 +2,8 @@
 use super::*;
 use sha2::{Digest as _, Sha256};
 
+mod reload;
+
 struct Scratch(PathBuf);
 
 impl Drop for Scratch {
@@ -317,7 +319,8 @@ async fn native_input_bounds(zed: &ZedRuntime, workspace: &Path, worktree: u64) 
             .unwrap(),
         expanded
     );
-    zed.sync.probe(zed).await.unwrap();
+    let instance = zed.sync.probe(zed).await.unwrap();
+    reload::exercise(zed, &instance, workspace, worktree).await;
     println!(
         "native input bounds: inclusive 4 MiB, oversized raw/decoded refusal, unchanged files and live native probe passed"
     );

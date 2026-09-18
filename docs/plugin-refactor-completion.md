@@ -495,6 +495,11 @@ record exact accepted artifacts and bounded production continuity observations.
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 
+The [native reload-input candidate](plugin-native-reload-bounds.md) also closes
+the existing reload reader's per-input byte/decoded-text gap and completed-task
+cleanup. It does not introduce automatic reload or replace the remaining
+aggregate retained-history/background-effect limits in the Code row.
+
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
 is [published and activated on Controller/Web](releases/plugin-install-continuation-2026-09-14.md),

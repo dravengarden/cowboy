@@ -76,3 +76,8 @@ turn those bounds into global native quiescence or recovery.
   enqueue and process restart are not restored native state.
 
 Production navigation admission must stay closed until those exits are accepted.
+
+The `1.15.1` [reload-input candidate](plugin-native-reload-bounds.md) additionally
+bounds the existing LocalFile reload reader and decoded text before diff/CRDT
+mutation, and clears completed local reload tasks on failure. It does not add
+automatic reload, read fallback, global history limits or recovery.
