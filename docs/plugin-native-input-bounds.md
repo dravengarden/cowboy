@@ -37,9 +37,11 @@ Ordinary native source opens and navigation targets use this same loader.
 
 These changes neither reload an existing buffer nor write a source file.
 Existing content/epoch checks and Unknown acquisition fences are unchanged.
-In particular, an upstream LSP conversion error may still be omitted from an
-aggregate query result: these input checks do **not** establish typed whole-query
-refusal or release uncertain target ownership.
+In the `1.13.3` candidate, an upstream LSP conversion error may still be omitted
+from an aggregate query result: these input checks alone do **not** establish
+typed whole-query refusal or release uncertain target ownership. The separate
+`1.14.0` [whole-query route](plugin-native-navigation-budgets.md) adds the former,
+not the latter.
 
 ## Verification
 
@@ -57,14 +59,17 @@ native process. The full native pair, signed disposable installation and
 connected Code gates remain required. Synthetic language answers and fixture
 cleanup are not production native-generation, device or restoration acceptance.
 
-## Still open
+## Follow-up and still open
 
-- Aggregate location/target budgets before opening any target, shared across
-  every participating LSP, with typed whole-query refusal rather than omitted
-  errors or partial success.
-- Bound aggregate live buffers/history, concurrent acquisitions, worktree
-  discovery, background LSP effects and deadlines; reject external worktrees
-  before native acquisition rather than only on the adapter result.
+The `1.14.0` [candidate record](releases/native-navigation-budgets-candidate-2026-09-18.md)
+adds all-server location/target budgets, original-worktree-only acquisition and
+typed whole-query refusal. It bounds registered-server enumeration, admits one
+private query handler at a time and limits observation deadlines. It does not
+turn those bounds into global native quiescence or recovery.
+
+- Bound aggregate live buffers/history and background effects, including loads
+  that outlive cancellation or an observation deadline. No whole-process memory
+  or worktree-scanning limit follows from the finite per-query bounds.
 - Accept the exact signed native pair through the intended deployed consumer
   and supported devices, with separate Machine maintenance and installation.
 - Independently authorized recovery of an uncertain acquisition; local close

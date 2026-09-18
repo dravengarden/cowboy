@@ -6,6 +6,10 @@ separate private protobuf request/response (tags 1002/1003, protocol 1), not a
 new core grant or a generic Plugin executor. Production navigation remains
 closed. Building this candidate does not publish or install it.
 
+The [candidate record](releases/native-navigation-budgets-candidate-2026-09-18.md)
+identifies the exact static pair, source and acceptance evidence. It is separate
+from the earlier single-input candidate and from any production rollout.
+
 ## Two-phase acquisition
 
 Only the five navigation query kinds are admitted. The input uses the pinned
@@ -18,7 +22,8 @@ worktree. It rechecks that the same native peer still owns that source before
 dispatch, every target open and final conversion. It selects at most four
 registered, capable language servers in that source language scope before
 dispatch, from an existing registration table limited to 32 entries. Selection
-does not invoke manifest discovery. Every response must complete successfully;
+does not invoke manifest discovery; a lost registered participant refuses before
+dispatch instead of disappearing from the result. Every response must succeed;
 an LSP error, including `content modified`, refuses the whole query. It never
 omits an error and returns empty/partial success. Each LSP request has a five-
 second timeout, with a twenty-second native observation budget for the whole
@@ -27,8 +32,9 @@ operation. One private navigation handler at a time is admitted per LSP store.
 All results are collected and validated before opening any target: at most 256
 locations (duplicates count) and 32 distinct relative target paths across all
 servers. Only bounded local file URIs within the original worktree are allowed.
-External, archive and network schemes, traversal, NULs and reversed ranges
-refuse. Acquisition uses that original worktree's `ProjectPath` directly, never
+External paths, archive and network schemes, residual parent components, NULs
+and reversed ranges refuse. Parsed paths must remain within the original root.
+Acquisition uses that original worktree's `ProjectPath` directly, never
 the upstream invisible-worktree discovery or archive extraction route.
 
 Each distinct path opens once in the query. Source version/file/worktree checks

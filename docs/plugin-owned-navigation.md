@@ -2,9 +2,9 @@
 
 Zed `1.10.0` introduced a private adapter resource primitive, not a public Code
 navigation API. A native LSP definition/reference query may open target buffers;
-it is resource acquisition, not one more `content_read` variant. Ordinary owned
-Review navigation remains closed until separate core authority, original-runtime
-routing and a destination consumer are implemented and accepted.
+it is resource acquisition, not one more `content_read` variant. Production owned
+Review navigation remains closed pending independent acceptance of the deployed
+core authority, original-runtime routing, destination consumer and native pair.
 
 The `1.11.0` candidate adds exact destination handoff and fixes native target
 registration, discovered by running a nonempty stdio LSP against the actual
@@ -22,13 +22,14 @@ owner. It does not enable the navigation consumer or renew old target positions.
 The `1.13.3` source candidate selects private server `1.0.1` with
 [individual native input budgets](plugin-native-input-bounds.md): bounded LSP
 framing before allocation and bounded actual file reads before native buffer
-construction. Aggregate acquisition and whole-query refusal remain unaccepted;
-this is not permission to open production navigation admission.
+construction. That milestone does not accept aggregate acquisition or whole-query
+refusal and is not permission to open production navigation admission.
 
 The `1.14.0` source adds a separate [whole-query native route](plugin-native-navigation-budgets.md)
 with aggregate pre-acquisition location/target budgets, original-worktree-only
-opens and typed refusal. Its acceptance is separate from the `1.13.3` evidence;
-Unknown/recovery and production admission remain unchanged.
+opens and typed refusal. Its [candidate acceptance](releases/native-navigation-budgets-candidate-2026-09-18.md)
+is separate from the `1.13.3` evidence; Unknown/recovery and production admission
+remain unchanged.
 
 ## Finite ownership contract
 
@@ -74,9 +75,10 @@ promise that every production language server has finished initialization.
 There are at most 32 live navigation groups, 256 result locations and 32
 distinct target native IDs per group. Duplicate locations share a resource pin.
 Only effect-free preparations expire; retained and uncertain groups cannot be
-evicted to free capacity. These bounds are not a global native memory/liveness
-guarantee: the native LSP can acquire resources before returning an unacceptable
-result.
+evicted to free capacity. The `1.14.0` native route checks aggregate raw results
+before opening targets. These bounds are not a global native memory/liveness
+guarantee: later loads, range validation or observation failure can still leave
+an uncertain acquisition, and background work may outlive the query handler.
 
 Unknown acquisition retains a process-wide admission fence because an unobserved
 target ID could alias another buffer. New opens, navigation and synchronization
@@ -132,11 +134,13 @@ Rust enum, so a failed handoff cannot fall through to path-based open.
 The Machine source explicitly refuses all four private commands before generic
 runtime selection. Neither a read lease nor an optional worktree field can
 bypass that check. The separate protocol-21 Machine continuation does not relax
-this check or enable a Service endpoint, Web/native bridge or shared component
-contract. The private adapter and consuming Zed Plugin are versioned together.
+this check; the dedicated Service admission and owned client contract remain
+separate gates. The private adapter and consuming Zed Plugin are versioned
+together.
 The `1.10`–`1.13.2` candidates retain server `1.0.0`; `1.13.3` selects the
-separate input-bounds server `1.0.1`. The upstream Zed revision, all third-party
-dependency pins and historical component-registry entries are untouched.
+separate input-bounds server `1.0.1`; `1.14.0` selects the whole-query server
+`1.1.0`. The upstream Zed revision, all third-party dependency pins and historical
+component-registry entries are untouched.
 
 Deterministic private-transport tests cover nonempty targets, duplicate
 locations, source release/deletion, same-ID aliases, disconnected observers,
@@ -156,18 +160,21 @@ the retained destination and checks each fixture document's one open/close.
 Both gates use disposable homes, closed environment, isolated network/PIDs and
 an explicit test-only LSP executable; no ambient language tools or downloads
 complete the fixture. Neither establishes production language semantics, a
-public consumer, universal close acknowledgements, native allocation bounds or
-independent recovery. Plaintext alone still proves no nonempty destinations.
+deployed consumer, universal close acknowledgements, global native allocation
+bounds or independent recovery. Plaintext alone still proves no nonempty destinations.
 
-Before exposing navigation, still required:
+The candidate has connected acceptance through the supplied Controller/Machine
+pair, including authenticated Service ownership and independent destination
+reads. That does not accept the intended deployed consumer or a native upgrade.
+Before production cutover, still required:
 
-- Accept the Machine continuation through an enrolled original-connection
-  consumer, including its authority, bounded handoff/cleanup and native budget.
-- Service/principal/Session ownership and client destination scopes, with
-  complete text/position binding and no legacy fallback or automatic target
-  synchronization.
-- The connected consumer gate beyond the private nonempty-LSP fixture,
-  separately accepted native rollout and supported-device tests.
+- Accept the actual deployed Machine continuation and exact signed native
+  generation through an enrolled original-connection consumer.
+- Verify implemented Service/principal/Session ownership and client destination
+  scopes on supported devices, including complete text/position binding without
+  legacy fallback or automatic target synchronization.
+- Bound aggregate retained history/background effects and provide independently
+  authorized native recovery; local release is not verified native cleanup.
 
 This source candidate does not publish a signed Catalog release, install a
 Plugin or authorize resident Machine maintenance. General DAG execution, state
