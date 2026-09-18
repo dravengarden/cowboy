@@ -69,7 +69,10 @@ pub(super) async fn exercise(zed: &ZedRuntime, instance: &[u8], workspace: &Path
         .await
         .unwrap();
     let version = zed.diagnostics.lock().unwrap().version(buffer).unwrap();
-    tokio::fs::rename(&path, &retained).await.unwrap();
+    // Do not rename the original inode: a worktree watcher may legitimately
+    // follow that rename and change the native File's path before this request.
+    tokio::fs::write(&retained, ORIGINAL).await.unwrap();
+    tokio::fs::remove_file(&path).await.unwrap();
     tokio::fs::symlink(&retained, &path).await.unwrap();
     assert!(reload(zed, buffer).await.is_err());
     assert_native_mirror(zed, buffer, ORIGINAL).await;
