@@ -74,7 +74,10 @@ pub(super) async fn exercise(zed: &ZedRuntime, instance: &[u8], workspace: &Path
     tokio::fs::write(&retained, ORIGINAL).await.unwrap();
     tokio::fs::remove_file(&path).await.unwrap();
     tokio::fs::symlink(&retained, &path).await.unwrap();
-    assert!(reload(zed, buffer).await.is_err());
+    let error = reload(zed, buffer)
+        .await
+        .expect_err("symlink replacement must be refused by the native request");
+    assert!(error.to_string().starts_with("Zed request failed:"));
     assert_native_mirror(zed, buffer, ORIGINAL).await;
     assert_eq!(
         vector(&zed.diagnostics.lock().unwrap().version(buffer).unwrap()),
