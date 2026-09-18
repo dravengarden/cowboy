@@ -411,28 +411,26 @@ impl LspStore {
             if registered.is_some_and(|ids| ids.len() > 32) {
                 return Err(Refusal::Budget);
             }
-            let servers = registered
-                .into_iter()
-                .flatten()
-                .filter_map(|id| match local.language_servers.get(id) {
-                    Some(LanguageServerState::Running {
-                        adapter, server, ..
-                    }) => Some((adapter, server)),
-                    _ => None,
-                })
-                .filter(|(adapter, _)| {
-                    scope
-                        .as_ref()
-                        .is_none_or(|scope| scope.language_allowed(&adapter.name))
-                })
-                .filter(|(_, server)| {
-                    command.check_capabilities(server.adapter_server_capabilities())
-                })
-                .take(MAX_SERVERS + 1)
-                .map(|(_, server)| server.clone())
-                .collect::<Vec<_>>();
-            if servers.len() > MAX_SERVERS {
-                return Err(Refusal::Budget);
+            let mut servers = Vec::new();
+            for id in registered.into_iter().flatten() {
+                let Some(LanguageServerState::Running {
+                    adapter, server, ..
+                }) = local.language_servers.get(id)
+                else {
+                    // A lost registered participant is not a successful empty
+                    // response. Validate the whole selection before dispatch.
+                    return Err(Refusal::LanguageServer);
+                };
+                if scope
+                    .as_ref()
+                    .is_none_or(|scope| scope.language_allowed(&adapter.name))
+                    && command.check_capabilities(server.adapter_server_capabilities())
+                {
+                    if servers.len() == MAX_SERVERS {
+                        return Err(Refusal::Budget);
+                    }
+                    servers.push(server.clone());
+                }
             }
             Ok(servers)
         })?;

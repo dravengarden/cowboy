@@ -218,6 +218,60 @@ async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_op
     // The all-success/over-budget cases must actually use both language servers.
     assert!(calls.load(Ordering::SeqCst) >= 7);
     let calls_before = calls.load(Ordering::SeqCst);
+    let source_id = buffer.read_with(cx, |buffer, _| buffer.remote_id());
+    let original = store.update(cx, |store, _| {
+        store
+            .as_local_mut()
+            .unwrap()
+            .buffers_opened_in_servers
+            .insert(
+                source_id,
+                (100..133).map(LanguageServerId::from_proto).collect(),
+            )
+            .unwrap()
+    });
+    let request = buffer.read_with(cx, |buffer, _| {
+        GetDefinitions {
+            position: PointUtf16::new(0, 0),
+        }
+        .to_proto(proto::REMOTE_SERVER_PROJECT_ID, buffer)
+    });
+    assert_eq!(
+        LspStore::cowboy_navigate::<GetDefinitions>(
+            store.clone(),
+            request.clone(),
+            PeerId::default(),
+            &mut cx.to_async()
+        )
+        .await
+        .unwrap_err(),
+        Refusal::Budget
+    );
+    store.update(cx, |store, _| {
+        let local = store.as_local_mut().unwrap();
+        local
+            .buffers_opened_in_servers
+            .insert(source_id, original.clone());
+        local
+            .language_servers
+            .remove(original.iter().next().unwrap());
+    });
+    assert_eq!(
+        LspStore::cowboy_navigate::<GetDefinitions>(
+            store.clone(),
+            request,
+            PeerId::default(),
+            &mut cx.to_async()
+        )
+        .await
+        .unwrap_err(),
+        Refusal::LanguageServer
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        calls_before,
+        "invalid selection partially dispatched a query"
+    );
     store.update(cx, |store, cx| {
         store.buffer_store.update(cx, |store, _| {
             store.forget_shared_buffers_for(&PeerId::default())
