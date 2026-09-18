@@ -277,11 +277,14 @@ async fn native_input_bounds(zed: &ZedRuntime, workspace: &Path, worktree: u64) 
     tokio::fs::write(&oversized, vec![b'a'; LIMIT + 1])
         .await
         .unwrap();
+    let refusal = zed
+        .open_buffer(worktree, Path::new("input-oversized.txt"))
+        .await
+        .expect_err("oversized source must not become a native buffer");
     assert!(
-        zed.open_buffer(worktree, Path::new("input-oversized.txt"))
-            .await
-            .is_err(),
-        "oversized source must not become a native buffer"
+        refusal.to_string().starts_with("Zed request failed:")
+            && refusal.to_string().contains("bounded regular file"),
+        "require the actual native budget refusal, not a timeout: {refusal:#}"
     );
 
     // Raw bytes fit, but decoding to UTF-8 would exceed the native text limit.
@@ -292,11 +295,16 @@ async fn native_input_bounds(zed: &ZedRuntime, workspace: &Path, worktree: u64) 
     tokio::fs::write(workspace.join("input-expanded.txt"), &expanded)
         .await
         .unwrap();
+    let refusal = zed
+        .open_buffer(worktree, Path::new("input-expanded.txt"))
+        .await
+        .expect_err("bounded source decoding must be checked before CRDT construction");
     assert!(
-        zed.open_buffer(worktree, Path::new("input-expanded.txt"))
-            .await
-            .is_err(),
-        "bounded source decoding must be checked before CRDT construction"
+        refusal.to_string().starts_with("Zed request failed:")
+            && refusal
+                .to_string()
+                .contains("private native text exceeds budget"),
+        "require the actual native decode refusal, not a timeout: {refusal:#}"
     );
     // Failure is not a runtime-wide crash and never mutates source bytes.
     assert_eq!(
