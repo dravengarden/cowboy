@@ -97,3 +97,24 @@ Deno.test("every load reports its decision, warned or not", async () => {
   assert(notice.includes("retained: announcement.count"));
   assert(notice.includes("if (announcement.announce) {"));
 });
+
+Deno.test("inspection waits for an admitted socket and logs its cause", async () => {
+  const store = await Deno.readTextFile(new URL("./store.ts", import.meta.url));
+  // Dataset discovery before admission can fail transiently while an auth
+  // cookie refreshes; that must not surface as a local data failure.
+  const start = store.indexOf("function connect(): void {");
+  const connect = store.slice(start, store.indexOf("\n}\n", start));
+  assert(!connect.includes("legacyRecords"));
+  const ready = store.slice(
+    store.indexOf("const markSocketReady = (): void => {"),
+  );
+  assert(
+    ready.slice(0, ready.indexOf("\n  };\n")).includes(
+      "inspectLegacyRecordsOnce();",
+    ),
+  );
+  const inspection = store.slice(
+    store.indexOf("function inspectLegacyRecordsOnce(): void {"),
+  );
+  assert(inspection.includes('"legacy_records_inspection_failed"'));
+});
