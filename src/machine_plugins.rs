@@ -2473,7 +2473,15 @@ impl MachinePluginStore {
     /// replica. Only a complete, contract-valid changed bundle is returned;
     /// missing or partially written credentials remain a failed
     /// materialization and are never promoted to Service authority.
+    ///
+    /// Blocking: call from a blocking thread. Applying a Service generation
+    /// replaces `replica-current.json` before it rewrites the shared runtime
+    /// credential, so an unserialized scan can pair the new baseline with the
+    /// previous bytes and resubmit the superseded token. Each such stale
+    /// candidate wins CAS and is redistributed the same way, ping-ponging two
+    /// tokens forever; holding the lifecycle lock observes only whole applies.
     pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
+        let _lifecycle = self.lifecycle.blocking_lock();
         let mut observations = ProviderAuthRefreshObservations::default();
         let Ok(entries) = fs::read_dir(self.auth_watch_root()) else {
             return observations;
@@ -6188,6 +6196,33 @@ mod tests {
                 .is_symlink()
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_observation_waits_for_an_in_flight_auth_apply() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        // `apply_auth` holds this lock across its replica write and runtime
+        // credential restore; a scan must not see one without the other.
+        let apply = store.lifecycle.blocking_lock();
+        std::thread::scope(|scope| {
+            let (done, finished) = std::sync::mpsc::channel();
+            let store = &store;
+            scope.spawn(move || {
+                let _ = store.auth_refresh_observations();
+                done.send(()).unwrap();
+            });
+            assert!(
+                finished
+                    .recv_timeout(std::time::Duration::from_millis(200))
+                    .is_err()
+            );
+            drop(apply);
+            finished
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+        });
     }
 
     #[test]
