@@ -531,6 +531,51 @@ async fn applied_receipt_must_match_original_content_and_native_instance() {
 }
 
 #[tokio::test]
+async fn native_budget_does_not_invent_a_core_outcome_or_clear_unknown_ownership() {
+    let mut fixture = Fixture::new().await;
+    let operation = fixture.prepare().await;
+    for action in [Action::Apply, Action::Query] {
+        let task = fixture.spawn(Request::BufferSync {
+            operation: operation.clone(),
+            action,
+        });
+        let native = if matches!(action, Action::Apply) {
+            NativeAction::Apply
+        } else {
+            NativeAction::Query
+        };
+        let (id, _) = fixture.message(native).await;
+        fixture.send(
+            id,
+            CowboyBufferSyncResponse {
+                protocol: 1,
+                instance: vec![3; 16],
+                operation_id: 42,
+                phase: Phase::Refused as i32,
+                refusal: Refusal::Budget as i32,
+                ..Default::default()
+            },
+        );
+        assert!(task.await.unwrap().is_err());
+        for action in [Action::Apply, Action::Retire] {
+            assert!(matches!(
+                state(&fixture.act(&operation, action).await.unwrap()),
+                State::Unknown
+            ));
+        }
+        assert!(fixture.receiver.try_recv().is_err());
+        assert!(
+            fixture
+                .local(Request::ReleaseBufferLease {
+                    lease: fixture.lease.clone()
+                })
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
 async fn expiry_and_retirement_never_recycle_ids_or_release_replacement_fences() {
     let mut fixture = Fixture::new().await;
     let original = fixture.prepare().await;

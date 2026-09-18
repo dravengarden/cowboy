@@ -4,6 +4,7 @@
 //! disappear when their HTTP/native observer disconnects. Restart loses this
 //! process-local instance; it is not durable restoration.
 use super::*;
+use language::cowboy_replacement;
 use proto::cowboy_buffer_sync::Action;
 use proto::cowboy_buffer_sync_response::{Phase, Refusal};
 use sha2::{Digest as _, Sha256};
@@ -159,6 +160,19 @@ impl BufferStore {
             "another native sync is pending"
         );
         let record = self.cowboy_sync.records.get_mut(&id).unwrap();
+        let job = match record
+            .buffer
+            .read(cx)
+            .cowboy_check_replacement()
+            .and_then(|()| cowboy_replacement::acquire(cx))
+        {
+            Ok(job) => job,
+            Err(_) => {
+                record.reply.phase = Phase::Refused as i32;
+                record.reply.refusal = Refusal::Budget as i32;
+                return Ok(record.reply.clone());
+            }
+        };
         record.reply.phase = Phase::Pending as i32;
         let reply = record.reply.clone();
         let buffer = record.buffer.clone();
@@ -186,13 +200,17 @@ impl BufferStore {
                             .fs()
                             .clone();
                         let path = file.as_local().ok_or(Refusal::Source)?.abs_path(cx);
+                        let job = job.clone();
                         Ok::<_, Refusal>(cx.background_spawn(async move {
-                            fs.cowboy_load_bytes_bounded(&path, MAX_BYTES as usize)
-                                .await
+                            let result = fs
+                                .cowboy_load_bytes_bounded(&path, MAX_BYTES as usize)
+                                .await;
+                            result.map(|bytes| job.hold(bytes))
                         }))
                     })
                     .map_err(|_| Refusal::Changed)??;
                 let loaded = source.await.map_err(|_| Refusal::Source)?;
+                let loaded = loaded.value;
                 if loaded.len() != bytes as usize
                     || Sha256::digest(&loaded)[..] != hash[..]
                     || loaded.contains(&b'\r')
@@ -203,9 +221,11 @@ impl BufferStore {
                 let text = String::from_utf8(loaded).map_err(|_| Refusal::Source)?;
                 let diff = buffer.update(cx, |buffer, cx| {
                     check_buffer(buffer, &file, &expected)?;
-                    Ok::<_, Refusal>(buffer.diff(text, cx))
+                    buffer
+                        .cowboy_diff(text, job, cx)
+                        .map_err(replacement_refusal)
                 })?;
-                let diff = diff.await;
+                let replacement = diff.await.map_err(replacement_refusal)?;
                 #[cfg(test)]
                 tests::pause(&this, cx, 1).await?;
                 this.update(cx, |this, cx| {
@@ -215,12 +235,12 @@ impl BufferStore {
                         // turn: no await, filesystem read or observer callback
                         // can insert an edit between the condition and write.
                         check_buffer(buffer, &file, &expected)?;
-                        if diff.base_version != expected {
+                        if replacement.diff().base_version != expected {
                             return Err(Refusal::Changed);
                         }
-                        buffer.finalize_last_transaction();
-                        buffer.apply_diff(diff, cx);
-                        buffer.finalize_last_transaction();
+                        buffer
+                            .cowboy_apply_replacement(replacement, cx)
+                            .map_err(replacement_refusal)?;
                         buffer.did_reload(
                             buffer.version(),
                             LineEnding::Unix,
@@ -346,6 +366,13 @@ impl BufferStore {
         );
         self.cowboy_sync.last_id = id;
         Ok(reply)
+    }
+}
+
+fn replacement_refusal(reason: cowboy_replacement::Refusal) -> Refusal {
+    match reason {
+        cowboy_replacement::Refusal::Changed => Refusal::Changed,
+        _ => Refusal::Budget,
     }
 }
 

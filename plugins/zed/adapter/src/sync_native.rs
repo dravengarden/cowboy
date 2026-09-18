@@ -129,7 +129,7 @@ fn validate_response(
     let refusal_valid = if phase == Phase::Refused {
         matches!(
             Refusal::from_i32(response.refusal),
-            Some(Refusal::Changed | Refusal::Source | Refusal::Shared)
+            Some(Refusal::Changed | Refusal::Source | Refusal::Shared | Refusal::Budget)
         )
     } else {
         response.refusal == Refusal::None as i32

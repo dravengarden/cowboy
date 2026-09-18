@@ -336,7 +336,9 @@ words still overflow steps to a compact font and only then breaks anywhere.
 Fitting runs on mount, on a text change, and when the column width changes
 — never on the swipe path, since a translate does not change layout width.
 Fenced code already wraps under the same flag. The transcript and Desktop
-keep native table scrolling.
+keep native table and code scrolling: Transcript prose never passes
+`touchWrap`, cells wrap at a readable measure, and a block scrolls
+sideways only when it really overflows.
 
 Do not restore a horizontally scrolling table wrapper in touch-wrapped
 Markdown, and do not toggle table or code overflow on swipe claim in either

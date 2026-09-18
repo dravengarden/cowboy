@@ -522,6 +522,14 @@ aggregate retained-history/background-effect limits in the Code row.
 The [acquisition lifetime candidate](plugin-native-acquisition-budgets.md) adds
 shared pre-load admission and actual-object release accounting across worktrees;
 retained history, detached snapshots and general background budgets remain open.
+The [sync/reload replacement candidate](plugin-native-replacement-budgets.md)
+adds shared actual-job/result lifetimes, bounded diff output and pre-mutation
+retained-history checks for those two writers. Its
+[candidate acceptance](releases/native-replacement-budgets-candidate-2026-09-18.md)
+passes the complete source gate, 43 native tests, the exact static pair,
+temporary signed lifecycle, 18 connected v5 and 24 browser checks. Other writers,
+global snapshot lifetimes and the public budget-outcome/reconciliation contract
+remain open; no production native generation changed.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It

@@ -446,6 +446,12 @@ impl Slot {
                     Some(Refusal::Changed) => Reason::Changed,
                     Some(Refusal::Source) => Reason::Source,
                     Some(Refusal::Shared) => Reason::Shared,
+                    // Core's accepted owner codec has no budget outcome yet.
+                    // Do not invent a public enum or classify it as Source.
+                    // The original Unknown fence remains; Query never replays.
+                    Some(Refusal::Budget) => anyhow::bail!(
+                        "native replacement budget refusal requires owner-level reconciliation"
+                    ),
                     _ => anyhow::bail!("invalid native refusal"),
                 },
             },

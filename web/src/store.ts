@@ -16,6 +16,7 @@ import {
   snapshotPatch,
 } from "@cowboy/state-sync";
 import { PRODUCT_SYNC_SUBPROTOCOL, ProductSyncDatasetChangedError, productSyncDatabase as syncDatabase, type ProductSyncScope, type SyncDataset } from "./productSyncDatabase";
+import { IdbPersistenceError } from "@cowboy/state-sync-idb";
 import { createSyncShutdown } from "./syncShutdown";
 import { createReplica, type ReplicaTail } from "./replica";
 import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
@@ -1819,19 +1820,15 @@ function scheduleReconnect(delay: number): void {
   publishSyncStatus();
 }
 
-// Restore local sync state once, concurrently with the authenticated socket.
-// Late hydration rebases onto live state and replays durable pending mutations;
-// unrelated cache reads must not delay connection or newly authored messages.
-let didHydrate = false;
-function connect(): void {
-  if (productSessionAbandoned || productSessionPausedForAuth) return;
-  if (didHydrate) {
-    openSocket();
-    return;
-  }
-  didHydrate = true;
-  openSocket();
-  void hydrateReplica();
+// Inspect unowned legacy records once per load, after the first admitted
+// socket. Dataset discovery before then can fail transiently (a cold start
+// racing an auth cookie refresh); that is a connection problem the socket
+// retries, not a local data failure. Once the dataset is adopted, a rejection
+// is a real IndexedDB read failure and is reported with its cause.
+let legacyRecordsInspected = false;
+function inspectLegacyRecordsOnce(): void {
+  if (legacyRecordsInspected) return;
+  legacyRecordsInspected = true;
   void syncDatabase.legacyRecords().then((keys) => {
     if (productSessionAbandoned) return;
     const announcement = legacyRecordsAnnouncement(keys);
@@ -1847,9 +1844,29 @@ function connect(): void {
     if (announcement.announce) {
       notify("Legacy browser records were retained separately and will not be sent. Review local recovery in Settings → Info.", "warning");
     }
-  }).catch(() => {
-    if (!productSessionAbandoned) notify("Local data inspection failed. Existing browser records have not been deleted.", "warning");
+  }).catch((error: unknown) => {
+    if (productSessionAbandoned) return;
+    reportClientLog("warn", "legacy_records_inspection_failed", "Legacy record inspection failed", {
+      error_name: error instanceof Error ? error.name : typeof error,
+      error_code: error instanceof IdbPersistenceError ? error.code : "",
+    });
+    notify("Local data inspection failed. Existing browser records have not been deleted.", "warning");
   });
+}
+
+// Restore local sync state once, concurrently with the authenticated socket.
+// Late hydration rebases onto live state and replays durable pending mutations;
+// unrelated cache reads must not delay connection or newly authored messages.
+let didHydrate = false;
+function connect(): void {
+  if (productSessionAbandoned || productSessionPausedForAuth) return;
+  if (didHydrate) {
+    openSocket();
+    return;
+  }
+  didHydrate = true;
+  openSocket();
+  void hydrateReplica();
   void (async (): Promise<void> => {
     try {
       // Queue outboxes carry authored prompts and must not wait behind an
@@ -2013,6 +2030,7 @@ function openBoundSocket(dataset: SyncDataset): void {
     lastLiveAt = Date.now();
     setState({ ...state, connected: true });
     conn.connectionReady();
+    inspectLegacyRecordsOnce();
     // Agent options arrive over WS, while recommended presets come from the
     // Catalog. Refresh both after an upgrade even when the app stayed open.
     refreshProviderCatalog();

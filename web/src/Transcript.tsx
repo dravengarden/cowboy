@@ -234,7 +234,6 @@ import { FloatingActionIsland, ImageLightbox } from "@cowboy/app-shell";
 import { Sheet } from "./Sheet";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { openSessionSettings } from "./sessionSettingsOpen";
-import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { isImeKeyEvent } from "./imeKey";
 
@@ -1221,7 +1220,6 @@ function ChunkView({
   chunk: ContentChunk;
   invert: boolean;
 }): React.JSX.Element {
-  const touchSurface = useSurfaceProfile().kind !== "desktop";
   if (chunk.type === "image") {
     return <TranscriptImage src={chunk.src} alt={chunk.alt ?? ""} />;
   }
@@ -1234,13 +1232,12 @@ function ChunkView({
       />
     );
   }
-  return (
-    <Markdown
-      text={chunk.text}
-      invert={invert}
-      touchWrap={touchSurface}
-    />
-  );
+  // Conversation prose keeps wide code and tables intact: a box diagram or a
+  // many-column table wrapped to a phone column is unreadable. Each block
+  // scrolls sideways only when it really overflows (`hasHorizontalScroller`
+  // then gives that pan to the block; prose still drives the drawer). The
+  // live row window bounds how many such scrollers the peek carries.
+  return <Markdown text={chunk.text} invert={invert} />;
 }
 
 // A user-message body that collapses when it's very tall — a pasted log / big
@@ -5488,6 +5485,13 @@ export function Transcript({
           // Commit vertical movement to the async scroller immediately; a
           // horizontal drag remains available to the drawer recognizer.
           touchAction: "pan-y pinch-zoom",
+          // A sideways-scrolling block is its own scroll container, so WebKit
+          // restarts touch-action there. Declare both native axes so a pan on
+          // wide code or a table scrolls it, and a vertical flick that starts
+          // on it still scrolls the transcript without waiting.
+          "& pre, & [data-markdown-table-scroll], & .katex-display": {
+            touchAction: "pan-x pan-y pinch-zoom",
+          },
           WebkitOverflowScrolling: "touch",
           // column-reverse → the browser anchors from the bottom. Rows are
           // rendered newest-first below and flipped to oldest-top / newest-bottom

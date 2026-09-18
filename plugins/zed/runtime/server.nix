@@ -39,9 +39,9 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.3.0";
+  version = "1.4.0";
   inherit src cargoDeps;
-  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ];
+  patches = [ ./server/dependencies.patch ./server/input-bounds.patch ./server/reload-bounds.patch ./server/acquisition-bounds.patch ./server/replacement-bounds.patch ];
   postPatch = ''
     cp ${../adapter/proto/cowboy-buffer.proto} crates/proto/proto/cowboy-buffer.proto
     mkdir -p crates/project/src/buffer_store/cowboy_sync
@@ -53,6 +53,8 @@ in platform.buildRustPackage {
     cp ${./server/reload_tests.rs} crates/project/src/buffer_store/cowboy_reload_tests.rs
     cp ${./server/acquisition_tests.rs} crates/project/src/buffer_store/cowboy_acquisition_tests.rs
     cp ${./server/cowboy_buffer_budget.rs} crates/language/src/cowboy_buffer_budget.rs
+    cp ${./server/cowboy_replacement.rs} crates/language/src/buffer/cowboy_replacement.rs
+    cp ${./server/replacement_tests.rs} crates/project/src/buffer_store/cowboy_replacement_tests.rs
     cp ${./server/cowboy_bounded.rs} crates/fs/src/cowboy_bounded.rs
     cp ${./server/cowboy_lsp_input.rs} crates/lsp/src/cowboy_lsp_input.rs
     mkdir -p crates/project/src/lsp_store/cowboy_navigation
@@ -101,6 +103,9 @@ in platform.buildRustPackage {
     #[cfg(test)]
     #[path = "buffer_store/cowboy_acquisition_tests.rs"]
     mod cowboy_acquisition_tests;
+    #[cfg(test)]
+    #[path = "buffer_store/cowboy_replacement_tests.rs"]
+    mod cowboy_replacement_tests;
     /// A set of open buffers.' \
       --replace-fail 'pub struct BufferStore {' 'pub struct BufferStore {
         cowboy_sync: cowboy_sync::State,
