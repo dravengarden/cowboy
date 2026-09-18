@@ -12,5 +12,7 @@ message CowboyBufferSyncEnvelope {
     CowboyBufferSyncResponse response = 1001;
     CowboyNavigation navigation_request = 1002;
     CowboyNavigationResponse navigation_response = 1003;
+    CowboyCloseBuffers close_request = 1004;
+    CowboyCloseBuffersResponse close_response = 1005;
   }
 }

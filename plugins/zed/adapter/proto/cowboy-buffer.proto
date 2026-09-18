@@ -84,3 +84,27 @@ message CowboyNavigationResponse {
   }
   Refusal refusal = 4;
 }
+
+// Empty instance/IDs probe the exact process. Otherwise close the complete
+// sorted, unique, bounded set for the authenticated native peer in one update.
+// This is not a saved operation or replay grant. The adapter owns one dispatch;
+// an unobserved reply remains Unknown and must never fall back to CloseBuffer.
+message CowboyCloseBuffers {
+  uint64 project_id = 1;
+  uint32 protocol = 2;
+  bytes instance = 3;
+  repeated uint64 buffer_ids = 4;
+}
+
+message CowboyCloseBuffersResponse {
+  uint32 protocol = 1;
+  bytes instance = 2;
+  enum Outcome {
+    UNSPECIFIED = 0;
+    SUPPORTED = 1;
+    CLOSED = 2;
+    REFUSED = 3;
+  }
+  Outcome outcome = 3;
+  repeated uint64 buffer_ids = 4;
+}

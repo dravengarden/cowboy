@@ -483,7 +483,7 @@ composition-check:
 fmt:
     cargo fmt --check
     cd plugins/zed/adapter && cargo fmt --check
-    rustfmt --edition 2024 --check plugins/zed/runtime/server/cowboy_sync.rs plugins/zed/runtime/server/cowboy_bounded.rs plugins/zed/runtime/server/cowboy_lsp_input.rs plugins/zed/runtime/server/cowboy_navigation.rs plugins/zed/runtime/server/navigation_tests.rs plugins/zed/runtime/server/tests.rs
+    rustfmt --edition 2024 --check plugins/zed/runtime/server/cowboy_sync.rs plugins/zed/runtime/server/cowboy_bounded.rs plugins/zed/runtime/server/cowboy_lsp_input.rs plugins/zed/runtime/server/cowboy_navigation.rs plugins/zed/runtime/server/navigation_tests.rs plugins/zed/runtime/server/tests.rs plugins/zed/runtime/server/cowboy_close.rs plugins/zed/runtime/server/close_tests.rs
 
 fmt-write:
     cargo fmt

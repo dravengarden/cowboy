@@ -39,7 +39,7 @@ let
 in platform.buildRustPackage {
   pname = "cowboy-zed-server";
   # Private distribution version, not a claim to be an upstream Zed release.
-  version = "1.1.0";
+  version = "1.2.0";
   inherit src cargoDeps;
   patches = [ ./server/dependencies.patch ./server/input-bounds.patch ];
   postPatch = ''
@@ -47,6 +47,9 @@ in platform.buildRustPackage {
     mkdir -p crates/project/src/buffer_store/cowboy_sync
     cp ${./server/cowboy_sync.rs} crates/project/src/buffer_store/cowboy_sync.rs
     cp ${./server/tests.rs} crates/project/src/buffer_store/cowboy_sync/tests.rs
+    mkdir -p crates/project/src/buffer_store/cowboy_close
+    cp ${./server/cowboy_close.rs} crates/project/src/buffer_store/cowboy_close.rs
+    cp ${./server/close_tests.rs} crates/project/src/buffer_store/cowboy_close/tests.rs
     cp ${./server/cowboy_bounded.rs} crates/fs/src/cowboy_bounded.rs
     cp ${./server/cowboy_lsp_input.rs} crates/lsp/src/cowboy_lsp_input.rs
     mkdir -p crates/project/src/lsp_store/cowboy_navigation
@@ -59,19 +62,25 @@ in platform.buildRustPackage {
         CowboyBufferSync cowboy_buffer_sync = 1000;
         CowboyBufferSyncResponse cowboy_buffer_sync_response = 1001;
         CowboyNavigation cowboy_navigation = 1002;
-        CowboyNavigationResponse cowboy_navigation_response = 1003;'
+        CowboyNavigationResponse cowboy_navigation_response = 1003;
+        CowboyCloseBuffers cowboy_close_buffers = 1004;
+        CowboyCloseBuffersResponse cowboy_close_buffers_response = 1005;'
     substituteInPlace crates/proto/src/proto.rs \
       --replace-fail '(ReloadBuffers, Foreground),' '(ReloadBuffers, Foreground),
         (CowboyBufferSync, Foreground),
         (CowboyBufferSyncResponse, Foreground),
         (CowboyNavigation, Foreground),
-        (CowboyNavigationResponse, Foreground),' \
+        (CowboyNavigationResponse, Foreground),
+        (CowboyCloseBuffers, Foreground),
+        (CowboyCloseBuffersResponse, Foreground),' \
       --replace-fail '(ReloadBuffers, ReloadBuffersResponse),' '(ReloadBuffers, ReloadBuffersResponse),
         (CowboyBufferSync, CowboyBufferSyncResponse),
-        (CowboyNavigation, CowboyNavigationResponse),' \
+        (CowboyNavigation, CowboyNavigationResponse),
+        (CowboyCloseBuffers, CowboyCloseBuffersResponse),' \
       --replace-fail '    ReloadBuffers,' '    ReloadBuffers,
         CowboyBufferSync,
-        CowboyNavigation,'
+        CowboyNavigation,
+        CowboyCloseBuffers,'
     substituteInPlace crates/project/src/lsp_store.rs \
       --replace-fail 'pub struct LspStore {' 'mod cowboy_navigation;
     pub struct LspStore {
@@ -82,13 +91,17 @@ in platform.buildRustPackage {
         client.add_entity_request_handler(Self::handle_cowboy_navigation);'
     substituteInPlace crates/project/src/buffer_store.rs \
       --replace-fail '/// A set of open buffers.' 'mod cowboy_sync;
+    mod cowboy_close;
     /// A set of open buffers.' \
       --replace-fail 'pub struct BufferStore {' 'pub struct BufferStore {
-        cowboy_sync: cowboy_sync::State,' \
+        cowboy_sync: cowboy_sync::State,
+        cowboy_close: cowboy_close::State,' \
       --replace-fail 'project_search: Default::default(),' 'project_search: Default::default(),
-            cowboy_sync: Default::default(),' \
+            cowboy_sync: Default::default(),
+            cowboy_close: Default::default(),' \
       --replace-fail 'client.add_entity_request_handler(Self::handle_reload_buffers);' 'client.add_entity_request_handler(Self::handle_reload_buffers);
-        client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);' \
+        client.add_entity_request_handler(Self::handle_cowboy_buffer_sync);
+        client.add_entity_request_handler(Self::handle_cowboy_close_buffers);' \
       --replace-fail '    pub fn has_shared_buffers(&self) -> bool {' '    pub(crate) fn cowboy_navigation_owner(&self, peer: proto::PeerId, buffer: &Entity<Buffer>, cx: &App) -> bool {
             self.shared_buffers.get(&peer)
                 .and_then(|values| values.get(&buffer.read(cx).remote_id()))

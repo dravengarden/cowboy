@@ -196,10 +196,12 @@ impl Transport {
                     return None;
                 }
                 match value.payload? {
-                    response @ (Payload::Response(_) | Payload::NavigationResponse(_)) => {
-                        Some(response)
-                    }
-                    Payload::Request(_) | Payload::NavigationRequest(_) => None,
+                    response @ (Payload::Response(_)
+                    | Payload::NavigationResponse(_)
+                    | Payload::CloseResponse(_)) => Some(response),
+                    Payload::Request(_)
+                    | Payload::NavigationRequest(_)
+                    | Payload::CloseRequest(_) => None,
                 }
             });
         let _ = sender.send(response);
