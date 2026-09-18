@@ -12,6 +12,9 @@ import { nativeJson, quotaView, REQUEST_ID, USAGE_ARGS } from "./usage.js";
 
 const CHILD_ENV_KEYS = [
   "HOME",
+  // The shared credential store: without it this CLI would lock its own
+  // generation home and race a sibling generation refreshing the same token.
+  "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "PATH",
   "TMPDIR",
   "USER",

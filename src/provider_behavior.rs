@@ -7,6 +7,12 @@
 //! process recipes.
 
 pub(crate) const COMPONENT_COMMANDS_ENV: &str = "COWBOY_PROVIDER_COMPONENT_COMMANDS";
+/// Directories holding the shared projected credential files, by bundle key.
+/// Auth-generation runtime homes are private, but their credentials are one
+/// source; a Provider CLI that locks its own refresh beside those credentials
+/// must see the shared directory or sibling generations race the single-use
+/// refresh token.
+pub(crate) const CREDENTIAL_DIRECTORIES_ENV: &str = "COWBOY_PROVIDER_CREDENTIAL_DIRECTORIES";
 pub(crate) const PROVIDER_AUTH_REQUIRED_PREFIX: &str = "Provider authentication required - ";
 
 #[must_use]

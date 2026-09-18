@@ -23,6 +23,30 @@ Service reconciliation, but did not test the actual notification path amid
 unrelated native state. An additional failure was that structurally present
 credential files, including a CLI's signed-out document, could become candidates.
 
+## Shared refresh serialization
+
+A rotating credential is single-use: the first refresh invalidates the token
+every other process still holds. Native CLIs coordinate this themselves, but
+they scope that lock to the directory their credentials live in. Cowboy gives
+each auth generation a private runtime home (CR-9) while linking all of them to
+one credential source, so per-home locks do not intersect and two live
+generations can refresh the same token at once. The loser then fails to
+authenticate mid-turn and writes a cleared document, which this observation
+layer correctly rejects — repairing the projection, not the race.
+
+A Provider therefore declares where its CLI must find the shared store. The
+`credential_directory` runtime binding names a declared credential file; the
+Machine binds the directory of the projection that owns those bytes, for the
+worker and for Plugin hosts that run the same authenticated CLI. Every live
+generation then locks and re-reads one directory, and the native "another
+process refreshed it" path resolves the race instead of failing a turn.
+
+The binding is additive to Machine contract 4: an older Machine cannot parse a
+package that uses it, so deploy Machines before publishing such a Plugin.
+Session history stays in each generation's own home; only the credential
+directory is shared. `native_claude_shared_credential_store_conformance`
+accepts a new native CLI only while it still honours that directory.
+
 ## Boundaries
 
 - Watches are nonrecursive and limited to declared credential paths, their
