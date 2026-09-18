@@ -401,33 +401,36 @@ impl LspStore {
             }
             Ok(())
         };
-        let servers = this.update(cx, |this, cx| {
+        let servers = this.read_with(cx, |this, cx| {
             check(this, cx)?;
             let local = this.as_local().ok_or(Refusal::Source)?;
             let scope = buffer.read(cx).snapshot().language_scope_at(position);
-            // Snapshot only registered, capable servers. No startup/download or
-            // unbounded fanout can occur while constructing the request batch.
-            let servers = buffer.update(cx, |buffer, cx| {
-                local
-                    .language_servers_for_buffer(buffer, cx)
-                    .filter(|(adapter, _)| {
-                        scope
-                            .as_ref()
-                            .is_none_or(|scope| scope.language_allowed(&adapter.name))
-                    })
-                    .filter(|(_, server)| {
-                        command.check_capabilities(server.adapter_server_capabilities())
-                    })
-                    .filter(|(_, server)| {
-                        local
-                            .buffers_opened_in_servers
-                            .get(&id)
-                            .is_some_and(|ids| ids.contains(&server.server_id()))
-                    })
-                    .take(MAX_SERVERS + 1)
-                    .map(|(_, server)| server.clone())
-                    .collect::<Vec<_>>()
-            });
+            // Use the existing registration table, not manifest-tree discovery.
+            // Bound enumeration too, including incapable/closing entries.
+            let registered = local.buffers_opened_in_servers.get(&id);
+            if registered.is_some_and(|ids| ids.len() > 32) {
+                return Err(Refusal::Budget);
+            }
+            let servers = registered
+                .into_iter()
+                .flatten()
+                .filter_map(|id| match local.language_servers.get(id) {
+                    Some(LanguageServerState::Running {
+                        adapter, server, ..
+                    }) => Some((adapter, server)),
+                    _ => None,
+                })
+                .filter(|(adapter, _)| {
+                    scope
+                        .as_ref()
+                        .is_none_or(|scope| scope.language_allowed(&adapter.name))
+                })
+                .filter(|(_, server)| {
+                    command.check_capabilities(server.adapter_server_capabilities())
+                })
+                .take(MAX_SERVERS + 1)
+                .map(|(_, server)| server.clone())
+                .collect::<Vec<_>>();
             if servers.len() > MAX_SERVERS {
                 return Err(Refusal::Budget);
             }

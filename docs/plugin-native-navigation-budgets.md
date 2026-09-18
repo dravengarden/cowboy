@@ -14,8 +14,11 @@ identity. An empty input is an effect-free capability probe. An old native pair
 cannot substitute synchronization support, health or the upstream query route.
 
 The server captures the original buffer, exact native vector, file object and
-worktree. It selects at most four registered, capable language servers in that
-source language scope before dispatch. Every response must complete successfully;
+worktree. It rechecks that the same native peer still owns that source before
+dispatch, every target open and final conversion. It selects at most four
+registered, capable language servers in that source language scope before
+dispatch, from an existing registration table limited to 32 entries. Selection
+does not invoke manifest discovery. Every response must complete successfully;
 an LSP error, including `content modified`, refuses the whole query. It never
 omits an error and returns empty/partial success. Each LSP request has a five-
 second timeout, with a twenty-second native observation budget for the whole
