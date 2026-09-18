@@ -4,6 +4,8 @@ Zed Plugin/private adapter `1.17.0` selects private server `1.4.0`, retaining
 the exact upstream revision and third-party dependencies. This candidate adds
 finite native replacement admission. It is not a production activation, a new
 core writer grant, a general history limit or completion of the Plugin refactor.
+The [candidate acceptance](releases/native-replacement-budgets-candidate-2026-09-18.md)
+records the exact static pair, source gates and disposable lifecycle checks.
 
 ## Admission before work and mutation
 
@@ -23,7 +25,8 @@ cloning it. Checks run before loading/diffing and again in the mutation turn:
 - at most 8 MiB total base text plus inserted operation strings;
 - at most 4,096 retained edit/undo operations;
 - at most 16,384 aggregate edit ranges, inserted strings and undo-map entries;
-- at most 256 dense vector slots in the current and retained operation clocks;
+- at most 256 dense vector slots for the writer replica and current/retained
+  operation clocks;
 - no causally deferred text operations;
 - at most 1,024 diff edits, checked before allocating another result string.
 
