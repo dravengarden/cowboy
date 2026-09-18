@@ -83,7 +83,7 @@ diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
              let is_writable = metadata.is_some_and(|metadata| metadata.is_writable);
  
              let worktree = this.upgrade().context("worktree was dropped")?;
-@@ -7002,10 +7003,10 @@ async fn decode_file_text(
+@@ -7002,10 +7003,11 @@ async fn decode_file_text(
      fs: &dyn Fs,
      abs_path: &Path,
  ) -> Result<(String, &'static Encoding, bool)> {
@@ -91,6 +91,7 @@ diff --git a/crates/worktree/src/worktree.rs b/crates/worktree/src/worktree.rs
 -        .open_sync(&abs_path)
 -        .await
 -        .with_context(|| format!("opening file {abs_path:?}"))?;
++    use std::io::Read as _;
 +    // The actual descriptor read, not an earlier pathname stat, owns the limit.
 +    // The private Fs implementation rejects growth, symlinks and nonregulars.
 +    let bytes = fs.cowboy_load_bytes_bounded(abs_path, 4 * 1024 * 1024).await?;
