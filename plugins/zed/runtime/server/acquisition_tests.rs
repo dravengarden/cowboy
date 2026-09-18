@@ -110,6 +110,10 @@ async fn cowboy_acquisition_shared_capacity_and_reuse(cx: &mut TestAppContext) {
     drop(alias);
     assert_eq!(used(cx), budget::MAX_BUFFERS - 1);
     // New independent acquisition, not a replay of the refused attempt.
+    first
+        .fs
+        .insert_file("/cowboy/independent", b"separate\n".to_vec())
+        .await;
     buffers.push(first.open("independent", cx).await.unwrap());
     assert_eq!(used(cx), budget::MAX_BUFFERS);
     drop(buffers);
