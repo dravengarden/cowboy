@@ -938,16 +938,21 @@ function ConfigOptionControl({
                 data-config-choice
                 key={String(candidate.value)}
                 value={String(candidate.value)}
+                // Size each segment from its own label, then share the spare
+                // width. Equal `1 1 0` segments with `nowrap` let a long
+                // Provider label ("Bypass permissions") paint past its pill.
+                // When the row is genuinely too narrow a label wraps at a word
+                // instead; the segment never shrinks below its longest word.
                 sx={{
                   minHeight: 28,
-                  minWidth: 0,
                   px: 1,
                   py: 0.2,
-                  flex: "1 1 0",
+                  flex: "1 1 auto",
                   fontSize: "0.6875rem",
                   lineHeight: 1.15,
                   textTransform: "none",
-                  whiteSpace: "nowrap",
+                  whiteSpace: "normal",
+                  textAlign: "center",
                 }}
               >
                 {candidate.name}
@@ -1028,11 +1033,19 @@ function RecommendedPresetControls({
               }}
             >
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Stack direction="row" spacing={0.65} alignItems="center">
+                <Stack
+                  direction="row"
+                  spacing={0.65}
+                  alignItems="center"
+                  sx={{ minWidth: 0 }}
+                >
                   <Typography
                     variant="caption"
                     fontWeight={750}
                     color={selected ? "primary.main" : "text.primary"}
+                    noWrap
+                    title={preset.name}
+                    sx={{ minWidth: 0 }}
                   >
                     {preset.name}
                   </Typography>
@@ -1040,7 +1053,7 @@ function RecommendedPresetControls({
                     <Typography
                       variant="caption"
                       color="primary.main"
-                      sx={{ fontSize: "0.625rem", fontWeight: 750 }}
+                      sx={{ flexShrink: 0, fontSize: "0.625rem", fontWeight: 750 }}
                     >
                       Default
                     </Typography>
@@ -1050,6 +1063,7 @@ function RecommendedPresetControls({
                   variant="caption"
                   color="text.secondary"
                   noWrap
+                  title={preset.detail}
                   sx={{ display: "block", fontSize: "0.625rem" }}
                 >
                   {preset.detail}
