@@ -388,7 +388,10 @@ and accepting a production effect are different milestones.
   independent of group/source cleanup; historical Prepared receipts cannot
   reset or revive a child. This closes browser preparation/adoption, not the
   intended Review destination view, native allocation bounds, device acceptance
-  or production acquisition policy. Verification is recorded in the
+  or production acquisition policy. Full source/Nix gates, 62 browser cases,
+  the exact static pair and all 18 connected v5 checks pass. Input review also
+  repairs the upstream private-runtime version mismatch in a Zed `1.13.2`
+  candidate, without publishing or installing it. Verification is recorded in the
   [candidate acceptance](releases/browser-destination-candidate-2026-09-18.md).
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
