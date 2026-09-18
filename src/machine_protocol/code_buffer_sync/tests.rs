@@ -103,3 +103,27 @@ fn effect_free_and_unknown_states_cannot_smuggle_extra_evidence() {
         }
     }
 }
+
+#[test]
+fn budget_is_a_closed_terminal_refusal_not_partial_applied_evidence() {
+    let value = json!({"kind":"refused","reason":"budget"});
+    let state: State = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(
+        state,
+        State::Refused {
+            reason: Reason::Budget
+        }
+    );
+    assert!(state.terminal());
+    assert_eq!(serde_json::to_value(state).unwrap(), value);
+    for field in ["content", "version", "retry_after", "authorized", "partial"] {
+        let mut extra = value.clone();
+        extra[field] = json!(true);
+        assert!(serde_json::from_value::<State>(extra).is_err());
+    }
+    for reason in ["Budget", "capacity", "timeout", "future"] {
+        assert!(
+            serde_json::from_value::<State>(json!({"kind":"refused","reason":reason})).is_err()
+        );
+    }
+}

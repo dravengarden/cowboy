@@ -169,6 +169,12 @@ versions and component-release pins remain unchanged. The matrix snapshots the
 current independently versioned Plugins without rewriting historical entries.
 This metadata repair does not publish a Catalog or activate a native shell.
 
+Scoped release 3.12.0 records app-shell 1.1.3's already-integrated connection
+banner change. App-shell has no component or Plugin consumers in the closure,
+so only its package version/digest changes. The current Plugin sources are
+snapshotted, including the independently versioned Zed 1.18.0 candidate; their
+historical component pins and existing signed releases remain unchanged.
+
 Run:
 
 ```sh

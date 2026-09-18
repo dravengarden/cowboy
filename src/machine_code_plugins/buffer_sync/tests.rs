@@ -249,6 +249,93 @@ async fn bad_or_missing_apply_replies_keep_the_original_fence_until_query() {
 }
 
 #[tokio::test]
+async fn budget_refusal_requires_exact_evidence_and_separate_retirement_without_replay() {
+    use crate::machine_protocol::code_buffer_sync::Reason;
+    for mode in [
+        "sync-budget",
+        "sync-budget-lost",
+        "sync-budget-owner",
+        "sync-budget-partial",
+    ] {
+        let fixture = Fixture::new(mode).await;
+        let id = fixture.prepare().await.operation;
+        let refused = State::Refused {
+            reason: Reason::Budget,
+        };
+        let applied = fixture
+            .act(Action::Apply {
+                operation: id.clone(),
+            })
+            .await;
+        if mode == "sync-budget" {
+            assert_eq!(applied.unwrap().state, refused);
+        } else {
+            assert!(applied.is_err());
+            assert!(fixture.release().await.is_err());
+            for action in [
+                Action::Apply {
+                    operation: id.clone(),
+                },
+                Action::Retire {
+                    operation: id.clone(),
+                },
+            ] {
+                assert_eq!(fixture.act(action).await.unwrap().state, State::Unknown {});
+            }
+            assert!(!fixture.home.join("sync-retires").exists());
+            assert_eq!(
+                fixture
+                    .act(Action::Query {
+                        operation: id.clone()
+                    })
+                    .await
+                    .unwrap()
+                    .state,
+                refused
+            );
+        }
+        for action in [
+            Action::Apply {
+                operation: id.clone(),
+            },
+            Action::Query {
+                operation: id.clone(),
+            },
+        ] {
+            assert_eq!(fixture.act(action).await.unwrap().state, refused);
+        }
+        assert_eq!(fixture.count("sync-applies"), 1);
+        assert!(!fixture.home.join("sync-retires").exists());
+        fixture.release().await.unwrap();
+        assert_eq!(fixture.host.live_generation_count().await, 1);
+        assert_eq!(
+            fixture
+                .act(Action::Retire {
+                    operation: id.clone()
+                })
+                .await
+                .unwrap()
+                .state,
+            State::Retired {}
+        );
+        assert_eq!(
+            fixture
+                .act(Action::Retire { operation: id })
+                .await
+                .unwrap()
+                .state,
+            State::Retired {}
+        );
+        assert_eq!(fixture.count("sync-retires"), 1);
+        assert_eq!(fixture.host.live_generation_count().await, 0);
+        assert_eq!(
+            fixture.host.buffer_sync.capacity.available_permits(),
+            MAX_OPERATIONS
+        );
+    }
+}
+
+#[tokio::test]
 async fn cancelled_apply_keeps_a_nonexpiring_owner_and_is_observed_not_replayed() {
     let fixture = Fixture::new("sync-pause").await;
     let id = fixture.prepare().await.operation;

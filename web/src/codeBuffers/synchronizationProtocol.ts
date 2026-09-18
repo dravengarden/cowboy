@@ -27,7 +27,7 @@ export type SynchronizationState =
   }
   | {
     readonly kind: "refused";
-    readonly reason: "changed" | "source" | "shared";
+    readonly reason: "changed" | "source" | "shared" | "budget";
   };
 export interface SynchronizationSnapshot {
   readonly apiVersion: 1;
@@ -102,7 +102,7 @@ export function decodeSynchronization(
       const refused = record(row.state, ["kind", "reason"]);
       requireValue(
         refused.reason === "changed" || refused.reason === "source" ||
-          refused.reason === "shared",
+          refused.reason === "shared" || refused.reason === "budget",
       );
       state = Object.freeze({ kind, reason: refused.reason });
       break;

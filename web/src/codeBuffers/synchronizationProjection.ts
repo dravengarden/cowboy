@@ -25,7 +25,8 @@ export type SynchronizationStatus =
   | "applied"
   | "changed"
   | "source"
-  | "shared";
+  | "shared"
+  | "budget";
 export interface SynchronizationRow {
   readonly handle: SynchronizationHandle;
   readonly ordinal: number;

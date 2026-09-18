@@ -93,7 +93,7 @@ async fn buffer(pair: &Pair<'_>) -> Result<String, Failure> {
     Ok(id)
 }
 
-async fn fenced(pair: &Pair<'_>, resource: &str) -> Result<(), Failure> {
+pub(super) async fn fenced(pair: &Pair<'_>, resource: &str) -> Result<(), Failure> {
     let commands = pair.proxy.counts()?.commands;
     let read = pair
         .http
@@ -146,7 +146,11 @@ pub(super) async fn prepare(pair: &Pair<'_>) -> Result<Prepared, Failure> {
     })
 }
 
-async fn settled(pair: &Pair<'_>, operation: &str, method: Method) -> Result<Value, Failure> {
+pub(super) async fn settled(
+    pair: &Pair<'_>,
+    operation: &str,
+    method: Method,
+) -> Result<Value, Failure> {
     // Deliberately covers the product's actual 40-second transport timeout.
     // The relay drops one real reply; neither a synthetic ACK nor test timeout
     // override can turn the uncertain operation into acceptance.

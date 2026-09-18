@@ -45,8 +45,8 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Eighteen checks cover (receipt schema `...code-buffer-connected-conformance/v5`,
-requiring Machine protocol 21 and Zed `1.13.0` navigation/text support).
+Nineteen checks cover (receipt schema `...code-buffer-connected-conformance/v6`,
+requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
 1. Anonymous installation refusal, actual signed Code installation, cancelled
@@ -100,6 +100,12 @@ Historical v3 receipts cover only the first eleven checks:
     parent release and path removal. A non-BMP scalar straddles the 64 KiB boundary;
     the original owner/content/snapshot, exact offsets and complete EOF agree.
     Historical v4 receipts do not accept this text extension.
+19. A real 1,025-edit replacement is refused by the native diff bound. One
+    actual Apply reply is discarded through the normal timeout; reads/release
+    and retirement remain fenced until original-ID Query observes exact
+    `refused/budget`. Duplicate Apply does not dispatch, original native text
+    and changed disk bytes remain intact, and separate retirement/release
+    complete without replay. Historical v5 does not accept this extension.
 
 The last case deliberately leaves unresolved native ownership. Teardown kills
 only fixture executables and removes their validated private runtime directories;

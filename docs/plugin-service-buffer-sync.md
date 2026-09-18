@@ -50,7 +50,10 @@ Responses have exactly `apiVersion: 1`, `operationId`, `resourceId`, `purpose`,
 `content`, `state` and `pending`. States are tagged objects with `kind`:
 `prepared`, `pending`, `unknown`, `applied`, `refused`, `retired` or `expired`.
 Applied evidence repeats exact content and a bounded canonical native version;
-refusal has only the closed `changed`, `source` or `shared` reason. That native
+refusal has only the closed `changed`, `source`, `shared` or `budget` reason.
+The [Budget continuation](plugin-sync-budget-outcomes.md) requires updated
+readers and the exact producing adapter; old process owners are not migrated.
+That native
 version is observed evidence, not a subsequent write grant.
 
 HTTP 202 / `pending: true` means an already-admitted Service job is running; it

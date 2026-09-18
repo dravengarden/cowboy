@@ -35,6 +35,7 @@ const labels = {
   changed: "Reload refused — text or ownership changed",
   source: "Reload refused — disk source unavailable or unsuitable",
   shared: "Reload refused — another owner shares the native buffer",
+  budget: "Reload refused — native resource limit reached",
 } satisfies Record<SynchronizationStatus, string>;
 const PAGE_SIZE = 5;
 interface Selection {

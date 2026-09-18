@@ -36,7 +36,18 @@ fn browser_synchronization_fixture_matches_service_serialization() {
         "../../../../contracts/code-buffer-sync.fixture.json"
     ))
     .unwrap();
-    assert_eq!(serde_json::to_value(snapshot).unwrap(), expected);
+    assert_eq!(serde_json::to_value(&snapshot).unwrap(), expected);
+    let budget = Snapshot {
+        state: State::from(NativeState::Refused {
+            reason: Reason::Budget,
+        }),
+        ..snapshot
+    };
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/code-buffer-sync-budget.fixture.json"
+    ))
+    .unwrap();
+    assert_eq!(serde_json::to_value(budget).unwrap(), expected);
 }
 
 pub(super) fn fixture(protocol: u16) -> Fixture {
@@ -285,6 +296,68 @@ async fn cancelled_observer_does_not_cancel_or_repeat_admitted_apply() {
         tokio::task::yield_now().await;
     }
     panic!("owned task did not settle");
+}
+
+#[tokio::test]
+async fn budget_refusal_reconciles_only_the_original_operation_and_never_rearms_apply() {
+    let mut fixture = fixture(20);
+    let resource = opened(&fixture, 1);
+    let prepared = prepared(&mut fixture, &resource).await;
+    let id = &prepared.operation_id;
+    let refused = NativeState::Refused {
+        reason: Reason::Budget,
+    };
+    let task = start(&fixture, id, Action::Apply);
+    let sent = command(&mut fixture).await;
+    let mut foreign = observation(refused.clone());
+    foreign["operation"] = native(2);
+    reply(&fixture, sent, foreign);
+    assert_eq!(task.await.unwrap().status(), StatusCode::BAD_GATEWAY);
+    assert!(matches!(
+        fixture.context.code_buffers.admit_read("local", &resource),
+        Err(StatusCode::CONFLICT)
+    ));
+    assert_eq!(
+        json_response(start(&fixture, id, Action::Apply).await.unwrap()).await["state"]["kind"],
+        "unknown"
+    );
+    assert_eq!(
+        start(&fixture, id, Action::Retire).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert!(fixture.commands.try_recv().is_err());
+    let task = start(&fixture, id, Action::Query);
+    let sent = command(&mut fixture).await;
+    reply(&fixture, sent, observation(refused));
+    let saved = json_response(task.await.unwrap()).await;
+    assert_eq!(saved["state"], json!({"kind":"refused","reason":"budget"}));
+    assert_eq!(saved["operationId"], *id);
+    for action in [Action::Apply, Action::Query] {
+        assert_eq!(
+            json_response(start(&fixture, id, action).await.unwrap()).await,
+            saved
+        );
+    }
+    assert!(fixture.commands.try_recv().is_err());
+    drop(
+        fixture
+            .context
+            .code_buffers
+            .admit_read("local", &resource)
+            .unwrap(),
+    );
+    let task = start(&fixture, id, Action::Retire);
+    let sent = command(&mut fixture).await;
+    reply(&fixture, sent, observation(NativeState::Retired {}));
+    assert_eq!(
+        json_response(task.await.unwrap()).await["state"]["kind"],
+        "retired"
+    );
+    assert_eq!(
+        start(&fixture, id, Action::Apply).await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert!(fixture.commands.try_recv().is_err());
 }
 
 #[tokio::test]

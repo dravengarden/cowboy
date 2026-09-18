@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  eighteen checks, including live authenticated Code installation into an empty
+  nineteen checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v5; historical
+  and separately completed retirement. Require receipt schema v6; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -348,6 +348,13 @@ In addition, require all applicable Provider gates below:
   hashing and cancellation-without-next-page gates in
   `docs/plugin-native-text-reads.md`. The connected v5 extension must read a
   multi-page destination after parent/path removal; v4 does not accept it.
+  Budget-outcome changes additionally require the actual native oversized-diff
+  refusal, lost real Apply reply through the normal timeout, original-ID Budget
+  observation, unchanged text/source and explicit retirement in v6 check 19.
+  Historical v5 does not accept that extension. Foreign/partial refusals and
+  local timeouts cannot clear Unknown; all four typed readers and the browser
+  confirmation surface must preserve one-use Apply and independent retirement.
+  See `docs/plugin-sync-budget-outcomes.md`; native rejection is not restoration.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not

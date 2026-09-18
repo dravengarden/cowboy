@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "operationId": "sync-0123456789abcdef0123456789abcdef-0000000000000001",
+  "resourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+  "purpose": "refresh_from_disk",
+  "content": {
+    "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    "utf8Bytes": 3
+  },
+  "state": { "kind": "refused", "reason": "budget" },
+  "pending": false
+}

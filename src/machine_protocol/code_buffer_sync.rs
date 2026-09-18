@@ -138,6 +138,8 @@ pub enum Reason {
     Changed,
     Source,
     Shared,
+    // Exact terminal native refusal, not a local timeout/capacity guess.
+    Budget,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

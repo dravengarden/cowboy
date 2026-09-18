@@ -528,8 +528,13 @@ retained-history checks for those two writers. Its
 [candidate acceptance](releases/native-replacement-budgets-candidate-2026-09-18.md)
 passes the complete source gate, 43 native tests, the exact static pair,
 temporary signed lifecycle, 18 connected v5 and 24 browser checks. Other writers,
-global snapshot lifetimes and the public budget-outcome/reconciliation contract
-remain open; no production native generation changed.
+global snapshot lifetimes remain open; no production native generation changed.
+The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
+adds exact terminal-refusal projection and original-ID reconciliation through
+adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and
+requiring separate retirement. It does not adopt old processes or implement
+independently authorized post-effect recovery; v6 connected acceptance and
+actual generation rollout remain distinct.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It

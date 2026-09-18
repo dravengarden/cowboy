@@ -307,6 +307,44 @@ export async function runCodeBufferSynchronizationBrowserConformance(): Promise<
     late.context.abort();
   }
 
+  const budget = await preparedSync();
+  const refused = budget.operation.confirm(budget.operation.preview("apply"));
+  budget.reply(3, syncWire({ kind: "refused", reason: "budget" }));
+  await refused;
+  view = mount(budget.source);
+  try {
+    view.expand();
+    check(
+      view.text().includes("native resource limit reached"),
+      "budget refusal hidden",
+    );
+    check(
+      !hasButton("Reload from disk…", view.container),
+      "budget refusal offered replay",
+    );
+    check(budget.calls.length === 4, "budget presentation caused work");
+    button("Retire operation…", view.container).click();
+    await dialog();
+    button("Retire synchronization").click();
+    await until(() => budget.calls.length === 5);
+    budget.reply(4, syncWire({ kind: "retired" }));
+    await until(() => view.container.children.length === 0);
+    check(
+      budget.calls[4]!.init.method === "DELETE",
+      "retirement replaced its action",
+    );
+    check(
+      Number(budget.calls.length) === 5,
+      "retirement released or reopened the buffer",
+    );
+    tests.push(
+      "native budget refusal is visible and permits only separate retirement, never replay or automatic buffer release",
+    );
+  } finally {
+    view.unmount();
+    budget.context.abort();
+  }
+
   const paged = fixture();
   await paged.owner.close();
   const captured = await content();

@@ -4,6 +4,9 @@ import { decodeSynchronization } from "./synchronizationProtocol.ts";
 import { appliedState, golden, syncWire } from "./synchronizationFixture.ts";
 import { capturedIdentity } from "./content.ts";
 import { content } from "./synchronizationFixture.ts";
+import budget from "../../../contracts/code-buffer-sync-budget.fixture.json" with {
+  type: "json",
+};
 
 const id = decodeResourceId(golden.resourceId);
 const decode = (value: unknown, status = 200) =>
@@ -102,11 +105,32 @@ Deno.test("native pending and Service pending are independent, closed observatio
       );
     } else assert(decode(syncWire({ kind }, true), 202).pending);
   }
-  for (const reason of ["changed", "source", "shared"] as const) {
+  for (const reason of ["changed", "source", "shared", "budget"] as const) {
     assertEquals(decode(syncWire({ kind: "refused", reason })).state, {
       kind: "refused",
       reason,
     });
   }
   assertEquals(decode(syncWire(appliedState)).state, appliedState);
+});
+
+Deno.test("actual Service budget fixture has no partial result, retry permission or foreign identity", () => {
+  assertEquals(decode(budget), budget);
+  for (const field of ["content", "version", "retryAfter", "partial"]) {
+    assertThrows(
+      () => decode({ ...budget, state: { ...budget.state, [field]: true } }),
+      BufferClientError,
+    );
+  }
+  for (const reason of ["Budget", "capacity", "timeout", "future"]) {
+    assertThrows(
+      () => decode({ ...budget, state: { ...budget.state, reason } }),
+      BufferClientError,
+    );
+  }
+  assertThrows(
+    () =>
+      decode({ ...budget, resourceId: "a".repeat(32) + "-0000000000000002" }),
+    BufferClientError,
+  );
 });

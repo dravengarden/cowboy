@@ -141,6 +141,32 @@ Deno.test("pending native evidence and Service 202 never rearm Apply or imply cl
   }
 });
 
+Deno.test("lost budget refusal stays query-only until exact evidence and explicit retirement", async () => {
+  const f = await preparedSync();
+  const applying = f.operation.confirm(f.operation.preview("apply"));
+  f.calls[3]!.result.reject(new Error("lost budget reply"));
+  await assertRejects(() => applying, BufferClientError);
+  assertEquals(f.source.get().rows[0]!.status, "unknown");
+  assertThrows(() => f.operation.preview("retire"), BufferClientError);
+  const query = f.operation.observe();
+  f.reply(4, syncWire({ kind: "refused", reason: "budget" }));
+  await query;
+  assertEquals(f.source.get().rows[0]!.status, "budget");
+  assert(!f.operation.view().canApply && f.operation.view().canRetire);
+  assertEquals((await f.owner.close()).kind, "retained");
+  assertEquals(f.calls.length, 5);
+  const retire = f.operation.confirm(f.operation.preview("retire"));
+  f.reply(5, syncWire({ kind: "retired" }));
+  await retire;
+  assertEquals(f.owner.synchronization(), undefined);
+  assert(!f.owner.view().fresh);
+  assertEquals(f.calls.filter(({ init }) => init.method === "PUT").length, 2);
+  assertEquals(
+    f.calls.filter(({ init }) => init.method === "DELETE").length,
+    1,
+  );
+});
+
 Deno.test("only Service expiry proves a failed Apply remained inert", async () => {
   const f = await preparedSync();
   const applying = f.operation.confirm(f.operation.preview("apply"));
@@ -159,6 +185,7 @@ Deno.test("terminal evidence cannot regress, change refusal or rewrite its exact
     const state of [
       appliedState,
       { kind: "refused", reason: "shared" } as const,
+      { kind: "refused", reason: "budget" } as const,
     ]
   ) {
     const f = await preparedSync();

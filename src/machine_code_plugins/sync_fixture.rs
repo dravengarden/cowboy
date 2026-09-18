@@ -48,6 +48,9 @@ impl Fixture {
             self.applies += 1;
             std::fs::write(home.join("sync-applies"), self.applies.to_string()).unwrap();
             *state = json!({"kind":"applied","content":content,"version":[{"replicaId":0,"timestamp":1}]});
+            if generation.starts_with("generation-sync-budget") {
+                *state = json!({"kind":"refused","reason":"budget"});
+            }
             if generation == "generation-sync-pause" {
                 for _ in 0..500 {
                     if home.join("resume-sync").exists() {
@@ -60,7 +63,7 @@ impl Fixture {
                     "fixture synchronization never resumed"
                 );
             }
-            if generation == "generation-sync-lost" {
+            if generation == "generation-sync-lost" || generation == "generation-sync-budget-lost" {
                 return Some(None);
             }
         } else if request["action"] == "retire" {
@@ -78,11 +81,12 @@ impl Fixture {
                 "generation-sync-bad-content" => {
                     reply["state"]["content"]["sha256"] = json!("f".repeat(64))
                 }
-                "generation-sync-bad-owner" => {
+                "generation-sync-bad-owner" | "generation-sync-budget-owner" => {
                     reply["operation"]["instance"] = json!("f".repeat(32))
                 }
                 "generation-sync-retired" => reply["state"] = json!({"kind":"retired"}),
                 "generation-sync-pending" => reply["state"] = json!({"kind":"pending"}),
+                "generation-sync-budget-partial" => reply["state"]["content"] = content.clone(),
                 _ => {}
             }
         }

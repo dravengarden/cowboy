@@ -531,32 +531,36 @@ async fn applied_receipt_must_match_original_content_and_native_instance() {
 }
 
 #[tokio::test]
-async fn native_budget_does_not_invent_a_core_outcome_or_clear_unknown_ownership() {
+async fn lost_budget_reply_retains_unknown_until_exact_query_without_apply_or_retire_replay() {
     let mut fixture = Fixture::new().await;
     let operation = fixture.prepare().await;
-    for action in [Action::Apply, Action::Query] {
-        let task = fixture.spawn(Request::BufferSync {
+    let apply = fixture.spawn(Request::BufferSync {
+        operation: operation.clone(),
+        action: Action::Apply,
+    });
+    fixture.message(NativeAction::Apply).await;
+    apply.abort();
+    assert!(apply.await.unwrap_err().is_cancelled());
+    let budget = CowboyBufferSyncResponse {
+        protocol: 1,
+        instance: vec![3; 16],
+        operation_id: 42,
+        phase: Phase::Refused as i32,
+        refusal: Refusal::Budget as i32,
+        ..Default::default()
+    };
+    let mut foreign = budget.clone();
+    foreign.operation_id += 1;
+    let mut partial = budget.clone();
+    partial.content_bytes = 1;
+    for bad in [foreign, partial] {
+        let query = fixture.spawn(Request::BufferSync {
             operation: operation.clone(),
-            action,
+            action: Action::Query,
         });
-        let native = if matches!(action, Action::Apply) {
-            NativeAction::Apply
-        } else {
-            NativeAction::Query
-        };
-        let (id, _) = fixture.message(native).await;
-        fixture.send(
-            id,
-            CowboyBufferSyncResponse {
-                protocol: 1,
-                instance: vec![3; 16],
-                operation_id: 42,
-                phase: Phase::Refused as i32,
-                refusal: Refusal::Budget as i32,
-                ..Default::default()
-            },
-        );
-        assert!(task.await.unwrap().is_err());
+        let (id, _) = fixture.message(NativeAction::Query).await;
+        fixture.send(id, bad);
+        assert!(query.await.unwrap().is_err());
         for action in [Action::Apply, Action::Retire] {
             assert!(matches!(
                 state(&fixture.act(&operation, action).await.unwrap()),
@@ -573,6 +577,48 @@ async fn native_budget_does_not_invent_a_core_outcome_or_clear_unknown_ownership
                 .is_err()
         );
     }
+    let query = fixture.spawn(Request::BufferSync {
+        operation: operation.clone(),
+        action: Action::Query,
+    });
+    let (id, _) = fixture.message(NativeAction::Query).await;
+    fixture.send(id, budget);
+    assert!(matches!(
+        state(&query.await.unwrap().unwrap()),
+        State::Refused {
+            reason: Reason::Budget
+        }
+    ));
+    for action in [Action::Apply, Action::Query] {
+        assert!(matches!(
+            state(&fixture.act(&operation, action).await.unwrap()),
+            State::Refused {
+                reason: Reason::Budget
+            }
+        ));
+    }
+    assert!(fixture.receiver.try_recv().is_err());
+    let retire = fixture.spawn(Request::BufferSync {
+        operation: operation.clone(),
+        action: Action::Retire,
+    });
+    let (id, _) = fixture.message(NativeAction::Retire).await;
+    fixture.reply(id, Phase::Retired);
+    assert!(matches!(
+        state(&retire.await.unwrap().unwrap()),
+        State::Retired
+    ));
+    fixture
+        .local(Request::ReleaseBufferLease {
+            lease: fixture.lease.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root.join("file")).unwrap(),
+        "old\n"
+    );
+    assert!(fixture.receiver.try_recv().is_err());
 }
 
 #[tokio::test]

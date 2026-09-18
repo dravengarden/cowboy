@@ -50,12 +50,15 @@ Native capacity/history refusal becomes a terminal saved result for the original
 operation. Repeated Apply/Query observes that result even after capacity returns.
 Pending operations and their retained owners still cannot expire or retire.
 
-The currently accepted core owner codec has no budget outcome. This candidate
+The `1.17.0` candidate's core owner codec has no budget outcome. That candidate
 does **not** extend that wire union, pretend the reason was Source, or use the
 private refusal as new reconciliation authority: adapter ownership remains
 Unknown and fenced. Queries use only the original native instance/operation;
 Apply and Retire do not resend or clear the fence. A public budget-result
 projection and its independently accepted reconciliation remain separate work.
+The subsequent [typed outcome continuation](plugin-sync-budget-outcomes.md)
+adds the `1.18.0` adapter and core readers without changing these native limits
+or adopting the preceding process's uncertain owners.
 
 Reload preserves its original result channel and invocation-specific task
 cleanup. Refusal reports failure, not a successful prefix or implicit retry.
