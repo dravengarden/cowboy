@@ -19,6 +19,7 @@ import { PRODUCT_SYNC_SUBPROTOCOL, ProductSyncDatasetChangedError, productSyncDa
 import { createSyncShutdown } from "./syncShutdown";
 import { ProductSessionEndEvent } from "./productSessionEnd";
 import { type Attachment, blocksToAttachments, buildContentBlocks } from "./attachments";
+import { actionErrorMessage } from "./actionErrorMessage";
 import {
   envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
@@ -769,7 +770,7 @@ function deleteSessionFailureMessage(error: unknown): string {
   if (raw.includes("was not acknowledged")) {
     return "Could not delete this session. Try again.";
   }
-  return raw.trim() || "Could not delete this session. Try again.";
+  return actionErrorMessage(error, "Could not delete this session. Try again.");
 }
 
 /** Soft-delete one Cowboy session. The row stays in the list, disabled and

@@ -13,6 +13,7 @@ import {
   IconButton,
   type IconButtonProps,
 } from "@mui/material";
+import { actionErrorMessage } from "./actionErrorMessage";
 import { notify } from "./store";
 import {
   NETWORK_PRESS_MIN_MS,
@@ -72,11 +73,7 @@ export function useNetworkActionState(): NetworkActionState {
         ]);
         succeeded = true;
       } catch (error) {
-        notify(
-          error instanceof Error
-            ? error.message
-            : "The action could not be completed",
-        );
+        notify(actionErrorMessage(error, "The action could not be completed"));
       } finally {
         globalThis.clearTimeout(timer);
         if (progressAt > 0) {
