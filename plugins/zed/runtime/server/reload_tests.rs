@@ -178,3 +178,32 @@ async fn cowboy_reload_replacement_and_lost_observer_do_not_stick(cx: &mut TestA
         assert!(buffer.cowboy_can_sync());
     });
 }
+
+#[gpui::test]
+async fn cowboy_reload_completion_cannot_retire_an_observers_new_task(cx: &mut TestAppContext) {
+    let f = Fixture::new(cx).await;
+    f.write(b"observed\n".to_vec()).await;
+    let (started, next) = oneshot::channel();
+    let mut started = Some(started);
+    let _subscription = f.buffer.update(cx, |_, cx| {
+        cx.subscribe(&cx.entity(), move |buffer, _, event, cx| {
+            if matches!(event, BufferEvent::Reloaded)
+                && let Some(started) = started.take()
+            {
+                started.send(buffer.reload(cx)).ok();
+            }
+        })
+    });
+    f.buffer
+        .update(cx, |buffer, cx| buffer.reload(cx))
+        .await
+        .unwrap();
+    next.await
+        .unwrap()
+        .await
+        .expect("old cleanup cancelled the observer's new reload");
+    f.buffer.read_with(cx, |buffer, _| {
+        assert_eq!(buffer.text(), "observed\n");
+        assert!(buffer.cowboy_can_sync());
+    });
+}

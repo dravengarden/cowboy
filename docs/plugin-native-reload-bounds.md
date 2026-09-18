@@ -42,10 +42,10 @@ Owned reads still cannot call legacy reload to repair a content mismatch.
 
 ## Verification
 
-The native build includes four GPUI regression groups using the actual
+The native build includes five GPUI regression groups using the actual
 Worktree/LocalFile and Buffer reload code: post-open raw growth, UTF-16 and
 forced single-byte expansion, binary input, exact 4 MiB acceptance, absent
-files, untitled buffers, replacement and lost observers. Failure preserves the
+files, untitled buffers, replacement, reentrant observers and lost observers. Failure preserves the
 original version/text and permits a separately initiated later operation.
 
 The isolated immutable-native gate sends actual reload RPCs for oversized,
