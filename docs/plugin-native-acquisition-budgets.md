@@ -6,6 +6,10 @@ candidate, not a published release, Machine activation or production navigation
 cutover. It extends the single-input and whole-query bounds with a shared native
 acquisition limit. It does not complete the global history/background budget.
 
+The [accepted candidate](releases/native-acquisition-budgets-candidate-2026-09-18.md)
+records exact source/artifacts and successful source, 32 native, final-pair,
+temporary signed lifecycle, 18 connected v5 and 24 browser gates.
+
 ## Admission and lifetime
 
 One native GPUI application admits at most **64** combined in-flight and live

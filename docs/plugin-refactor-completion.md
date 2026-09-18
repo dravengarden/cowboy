@@ -431,9 +431,11 @@ and accepting a production effect are different milestones.
   One application-wide 64-slot pool covers local file/untitled loading and
   live buffer entities across worktrees. Actual loader/CRDT results and buffers
   retain shared charges, not Close ACKs or observers. Released weak indexes
-  are removed only for their original entity. Acceptance is recorded separately;
-  this is not a total byte/history/snapshot/background budget or production
-  navigation cutover.
+  are removed only for their original entity. Its
+  [candidate acceptance](releases/native-acquisition-budgets-candidate-2026-09-18.md)
+  passes the complete source gate, 32 native tests, the exact static pair,
+  temporary signed lifecycle, 18 connected v5 and 24 browser checks. This is
+  not a total byte/history/snapshot/background budget or production cutover.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -517,6 +519,9 @@ The [native reload-input candidate](plugin-native-reload-bounds.md) also closes
 the existing reload reader's per-input byte/decoded-text gap and completed-task
 cleanup. It does not introduce automatic reload or replace the remaining
 aggregate retained-history/background-effect limits in the Code row.
+The [acquisition lifetime candidate](plugin-native-acquisition-budgets.md) adds
+shared pre-load admission and actual-object release accounting across worktrees;
+retained history, detached snapshots and general background budgets remain open.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
