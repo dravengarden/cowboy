@@ -13,6 +13,8 @@ import type {
 } from "../../codeBuffers/owner.ts";
 import { BufferClientError } from "../../codeBuffers/protocol.ts";
 import { observePromise } from "../../codeBuffers/transport.ts";
+import type { NavigationKind } from "../../codeBuffers/navigationProtocol.ts";
+import type { Point } from "../../codeBuffers/protocol.ts";
 
 export type ReviewBufferMode = "legacy" | "owned" | "unavailable";
 export interface ReviewBufferSource {
@@ -46,6 +48,9 @@ export function createReviewBuffer(
   let refreshObserver:
     | { signal: AbortSignal; listener: () => void }
     | undefined;
+  let navigationObserver:
+    | { signal: AbortSignal; listener: () => void }
+    | undefined;
   const clearRefreshObserver = () => {
     if (refreshObserver) {
       refreshObserver.signal.removeEventListener(
@@ -57,6 +62,13 @@ export function createReviewBuffer(
   };
   const close = () => {
     clearRefreshObserver();
+    if (navigationObserver) {
+      navigationObserver.signal.removeEventListener(
+        "abort",
+        navigationObserver.listener,
+      );
+      navigationObserver = undefined;
+    }
     lifetime.abort();
     // Synchronously fence Apply/open/read, including a prepare still in flight.
     // The core registry retains unresolved cleanup for Settings.
@@ -125,6 +137,32 @@ export function createReviewBuffer(
   }
 
   return Object.freeze({
+    prepareNavigation(
+      content: CapturedContent,
+      point: Point,
+      kind: NavigationKind,
+      signal: AbortSignal,
+    ) {
+      const position = Object.freeze({ ...point });
+      return run(async (original) => {
+        if (original.navigation()) throw new BufferClientError("state");
+        if (navigationObserver) {
+          navigationObserver.signal.removeEventListener(
+            "abort",
+            navigationObserver.listener,
+          );
+        }
+        const listener = () => {
+          // A replaced source snapshot must revoke Execute, including late Prepare.
+          if (original.navigation() || original.view().busy === "navigate") {
+            void close();
+          }
+        };
+        navigationObserver = { signal, listener };
+        signal.addEventListener("abort", listener, { once: true });
+        return await original.prepareNavigation(content, position, kind);
+      }, signal);
+    },
     read<Q extends ContentQueries[ContentKind]>(
       content: CapturedContent,
       query: Q,

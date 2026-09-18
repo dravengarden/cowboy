@@ -67,8 +67,10 @@ owner. Neither action starts a timer, replays Open or switches to a legacy API.
 Diff chrome offers no native refresh/preparation/Apply. A native mismatch directs
 the user to full source for separately reviewed synchronization. No diff read,
 revalidation, projection replacement, unmount or cancellation writes to disk,
-prepares synchronization or retires an effect. Owned cross-file navigation
-remains unavailable until destination ownership exists.
+prepares synchronization or retires an effect. The subsequent
+[destination reader](plugin-review-owned-destinations.md) uses this same
+validated new-side source and point for explicit navigation, with independent
+target ownership. It does not enable production acquisition admission.
 
 Routine states occupy no status row. Refusals use the same single flat,
 paint-only attention row as source Review; details remain in the row's title.

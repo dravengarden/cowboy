@@ -10,7 +10,8 @@ if (
   suite !== "settings-recovery" && suite !== "code-buffers" &&
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
-  suite !== "review-document-refresh" && suite !== "review-diff"
+  suite !== "review-document-refresh" && suite !== "review-diff" &&
+  suite !== "review-destination"
 ) {
   throw new Error("unknown suite");
 }
@@ -38,6 +39,8 @@ const entry = suite === "idb"
   ? "runReviewDocumentRefreshBrowserConformance"
   : suite === "review-diff"
   ? "runReviewDiffBrowserConformance"
+  : suite === "review-destination"
+  ? "runReviewDestinationBrowserConformance"
   : "runProviderManagementBrowserConformance";
 if (!browser?.startsWith("/nix/store/") || !browser.endsWith("/bin/firefox")) {
   throw new Error(
@@ -155,7 +158,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "settings-recovery"
+      (suite === "review-destination"
+        ? 10
+        : suite === "settings-recovery"
         ? 9
         : suite === "code-buffer-cleanup"
         ? 7

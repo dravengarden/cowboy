@@ -26,6 +26,8 @@ import {
   type ReviewBuffer,
   type ReviewBufferSource,
 } from "./ownedReviewBuffer.ts";
+import type { NavigationKind } from "../../codeBuffers/navigationProtocol.ts";
+import type { Point } from "../../codeBuffers/protocol.ts";
 export { reviewDisplayText } from "./reviewDisplayText.ts";
 
 export type ReviewCodeStatus =
@@ -34,7 +36,8 @@ export type ReviewCodeStatus =
   | "mismatch"
   | "unavailable"
   | "incomplete"
-  | "synchronization";
+  | "synchronization"
+  | "navigation";
 type Capture = {
   reader: ReviewBuffer;
   content: CapturedContent;
@@ -69,6 +72,7 @@ export function useOwnedReviewBuffer(
   const [capture, setCapture] = useState<Capture>();
   const [captureFailed, setCaptureFailed] = useState<string>();
   const [evidence, setEvidence] = useState<Evidence>();
+  const [navigationCapture, setNavigationCapture] = useState<Capture>();
   const contentObserver = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
     if (!enabled) return;
@@ -143,6 +147,13 @@ export function useOwnedReviewBuffer(
           reconcile,
         );
         const observed = result.result.result;
+        if (reconcile && !selected.signal.aborted) {
+          // Navigation invalidates source evidence, even after group retirement.
+          // Only this explicit original-owner/content check restores annotations.
+          setNavigationCapture((pending) =>
+            pending === selected ? undefined : pending
+          );
+        }
         if (observed.kind === "mismatch") {
           report(selected, "mismatch");
           return;
@@ -179,17 +190,37 @@ export function useOwnedReviewBuffer(
       ? "incomplete"
       : captureFailed === completeText
       ? "unavailable"
+      : current && navigationCapture === current
+      ? "navigation"
       : matching?.status ?? "checking") as ReviewCodeStatus,
-    language: matching?.language,
+    language: current && navigationCapture === current
+      ? undefined
+      : matching?.language,
     // This identity changes for every displayed snapshot, including equal-text
     // ABA after a loading interval. Outline must end its previous observer too.
     identity: current,
+    async prepareNavigation(
+      point: Point,
+      kind: NavigationKind,
+      observer: AbortSignal,
+    ) {
+      if (!current) {
+        throw new BufferClientError("state");
+      }
+      setNavigationCapture(current);
+      return await current.reader.prepareNavigation(
+        current.content,
+        point,
+        kind,
+        AbortSignal.any([current.signal, observer]),
+      );
+    },
     async hover(
       row: number,
       column: number,
       observer: AbortSignal,
     ): Promise<CodeHover> {
-      if (!current) {
+      if (!current || navigationCapture === current) {
         throw new BufferClientError("state");
       }
       const signal = AbortSignal.any([current.signal, observer]);
@@ -212,7 +243,7 @@ export function useOwnedReviewBuffer(
       };
     },
     async outline(observer: AbortSignal): Promise<CodeOutline> {
-      if (!current) {
+      if (!current || navigationCapture === current) {
         throw new BufferClientError("state");
       }
       const result = await current.reader.read(current.content, {
@@ -247,7 +278,16 @@ export function useOwnedReviewBuffer(
         report(current, "unavailable")
       );
     },
-  }), [completeText, captureFailed, matching, current, path, report, language]);
+  }), [
+    completeText,
+    captureFailed,
+    matching,
+    current,
+    navigationCapture,
+    path,
+    report,
+    language,
+  ]);
 }
 
 export type OwnedReviewIntelligence = ReturnType<typeof useOwnedReviewBuffer>;

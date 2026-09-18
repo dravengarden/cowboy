@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "jsr:@std/assert";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import { captureContent, capturedIdentity } from "../../codeBuffers/content.ts";
 import {
   deferred,
@@ -9,9 +9,40 @@ import {
 } from "../../codeBuffers/fixture.ts";
 import { BufferClientError } from "../../codeBuffers/protocol.ts";
 import { createReviewBuffer, reviewBufferMode } from "./ownedReviewBuffer.ts";
+import { navigationWire } from "../../codeBuffers/navigationFixture.ts";
 
 const signal = () => new AbortController().signal;
 const text = await captureContent("a🙂z\n");
+
+Deno.test("Review source replacement during navigation Prepare revokes late Execute", async () => {
+  const f = await prepare();
+  const displayed = new AbortController();
+  const preparing = f.reader.prepareNavigation(
+    text,
+    { row: 0, column: 3 },
+    "definition",
+    displayed.signal,
+  );
+  const rejected = assertRejects(
+    () => preparing,
+    BufferClientError,
+    "cancelled",
+  );
+  await f.advance(3);
+  const owner = f.registry.retained()[0]!;
+  displayed.abort();
+  assert(owner.view().closing);
+  await rejected;
+  f.reply(2, {
+    ...navigationWire(),
+    content: capturedIdentity(text),
+    position: { row: 0, column: 3 },
+  });
+  await f.reader.close();
+  assertEquals(owner.navigation()?.view().canExecute, false);
+  assertEquals(f.calls.length, 3);
+  f.context.abort();
+});
 function observed(kind: "language" | "symbols" = "language") {
   return {
     ...readWire(kind),

@@ -72,7 +72,9 @@ can resurrect a retired owner.
 The cleanup store shows unresolved handoff as a separate status directing the
 user to the original navigation. It offers no ordinary Query/Release before
 the ID is known. The passive navigation store remains Query/Release-only and
-cannot prepare targets or initiate Open. No new panel is activated here.
+cannot prepare targets or initiate Open. The later
+[Review consumer](plugin-review-owned-destinations.md) supplies the explicit
+reader and passive recovery panel without broadening this core API.
 
 ## Acceptance and boundaries
 
@@ -93,8 +95,8 @@ Code browser suites and connected v5 checks remain required regressions.
 Exact source/artifact evidence belongs in the
 [candidate record](releases/browser-destination-candidate-2026-09-18.md).
 
-This is not an intended Review destination consumer: that still needs complete
-native text, checked actual UTF-16 coordinates and view-lifetime integration.
+This core handoff is consumed by the separate Review destination reader, which
+checks complete native text, actual UTF-16 coordinates and its view lifetime.
 Native pre-acquisition allocation bounds, supported-device/native acceptance,
 signed runtime rollout and independently authorized post-effect recovery are
 separate exits. Production navigation acquisition remains default closed.

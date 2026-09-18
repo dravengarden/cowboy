@@ -96,6 +96,7 @@ import type { CodeInspectCandidate, CodeRevealRange } from "./CodeViewer";
 import { ReviewDrawerShell } from "./ReviewDrawerShell";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewOutline } from "./ReviewOutline";
+import { ReviewNavigation } from "./ReviewNavigation";
 import { type ReviewBufferMode, reviewBufferMode } from "./ownedReviewBuffer";
 import {
   reviewDisplayText,
@@ -1660,7 +1661,14 @@ export function DocumentView({
             No symbol information is available at this location.
           </Typography>
         )}
-      {!hoverLoading && !hoverError && (
+      {usingOwned && hoverOpen && inspectTarget && owned.identity && (
+        <ReviewNavigation
+          key={`${inspectTarget.row}:${inspectTarget.column}`}
+          intelligence={owned}
+          point={inspectTarget}
+        />
+      )}
+      {!usingOwned && !hoverLoading && !hoverError && (
         <Stack direction="row" useFlexGap flexWrap="wrap" gap={1}>
           {navigationButton("definition", "Definition")}
           {navigationButton("declaration", "Declaration")}
@@ -1804,10 +1812,10 @@ export function DocumentView({
       )}
       {usingOwned && !mediaPreview && !markdownPreview &&
         previewKind !== "mermaid" && (isPatch
-        ? <ReviewDiffCodeStatus diff={diff} intelligence={owned} />
-        : target.kind === "source" && (
-          <ReviewCodeStatus intelligence={owned} />
-        ))}
+          ? <ReviewDiffCodeStatus diff={diff} intelligence={owned} />
+          : target.kind === "source" && (
+            <ReviewCodeStatus intelligence={owned} />
+          ))}
       {target.kind === "source" && (
         <ReviewOutline
           open={outlineOpen}
@@ -1818,7 +1826,12 @@ export function DocumentView({
           documentIdentity={displayText}
           onSelect={onOutlineSelect}
           owned={bufferMode !== "legacy"
-            ? { identity: owned.identity, read: owned.outline }
+            ? {
+              identity: owned.status === "navigation"
+                ? undefined
+                : owned.identity,
+              read: owned.outline,
+            }
             : undefined}
         />
       )}

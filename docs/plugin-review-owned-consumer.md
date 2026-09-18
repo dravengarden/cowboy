@@ -3,7 +3,7 @@
 The ordinary source-file Review now has a core-owned Code path. This is not a
 Plugin, an alternative resource registry, a Machine upgrade or a complete Code
 refactor. The [completion ledger](plugin-refactor-completion.md) still requires
-owned navigation destinations, native rollout and
+native destination rollout and
 supported-device acceptance.
 
 ## Select before acquiring
@@ -34,9 +34,11 @@ Switching Session/path or source/diff presentation ends that consumer. The later
 row against separately captured complete current-file text before positional
 reads on the same core API. Staged/history views are render-only in owned mode;
 no diff is a legacy fallback from an owned source read.
-The owned source consumer does not call path-based navigation: destination
-ownership is unfinished, so cross-file symbol navigation is unavailable in
-this mode. Local syntax coloring, source reading and Markdown links remain.
+The owned source consumer does not call path-based navigation. Its subsequent
+[destination reader](plugin-review-owned-destinations.md) explicitly prepares
+and executes on this owner, then reads the independently handed-off target.
+Production acquisition remains default closed pending native/device acceptance.
+Local syntax coloring, source reading and Markdown links remain.
 
 ## Displayed content and cancellation
 

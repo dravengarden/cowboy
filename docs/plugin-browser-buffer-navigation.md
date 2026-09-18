@@ -4,7 +4,9 @@ This finite core candidate extends the [browser buffer owner](plugin-buffer-clie
 with the [Service navigation protocol](plugin-service-buffer-navigation.md).
 Communication, identity, ownership and cleanup stay core-owned; this is not an
 installable navigation Plugin, generic DAG executor or new native dependency.
-Production acquisition remains default closed. No Review entrypoint is enabled.
+Production acquisition remains default closed. The subsequent
+[Review destination reader](plugin-review-owned-destinations.md) supplies an
+explicit consumer without changing that admission policy.
 
 ## One original source, one continuation
 
@@ -83,7 +85,8 @@ polling or implicit cleanup. It projects status and the original source label,
 not private target locations, raw errors, hashes or native references. Ending
 the core identity synchronously redacts labels and fences actions. Ordinary
 cleanup displays a distinct navigation fence and disables its unrelated controls.
-No recovery panel or navigation consumer is activated by this candidate.
+The subsequent Review reader adds a passive Settings Query/Release panel;
+neither surface grants native admission or enables production acquisition.
 
 ## Acceptance and remaining work
 

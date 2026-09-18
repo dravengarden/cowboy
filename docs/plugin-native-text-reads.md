@@ -84,8 +84,9 @@ cookies. Original-ID cleanup and retained uncertainty are unchanged; partial,
 stale or mismatched text never triggers retry, release/reopen or synchronization.
 
 A completed read is an observation, not a continuously live revision, native
-anchor grant or renewed navigation position. A future destination consumer
-must display this exact complete capture, validate its target range against it,
+anchor grant or renewed navigation position. The subsequent
+[Review destination consumer](plugin-review-owned-destinations.md) must display
+this exact complete capture, validate its target range against it,
 end positional observers when replacing the view and obtain fresh conditional
 reads. It cannot treat a historical location as current native authority.
 
@@ -107,8 +108,9 @@ after parent release/path removal. Historical v4 evidence does not accept this
 new read. These are disposable fixtures, not a production installation or an
 actual Review destination view.
 
-Service navigation acquisition remains default closed. The intended Web
-destination handoff/view, native pre-acquisition resource budget, signed rollout,
-supported-device acceptance and independent recovery remain separate exits.
+Service navigation acquisition remains default closed. The Web handoff and
+read-only Review consumer now exist separately; native pre-acquisition resource
+budget, signed rollout, supported-device acceptance and independent recovery
+remain separate exits.
 No running Controller, Machine, native process or installed Plugin is replaced
 merely by adding this reader.

@@ -56,6 +56,12 @@ export function ReviewCodeStatus(
         "Code intelligence is out of date · diagnostics hidden",
         "Code intelligence has an older copy of this file. Diagnostics and symbols stay hidden until it matches the text shown here.",
       ] as const
+    : status === "navigation"
+    ? [
+      "info",
+      "Source check required after navigation",
+      "Finish and release the original navigation in the symbol view or Settings → About, then Check this source. Nothing is reopened automatically.",
+    ] as const
     : status === "synchronization"
     ? [
       "info",
@@ -91,6 +97,16 @@ export function ReviewCodeStatus(
               sx={reviewCodeStatusAction}
             >
               Confirm
+            </Button>
+          )}
+          {status === "navigation" && (
+            <Button
+              size="small"
+              color="inherit"
+              onClick={() => openAppSettings({ tab: "info", section: "code" })}
+              sx={reviewCodeStatusAction}
+            >
+              Navigation
             </Button>
           )}
           {status === "mismatch" && diff && (

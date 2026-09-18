@@ -55,6 +55,7 @@ import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
 import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
 import { CodeBufferSynchronizationPanel } from "./CodeBufferSynchronizationPanel";
+import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel";
 import {
   type ClientRuntimeMetrics,
   readClientRuntimeMetrics,
@@ -923,6 +924,7 @@ export function InfoContent({
         <TelemetryBindingPanel desktop={desktop} />
         <CodeBufferCleanupPanel />
         <CodeBufferSynchronizationPanel />
+        <CodeBufferNavigationPanel />
         {!desktop && <Divider />}
         <Stack
           spacing={0.5}
