@@ -58,8 +58,10 @@ and verifies independent original text read/release.
 
 The fence is not durable recovery, a saved native acquisition record or proof
 that background work stopped. No restart, timeout, automatic cleanup or new
-credentials are used to clear it. Verified native close acknowledgements,
-independently authorized uncertain-acquisition recovery and global retained
+credentials are used to clear it. The subsequent
+[original-peer close candidate](plugin-native-close-confirmation.md) separately
+confirms native peer removal; it does not resolve an uncertain acquisition.
+Independently authorized recovery and global retained
 buffer/history/background-effect budgets remain separate work. These candidate
 checks are not production installation or supported-device acceptance; see the
 [completion ledger](plugin-refactor-completion.md).

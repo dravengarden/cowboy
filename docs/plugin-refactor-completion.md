@@ -411,6 +411,11 @@ and accepting a production effect are different milestones.
   original pins and exclusion with no replay; unrelated confirmed releases
   cannot clear that fence. This verifies native peer-map removal, not all buffer
   deallocation, background-effect drain, recovery or a production rollout.
+  Its [candidate acceptance](releases/native-close-confirmation-candidate-2026-09-18.md)
+  passes 124 adapter tests, 19 native tests, the exact static pair, temporary
+  signed lifecycle, all 18 connected v5 and 24 browser checks, plus the complete
+  source/Nix gates. Source-test loss of a real native Closed reply remains
+  Unknown; a completed upper-layer release still settles by original Query.
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only

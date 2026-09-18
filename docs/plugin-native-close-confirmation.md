@@ -6,6 +6,10 @@ This extends the [single-use Open](plugin-native-open-once.md) and
 [owned navigation](plugin-owned-navigation.md) candidates. It does not publish,
 install, replace a running native process or enable production navigation.
 
+The [candidate acceptance](releases/native-close-confirmation-candidate-2026-09-18.md)
+records exact immutable artifacts, native/source gates and separate lifecycle,
+connected and browser evidence.
+
 ## What Closed proves
 
 The private protobuf `CowboyCloseBuffers` route operates on the actual sender's

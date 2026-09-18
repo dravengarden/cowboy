@@ -20,7 +20,7 @@ receipts are historical observations without one. Admin/automation are not grant
 | `POST /api/code/buffers/{id}/navigations` | `content`, UTF-16 `position`, `query` | Effect-free preparation from an existing Service-admitted Open |
 | `PUT /api/code/navigations/{id}` | `{}` | One-use acquisition on the original source/runtime |
 | `GET /api/code/navigations/{id}` | No body | Original-ID observation; never another language query |
-| `DELETE /api/code/navigations/{id}` | `{}` | Explicit local-owner release, not rollback or native close acknowledgement |
+| `DELETE /api/code/navigations/{id}` | `{}` | Explicit original-owner release; no rollback or background-drain claim |
 | `POST /api/code/navigations/{id}/destinations` | Result `destination` index and exact `content` | Effect-free ordinary buffer preparation, never implicit Open |
 
 The five closed query kinds are definition, declaration, typeDefinition,
@@ -30,6 +30,14 @@ are refused. All route responses, including extractor rejections, are no-store.
 Machine/native references never enter browser snapshots. Separate `nav-` lookup
 IDs bind original user, immutable Session scope, original connection and source
 resource. Complete content identity and points remain part of that record.
+
+Close evidence depends on the exact retained native pair. Historical candidates
+confirmed only local enqueue; the Zed `1.15.0` / private server `1.2.0`
+[close candidate](plugin-native-close-confirmation.md) additionally requires
+original-peer removal confirmation. Losing that native reply retains
+ReleaseUnknown and cannot be repaired by observing current absence. Losing only
+an upper-layer reply may still settle by querying the completed original adapter
+record. Neither case permits replay, generation replacement or a recovery claim.
 
 Preparation, Execute and destination preparation recheck a live owned Session.
 Execute borrows the original Service-admitted Open through native dispatch,
