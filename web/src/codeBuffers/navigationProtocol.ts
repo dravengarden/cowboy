@@ -41,14 +41,24 @@ export interface NavigationLocation {
   readonly start: Point;
   readonly end: Point;
 }
+export type NavigationDestination =
+  & {
+    readonly destination: number;
+  }
+  & (
+    | { readonly state: "prepared"; readonly resourceId: ResourceId }
+    | {
+      readonly state: "pending" | "unknown" | "expired";
+      readonly resourceId: null;
+    }
+  );
 export interface NavigationSnapshot extends NavigationRequest {
   readonly apiVersion: 1;
   readonly navigationId: NavigationId;
   readonly sourceResourceId: ResourceId;
   readonly state: NavigationState;
   readonly locations: readonly NavigationLocation[];
-  /** Destination handoff is a separate client continuation, not an ID importer. */
-  readonly destinations: readonly never[];
+  readonly destinations: readonly NavigationDestination[];
   readonly pending: boolean;
 }
 
@@ -97,6 +107,7 @@ export function decodeNavigation(
   source: ResourceId,
   expected: NavigationRequest,
   id?: NavigationId,
+  requested: ReadonlySet<number> = new Set(),
 ): NavigationSnapshot {
   const row = record(value, [
     "apiVersion",
@@ -165,8 +176,31 @@ export function decodeNavigation(
     !["prepared", "unknown", "expired"].includes(row.state) ||
       locations.length === 0,
   );
-  // This finite client has never requested a destination; never adopt unsolicited IDs.
-  list(row.destinations, 0);
+  const resources = new Set<ResourceId>([source]);
+  let previous = -1;
+  const destinations = Object.freeze(
+    list(row.destinations, 256).map((value): NavigationDestination => {
+      const item = record(value, ["destination", "state", "resourceId"]);
+      const destination = integer(item.destination, 0, locations.length - 1);
+      requireValue(destination > previous && requested.has(destination));
+      previous = destination;
+      if (item.state === "prepared") {
+        const resourceId = decodeResourceId(item.resourceId);
+        requireValue(!resources.has(resourceId));
+        resources.add(resourceId);
+        return Object.freeze({ destination, state: "prepared", resourceId });
+      }
+      requireValue(
+        (item.state === "pending" || item.state === "unknown" ||
+          item.state === "expired") && item.resourceId === null,
+      );
+      return Object.freeze({
+        destination,
+        state: item.state,
+        resourceId: null,
+      });
+    }),
+  );
   return Object.freeze({
     apiVersion: 1,
     navigationId: row.navigationId as NavigationId,
@@ -176,7 +210,7 @@ export function decodeNavigation(
     query: expected.query,
     state: row.state,
     locations,
-    destinations: Object.freeze([]),
+    destinations,
     pending: row.pending,
   });
 }

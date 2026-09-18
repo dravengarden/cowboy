@@ -16,6 +16,7 @@ import contentGolden from "../../plugins/zed/adapter/fixtures/content.json" with
 };
 import { runTextBrowserConformance } from "./codeBufferTextBrowserConformance.ts";
 import { runNavigationBrowserConformance } from "./codeBufferNavigationBrowserConformance.ts";
+import { runDestinationBrowserConformance } from "./codeBufferDestinationBrowserConformance.ts";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -229,6 +230,7 @@ export async function runCodeBufferBrowserConformance(): Promise<string[]> {
   await contentLifetime(tests);
   tests.push(...await runTextBrowserConformance());
   tests.push(...await runNavigationBrowserConformance());
+  tests.push(...await runDestinationBrowserConformance());
   const pending = await opened();
   try {
     const close = pending.owner.close();

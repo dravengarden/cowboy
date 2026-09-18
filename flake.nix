@@ -87,6 +87,7 @@
           ./contracts/code-buffer-client.fixture.json
           ./contracts/code-buffer-sync.fixture.json
           ./contracts/code-buffer-navigation.fixture.json
+          ./contracts/code-buffer-destination.fixture.json
           ./plugins/zed/adapter/fixtures/content.json
           ./plugins/zed/adapter/fixtures/text.json
           ./tests/fixtures/otel-client.json
@@ -467,6 +468,7 @@
         test -e ${cowboy-src}/contracts/code-buffer-client.fixture.json
         test -e ${cowboy-src}/contracts/code-buffer-sync.fixture.json
         test -e ${cowboy-src}/contracts/code-buffer-navigation.fixture.json
+        test -e ${cowboy-src}/contracts/code-buffer-destination.fixture.json
         test -e ${cowboy-src}/components/provider-sdk/Cargo.toml
         test -e ${cowboy-src}/components/plugin-sdk/Cargo.toml
         test -e ${cowboy-src}/plugins/codex/provider.json
@@ -499,6 +501,7 @@
         test ! -e ${machine-src}/plugins/zed/adapter/src/main.rs
         test ! -e ${machine-src}/contracts/code-buffer-sync.fixture.json
         test ! -e ${machine-src}/contracts/code-buffer-navigation.fixture.json
+        test ! -e ${machine-src}/contracts/code-buffer-destination.fixture.json
         test -e ${machine-src}/plugins/gemini/provider.json
         test ! -e ${machine-src}/components/provider-runtime/lock.json
         test -e ${code-adapter-src}/components/provider-sdk/Cargo.toml

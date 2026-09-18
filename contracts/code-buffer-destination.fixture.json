@@ -1,0 +1,31 @@
+{
+  "apiVersion": 1,
+  "navigationId": "nav-0123456789abcdef0123456789abcdef-0000000000000001",
+  "sourceResourceId": "0123456789abcdef0123456789abcdef-0000000000000001",
+  "content": {
+    "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    "utf8Bytes": 3
+  },
+  "position": { "row": 0, "column": 1 },
+  "query": "definition",
+  "state": "retained",
+  "locations": [
+    {
+      "path": "src/target.rs",
+      "content": {
+        "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "utf8Bytes": 3
+      },
+      "start": { "row": 0, "column": 0 },
+      "end": { "row": 0, "column": 3 }
+    }
+  ],
+  "destinations": [
+    {
+      "destination": 0,
+      "state": "prepared",
+      "resourceId": "0123456789abcdef0123456789abcdef-0000000000000002"
+    }
+  ],
+  "pending": false
+}

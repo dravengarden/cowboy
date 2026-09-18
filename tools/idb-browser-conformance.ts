@@ -160,7 +160,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "code-buffer-cleanup"
         ? 7
         : suite === "code-buffers"
-        ? 18
+        ? 24
         : suite === "idb" || suite === "code-buffer-sync"
         ? 8
         : suite === "idb-outbox"

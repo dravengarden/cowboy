@@ -348,7 +348,7 @@ In addition, require all applicable Provider gates below:
   hashing and cancellation-without-next-page gates in
   `docs/plugin-native-text-reads.md`. The connected v5 extension must read a
   multi-page destination after parent/path removal; v4 does not accept it.
-  Run `just code-buffer-browser-conformance <absolute-firefox>` for all eighteen
+  Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not
   accept an intended navigation view, native acquisition budget or device.
@@ -357,8 +357,14 @@ In addition, require all applicable Provider gates below:
   Check original Open intent, pre-dispatch group capacity, one-use Execute,
   observer cancellation, source cleanup fencing, query-only lost Execute/Release,
   exact 202 no-admission handling and identity-loss redaction. Refuse unsolicited
-  destination IDs; this finite continuation is not destination handoff, intended
-  Review consumer acceptance or native pre-allocation budgets. See
+  destination IDs. Destination handoff changes also require the shared actual
+  Service/Web destination fixture and all six destination browser cases: opaque
+  original targets, capacity before POST, lost/cancelled reply adoption into the
+  same ordinary slot, explicit separate Open, independent child release, inert
+  expiry, immutable receipt IDs and identity-loss redaction. Historical Prepared
+  receipts must never reset or revive children. Pending slots cannot be evicted,
+  re-POSTed or repaired by path. This is not intended Review consumer acceptance
+  or native pre-allocation budgets. See `docs/plugin-browser-buffer-destinations.md` and
   `docs/plugin-browser-buffer-navigation.md`. Keep production acquisition closed.
   See `docs/plugin-service-buffer-navigation.md` and
   `docs/plugin-service-buffer-sync.md`.

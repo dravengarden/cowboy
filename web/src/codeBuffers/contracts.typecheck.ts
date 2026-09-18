@@ -46,6 +46,15 @@ export function navigationTypes(
   source.execute({});
   // @ts-expect-error no path-based or serialized destination adoption API
   operation.openDestination("target");
+  // @ts-expect-error a numeric index or serialized location is not an original target
+  operation.prepareDestination(0);
+  // @ts-expect-error a buffer ID cannot grant destination ownership
+  operation.prepareDestination(resource);
+  const location = operation.view().observation.locations[0]!;
+  // @ts-expect-error displayed JSON cannot reconstruct an opaque target
+  operation.prepareDestination({ location });
+  // @ts-expect-error no serialized-ID adoption entrypoint on an ordinary buffer
+  owner.adopt(resource);
   return { wrongSource, wrongSync };
 }
 

@@ -37,7 +37,7 @@ effects do not expire locally or make space through eviction.
 | Fresh Prepared, no Execute/Release attempt, source view active | Explicit Execute, Query or Release |
 | Fresh Prepared after source close, never executed | Query or Release; no Execute |
 | Execute response lost, or fresh Unknown | Original-group Query only |
-| Fresh Retained, Release not attempted | Query or explicit Release |
+| Fresh Retained, Release not attempted | Query, explicit Release, or original-target preparation while the source view is active |
 | Release response lost or ReleaseUnknown | Original-group Query only; never resend DELETE |
 | Released or inert Expired | End the group; ordinary source cleanup needs fresh source evidence |
 | Core Service/principal lifetime ended | No remote action; retain/redact local recovery status |
@@ -71,9 +71,10 @@ Repeated paths must have the same content. Location coordinates are only bounded
 historical evidence; a future destination display must validate actual complete
 text and UTF-16 ranges before use.
 
-This client has not requested any destination: nonempty `destinations` are
-therefore refused instead of silently importing ordinary owner IDs. Destination
-preparation/adoption needs its own typed continuation and capacity reservation.
+Unrequested destination indices are refused instead of importing ordinary owner
+IDs. The [typed target handoff](plugin-browser-buffer-destinations.md) reserves an
+ordinary slot before its one-use request and adopts only that original slot.
+Paths, displayed JSON and copied tokens cannot initiate or recover a handoff.
 
 The passive `navigations` recovery store, also exposed by `productCodeBuffers`
 without calling `ready()` or Service discovery, accepts only original in-memory
@@ -94,13 +95,13 @@ captures, generic operations and destination import. Unit tests exercise
 cancellation, unknown outcomes, one-use admission, terminal/target monotonicity,
 capacity before dispatch, context loss and stale/foreign recovery handles.
 
-The isolated Firefox owner suite now requires 18 cases: the previous 11 plus
-seven navigation cases, using browser WebCrypto, Response streams, real clicks
-and cancellation. Other product-context, cleanup, synchronization, source,
+The isolated Firefox owner suite now requires 24 cases: the previous 11 plus
+seven navigation and six destination cases, using browser WebCrypto, Response
+streams, real clicks and cancellation. Other product-context, cleanup, synchronization, source,
 working-diff and document-refresh suites remain mandatory regressions. Exact
 results belong in the [candidate record](releases/browser-navigation-candidate-2026-09-18.md).
 
-This is not complete destination handoff/view integration, native acquisition
+This is not complete intended destination-view integration, native acquisition
 pre-allocation bounds, intended-consumer or supported-device acceptance, a
 production rollout or independently authorized post-effect recovery. Those
 remain explicit exits in the [completion ledger](plugin-refactor-completion.md).

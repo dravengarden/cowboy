@@ -380,6 +380,16 @@ and accepting a production effect are different milestones.
   18 connected v5 checks against the unchanged exact native pair. Destination handoff,
   intended Review views, native budgets, production activation and independent
   recovery remain separate; acquisition is still default closed.
+- [Browser destination handoff](plugin-browser-buffer-destinations.md) adds
+  original opaque target tokens, ordinary-owner capacity reserved before the
+  single POST, and closed Service receipt adoption into that same local slot.
+  Query can reconcile lost replies without another preparation; view close
+  retains unresolved ownership. Open and child release remain explicit and
+  independent of group/source cleanup; historical Prepared receipts cannot
+  reset or revive a child. This closes browser preparation/adoption, not the
+  intended Review destination view, native allocation bounds, device acceptance
+  or production acquisition policy. Verification is recorded in the
+  [candidate acceptance](releases/browser-destination-candidate-2026-09-18.md).
 - [Core process cleanup](plugin-process-cleanup.md) no longer resolves `kill`
   through PATH. Typed process-group syscalls refuse broad/overflowed selectors,
   retain original direct-worker ownership through delivery, and treat only
@@ -455,7 +465,7 @@ record exact accepted artifacts and bounded production continuity observations.
 | P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
-| P4 / Code consumer | Browser destination preparation/adoption and complete intended destination views beyond the finite browser navigation continuation, Service handoff, original-native-text reader and source/working-diff consumers; native acquisition bounds and independent acceptance of the deployed Machine/exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; pre-acquisition resource budgets and supported-client native acceptance |
+| P4 / Code consumer | Complete intended destination views beyond the finite browser navigation/target-handoff owners, Service handoff, original-native-text reader and source/working-diff consumers; native acquisition bounds and independent acceptance of the deployed Machine/exact native pair through the intended consumer | Actual consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; pre-acquisition resource budgets and supported-client native acceptance |
 | P4 / recovery | Independently authorized post-effect Plugin restoration and verified exact native-worker recovery; bounded evidence archival that retains unresolved references | Installation CAS, fresh recovery purpose/budget, partial outcomes, no restored-turn claim, no credential rollback or userdata deletion |
 | P4 / diagnostics | Extend the deployed unified install/uninstall/resolution Web consumer as additional finite domains and post-effect recovery exist | Reloaded UI reads durable status without replay or fabricated completion; recoveries remain explicitly separate and independent observations never claim an atomic cross-domain snapshot |
 

@@ -5,6 +5,14 @@ import {
   type NavigationSnapshot,
 } from "./navigationProtocol.ts";
 import { observePromise } from "./transport.ts";
+import {
+  createNavigationDestinations,
+  type DestinationReservation,
+  type NavigationTarget,
+} from "./navigationDestinations.ts";
+import type { NavigationLocation } from "./navigationProtocol.ts";
+import type { ContentIdentity } from "./content.ts";
+import type { OwnedCodeBuffer } from "./owner.ts";
 
 export interface NavigationView {
   readonly observation: NavigationSnapshot;
@@ -17,6 +25,7 @@ export interface NavigationView {
   readonly canExecute: boolean;
   readonly canRelease: boolean;
   readonly canInspect: boolean;
+  readonly canPrepareDestination: boolean;
 }
 export interface OwnedNavigation {
   view(): NavigationView;
@@ -24,6 +33,12 @@ export interface OwnedNavigation {
   observe(observer?: AbortSignal): Promise<NavigationSnapshot>;
   /** Group release only, not buffer release, rollback or native close proof. */
   release(observer?: AbortSignal): Promise<NavigationSnapshot>;
+  targets(): readonly NavigationTarget[];
+  prepareDestination(
+    target: NavigationTarget,
+    observer?: AbortSignal,
+  ): Promise<OwnedCodeBuffer>;
+  destination(target: NavigationTarget): OwnedCodeBuffer | undefined;
 }
 
 /** Internal constructor used only by the original buffer's admitted preparation.
@@ -40,6 +55,11 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
   ): Promise<{ value: unknown; status: number }>;
   changed(): void;
   retired(): void;
+  reserveDestination(location: NavigationLocation): DestinationReservation;
+  prepareDestination(
+    destination: number,
+    content: ContentIdentity,
+  ): Promise<{ value: unknown; status: number }>;
 }): OwnedNavigation {
   let last = prepared;
   let fresh = true;
@@ -47,6 +67,7 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
   let executed = false;
   let releasing = false;
   let failure: Failure | undefined;
+  const destinations = createNavigationDestinations(ports.reserveDestination);
   const available = () => !ended && !ports.context.aborted && !ports.busy();
   const executeAllowed = () =>
     available() && fresh && !last.pending &&
@@ -55,13 +76,26 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
     available() && fresh && !last.pending &&
     !releasing &&
     (last.state === "retained" || !executed && last.state === "prepared");
-  const run = (method: "PUT" | "GET" | "DELETE", observer?: AbortSignal) => {
+  const destinationAllowed = () =>
+    available() && fresh && !last.pending &&
+    !ports.closing() && !releasing && last.state === "retained" &&
+    destinations.hasUnrequested();
+  const run = (
+    method: "PUT" | "GET" | "DELETE" | "POST",
+    observer?: AbortSignal,
+    target?: NavigationTarget,
+  ) => {
     ports.check(observer);
     if (ports.busy()) throw new BufferClientError("busy");
     if (
       ended || method === "PUT" && !executeAllowed() ||
-      method === "DELETE" && !releaseAllowed()
+      method === "DELETE" && !releaseAllowed() ||
+      method === "POST" && !destinationAllowed()
     ) throw new BufferClientError("state");
+    // Reservation/identity is stored before dispatch, not owned by the observer.
+    const destination = method === "POST"
+      ? destinations.reserve(target!)
+      : undefined;
     return observePromise(
       ports.perform(async () => {
         if (method === "PUT") executed = true;
@@ -69,13 +103,19 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
         fresh = false;
         ports.changed();
         try {
-          const reply = await ports.request(method);
+          const reply = method === "POST"
+            ? await ports.prepareDestination(
+              destination!.destination,
+              destination!.content,
+            )
+            : await ports.request(method);
           const next = decodeNavigation(
             reply.value,
             reply.status,
             prepared.sourceResourceId,
             prepared,
             prepared.navigationId,
+            destinations.requested(),
           );
           if (last.state === "retained" || last.state === "release_unknown") {
             requireValue(
@@ -111,6 +151,7 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
                 next.state === "prepared" && next.pending,
             );
           }
+          let releaseNotAdmitted = false;
           if (method === "DELETE") {
             requireValue(
               next.pending || next.state === "release_unknown" ||
@@ -122,12 +163,15 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
               next.pending && next.state === last.state &&
               next.state !== "release_unknown"
             ) {
-              releasing = false;
+              releaseNotAdmitted = true;
             }
           }
           if (ports.context.aborted) {
             throw new BufferClientError("context_lost");
           }
+          destinations.accept(next);
+          // A malformed child receipt cannot acknowledge no-admission/rearm.
+          if (releaseNotAdmitted) releasing = false;
           last = next;
           fresh = true;
           failure = undefined;
@@ -161,6 +205,7 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
         canExecute: executeAllowed(),
         canRelease: releaseAllowed(),
         canInspect: available(),
+        canPrepareDestination: destinationAllowed(),
       }),
     async execute(observer?: AbortSignal) {
       return await run("PUT", observer);
@@ -170,6 +215,12 @@ export function ownNavigation(prepared: NavigationSnapshot, ports: {
     },
     async release(observer?: AbortSignal) {
       return await run("DELETE", observer);
+    },
+    targets: destinations.targets,
+    destination: destinations.destination,
+    async prepareDestination(target: NavigationTarget, observer?: AbortSignal) {
+      await run("POST", observer, target);
+      return destinations.destination(target)!;
     },
   });
 }

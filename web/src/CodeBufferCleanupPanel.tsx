@@ -28,6 +28,7 @@ const labels = {
   pending: "Operation pending — cleanup was not queued",
   synchronization: "Resolve and retire the original synchronization first",
   navigation: "Inspect and release the original navigation first",
+  destination: "Inspect the original navigation to resolve target handoff",
   needs_cleanup: "Cleanup still required",
 } satisfies Record<CleanupStatus, string>;
 const PAGE_SIZE = 5;

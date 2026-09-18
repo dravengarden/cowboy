@@ -18,6 +18,7 @@ export type CleanupStatus =
   | "pending"
   | "synchronization"
   | "navigation"
+  | "destination"
   | "needs_cleanup";
 export interface CleanupRow {
   readonly handle: CleanupHandle;
@@ -43,6 +44,7 @@ function status(view: OwnerView): CleanupStatus {
   if (view.busy || view.cleaning) return "working";
   if (view.synchronizing) return "synchronization";
   if (view.navigating) return "navigation";
+  if (view.handingOff) return "destination";
   if (view.releaseAttempted) return "release_uncertain";
   if (view.failure || !view.fresh) return "unavailable";
   if (!view.observation || view.observation.state === "unknown") {

@@ -37,9 +37,11 @@ import {
 import { decodeSynchronization } from "./synchronizationProtocol.ts";
 import { readCompleteText, textIdentity, type TextRead } from "./text.ts";
 import { type OwnedNavigation, ownNavigation } from "./navigation.ts";
+import type { DestinationReservation } from "./navigationDestinations.ts";
 import {
   decodeNavigation,
   type NavigationKind,
+  type NavigationLocation,
   navigationRequest,
 } from "./navigationProtocol.ts";
 
@@ -72,6 +74,8 @@ export interface OwnerView {
   readonly synchronizing: boolean;
   /** Original navigation must end explicitly before source reads or release. */
   readonly navigating: boolean;
+  /** Capacity is owned, but only the original navigation can provide its ID. */
+  readonly handingOff: boolean;
 }
 export type CloseResult =
   | { readonly kind: "unopened" }
@@ -130,31 +134,46 @@ export function createOwnedCodeBuffers(options: TransportOptions) {
       --navigations;
     };
   };
+  const allocate = (
+    target: BufferTarget,
+    destination = false,
+  ): DestinationReservation => {
+    transport.check();
+    if (monitor.size() >= MAX_OWNERS) throw new BufferClientError("capacity");
+    const captured = Object.freeze({
+      sessionId: text(target.sessionId, 128),
+      path: text(target.path, 4096),
+    });
+    if (!captured.sessionId || !captured.path) {
+      throw new BufferClientError("protocol");
+    }
+    const entry = createOwner(
+      captured,
+      context,
+      transport,
+      () => monitor.retire(entry.owner),
+      monitor.changed,
+      reserveNavigation,
+      destination,
+      (location) =>
+        allocate({ sessionId: captured.sessionId, path: location.path }, true),
+      (id) =>
+        requireValue(
+          !monitor.retained().some((owner) =>
+            owner !== entry.owner && owner.view().resourceId === id
+          ),
+        ),
+    );
+    monitor.add(entry.owner, captured);
+    return entry;
+  };
   return Object.freeze({
     cleanup: monitor.store,
     synchronizations: monitor.synchronizations,
     navigations: monitor.navigations,
     /** No restore(id), import, serialization, LRU or automatic account adoption. */
     reserve(target: BufferTarget): OwnedCodeBuffer {
-      transport.check();
-      if (monitor.size() >= MAX_OWNERS) throw new BufferClientError("capacity");
-      const captured = Object.freeze({
-        sessionId: text(target.sessionId, 128),
-        path: text(target.path, 4096),
-      });
-      if (!captured.sessionId || !captured.path) {
-        throw new BufferClientError("protocol");
-      }
-      const owner = createOwner(
-        captured,
-        context,
-        transport,
-        () => monitor.retire(owner),
-        monitor.changed,
-        reserveNavigation,
-      );
-      monitor.add(owner, captured);
-      return owner;
+      return allocate(target).owner;
     },
     retained(): readonly OwnedCodeBuffer[] {
       return monitor.retained();
@@ -169,7 +188,12 @@ function createOwner(
   retire: () => void,
   changed: () => void,
   reserveNavigation: () => () => void,
-): OwnedCodeBuffer {
+  destination: boolean,
+  reserveDestination: (
+    location: NavigationLocation,
+  ) => DestinationReservation,
+  uniqueDestination: (id: ResourceId) => void,
+): DestinationReservation {
   let phase: OwnerView["phase"] = "reserved";
   let id: ResourceId | undefined;
   let last: Snapshot | undefined;
@@ -183,6 +207,7 @@ function createOwner(
   let cleanup: Promise<CloseResult> | undefined;
   let synchronization: OwnedSynchronization | undefined;
   let navigation: OwnedNavigation | undefined;
+  let handingOff = destination;
   function unavailable(kind: Failure): never {
     throw new BufferClientError(kind);
   }
@@ -243,7 +268,7 @@ function createOwner(
   };
   const observe = async (observer?: AbortSignal): Promise<Snapshot> => {
     check(observer);
-    if (synchronization || navigation) unavailable("state");
+    if (synchronization || navigation || handingOff) unavailable("state");
     if (phase === "released" && last) return Promise.resolve(last);
     resource();
     return observePromise(perform("observe", () => snapshot("GET")), observer);
@@ -252,6 +277,7 @@ function createOwner(
     // Detach immediately, drain the owned continuation, then decide using its
     // result. This queues a LOCAL cleanup pass, not a server DELETE from a 202.
     await job?.settled;
+    if (handingOff) return Object.freeze({ kind: "retained", owner });
     if (!id) {
       phase = "unopened";
       retire();
@@ -308,10 +334,13 @@ function createOwner(
         failure,
         synchronizing: !!synchronization || job?.kind === "synchronize",
         navigating: !!navigation || job?.kind === "navigate",
+        handingOff,
       }),
     async prepare(observer?: AbortSignal) {
       check(observer);
-      if (prepared || closing || phase !== "reserved") unavailable("state");
+      if (destination || prepared || closing || phase !== "reserved") {
+        unavailable("state");
+      }
       prepared = true;
       return observePromise(
         perform("prepare", async () => {
@@ -548,6 +577,15 @@ function createOwner(
                   "navigations",
                 ),
               changed,
+              reserveDestination,
+              prepareDestination: (destination, content) =>
+                transport.request(
+                  `/${prepared.navigationId}/destinations`,
+                  "POST",
+                  { destination, content },
+                  2 * 1024 * 1024,
+                  "navigations",
+                ),
               retired: () => {
                 if (navigation === owned) navigation = undefined;
                 free();
@@ -577,5 +615,40 @@ function createOwner(
       return cleanup;
     },
   });
-  return owner;
+  const validate = (next: ResourceId) => {
+    transport.check();
+    requireValue(destination);
+    if (id) requireValue(id === next);
+    else {
+      requireValue(handingOff && phase === "reserved");
+      uniqueDestination(next);
+    }
+  };
+  return {
+    owner,
+    validate,
+    adopt(next) {
+      validate(next);
+      if (id) return; // historical group evidence cannot reset an opened/closed child
+      id = next;
+      prepared = true;
+      handingOff = false;
+      phase = "retained";
+      accept(
+        Object.freeze({
+          apiVersion: 1,
+          resourceId: next,
+          state: "prepared",
+          pending: false,
+        }),
+      );
+    },
+    abandon() {
+      requireValue(destination && !id);
+      handingOff = false;
+      phase = "unopened"; // only an inert reservation, never an acquired buffer
+      retire();
+      changed();
+    },
+  };
 }
