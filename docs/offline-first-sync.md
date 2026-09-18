@@ -1,10 +1,11 @@
 # Offline-first synchronization
 
-Status: design, 2026-09-18. Nothing in this document is implemented yet. It
-is the app-level contract for how Cowboy Web opens, reads, composes, sends and
-reconciles when the controller is slow, unreachable, restarting or when the
-device is offline. It is UX-first: implementation cost decides phase order, not
-whether a behaviour is in scope.
+Status: design 2026-09-18; Phase 1 implemented on Web the same day (see
+[Implementation status](#implementation-status)). This is the app-level
+contract for how Cowboy Web opens, reads, composes, sends and reconciles when
+the controller is slow, unreachable, restarting or when the device is offline.
+It is UX-first: implementation cost decides phase order, not whether a
+behaviour is in scope.
 
 Related contracts that stay authoritative: the Hub as sole arbiter and `seq`
 owner ([core hub](architecture/02-core-hub.md)), the optimistic state-sync
@@ -472,6 +473,34 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 | 8 | Sessions drawer swipe with the pill visible | 1:1 tracking, no dropped frames |
 | 9 | Auth expiry while offline, then reconnect | `Sign in to sync`; after login the outbox drains |
 | 10 | Two tabs, one device, both queue offline | both rows survive and both drain once |
+
+## Implementation status
+
+Phase 1 shipped as a Web-only release (service worker `cowboy-v1722`):
+
+- `web/src/replica.ts` owns the paint caches through new closed
+  `ProductCacheScope` keys (`service:sessions`, `service:machines`,
+  `session:<sid>:tail`, `session:<sid>:delivery`) on the existing dataset
+  owner; sign-out discards them inside the same shutdown barrier as the
+  outboxes, while an expired sign-in or a changed dataset only seals them.
+- `web/src/replicaTail.ts` bounds a stored tail to the daemon's snapshot
+  limits and detects a restarted transcript epoch by seq overlap, since the
+  server does not yet carry `transcript_epoch`.
+- `store.ts` paints replica sessions and machines in `connect()`, restores a
+  cached tail in `openSession()`, persists tails on checkpoints, tracks
+  `sessionsSource` / `transcriptSources`, persists held deliveries, derives
+  the sync status (`useSyncStatus`, `retrySyncNow`, `canApplyUpdateNow`).
+- Gates: the auth gate mounts from `cowboy:auth-status-cache` on a `retry`
+  probe and keeps polling; the setup gate latches from the replica and names
+  an empty offline start; the stall auto-reload fires only with no replica.
+- Presentation: `MobileSyncPill` with its detail sheet, the Desktop status
+  line segment, `TranscriptCachedCaption`, the update banner restricted to
+  the update decision and gated by `canApplyUpdateNow`.
+
+Not yet implemented: sessions drawer badges and "not cached" glyphs, the
+inline gap divider, drafts in IndexedDB, the hydration scheduler's P2/P3
+prefetch, and every server change in Phase 2. Replay correctness across a
+controller restart is therefore unchanged from before this work.
 
 ## Open decisions
 
