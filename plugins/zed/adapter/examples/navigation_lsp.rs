@@ -51,18 +51,44 @@ fn main() -> Result<()> {
                     "start": {"line": 0, "character": 4},
                     "end": {"line": 0, "character": 6}
                 });
-                json!([
-                    {"uri": uri("destination-a.rs"), "range": range},
-                    {"uri": uri("destination-b.rs"), "range": range},
-                    {"uri": uri("destination-a.rs"), "range": range}
-                ])
+                if document.is_some_and(|uri| uri.ends_with("reject-locations.rs")) {
+                    json!(
+                        (0..257)
+                            .map(|_| json!({"uri": uri("never-acquire.rs"), "range": range}))
+                            .collect::<Vec<_>>()
+                    )
+                } else if document.is_some_and(|uri| uri.ends_with("reject-targets.rs")) {
+                    json!((0..33).map(|i| json!({"uri": uri(&format!("never-acquire-{i}.rs")), "range": range})).collect::<Vec<_>>())
+                } else if document.is_some_and(|uri| uri.ends_with("reject-external.rs")) {
+                    json!([
+                        {"uri": uri("destination-a.rs"), "range": range},
+                        {"uri": format!("file://{}/outside.rs", root.display()), "range": range}
+                    ])
+                } else if document.is_some_and(|uri| uri.ends_with("reject-range.rs")) {
+                    json!([{"uri": uri("destination-a.rs"), "range": {
+                        "start": {"line":0,"character":5}, "end": {"line":0,"character":6}
+                    }}])
+                } else {
+                    json!([
+                        {"uri": uri("destination-a.rs"), "range": range},
+                        {"uri": uri("destination-b.rs"), "range": range},
+                        {"uri": uri("destination-a.rs"), "range": range}
+                    ])
+                }
             }
             "textDocument/hover" => json!({"contents": {
                 "kind": "plaintext", "value": "owned native destination fixture"
             }}),
             _ => Value::Null,
         };
-        let bytes = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "result": result}))?;
+        let response = if method == "textDocument/definition"
+            && document.is_some_and(|uri| uri.ends_with("reject-lsp.rs"))
+        {
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32801,"message":"content modified"}})
+        } else {
+            json!({"jsonrpc": "2.0", "id": id, "result": result})
+        };
+        let bytes = serde_json::to_vec(&response)?;
         write!(output, "Content-Length: {}\r\n\r\n", bytes.len())?;
         output.write_all(&bytes)?;
         output.flush()?;

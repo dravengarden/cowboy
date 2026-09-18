@@ -1,6 +1,54 @@
 use super::*;
 
 #[tokio::test]
+async fn typed_native_refusal_never_becomes_empty_success_or_clears_unknown() {
+    use wire::cowboy_buffer_sync_envelope::Payload;
+    use wire::cowboy_navigation_response::{Outcome, Refusal};
+    for reason in [
+        Refusal::Budget,
+        Refusal::Source,
+        Refusal::Target,
+        Refusal::LanguageServer,
+        Refusal::Deadline,
+    ] {
+        let mut f = Fixture::new().await;
+        let nav = f.prepare().await;
+        let task = f.spawn(action(&nav, Action::Execute));
+        let request = f.navigation.recv().await.unwrap();
+        let reply = wire::CowboyBufferSyncEnvelope {
+            responding_to: Some(request.id),
+            payload: Some(Payload::NavigationResponse(
+                wire::CowboyNavigationResponse {
+                    protocol: 1,
+                    outcome: Outcome::Refused as i32,
+                    refusal: reason as i32,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(f.zed.sync.response(request.id, &reply.encode_to_vec()));
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<crate::navigation_native::NativeRefusal>()
+                .unwrap()
+                .0,
+            reason
+        );
+        for action_kind in [Action::Query, Action::Execute, Action::Release] {
+            assert!(matches!(
+                state(f.request(action(&nav, action_kind)).await.unwrap()),
+                State::Unknown
+            ));
+        }
+        assert!(f.navigation.try_recv().is_err());
+        assert!(f.outbound.try_recv().is_err());
+        assert!(crate::sync_owners::ensure_admission(&f.buffers.active.read().await).is_err());
+    }
+}
+
+#[tokio::test]
 async fn navigation_reply_can_precede_the_original_target_state_and_last_chunk() {
     let mut f = Fixture::new().await;
     let nav = f.prepare().await;

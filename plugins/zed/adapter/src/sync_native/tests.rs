@@ -50,6 +50,41 @@ fn encoded(id: u32, response: wire::CowboyBufferSyncResponse) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn navigation_support_cannot_borrow_sync_or_upstream_support() {
+    for wrong in [true, false] {
+        let (zed, mut receiver) = fixture().await;
+        let task = {
+            let zed = zed.clone();
+            tokio::spawn(async move { crate::navigation_native::support(Some(&zed)).await })
+        };
+        let request = receiver.recv().await.unwrap();
+        let Some(Payload::NavigationRequest(value)) = request.payload else {
+            panic!("not a navigation probe")
+        };
+        assert!(value.query.is_empty());
+        let response = if wrong {
+            encoded(request.id, supported())
+        } else {
+            wire::CowboyBufferSyncEnvelope {
+                responding_to: Some(request.id),
+                payload: Some(Payload::NavigationResponse(
+                    wire::CowboyNavigationResponse {
+                        protocol: 1,
+                        outcome: wire::cowboy_navigation_response::Outcome::Supported as i32,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }
+            .encode_to_vec()
+        };
+        assert!(zed.sync.response(request.id, &response));
+        assert_eq!(task.await.unwrap().is_err(), wrong);
+        assert!(receiver.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn owner_support_is_distinct_effect_free_and_requires_the_actual_native_pair() {
     let worktrees = Arc::default();
     let buffers: Buffers = Arc::default();

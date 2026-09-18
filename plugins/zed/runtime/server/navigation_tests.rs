@@ -100,3 +100,113 @@ fn cowboy_navigation_admission_is_single_and_released_by_owned_guard() {
     drop(first);
     assert!(state.admit().is_ok());
 }
+
+#[gpui::test]
+async fn cowboy_navigation_two_real_request_handlers_refuse_before_any_target_open(
+    cx: &mut gpui::TestAppContext,
+) {
+    use fs::FakeFs;
+    use language::{FakeLspAdapter, rust_lang};
+    use std::sync::atomic::AtomicUsize;
+    cx.update(|cx| {
+        let settings = settings::SettingsStore::test(cx);
+        cx.set_global(settings);
+        release_channel::init(semver::Version::new(0, 0, 0), cx);
+    });
+    let fs = FakeFs::new(cx.executor());
+    fs.insert_tree(
+        "/workspace",
+        serde_json::json!({"source.rs": "fn source() {}", "target.rs":"🙂x\n"}),
+    )
+    .await;
+    let project = Project::test(fs, [Path::new("/workspace")], cx).await;
+    let languages = project.read_with(cx, |project, _| project.languages().clone());
+    languages.add(rust_lang());
+    let mut first = languages.register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            name: "cowboy-first",
+            ..Default::default()
+        },
+    );
+    let mut second = languages.register_fake_lsp(
+        "Rust",
+        FakeLspAdapter {
+            name: "cowboy-second",
+            ..Default::default()
+        },
+    );
+    let (buffer, _handle) = project
+        .update(cx, |project, cx| {
+            project.open_local_buffer_with_lsp(Path::new("/workspace/source.rs"), cx)
+        })
+        .await
+        .unwrap();
+    let first = first.next().await.unwrap();
+    let second = second.next().await.unwrap();
+    cx.run_until_parked();
+    let mode = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let servers = [first, second];
+    for (index, server) in servers.iter().enumerate() {
+        let second = index == 1;
+        let mode = mode.clone();
+        let calls = calls.clone();
+        server.set_request_handler::<lsp::request::GotoDefinition, _, _>(move |_, _| {
+            let case = mode.load(Ordering::SeqCst);
+            calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if second && case == 1 {
+                    return Err(anyhow!("content modified"));
+                }
+                let count = if second && case == 0 { 129 } else { 128 };
+                Ok(Some(lsp::GotoDefinitionResponse::Array(
+                    (0..count)
+                        .map(|_| lsp::Location {
+                            uri: "file:///workspace/target.rs".parse().unwrap(),
+                            range: lsp::Range::new(
+                                lsp::Position::new(0, if case == 3 { 1 } else { 0 }),
+                                lsp::Position::new(0, 2),
+                            ),
+                        })
+                        .collect(),
+                )))
+            }
+        });
+    }
+    let store = project.read_with(cx, |project, _| project.lsp_store());
+    for (case, reason, expected_opens) in [
+        (0, Some(Refusal::Budget), 0),
+        (1, Some(Refusal::LanguageServer), 0),
+        (2, None, 1),
+        (3, Some(Refusal::Target), 2),
+    ] {
+        mode.store(case, Ordering::SeqCst);
+        let request = buffer.read_with(cx, |buffer, _| {
+            GetDefinitions {
+                position: PointUtf16::new(0, 0),
+            }
+            .to_proto(proto::REMOTE_SERVER_PROJECT_ID, buffer)
+        });
+        let result = LspStore::cowboy_navigate::<GetDefinitions>(
+            store.clone(),
+            request,
+            PeerId::default(),
+            &mut cx.to_async(),
+        )
+        .await;
+        if let Some(reason) = reason {
+            assert_eq!(result.unwrap_err(), reason);
+        } else {
+            let result = proto::LspQueryResponse::decode(result.unwrap().as_slice()).unwrap();
+            assert_eq!(result.responses.len(), 2);
+            assert!(result.responses.iter().all(|response| matches!(&response.response, Some(proto::lsp_response::Response::GetDefinitionResponse(value)) if value.links.len() == 128)));
+        }
+        assert_eq!(
+            store.read_with(cx, |store, _| store.cowboy_navigation.1),
+            expected_opens
+        );
+    }
+    // The all-success/over-budget cases must actually use both language servers.
+    assert!(calls.load(Ordering::SeqCst) >= 7);
+}

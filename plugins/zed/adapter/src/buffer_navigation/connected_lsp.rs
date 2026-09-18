@@ -111,6 +111,7 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         .remote_id;
     let content = zed.diagnostics.lock().unwrap().content(source).unwrap();
     let retained = acquire_all(zed, root, &lease, &content, &worktrees, &buffers).await;
+    exercise_refusals(zed, root, &workspace).await;
     exercise_handoff(zed, &workspace, lease, retained, &worktrees, &buffers).await;
     assert!(buffers.active.read().await.is_empty());
     request(Request::CloseWorktree { path: workspace })
@@ -118,6 +119,69 @@ pub(crate) async fn exercise(zed: &Zed, root: &Path) {
         .unwrap();
     println!(
         "real native nonempty LSP: five kinds, two cross-file targets, UTF-16, duplicate no-replay, path-free read/release and independent handoff passed (synthetic LSP, no production consumer)"
+    );
+}
+
+async fn exercise_refusals(zed: &Zed, root: &Path, workspace: &Path) {
+    use crate::navigation_native::{self, NativeRefusal};
+    use crate::sync_native::wire::cowboy_navigation_response::Refusal;
+    navigation_native::support(Some(zed)).await.unwrap();
+    let worktree_id = *zed
+        .worktree_paths
+        .read()
+        .await
+        .iter()
+        .find(|(_, path)| path.as_path() == workspace)
+        .unwrap()
+        .0;
+    // Direct native protocol probes; adapter Unknown/no-replay ownership is
+    // tested separately. Never reinterpret these refusals as restoration.
+    let before = zed.buffer_files.read().await.len();
+    for (index, (name, reason)) in [
+        ("reject-locations.rs", Refusal::Budget),
+        ("reject-targets.rs", Refusal::Budget),
+        ("reject-external.rs", Refusal::Target),
+        ("reject-range.rs", Refusal::Target),
+        ("reject-lsp.rs", Refusal::LanguageServer),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        std::fs::write(workspace.join(name), SOURCE).unwrap();
+        let (id, _) = zed.open_buffer(worktree_id, Path::new(name)).await.unwrap();
+        opened(root, name).await;
+        let position = zed.diagnostics.lock().unwrap().position(id, 0, 14).unwrap();
+        let error = navigation_native::query(
+            zed,
+            crate::navigation_request(
+                id,
+                &position.version,
+                position.anchor,
+                NavigationKind::Definition,
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<NativeRefusal>()
+                .expect("native refusal required, not timeout or generic transport error")
+                .0,
+            reason
+        );
+        assert_eq!(
+            zed.buffer_files.read().await.len(),
+            before + index + 1,
+            "refused query unexpectedly shared targets"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.join(name)).unwrap(),
+            SOURCE
+        );
+        zed.close_buffer(id).unwrap();
+    }
+    println!(
+        "actual native typed navigation refusals: location/target budgets, external target, invalid UTF-16 and LSP content-modified; no partial result passed"
     );
 }
 

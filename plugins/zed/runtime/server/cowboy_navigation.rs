@@ -4,7 +4,6 @@
 //! worktree discovery, archive extraction, partial success or error omission.
 use super::*;
 use crate::Location;
-use proto::LspRequestMessage as _;
 use proto::cowboy_navigation_response::{Outcome, Refusal};
 use proto::{Message as _, PeerId};
 use std::path::Component;
@@ -19,7 +18,7 @@ const MAX_BYTES: usize = 4 * 1024 * 1024;
 mod tests;
 
 #[derive(Default)]
-pub(super) struct State(Arc<AtomicBool>);
+pub(super) struct State(Arc<AtomicBool>, #[cfg(test)] usize);
 
 struct Admission(Arc<AtomicBool>);
 impl Drop for Admission {
@@ -157,7 +156,7 @@ fn plan(
         let mut planned = Vec::new();
         for value in response {
             if value.uri.as_str().len() > 8192
-                || value.uri.scheme().as_str() != "file"
+                || value.uri.scheme() != "file"
                 || value.range.start > value.range.end
                 || value
                     .origin
@@ -398,31 +397,33 @@ impl LspStore {
             }
             Ok(())
         };
-        let servers = this.read_with(cx, |this, cx| {
+        let servers = this.update(cx, |this, cx| {
             check(this, cx)?;
             let local = this.as_local().ok_or(Refusal::Source)?;
             let scope = buffer.read(cx).snapshot().language_scope_at(position);
             // Snapshot only registered, capable servers. No startup/download or
             // unbounded fanout can occur while constructing the request batch.
-            let servers = local
-                .language_servers_for_buffer(buffer.read(cx), cx)
-                .filter(|(adapter, _)| {
-                    scope
-                        .as_ref()
-                        .is_none_or(|scope| scope.language_allowed(&adapter.name))
-                })
-                .filter(|(_, server)| {
-                    command.check_capabilities(server.adapter_server_capabilities())
-                })
-                .filter(|(_, server)| {
-                    local
-                        .buffers_opened_in_servers
-                        .get(&id)
-                        .is_some_and(|ids| ids.contains(&server.server_id()))
-                })
-                .take(MAX_SERVERS + 1)
-                .map(|(_, server)| server.clone())
-                .collect::<Vec<_>>();
+            let servers = buffer.update(cx, |buffer, cx| {
+                local
+                    .language_servers_for_buffer(buffer, cx)
+                    .filter(|(adapter, _)| {
+                        scope
+                            .as_ref()
+                            .is_none_or(|scope| scope.language_allowed(&adapter.name))
+                    })
+                    .filter(|(_, server)| {
+                        command.check_capabilities(server.adapter_server_capabilities())
+                    })
+                    .filter(|(_, server)| {
+                        local
+                            .buffers_opened_in_servers
+                            .get(&id)
+                            .is_some_and(|ids| ids.contains(&server.server_id()))
+                    })
+                    .take(MAX_SERVERS + 1)
+                    .map(|(_, server)| server.clone())
+                    .collect::<Vec<_>>()
+            });
             if servers.len() > MAX_SERVERS {
                 return Err(Refusal::Budget);
             }
@@ -465,6 +466,10 @@ impl LspStore {
                 let target = this
                     .update(cx, |this, cx| {
                         check(this, cx)?;
+                        #[cfg(test)]
+                        {
+                            this.cowboy_navigation.1 += 1;
+                        }
                         Ok::<_, Refusal>(this.buffer_store.update(cx, |store, cx| {
                             store.open_buffer(
                                 ProjectPath {
