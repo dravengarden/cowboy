@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "zed",
-  "version": "1.19.0",
+  "version": "1.20.0",
   "transport": "unix_socket_json_v1",
   "operations": [
     "worktree_ensure",
@@ -24,14 +24,14 @@
         "kind": "code_intelligence_adapter",
         "slot": "adapter",
         "dependency": "cowboy-zed-adapter",
-        "version": "1.19.0",
+        "version": "1.20.0",
         "command": "cowboy-zed-adapter"
       },
       {
         "kind": "code_intelligence_server",
         "slot": "server",
         "dependency": "cowboy-zed-server",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "command": "cowboy-zed-server"
       }
     ],

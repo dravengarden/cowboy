@@ -76,10 +76,20 @@ async fn install(
     plugin_install::confirmed_install(state, machine, plugin, request, approval).await
 }
 
+struct OwnerLock(File);
+
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        // A child between fork and exec can retain this open-file description.
+        // Closing our descriptor alone would leave its flock held by that child.
+        let _ = fs2::FileExt::unlock(&self.0);
+    }
+}
+
 struct SocketOwner {
     path: PathBuf,
     inode: u64,
-    _lock: File,
+    _lock: OwnerLock,
     live: Arc<AtomicBool>,
 }
 
@@ -152,6 +162,7 @@ fn bind_socket(
 ) -> anyhow::Result<(UnixListener, SocketOwner)> {
     let lock = private_file(&directory.join("owner.lock"), true)?;
     fs2::FileExt::try_lock_exclusive(&lock).context("local Operator endpoint is already owned")?;
+    let lock = OwnerLock(lock);
     let path = directory.join(SOCKET_NAME);
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) => {

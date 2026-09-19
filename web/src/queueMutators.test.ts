@@ -5,6 +5,7 @@ import {
   draftActivationSourceId,
   emptyQueueValue,
   queueMutators,
+  queuedSendTarget,
   removeById,
   settledTransitionIds,
 } from "./queueMutators.ts";
@@ -288,5 +289,19 @@ Deno.test("unschedule stays pending until the authoritative schedule is absent",
   assertEquals(
     settledTransitionIds(pending, { ...emptyQueueValue(), drafts: [plain] }),
     ["unschedule-op"],
+  );
+});
+
+Deno.test("an explicit send targets the server row even while an edit annotates it", () => {
+  // A pending editQueue paints "sending" on a row the daemon already holds.
+  // Re-adding it under a new cmid would dispatch a copy and leave it queued.
+  const edited = { ...queued, status: "sending" as const };
+  assertEquals(queuedSendTarget([queued], edited), { kind: "server", id: queued.id });
+  assertEquals(queuedSendTarget([queued], queued), { kind: "server", id: queued.id });
+  const local = { id: "opt-c-new", text: "new", cmid: "c-new", status: "pending" as const };
+  assertEquals(queuedSendTarget([queued], local), { kind: "local", cmid: "c-new" });
+  assertEquals(
+    queuedSendTarget([{ id: "q2", text: "new", cmid: "c-new" }], local),
+    { kind: "server", id: "q2" },
   );
 });

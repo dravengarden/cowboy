@@ -34,6 +34,28 @@ export function draftActivationSourceId(
     : drafts.find((row) => row.cmid === activation.sourceCmid)?.id ?? null;
 }
 
+/** Where an explicit send of a visible queued row must go. A delivery status
+ * is presentation only: a pending edit also annotates a row the server already
+ * holds. Only membership in the authoritative base proves the server owns it;
+ * re-adding such a row under a new cmid would leave the original queued. */
+export type QueuedSendTarget =
+  | { readonly kind: "server"; readonly id: string }
+  | { readonly kind: "local"; readonly cmid: string };
+
+export function queuedSendTarget(
+  base: readonly QueueItem[],
+  row: QueueItem,
+): QueuedSendTarget {
+  const server = base.find((candidate) =>
+    candidate.id === row.id ||
+    (row.cmid !== undefined && candidate.cmid === row.cmid)
+  );
+  if (server !== undefined) return { kind: "server", id: server.id };
+  return row.status !== undefined && row.cmid !== undefined
+    ? { kind: "local", cmid: row.cmid }
+    : { kind: "server", id: row.id };
+}
+
 export function emptyQueueValue<R extends QueueItem>(): QueueValue<R> {
   return { queue: [], drafts: [], inFlight: [] };
 }

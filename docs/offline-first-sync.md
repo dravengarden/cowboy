@@ -534,7 +534,7 @@ Phase 2 shipped as a Controller and Web release (service worker
   leaving a hole; ordinary scrollback pages it back on demand.
 
 Phase 3 shipped in part with the same release (service worker
-`cowboy-v1726`):
+`cowboy-v1729`):
 
 - Hydration scheduler P2: `web/src/hydrationScheduler.ts` ranks busy sessions
   first, then the transcript MRU newest first, skipping the opened and the

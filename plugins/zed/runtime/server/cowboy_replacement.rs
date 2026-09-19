@@ -4,6 +4,9 @@ use super::*;
 use gpui::{EntityId, Global};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[path = "cowboy_remote_edits.rs"]
+mod remote_edits;
+
 pub const MAX_JOBS: usize = 4;
 pub const MAX_TEXT: usize = 4 * 1024 * 1024;
 pub const MAX_HISTORY_TEXT: usize = 8 * 1024 * 1024;

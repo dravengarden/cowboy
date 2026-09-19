@@ -19,6 +19,8 @@ struct Record {
     counts: WireCounts,
     failure: Option<Failure>,
     generation: Option<String>,
+    protocol_range: Option<(u16, u16)>,
+    protocol: Option<u16>,
     configured: bool,
     target_query: Option<(String, String)>,
     target: Option<InstallTarget>,
@@ -34,6 +36,8 @@ impl Record {
             counts: WireCounts::default(),
             failure: None,
             generation: None,
+            protocol_range: None,
+            protocol: None,
             configured: false,
             target_query: None,
             target: None,
@@ -139,6 +143,10 @@ impl Proxy {
 
     pub fn snapshot(&self) -> WireCounts {
         self.record.lock().counts.clone()
+    }
+
+    pub fn protocol(&self) -> Option<u16> {
+        self.record.lock().protocol
     }
 
     pub fn hold_catalog_probe(&self, kind: CatalogProbeKind) -> Result<catalog::Gate, Failure> {
@@ -339,13 +347,19 @@ fn handshake(
     match frame {
         MachineFrame::Challenge {
             proof_version: 3, ..
-        } if !from_machine => {}
+        } if !from_machine => {
+            record.protocol_range = None;
+            record.protocol = None;
+            record.generation = None;
+            record.configured = false;
+        }
         MachineFrame::Hello { hello }
             if from_machine
                 && hello.machine_id == MACHINE
                 && hello.challenge_signature.is_some()
                 && hello.encryption_public_key.is_some()
-                && hello.min_protocol <= 19
+                && hello.min_protocol <= hello.max_protocol
+                && hello.min_protocol <= 21
                 && hello.max_protocol >= 19 =>
         {
             let generation = hello
@@ -358,13 +372,24 @@ fn handshake(
                 .map_or(hello.host_build, |component| component.generation.clone());
             check(!generation.is_empty() && generation.len() <= 128)?;
             record.generation = Some(generation);
+            record.protocol_range = Some((hello.min_protocol, hello.max_protocol));
+            record.protocol = None;
             record.configured = false;
         }
         MachineFrame::Welcome {
-            protocol: 19,
+            protocol,
             desired_components,
             ..
-        } if !from_machine && desired_components.is_empty() => record.counts.connections += 1,
+        } if !from_machine
+            && desired_components.is_empty()
+            && matches!(protocol, 19..=21)
+            && record
+                .protocol_range
+                .is_some_and(|(min, max)| (min..=max).contains(&protocol)) =>
+        {
+            record.protocol = Some(protocol);
+            record.counts.connections += 1;
+        }
         MachineFrame::Runtime { frame } => match frame {
             Frame::CoreCommand {
                 command:
@@ -394,7 +419,7 @@ fn handshake(
 
 #[test]
 fn installation_relay_refuses_old_protocols_auth_and_read_only_target_queries() {
-    for protocol in [18, 19, 20] {
+    for protocol in [18, 19, 20, 21, 22] {
         let frame = MachineFrame::Welcome {
             protocol,
             controller_epoch: 1,
@@ -402,7 +427,34 @@ fn installation_relay_refuses_old_protocols_auth_and_read_only_target_queries() 
             desired_components: Vec::new(),
         };
         let mut record = Record::new(Flow::LostReceipt, false);
-        assert_eq!(handshake(frame, false, &mut record).is_ok(), protocol == 19);
+        record.protocol_range = Some((18, 22));
+        assert_eq!(
+            handshake(frame, false, &mut record).is_ok(),
+            matches!(protocol, 19..=21)
+        );
+        assert_eq!(
+            record.protocol,
+            matches!(protocol, 19..=21).then_some(protocol)
+        );
+    }
+    for range in [None, Some((19, 19)), Some((22, 22))] {
+        let mut record = Record::new(Flow::LostReceipt, false);
+        record.protocol_range = range;
+        assert!(
+            handshake(
+                MachineFrame::Welcome {
+                    protocol: 21,
+                    controller_epoch: 1,
+                    heartbeat_interval_ms: 1000,
+                    desired_components: Vec::new(),
+                },
+                false,
+                &mut record
+            )
+            .is_err()
+        );
+        assert_eq!(record.protocol, None);
+        assert_eq!(record.counts.connections, 0);
     }
     let mut record = Record::new(Flow::InstallAndReinstall, true);
     let query = crate::machine_protocol::plugin_install::InstallTargetQuery {

@@ -367,6 +367,22 @@ export function topBarUsageLimits(
   return account.slice(0, 2);
 }
 
+/** Account windows that currently have no capacity left.
+ *
+ * A reset timestamp in the past means the cached observation has expired; it
+ * must not keep warning (or block) the user while the next collector refresh is
+ * in flight. Model-scoped rows stay in the detailed Usage surface because the
+ * active agent model cannot be inferred from an account quota document. */
+export function exhaustedAccountUsageLimits(
+  usage: ProviderUsage | undefined,
+  now = Date.now(),
+): UsageLimit[] {
+  return topBarUsageLimits(usage).filter((limit) =>
+    limit.remaining <= 0 &&
+    (limit.resetsAt === undefined || limit.resetsAt * 1000 > now)
+  );
+}
+
 export interface ProviderUsageLimitView extends UsageLimit {
   resetsLabel?: string;
 }
@@ -406,7 +422,9 @@ export function providerUsageSlotContext(
     emptyMessage: options.emptyMessage,
     limits: limits.map((limit) => {
       const resetsLabel = options.resetsLabel(limit.resetsAt);
-      return resetsLabel === undefined ? { ...limit } : { ...limit, resetsLabel };
+      return resetsLabel === undefined
+        ? { ...limit }
+        : { ...limit, resetsLabel };
     }),
   };
 }

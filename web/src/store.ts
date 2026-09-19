@@ -55,6 +55,7 @@ import {
   emptyQueueValue,
   QUEUE_TRANSITION_MUTATORS,
   queueMutators,
+  queuedSendTarget,
   type QueueValue,
   settledTransitionIds,
 } from "./queueMutators.ts";
@@ -4124,6 +4125,11 @@ function findQueued(sessionId: string, id: string): QueuedMessage | undefined {
   return (state.queues.get(sessionId) ?? []).find((message) => message.id === id);
 }
 
+/** The last queue the daemon acknowledged, without local optimistic moves. */
+function serverQueue(sessionId: string): readonly QueuedMessage[] {
+  return qClients.get(sessionId)?.baseValue().queue ?? [];
+}
+
 function findDraft(sessionId: string, id: string): QueuedMessage | undefined {
   return (state.drafts.get(sessionId) ?? []).find((message) => message.id === id);
 }
@@ -4175,10 +4181,11 @@ async function editPendingRow(
 export async function requestSendQueued(sessionId: string, id: string): Promise<void> {
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
-  if (row.status !== undefined && row.cmid !== undefined) {
+  const target = queuedSendTarget(serverQueue(sessionId), row);
+  if (target.kind === "local") {
     if (destinationForPrompt(isConnected(), sessionDispatchable(sessionId), true) === "transcript") {
       await optimisticMessage(sessionId, row.text, row.attachments, "queue");
-      await discardQueued(sessionId, row.cmid);
+      await discardQueued(sessionId, target.cmid);
       return;
     }
     return waitForState(
@@ -4224,9 +4231,10 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
 export async function forcePushQueued(sessionId: string, id: string): Promise<void> {
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
-  if (row.status !== undefined && row.cmid !== undefined) {
+  const target = queuedSendTarget(serverQueue(sessionId), row);
+  if (target.kind === "local") {
     await qAdd("queue", sessionId, row.text, row.attachments, { mode: "force", origin: "queue" });
-    await discardQueued(sessionId, row.cmid);
+    await discardQueued(sessionId, target.cmid);
     return;
   }
   const opId = newCmid();

@@ -2,6 +2,26 @@ use super::*;
 use std::io::Write as _;
 
 #[tokio::test]
+#[allow(clippy::used_underscore_binding)] // Inspect only the private ownership guard.
+async fn endpoint_owner_releases_shared_description_without_unlocking_a_successor() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = directory(root.path()).unwrap();
+    let live = Arc::new(AtomicBool::new(true));
+    let (listener, owner) = bind_socket(&directory, live.clone()).unwrap();
+    // dup and pre-exec fork inheritance retain the same flock description.
+    let inherited = owner._lock.0.try_clone().unwrap();
+    assert!(bind_socket(&directory, Arc::new(AtomicBool::new(true))).is_err());
+    drop(listener);
+    drop(owner);
+    assert!(!live.load(Ordering::Acquire));
+    let (listener, owner) = bind_socket(&directory, Arc::new(AtomicBool::new(true))).unwrap();
+    drop(inherited);
+    assert!(bind_socket(&directory, Arc::new(AtomicBool::new(true))).is_err());
+    drop(listener);
+    drop(owner);
+}
+
+#[tokio::test]
 async fn endpoint_ownership_prevents_unlinking_live_or_foreign_paths_and_revokes_on_exit() {
     let root = tempfile::tempdir().unwrap();
     let directory = directory(root.path()).unwrap();
