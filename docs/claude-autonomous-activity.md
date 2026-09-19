@@ -48,3 +48,41 @@ This is a Machine/worker change using the existing runtime status protocol.
 Deploy `cowboy-machine-release` through the machine maintenance transaction;
 new or safely replaced workers subscribe when establishing their ACP session.
 Existing clients consume the corrected status without a Web release.
+
+## Waiting between autonomous stretches, 2026-09-19
+
+The `offline first` session (`sess-1789788450509`) started two `Monitor`
+tasks watching a detached gate and release build, then replied "等结果"
+and ended its prompt with `turn_end: EndTurn` at 14:23:13 (event 2208).
+For the next ten minutes native state alternated: each Monitor event woke
+the SDK for a few seconds (`busy`, "No response requested."), then returned
+to `idle` (`running`). The spinner therefore showed only during those short
+wakes, while the agent was continuously waiting on work it would resume on.
+
+Native execution state is correct here: no model turn is running between
+wakes. The missing fact is the live background-task set. The SDK publishes it
+as `system/background_tasks_changed`, a level with REPLACE semantics. Its
+`ambient` flag excludes housekeeping tasks and live-update watchers; a
+`Monitor` (`local_bash`, kind `monitor`) and a backgrounded shell are not
+ambient and count as activity.
+
+### Ownership
+
+- The worker adds `background_tasks_changed` to the same raw-message filter,
+  counts non-ambient tasks for the bound native session, and reports changes
+  through `AgentSink::set_background_tasks`. Attaching a native session resets
+  the level because the SDK sends none at startup.
+- The count crosses the runtime wire as the Cowboy-owned update
+  `cowboy_background_tasks` (not a new `RuntimeEvent` variant, which an older
+  peer could not decode) and as the optional `WorkerSnapshot.background_tasks`
+  so a Controller reconnect restores it.
+- The Controller projects it onto transient `SessionMeta.background_tasks`,
+  never into the transcript. Worker restart, exit, and interruption clear it.
+- It is presentation only. Busy still means a running turn: a background
+  server may never finish, so the level must not hold the queue or block a
+  send. The session status indicator spins while an idle session has
+  background tasks and names the count in its label.
+
+Deliver Controller and Web before the Machine release. A worker from the new
+Machine release talking to an older Controller would record the update as an
+unrecognized transcript row.

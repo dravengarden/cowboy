@@ -123,6 +123,7 @@ import {
     type SessionMeta,
     type Status,
 } from "./protocol";
+import { backgroundTasksLabel, waitingOnBackground } from "./backgroundActivity";
 import { currentConfigOptionName, providerConfigOptions } from "./providerConfigOptions";
 import {
     bindSessionFolderProject,
@@ -419,9 +420,11 @@ function statusLabel(s: Status): string {
 // the surrounding chrome).
 function StatusDot({
     status,
+    backgroundTasks,
     sx,
 }: {
     status: Status;
+    backgroundTasks?: number | undefined;
     sx?: SxProps<Theme>;
 }): React.JSX.Element {
     const extra = Array.isArray(sx) ? sx : sx ? [sx] : [];
@@ -431,27 +434,32 @@ function StatusDot({
     // statusColor for palette continuity. running / exited / crashed are settled,
     // so they stay a color-coded dot. `color="inherit"` lets the sx `color`
     // (statusColor) drive the stroke instead of a fixed MUI palette slot.
-    const active = status === "busy" || status === "starting";
+    // An idle session whose agent still waits on its own background work is
+    // not settled either: it resumes on that work's result without a prompt.
+    const waiting = waitingOnBackground(status, backgroundTasks);
+    const shown: Status = waiting ? "busy" : status;
+    const label = waiting ? backgroundTasksLabel(backgroundTasks ?? 0) : statusLabel(status);
+    const active = shown === "busy" || shown === "starting";
     const indicator = active ? (
             <CircularProgress
                 size={11}
                 thickness={6}
                 disableShrink
                 color="inherit"
-                aria-label={statusLabel(status)}
-                sx={[{ flexShrink: 0, color: statusColor(status) }, ...extra]}
+                aria-label={label}
+                sx={[{ flexShrink: 0, color: statusColor(shown) }, ...extra]}
             />
         ) : (
             <Circle
-                aria-label={statusLabel(status)}
+                aria-label={label}
                 sx={[
-                    { fontSize: 10, flexShrink: 0, color: statusColor(status) },
+                    { fontSize: 10, flexShrink: 0, color: statusColor(shown) },
                     ...extra,
                 ]}
             />
         );
     return (
-        <Tooltip title={statusLabel(status)} enterDelay={300}>
+        <Tooltip title={label} enterDelay={300}>
             {indicator}
         </Tooltip>
     );
@@ -1417,7 +1425,7 @@ function SessionList({
                                 <DragIndicator sx={{ fontSize: "1.5rem" }} />
                             </IconButton>
                         </Box>
-                        <StatusDot status={s.status} sx={{ mr: 1 }} />
+                        <StatusDot status={s.status} backgroundTasks={s.background_tasks} sx={{ mr: 1 }} />
                         <ListItemText
                             primary={
                                 <Stack
@@ -4114,7 +4122,7 @@ export function App({
                                     }),
                                 }}
                             >
-                                <StatusDot status={active.status} />
+                                <StatusDot status={active.status} backgroundTasks={active.background_tasks} />
                                 <ProviderIcon
                                     provider={active.provider}
                                     providerVersion={active.provider_version}

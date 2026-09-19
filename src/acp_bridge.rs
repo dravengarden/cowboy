@@ -1760,6 +1760,7 @@ mod tests {
             context_used: 0,
             context_size: 0,
             usage: None,
+            background_tasks: 0,
             next_schedule_ms: None,
             owner_user_id: None,
             owner_username: None,
