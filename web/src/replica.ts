@@ -207,6 +207,8 @@ export interface Replica {
   loadMachines(): Promise<ReplicaMachines | null>;
   recordMachines(revision: number, machines: readonly MachineSummary[]): void;
   session(sessionId: string): SessionReplica;
+  /** Sessions with a cached transcript tail; empty when the store is unreadable. */
+  listTailSessions(): Promise<string[]>;
   /** Drop caches for sessions the Hub no longer lists. Throttled by callers. */
   retainSessions(valid: ReadonlySet<string>): Promise<void>;
   flush(): Promise<void>;
@@ -311,6 +313,14 @@ export function createReplica(
       machinesWriter.schedule(() => ({ receivedAt: now(), revision, machines: snapshot }));
     },
     session,
+    listTailSessions: async (): Promise<string[]> => {
+      if (sealed) return [];
+      try {
+        return await db.cacheSessions("tail");
+      } catch {
+        return [];
+      }
+    },
     retainSessions: async (valid): Promise<void> => {
       if (sealed) return;
       let stored: string[];

@@ -18385,6 +18385,21 @@ fn first_prompt_title(text: &str, content: &[serde_json::Value]) -> Option<Strin
 }
 
 #[allow(clippy::too_many_lines)] // one cohesive command-dispatch match
+/// Address a replayed edit or removal whose row already left the queue or
+/// drafts. The session itself still exists, so the outcome is `stale` rather
+/// than `not_found`; a command without a client id has no outbox entry to
+/// retire and stays a silent no-op.
+fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
+    if let Some(cmid) = cmid {
+        state.hub.command_result(
+            session_id,
+            cmid,
+            CommandOutcome::Stale,
+            "this message no longer exists",
+        );
+    }
+}
+
 fn handle_command(
     state: &AppState,
     principal: &ProductPrincipal,
@@ -18453,7 +18468,11 @@ fn handle_command(
     let authored_cmid: Option<String> = match &cmd {
         Inbound::Submit { cmid, .. }
         | Inbound::AddDraft { cmid, .. }
-        | Inbound::ScheduleDraft { cmid, .. } => cmid.clone(),
+        | Inbound::ScheduleDraft { cmid, .. }
+        | Inbound::EditQueued { cmid, .. }
+        | Inbound::RemoveQueued { cmid, .. }
+        | Inbound::EditDraft { cmid, .. }
+        | Inbound::RemoveDraft { cmid, .. } => cmid.clone(),
         _ => None,
     };
     if let (Some(sid), Some(cmid)) = (&session_id_for_err, &authored_cmid)
@@ -18812,8 +18831,14 @@ fn handle_command(
                 Ok(())
             }
         }
-        Inbound::RemoveQueued { session_id, id } => {
-            state.hub.remove_queued(&session_id, &id);
+        Inbound::RemoveQueued {
+            session_id,
+            id,
+            cmid,
+        } => {
+            if !state.hub.remove_queued(&session_id, &id) {
+                report_stale_row(state, &session_id, cmid.as_deref());
+            }
             Ok(())
         }
         Inbound::EditQueued {
@@ -18821,8 +18846,11 @@ fn handle_command(
             id,
             text,
             content,
+            cmid,
         } => {
-            state.hub.edit_queued(&session_id, &id, text, content);
+            if !state.hub.edit_queued(&session_id, &id, text, content) {
+                report_stale_row(state, &session_id, cmid.as_deref());
+            }
             Ok(())
         }
         Inbound::ClearQueue { session_id } => {
@@ -18888,12 +18916,21 @@ fn handle_command(
             id,
             text,
             content,
+            cmid,
         } => {
-            state.hub.edit_draft(&session_id, &id, text, content);
+            if !state.hub.edit_draft(&session_id, &id, text, content) {
+                report_stale_row(state, &session_id, cmid.as_deref());
+            }
             Ok(())
         }
-        Inbound::RemoveDraft { session_id, id } => {
-            state.hub.remove_draft(&session_id, &id);
+        Inbound::RemoveDraft {
+            session_id,
+            id,
+            cmid,
+        } => {
+            if !state.hub.remove_draft(&session_id, &id) {
+                report_stale_row(state, &session_id, cmid.as_deref());
+            }
             Ok(())
         }
         Inbound::ClearDrafts { session_id } => {

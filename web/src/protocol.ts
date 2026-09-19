@@ -329,7 +329,9 @@ export type Outbound =
     type: "command_result";
     session_id: string;
     cmid: string;
-    outcome: "not_found" | "rejected";
+    // `stale`: the session exists but the targeted row already left the
+    // queue or drafts.
+    outcome: "not_found" | "rejected" | "stale";
     message: string;
   }
   | { type: "error"; session_id?: string; message: string };
@@ -399,13 +401,16 @@ export type Inbound =
     force?: boolean;
     front?: boolean;
   }
-  | { type: "remove_queued"; session_id: string; id: string }
+  // `cmid` on an edit or removal is the outbox mutation id, so a replay whose
+  // row already ran is answered with an addressed `stale` result.
+  | { type: "remove_queued"; session_id: string; id: string; cmid?: string }
   | {
     type: "edit_queued";
     session_id: string;
     id: string;
     text?: string;
     content?: ContentBlock[];
+    cmid?: string;
   }
   | { type: "clear_queue"; session_id: string }
   | { type: "request_send_queued"; session_id: string; id: string }
@@ -425,8 +430,9 @@ export type Inbound =
     id: string;
     text?: string;
     content?: ContentBlock[];
+    cmid?: string;
   }
-  | { type: "remove_draft"; session_id: string; id: string }
+  | { type: "remove_draft"; session_id: string; id: string; cmid?: string }
   | { type: "clear_drafts"; session_id: string }
   | { type: "activate_draft"; session_id: string; id: string }
   | { type: "activate_all_drafts"; session_id: string }

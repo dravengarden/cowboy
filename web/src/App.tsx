@@ -99,6 +99,11 @@ import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
 import {
+    SessionCacheGlyph,
+    SessionObligationBadge,
+    SessionsSyncedCaption,
+} from "./SessionOfflineBadges";
+import {
     mergeSessionOverview,
     type SessionInfoPayload,
     sessionOverviewSections,
@@ -1193,6 +1198,7 @@ function SessionList({
                     },
                 }}
             >
+                {mobileDrawer && <SessionsSyncedCaption />}
                 {sortable.order.map((rowKey) => {
                     const row = rowByKey.get(rowKey);
                     if (!row) return null;
@@ -1447,6 +1453,8 @@ function SessionList({
                                     )}
                                     <SessionProjectionBadge sessionId={s.id} />
                                     <ScheduleBadge meta={s} />
+                                    <SessionObligationBadge sessionId={s.id} />
+                                    <SessionCacheGlyph sessionId={s.id} active={s.id === activeId} />
                                 </Stack>
                             }
                             secondary={sessionDisplayDirectory(s)}
