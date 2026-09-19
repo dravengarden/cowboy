@@ -2,9 +2,11 @@
 
 Zed Plugin/private adapter `1.19.0` selects private server `1.5.0`, retaining
 the exact upstream revision, third-party dependencies and public contracts.
-This source candidate extends the
-[acquisition lifetime budget](plugin-native-acquisition-budgets.md); source
-changes alone are not signed publication, installation or production acceptance.
+This extends the [acquisition lifetime budget](plugin-native-acquisition-budgets.md).
+The [acceptance and publication](releases/native-snapshot-lifetimes-2026-09-19.md)
+records 48 native tests, the final pair, temporary signed lifecycle, 19 connected
+v6 checks, 24 browser checks and the actual complete-Catalog reader floor.
+The signed release is available; Hawk installation remains separately pending.
 
 ## One charge, all original holders
 

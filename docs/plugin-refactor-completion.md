@@ -522,11 +522,17 @@ aggregate retained-history/background-effect limits in the Code row.
 The [acquisition lifetime candidate](plugin-native-acquisition-budgets.md) adds
 shared pre-load admission and actual-object release accounting across worktrees;
 retained history, detached snapshots and general background budgets remain open.
-The [text-snapshot lifetime candidate](plugin-native-snapshot-lifetimes.md)
+The [text-snapshot lifetime extension](plugin-native-snapshot-lifetimes.md)
 extends the original charge through native text snapshots, branches and
 background previews, including after BufferStore entity/index teardown.
 It addresses early release of acquisition capacity, not global snapshot
 counts, retained bytes/history or general background-effect budgets.
+Its [acceptance and signed publication](releases/native-snapshot-lifetimes-2026-09-19.md)
+passes 48 native, 19 connected v6 and 24 browser checks, the complete source gate
+and the actual active/next-recovery/cold readers of the full 88-release Catalog.
+Zed `1.19.0` is available; Hawk remains installed on `1.18.0`, with its resident
+Machine and all 18 observed ACP workers retained. Publication is not installation
+or native-owner recovery.
 The [sync/reload replacement candidate](plugin-native-replacement-budgets.md)
 adds shared actual-job/result lifetimes, bounded diff output and pre-mutation
 retained-history checks for those two writers. Its
