@@ -34,7 +34,13 @@ export {
   type ConnectionStoreOptions,
   createConnectionStore,
 } from "./connection-banner.tsx";
-export { type GalleryImage, ImageLightbox, type ImageLightboxProps } from "./image-lightbox.tsx";
+export {
+  type GalleryImage,
+  type GalleryInlineSvg,
+  type GalleryRasterImage,
+  ImageLightbox,
+  type ImageLightboxProps,
+} from "./image-lightbox.tsx";
 export { createSharedTheme, type SharedThemeOptions } from "./theme.ts";
 export { type ThemeModeState, useThemeMode } from "./theme-mode.ts";
 export type { ThemeChoice, ThemeMode } from "./theme-types.ts";

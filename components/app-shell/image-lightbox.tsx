@@ -31,15 +31,17 @@
 // Business-free: presentational only. The caller owns the gallery array and the
 // open/index state.
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Box, IconButton, SvgIcon, useTheme } from "@mui/material";
 import { FloatingActionIsland } from "./bottom-sheet.tsx";
-import { useLightboxGestures } from "./image-lightbox-gestures.ts";
+import {
+  type LightboxMediaElement,
+  useLightboxGestures,
+} from "./image-lightbox-gestures.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
 
-export interface GalleryImage {
-  src: string;
+interface GalleryMediaBase {
   alt: string;
   /**
    * The image is already theme-native — it was rendered/snapshotted for the
@@ -52,6 +54,23 @@ export interface GalleryImage {
    */
   themed?: boolean;
 }
+
+export interface GalleryRasterImage extends GalleryMediaBase {
+  kind?: "image";
+  src: string;
+}
+
+export interface GalleryInlineSvg extends GalleryMediaBase {
+  kind: "inline-svg";
+  /**
+   * Trusted, sanitized SVG from a host renderer. Keeping it inline preserves
+   * SVG features such as Mermaid's foreignObject labels, which WebKit may drop
+   * when the same markup is loaded again through an <img> data URL.
+   */
+  markup: string;
+}
+
+export type GalleryImage = GalleryRasterImage | GalleryInlineSvg;
 
 export interface ImageLightboxProps {
   /** All zoomable images in the current context, in reading order. */
@@ -95,7 +114,8 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
   // a hook behind `&&`.)
   const isDarkMode = useTheme().palette.mode === "dark";
   const overlayRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
+  const imgRef = useRef<LightboxMediaElement>(null);
+  const inlineSvgHostRef = useRef<HTMLDivElement>(null);
 
   const open = index !== null && index >= 0 && index < images.length;
   // Light tap when the lightbox DISMISSES — one central hook covering every close
@@ -110,7 +130,9 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     wasOpen.current = open;
   }, [open]);
   const current = open && index !== null ? images[index] : undefined;
-  const src = current?.src ?? null;
+  const mediaKey = current?.kind === "inline-svg"
+    ? current.markup
+    : current?.src ?? null;
   const canPrev = open && index !== null && index > 0;
   const canNext = open && index !== null && index < images.length - 1;
 
@@ -129,13 +151,29 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     imgRef,
     overlayRef,
     open,
-    src,
+    src: mediaKey,
     canPrev,
     canNext,
     goPrev,
     goNext,
     onClose,
   });
+
+  // Inline SVG has no resource load event. Attach the gesture ref to the SVG
+  // root after React commits the trusted markup, then measure it exactly as an
+  // image load would. The host itself uses display:contents so the SVG remains
+  // the centred flex item and the transform target.
+  useLayoutEffect(() => {
+    if (!open || current?.kind !== "inline-svg") return undefined;
+    const svg = inlineSvgHostRef.current?.querySelector(":scope > svg");
+    if (!(svg instanceof SVGSVGElement)) return undefined;
+    if (!svg.hasAttribute("aria-label")) svg.setAttribute("aria-label", current.alt);
+    imgRef.current = svg;
+    onImageLoad();
+    return () => {
+      if (imgRef.current === svg) imgRef.current = null;
+    };
+  }, [current, open, onImageLoad]);
 
   // Key shortcuts while open. No body-scroll lock — see the file header.
   useEffect(() => {
@@ -217,34 +255,65 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         "@media (prefers-reduced-motion: reduce)": { animation: "none" },
       }}
     >
-      <img
-        ref={imgRef}
-        src={current.src}
-        alt={current.alt}
-        onLoad={onImageLoad}
-        draggable={false}
-        style={{
-          maxWidth: "100%",
-          maxHeight: "100%",
-          objectFit: "contain",
-          touchAction: "none",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          cursor: "zoom-out",
-          // The plate (see `plate` prop): docs/figures need it so white-bg
-          // diagrams don't glare and transparent line art doesn't vanish on the
-          // near-black backdrop; photos/screenshots opt out. A self-themed figure
-          // gets a mode-matched plate (subtle dark card in dark mode).
-          backgroundColor: plateBg,
-          padding: plate ? "0.5rem" : 0,
-          borderRadius: "6px",
-          boxSizing: "border-box",
-          // Fixed-colour figures invert in dark mode (plate + art together, hues
-          // preserved) to match the in-page plate; self-themed figures (mermaid)
-          // are already mode-correct and must NOT be inverted.
-          filter: invertPlate ? "invert(0.9) hue-rotate(180deg)" : undefined,
-        }}
-      />
+      {current.kind === "inline-svg"
+        ? (
+          <Box
+            ref={inlineSvgHostRef}
+            role="img"
+            aria-label={current.alt}
+            sx={{
+              display: "contents",
+              "& > svg": {
+                maxWidth: "100%",
+                maxHeight: "100%",
+                width: "auto",
+                height: "auto",
+                touchAction: "none",
+                userSelect: "none",
+                WebkitUserSelect: "none",
+                cursor: "zoom-out",
+                backgroundColor: plateBg,
+                padding: plate ? "0.5rem" : 0,
+                borderRadius: "6px",
+                boxSizing: "border-box",
+                filter: invertPlate ? "invert(0.9) hue-rotate(180deg)" : undefined,
+              },
+            }}
+            dangerouslySetInnerHTML={{ __html: current.markup }}
+          />
+        )
+        : (
+          <img
+            ref={(element) => {
+              imgRef.current = element;
+            }}
+            src={current.src}
+            alt={current.alt}
+            onLoad={onImageLoad}
+            draggable={false}
+            style={{
+              maxWidth: "100%",
+              maxHeight: "100%",
+              objectFit: "contain",
+              touchAction: "none",
+              userSelect: "none",
+              WebkitUserSelect: "none",
+              cursor: "zoom-out",
+              // The plate (see `plate` prop): docs/figures need it so white-bg
+              // diagrams don't glare and transparent line art doesn't vanish on the
+              // near-black backdrop; photos/screenshots opt out. A self-themed figure
+              // gets a mode-matched plate (subtle dark card in dark mode).
+              backgroundColor: plateBg,
+              padding: plate ? "0.5rem" : 0,
+              borderRadius: "6px",
+              boxSizing: "border-box",
+              // Fixed-colour figures invert in dark mode (plate + art together, hues
+              // preserved) to match the in-page plate; self-themed figures (mermaid)
+              // are already mode-correct and must NOT be inverted.
+              filter: invertPlate ? "invert(0.9) hue-rotate(180deg)" : undefined,
+            }}
+          />
+        )}
 
       {
         /* One bottom dock holds every control, within the thumb's reach on a

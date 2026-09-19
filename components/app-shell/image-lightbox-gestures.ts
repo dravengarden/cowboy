@@ -5,6 +5,8 @@
 
 import { type RefObject, useCallback, useEffect, useRef } from "react";
 
+export type LightboxMediaElement = HTMLImageElement | SVGSVGElement;
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 // Vertical drag (at 1x) past this many px releases into a dismiss.
@@ -29,7 +31,7 @@ const TAP_ZOOM_SCALE = 2.5;
 const EDGE_RESISTANCE = 0.32;
 
 export interface LightboxGesturesParams {
-  imgRef: RefObject<HTMLImageElement | null>;
+  imgRef: RefObject<LightboxMediaElement | null>;
   overlayRef: RefObject<HTMLDivElement | null>;
   /** Whether the lightbox is currently showing an image. */
   open: boolean;
@@ -106,13 +108,23 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       return;
     }
     const rect = overlay.getBoundingClientRect();
+    const mediaRect = img.getBoundingClientRect();
+    const imageWidth = img instanceof HTMLImageElement
+      ? img.offsetWidth / bakedScale.current
+      : mediaRect.width / tf.current.scale;
+    const imageHeight = img instanceof HTMLImageElement
+      ? img.offsetHeight / bakedScale.current
+      : mediaRect.height / tf.current.scale;
     geometry.current = {
       centerX: rect.left + overlay.clientWidth / 2,
       centerY: rect.top + overlay.clientHeight / 2,
       viewportWidth: overlay.clientWidth,
       viewportHeight: overlay.clientHeight,
-      imageWidth: img.offsetWidth / bakedScale.current,
-      imageHeight: img.offsetHeight / bakedScale.current,
+      // SVG has no offsetWidth/offsetHeight. Its client rect includes the
+      // current transform, so divide out the logical scale to recover the
+      // base layout size. Keep the established offset geometry for <img>.
+      imageWidth,
+      imageHeight,
     };
   }, [imgRef, overlayRef]);
 
