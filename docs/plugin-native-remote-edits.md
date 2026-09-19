@@ -51,7 +51,11 @@ shape limits, missing history, Unicode tombstones and concurrent edits,
 inclusive retained-byte/operation limits, undo, visible-text and read-only
 refusal, and unknown-ID queue admission. The final static-pair gate must also
 exercise real RPC failures, exact duplicates, tombstone offsets and editing
-after peer closure, with unchanged disk bytes. Complete source, temporary signed
+after peer closure, with unchanged disk bytes. Since the native server does not
+echo a sender's own remote edits, independent exact-version plaintext queries
+verify the native result and stale-vector refusal; the direct GPUI tests verify
+complete content and retained history. An unchanged local mirror alone is not
+native no-mutation evidence. Complete source, temporary signed
 installation lifecycle, connected v6 and browser gates remain required before
 release acceptance; results belong in a separate dated receipt.
 
