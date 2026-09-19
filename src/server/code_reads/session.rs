@@ -29,11 +29,26 @@ pub(in crate::server) async fn worktree_ready(
     local_socket: Option<&std::path::Path>,
     scope: &SessionReadScope,
 ) -> anyhow::Result<bool> {
-    use crate::server::{ZedAdapterResponse, validate_zed_adapter_response};
-    anyhow::ensure!(current(hub, control, scope), "code context changed");
     let request = serde_json::json!({
         "type": "ensureWorktree", "path": scope.session().cwd(), "trusted": true,
     });
+    match adapter_request(hub, control, local_socket, scope, request).await? {
+        crate::server::ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
+        _ => anyhow::bail!("unexpected Zed adapter response"),
+    }
+}
+
+/// The buffered readers keep the connection captured before asynchronous
+/// authorization. Never resolve it again from the logical Machine name.
+pub(super) async fn adapter_request(
+    hub: &Hub,
+    control: &MachineControl,
+    local_socket: Option<&std::path::Path>,
+    scope: &SessionReadScope,
+    request: serde_json::Value,
+) -> anyhow::Result<crate::server::ZedAdapterResponse> {
+    use crate::server::validate_zed_adapter_response;
+    anyhow::ensure!(current(hub, control, scope), "code context changed");
     let response = if let Some(connection) = scope.connection() {
         let value = control
             .adapter_request_on_connection(connection, "zed", request)
@@ -45,10 +60,7 @@ pub(in crate::server) async fn worktree_ready(
             .await?
     };
     anyhow::ensure!(current(hub, control, scope), "code context changed");
-    match response {
-        ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
-        _ => anyhow::bail!("unexpected Zed adapter response"),
-    }
+    Ok(response)
 }
 
 #[cfg(test)]

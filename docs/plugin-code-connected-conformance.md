@@ -45,7 +45,7 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Twenty-one checks cover (receipt schema `...code-buffer-connected-conformance/v8`,
+Twenty-five checks cover (receipt schema `...code-buffer-connected-conformance/v9`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -119,6 +119,16 @@ Historical v3 receipts cover only the first eleven checks:
     extra dispatch for the revoked request, and continued reading by the
     independent original login. Historical v7 does not accept this original
     credential continuation; no production cookie or database edit is used.
+22. Legacy language diagnostics: query the already opened fixture, hold the next
+    real native reply, revoke only its disposable product login and require
+    `401/no-store/no-ETag`. Refuse further dispatch by that login; the independent
+    login remains usable, without reopen, release, reload or retry.
+23. Repeat the same exact authority/command-count checks for legacy hover.
+24. Repeat them for legacy navigation; response refusal is not evidence that
+    native destination acquisitions have been undone.
+25. Repeat them for legacy outline. The relay admits only the named pre-opened
+    fixture for these four query kinds; arbitrary paths and native mutations
+    remain refused. Historical v8 does not accept this extension.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills

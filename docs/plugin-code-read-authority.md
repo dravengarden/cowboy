@@ -35,6 +35,25 @@ observations are checked around asynchronous credential lookup too; their
 existing `410/no-store` behavior is retained. Independent native resource
 query/release paths are not converted into Session-path reads.
 
+## Legacy language queries
+
+The four Session-path GET handlers for language diagnostics, hover, navigation
+and outline now consume the same private read authority. Their closed query
+enum cannot encode open, close, reload, sync or owned-resource commands. Each
+handler retains its original Session and connection before asynchronous
+credential validation, dispatches on that exact connection and checks again
+before returning the whole response. A replacement connection, even with the
+same reported epoch, cannot be selected during authorization.
+
+Only an existing Session is accepted: a Workspace file-read scope does not
+establish a native buffer. The adapter still requires an already opened source
+buffer. Stable response schemas and ordinary Viewer/automation read policy are
+unchanged. Resource opening/closing and independent original-ID cleanup retain
+their separate protocols; no retry, acquisition or release is added when a
+reply is refused. Native navigation can itself acquire destination state; this
+response fence neither cancels those already-admitted effects nor proves their
+release. It is not owned-navigation acceptance or post-effect recovery.
+
 ## Acceptance and limits
 
 Source tests cover logout, personal-token revocation (including no cookie
@@ -46,6 +65,15 @@ setup. The [connected gate](plugin-code-connected-conformance.md) adds v8 check
 through the real product API, then release the unchanged reply. The response
 must be denied without an ETag or another Machine command; the independent
 original login remains usable. This uses no production credentials.
+
+The language-query extension requires connected v9 checks 22–25. For each
+handler, query an already opened real native source, hold a second actual reply,
+log out that disposable login through the product API and require
+`401/no-store/no-ETag`. A further revoked request must dispatch nothing; the
+independent login must still query successfully, with exactly three total
+commands of that query kind and no other command. Source tests additionally
+cover the closed wire shape, response-kind mismatch, pre-dispatch and
+parked-reply connection replacement, and Session path ABA.
 
 The [accepted Controller rollout](releases/plugin-code-read-authority-2026-09-19.md)
 records the old-artifact negative result, all 21 connected checks, complete

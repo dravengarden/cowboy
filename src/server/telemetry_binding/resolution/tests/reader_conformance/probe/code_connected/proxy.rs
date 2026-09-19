@@ -185,6 +185,10 @@ impl Proxy {
             record.hold.is_none()
                 && [
                     "coreFile",
+                    "bufferLanguage",
+                    "bufferHover",
+                    "bufferNavigate",
+                    "bufferSymbols",
                     "openBufferLease",
                     "readBufferLease",
                     "releaseBufferLease",
@@ -323,20 +327,29 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
         } => {
             let kind = if adapter == "zed" {
                 let kind = payload["type"].as_str().ok_or(Failure::WrongObservation)?;
-                check(
-                    [
-                        "ensureWorktree",
-                        "bufferLeaseSupport",
-                        "prepareBuffer",
-                        "openBufferLease",
-                        "queryBufferLease",
-                        "releaseBufferLease",
-                        "bufferLeaseContentSupport",
-                        "bufferLeaseTextSupport",
-                        "readBufferLease",
-                    ]
-                    .contains(&kind),
-                )?;
+                if language_reads::COMMANDS.contains(&kind) {
+                    // Only the named pre-opened fixture; no generic path/native
+                    // resource admission has been added to this relay.
+                    check(payload["path"] == language_reads::FILE)?;
+                    check(payload["worktree"].as_str().is_some_and(|root| {
+                        std::path::Path::new(root).is_absolute() && root.ends_with("/workspace")
+                    }))?;
+                } else {
+                    check(
+                        [
+                            "ensureWorktree",
+                            "bufferLeaseSupport",
+                            "prepareBuffer",
+                            "openBufferLease",
+                            "queryBufferLease",
+                            "releaseBufferLease",
+                            "bufferLeaseContentSupport",
+                            "bufferLeaseTextSupport",
+                            "readBufferLease",
+                        ]
+                        .contains(&kind),
+                    )?;
+                }
                 kind
             } else {
                 // Core file/manifest reader only. Never Agent/runtime commands.
@@ -506,6 +519,36 @@ fn relay_core_pages_are_limited_to_the_named_fixture_and_never_raw_or_arbitrary_
             assert!(record.reply("core-file").unwrap().is_none());
         } else {
             assert!(record.pending.is_empty());
+        }
+    }
+}
+
+#[test]
+fn relay_language_reads_require_the_preopened_fixture_and_an_absolute_worktree() {
+    for kind in language_reads::COMMANDS {
+        for (path, root, accepted) in [
+            (language_reads::FILE, "/fixture/workspace", true),
+            ("other.txt", "/fixture/workspace", false),
+            ("../fixture.txt", "/fixture/workspace", false),
+            (language_reads::FILE, "relative/workspace", false),
+            (language_reads::FILE, "/fixture/other", false),
+        ] {
+            let mut record = Record::default();
+            let result = command_frame(
+                MachineCommand::AdapterRequest {
+                    request_id: "language-read".into(),
+                    adapter: "zed".into(),
+                    payload: json!({"type":kind, "path":path, "worktree":root}),
+                },
+                &mut record,
+            );
+            assert_eq!(result.is_ok(), accepted);
+            if accepted {
+                assert_eq!(record.counts.commands.get(kind), Some(&1));
+                assert!(record.reply("language-read").unwrap().is_none());
+            } else {
+                assert!(record.pending.is_empty());
+            }
         }
     }
 }

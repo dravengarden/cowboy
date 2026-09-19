@@ -7,6 +7,7 @@
 use std::future::Future;
 
 pub(super) mod file_pages;
+pub(super) mod language;
 pub(super) mod session;
 pub(super) mod workspace;
 

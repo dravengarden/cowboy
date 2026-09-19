@@ -8,6 +8,7 @@ mod budget;
 mod exercise;
 mod fixture;
 mod installation;
+mod language_reads;
 mod navigation;
 mod proxy;
 mod read_routes;
@@ -203,7 +204,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v8",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v9",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -235,7 +236,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 21;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 25;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,

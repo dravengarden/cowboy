@@ -15348,21 +15348,6 @@ fn validate_zed_adapter_response(
     }
 }
 
-async fn zed_adapter_request_for_session(
-    state: &AppState,
-    context: &SessionCodeContext,
-    request: serde_json::Value,
-) -> anyhow::Result<ZedAdapterResponse> {
-    zed_request_in_scope(
-        &state.hub,
-        &state.machine_control,
-        state.zed_adapter_socket.as_deref(),
-        &context.scope,
-        request,
-    )
-    .await
-}
-
 async fn zed_request_in_scope(
     hub: &Hub,
     control: &MachineControl,
@@ -15742,8 +15727,8 @@ struct ResolvedCodeContext {
     scope: CodeReadScope,
 }
 
-// Legacy language/resource calls retain their separate original-connection
-// operation boundary. A logical Session observation is not a read-cache key.
+// Legacy resource calls retain their separate original-connection operation
+// boundary. Buffered language reads use code_reads' product and route binding.
 struct SessionCodeContext {
     machine_id: String,
     cwd: String,
@@ -16435,7 +16420,7 @@ struct CodeHoverQuery {
     column: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CodeNavigationKind {
     Definition,
@@ -16454,216 +16439,66 @@ struct CodeNavigationQuery {
 }
 
 async fn api_code_language(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferLanguage",
-            "worktree": worktree,
-            "path": path,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Language,
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferLanguage {
-            path,
-            version,
-            diagnostics,
-            inlay_hints,
-            semantic_tokens,
-            ..
-        }) => Json(CodeLanguageResponse {
-            api_version: 1,
-            path,
-            version,
-            diagnostics,
-            inlay_hints,
-            semantic_tokens,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::warn!(session = %session_id, %error, "Zed language query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "language intelligence unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_hover(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeHoverQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferHover",
-            "worktree": worktree,
-            "path": path,
-            "row": query.row,
-            "column": query.column,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Hover {
+            row: query.row,
+            column: query.column,
+        },
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferHover { path, contents, .. }) => Json(CodeHoverResponse {
-            api_version: 1,
-            path,
-            contents,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed hover query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "symbol information unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_navigation(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeNavigationQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferNavigate",
-            "worktree": worktree,
-            "path": path,
-            "row": query.row,
-            "column": query.column,
-            "kind": query.kind,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Navigation {
+            row: query.row,
+            column: query.column,
+            kind: query.kind,
+        },
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferNavigation {
-            path, locations, ..
-        }) => Json(CodeNavigationResponse {
-            api_version: 1,
-            path,
-            locations,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed navigation query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "symbol navigation unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_outline(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferSymbols",
-            "worktree": worktree,
-            "path": path,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Outline,
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferSymbols { path, symbols, .. }) => Json(CodeOutlineResponse {
-            api_version: 1,
-            path,
-            symbols,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed outline query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "document outline unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_buffer_close(

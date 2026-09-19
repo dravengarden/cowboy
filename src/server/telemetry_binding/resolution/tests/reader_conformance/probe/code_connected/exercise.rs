@@ -156,6 +156,8 @@ pub(super) async fn run(
     operation(pair, Method::PUT, &second, "open").await?;
     operation(pair, Method::PUT, &retained, "open").await?;
     reads(pair, &first, TEXT, false).await?;
+    language_reads::authorization(pair, password, stage, checks).await?;
+    *stage = "content_and_independent_owners";
     std::fs::write(
         pair.root.join("workspace/fixture.txt"),
         "different disk text\n",

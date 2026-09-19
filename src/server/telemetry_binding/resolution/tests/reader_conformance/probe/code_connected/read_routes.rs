@@ -52,21 +52,24 @@ pub(super) async fn authorization(pair: &mut Pair<'_>, password: &str) -> Result
     // negative receipt records the actual denied/incorrect read, not an older
     // request made by the independent login.
     let original = std::mem::replace(&mut pair.http, reader);
-    revoked_read(pair).await?;
+    let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
+    revoked_read(pair, &path, "coreFile").await?;
     pair.http = original;
     let mut expected = pair.proxy.counts()?.commands;
-    let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
     let fresh = pair.http.get(&path).await?;
     check(fresh["apiVersion"] == 1 && fresh["path"] == FILE)?;
     *expected.entry("coreFile".into()).or_default() += 1;
     check(pair.proxy.counts()?.commands == expected)
 }
 
-async fn revoked_read(pair: &Pair<'_>) -> Result<(), Failure> {
-    let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
+pub(super) async fn revoked_read(
+    pair: &Pair<'_>,
+    path: &str,
+    command: &'static str,
+) -> Result<(), Failure> {
     let before = pair.proxy.counts()?.commands;
-    let gate = pair.proxy.hold("coreFile")?;
-    let request = pair.http.call(Method::GET, &path, None);
+    let gate = pair.proxy.hold(command)?;
+    let request = pair.http.call(Method::GET, path, None);
     tokio::pin!(request);
     tokio::select! {
         held = gate.held() => held?,
@@ -86,9 +89,9 @@ async fn revoked_read(pair: &Pair<'_>) -> Result<(), Failure> {
             && reply.value.is_null(),
     )?;
     let mut expected = before;
-    *expected.entry("coreFile".into()).or_default() += 1;
+    *expected.entry(command.into()).or_default() += 1;
     check(pair.proxy.counts()?.commands == expected)?;
     // Revoked credentials cannot admit another read or pick the other login.
-    pair.http.denied(Method::GET, &path, None).await?;
+    pair.http.denied(Method::GET, path, None).await?;
     check(pair.proxy.counts()?.commands == expected)
 }
