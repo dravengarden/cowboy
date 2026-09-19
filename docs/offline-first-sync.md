@@ -1,8 +1,9 @@
 # Offline-first synchronization
 
 Status: design 2026-09-18; Phase 1 implemented on Web the same day; the
-Phase 2 submission ledger, addressed results and idempotent sync landed
-2026-09-19 (see [Implementation status](#implementation-status)). This is
+Phase 2 submission ledger, addressed results and idempotent sync, plus the
+Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
+[Implementation status](#implementation-status)). This is
 the app-level contract for how Cowboy Web opens, reads, composes, sends and
 reconciles when the controller is slow, unreachable, restarting or when the
 device is offline.
@@ -514,11 +515,15 @@ Phase 2 shipped as a Controller and Web release (service worker
   when a crashed turn hands the prompt back. Hub-synthesized ids
   (`cowboy-*`, `__*`) stay reusable and never take part in this dedupe.
 - Addressed results: `Outbound::CommandResult { session_id, cmid, outcome,
-  message }` with `not_found` for a submit, draft or scheduled draft whose
-  session is gone and `rejected` for a session the principal may not mutate
-  or a view-only system session. The Web store holds the owning row with the
-  reason as its caption and, for `not_found`, parks the content in the opened
-  session's drafts before retiring the orphan.
+  message }` with `not_found` for a submit, draft, scheduled draft, edit or
+  removal whose session is gone, `rejected` for a session the principal may
+  not mutate or a view-only system session, and `stale` for an
+  `edit_queued`, `remove_queued`, `edit_draft` or `remove_draft` whose row
+  already left the queue or drafts (those commands carry the outbox mutation
+  id as `cmid`). The Web store holds a refused row with the reason as its
+  caption; for `not_found` it parks the content in the opened session's
+  drafts before retiring the orphan, and for `stale` it keeps an edit's text
+  as a new draft, retires the mutation and says so once (conflict 5).
 - Idempotent sync by id: a duplicate `Sync` delivery re-emits a `sync_patch`
   confirming the id; a folder `create` that already produced the identical
   folder for the same actor is confirmed after a restart; the per-session
@@ -528,13 +533,29 @@ Phase 2 shipped as a Controller and Web release (service worker
   join gap the fill cannot close truncates the unjoined prefix instead of
   leaving a hole; ordinary scrollback pages it back on demand.
 
-Not yet implemented: the forward bootstrap cursor with `transcript_epoch`,
-target-bound `cancel` / `permission` outcomes (`stale`,
-`already_resolved`), the sessions `revision`, sessions drawer badges and
-"not cached" glyphs, the inline gap divider, drafts in IndexedDB, and the
-hydration scheduler's P2/P3 prefetch. A replayed `edit_queued` or
-`remove_queued` for a row that already ran is still a silent server no-op;
-the client's orphan claim recovers the edited text.
+Phase 3 shipped in part with the same release (service worker
+`cowboy-v1726`):
+
+- Hydration scheduler P2: `web/src/hydrationScheduler.ts` ranks busy sessions
+  first, then the transcript MRU newest first, skipping the opened and the
+  already hydrated sessions and capped below the MRU limit. The store runs
+  at most two background bootstraps after the opened session's bootstrap
+  settles, on `bootstrap_complete`, on `sessions` changes and on foreground,
+  and cancels them when a session is opened or the socket closes. A
+  prefetched tail lands in the replica like any snapshot.
+- Sessions list: a paint-only badge counts a session's unsent or held rows
+  (`useSessionObligations`), a "not cached" glyph marks sessions without a
+  cached tail while the Hub is not live (`useCachedTailSessions`), and the
+  Mobile drawer shows "Last synced …" once the presentation debounce passes.
+
+Not yet implemented: the forward bootstrap cursor with `transcript_epoch`
+(a plain `after_seq` cursor is unsafe while canonical rows such as tool calls
+and streaming messages are updated in place under their first seq; it needs
+a per-row update watermark first), target-bound `cancel` / `permission`
+outcomes (`stale`, `already_resolved`; permission resolution lives in the
+Machine-hosted worker path), the sessions `revision`, the P3 hover and
+long-press prefetch, the inline gap divider, drafts in IndexedDB, and the
+workspaces cache.
 
 ## Open decisions
 

@@ -966,8 +966,15 @@ pub enum Inbound {
         #[serde(default)]
         front: bool,
     },
-    /// Drop one queued prompt.
-    RemoveQueued { session_id: String, id: String },
+    /// Drop one queued prompt. `cmid` is the client's durable outbox id for
+    /// this command, so a replay whose row already ran receives an addressed
+    /// `stale` result instead of retrying forever.
+    RemoveQueued {
+        session_id: String,
+        id: String,
+        #[serde(default)]
+        cmid: Option<String>,
+    },
     /// Edit a queued prompt in place (text + content). Empty both → removed.
     EditQueued {
         session_id: String,
@@ -976,6 +983,8 @@ pub enum Inbound {
         text: String,
         #[serde(default)]
         content: Vec<serde_json::Value>,
+        #[serde(default)]
+        cmid: Option<String>,
     },
     /// Drop a session's whole queue.
     ClearQueue { session_id: String },
@@ -1012,9 +1021,16 @@ pub enum Inbound {
         text: String,
         #[serde(default)]
         content: Vec<serde_json::Value>,
+        #[serde(default)]
+        cmid: Option<String>,
     },
     /// Drop one draft.
-    RemoveDraft { session_id: String, id: String },
+    RemoveDraft {
+        session_id: String,
+        id: String,
+        #[serde(default)]
+        cmid: Option<String>,
+    },
     /// Drop a session's whole draft list.
     ClearDrafts { session_id: String },
     /// Activate one draft: submit it (send-or-queue) and remove it from drafts.
@@ -1179,6 +1195,9 @@ pub enum CommandOutcome {
     NotFound,
     /// The session exists but refuses this command.
     Rejected,
+    /// The session exists but the targeted row already left the queue or
+    /// drafts, so the command has nothing left to act on.
+    Stale,
 }
 
 /// One immutable live frame shared by every WebSocket and the Web Push observer.
@@ -4406,20 +4425,23 @@ impl Hub {
         self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
     }
 
-    /// Drop one queued prompt.
-    pub fn remove_queued(&self, session_id: &str, id: &str) {
-        {
+    /// Drop one queued prompt. Returns whether the row was still queued.
+    pub fn remove_queued(&self, session_id: &str, id: &str) -> bool {
+        let removed = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
+            let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
             }
-        }
+            before != s.queue.len()
+        };
         self.emit_pending(session_id);
         self.try_drain(session_id);
+        removed
     }
 
     /// Remove exactly one still-queued prompt by its client correlation id.
@@ -4446,31 +4468,38 @@ impl Hub {
         removed
     }
 
-    /// Edit a queued prompt in place. Empty text + content removes it.
+    /// Edit a queued prompt in place. Empty text + content removes it. Returns
+    /// whether the row was still queued.
     pub fn edit_queued(
         &self,
         session_id: &str,
         id: &str,
         text: String,
         content: Vec<serde_json::Value>,
-    ) {
-        {
+    ) -> bool {
+        let found = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
             if text.trim().is_empty() && content.is_empty() {
+                let before = s.queue.len();
                 s.queue.retain(|m| m.id != id);
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
                 }
+                before != s.queue.len()
             } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
                 m.text = text;
                 m.content = content;
+                true
+            } else {
+                false
             }
-        }
+        };
         self.emit_pending(session_id);
         self.try_drain(session_id);
+        found
     }
 
     /// Drop a session's whole queue.
@@ -4832,28 +4861,31 @@ impl Hub {
     }
 
     /// Edit a draft in place. Empty text + content removes it.
+    /// Edit a draft in place. Empty text + content removes it. Returns whether
+    /// the draft still existed.
     pub fn edit_draft(
         &self,
         session_id: &str,
         id: &str,
         text: String,
         content: Vec<serde_json::Value>,
-    ) {
-        let unscheduled = {
+    ) -> bool {
+        let (found, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
             if text.trim().is_empty() && content.is_empty() {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
+                let before = s.drafts.len();
                 s.drafts.retain(|m| m.id != id);
-                had
+                (before != s.drafts.len(), had)
             } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
                 m.text = text;
                 m.content = content;
-                false
+                (true, false)
             } else {
-                false
+                (false, false)
             }
         };
         self.emit_pending(session_id);
@@ -4861,24 +4893,27 @@ impl Hub {
             self.cancel_draft_timer(session_id, id);
             self.broadcast_sessions();
         }
+        found
     }
 
-    /// Drop one draft.
-    pub fn remove_draft(&self, session_id: &str, id: &str) {
-        let unscheduled = {
+    /// Drop one draft. Returns whether the draft still existed.
+    pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
+        let (removed, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
             let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
+            let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
-            had
+            (before != s.drafts.len(), had)
         };
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
             self.broadcast_sessions();
         }
+        removed
     }
 
     /// Move a draft out of `from`'s draft list and onto the END of `to`'s. The
@@ -6247,6 +6282,35 @@ mod core_tests {
                 .unwrap_err(),
             "folder id already exists"
         );
+    }
+
+    // A replayed edit or removal must be able to tell the client when its row
+    // already left the queue or drafts, so the outbox entry can be retired.
+    #[test]
+    fn queue_and_draft_edits_report_whether_the_row_still_exists() {
+        let hub = hub_with_session("rows");
+        hub.submit("rows", "queued".to_owned(), vec![], Some("q-1".to_owned()));
+        hub.add_draft("rows", "draft".to_owned(), vec![], Some("d-1".to_owned()));
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("rows") else {
+            panic!("expected a queue resync");
+        };
+        let queued = value["queue"][0]["id"].as_str().unwrap().to_owned();
+        let draft = value["drafts"][0]["id"].as_str().unwrap().to_owned();
+
+        assert!(hub.edit_queued("rows", &queued, "edited".to_owned(), vec![]));
+        assert!(!hub.edit_queued("rows", "missing", "edited".to_owned(), vec![]));
+        assert!(hub.remove_queued("rows", &queued));
+        assert!(!hub.remove_queued("rows", &queued));
+        assert!(!hub.edit_queued("rows", &queued, String::new(), vec![]));
+
+        assert!(hub.edit_draft("rows", &draft, "edited".to_owned(), vec![]));
+        assert!(!hub.edit_draft("rows", "missing", "edited".to_owned(), vec![]));
+        assert!(hub.remove_draft("rows", &draft));
+        assert!(!hub.remove_draft("rows", &draft));
+        assert!(!hub.edit_draft("rows", &draft, String::new(), vec![]));
+
+        assert!(!hub.remove_queued("gone", "x"));
+        assert!(!hub.remove_draft("gone", "x"));
     }
 
     // Per-session sync dedupe sets are dropped with the session.

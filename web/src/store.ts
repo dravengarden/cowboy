@@ -131,7 +131,9 @@ import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
 import {
   retainTranscriptSessionCache,
   touchTranscriptSessionCache,
+  TRANSCRIPT_SESSION_CACHE_LIMIT,
 } from "./transcriptSessionCache";
+import { createPrefetchRunner, prefetchCandidates } from "./hydrationScheduler";
 import {
   announceProductAuthSession,
   PRODUCT_AUTH_COOKIE_CHANGED_EVENT,
@@ -303,6 +305,9 @@ let socket: WebSocket | undefined;
 // command-ready after server-side active-client admission and the deterministic
 // bootstrap_complete marker.
 let socketReady = false;
+// True between `bootstrap_complete` and the socket's close: only then may
+// background prefetch (P2) spend on sessions the user has not opened.
+let liveBootstrapped = false;
 // Set by `cowboy:product-sign-out`. Prevents onclose / online / foreground
 // from opening another product socket after logout.
 let productSessionAbandoned = false;
@@ -571,7 +576,10 @@ if (typeof document !== "undefined") {
     // transition. Coalesce them so the forced Apple reconnect never replaces
     // its own in-flight successor.
     if (now - lastForegroundRecoveryAt < FOREGROUND_RECOVERY_COALESCE_MS) return;
-    if (state.connected) refreshProviderCatalog();
+    if (state.connected) {
+      refreshProviderCatalog();
+      schedulePrefetch();
+    }
     if (
       shouldReconnectOnForeground(
         socket?.readyState,
@@ -1412,6 +1420,8 @@ function handle(msg: Outbound): void {
       setState({ ...state, activeCapacity: msg.capacity });
       break;
     case "bootstrap_complete":
+      liveBootstrapped = true;
+      schedulePrefetchAfterActive();
       break;
     case "ping":
       // Heartbeat: its ARRIVAL is the signal (onmessage stamps lastMessageAt for
@@ -1434,6 +1444,8 @@ function handle(msg: Outbound): void {
       }
       commitSessions();
       replica.recordSessions(msg.sessions);
+      // A session that just turned busy is the likeliest next switch.
+      schedulePrefetch();
       const machines = projectMachineOccupancy(state.machines, msg.sessions);
       if (machines !== state.machines) setState({ ...state, machines });
       // The list is authoritative: drop composer drafts for sessions that no
@@ -1727,6 +1739,12 @@ function handle(msg: Outbound): void {
       });
       if (client === undefined || pending === undefined) break;
       clearOptTimers(pending.id);
+      if (msg.outcome === "stale") {
+        // The session is fine; only the targeted row is gone. Keep an edit's
+        // text, retire the mutation, and say what happened once.
+        void settleStaleRowMutation(msg.session_id, pending);
+        break;
+      }
       const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
       const rowCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
       for (const id of new Set([pending.id, msg.cmid, ...(rowCmid === undefined ? [] : [rowCmid])])) {
@@ -2195,6 +2213,8 @@ function openBoundSocket(dataset: SyncDataset): void {
     telemetryOperations.clear();
     socket = undefined;
     socketReady = false;
+    liveBootstrapped = false;
+    prefetch.cancel();
     stopLiveness();
     if (ready) lastLiveAt = Date.now();
     outageFailures += 1;
@@ -2360,6 +2380,11 @@ function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> 
  * the active transcript before the Hub answers. A live broadcast that arrives
  * first wins; the replica never overwrites live state. */
 async function hydrateReplica(): Promise<void> {
+  void replica.listTailSessions().then((ids) => {
+    if (!productSessionAbandoned && ids.length > 0) {
+      setCachedTailSessions(new Set([...cachedTailSessions, ...ids]));
+    }
+  });
   const [sessionsResult, machinesResult] = await Promise.allSettled([
     replica.loadSessions(),
     replica.loadMachines(),
@@ -2471,6 +2496,10 @@ function buildReplicaTail(sessionId: string): ReplicaTail | null {
 function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
   if (productSessionAbandoned || !transcriptIsCached(sessionId)) return;
   replica.session(sessionId).scheduleTail(() => buildReplicaTail(sessionId), { immediate });
+  if (
+    state.hydrated.has(sessionId) &&
+    state.transcriptSources.get(sessionId)?.source === "live"
+  ) noteCachedTail(sessionId);
 }
 
 function retainReplicaSessions(valid: ReadonlySet<string>): void {
@@ -2478,6 +2507,83 @@ function retainReplicaSessions(valid: ReadonlySet<string>): void {
   if (key === retainedReplicaKey) return;
   retainedReplicaKey = key;
   void replica.retainSessions(valid);
+  if ([...cachedTailSessions].some((id) => !valid.has(id))) {
+    setCachedTailSessions(new Set([...cachedTailSessions].filter((id) => valid.has(id))));
+  }
+}
+
+// --- Cached transcript tails ------------------------------------------------
+// Which sessions this device could paint without the Hub. Read once from the
+// replica at boot, then kept current as tails are written or dropped, so the
+// sessions list can mark what is not cached before the user taps it.
+let cachedTailSessions: ReadonlySet<string> = new Set();
+const cachedTailListeners = new Set<() => void>();
+
+function setCachedTailSessions(next: ReadonlySet<string>): void {
+  cachedTailSessions = next;
+  for (const listener of cachedTailListeners) listener();
+}
+
+function noteCachedTail(sessionId: string): void {
+  if (cachedTailSessions.has(sessionId)) return;
+  setCachedTailSessions(new Set([...cachedTailSessions, sessionId]));
+}
+
+function subscribeCachedTails(listener: () => void): () => void {
+  cachedTailListeners.add(listener);
+  return () => {
+    cachedTailListeners.delete(listener);
+  };
+}
+
+export function useCachedTailSessions(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    subscribeCachedTails,
+    () => cachedTailSessions,
+    () => cachedTailSessions,
+  );
+}
+
+// --- Background tail prefetch (docs/offline-first-sync.md §3, P2) ----------
+// After the opened session's bootstrap settles, fetch the tails of busy
+// sessions and the transcript MRU so a switch, or a later offline open, paints
+// from cache. Two at a time; a session switch or a closed socket cancels it.
+const prefetch = createPrefetchRunner({
+  concurrency: 2,
+  start: (sessionId): Promise<void> => {
+    touchTranscriptSession(sessionId);
+    return hydrateSession(sessionId);
+  },
+  abort: (sessionId): void => {
+    sessionHydrations.get(sessionId)?.controller.abort();
+  },
+});
+
+function schedulePrefetch(): void {
+  if (
+    !liveBootstrapped || !state.connected || productSessionAbandoned ||
+    !state.sessionsLoaded || globalThis.document?.visibilityState === "hidden"
+  ) return;
+  prefetch.schedule(prefetchCandidates({
+    sessions: state.sessions,
+    activeId: openedSessionId,
+    recent: transcriptSessionCache,
+    hydrated: state.hydrated,
+    // Never enough to push the opened session out of the transcript MRU.
+    limit: TRANSCRIPT_SESSION_CACHE_LIMIT - 1,
+  }));
+}
+
+/** P1 first: the opened session's bootstrap settles before P2 spends. */
+function schedulePrefetchAfterActive(): void {
+  const active = openedSessionId === undefined
+    ? undefined
+    : sessionHydrations.get(openedSessionId);
+  if (active === undefined) {
+    schedulePrefetch();
+    return;
+  }
+  void active.promise.then(schedulePrefetch, schedulePrefetch);
 }
 
 // --- Held deliveries -------------------------------------------------------
@@ -2510,22 +2616,59 @@ function forgetSettledHeld(sessionId: string, held: readonly string[]): void {
 // --- Sync status (docs/offline-first-sync.md §4) ----------------------------
 const syncStatusListeners = new Set<() => void>();
 
+/** Unsent or held rows one session still owes (sessions drawer badge). */
+export interface SessionObligations {
+  readonly pending: number;
+  readonly held: number;
+}
+
+const NO_OBLIGATIONS: SessionObligations = { pending: 0, held: 0 };
+let obligationsBySession = new Map<string, SessionObligations>();
+
+/** Recount every session's obligations; per-session identity survives when
+ * the counts did not change, so row subscribers do not re-render. */
+function refreshObligations(): boolean {
+  const next = new Map<string, SessionObligations>();
+  let changed = false;
+  for (const [sessionId, client] of qClients) {
+    let pending = 0;
+    let held = 0;
+    for (const mutation of client.pending()) {
+      if (qStatus.get(mutation.id) === "failed") held += 1;
+      else pending += 1;
+    }
+    if (pending + held === 0) continue;
+    const previous = obligationsBySession.get(sessionId);
+    if (previous !== undefined && previous.pending === pending && previous.held === held) {
+      next.set(sessionId, previous);
+    } else {
+      next.set(sessionId, { pending, held });
+      changed = true;
+    }
+  }
+  if (next.size !== obligationsBySession.size) changed = true;
+  obligationsBySession = next;
+  return changed;
+}
+
 function outboxSummary(): SyncStatusInput["outbox"] {
   let pending = 0;
   let held = 0;
   const sessions: string[] = [];
-  for (const [sessionId, client] of qClients) {
-    let sessionPending = 0;
-    let sessionHeld = 0;
-    for (const mutation of client.pending()) {
-      if (qStatus.get(mutation.id) === "failed") sessionHeld += 1;
-      else sessionPending += 1;
-    }
-    if (sessionPending + sessionHeld > 0) sessions.push(sessionId);
-    pending += sessionPending;
-    held += sessionHeld;
+  for (const [sessionId, obligations] of obligationsBySession) {
+    sessions.push(sessionId);
+    pending += obligations.pending;
+    held += obligations.held;
   }
   return { pending, held, sessions };
+}
+
+export function useSessionObligations(sessionId: string): SessionObligations {
+  return useSyncExternalStore(
+    subscribeSyncStatus,
+    () => obligationsBySession.get(sessionId) ?? NO_OBLIGATIONS,
+    () => NO_OBLIGATIONS,
+  );
 }
 
 function syncStatusInput(): SyncStatusInput {
@@ -2556,8 +2699,9 @@ function currentSyncStatus(): SyncStatus {
 }
 
 function publishSyncStatus(): void {
+  const obligationsChanged = refreshObligations();
   const next = deriveSyncStatus(syncStatusInput(), syncStatus, Date.now());
-  if (next === syncStatus) return;
+  if (next === syncStatus && !obligationsChanged) return;
   syncStatus = next;
   for (const listener of syncStatusListeners) listener();
 }
@@ -3038,6 +3182,43 @@ async function rescueOrphanedDelivery(
     console.warn("orphaned delivery rescue failed", error);
   }
 }
+
+/** A replayed edit or removal whose row already left the queue or drafts
+ * (docs/offline-first-sync.md, conflict 5). An edit keeps its text as a new
+ * draft; a removal has nothing left to do. Either way the mutation retires. */
+async function settleStaleRowMutation(
+  sessionId: string,
+  mutation: { id: string; name: string; args: unknown },
+): Promise<void> {
+  const row = (mutation.args as { row?: QueuedMessage }).row;
+  const edit = mutation.name === "editQueue" || mutation.name === "editDraft";
+  const kept = edit && row !== undefined &&
+    (row.text.trim() !== "" || row.attachments.length > 0);
+  try {
+    if (kept) {
+      // Persist the replacement first: a failed write keeps the edit held.
+      await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer" });
+    }
+    await discardQueued(sessionId, mutation.id);
+    if (row?.cmid !== undefined) {
+      qStatus.delete(row.cmid);
+      forgetDeliveryFailure(row.cmid);
+      commitQueue(sessionId);
+    }
+    if (mutation.name === "editQueue" || mutation.name === "removeQueue") {
+      notify(
+        kept
+          ? "That message was already sent. Your edit is saved as a draft."
+          : "That message was already sent.",
+        "warning",
+      );
+    } else if (kept) {
+      notify("That draft no longer exists. Your edit is saved as a new draft.", "warning");
+    }
+  } catch (error) {
+    console.warn("stale row settlement failed", error);
+  }
+}
 const draftDispatches = new Set<string>();
 const SILENT_QUEUE_MUTATORS = new Set([
   "editDraft",
@@ -3103,13 +3284,14 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       id: args.id,
       text: args.row.text,
       content: contentOf(args.row.text, args.row.attachments),
+      cmid: m.id,
     };
   }
   if (m.name === "removeDraft" && args.id !== undefined) {
-    return { type: "remove_draft", session_id: sessionId, id: args.id };
+    return { type: "remove_draft", session_id: sessionId, id: args.id, cmid: m.id };
   }
   if (m.name === "removeQueue" && args.id !== undefined) {
-    return { type: "remove_queued", session_id: sessionId, id: args.id };
+    return { type: "remove_queued", session_id: sessionId, id: args.id, cmid: m.id };
   }
   if (m.name === "unscheduleDraft" && args.id !== undefined) {
     return { type: "unschedule_draft", session_id: sessionId, id: args.id };
@@ -3829,10 +4011,13 @@ function optimisticMessage(
 // every navigation.
 export function openSession(id: string): void {
   openedSessionId = id;
+  // The opened session is P1: background prefetch yields to it. A prefetch
+  // of this very session keeps running; `hydrateSession` reuses it.
+  prefetch.cancel(id);
   touchTranscriptSession(id);
   send({ type: "open_session", session_id: id });
   void restoreReplicaTail(id);
-  void hydrateSession(id);
+  void hydrateSession(id).then(schedulePrefetch);
 }
 
 // Mark a session hydrated WITHOUT waiting for a server snapshot — called the
