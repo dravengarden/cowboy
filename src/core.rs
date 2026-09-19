@@ -179,6 +179,11 @@ fn is_turn_end(envelope: &Envelope) -> bool {
     matches!(envelope.event, Event::TurnEnd { .. })
 }
 
+/// A typed refusal ends a turn, but leaves the native worker available. This
+/// controller-owned detail holds queued work through idle snapshots without
+/// inferring a refusal from ordinary assistant prose.
+pub(crate) const MODEL_REFUSAL_DETAIL: &str = "The model declined this request. Review its message before editing the request, changing models, or starting a new session. Queued messages require an explicit send.";
+
 /// Whether the current native-agent context has received a user turn.
 ///
 /// Codex allocates a thread id at `session/new` but does not create a resumable

@@ -537,7 +537,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
       case "turn_end": {
         const error = /^error(?::\s*(.*))?$/is.exec(env.stop_reason);
         const failure = error ? error[1]?.trim() || null : undefined;
-        const interrupted = failure !== undefined || /cancel|interrupt/i.test(env.stop_reason);
+        const interrupted = failure !== undefined ||
+          /^refusal$/i.test(env.stop_reason) || /cancel|interrupt/i.test(env.stop_reason);
         // A failed/cancelled turn cannot prove that an unfinished tool ran.
         // Keep confirmed results; a later actual tool result can still settle it.
         settleOutstandingTools(items, interrupted ? "interrupted" : "completed");

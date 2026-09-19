@@ -38,6 +38,7 @@ primary phone/desktop product path.
 - [`architecture/00-overview.md`](architecture/00-overview.md) — Current system topology and component map
 - [`architecture/01-acp-transport.md`](architecture/01-acp-transport.md) — ACP session lifecycle, streaming, permissions, and cancellation
 - [`claude-autonomous-activity.md`](claude-autonomous-activity.md) — Native execution state and loading feedback after a background task resumes Claude
+- [`claude-refusals.md`](claude-refusals.md) — Classifier refusal evidence, local failure handling, and unverified upstream trigger
 - [`architecture/02-core-hub.md`](architecture/02-core-hub.md) — Authoritative session state, ordering, queues, and fan-out
 - [`architecture/03-supervisor.md`](architecture/03-supervisor.md) — Machine routing, detached-worker lifetime, and restart recovery
 - [`architecture/04-providers.md`](architecture/04-providers.md) — Provider packages, launch generations, behavior, and compatibility fallback

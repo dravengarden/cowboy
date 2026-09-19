@@ -179,3 +179,19 @@ Deno.test("bare transport errors cannot settle a pending tool as successful", ()
     );
   }
 });
+
+Deno.test("model refusal interrupts pending tools without offering transport continuation", () => {
+  for (const reason of ["Refusal", "refusal"]) {
+    const diagnostic = "API Error: safeguards flagged this message. Details: [reasoning_extraction]";
+    const items = derive([
+      ...fixture.slice(0, 3), text(4, diagnostic), end(5, reason),
+    ]);
+    assertEquals(items[0]?.kind === "tool" && items[0].status, "completed");
+    assertEquals(items[2]?.kind === "tool" && items[2].status, "interrupted");
+    assertEquals(items[3]?.kind === "message" && items[3].chunks, [{ type: "text", text: diagnostic }]);
+    assertEquals(items.some((item) => item.kind === "lifecycle" && item.turnFailure), false);
+    // Refusal-like prose on a successful turn remains ordinary output.
+    const success = derive([...fixture.slice(0, 3), text(4, diagnostic), end(5, "EndTurn")]);
+    assertEquals(success[2]?.kind === "tool" && success[2].status, "completed");
+  }
+});

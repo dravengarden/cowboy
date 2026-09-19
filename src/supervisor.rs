@@ -746,7 +746,8 @@ impl Supervisor {
                             .provider_behavior
                             .clone()
                             .unwrap_or_else(|| provider::legacy_behavior(&meta.provider));
-                        crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
+                        detail == crate::core::MODEL_REFUSAL_DETAIL
+                            || crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
                     })
             })
             && self.runtime_for_session(session_id)?.has_worker(session_id);
@@ -1571,8 +1572,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_rejection_reuses_live_claude_workers_without_resume() {
-        for provider in ["claude-code", "claude-deepseek"] {
+    async fn turn_rejection_reuses_live_workers_without_resume() {
+        let context_limit = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
+        for (provider, detail) in [
+            ("claude-code", context_limit),
+            ("claude-deepseek", context_limit),
+            ("claude-code", crate::core::MODEL_REFUSAL_DETAIL),
+            ("codex", crate::core::MODEL_REFUSAL_DETAIL),
+        ] {
             let root = TestDir::new();
             let cwd = root.path().join("checkout");
             std::fs::create_dir_all(&cwd).expect("checkout");
@@ -1585,7 +1592,6 @@ mod tests {
                 SessionOrigin::Web,
                 false,
             );
-            let detail = "API Error: 400 This model's maximum context length is 1048576 tokens. However, you requested 1048875 tokens";
             hub.set_status("s", Status::Crashed, Some(detail.to_owned()));
             let mut worker = worker_snapshot(cwd.to_string_lossy().as_ref());
             worker.state = WorkerState::Running;

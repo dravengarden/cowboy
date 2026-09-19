@@ -1542,13 +1542,20 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         .then(|| shared.hub.latest_crash_detail(&worker.session_id))
         .flatten()
         .filter(|detail| {
-            recoverable_live_worker_error(
-                &shared.hub,
-                &worker.session_id,
-                worker.state,
-                Some(detail.as_str()),
-            )
+            // TurnEnded clears current_turn_id before the trailing idle edge.
+            // A Busy snapshot in that gap must not release a refusal hold.
+            (detail == crate::core::MODEL_REFUSAL_DETAIL
+                && worker.state == WorkerState::Busy
+                && worker.current_turn_id.is_none())
+                || recoverable_live_worker_error(
+                    &shared.hub,
+                    &worker.session_id,
+                    worker.state,
+                    Some(detail.as_str()),
+                )
         });
+    let preserves_refusal =
+        recoverable_detail.as_deref() == Some(crate::core::MODEL_REFUSAL_DETAIL);
     let status = if busy {
         Status::Busy
     } else if recoverable_detail.is_some() {
@@ -1564,9 +1571,13 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
             .then(|| worker.exit_detail.clone())
             .flatten()
     });
-    shared
-        .hub
-        .project_runtime_status(&worker.session_id, status, detail);
+    // The hold is already projected. Re-emitting a terminal status would clear
+    // the dispatch guard of an explicit prompt sent before this idle snapshot.
+    if !preserves_refusal {
+        shared
+            .hub
+            .project_runtime_status(&worker.session_id, status, detail);
+    }
     reconcile_idle_guard(shared, &worker.session_id, idle_guard);
     true
 }
@@ -1584,7 +1595,8 @@ fn recoverable_live_worker_error(
                     session.meta.provider_behavior.clone().unwrap_or_else(|| {
                         crate::provider::legacy_behavior(&session.meta.provider)
                     });
-                crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
+                detail == crate::core::MODEL_REFUSAL_DETAIL
+                    || crate::provider::keeps_worker_alive_for_behavior(&behavior, detail)
             })
         })
 }
@@ -1672,27 +1684,41 @@ fn update_snapshot_from_event(
     }
 }
 
+fn apply_worker_status(hub: &Hub, session_id: &str, state: WorkerState, detail: Option<String>) {
+    // The idle edge after a typed refusal describes the still-live worker, not
+    // another completion. Preserve both the hold and any newer explicit send's
+    // dispatch guard instead of re-emitting a terminal status that clears it.
+    // Draining may carry a generation-handoff explanation; it is maintenance,
+    // not a successful turn or a new provider failure.
+    if (state == WorkerState::Draining
+        || (state == WorkerState::Running
+            && detail
+                .as_deref()
+                .is_none_or(|detail| detail == crate::core::MODEL_REFUSAL_DETAIL)))
+        && hub.latest_crash_detail(session_id).as_deref() == Some(crate::core::MODEL_REFUSAL_DETAIL)
+    {
+        return;
+    }
+    // Recoverable turn failures keep the native worker alive, but hold the
+    // Controller queue. Supervisor reuses it for the next explicit prompt.
+    let status = if recoverable_live_worker_error(hub, session_id, state, detail.as_deref()) {
+        Status::Crashed
+    } else {
+        worker_status(state)
+    };
+    hub.set_status(session_id, status, detail);
+}
+
 fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     match event {
         RuntimeEvent::Ready { agent_session_id } => {
             if let Some(agent_session_id) = agent_session_id {
                 hub.set_agent_session_id(session_id, agent_session_id);
             }
-            hub.set_status(session_id, Status::Running, None);
+            apply_worker_status(hub, session_id, WorkerState::Running, None);
         }
         RuntimeEvent::Status { state, detail } => {
-            // claude-agent-acp survives turn-scoped provider failures and
-            // reports Running so Machine retains the live worker. Keep the
-            // controller session errored to hold queued prompts and expose Retry;
-            // Supervisor recognizes the same detail and reuses this worker for
-            // /compact or the next explicit prompt instead of recycling it.
-            let status = if recoverable_live_worker_error(hub, session_id, state, detail.as_deref())
-            {
-                Status::Crashed
-            } else {
-                worker_status(state)
-            };
-            hub.set_status(session_id, status, detail);
+            apply_worker_status(hub, session_id, state, detail);
         }
         RuntimeEvent::Update { update, cmid } => {
             let compact_failure = remote_compact_failure(hub, session_id, &update);
@@ -1740,8 +1766,18 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
         ),
         RuntimeEvent::TurnStarted { .. } => hub.set_status(session_id, Status::Busy, None),
         RuntimeEvent::TurnEnded { stop_reason, .. } => {
+            let refused = stop_reason.eq_ignore_ascii_case("refusal");
             hub.push(session_id, Event::TurnEnd { stop_reason });
-            // TurnEnded is the authoritative clean-completion edge. Do not rely
+            if refused {
+                // Set the hold before releasing the dispatch guard, including
+                // when a reconnect has already projected an idle worker.
+                hub.set_status(
+                    session_id,
+                    Status::Crashed,
+                    Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
+                );
+            }
+            // TurnEnded is the authoritative terminal edge. Do not rely
             // solely on a following Busy -> Running status transition to release
             // the dispatch guard: reconnect/snapshot ordering can already have
             // projected Running. `complete_turn` also latches this edge so the
@@ -1953,6 +1989,152 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Exercise one ordered refusal/reconnect/recovery sequence.
+    async fn refusal_holds_queued_work_through_idle_and_reconnect_until_explicit_send() {
+        for (provider, stop_reason) in [("claude-code", "Refusal"), ("codex", "refusal")] {
+            let hub = Hub::new();
+            hub.create_local_session(
+                "s".to_owned(),
+                provider.to_owned(),
+                "/tmp".to_owned(),
+                "test".to_owned(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+            hub.set_agent_session_id("s", "agent-1".to_owned());
+            let (tx, mut rx) = mpsc::channel(4);
+            hub.set_dispatch_tx(tx);
+            hub.set_status("s", Status::Running, None);
+            hub.submit("s", "first".to_owned(), vec![], Some("first".to_owned()));
+            assert_eq!(rx.recv().await.unwrap().text, "first");
+            hub.set_status("s", Status::Busy, None);
+            hub.submit("s", "next task".to_owned(), vec![], Some("next".to_owned()));
+            let diagnostic = "The provider declined the request.";
+            apply_event(&hub, "s", assistant_chunk(diagnostic));
+            // Assistant prose alone must never trigger the hold.
+            assert_eq!(hub.status("s"), Some(Status::Busy));
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::TurnEnded {
+                    turn_id: "turn-1".to_owned(),
+                    stop_reason: stop_reason.to_owned(),
+                },
+            );
+            assert_eq!(hub.status("s"), Some(Status::Crashed));
+            assert!(rx.try_recv().is_err());
+            assert!(!hub.session_has_in_flight_prompt("s"));
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::Status {
+                    state: WorkerState::Draining,
+                    detail: Some("waiting for generation handoff".to_owned()),
+                },
+            );
+            assert_eq!(hub.status("s"), Some(Status::Crashed));
+            assert!(rx.try_recv().is_err());
+            // An explicit send can beat the old turn's trailing idle edge.
+            // Reaffirming the hold must not complete that new dispatch.
+            hub.drain_now("s");
+            assert_eq!(rx.recv().await.unwrap().text, "next task");
+            hub.submit(
+                "s",
+                "third task".to_owned(),
+                vec![],
+                Some("third".to_owned()),
+            );
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    detail: None,
+                },
+            );
+            assert_eq!(hub.status("s"), Some(Status::Crashed));
+            assert!(hub.session_has_in_flight_prompt("s"));
+            hub.drain_now("s");
+            assert!(rx.try_recv().is_err());
+
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::Ready {
+                    agent_session_id: Some("agent-1".to_owned()),
+                },
+            );
+            assert_eq!(hub.status("s"), Some(Status::Crashed));
+            assert!(hub.session_has_in_flight_prompt("s"));
+            hub.drain_now("s");
+            assert!(rx.try_recv().is_err());
+
+            let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+            let mut worker = snapshot("s");
+            worker.current_turn_id = None;
+            worker.launch.as_mut().unwrap().provider = provider.to_owned();
+            // TurnEnded clears the native turn id before the trailing idle
+            // edge updates the worker state. A snapshot can land between them.
+            for state in [
+                WorkerState::Busy,
+                WorkerState::Running,
+                WorkerState::Draining,
+            ] {
+                worker.state = state;
+                assert!(apply_snapshot(&runtime.shared, &worker));
+                assert_eq!(hub.status("s"), Some(Status::Crashed), "{state:?}");
+                assert_eq!(
+                    hub.latest_crash_detail("s").as_deref(),
+                    Some(crate::core::MODEL_REFUSAL_DETAIL)
+                );
+                assert!(hub.session_has_in_flight_prompt("s"));
+                hub.drain_now("s");
+                assert!(rx.try_recv().is_err());
+            }
+            assert_eq!(
+                hub.session_info("s")
+                    .unwrap()
+                    .meta
+                    .agent_session_id
+                    .as_deref(),
+                Some("agent-1")
+            );
+
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::TurnStarted {
+                    turn_id: "turn-2".to_owned(),
+                    command_id: "next".to_owned(),
+                },
+            );
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::TurnEnded {
+                    turn_id: "turn-2".to_owned(),
+                    stop_reason: "EndTurn".to_owned(),
+                },
+            );
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    detail: None,
+                },
+            );
+            assert_eq!(hub.status("s"), Some(Status::Running));
+            assert_eq!(rx.recv().await.unwrap().text, "third task");
+            assert!(rx.try_recv().is_err());
+            assert!(hub.latest_crash_detail("s").is_none());
+            assert!(hub.snapshot("s").unwrap().0.iter().any(|event| matches!(
+                &event.event, Event::Update { update } if update["content"]["text"] == diagnostic
+            )));
+        }
+    }
 
     #[tokio::test]
     async fn turn_end_releases_guard_when_lifecycle_was_already_running() {
