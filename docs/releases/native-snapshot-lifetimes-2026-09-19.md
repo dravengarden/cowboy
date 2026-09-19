@@ -1,10 +1,15 @@
 # Native text-snapshot lifetime release — 2026-09-19
 
-Status: Zed Plugin/private adapter **1.19.0**, selecting private server **1.5.0**,
+Status at publication: Zed Plugin/private adapter **1.19.0**, selecting private server **1.5.0**,
 is verified, signed and published. The exact release is advertised as `ready`
 for Linux x86_64. **Hawk still has Zed 1.18.0 installed**; this release did not
 perform a Machine upgrade, restart an existing process or migrate native owners.
 This is not whole-refactor completion.
+
+Later status: the separately authorized
+[Hawk installation](zed-snapshot-install-2026-09-19.md) is complete. The original
+publication-only facts below remain unchanged; the later record also identifies
+an overlapping Controller/Web deployment without attributing it to this Plugin.
 
 Implementation and clean final build/sign/publication source:
 `819e6e4a893e8fe3defbb00bbb06b2c7a24b4e09`. This record is a documentation

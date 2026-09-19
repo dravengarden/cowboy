@@ -6,7 +6,10 @@ This extends the [acquisition lifetime budget](plugin-native-acquisition-budgets
 The [acceptance and publication](releases/native-snapshot-lifetimes-2026-09-19.md)
 records 48 native tests, the final pair, temporary signed lifecycle, 19 connected
 v6 checks, 24 browser checks and the actual complete-Catalog reader floor.
-The signed release is available; Hawk installation remains separately pending.
+The signed release is available and the separately authorized
+[Hawk installation](releases/zed-snapshot-install-2026-09-19.md) is complete.
+Its resident Machine and original ACP workers remain unchanged; this does not
+migrate old native owners or complete the remaining resource/recovery budgets.
 
 ## One charge, all original holders
 

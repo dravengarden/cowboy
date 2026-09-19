@@ -530,9 +530,12 @@ counts, retained bytes/history or general background-effect budgets.
 Its [acceptance and signed publication](releases/native-snapshot-lifetimes-2026-09-19.md)
 passes 48 native, 19 connected v6 and 24 browser checks, the complete source gate
 and the actual active/next-recovery/cold readers of the full 88-release Catalog.
-Zed `1.19.0` is available; Hawk remains installed on `1.18.0`, with its resident
-Machine and all 18 observed ACP workers retained. Publication is not installation
-or native-owner recovery.
+Zed `1.19.0` is available and the separately authorized
+[Hawk upgrade](releases/zed-snapshot-install-2026-09-19.md) records the exact
+installed generation with Service `completed` and Machine `applied` receipts.
+Its resident Machine and all 18 original ACP workers remain unchanged. A
+separate concurrent Controller/Web deployment is recorded explicitly; this
+Plugin upgrade is not native-owner recovery or full continuity of every process.
 The [sync/reload replacement candidate](plugin-native-replacement-budgets.md)
 adds shared actual-job/result lifetimes, bounded diff output and pre-mutation
 retained-history checks for those two writers. Its
