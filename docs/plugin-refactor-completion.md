@@ -558,9 +558,14 @@ claim. The later, separately authorized
 Service `completed`, Machine `applied` and the matching new installation revision.
 It retains all 17 original ACP workers and unchanged component profiles in its
 own observation window, without revising the earlier continuity failure.
-The core Operator lock fix is source-verified but Controller activation is held
-by five missing exact Agent publications. This is not an all-writer or global
-memory budget, independent recovery or supported-device acceptance.
+The subsequent [Agent publication and Hawk rollout](releases/agent-upgrades-2026-09-19.md)
+closes all five missing exact publications, installs their signed generations
+and activates the Controller's Operator lock fix from integrated `e10bdaf3`.
+The final 94-release reader floor and empty convergence plan pass; all 18
+original ACP workers survive this rollout. The independent Web changes and
+their failed-then-reconciled continuity checks are retained in that record.
+This is not an all-writer or global memory budget, independent recovery or
+supported-device acceptance.
 The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
 adds exact terminal-refusal projection and original-ID reconciliation through
 adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and

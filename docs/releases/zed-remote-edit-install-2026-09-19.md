@@ -98,6 +98,11 @@ global resource limits, independently authorized post-effect recovery and the
 broader [completion exits](../plugin-refactor-completion.md) are unchanged.
 Whole-refactor completion is not claimed.
 
+The later [Agent publication and Hawk rollout](agent-upgrades-2026-09-19.md)
+closes those five publication gaps and deploys the Controller repair without
+changing this installed Zed generation. It has its own acceptance window and
+does not revise this earlier installation evidence.
+
 Private evidence directory: `/tmp/cowboy-zed-remote-edit-install.8n1HZz`.
 
 | Evidence file | SHA-256 |

@@ -182,6 +182,11 @@ Website metadata is not installation authority.
 
 ## Controller activation is held
 
+This was the boundary of the original release. The later
+[Agent publication and Hawk rollout](agent-upgrades-2026-09-19.md) closes all
+five missing publications and activates the Operator repair. The historical
+failed gate and continuity observations below remain unchanged.
+
 The exact source Agent-publication gate fails against the primary Catalog
 `/var/lib/cowboy/plugins/catalog`. Claude Code `3.1.28` is covered, but the
 following exact signed versions are absent:
