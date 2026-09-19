@@ -560,6 +560,16 @@ Phase 3 shipped in part with the same release (service worker
   cached tail while the Hub is not live (`useCachedTailSessions`), and the
   Mobile drawer shows its own tappable connection line once the presentation
   debounce passes while the floating pill hides.
+- Drafts in IndexedDB (service worker `cowboy-v1732`, conflict 19): a
+  composer draft's attachment bytes are written to the dataset-scoped
+  `session:<sid>:draft` cache while localStorage keeps the text with its
+  inline tokens and a flag; the bytes are read back once the product
+  database knows its dataset and a mounted composer adopts them, or drops
+  the tokens of images that are gone (`web/src/draftRestore.ts`). Without a
+  database the old text-only quota fallback still applies; a pending paste
+  placeholder is still lost on a crash.
+- P3 hover prefetch: a mouse resting on a Desktop sessions row for 150 ms
+  fetches that tail ahead of the P2 queue (`prefetchSessionTail`).
 - One indicator per surface (service worker `cowboy-v1731`): the transcript
   tail's "Reconnecting…" row is removed on both products; the Mobile pill is
   restyled to the transcript pills' tinted language; "needs attention"
@@ -571,9 +581,9 @@ Not yet implemented: the forward bootstrap cursor with `transcript_epoch`
 and streaming messages are updated in place under their first seq; it needs
 a per-row update watermark first), target-bound `cancel` / `permission`
 outcomes (`stale`, `already_resolved`; permission resolution lives in the
-Machine-hosted worker path), the sessions `revision`, the P3 hover and
-long-press prefetch, the inline gap divider, drafts in IndexedDB, and the
-workspaces cache.
+Machine-hosted worker path), the sessions `revision`, the Mobile long-press
+prefetch, the inline gap divider (superseded by dropping an unjoinable
+prefix), and the workspaces cache.
 
 ## Open decisions
 

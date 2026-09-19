@@ -12,15 +12,29 @@
 // + draft MESSAGES live server-side in postgres and sync across terminals; this
 // is the not-yet-sent working text, which is purely local, so localStorage is the
 // right home — survives reload, no server round-trip, no cross-device coupling.)
-// Mirror in a Map for synchronous reads; write through to localStorage, with a
-// text-only fallback if attachments blow the quota (the text is the precious
-// part — an image is easy to re-attach).
+// Mirror in a Map for synchronous reads; write through to localStorage.
+//
+// Attachment bytes go to the dataset-scoped IndexedDB (docs/offline-first-sync.md,
+// conflict 19): a pasted screenshot is far bigger than the localStorage quota
+// tolerates, and dropping it silently was the old fallback. The localStorage
+// record then keeps the text (inline tokens intact) plus a flag; the bytes are
+// read back asynchronously once the product database knows its dataset, and
+// the composer adopts them through `subscribeDraftRestore`. Without a database
+// (no product dataset yet) the old text-only quota fallback still applies.
 
 import {
   type Attachment,
   dropOrphanImageTokens,
   stripImageTokens,
 } from "./attachments";
+import {
+  type DraftMirror,
+  mergeRestoredDraft,
+  type RestoredDraft,
+  type StoredDraft,
+  storableAttachments,
+} from "./draftRestore";
+import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
 
 export interface Draft {
   text: string;
@@ -34,6 +48,29 @@ const EMPTY: Draft = { text: "", attachments: [] };
 const KEY_PREFIX = "cowboy:composer-draft:";
 const drafts = new Map<string, Draft>();
 
+/** The slice of the product database the draft store borrows. */
+export interface DraftDatabase {
+  cache<T>(scope: ProductCacheScope): ProductCache<T>;
+  cacheSessions(state: "draft"): Promise<string[]>;
+}
+
+let database: DraftDatabase | undefined;
+// Sessions whose localStorage record promised bytes in the database and are
+// still waiting for them, plus every session known to own a database record.
+const awaitingDatabase = new Set<string>();
+const databaseDrafts = new Set<string>();
+const restoreListeners = new Map<string, Set<(draft: RestoredDraft) => void>>();
+
+function draftCache(sessionId: string): ProductCache<StoredDraft> | undefined {
+  if (database === undefined) return undefined;
+  try {
+    return database.cache<StoredDraft>({ kind: "session", session: sessionId, state: "draft" });
+  } catch {
+    // Admission ended (sign-out): the in-memory copy still serves this page.
+    return undefined;
+  }
+}
+
 // Hydrate the in-memory mirror from localStorage once at module load, so the
 // first Composer mount after a reload already has the restored draft.
 function hydrate(): void {
@@ -46,15 +83,23 @@ function hydrate(): void {
       const raw = ls.getItem(k);
       const d: unknown = raw ? JSON.parse(raw) : null;
       if (d && typeof d === "object" && typeof (d as Draft).text === "string") {
-        const parsed = d as Partial<Draft>;
+        const parsed = d as Partial<DraftMirror>;
         const attachments = Array.isArray(parsed.attachments)
-          ? parsed.attachments
+          ? [...parsed.attachments]
           : [];
+        const sessionId = k.slice(KEY_PREFIX.length);
+        if (parsed.attachmentsInDatabase === true && attachments.length === 0) {
+          // The bytes live in IndexedDB; keep the tokens so the restore can
+          // put the images back exactly where they were.
+          awaitingDatabase.add(sessionId);
+          drafts.set(sessionId, { text: parsed.text ?? "", attachments });
+          continue;
+        }
         // Heal drafts whose image bytes were dropped on a prior quota-save: strip
         // the now-orphaned `![](cowboy-att:id)` tokens so they don't render as a
         // stray fallback chip on reload.
         const ids = new Set(attachments.map((a) => a.id));
-        drafts.set(k.slice(KEY_PREFIX.length), {
+        drafts.set(sessionId, {
           text: dropOrphanImageTokens(parsed.text ?? "", ids),
           attachments,
         });
@@ -66,6 +111,11 @@ function hydrate(): void {
 }
 hydrate();
 
+function discardDatabaseDraft(sessionId: string): void {
+  if (!databaseDrafts.delete(sessionId)) return;
+  void draftCache(sessionId)?.discard().catch(() => undefined);
+}
+
 function persist(sessionId: string, draft: Draft | null): void {
   const ls = globalThis.localStorage;
   if (!ls) return;
@@ -76,8 +126,44 @@ function persist(sessionId: string, draft: Draft | null): void {
     } catch {
       /* unavailable — in-memory copy already updated */
     }
+    discardDatabaseDraft(sessionId);
     return;
   }
+  const attachments = storableAttachments(draft.attachments);
+  if (attachments.length === 0) {
+    discardDatabaseDraft(sessionId);
+  } else {
+    const cache = draftCache(sessionId);
+    if (cache !== undefined) {
+      const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
+      databaseDrafts.add(sessionId);
+      void cache.save(stored).then(
+        (): void => {
+          const mirror: DraftMirror = {
+            text: draft.text,
+            attachments: [],
+            attachmentsInDatabase: true,
+          };
+          try {
+            ls.setItem(key, JSON.stringify(mirror));
+          } catch {
+            /* the database holds the whole draft; the text mirror is optional */
+          }
+        },
+        (): void => {
+          // The database refused the bytes; fall back to the localStorage
+          // record with its old quota policy.
+          databaseDrafts.delete(sessionId);
+          persistLegacy(ls, key, draft);
+        },
+      );
+      return;
+    }
+  }
+  persistLegacy(ls, key, draft);
+}
+
+function persistLegacy(ls: Storage, key: string, draft: Draft): void {
   try {
     ls.setItem(key, JSON.stringify(draft));
   } catch {
@@ -136,6 +222,70 @@ export function getDraft(sessionId: string): Draft {
   return drafts.get(sessionId) ?? EMPTY;
 }
 
+/** Called once when the product database exists. Reads back every draft
+ * whose bytes live there and tells mounted composers about them. */
+export function attachDraftDatabase(db: DraftDatabase): void {
+  if (database !== undefined) return;
+  database = db;
+  void restoreFromDatabase();
+}
+
+async function restoreFromDatabase(): Promise<void> {
+  let stored: string[] = [];
+  try {
+    stored = await database!.cacheSessions("draft");
+  } catch {
+    // No dataset yet (logged out) or the database is unavailable: the
+    // localStorage text stays authoritative for this page.
+  }
+  for (const id of stored) databaseDrafts.add(id);
+  const candidates = new Set([...stored, ...awaitingDatabase]);
+  for (const sessionId of candidates) {
+    let record: StoredDraft | null = null;
+    try {
+      record = (await draftCache(sessionId)?.load()) ?? null;
+    } catch {
+      record = null;
+    }
+    awaitingDatabase.delete(sessionId);
+    // A draft edited after hydration is newer than anything on disk.
+    if (dirty.has(sessionId)) continue;
+    const mirror = drafts.get(sessionId);
+    const restored = mergeRestoredDraft(
+      mirror === undefined ? undefined : {
+        ...mirror,
+        attachmentsInDatabase: stored.includes(sessionId) || mirror.attachments.length === 0,
+      },
+      record,
+    );
+    if (restored === null) continue;
+    if (restored.text === "" && restored.attachments.length === 0) {
+      drafts.delete(sessionId);
+    } else {
+      drafts.set(sessionId, restored);
+    }
+    for (const listener of restoreListeners.get(sessionId) ?? []) listener(restored);
+  }
+}
+
+/** A mounted composer learns when its draft's bytes arrive from the database
+ * after its mount seed, or when they turned out to be gone. */
+export function subscribeDraftRestore(
+  sessionId: string,
+  listener: (draft: RestoredDraft) => void,
+): () => void {
+  let listeners = restoreListeners.get(sessionId);
+  if (listeners === undefined) {
+    listeners = new Set();
+    restoreListeners.set(sessionId, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) restoreListeners.delete(sessionId);
+  };
+}
+
 // Store the draft, or drop the entry once it's empty so neither the map nor
 // localStorage accumulates a blank draft for every session ever focused. The
 // Map is updated synchronously; the disk write is debounced (see schedulePersist)
@@ -164,6 +314,10 @@ export function pruneDrafts(liveSessionIds: Set<string>): void {
       drafts.delete(id);
       dirty.delete(id);
     }
+  }
+  // Deleting the current entry during Set iteration is spec-safe.
+  for (const id of databaseDrafts) {
+    if (!liveSessionIds.has(id)) discardDatabaseDraft(id);
   }
   const ls = globalThis.localStorage;
   if (!ls) return;

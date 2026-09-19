@@ -134,6 +134,7 @@ import {
     moveSessionFolder,
     notify,
     openSession,
+    prefetchSessionTail,
     organizeSessionsByProject,
     placeSessions,
     releaseInactiveHistory,
@@ -687,6 +688,9 @@ function SessionList({
     // Drag-to-reorder via the leading grip handle (server-authoritative, synced).
     const byId = new Map(sessions.map((s) => [s.id, s]));
     const listRef = useRef<HTMLUListElement>(null);
+    // Desktop P3 prefetch: a mouse resting on a row for 150 ms fetches that
+    // session's tail so the switch paints at once (docs/offline-first-sync.md §3).
+    const hoverPrefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     // --- Folders (docs/sessions-folders.md) ---------------------------------
     // The synced folder tree is overlaid on the display-ordered session list;
     // Mobile keeps its newest-last direction inside every container. Collapse
@@ -1330,6 +1334,19 @@ function SessionList({
                         ref={sortable.registerItem(s.id)}
                         style={sortable.itemStyle(s.id)}
                         selected={s.id === activeId}
+                        onPointerEnter={desktop
+                            ? (event): void => {
+                                if (event.pointerType !== "mouse" || s.id === activeId) return;
+                                clearTimeout(hoverPrefetchTimer.current);
+                                hoverPrefetchTimer.current = setTimeout(
+                                    () => prefetchSessionTail(s.id),
+                                    150,
+                                );
+                            }
+                            : undefined}
+                        onPointerLeave={desktop
+                            ? (): void => clearTimeout(hoverPrefetchTimer.current)
+                            : undefined}
                         onActivate={(): void => {
                             if (deleting) return;
                             setPinned(false);

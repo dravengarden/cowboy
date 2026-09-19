@@ -129,10 +129,13 @@ export type ProductCacheScope =
   | {
     readonly kind: "session";
     readonly session: string;
-    readonly state: "tail" | "delivery";
+    // `draft` holds the composer's staged attachments (bytes too large for
+    // the localStorage text mirror); it is device-local, never server-derived,
+    // but shares the dataset fence and the sign-out discard.
+    readonly state: "tail" | "delivery" | "draft";
   };
 
-const CACHE_SESSION_STATES = ["tail", "delivery"] as const;
+const CACHE_SESSION_STATES = ["tail", "delivery", "draft"] as const;
 
 function cacheSuffix(scope: ProductCacheScope): string {
   if (scope.kind === "service") {

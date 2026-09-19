@@ -16,7 +16,7 @@ import {
   reconcileDeletedInlineImages,
   settlePendingAttachments,
 } from "../attachments";
-import { getDraft, setDraft } from "../draftStore";
+import { getDraft, setDraft, subscribeDraftRestore } from "../draftStore";
 import {
   getInlineAttachment,
   registerInlineAttachment,
@@ -121,6 +121,27 @@ export function useComposerDraftController(
       setAttachmentsState(next);
     },
     [],
+  );
+
+  // Attachment bytes live in IndexedDB and can land after the mount seed.
+  // Register them so inline tokens paint, adopt them when nothing newer was
+  // staged here, and drop the tokens of images that turned out to be gone.
+  useEffect(
+    () =>
+      subscribeDraftRestore(sessionId, (restored) => {
+        seedInlineAttachments(restored.attachments);
+        const restoredIds = new Set(restored.attachments.map((attachment) => attachment.id));
+        for (const token of imageTokensInText(textRef.current)) {
+          if (!restoredIds.has(token.id) && getInlineAttachment(token.id) === undefined) {
+            editorRef.current?.deleteImage(token.id);
+          }
+        }
+        if (attachmentsRef.current.length === 0 && restored.attachments.length > 0) {
+          setAttachments(restored.attachments);
+        }
+        editorRef.current?.refreshImages();
+      }),
+    [editorRef, sessionId, setAttachments],
   );
 
   const setText = useCallback((next: string): void => {

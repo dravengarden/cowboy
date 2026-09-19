@@ -65,7 +65,7 @@ import {
   configOptionsMatchChanges,
 } from "./configOptionMutation";
 import { refreshProviderCatalog } from "./providerCatalogRegistry";
-import { getDraft, pruneDrafts } from "./draftStore";
+import { attachDraftDatabase, getDraft, pruneDrafts } from "./draftStore";
 import {
   claimOrphanedPendingEdits,
   finishOrphanedPendingEdit,
@@ -2362,6 +2362,9 @@ const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 // --- Local replica (docs/offline-first-sync.md) -----------------------------
 // Last known server-derived state, painted before the socket answers. Every
 // value is a cache the next broadcast replaces; nothing here is ever sent.
+// Composer drafts keep their attachment bytes beside the replica caches.
+attachDraftDatabase(syncDatabase);
+
 const replica = createReplica(syncDatabase, {
   onError: (error) => console.warn("replica persistence failed", error),
 });
@@ -2573,6 +2576,17 @@ function schedulePrefetch(): void {
     // Never enough to push the opened session out of the transcript MRU.
     limit: TRANSCRIPT_SESSION_CACHE_LIMIT - 1,
   }));
+}
+
+/** P3: a Desktop hover (or any pointer intent) on a sessions row fetches that
+ * one tail ahead of the queued P2 work, so the switch paints at once. */
+export function prefetchSessionTail(sessionId: string): void {
+  if (
+    !liveBootstrapped || !state.connected || productSessionAbandoned ||
+    sessionId === openedSessionId || state.hydrated.has(sessionId) ||
+    !state.sessions.some((session) => session.id === sessionId)
+  ) return;
+  prefetch.schedule([sessionId]);
 }
 
 /** P1 first: the opened session's bootstrap settles before P2 spends. */
