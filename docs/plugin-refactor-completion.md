@@ -533,8 +533,10 @@ The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
 adds exact terminal-refusal projection and original-ID reconciliation through
 adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and
 requiring separate retirement. It does not adopt old processes or implement
-independently authorized post-effect recovery; v6 connected acceptance and
-actual generation rollout remain distinct.
+independently authorized post-effect recovery. Its
+[acceptance](releases/sync-budget-outcomes-2026-09-19.md) passes all 19 connected
+v6 checks and records Controller/Web reader activation; actual Machine/native
+generation rollout remains separate.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It

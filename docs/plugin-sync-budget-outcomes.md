@@ -6,6 +6,10 @@ The exact private server remains `1.4.0`; upstream and third-party pins are
 unchanged. Communication, confirmation, installation and recovery remain core
 mechanisms. This adds no writer purpose or generic Plugin execution authority.
 
+The [2026-09-19 acceptance](releases/sync-budget-outcomes-2026-09-19.md) records
+all 19 connected checks, browser/native regressions and Controller/Web reader
+activation. The Machine and exact signed Plugin rollout remain separate.
+
 ## Evidence, not a local guess
 
 Only a validated terminal response from the original native process/operation

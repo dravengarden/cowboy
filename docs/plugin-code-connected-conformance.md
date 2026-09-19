@@ -107,7 +107,8 @@ Historical v3 receipts cover only the first eleven checks:
     and changed disk bytes remain intact, and separate retirement/release
     complete without replay. Historical v5 does not accept this extension.
 
-The last case deliberately leaves unresolved native ownership. Teardown kills
+The connection-replacement/restart checks deliberately leave unresolved native
+ownership. Teardown kills
 only fixture executables and removes their validated private runtime directories;
 the PID namespace is an exceptional-path process safety net. **That forced test
 cleanup is not product cleanup, rollback or recovery evidence.** No byte is
@@ -143,3 +144,6 @@ and parent release have completed; its process-wide guard is never bypassed.
 The [native text reader](plugin-native-text-reads.md) adds check 18, a new
 core-only support probe and independent read validation without changing
 navigation admission or enabling its Web consumer.
+The [Budget outcome acceptance](releases/sync-budget-outcomes-2026-09-19.md)
+adds the complete v6 19-check run and separately records Controller/Web reader
+activation without Machine maintenance or production Plugin installation.
