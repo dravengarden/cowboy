@@ -79,3 +79,7 @@ baseline or production policy changes. Only the Controller needs activation.
 General graph linking, Machine-owned Workspace/Session/security-domain identity,
 state compatibility and independent post-effect recovery remain in the
 [completion ledger](plugin-refactor-completion.md).
+
+The [2026-09-19 Controller release](releases/plugin-workspace-read-scopes-2026-09-19.md)
+records final integrated source gates, exact immutable artifacts, the separate
+19-check Code regression chain and actual production activation/continuity.
