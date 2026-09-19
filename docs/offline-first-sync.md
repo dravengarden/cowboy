@@ -570,6 +570,13 @@ Phase 3 shipped in part with the same release (service worker
   placeholder is still lost on a crash.
 - P3 hover prefetch: a mouse resting on a Desktop sessions row for 150 ms
   fetches that tail ahead of the P2 queue (`prefetchSessionTail`).
+- Conflict 7 (Controller and Web release, service worker `cowboy-v1733`):
+  the Hub appends no second `permission_resolved` row for a request already
+  resolved in the session log, so an answer given on two devices at once
+  resolves once; the first broadcast already clears the other device's card,
+  so no addressed `already_resolved` result is needed. Creating a session
+  while Cowboy is unreachable now says "Needs a connection" in place instead
+  of the browser's fetch error (class C).
 - One indicator per surface (service worker `cowboy-v1731`): the transcript
   tail's "Reconnecting…" row is removed on both products; the Mobile pill is
   restyled to the transcript pills' tinted language; "needs attention"
@@ -579,11 +586,11 @@ Phase 3 shipped in part with the same release (service worker
 Not yet implemented: the forward bootstrap cursor with `transcript_epoch`
 (a plain `after_seq` cursor is unsafe while canonical rows such as tool calls
 and streaming messages are updated in place under their first seq; it needs
-a per-row update watermark first), target-bound `cancel` / `permission`
-outcomes (`stale`, `already_resolved`; permission resolution lives in the
-Machine-hosted worker path), the sessions `revision`, the Mobile long-press
-prefetch, the inline gap divider (superseded by dropping an unjoinable
-prefix), and the workspaces cache.
+a per-row update watermark first), a turn-bound `cancel` outcome (`stale`),
+the sessions `revision`, the Mobile long-press prefetch, and the inline gap
+divider (superseded by dropping an unjoinable prefix). The New Session
+picker already lists workspaces from the replicated Machine registry, so a
+separate `service:workspaces` cache is not needed.
 
 ## Open decisions
 

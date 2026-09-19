@@ -2324,7 +2324,18 @@ function NewSessionDialog({
                 });
                 onClose();
             } catch (error) {
-                setCreateError(error instanceof Error ? error.message : "Session creation failed");
+                // Creating a session is live-only (docs/offline-first-sync.md,
+                // class C): a network failure says so in place instead of
+                // surfacing the browser's "Failed to fetch".
+                const unreachable = error instanceof TypeError ||
+                    globalThis.navigator?.onLine === false;
+                setCreateError(
+                    unreachable
+                        ? "Needs a connection. A new session prepares its workspace on the Machine, so try again when Cowboy is reachable."
+                        : error instanceof Error
+                        ? error.message
+                        : "Session creation failed",
+                );
             } finally {
                 setCreating(false);
             }
