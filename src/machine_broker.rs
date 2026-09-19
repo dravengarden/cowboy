@@ -41,11 +41,15 @@ const DIRECT_WORKER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn worker_generation_failure_allows_fallback(error: &anyhow::Error) -> bool {
     let detail = format!("{error:#}");
-    // Auth and native-thread restore timeouts are session-local. Retrying a
-    // previous worker generation hydrates the same thread and hides the real
+    // Auth, missing native threads, and restore timeouts are session-local.
+    // Retrying a previous worker generation hydrates the same thread and hides the real
     // failure behind "fallback after generation launch failed".
     !crate::provider_behavior::is_provider_auth_required_error(&detail)
         && !crate::provider_behavior::is_native_session_restore_timeout(&detail)
+        // Older workers do not attach the ACP method to this diagnostic. A
+        // missing ACP resource cannot be repaired by selecting an older
+        // worker, which may not even understand the exact Provider package.
+        && !detail.contains("acp connection: Resource not found:")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1747,8 +1751,18 @@ impl Broker {
         self.session_states
             .lock()
             .insert(session_id.to_owned(), state);
-        if !matches!(event, RuntimeEvent::Ready { .. })
-            || generation != *self.desired_generation.lock()
+        // RemoteSink publishes startup readiness as Status::Running. Ready is
+        // retained for older peers, but is not emitted by current ACP workers.
+        // Ignoring Running leaves a working generation "unproven", so one
+        // missing native thread can quarantine it for every new session.
+        if !matches!(
+            event,
+            RuntimeEvent::Ready { .. }
+                | RuntimeEvent::Status {
+                    state: WorkerState::Running,
+                    ..
+                }
+        ) || generation != *self.desired_generation.lock()
         {
             return Vec::new();
         }
@@ -3021,10 +3035,14 @@ mod tests {
         let resume = anyhow::anyhow!(
             "worker sess-1 exited before readiness: agent did not complete ACP session/resume within 240s"
         );
+        let missing = anyhow::anyhow!(
+            "worker sess-1 exited before readiness: acp connection: Resource not found: native-thread: {{\"uri\":\"native-thread\"}}"
+        );
 
         assert!(!worker_generation_failure_allows_fallback(&auth));
         assert!(worker_generation_failure_allows_fallback(&binary));
         assert!(!worker_generation_failure_allows_fallback(&resume));
+        assert!(!worker_generation_failure_allows_fallback(&missing));
     }
 
     #[test]
@@ -3781,6 +3799,20 @@ mod tests {
 
     #[test]
     fn ready_event_rehabilitates_generation_fallbacks() {
+        assert_readiness_rehabilitates_generation_fallbacks(RuntimeEvent::Ready {
+            agent_session_id: Some("agent-ready".to_owned()),
+        });
+    }
+
+    #[test]
+    fn running_status_rehabilitates_generation_fallbacks() {
+        assert_readiness_rehabilitates_generation_fallbacks(RuntimeEvent::Status {
+            state: WorkerState::Running,
+            detail: None,
+        });
+    }
+
+    fn assert_readiness_rehabilitates_generation_fallbacks(ready: RuntimeEvent) {
         let broker = Broker::new(MachineBrokerArgs {
             socket: PathBuf::from("/tmp/unused.sock"),
             worker_command: PathBuf::from("/bin/false"),
@@ -3849,15 +3881,14 @@ mod tests {
             })
             .expect("register desired worker");
 
+        assert!(
+            broker
+                .update_from_event("sess-ready", 99, 1, &ready)
+                .is_empty()
+        );
+        assert!(!broker.unhealthy_generations.lock().is_empty());
         assert_eq!(
-            broker.update_from_event(
-                "sess-ready",
-                1,
-                1,
-                &RuntimeEvent::Ready {
-                    agent_session_id: Some("agent-ready".to_owned()),
-                },
-            ),
+            broker.update_from_event("sess-ready", 1, 1, &ready),
             vec!["sess-fallback".to_owned()]
         );
         assert!(broker.unhealthy_generations.lock().is_empty());
@@ -3868,6 +3899,8 @@ mod tests {
                 .lock()
                 .contains(&("gen-2".to_owned(), "codex".to_owned()))
         );
+        broker.quarantine_generation_if_unproven("gen-2", "codex", "missing-native-thread");
+        assert!(broker.unhealthy_generations.lock().is_empty());
     }
 
     #[test]

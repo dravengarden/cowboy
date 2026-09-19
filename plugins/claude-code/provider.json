@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.27",
+  "version": "3.1.28",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
@@ -68,16 +68,16 @@
     {
       "id": "fable-high",
       "name": "Fable · High",
-      "detail": "Fable 5 (1M context) · High effort",
+      "detail": "Fable 5.1 (1M context) · High effort",
       "is_default": false,
-      "values": { "model": "claude-fable-5[1m]", "effort": "high" }
+      "values": { "model": "claude-fable-5-1[1m]", "effort": "high" }
     },
     {
       "id": "fable-max",
       "name": "Fable · Max",
-      "detail": "Fable 5 (1M context) · Max effort",
+      "detail": "Fable 5.1 (1M context) · Max effort",
       "is_default": false,
-      "values": { "model": "claude-fable-5[1m]", "effort": "max" }
+      "values": { "model": "claude-fable-5-1[1m]", "effort": "max" }
     }
   ],
   "host": {
