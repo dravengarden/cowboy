@@ -122,7 +122,10 @@ Disabling the grant cannot undo an effect that has already happened.
   Product login.
 - An exclusive endpoint-owner lock prevents a second Controller from unlinking
   the first one's socket. Cleanup removes only the socket inode owned by that
-  listener and revokes its process-local grants.
+  listener and revokes its process-local grants. The guard explicitly unlocks
+  the shared file description on teardown and failed binds: an inherited
+  descriptor between fork and exec must not retain ownership after the listener
+  ends. Closing that old descriptor later cannot unlock a successor's lock.
 
 The delegation covers the Controller's registered Machines and trusted Plugins.
 All agents running as the Service UID share this authority; it is not per-task
