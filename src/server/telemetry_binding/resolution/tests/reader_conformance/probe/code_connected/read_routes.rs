@@ -45,19 +45,35 @@ pub(super) async fn refused(pair: &Pair<'_>, continuation: &str) -> Result<(), F
 /// Hold bytes from the actual core adapter, revoke only this disposable login
 /// through the product API, then deliver the original correlated reply. The
 /// retained main login and native owners are independent and must remain usable.
-pub(super) async fn authorization(pair: &Pair<'_>, password: &str) -> Result<(), Failure> {
+pub(super) async fn authorization(pair: &mut Pair<'_>, password: &str) -> Result<(), Failure> {
     let mut reader = Http::new(pair.address)?;
     reader.login(password).await?;
+    // Keep the observed HTTP client on Pair until this check succeeds so a
+    // negative receipt records the actual denied/incorrect read, not an older
+    // request made by the independent login.
+    let original = std::mem::replace(&mut pair.http, reader);
+    revoked_read(pair).await?;
+    pair.http = original;
+    let mut expected = pair.proxy.counts()?.commands;
+    let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
+    let fresh = pair.http.get(&path).await?;
+    check(fresh["apiVersion"] == 1 && fresh["path"] == FILE)?;
+    *expected.entry("coreFile".into()).or_default() += 1;
+    check(pair.proxy.counts()?.commands == expected)
+}
+
+async fn revoked_read(pair: &Pair<'_>) -> Result<(), Failure> {
     let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
     let before = pair.proxy.counts()?.commands;
     let gate = pair.proxy.hold("coreFile")?;
-    let request = reader.call(Method::GET, &path, None);
+    let request = pair.http.call(Method::GET, &path, None);
     tokio::pin!(request);
     tokio::select! {
         held = gate.held() => held?,
         _ = &mut request => return Err(Failure::WrongObservation),
     }
-    let logout = reader
+    let logout = pair
+        .http
         .call(Method::POST, "/api/auth/logout", Some(json!({})))
         .await?;
     check(logout.status == StatusCode::OK)?;
@@ -73,10 +89,6 @@ pub(super) async fn authorization(pair: &Pair<'_>, password: &str) -> Result<(),
     *expected.entry("coreFile".into()).or_default() += 1;
     check(pair.proxy.counts()?.commands == expected)?;
     // Revoked credentials cannot admit another read or pick the other login.
-    reader.denied(Method::GET, &path, None).await?;
-    check(pair.proxy.counts()?.commands == expected)?;
-    let fresh = pair.http.get(&path).await?;
-    check(fresh["apiVersion"] == 1 && fresh["path"] == FILE)?;
-    *expected.entry("coreFile".into()).or_default() += 1;
+    pair.http.denied(Method::GET, &path, None).await?;
     check(pair.proxy.counts()?.commands == expected)
 }
