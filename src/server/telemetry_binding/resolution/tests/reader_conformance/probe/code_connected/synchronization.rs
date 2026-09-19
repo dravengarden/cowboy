@@ -176,9 +176,11 @@ pub(super) async fn settled(
 }
 
 pub(super) async fn finish(
-    pair: &Pair<'_>,
+    pair: &mut Pair<'_>,
+    password: &str,
     prepared: Prepared,
     stage: &mut &'static str,
+    checks: &mut Vec<&'static str>,
 ) -> Result<Retired, Failure> {
     let Prepared {
         resource,
@@ -193,6 +195,17 @@ pub(super) async fn finish(
     snapshot(&unknown, &resource, "unknown")?;
     fenced(pair, &resource).await?;
     check(pair.proxy.counts()?.commands.get("codeSyncApply") == Some(&1))?;
+    *stage = "synchronization_failed_query_original_login_revocation";
+    failure_authority::lost_reply(
+        pair,
+        password,
+        &endpoint(&operation),
+        Method::GET,
+        None,
+        "codeSyncQuery",
+    )
+    .await?;
+    checks.push(*stage);
     *stage = "synchronization_original_id_query";
     let observed = pair.http.get(&endpoint(&operation)).await?;
     snapshot(&observed, &resource, "applied")?;
@@ -200,7 +213,7 @@ pub(super) async fn finish(
         observed["state"]["content"] == request()["content"]
             && observed["state"]["version"].is_array(),
     )?;
-    check(pair.proxy.counts()?.commands.get("codeSyncQuery") == Some(&1))?;
+    check(pair.proxy.counts()?.commands.get("codeSyncQuery") == Some(&2))?;
     let duplicate = pair
         .http
         .call(Method::PUT, &endpoint(&operation), Some(json!({})))

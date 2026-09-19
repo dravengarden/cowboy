@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 mod budget;
 mod effect_authority;
 mod exercise;
+mod failure_authority;
 mod fixture;
 mod installation;
 mod language_reads;
@@ -205,7 +206,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v10",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v11",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -237,7 +238,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 28;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 31;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,

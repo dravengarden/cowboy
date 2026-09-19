@@ -3,9 +3,65 @@ use crate::admin::{AdminRole, hex_sha256};
 use crate::store::{ProductApiToken, ProductUser};
 
 #[tokio::test]
+async fn expired_read_deadline_does_not_probe_and_releases_only_its_borrow() {
+    let (mut f, id) = opened().await;
+    let authority = Arc::new(approval(&f.context, &authenticated(), &HeaderMap::new()).unwrap());
+    let job = f.context.code_buffers.admit_read("local", &id).unwrap();
+    assert!(matches!(
+        run_read(
+            f.context.clone(),
+            authority,
+            job,
+            Request::Language {},
+            tokio::time::Instant::now()
+        )
+        .await,
+        Err(StatusCode::GATEWAY_TIMEOUT)
+    ));
+    assert!(f.commands.try_recv().is_err());
+    assert!(f.context.code_buffers.admit_read("local", &id).is_ok());
+}
+
+#[tokio::test]
+async fn cancelled_read_drains_by_the_original_deadline_across_both_native_waits() {
+    let (mut f, id) = opened().await;
+    tokio::time::pause();
+    let task = start(&f, &id, Request::Language {});
+    let support = command(&mut f).await;
+    tokio::time::advance(std::time::Duration::from_secs(30)).await;
+    reply(
+        &f.context,
+        &f.connection,
+        support,
+        json!({"type":"bufferLeaseReadSupport","api_version":1}),
+    );
+    let reading = command(&mut f).await;
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(f.context.code_buffers.admit_read("local", &id).is_err());
+    tokio::time::advance(std::time::Duration::from_secs(31)).await;
+    tokio::task::yield_now().await;
+    assert!(
+        f.context.code_buffers.admit_read("local", &id).is_ok(),
+        "a dropped observer must not renew the owned read's total budget"
+    );
+    reply(&f.context, &f.connection, reading, result("language"));
+    let Admission::Saved(snapshot) = f
+        .context
+        .code_buffers
+        .admit("local", &id, Action::Open)
+        .unwrap()
+    else {
+        panic!("read timeout must not reopen or close the original native owner")
+    };
+    assert_eq!(snapshot.state, remote::LeaseState::Open);
+    assert!(f.commands.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn original_credential_and_role_are_rechecked_after_each_remote_boundary() {
-    for stage in ["probe", "read"] {
-        for change in ["revoked", "role"] {
+    for stage in ["probe", "read", "probe_error", "read_error"] {
+        for change in ["revoked", "role", "role_aba"] {
             let mut fixture = Fixture::new();
             let root = tempfile::tempdir().unwrap();
             let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
@@ -85,7 +141,7 @@ async fn original_credential_and_role_are_rechecked_after_each_remote_boundary()
                 headers,
                 Json(Request::Language {}),
             ));
-            if stage == "read" {
+            if stage.starts_with("read") {
                 probe(&mut fixture).await;
             }
             let command = command(&mut fixture).await;
@@ -99,8 +155,16 @@ async fn original_credential_and_role_are_rechecked_after_each_remote_boundary()
                     crate::admin::PERMISSIONS_SETTING.into(),
                     json!({"default_role":AdminRole::Viewer,"grants":[]}),
                 );
+                if change == "role_aba" {
+                    fixture.context.hub.set_setting(
+                        crate::admin::PERMISSIONS_SETTING.into(),
+                        json!({"default_role":AdminRole::Operator,"grants":[]}),
+                    );
+                }
             }
-            let value = if stage == "read" {
+            let value = if stage.ends_with("_error") {
+                Value::Null
+            } else if stage == "read" {
                 result("language")
             } else {
                 json!({"type":"bufferLeaseReadSupport","api_version":1})

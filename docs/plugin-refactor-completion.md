@@ -558,6 +558,14 @@ It is published and activated, retaining all 16 original workers in its bounded
 deployment window. This does not open the single-user permission API, supply
 durable principal epochs or close the broader graph/state/recovery exits below.
 
+The [continuation finalization](plugin-continuation-finalization.md) extends the
+same original-user response boundary to owned read, synchronization and
+navigation failures and saved outcomes. An expired original deadline cannot
+consume a new attempt; owned reads retain one total deadline across support,
+read and observer cancellation. Effect records and unresolved fences remain
+independent. This is a finite Controller extension, not remote cancellation,
+independent restoration or the general state/background-budget exit below.
+
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both

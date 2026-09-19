@@ -137,7 +137,8 @@ fn events(root: &Path) -> Result<Vec<Value>, Failure> {
 }
 
 pub(super) async fn prepare(
-    pair: &Pair<'_>,
+    pair: &mut Pair<'_>,
+    password: &str,
     plaintext_source: &str,
     stage: &mut &'static str,
     checks: &mut Vec<&'static str>,
@@ -207,21 +208,34 @@ pub(super) async fn prepare(
         )?;
         let retained = if query == "definition" {
             *stage = "navigation_lost_execute_reply";
-            let gate = pair.proxy.hold("codeNavigationExecute")?;
-            let execute_endpoint = endpoint(&id);
-            let call = pair
-                .http
-                .call(Method::PUT, &execute_endpoint, Some(json!({})));
-            tokio::pin!(call);
-            tokio::select! { held = gate.held() => held?, _ = &mut call => return Err(Failure::WrongObservation) }
-            gate.discard();
-            check(call.await?.status == StatusCode::BAD_GATEWAY)?;
+            {
+                let gate = pair.proxy.hold("codeNavigationExecute")?;
+                let execute_endpoint = endpoint(&id);
+                let call = pair
+                    .http
+                    .call(Method::PUT, &execute_endpoint, Some(json!({})));
+                tokio::pin!(call);
+                tokio::select! { held = gate.held() => held?, _ = &mut call => return Err(Failure::WrongObservation) }
+                gate.discard();
+                check(call.await?.status == StatusCode::BAD_GATEWAY)?;
+            }
             operation(pair, &id, Method::PUT, "unknown").await?;
             let denied = pair
                 .http
                 .call(Method::DELETE, &endpoint(&id), Some(json!({})))
                 .await?;
             check(denied.status == StatusCode::CONFLICT)?;
+            *stage = "navigation_failed_query_original_login_revocation";
+            failure_authority::lost_reply(
+                pair,
+                password,
+                &endpoint(&id),
+                Method::GET,
+                None,
+                "codeNavigationQuery",
+            )
+            .await?;
+            checks.push(*stage);
             let value = settled(pair, &id, "retained").await?;
             check(count(pair, "codeNavigationExecute")? == 1)?;
             checks.push("lost_real_navigation_execute_reply_original_query_without_replay");

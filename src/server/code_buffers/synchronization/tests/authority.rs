@@ -112,6 +112,93 @@ impl AuthFixture {
                 crate::admin::PERMISSIONS_SETTING.into(),
                 json!({"default_role":AdminRole::Viewer,"grants":[]}),
             );
+            if change == "role_aba" {
+                self.fixture.context.hub.set_setting(
+                    crate::admin::PERMISSIONS_SETTING.into(),
+                    json!({"default_role":AdminRole::Operator,"grants":[]}),
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn expired_sync_deadline_never_consumes_an_inert_attempt_or_dispatches() {
+    for action in [Action::Apply, Action::Query, Action::Retire] {
+        let mut f = fixture(20);
+        let resource = opened(&f, 1);
+        let prepared = prepared(&mut f, &resource).await;
+        let approval = Arc::new(approval(&f.context, &authenticated(), &HeaderMap::new()).unwrap());
+        let registry::Admission::Run(job) = f
+            .context
+            .code_buffers
+            .synchronizations
+            .admit("local", &prepared.operation_id, action)
+            .unwrap()
+        else {
+            panic!("admission")
+        };
+        assert!(matches!(
+            run_job(f.context.clone(), approval, *job, Instant::now()).await,
+            Err(StatusCode::GATEWAY_TIMEOUT)
+        ));
+        assert!(f.commands.try_recv().is_err());
+        assert!(matches!(
+            f.context
+                .code_buffers
+                .synchronizations
+                .admit("local", &prepared.operation_id, action)
+                .unwrap(),
+            registry::Admission::Run(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn revoked_failures_do_not_disclose_sync_outcomes_or_rearm_apply() {
+    for action in [Action::Apply, Action::Query, Action::Retire] {
+        for change in ["revoked", "role", "role_aba"] {
+            let mut fixture = AuthFixture::new().await;
+            let task = fixture.prepare();
+            let sent = command(&mut fixture.fixture).await;
+            reply(
+                &fixture.fixture,
+                sent,
+                observation(NativeState::Prepared {}),
+            );
+            let id = json_response(task.await.unwrap()).await["operationId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let task = fixture.operate(&id, action);
+            let sent = command(&mut fixture.fixture).await;
+            fixture.invalidate(change).await;
+            reply(&fixture.fixture, sent, Value::Null);
+            let response = task.await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "{action:?}/{change}"
+            );
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            assert!(!response.headers().contains_key(header::ETAG));
+            if action != Action::Query {
+                let registry::Admission::Saved(snapshot) = fixture
+                    .fixture
+                    .context
+                    .code_buffers
+                    .synchronizations
+                    .admit(&fixture.token.user_id, &id, action)
+                    .unwrap()
+                else {
+                    panic!("an uncertain effect must never be rearmed");
+                };
+                assert!(!snapshot.pending);
+                if action == Action::Apply {
+                    assert!(matches!(snapshot.state, State::Unknown {}));
+                }
+            }
+            assert!(fixture.fixture.commands.try_recv().is_err());
         }
     }
 }
@@ -119,7 +206,7 @@ impl AuthFixture {
 #[tokio::test]
 async fn credentials_and_role_are_rechecked_on_preparation_confirmation_and_response() {
     for stage in ["prepare", "before_apply", "apply_reply"] {
-        for change in ["revoked", "role"] {
+        for change in ["revoked", "role", "role_aba"] {
             let mut fixture = AuthFixture::new().await;
             let task = fixture.prepare();
             let sent = command(&mut fixture.fixture).await;

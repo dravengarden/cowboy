@@ -127,6 +127,121 @@ impl AuthFixture {
 }
 
 #[tokio::test]
+async fn expired_navigation_deadline_never_consumes_or_dispatches_an_attempt() {
+    for action in [
+        Action::Execute,
+        Action::Query,
+        Action::Release,
+        Action::Destination {
+            destination: 0,
+            content: content(),
+        },
+    ] {
+        let mut f = fixture(21);
+        let source = opened(&f);
+        let id = prepared(&mut f, &source).await;
+        let owners = &f.context.code_buffers;
+        if matches!(action, Action::Destination { .. }) {
+            let registry::Admission::Run(job) = owners
+                .navigations
+                .admit(owners, "local", &id, Action::Execute)
+                .unwrap()
+            else {
+                panic!("execute")
+            };
+            job.begin().unwrap();
+            job.finish(owners, observed(Phase::Retained)).unwrap();
+        }
+        let authority =
+            Arc::new(approval(&f.context, &authenticated(), &HeaderMap::new()).unwrap());
+        let registry::Admission::Run(job) = owners
+            .navigations
+            .admit(owners, "local", &id, action.clone())
+            .unwrap()
+        else {
+            panic!("admission")
+        };
+        assert!(matches!(
+            run_job(f.context.clone(), authority, *job, Instant::now()).await,
+            Err(StatusCode::GATEWAY_TIMEOUT)
+        ));
+        assert!(f.commands.try_recv().is_err());
+        assert!(matches!(
+            owners
+                .navigations
+                .admit(owners, "local", &id, action)
+                .unwrap(),
+            registry::Admission::Run(_)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn revoked_failures_do_not_disclose_navigation_outcomes_or_rearm_acquisition() {
+    for action in [
+        Action::Execute,
+        Action::Query,
+        Action::Release,
+        Action::Destination {
+            destination: 0,
+            content: content(),
+        },
+    ] {
+        let mut fixture = AuthFixture::new().await;
+        let task = fixture.prepare();
+        let sent = command(&mut fixture.fixture).await;
+        reply(
+            &fixture.fixture,
+            sent,
+            serde_json::to_value(observed(Phase::Prepared)).unwrap(),
+        );
+        let id = json_response(task.await.unwrap()).await["navigationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        if action != Action::Execute {
+            let task = fixture.operate(&id, Action::Execute);
+            let sent = command(&mut fixture.fixture).await;
+            reply(
+                &fixture.fixture,
+                sent,
+                serde_json::to_value(observed(Phase::Retained)).unwrap(),
+            );
+            assert_eq!(task.await.unwrap().status(), StatusCode::OK);
+        }
+        let task = fixture.operate(&id, action.clone());
+        let sent = command(&mut fixture.fixture).await;
+        fixture.invalidate(true).await;
+        reply(&fixture.fixture, sent, Value::Null);
+        let response = task.await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{action:?}");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert!(!response.headers().contains_key(header::ETAG));
+        if action != Action::Query {
+            let owners = &fixture.fixture.context.code_buffers;
+            let registry::Admission::Saved(snapshot, _) = owners
+                .navigations
+                .admit(owners, &fixture.token.user_id, &id, action.clone())
+                .unwrap()
+            else {
+                panic!("an uncertain effect must never be rearmed");
+            };
+            assert!(!snapshot.pending);
+            match action {
+                Action::Execute => assert_eq!(snapshot.state, State::Unknown),
+                Action::Release => assert_eq!(snapshot.state, State::ReleaseUnknown),
+                Action::Destination { .. } => {
+                    assert_eq!(snapshot.destinations[0].state, DestinationState::Unknown);
+                    assert!(snapshot.destinations[0].resource_id.is_none());
+                }
+                _ => unreachable!(),
+            }
+        }
+        assert!(fixture.fixture.commands.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
 async fn navigation_rechecks_original_credential_and_operator_role_at_each_boundary() {
     for stage in [
         "prepare",

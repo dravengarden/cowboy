@@ -198,7 +198,11 @@ pub(super) async fn run(
 
     effect_authority::run(pair, password, stage, checks).await?;
 
-    let navigation = navigation::prepare(pair, &second, stage, checks).await?;
+    *stage = "owned_read_failed_reply_original_login_revocation";
+    failure_authority::read(pair, password, &second).await?;
+    checks.push(*stage);
+
+    let navigation = navigation::prepare(pair, password, &second, stage, checks).await?;
 
     *stage = "synchronization_preparation";
     let sync = synchronization::prepare(pair).await?;
@@ -222,7 +226,7 @@ pub(super) async fn run(
         .await?;
     check(uninstalled["phase"] == "completed" && uninstalled["deleted_session_ids"] == json!([]))?;
     *stage = "synchronization_after_uninstall";
-    let sync = synchronization::finish(pair, sync, stage).await?;
+    let sync = synchronization::finish(pair, password, sync, stage, checks).await?;
     checks.push("lost_real_sync_reply_original_id_query_and_no_apply_replay_after_uninstall");
     checks.push("synchronization_retirement_drains_after_cancelled_http_without_replay");
     let navigation = navigation::handoff(pair, navigation, stage, checks).await?;
