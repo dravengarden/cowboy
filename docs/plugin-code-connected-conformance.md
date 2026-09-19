@@ -147,3 +147,7 @@ navigation admission or enabling its Web consumer.
 The [Budget outcome acceptance](releases/sync-budget-outcomes-2026-09-19.md)
 adds the complete v6 19-check run and separately records Controller/Web reader
 activation without Machine maintenance or production Plugin installation.
+The later [signed Zed rollout](releases/zed-budget-rollout-2026-09-19.md) repeats
+the 19-check v6 chain against its exact supplied artifacts, then separately
+records actual Machine maintenance and Zed `1.18.0` installation. Its retained
+worker observations do not establish native resume or supported-device acceptance.

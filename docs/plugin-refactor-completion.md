@@ -535,8 +535,12 @@ adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and
 requiring separate retirement. It does not adopt old processes or implement
 independently authorized post-effect recovery. Its
 [acceptance](releases/sync-budget-outcomes-2026-09-19.md) passes all 19 connected
-v6 checks and records Controller/Web reader activation; actual Machine/native
-generation rollout remains separate.
+v6 checks and records Controller/Web reader activation. The separately authorized
+[Machine and signed Zed rollout](releases/zed-budget-rollout-2026-09-19.md) repeats
+those 19 checks and 72 Machine installation-reader checks, activates the new
+resident generation and installs the exact Zed `1.18.0` pair on Hawk. All 16
+original ACP workers are retained in the bounded observation window; complete
+drain, native-owner migration/resume and supported-device acceptance remain open.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
@@ -550,6 +554,14 @@ unconstrained workflow executor to hide these gaps.
 
 ## Production and supported-client acceptance still required
 
+- **Current cold Controller compatibility:** the [Zed 1.18 rollout](releases/zed-budget-rollout-2026-09-19.md#controller-reader-boundary-and-cold-failure)
+  accepts the actual active/next-transaction recovery Controller and retained
+  predecessor, but the NixOS cold Controller fails both the original Catalog
+  and staged Catalog on the same pre-existing Claude `3.1.27` runtime value.
+  Earlier cold-reader acceptance is not proof for today's Catalog. Repair the
+  owning complete Columbus host/recovery configuration and independently
+  recheck its exact reader before claiming compatible cold recovery; no Catalog
+  deletion, decoder relaxation or Agent downgrade substitutes for that check.
 - **Historical persistence loss:** the two append rejections after the
   [1.8.0 installation window](releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved)
   led to a separately [repaired and activated Controller admission queue](releases/persistence-admission-2026-09-16.md).
@@ -590,6 +602,11 @@ unconstrained workflow executor to hide these gaps.
   [working-diff release observation](releases/review-owned-diff-2026-09-17.md)
   records an already-active protocol-20 Machine and retained Zed 1.8, not
   installation of the exact 1.9 native pair used by the owned-buffer gates.
+  The subsequent [Budget rollout](releases/zed-budget-rollout-2026-09-19.md)
+  records actual protocol-21 Machine activation and signed Zed `1.18.0`
+  installation, with the exact adapter `1.18.0` / private server `1.4.0` pair
+  and 19 connected v6 checks. Retained workers were not force-replaced and the
+  production private navigation policy remains closed.
   Actual owned Review acceptance,
   independent recovery, other Machines and supported-device acceptance remain
   separate; a healthy Machine

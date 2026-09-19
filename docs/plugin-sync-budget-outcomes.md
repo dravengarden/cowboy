@@ -1,6 +1,6 @@
 # Original-operation synchronization budget outcomes
 
-The Zed `1.18.0` candidate continues the [native replacement limits](plugin-native-replacement-budgets.md)
+Zed `1.18.0` continues the [native replacement limits](plugin-native-replacement-budgets.md)
 with a closed `refused/budget` result through adapter, Machine, Service and Web.
 The exact private server remains `1.4.0`; upstream and third-party pins are
 unchanged. Communication, confirmation, installation and recovery remain core
@@ -8,7 +8,9 @@ mechanisms. This adds no writer purpose or generic Plugin execution authority.
 
 The [2026-09-19 acceptance](releases/sync-budget-outcomes-2026-09-19.md) records
 all 19 connected checks, browser/native regressions and Controller/Web reader
-activation. The Machine and exact signed Plugin rollout remain separate.
+activation. The separate [Machine and signed Plugin rollout](releases/zed-budget-rollout-2026-09-19.md)
+now records Hawk's new resident generation and exact Zed `1.18.0` installation;
+it does not accept retained native-owner migration or supported-device behavior.
 
 ## Evidence, not a local guess
 
@@ -62,6 +64,6 @@ v5 does not accept this extension. Complete source, static pair, temporary
 signed lifecycle and browser regressions remain required.
 
 This is finite outcome reconciliation, not independent post-effect restoration,
-all-writer/global native accounting, general graph/state leases, production
-generation replacement or device acceptance. See the
+all-writer/global native accounting, general graph/state leases, replacement of
+retained native owners or device acceptance. See the
 [completion ledger](plugin-refactor-completion.md).

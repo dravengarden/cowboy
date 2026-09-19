@@ -1,5 +1,9 @@
 # Original-operation Budget outcomes — 2026-09-19
 
+Later update: the separately authorized [Machine and signed Zed rollout](zed-budget-rollout-2026-09-19.md)
+is now recorded. The candidate-only status and observations below describe this
+earlier reader-activation window, not the later installation.
+
 Status: typed reconciliation is accepted across the supplied four-process chain;
 the **Controller and Web readers are published and active on Hawk**. Zed
 `1.18.0` and the new Machine are verified candidates, **not production Plugin
