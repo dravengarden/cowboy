@@ -130,6 +130,11 @@ export function AppIconSettings(): React.JSX.Element {
   );
   const [expanded, setExpanded] = useState(false),
     [preview, setPreview] = useState(selected);
+  const [groupId, setGroupId] = useState(() =>
+    APP_ICON_GROUPS.find((group) =>
+      group.styles.some((item) => item.id === selected)
+    )?.id ?? "flow"
+  );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null),
     [message, setMessage] = useState<string | null>(null);
@@ -187,7 +192,7 @@ export function AppIconSettings(): React.JSX.Element {
         <Box sx={{ flex: 1 }}>
           <Typography variant="body2">Icon &amp; theme</Typography>
           <Typography variant="caption" color="text.secondary">
-            {appearanceStyle(selected).name} · {APP_ICONS.length} curated styles
+            {appearanceStyle(selected).name} · {APP_ICONS.length} color styles
           </Typography>
         </Box>
         <Button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
@@ -211,15 +216,34 @@ export function AppIconSettings(): React.JSX.Element {
               )}
             </Stack>
             <Typography variant="caption" color="text.secondary">
-              One style for your icon, buttons, accents and surfaces. Your light
-              / dark preference stays the same.
+              One style for your icon, tab and accents. Flat 01–25 pairs with
+              Flow 26–50. Your light / dark preference stays the same.
             </Typography>
             <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
               <StylePreview id={preview} dark={false} />
               <StylePreview id={preview} dark />
             </Stack>
           </Box>
-          {APP_ICON_GROUPS.map((group) => (
+          <Stack
+            direction="row"
+            spacing={1}
+            role="group"
+            aria-label="Icon color treatment"
+          >
+            {APP_ICON_GROUPS.map((group) => (
+              <Button
+                key={group.id}
+                variant={groupId === group.id ? "contained" : "outlined"}
+                aria-pressed={groupId === group.id}
+                onClick={() => setGroupId(group.id)}
+              >
+                {group.name} · {group.styles.length}
+              </Button>
+            ))}
+          </Stack>
+          {APP_ICON_GROUPS.filter((group) => group.id === groupId).map((
+            group,
+          ) => (
             <Box key={group.id}>
               <Typography variant="subtitle2">{group.name}</Typography>
               <Typography variant="caption" color="text.secondary">
@@ -230,7 +254,10 @@ export function AppIconSettings(): React.JSX.Element {
                 aria-label={`${group.name} styles`}
                 sx={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  gridTemplateColumns: {
+                    xs: "repeat(3, minmax(0, 1fr))",
+                    sm: "repeat(5, minmax(0, 1fr))",
+                  },
                   gap: 0.75,
                   mt: 1,
                 }}
@@ -276,6 +303,7 @@ export function AppIconSettings(): React.JSX.Element {
                       }}
                     />
                     <Typography variant="caption" sx={{ fontSize: "0.75rem" }}>
+                      {String(appIcon(item.id).number).padStart(2, "0")} ·{" "}
                       {item.name}
                       {item.id === selected ? " ✓" : ""}
                     </Typography>

@@ -53,11 +53,18 @@ export function appIcon(id: string | null | undefined): AppIcon {
   return byId.get(id ?? "") ?? byId.get(DEFAULT_APP_ICON)!;
 }
 
+export function appIconBase(id: string): string {
+  const icon = appIcon(id);
+  return `/app-icons/${
+    icon.collection === "curlseal" ? "v10" : "v5"
+  }/${icon.id}`;
+}
+
 export function appIconAsset(
   id: string,
   size: 96 | 180 | 192 | 512 = 192,
 ): string {
-  return `/app-icons/v5/${appIcon(id).id}/icon-${size}.png`;
+  return `${appIconBase(id)}/icon-${size}.png`;
 }
 
 // Native Neon supplies paired appearances; archived styles retain their artwork.
@@ -69,13 +76,15 @@ export function appIconAppearanceAsset(id: string, dark: boolean): string {
 
 export function appIconTabAsset(id: string): string {
   const icon = appIcon(id);
-  return icon.collection === "palette"
+  return icon.collection === "curlseal"
+    ? `${appIconBase(id)}/favicon.svg`
+    : icon.collection === "palette"
     ? `/app-icons/v9/${icon.id}/favicon.svg`
     : appIconAsset(icon.id, 192);
 }
 
 export function appIconInstallPath(id: string): string {
-  return `/app-icons/v5/${appIcon(id).id}/install.html`;
+  return `${appIconBase(id)}/install.html`;
 }
 
 export function iconColorFamily(hex: string): string {
@@ -217,7 +226,7 @@ export function applyAppIconDocument(id: string): void {
   }
   const manifest = doc.querySelector<HTMLLinkElement>('link[rel="manifest"]');
   if (manifest) {
-    manifest.href = `/app-icons/v5/${selected.id}/manifest.webmanifest`;
+    manifest.href = `${appIconBase(selected.id)}/manifest.webmanifest`;
   }
 }
 

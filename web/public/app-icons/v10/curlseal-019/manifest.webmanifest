@@ -1,0 +1,40 @@
+{
+  "name": "Cowboy",
+  "short_name": "Cowboy",
+  "id": "/",
+  "scope": "/",
+  "start_url": "/?app-icon=curlseal-019",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay"
+  ],
+  "orientation": "any",
+  "background_color": "#F0F1E8",
+  "theme_color": "#F0F1E8",
+  "icons": [
+    {
+      "src": "/app-icons/v10/curlseal-019/icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v10/curlseal-019/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v10/curlseal-019/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icons/v10/curlseal-019/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

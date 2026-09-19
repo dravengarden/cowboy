@@ -1,0 +1,552 @@
+[
+  {
+    "id": "01",
+    "name": "Lilac Flat",
+    "mode": "fully-flat",
+    "background": "#211B34",
+    "solid": "#B99AF3",
+    "gradient": [
+      "#D8C0FF",
+      "#9776DB"
+    ]
+  },
+  {
+    "id": "02",
+    "name": "Orchid Flat",
+    "mode": "fully-flat",
+    "background": "#2B1D32",
+    "solid": "#DA94D8",
+    "gradient": [
+      "#F0B2E5",
+      "#B879CE"
+    ]
+  },
+  {
+    "id": "03",
+    "name": "Rose Flat",
+    "mode": "fully-flat",
+    "background": "#321C2A",
+    "solid": "#EA8DB6",
+    "gradient": [
+      "#FFB2CB",
+      "#CB699D"
+    ]
+  },
+  {
+    "id": "04",
+    "name": "Coral Flat",
+    "mode": "fully-flat",
+    "background": "#302024",
+    "solid": "#F9917A",
+    "gradient": [
+      "#FFBA91",
+      "#E47577"
+    ]
+  },
+  {
+    "id": "05",
+    "name": "Amber Flat",
+    "mode": "fully-flat",
+    "background": "#2E251C",
+    "solid": "#F1BF70",
+    "gradient": [
+      "#FFE09A",
+      "#E7A655"
+    ]
+  },
+  {
+    "id": "06",
+    "name": "Gold Flat",
+    "mode": "fully-flat",
+    "background": "#252631",
+    "solid": "#EBD58B",
+    "gradient": [
+      "#FFF0B4",
+      "#D1B568"
+    ]
+  },
+  {
+    "id": "07",
+    "name": "Lime Flat",
+    "mode": "fully-flat",
+    "background": "#242C21",
+    "solid": "#CCD999",
+    "gradient": [
+      "#E7ECC1",
+      "#9EB879"
+    ]
+  },
+  {
+    "id": "08",
+    "name": "Jade Flat",
+    "mode": "fully-flat",
+    "background": "#172E28",
+    "solid": "#8BD1B2",
+    "gradient": [
+      "#B4E6C8",
+      "#62B5A0"
+    ]
+  },
+  {
+    "id": "09",
+    "name": "Lagoon Flat",
+    "mode": "fully-flat",
+    "background": "#142D32",
+    "solid": "#78CED0",
+    "gradient": [
+      "#A8E5DD",
+      "#54ADC5"
+    ]
+  },
+  {
+    "id": "10",
+    "name": "Glacier Flat",
+    "mode": "fully-flat",
+    "background": "#172C40",
+    "solid": "#92CFF0",
+    "gradient": [
+      "#B8E8FA",
+      "#72ADE5"
+    ]
+  },
+  {
+    "id": "11",
+    "name": "Azure Flat",
+    "mode": "fully-flat",
+    "background": "#18253E",
+    "solid": "#8CABEF",
+    "gradient": [
+      "#B8CBFF",
+      "#698FDD"
+    ]
+  },
+  {
+    "id": "12",
+    "name": "Indigo Flat",
+    "mode": "fully-flat",
+    "background": "#252342",
+    "solid": "#A6A5EC",
+    "gradient": [
+      "#CBCBFF",
+      "#8C89D0"
+    ]
+  },
+  {
+    "id": "13",
+    "name": "Silver Flat",
+    "mode": "fully-flat",
+    "background": "#202631",
+    "solid": "#CDD5E3",
+    "gradient": [
+      "#EAF1F9",
+      "#A6B4CE"
+    ]
+  },
+  {
+    "id": "14",
+    "name": "Ivory Flat",
+    "mode": "fully-flat",
+    "background": "#28232B",
+    "solid": "#E9DDCC",
+    "gradient": [
+      "#FFF0DC",
+      "#C8B7AC"
+    ]
+  },
+  {
+    "id": "15",
+    "name": "Copper Flat",
+    "mode": "fully-flat",
+    "background": "#30231E",
+    "solid": "#D3A181",
+    "gradient": [
+      "#EDC5A2",
+      "#B37D69"
+    ]
+  },
+  {
+    "id": "16",
+    "name": "Lavender Paper Flat",
+    "mode": "fully-flat",
+    "background": "#F5EEFC",
+    "solid": "#906CB6",
+    "gradient": [
+      "#AA8DCB",
+      "#78569F"
+    ]
+  },
+  {
+    "id": "17",
+    "name": "Rose Paper Flat",
+    "mode": "fully-flat",
+    "background": "#FBEFF2",
+    "solid": "#AF5E82",
+    "gradient": [
+      "#C37D98",
+      "#944C73"
+    ]
+  },
+  {
+    "id": "18",
+    "name": "Terracotta Paper Flat",
+    "mode": "fully-flat",
+    "background": "#F9EDDD",
+    "solid": "#AF7052",
+    "gradient": [
+      "#C68B65",
+      "#935E4C"
+    ]
+  },
+  {
+    "id": "19",
+    "name": "Sage Paper Flat",
+    "mode": "fully-flat",
+    "background": "#F0F1E8",
+    "solid": "#587D69",
+    "gradient": [
+      "#7B9980",
+      "#3E655A"
+    ]
+  },
+  {
+    "id": "20",
+    "name": "Blue Paper Flat",
+    "mode": "fully-flat",
+    "background": "#EBF2FC",
+    "solid": "#4777AD",
+    "gradient": [
+      "#7399C2",
+      "#345B8D"
+    ]
+  },
+  {
+    "id": "21",
+    "name": "Cobalt Flat",
+    "mode": "fully-flat",
+    "background": "#284FC0",
+    "solid": "#F0EDFF",
+    "gradient": [
+      "#FFFFFF",
+      "#CBD8FF"
+    ]
+  },
+  {
+    "id": "22",
+    "name": "Violet Flat",
+    "mode": "fully-flat",
+    "background": "#6643AB",
+    "solid": "#F3E6FF",
+    "gradient": [
+      "#FFF5FF",
+      "#D5BDF5"
+    ]
+  },
+  {
+    "id": "23",
+    "name": "Cherry Flat",
+    "mode": "fully-flat",
+    "background": "#A73152",
+    "solid": "#FFE5D8",
+    "gradient": [
+      "#FFF4DE",
+      "#EDB5BD"
+    ]
+  },
+  {
+    "id": "24",
+    "name": "Evergreen Flat",
+    "mode": "fully-flat",
+    "background": "#265B49",
+    "solid": "#E8E3C8",
+    "gradient": [
+      "#FFF1CE",
+      "#BED9C0"
+    ]
+  },
+  {
+    "id": "25",
+    "name": "Ink on Cream Flat",
+    "mode": "fully-flat",
+    "background": "#F6ECD9",
+    "solid": "#534550",
+    "gradient": [
+      "#766076",
+      "#393643"
+    ]
+  },
+  {
+    "id": "26",
+    "name": "Lilac Flow",
+    "mode": "shared-gradient",
+    "background": "#211B34",
+    "solid": "#B99AF3",
+    "gradient": [
+      "#D8C0FF",
+      "#9776DB"
+    ]
+  },
+  {
+    "id": "27",
+    "name": "Orchid Flow",
+    "mode": "shared-gradient",
+    "background": "#2B1D32",
+    "solid": "#DA94D8",
+    "gradient": [
+      "#F0B2E5",
+      "#B879CE"
+    ]
+  },
+  {
+    "id": "28",
+    "name": "Rose Flow",
+    "mode": "shared-gradient",
+    "background": "#321C2A",
+    "solid": "#EA8DB6",
+    "gradient": [
+      "#FFB2CB",
+      "#CB699D"
+    ]
+  },
+  {
+    "id": "29",
+    "name": "Coral Flow",
+    "mode": "shared-gradient",
+    "background": "#302024",
+    "solid": "#F9917A",
+    "gradient": [
+      "#FFBA91",
+      "#E47577"
+    ]
+  },
+  {
+    "id": "30",
+    "name": "Amber Flow",
+    "mode": "shared-gradient",
+    "background": "#2E251C",
+    "solid": "#F1BF70",
+    "gradient": [
+      "#FFE09A",
+      "#E7A655"
+    ]
+  },
+  {
+    "id": "31",
+    "name": "Gold Flow",
+    "mode": "shared-gradient",
+    "background": "#252631",
+    "solid": "#EBD58B",
+    "gradient": [
+      "#FFF0B4",
+      "#D1B568"
+    ]
+  },
+  {
+    "id": "32",
+    "name": "Lime Flow",
+    "mode": "shared-gradient",
+    "background": "#242C21",
+    "solid": "#CCD999",
+    "gradient": [
+      "#E7ECC1",
+      "#9EB879"
+    ]
+  },
+  {
+    "id": "33",
+    "name": "Jade Flow",
+    "mode": "shared-gradient",
+    "background": "#172E28",
+    "solid": "#8BD1B2",
+    "gradient": [
+      "#B4E6C8",
+      "#62B5A0"
+    ]
+  },
+  {
+    "id": "34",
+    "name": "Lagoon Flow",
+    "mode": "shared-gradient",
+    "background": "#142D32",
+    "solid": "#78CED0",
+    "gradient": [
+      "#A8E5DD",
+      "#54ADC5"
+    ]
+  },
+  {
+    "id": "35",
+    "name": "Glacier Flow",
+    "mode": "shared-gradient",
+    "background": "#172C40",
+    "solid": "#92CFF0",
+    "gradient": [
+      "#B8E8FA",
+      "#72ADE5"
+    ]
+  },
+  {
+    "id": "36",
+    "name": "Azure Flow",
+    "mode": "shared-gradient",
+    "background": "#18253E",
+    "solid": "#8CABEF",
+    "gradient": [
+      "#B8CBFF",
+      "#698FDD"
+    ]
+  },
+  {
+    "id": "37",
+    "name": "Indigo Flow",
+    "mode": "shared-gradient",
+    "background": "#252342",
+    "solid": "#A6A5EC",
+    "gradient": [
+      "#CBCBFF",
+      "#8C89D0"
+    ]
+  },
+  {
+    "id": "38",
+    "name": "Silver Flow",
+    "mode": "shared-gradient",
+    "background": "#202631",
+    "solid": "#CDD5E3",
+    "gradient": [
+      "#EAF1F9",
+      "#A6B4CE"
+    ]
+  },
+  {
+    "id": "39",
+    "name": "Ivory Flow",
+    "mode": "shared-gradient",
+    "background": "#28232B",
+    "solid": "#E9DDCC",
+    "gradient": [
+      "#FFF0DC",
+      "#C8B7AC"
+    ]
+  },
+  {
+    "id": "40",
+    "name": "Copper Flow",
+    "mode": "shared-gradient",
+    "background": "#30231E",
+    "solid": "#D3A181",
+    "gradient": [
+      "#EDC5A2",
+      "#B37D69"
+    ]
+  },
+  {
+    "id": "41",
+    "name": "Lavender Paper Flow",
+    "mode": "shared-gradient",
+    "background": "#F5EEFC",
+    "solid": "#906CB6",
+    "gradient": [
+      "#AA8DCB",
+      "#78569F"
+    ]
+  },
+  {
+    "id": "42",
+    "name": "Rose Paper Flow",
+    "mode": "shared-gradient",
+    "background": "#FBEFF2",
+    "solid": "#AF5E82",
+    "gradient": [
+      "#C37D98",
+      "#944C73"
+    ]
+  },
+  {
+    "id": "43",
+    "name": "Terracotta Paper Flow",
+    "mode": "shared-gradient",
+    "background": "#F9EDDD",
+    "solid": "#AF7052",
+    "gradient": [
+      "#C68B65",
+      "#935E4C"
+    ]
+  },
+  {
+    "id": "44",
+    "name": "Sage Paper Flow",
+    "mode": "shared-gradient",
+    "background": "#F0F1E8",
+    "solid": "#587D69",
+    "gradient": [
+      "#7B9980",
+      "#3E655A"
+    ]
+  },
+  {
+    "id": "45",
+    "name": "Blue Paper Flow",
+    "mode": "shared-gradient",
+    "background": "#EBF2FC",
+    "solid": "#4777AD",
+    "gradient": [
+      "#7399C2",
+      "#345B8D"
+    ]
+  },
+  {
+    "id": "46",
+    "name": "Cobalt Flow",
+    "mode": "shared-gradient",
+    "background": "#284FC0",
+    "solid": "#F0EDFF",
+    "gradient": [
+      "#FFFFFF",
+      "#CBD8FF"
+    ]
+  },
+  {
+    "id": "47",
+    "name": "Violet Flow",
+    "mode": "shared-gradient",
+    "background": "#6643AB",
+    "solid": "#F3E6FF",
+    "gradient": [
+      "#FFF5FF",
+      "#D5BDF5"
+    ]
+  },
+  {
+    "id": "48",
+    "name": "Cherry Flow",
+    "mode": "shared-gradient",
+    "background": "#A73152",
+    "solid": "#FFE5D8",
+    "gradient": [
+      "#FFF4DE",
+      "#EDB5BD"
+    ]
+  },
+  {
+    "id": "49",
+    "name": "Evergreen Flow",
+    "mode": "shared-gradient",
+    "background": "#265B49",
+    "solid": "#E8E3C8",
+    "gradient": [
+      "#FFF1CE",
+      "#BED9C0"
+    ]
+  },
+  {
+    "id": "50",
+    "name": "Ink on Cream Flow",
+    "mode": "shared-gradient",
+    "background": "#F6ECD9",
+    "solid": "#534550",
+    "gradient": [
+      "#766076",
+      "#393643"
+    ]
+  }
+]

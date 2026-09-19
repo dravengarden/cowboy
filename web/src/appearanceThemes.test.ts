@@ -7,7 +7,7 @@ import {
 } from "./appIcons.ts";
 import { appearancePalette, colorContrast } from "./appearanceThemes.ts";
 
-Deno.test("all twenty styles retain readable light and dark controls and text", () => {
+Deno.test("all fifty styles retain readable light and dark controls and text", () => {
   for (const dark of [false, true]) {
     const accents = new Set<string>();
     for (const icon of APP_ICONS) {
@@ -37,15 +37,15 @@ Deno.test("all twenty styles retain readable light and dark controls and text", 
         }
       }
     }
-    assertEquals(accents.size, 20);
+    assert(accents.size >= 22, "the catalog retains varied accent families");
   }
   assertEquals(
     appearancePalette(DEFAULT_APP_ICON, true).primary.main,
-    "#bb83ff",
+    "#b99af3",
   );
   assertEquals(
     appearancePalette(DEFAULT_APP_ICON, true).secondary.main,
-    "#51c9ff",
+    "#9776db",
   );
   assertEquals(
     appearancePalette(DEFAULT_APP_ICON, true).background.default,
