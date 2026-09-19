@@ -3,6 +3,7 @@
   --brand-purple: #b99af3;
   --brand-lilac: #d8c0ff;
   --brand-gradient: linear-gradient(100deg, #d8c0ff, #9776db);
+  --brand-text-gradient: linear-gradient(100deg, #9776db, #8159bd);
   --on-brand: #21132f;
   --canvas: #faf9fc;
   --canvas-strong: #f0edf6;
@@ -35,6 +36,7 @@
 
 html[data-theme="dark"] {
   color-scheme: dark;
+  --brand-text-gradient: var(--brand-gradient);
   --canvas: #101014;
   --canvas-strong: #0c0c10;
   --paper: #1b1921;
@@ -574,12 +576,10 @@ kbd {
 
 .hero h1 em,
 .section-heading h2 em {
-  padding-inline: 0.08em;
-  border-radius: 0.08em;
-  background: var(--brand-gradient);
-  color: var(--on-brand);
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
+  background: var(--brand-text-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
   font-style: normal;
 }
 
@@ -3202,7 +3202,7 @@ html[data-theme="dark"] .topology-machines article {
   }
 
   .hero h1 {
-    font-size: clamp(3.15rem, 15vw, 4.6rem);
+    font-size: clamp(2rem, 11vw, 3.3rem);
     line-height: 0.96;
   }
 
