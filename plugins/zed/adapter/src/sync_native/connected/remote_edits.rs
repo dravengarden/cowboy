@@ -53,10 +53,11 @@ pub(super) async fn exercise(zed: &ZedRuntime, root: &Path, worktree: u64) {
     assert_native_mirror(zed, buffer, base).await;
     update(zed, buffer, vec![first.clone()]).await.unwrap();
     assert_native_mirror(zed, buffer, "firsta🙂z").await;
-    let version = serde_json::to_value(zed.diagnostics.lock().unwrap().version(buffer)).unwrap();
+    let version =
+        serde_json::to_value(zed.diagnostics.lock().unwrap().version(buffer).unwrap()).unwrap();
     update(zed, buffer, vec![first.clone()]).await.unwrap();
     assert_eq!(
-        serde_json::to_value(zed.diagnostics.lock().unwrap().version(buffer)).unwrap(),
+        serde_json::to_value(zed.diagnostics.lock().unwrap().version(buffer).unwrap()).unwrap(),
         version
     );
     let proto::operation::Variant::Edit(edit) = first.variant.unwrap() else {
