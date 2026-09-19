@@ -896,6 +896,7 @@ mod tests {
             }),
             state: WorkerState::Crashed,
             agent_session_id: Some("codex-thread-1".to_owned()),
+            native_thread_materialized: None,
             current_turn_id: None,
             last_runtime_seq: 1,
             pending_permissions: Vec::new(),

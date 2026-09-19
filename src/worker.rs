@@ -106,12 +106,10 @@ impl Shared {
     fn apply_snapshot_event(&self, seq: u64, event: &RuntimeEvent) {
         let mut snapshot = self.snapshot.lock();
         snapshot.last_runtime_seq = seq;
+        snapshot.observe_native_thread(event);
         match event {
-            RuntimeEvent::Ready { agent_session_id } => {
+            RuntimeEvent::Ready { .. } => {
                 snapshot.state = WorkerState::Running;
-                if agent_session_id.is_some() {
-                    snapshot.agent_session_id.clone_from(agent_session_id);
-                }
             }
             RuntimeEvent::Status { state, .. } => {
                 snapshot.state = if *state == WorkerState::Running && snapshot.drain_requested {
@@ -143,9 +141,6 @@ impl Shared {
                     snapshot.current_turn_id = None;
                 }
             }
-            RuntimeEvent::AgentSessionId { agent_session_id } => {
-                snapshot.agent_session_id = Some(agent_session_id.clone());
-            }
             RuntimeEvent::ConfigOptions { options } => {
                 snapshot.config_options = Some(options.clone());
             }
@@ -153,7 +148,8 @@ impl Shared {
                 snapshot.context_used = Some(*used);
                 snapshot.context_size = Some(*size);
             }
-            RuntimeEvent::Update { .. }
+            RuntimeEvent::AgentSessionId { .. }
+            | RuntimeEvent::Update { .. }
             | RuntimeEvent::ScheduleWakeup { .. }
             | RuntimeEvent::UndeliveredPrompt { .. }
             | RuntimeEvent::CommandRejected { .. }
@@ -404,6 +400,9 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             launch: Some(launch),
             state: WorkerState::Starting,
             agent_session_id: args.resume.clone(),
+            // A resumed thread already exists on disk; a fresh one does not
+            // until its first prompt.
+            native_thread_materialized: Some(args.resume.is_some()),
             current_turn_id: None,
             last_runtime_seq: 0,
             pending_permissions: Vec::new(),
@@ -1038,6 +1037,7 @@ mod tests {
                     launch: None,
                     state: WorkerState::Running,
                     agent_session_id: None,
+                    native_thread_materialized: None,
                     current_turn_id: None,
                     last_runtime_seq: 0,
                     pending_permissions: vec![],
