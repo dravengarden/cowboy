@@ -8,7 +8,7 @@ import {
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
-import { type GalleryImage, ImageLightbox } from "@cowboy/app-shell";
+import { type GalleryMedia, ImageLightbox } from "@cowboy/app-shell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 let configuredTheme: MermaidConfig["theme"];
@@ -96,7 +96,7 @@ export function MermaidDiagram({
       cancelled = true;
     };
   }, [reactId, source, theme]);
-  const previewImages = useMemo<GalleryImage[]>(() =>
+  const previewImages = useMemo<GalleryMedia[]>(() =>
     svg
       ? [{
         kind: "inline-svg",

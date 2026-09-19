@@ -55,7 +55,7 @@ interface GalleryMediaBase {
   themed?: boolean;
 }
 
-export interface GalleryRasterImage extends GalleryMediaBase {
+export interface GalleryImage extends GalleryMediaBase {
   kind?: "image";
   src: string;
 }
@@ -70,11 +70,11 @@ export interface GalleryInlineSvg extends GalleryMediaBase {
   markup: string;
 }
 
-export type GalleryImage = GalleryRasterImage | GalleryInlineSvg;
+export type GalleryMedia = GalleryImage | GalleryInlineSvg;
 
 export interface ImageLightboxProps {
   /** All zoomable images in the current context, in reading order. */
-  images: GalleryImage[];
+  images: GalleryMedia[];
   /** Index of the open image, or `null` to keep the lightbox closed. */
   index: number | null;
   /** Request a different image (prev/next, swipe, arrow keys). */

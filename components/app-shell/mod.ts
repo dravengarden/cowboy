@@ -37,7 +37,7 @@ export {
 export {
   type GalleryImage,
   type GalleryInlineSvg,
-  type GalleryRasterImage,
+  type GalleryMedia,
   ImageLightbox,
   type ImageLightboxProps,
 } from "./image-lightbox.tsx";
