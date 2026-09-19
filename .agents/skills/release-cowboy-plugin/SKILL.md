@@ -501,6 +501,16 @@ In addition, require all applicable Provider gates below:
   Associated Domains or physical-device/login acceptance.
 - Run unit, integration, failure-path, authentication-state, and upgrade tests.
   Never put real credentials in fixtures or logs.
+- Core product permission continuation changes require the actual Hub mutation
+  gates in `docs/plugin-product-permission-lifetimes.md`: no-poll role ABA,
+  queued-request refusal, no mid-request privilege promotion, unchanged-role
+  and unrelated-user continuity, foreign-core rejection, mutation unwind and
+  bounded retention of ended generations until their last holder drops.
+  Exercise buffered response redaction and preservation of owned native
+  outcomes independently. Retain the actual connected Code regression gate;
+  its existing logout cases do not claim HTTP role-mutation acceptance. Never
+  open the closed single-user permission API or modify production policy to
+  manufacture that evidence.
 - Run applicable typed Service-authentication tests with hermetic bundles.
   Cover generation compare-and-swap, per-Machine sealing/materialization,
   exact-release temporary-executor and candidate binding, logout wipe, and the

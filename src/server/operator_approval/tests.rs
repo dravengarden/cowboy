@@ -113,7 +113,7 @@ async fn telemetry_resolution_has_new_purpose_original_credential_and_nonrenewin
 #[tokio::test]
 async fn managed_export_requires_fresh_original_operator_and_exact_payload() {
     for change in [
-        "none", "logout", "role", "disabled", "service", "payload", "budget",
+        "none", "logout", "role", "role_aba", "disabled", "service", "payload", "budget",
     ] {
         let h = Harness::new().await;
         let (headers, verified) = h.cookie().await;
@@ -142,6 +142,10 @@ async fn managed_export_requires_fresh_original_operator_and_exact_payload() {
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             "disabled" => h
                 .store
                 .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
@@ -175,6 +179,7 @@ async fn telemetry_binding_requires_original_operator_and_complete_intent() {
         "none",
         "logout",
         "role",
+        "role_aba",
         "disabled",
         "actor",
         "service",
@@ -205,6 +210,10 @@ async fn telemetry_binding_requires_original_operator_and_complete_intent() {
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             "disabled" => h
                 .store
                 .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
@@ -262,7 +271,7 @@ async fn queued_telemetry_confirmation_cannot_mint_a_new_minute() {
 async fn resolution_requires_new_authority_and_does_not_renew_an_expired_uninstall() {
     use crate::plugin_operation::resolution::{ResolutionIntent, fixture as interrupted};
     for change in [
-        "none", "logout", "role", "disabled", "owner", "service", "budget",
+        "none", "logout", "role", "role_aba", "disabled", "owner", "service", "budget",
     ] {
         let h = Harness::new().await;
         let (headers, verified) = h.cookie().await;
@@ -296,6 +305,10 @@ async fn resolution_requires_new_authority_and_does_not_renew_an_expired_uninsta
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             "disabled" => h
                 .store
                 .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
@@ -323,8 +336,14 @@ async fn resolution_requires_new_authority_and_does_not_renew_an_expired_uninsta
         }
         let mut forward = op.intent;
         let forward_approval =
-            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
-                .unwrap();
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers);
+        let Ok(forward_approval) = forward_approval else {
+            assert!(
+                matches!(change, "role" | "role_aba"),
+                "the old verified role lifetime ended: {change}"
+            );
+            continue;
+        };
         forward.actor = forward_approval.actor().clone();
         let authority = forward_approval.bind(&forward).unwrap();
         assert!(
@@ -426,7 +445,10 @@ impl Harness {
                 principal: product_principal(&self.hub, &self.user),
                 cookie_session: Some(session),
                 device_identity: None,
-            },
+                permissions: None,
+            }
+            .observe_permissions(&self.hub)
+            .unwrap(),
         )
     }
 
@@ -446,7 +468,7 @@ impl Harness {
 
 #[tokio::test]
 async fn cookie_revocation_role_changes_and_user_disable_are_rechecked_and_sticky() {
-    for change in ["logout", "role", "disable"] {
+    for change in ["logout", "role", "role_aba", "disable"] {
         let h = Harness::new().await;
         let (headers, verified) = h.cookie().await;
         let (authority, intent) = h.bind(&headers, &verified);
@@ -464,6 +486,10 @@ async fn cookie_revocation_role_changes_and_user_disable_are_rechecked_and_stick
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             _ => h
                 .store
                 .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
@@ -692,7 +718,7 @@ async fn admin_continuation_keeps_credential_precedence_and_current_role() {
 }
 
 #[tokio::test]
-async fn product_only_continuation_exposes_current_role_and_rechecks_original_cookie() {
+async fn product_only_continuation_requires_fresh_role_observation_and_original_cookie() {
     let h = Harness::new().await;
     let (headers, verified) = h.cookie().await;
     let approval =
@@ -703,10 +729,47 @@ async fn product_only_continuation_exposes_current_role_and_rechecks_original_co
         approval
             .current_product_operator(h.context())
             .await
+            .is_none()
+    );
+    let verified = resolve_product_api_request_principal(
+        h.context(),
+        &Method::GET,
+        &"/api/plugins".parse().unwrap(),
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let owner =
+        OperatorApproval::capture_product(h.context(), "service-test", Some(&verified), &headers)
+            .unwrap();
+    assert!(
+        owner
+            .current_product_operator(h.context())
+            .await
             .unwrap()
             .can_mutate(Some("other-user"))
     );
     h.role(AdminRole::Operator);
+    assert!(
+        approval
+            .current_product_operator(h.context())
+            .await
+            .is_none()
+    );
+    assert!(owner.current_product_operator(h.context()).await.is_none());
+    let verified = resolve_product_api_request_principal(
+        h.context(),
+        &Method::GET,
+        &"/api/plugins".parse().unwrap(),
+        &headers,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let approval =
+        OperatorApproval::capture_product(h.context(), "service-test", Some(&verified), &headers)
+            .unwrap();
     assert!(
         !approval
             .current_product_operator(h.context())
@@ -733,6 +796,7 @@ async fn explicit_local_mode_is_not_a_reusable_authentication_bypass() {
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,
+        permissions: None,
     };
     let local_context = || ProductRequestAuth {
         product_auth_enabled: false,

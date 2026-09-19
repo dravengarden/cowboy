@@ -543,6 +543,17 @@ window. The separately completed earlier Machine maintenance is recorded, not
 attributed to this Controller release. This does not close general graph/state
 authority, abandoned-browser/restart recovery or independent effect restoration.
 
+The [core product permission lifetime](plugin-product-permission-lifetimes.md)
+now binds verified product requests to the effective role observed at original
+authentication. Core policy changes end affected observations before unlocking;
+role restoration without an intervening poll cannot revive old requests, and
+promotion cannot expand them. Unchanged users/roles retain their observations.
+Both current and ended generations count against bounded live retention.
+Code responses and Operator install/uninstall/telemetry continuations share this
+core-only boundary while recording actual native effects independently. This
+source extension does not open the single-user permission API, supply durable
+principal epochs or close the broader graph/state/recovery exits below.
+
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both

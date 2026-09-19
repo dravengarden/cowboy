@@ -4560,6 +4560,7 @@ async fn resolve_product_api_request_principal(
             principal: crate::product_auth::local_product_principal(),
             cookie_session: None,
             device_identity: None,
+            permissions: None,
         }));
     }
     let bearer = crate::product_auth::bearer_token(headers);
@@ -4612,24 +4613,27 @@ async fn resolve_product_api_request_principal(
                     .await;
             });
         }
-        return Ok(Some(AuthenticatedProductRequest {
+        return AuthenticatedProductRequest {
             principal: product_principal(state.hub, &user),
             cookie_session: None,
             device_identity: Some(identity),
-        }));
+            permissions: None,
+        }
+        .observe_permissions(state.hub)
+        .map(Some);
     }
-    Ok(resolve_product_request_principal(
-        state.product_auth_enabled,
-        state.store,
-        state.hub,
-        headers,
-    )
-    .await
-    .map(|(principal, cookie_session)| AuthenticatedProductRequest {
-        principal,
-        cookie_session,
-        device_identity: None,
-    }))
+    resolve_product_request_principal(state.product_auth_enabled, state.store, state.hub, headers)
+        .await
+        .map(|(principal, cookie_session)| {
+            AuthenticatedProductRequest {
+                principal,
+                cookie_session,
+                device_identity: None,
+                permissions: None,
+            }
+            .observe_permissions(state.hub)
+        })
+        .transpose()
 }
 
 fn automation_route_allowed(
@@ -4662,6 +4666,20 @@ struct AuthenticatedProductRequest {
     principal: ProductPrincipal,
     cookie_session: Option<crate::store::ProductUserSession>,
     device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+    permissions: Option<crate::core::ProductPermissionObservation>,
+}
+
+impl AuthenticatedProductRequest {
+    /// Complete authentication by atomically observing current permissions.
+    /// Handlers may share this observation, but must never recapture it.
+    fn observe_permissions(mut self, hub: &Hub) -> Result<Self, ()> {
+        let permissions = hub
+            .observe_product_permissions(&self.principal.username)
+            .ok_or(())?;
+        self.principal.role = permissions.role();
+        self.permissions = Some(permissions);
+        Ok(self)
+    }
 }
 
 async fn product_user_from_store_cookie(
@@ -19544,6 +19562,7 @@ mod auth_capacity_boundary_tests {
 
     fn cookie_request(user_id: &str) -> AuthenticatedProductRequest {
         AuthenticatedProductRequest {
+            permissions: None,
             principal: principal(user_id),
             cookie_session: Some(crate::store::ProductUserSession {
                 token_hash: "aa".repeat(32),
@@ -19577,6 +19596,7 @@ mod auth_capacity_boundary_tests {
         scopes: &[&str],
     ) -> AuthenticatedProductRequest {
         AuthenticatedProductRequest {
+            permissions: None,
             principal: principal(user_id),
             cookie_session: None,
             device_identity: Some(crate::client_auth::DeviceAccessIdentity {

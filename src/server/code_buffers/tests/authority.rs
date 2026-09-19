@@ -104,7 +104,13 @@ async fn an_expired_original_deadline_never_begins_or_consumes_an_open_attempt()
 #[tokio::test]
 async fn original_authority_is_rechecked_after_effects_without_discarding_the_outcome() {
     for action in [Action::Open, Action::Query, Action::Release] {
-        for change in ["cookie", "token", "disabled", "visibility"] {
+        for change in [
+            "cookie",
+            "token",
+            "disabled",
+            "visibility",
+            "permission_aba",
+        ] {
             let h = Harness::new().await;
             h.role(AdminRole::Operator);
             let (mut f, id) = fixture(&h, action != Action::Open);
@@ -207,7 +213,13 @@ async fn revoked_authority_masks_failed_dispatch_without_rearming_unknown_effect
 #[tokio::test]
 async fn saved_open_and_terminal_receipts_require_current_original_authority() {
     for action in [Action::Open, Action::Query, Action::Release] {
-        for change in ["cookie", "token", "disabled", "visibility"] {
+        for change in [
+            "cookie",
+            "token",
+            "disabled",
+            "visibility",
+            "permission_aba",
+        ] {
             let h = Harness::new().await;
             h.role(AdminRole::Operator);
             let (mut f, id) = fixture(&h, true);

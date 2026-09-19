@@ -18,8 +18,10 @@ visibility. Cookie checks retain the original session ID and token hash, expiry
 and primary/passkey freshness. Personal tokens retain the original hash; device
 and automation tokens retain the original identity and token hash without
 replaying their one-use sender proof. All authenticated modes check the enabled
-user and current role. Auth-off mode is only the original explicit local mode;
-it is never a fallback for an expired or revoked credential.
+user and original [permission lifetime](plugin-product-permission-lifetimes.md).
+Role changes end that observation; restoring or increasing the role cannot revive
+or expand an in-flight request. Auth-off mode is only the original explicit
+local mode; it is never a fallback for an expired or revoked credential.
 
 The shared credential continuation also backs existing Operator confirmations.
 Their Operator minimum and automation-mutation refusal remain distinct from
@@ -28,8 +30,8 @@ read others' Sessions only while they retain that role. Existing authenticated
 shared-Workspace policy and automation read scopes are unchanged. Credential
 evidence never enters a file/diff cache, Machine command, journal or diagnostic.
 
-Lost authentication yields `401/no-store`; lost Session visibility yields
-`404/no-store`. Both replace the entire response, including an old ETag,
+Lost authentication or an ended permission lifetime yields `401/no-store`;
+lost Session visibility yields `404/no-store`. Both replace the entire response, including an old ETag,
 `304`, cached/raw body or detailed read error. Original logical/transport
 observations are checked around asynchronous credential lookup too; their
 existing `410/no-store` behavior is retained. Independent native resource
@@ -84,8 +86,9 @@ extends acceptance to all 25 connected checks and records Controller-only
 activation with the 16 original workers retained in its own observation window.
 
 These are checks at finite boundaries, not a continuous principal epoch or an
-atomic database/network delivery transaction. An unobserved disable/re-enable
-or role ABA is not detected. Already dispatched reads may execute; previously
+atomic database/network delivery transaction. Core-observed role ABA is fenced
+by the permission lifetime; unobserved database disable/re-enable or external
+policy edits are not. Already dispatched reads may execute; previously
 delivered browser/cache bytes cannot be withdrawn. This does not add a generic
 graph grant, state reader/writer lease, effect fence or independent restoration.
 No Plugin/SDK, Machine protocol, native binary, SQL baseline or host policy

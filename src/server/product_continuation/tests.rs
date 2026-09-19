@@ -154,9 +154,75 @@ impl Harness {
                 .await
                 .unwrap(),
             "visibility" => self.role(AdminRole::Viewer),
+            "permission_aba" => {
+                let role = permission_policy(&self.hub).role_for(&self.user.username);
+                self.role(if role == AdminRole::Viewer {
+                    AdminRole::Owner
+                } else {
+                    AdminRole::Viewer
+                });
+                self.role(role);
+            }
             _ => panic!("unknown fixture change"),
         }
     }
+}
+
+#[tokio::test]
+async fn permission_aba_cannot_revive_an_original_product_continuation() {
+    let h = Harness::new().await;
+    h.role(AdminRole::Owner);
+    let headers = h.cookie().await;
+    let captured = h.capture(&headers).await;
+    h.role(AdminRole::Viewer);
+    h.role(AdminRole::Owner);
+    // No intermediate poll: the core's actual permission mutation must end
+    // the original lifetime, not just compare equal before/after role values.
+    assert!(captured.current(h.auth()).await.is_none());
+    assert!(h.capture(&headers).await.current(h.auth()).await.is_some());
+}
+
+#[tokio::test]
+async fn queued_authentication_cannot_capture_a_replacement_permission_lifetime() {
+    for token in [false, true] {
+        let h = Harness::new().await;
+        h.role(AdminRole::Operator);
+        let headers = if token {
+            h.token().await
+        } else {
+            h.cookie().await
+        };
+        let verified = resolve_product_api_request_principal(
+            h.auth(),
+            &Method::GET,
+            &"/api/plugins".parse().unwrap(),
+            &headers,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        h.revoke("permission_aba").await;
+        assert!(ProductContinuation::capture(h.auth(), Some(&verified), &headers).is_err());
+        assert!(h.capture(&headers).await.current(h.auth()).await.is_some());
+    }
+}
+
+#[tokio::test]
+async fn permission_observations_cannot_be_substituted_from_another_core() {
+    let h = Harness::new().await;
+    let headers = h.cookie().await;
+    let captured = h.capture(&headers).await;
+    let other = Hub::new();
+    assert!(
+        captured
+            .current(ProductRequestAuth {
+                hub: &other,
+                ..h.auth()
+            })
+            .await
+            .is_none()
+    );
+    assert!(captured.current(h.auth()).await.is_some());
 }
 
 #[tokio::test]
@@ -193,16 +259,21 @@ async fn current_roles_preserve_viewer_reads_without_granting_mutations() {
     assert!(viewer.can_see(Some(&h.user.id)) && viewer.can_see(None));
     assert!(!viewer.can_see(Some("other-user")) && !viewer.can_mutate(Some(&h.user.id)));
     h.role(AdminRole::Owner);
+    assert!(captured.current(h.auth()).await.is_none());
+    let owner = h.capture(&headers).await;
     assert!(
-        captured
+        owner
             .current(h.auth())
             .await
             .unwrap()
             .can_see(Some("other-user"))
     );
     h.role(AdminRole::Viewer);
+    assert!(owner.current(h.auth()).await.is_none());
+    assert!(captured.current(h.auth()).await.is_none());
+    let fresh = h.capture(&headers).await;
     assert!(
-        !captured
+        !fresh
             .current(h.auth())
             .await
             .unwrap()

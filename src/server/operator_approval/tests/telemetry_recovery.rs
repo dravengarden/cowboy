@@ -8,6 +8,7 @@ async fn machine_recovery_binds_fresh_actor_original_credential_full_operation_a
         "none",
         "logout",
         "role",
+        "role_aba",
         "disabled",
         "actor",
         "operation",
@@ -83,6 +84,10 @@ async fn machine_recovery_binds_fresh_actor_original_credential_full_operation_a
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             "disabled" => h
                 .store
                 .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))

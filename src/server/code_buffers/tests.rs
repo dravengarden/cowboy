@@ -109,6 +109,7 @@ pub(super) fn create_owned(hub: &Hub, machine: &str, user: &str) {
 
 pub(super) fn authenticated() -> AuthenticatedProductRequest {
     AuthenticatedProductRequest {
+        permissions: None,
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,

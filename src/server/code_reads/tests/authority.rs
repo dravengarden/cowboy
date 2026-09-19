@@ -4,7 +4,13 @@ use crate::server::product_continuation::tests::Harness;
 
 #[tokio::test]
 async fn revoked_reads_discard_success_conditional_and_error_bodies() {
-    for kind in ["cookie", "token", "disabled", "visibility"] {
+    for kind in [
+        "cookie",
+        "token",
+        "disabled",
+        "visibility",
+        "permission_aba",
+    ] {
         for status in [
             StatusCode::OK,
             StatusCode::NOT_MODIFIED,
@@ -49,14 +55,7 @@ async fn revoked_reads_discard_success_conditional_and_error_bodies() {
                 release.send(()).unwrap();
             };
             let (response, ()) = tokio::join!(read, change);
-            assert_eq!(
-                response.status(),
-                if kind == "visibility" {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::UNAUTHORIZED
-                }
-            );
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
             assert!(!response.headers().contains_key(header::ETAG));
             assert_ne!(

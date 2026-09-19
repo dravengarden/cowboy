@@ -24,6 +24,7 @@ enum Credential {
 pub(super) struct ProductContinuation {
     user_id: String,
     credential: Credential,
+    permissions: Option<crate::core::ProductPermissionObservation>,
 }
 
 impl ProductContinuation {
@@ -33,6 +34,21 @@ impl ProductContinuation {
         headers: &HeaderMap,
     ) -> Result<Self, StatusCode> {
         let verified = authenticated.ok_or(StatusCode::UNAUTHORIZED)?;
+        let permissions = if auth.product_auth_enabled {
+            Some(
+                verified
+                    .permissions
+                    .as_ref()
+                    .filter(|scope| {
+                        scope.current(auth.hub, &verified.principal.username)
+                            && scope.role() == verified.principal.role
+                    })
+                    .ok_or(StatusCode::UNAUTHORIZED)?
+                    .clone(),
+            )
+        } else {
+            None
+        };
         let credential = if !auth.product_auth_enabled {
             if verified.principal != crate::product_auth::local_product_principal() {
                 return Err(StatusCode::UNAUTHORIZED);
@@ -75,6 +91,7 @@ impl ProductContinuation {
         Ok(Self {
             user_id: verified.principal.user_id.clone(),
             credential,
+            permissions,
         })
     }
 
@@ -85,9 +102,10 @@ impl ProductContinuation {
         if !auth.product_auth_enabled {
             return None;
         }
+        let permissions = self.permissions.as_ref()?;
         let store = auth.store?;
         let user = store.user_by_id(&self.user_id).await.ok()??;
-        if user.disabled_at_ms.is_some() {
+        if user.disabled_at_ms.is_some() || !permissions.current(auth.hub, &user.username) {
             return None;
         }
         // Credential validation follows the user lookup: a device revocation
@@ -136,8 +154,14 @@ impl ProductContinuation {
                 identity.user_id.clone()
             }
         };
-        (user_id == self.user_id && user.id == self.user_id)
-            .then(|| product_principal(auth.hub, &user))
+        (user_id == self.user_id
+            && user.id == self.user_id
+            && permissions.current(auth.hub, &user.username))
+        .then(|| ProductPrincipal {
+            user_id: user.id,
+            username: user.username,
+            role: permissions.role(),
+        })
     }
 }
 
