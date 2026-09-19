@@ -16,6 +16,9 @@ pub trait AgentSink: Send + Sync + 'static {
     fn set_config_options(&self, session_id: &str, options: serde_json::Value);
     fn set_agent_session_id(&self, session_id: &str, agent_session_id: String);
     fn set_session_usage(&self, session_id: &str, usage: SessionUsage);
+    /// Live native background tasks that count as activity. A level, not an
+    /// edge: every call replaces the previous count.
+    fn set_background_tasks(&self, _session_id: &str, _count: u32) {}
     fn schedule_wakeup(&self, session_id: &str, delay_seconds: i64, prompt: String);
     fn session_is_system(&self, session_id: &str) -> bool;
     fn broadcast_error(&self, session_id: Option<String>, message: String);

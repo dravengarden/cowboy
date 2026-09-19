@@ -87,6 +87,43 @@ pub struct WorkerSnapshot {
     /// never set this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_detail: Option<String>,
+    /// Live native background tasks that count as agent activity (see
+    /// [`background_tasks_update`]). `None` comes from a worker that does not
+    /// observe them. Restores the level after a Controller reconnect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_tasks: Option<u32>,
+}
+
+/// Cowboy-owned `sessionUpdate` carrying the native background-task level.
+///
+/// A Provider can end its prompt turn while background work it will resume on
+/// (a backgrounded shell, a Monitor) is still running. The level is carried as
+/// an update rather than a new [`RuntimeEvent`] variant so peers that predate
+/// it still decode the frame. The Controller projects it onto session
+/// metadata and never stores it in the transcript.
+pub const BACKGROUND_TASKS_UPDATE: &str = "cowboy_background_tasks";
+
+#[must_use]
+pub fn background_tasks_update(count: u32) -> serde_json::Value {
+    serde_json::json!({ "sessionUpdate": BACKGROUND_TASKS_UPDATE, "count": count })
+}
+
+/// The level carried by a [`BACKGROUND_TASKS_UPDATE`], if `update` is one.
+#[must_use]
+pub fn background_tasks_count(update: &serde_json::Value) -> Option<u32> {
+    if update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        != Some(BACKGROUND_TASKS_UPDATE)
+    {
+        return None;
+    }
+    Some(
+        update
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
+    )
 }
 
 impl WorkerSnapshot {
@@ -620,6 +657,7 @@ mod tests {
             pending_prompt_count: 0,
             drain_requested: false,
             exit_detail: None,
+            background_tasks: None,
         }
     }
 

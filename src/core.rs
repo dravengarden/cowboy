@@ -414,6 +414,12 @@ pub struct SessionMeta {
     /// Full latest ACP usage update, including optional cost and provider `_meta`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<crate::agent_model::SessionUsage>,
+    /// Native background tasks the agent is still waiting on after its prompt
+    /// turn ended (a backgrounded shell, a Monitor). Presentation only: it
+    /// never holds the queue, because a background server may never finish.
+    /// Transient live state restored from the worker snapshot on reconnect.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub background_tasks: u32,
     /// Soonest fire time (epoch ms) across this session's SCHEDULED DRAFTS, or
     /// `None` if none are scheduled. Derived from the drafts in `session_list`
     /// (not stored on the struct proper) so the session-row clock badge can show
@@ -428,6 +434,11 @@ pub struct SessionMeta {
     /// joined from `users` on restore.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_username: Option<String>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if passes a reference.
+const fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 fn local_machine_id() -> String {
@@ -2495,6 +2506,7 @@ impl Hub {
             context_used: 0,
             context_size: 0,
             usage: None,
+            background_tasks: 0,
             next_schedule_ms: None,
             owner_user_id,
             owner_username,
@@ -2702,6 +2714,24 @@ impl Hub {
                     s.meta.context_used = usage.used;
                     s.meta.context_size = usage.size;
                     s.meta.usage = Some(usage);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            self.broadcast_sessions();
+        }
+    }
+
+    /// Record the worker's live background-task level. Broadcast-only and
+    /// deduped; it never changes dispatch or the transcript.
+    pub fn set_background_tasks(&self, session_id: &str, count: u32) {
+        let changed = {
+            let mut sessions = self.inner.sessions.lock();
+            match sessions.get_mut(session_id) {
+                Some(s) if s.meta.background_tasks != count => {
+                    s.meta.background_tasks = count;
                     true
                 }
                 _ => false,
@@ -3618,6 +3648,14 @@ impl Hub {
             }
             if was != status {
                 s.lifecycle_epoch = s.lifecycle_epoch.wrapping_add(1);
+            }
+            // Background work belongs to one live worker. A recoverable Crashed
+            // hold keeps that worker, so only a restart or exit clears it.
+            if matches!(
+                status,
+                Status::Starting | Status::Exited | Status::Interrupted
+            ) {
+                s.meta.background_tasks = 0;
             }
             s.meta.status = status;
         }
@@ -5630,6 +5668,7 @@ mod runtime_reconciliation_tests {
                 context_used: 0,
                 context_size: 0,
                 usage: None,
+                background_tasks: 0,
                 next_schedule_ms: None,
                 owner_user_id: None,
                 owner_username: None,
@@ -5666,6 +5705,7 @@ mod runtime_reconciliation_tests {
             pending_prompt_count: 0,
             drain_requested: false,
             exit_detail: None,
+            background_tasks: None,
         }
     }
 

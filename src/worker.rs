@@ -148,6 +148,11 @@ impl Shared {
                 snapshot.context_used = Some(*used);
                 snapshot.context_size = Some(*size);
             }
+            RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::background_tasks_count(update).is_some() =>
+            {
+                snapshot.background_tasks = crate::runtime_wire::background_tasks_count(update);
+            }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
             | RuntimeEvent::ScheduleWakeup { .. }
@@ -284,6 +289,13 @@ impl AgentSink for RemoteSink {
         });
     }
 
+    fn set_background_tasks(&self, _session_id: &str, count: u32) {
+        self.shared.emit(RuntimeEvent::Update {
+            update: crate::runtime_wire::background_tasks_update(count),
+            cmid: None,
+        });
+    }
+
     fn schedule_wakeup(&self, _session_id: &str, delay_seconds: i64, prompt: String) {
         self.shared.emit(RuntimeEvent::ScheduleWakeup {
             delay_seconds,
@@ -412,6 +424,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             pending_prompt_count: 0,
             drain_requested: false,
             exit_detail: None,
+            background_tasks: Some(0),
         }),
         outbox: Mutex::new(BTreeMap::new()),
         trace_outbox: Mutex::default(),
@@ -1047,6 +1060,7 @@ mod tests {
                     pending_prompt_count: 0,
                     drain_requested: false,
                     exit_detail: None,
+                    background_tasks: None,
                 }),
                 outbox: Mutex::new(BTreeMap::new()),
                 trace_outbox: Mutex::default(),

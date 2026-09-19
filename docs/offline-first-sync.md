@@ -570,7 +570,7 @@ Phase 3 shipped in part with the same release (service worker
   placeholder is still lost on a crash.
 - P3 hover prefetch: a mouse resting on a Desktop sessions row for 150 ms
   fetches that tail ahead of the P2 queue (`prefetchSessionTail`).
-- Conflict 7 (Controller and Web release, service worker `cowboy-v1733`):
+- Conflict 7 (Controller and Web release, service worker `cowboy-v1734`):
   the Hub appends no second `permission_resolved` row for a request already
   resolved in the session log, so an answer given on two devices at once
   resolves once; the first broadcast already clears the other device's card,

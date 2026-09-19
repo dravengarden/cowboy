@@ -115,6 +115,9 @@ export interface SessionMeta {
    *  "context X% full" ring). `0`/`0` (or absent) = not reported yet. Transient. */
   context_used?: number;
   context_size?: number;
+  /** Native background tasks the agent still waits on after its prompt turn
+   *  ended. Presentation only; it never holds the queue. Absent = none. */
+  background_tasks?: number;
   /** Full latest ACP usage update. `raw` retains optional standard cost and
    * provider `_meta` rate-limit fields for the Info → Usage panel. */
   usage?: {
