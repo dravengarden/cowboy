@@ -3,14 +3,15 @@
 Status: the [original candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
 is included in the separately activated Controller `0fded719`; the
 [six Agent publications](releases/agent-publication-2026-09-15.md) closed its
-original prerequisite. The ordinary Review buffer and language APIs remain
-legacy; this is not the Web cutover or production
-Machine/Zed acceptance. It consumes the independently verified
+original prerequisite. The subsequent [owned Review consumer](plugin-review-owned-consumer.md)
+and [working-diff consumer](plugin-review-owned-diff.md) use this ownership path;
+their Web rollout and actual Machine/Zed and device acceptance remain separately
+recorded. It consumes the independently verified
 [Machine/native candidate](plugin-native-buffer-leases.md).
 The additive [owned observation API](plugin-owned-buffer-reads.md) now implements
 diagnostic and symbol reads; its rollout remains separately recorded.
 The separate [synchronization API](plugin-service-buffer-sync.md) adds finite
-original-owner preparation/confirmation, without changing ordinary Review.
+original-owner preparation/confirmation, independently of ordinary buffer reads.
 
 ## Fixed core ownership
 
@@ -51,9 +52,11 @@ HTTP 200. A duplicate open/release never resends its native mutation. A query
 that discovers `prepared` after an ambiguous open does not rearm that attempt.
 An evicted terminal ID is unavailable (404), never a new admission opportunity.
 
-Native `released` means local ownership removal and, when needed, successful
-native close enqueue. It does not prove the unacknowledged native CloseBuffer
-effect, undo file edits or constitute independently authorized recovery.
+Native `released` follows the original runtime's close contract. The original
+candidate acknowledged local removal/close enqueue only; the later
+[close confirmation](plugin-native-close-confirmation.md) requires observation
+of the original native ownership removal. Neither undoes file edits nor
+constitutes independently authorized recovery.
 
 ## Admission and cancellation
 
@@ -61,7 +64,9 @@ These routes require a currently authenticated product Operator, not a separate
 admin cookie. Fresh product authentication is checked by the normal API
 middleware. The continuation captures the original credential hash/identity,
 without retaining its secret or consuming device proof twice, and rechecks that
-credential, disabled/revoked status and current role before native dispatch.
+credential, disabled/revoked status and current role before native dispatch and
+before disclosing its outcome. Saved observations also require fresh original
+authority; a retained snapshot is not a new Session or native-use grant.
 Current automation scopes do not authorize this new effect surface.
 
 Prepare and open additionally require permission to mutate the original Session
@@ -81,9 +86,18 @@ an unknown open must first be observed before requesting release. A lost release
 is observed without resending it. Independent resolution of unresolved effects
 remains unfinished.
 
+The owned task records a valid native outcome before the HTTP observer rechecks
+authority. Logout, role loss or observer cancellation must not erase an actual
+Open or Release. The revoked login receives no result, while an independently
+authenticated original user can observe the same ID and explicitly request
+original-owner cleanup. This separation neither compensates a native effect nor
+authorizes new work in a replaced Session. Failed or missing native observations
+retain their existing uncertainty and never rearm a consumed attempt.
+
 Per-resource jobs serialize by admission without holding a global lock across
 I/O. Other resources can progress independently. The owning task set imposes a
-60-second deadline including authority checks, bounds concurrent jobs to 64,
+60-second absolute request deadline including authority checks; handing work to
+the owned task cannot renew it, and expiry cannot begin an effect. It bounds concurrent jobs to 64,
 reaps completed tasks and aborts/drains outstanding tasks at Controller shutdown.
 Shutdown is not native cleanup or restoration: possible effects keep their
 process-local unknown evidence until this Controller goes away.
@@ -103,20 +117,20 @@ native-memory, filesystem scheduling or worktree-cache reclamation guarantee.
 Source tests exercise actual Hub observations, the Machine connection registry,
 closed HTTP routes, independent task ownership, late/wrong replies, cancellation,
 expiry, saturation, user/process isolation and current product credentials.
-Machine responses are deterministic fixtures; this is not the immutable
-Controller/Machine/native connected rollout matrix or a real product login.
+Source tests use deterministic Machine replies; they do not replace the separate
+[immutable connected gate](plugin-code-connected-conformance.md). Its v10 checks
+26–28 exercise actual product logout during real native Open/Query/Release, with
+saved original-ID outcomes and exact no-replay command counts.
 
-Controller activation can expose this additive API without changing the old
-Review consumer or activating new Machine/Plugin bytes. No database schema,
-Catalog format, installation, telemetry policy, Worker generation or native ABI
-changes here. Machine maintenance and signed Zed publication/installation remain
-independent. Diagnostic and symbol reads now have an
-[additive owned interface](plugin-owned-buffer-reads.md). Before switching Review,
-resolve hover/navigation content-coordinate ownership, connect the
-[typed browser owner](plugin-buffer-client-owner.md) to the real identity and
-Review lifetimes, present unresolved cleanup, and accept the actual Machine/Code
-generation. The client implements pending/unknown observation and explicit
-release with isolated StrictMode acceptance; it does not yet change live Review.
+Controller outcome-authority changes activate independently of Machine/Plugin
+bytes. No database schema, Catalog format, installation, telemetry policy,
+Worker generation or native ABI changes here. Machine maintenance and signed
+Zed publication/installation remain independent. Diagnostic and symbol reads
+have an [owned interface](plugin-owned-buffer-reads.md); the
+[typed browser owner](plugin-buffer-client-owner.md), product-context lifetime
+and explicit unresolved-cleanup projection now support the separate Review
+consumers. Intended navigation destination views, actual supported-device and
+retained native-generation acceptance remain separately required.
 There is no heartbeat, automatic abandoned-browser cleanup, Controller-restart
 restoration, continuous principal/workspace writer fence or generic DAG recovery
 claim in this slice.

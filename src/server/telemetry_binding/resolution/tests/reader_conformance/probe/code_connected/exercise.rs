@@ -14,7 +14,7 @@ fn content(text: &str, kind: &str) -> Value {
 fn snapshot(value: &Value, id: &str, state: &str, pending: bool) -> Result<(), Failure> {
     check(value == &json!({"apiVersion":1,"resourceId":id,"state":state,"pending":pending}))
 }
-async fn prepare(pair: &Pair<'_>) -> Result<String, Failure> {
+pub(super) async fn prepare(pair: &Pair<'_>) -> Result<String, Failure> {
     let value = pair.http.post("/api/code/buffers", target()).await?;
     let id = value["resourceId"]
         .as_str()
@@ -195,6 +195,8 @@ pub(super) async fn run(
     operation(pair, Method::DELETE, &first, "released").await?;
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
+
+    effect_authority::run(pair, password, stage, checks).await?;
 
     let navigation = navigation::prepare(pair, &second, stage, checks).await?;
 

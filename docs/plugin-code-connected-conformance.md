@@ -45,7 +45,7 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Twenty-five checks cover (receipt schema `...code-buffer-connected-conformance/v9`,
+Twenty-eight checks cover (receipt schema `...code-buffer-connected-conformance/v10`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -129,6 +129,18 @@ Historical v3 receipts cover only the first eleven checks:
 25. Repeat them for legacy outline. The relay admits only the named pre-opened
     fixture for these four query kinds; arbitrary paths and native mutations
     remain refused. Historical v8 does not accept this extension.
+26. Ordinary owned Open: hold its real reply, revoke only the admitting product
+    login, then require `401/no-store/no-ETag` and no extra dispatch. An independent
+    original-user login observes saved Open by the same ID without reopening,
+    and explicitly queries the retained original native owner.
+27. Repeat the original-login revocation during ordinary Query. The independent
+    original-user login still observes the recorded Open; neither refusal nor
+    saved observation dispatches an extra command.
+28. Repeat during ordinary Release. Its actual terminal outcome remains
+    queryable by the independent original-user login, duplicate release does
+    not dispatch, and Open cannot revive that ID. Historical v9 does not accept
+    these three checks. Denying a response is not native undo or independently
+    authorized post-effect recovery; no outcome is dropped to simulate it.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills

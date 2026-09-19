@@ -137,22 +137,6 @@ fn response(result: Result<Snapshot, StatusCode>) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], response).into_response()
 }
 
-async fn check_user(
-    context: &Context,
-    approval: &OperatorApproval,
-    user: &str,
-) -> Result<(), StatusCode> {
-    if approval
-        .current_product_operator(context.auth())
-        .await
-        .is_none_or(|principal| principal.user_id != user)
-        || *context.shutdown.borrow()
-    {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    Ok(())
-}
-
 async fn check(
     context: &Context,
     approval: &OperatorApproval,

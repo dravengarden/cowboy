@@ -190,6 +190,7 @@ impl Proxy {
                     "bufferNavigate",
                     "bufferSymbols",
                     "openBufferLease",
+                    "queryBufferLease",
                     "readBufferLease",
                     "releaseBufferLease",
                     "installationStep",

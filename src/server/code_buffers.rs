@@ -232,6 +232,24 @@ async fn check_open(
     Ok(())
 }
 
+/// Fresh permission to observe this user's retained outcome, not a grant to
+/// acquire work in its current/replacement Session. Also used by sync/navigation.
+async fn check_user(
+    state: &Context,
+    approval: &OperatorApproval,
+    user: &str,
+) -> Result<(), StatusCode> {
+    if approval
+        .current_product_operator(state.auth())
+        .await
+        .is_none_or(|principal| principal.user_id != user)
+        || *state.shutdown.borrow()
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
+}
+
 async fn open(
     State(state): State<Context>,
     Path(id): Path<String>,
@@ -268,50 +286,77 @@ async fn operate(
     headers: HeaderMap,
     action: Action,
 ) -> Response {
-    let result = async {
-        let approval = approval(&state, &authenticated, &headers)?;
-        match state
-            .code_buffers
-            .admit(&authenticated.principal.user_id, &id, action)?
-        {
-            Admission::Saved(snapshot) => Ok(snapshot),
-            Admission::Run(job) => {
-                let owners = Arc::clone(&state.code_buffers);
-                let receiver = owners.spawn(async move {
-                    let observed = {
-                        if action == Action::Open {
-                            check_open(&state, &approval, &job.binding.scope, &job.binding.user)
-                                .await?;
-                        } else {
-                            // Fresh permission to observe/release this original
-                            // user's resource, even after Session removal/ABA.
-                            let current = approval.current_product_operator(state.auth()).await;
-                            if current.is_none_or(|principal| principal.user_id != job.binding.user)
-                                || *state.shutdown.borrow()
-                            {
-                                return Err(StatusCode::UNAUTHORIZED);
-                            }
-                        }
-                        job.begin()?;
-                        remote::request(
-                            &state.machine_control,
-                            &job.binding.connection,
-                            &job.binding.native,
-                            job.action,
-                        )
+    let deadline = tokio::time::Instant::now() + registry::JOB_TIMEOUT;
+    let future = async {
+        // Share one original continuation with the owned job and its observer.
+        // This neither captures a second credential nor renews its deadline.
+        let approval = Arc::new(approval(&state, &authenticated, &headers)?);
+        check_user(&state, &approval, &authenticated.principal.user_id).await?;
+        let result =
+            match state
+                .code_buffers
+                .admit(&authenticated.principal.user_id, &id, action)?
+            {
+                Admission::Saved(snapshot) => Ok(snapshot),
+                Admission::Run(job) => {
+                    let owners = Arc::clone(&state.code_buffers);
+                    let receiver = owners.spawn(run_job(
+                        state.clone(),
+                        Arc::clone(&approval),
+                        *job,
+                        deadline,
+                    ))?;
+                    receiver
                         .await
-                        .map_err(|_| StatusCode::BAD_GATEWAY)?
-                    };
-                    job.finish(observed)
-                })?;
-                receiver
-                    .await
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-            }
+                        .unwrap_or(Err(StatusCode::SERVICE_UNAVAILABLE))
+                }
+            };
+        // Cover saved observations and errors too. This is only permission to
+        // disclose an outcome: it does not reopen, release, rearm, or confer a
+        // new Session/native-use grant. The job has already recorded its effect.
+        check_user(&state, &approval, &authenticated.principal.user_id).await?;
+        result
+    };
+    response(
+        tokio::time::timeout_at(deadline, future)
+            .await
+            .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT)),
+    )
+}
+
+/// The task owner commits observations independently of the response observer.
+async fn run_job(
+    state: Context,
+    approval: Arc<OperatorApproval>,
+    job: registry::Job,
+    deadline: tokio::time::Instant,
+) -> Result<Snapshot, StatusCode> {
+    tokio::time::timeout_at(deadline, async {
+        if job.action == Action::Open {
+            check_open(&state, &approval, &job.binding.scope, &job.binding.user).await?;
+        } else {
+            // Original-resource observation/cleanup survives Session removal.
+            check_user(&state, &approval, &job.binding.user).await?;
         }
-    }
-    .await;
-    response(result)
+        // Do not rely on timer poll ordering when authority becomes ready at
+        // the deadline. Expiry cannot start a fresh native effect.
+        if tokio::time::Instant::now() >= deadline {
+            return Err(StatusCode::GATEWAY_TIMEOUT);
+        }
+        job.begin()?;
+        let observed = remote::request(
+            &state.machine_control,
+            &job.binding.connection,
+            &job.binding.native,
+            job.action,
+        )
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        // Save even after logout/cancellation. Response refusal is not undo.
+        job.finish(observed)
+    })
+    .await
+    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
 }
 
 #[cfg(test)]

@@ -4,6 +4,8 @@ use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 use serde_json::{Value, json};
 
+mod authority;
+
 #[tokio::test]
 async fn review_selection_is_effect_free_and_requires_the_connected_machine_floor() {
     let mut fixture = Fixture::new();
