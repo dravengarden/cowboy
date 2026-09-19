@@ -125,6 +125,7 @@ import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
 
 import {
+  cancelTurn,
   canonicalTimeline,
   discardMessage,
   loadOlder,
@@ -134,7 +135,6 @@ import {
   retryMessage,
   retrySessionHydration,
   returnFailedMessage,
-  send,
   sessionTurnActivityAt,
   submitPrompt,
   useConnected,
@@ -5641,7 +5641,7 @@ export function Transcript({
                     startIcon={<Stop sx={{ fontSize: 16 }} />}
                     onClick={(): void => {
                       importantHaptic();
-                      send({ type: "cancel", session_id: sessionId });
+                      cancelTurn(sessionId);
                     }}
                     sx={{ textTransform: "none", minHeight: 28, py: 0.25 }}
                   >

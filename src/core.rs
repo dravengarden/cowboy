@@ -3696,6 +3696,19 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            // A permission answered on two devices at once resolves once. The
+            // second answer is the same fact: the first row stays and no
+            // duplicate is appended (docs/offline-first-sync.md, conflict 7).
+            if let Event::PermissionResolved { request_id, .. } = &event
+                && s.log.iter().rev().any(|entry| {
+                    matches!(
+                        &entry.event,
+                        Event::PermissionResolved { request_id: seen, .. } if seen == request_id
+                    )
+                })
+            {
+                return;
+            }
             let seq = s.next_seq;
             s.next_seq += 1;
             let envelope = Envelope {
@@ -6351,6 +6364,55 @@ mod core_tests {
 
         assert!(!hub.remove_queued("gone", "x"));
         assert!(!hub.remove_draft("gone", "x"));
+    }
+
+    // A permission answered on two devices resolves once in the transcript;
+    // the first answer wins and the second appends no row.
+    #[test]
+    fn duplicate_permission_resolution_appends_no_second_row() {
+        let hub = hub_with_session("perm");
+        hub.push(
+            "perm",
+            Event::PermissionRequest {
+                request_id: "r-1".to_owned(),
+                tool_call: serde_json::json!({}),
+                options: serde_json::json!([]),
+            },
+        );
+        hub.push(
+            "perm",
+            Event::PermissionResolved {
+                request_id: "r-1".to_owned(),
+                option_id: Some("allow".to_owned()),
+            },
+        );
+        hub.push(
+            "perm",
+            Event::PermissionResolved {
+                request_id: "r-1".to_owned(),
+                option_id: Some("deny".to_owned()),
+            },
+        );
+        let resolutions = |hub: &Hub| -> Vec<Option<String>> {
+            hub.snapshot("perm")
+                .expect("snapshot")
+                .0
+                .into_iter()
+                .filter_map(|entry| match entry.event {
+                    Event::PermissionResolved { option_id, .. } => Some(option_id),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(resolutions(&hub), vec![Some("allow".to_owned())]);
+        hub.push(
+            "perm",
+            Event::PermissionResolved {
+                request_id: "r-2".to_owned(),
+                option_id: None,
+            },
+        );
+        assert_eq!(resolutions(&hub), vec![Some("allow".to_owned()), None]);
     }
 
     // Per-session sync dedupe sets are dropped with the session.

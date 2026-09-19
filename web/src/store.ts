@@ -1869,6 +1869,19 @@ async function hydrateSession(
   return promise;
 }
 
+/** Stop the running turn. Cancel is live-only (docs/offline-first-sync.md,
+ * class C): it cannot be queued for a turn that may have ended by the time
+ * the socket returns, so an unreachable Cowboy says so instead of dropping
+ * the tap silently. */
+export function cancelTurn(sessionId: string): boolean {
+  if (send({ type: "cancel", session_id: sessionId })) return true;
+  notify(
+    "Needs a connection to stop this turn. Cowboy keeps running it until it can be reached.",
+    "warning",
+  );
+  return false;
+}
+
 /** Retry only this session's bootstrap; never reload the whole application or
  * discard a local composer/delivery state merely because history was slow. */
 export function retrySessionHydration(sessionId: string): Promise<void> {
