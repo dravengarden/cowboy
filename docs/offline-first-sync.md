@@ -576,7 +576,9 @@ Phase 3 shipped in part with the same release (service worker
   resolves once; the first broadcast already clears the other device's card,
   so no addressed `already_resolved` result is needed. Creating a session
   while Cowboy is unreachable now says "Needs a connection" in place instead
-  of the browser's fetch error (class C).
+  of the browser's fetch error, and Stop while unreachable says so too
+  instead of dropping the tap (`cancelTurn`, class C; service worker
+  `cowboy-v1735`).
 - One indicator per surface (service worker `cowboy-v1731`): the transcript
   tail's "Reconnecting…" row is removed on both products; the Mobile pill is
   restyled to the transcript pills' tinted language; "needs attention"

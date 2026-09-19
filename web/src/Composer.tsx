@@ -236,6 +236,7 @@ import {
 } from "./inlineImages";
 
 import {
+  cancelTurn,
   activateAllDrafts,
   activateDraft,
   clearDrafts,
@@ -3584,7 +3585,7 @@ export function ComposerWorkspace({
         onClose={(): void => setCancelOpen(false)}
         onConfirm={(): void => {
           importantHaptic();
-          send({ type: "cancel", session_id: sessionId });
+          cancelTurn(sessionId);
           setCancelOpen(false);
         }}
       />
@@ -6434,7 +6435,7 @@ export function AutoScrollAndStop({
           onClose={(): void => setCancelOpen(false)}
           onConfirm={(): void => {
             importantHaptic();
-            send({ type: "cancel", session_id: sessionId });
+            cancelTurn(sessionId);
             setCancelOpen(false);
           }}
         />
@@ -6519,7 +6520,7 @@ export function AutoScrollAndStop({
         onClose={(): void => setCancelOpen(false)}
         onConfirm={(): void => {
           importantHaptic();
-          send({ type: "cancel", session_id: sessionId });
+          cancelTurn(sessionId);
           setCancelOpen(false);
         }}
       />
