@@ -15380,10 +15380,26 @@ async fn zed_request_in_scope(
 
 async fn remote_code_request(
     state: &AppState,
-    machine_id: &str,
-    cwd: &str,
+    scope: &CodeReadScope,
     operation: CodeOperation,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
+    if let CodeReadScope::Workspace(workspace) = scope {
+        if state
+            .machine_control
+            .workspace_scope_is_colocated(workspace)
+            .map_err(anyhow::Error::msg)?
+        {
+            return Ok(None);
+        }
+        let value = state
+            .machine_control
+            .code_request_in_workspace(workspace, operation)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        return Ok(Some(serde_json::from_value(value)?));
+    }
+    let machine_id = scope.machine_id();
+    let cwd = scope.cwd();
     if machine_id == "local" {
         return Ok(None);
     }
@@ -15543,8 +15559,7 @@ async fn api_search_files(
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::Search {
                 query: query.q.clone(),
                 limit,
@@ -15579,8 +15594,7 @@ async fn api_code_search(
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::Search {
                 query: query.q.clone(),
                 limit,
@@ -15628,8 +15642,7 @@ async fn api_file_tree(
         let requested_path = path.clone();
         let remote_page = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::Directory {
                 path: path.clone(),
                 limit,
@@ -15773,27 +15786,18 @@ mod workspace_code_context_tests {
 async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCodeContext> {
     if let Some((machine_id, workspace_id)) = parse_workspace_code_context(id) {
         let store = state.store.as_ref()?;
-        let machines = store.list_machines().await.ok()?;
-        let machine = machines
-            .into_iter()
-            .find(|machine| machine.id == machine_id && !machine.revoked)?;
-        let workspaces: Vec<crate::machine_protocol::MachineWorkspace> = machine
-            .inventory
-            .get("workspaces")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())?;
-        let workspace = workspaces
-            .into_iter()
-            .find(|workspace| workspace.id == workspace_id)?;
+        let scope = code_reads::workspace::resolve(
+            store,
+            &state.machine_control,
+            &state.service_id,
+            machine_id,
+            workspace_id,
+        )
+        .await?;
         return Some(ResolvedCodeContext {
-            scope: CodeReadScope::Workspace {
-                service_id: state.service_id.clone(),
-                machine_id: machine.id.clone(),
-                workspace_id: workspace.id,
-                cwd: workspace.canonical_path.clone(),
-            },
-            machine_id: machine.id,
-            cwd: workspace.canonical_path,
+            machine_id: scope.machine_id().into(),
+            cwd: scope.cwd().into(),
+            scope,
         });
     }
     session_code_context(state, id)
@@ -15811,9 +15815,12 @@ fn session_code_context(state: &AppState, session_id: &str) -> Option<ResolvedCo
 async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadScope) -> bool {
     match scope {
         CodeReadScope::Session(scope) => state.hub.code_scope_is_current(scope),
-        CodeReadScope::Workspace { .. } => resolve_code_context(state, id)
-            .await
-            .is_some_and(|current| &current.scope == scope),
+        CodeReadScope::Workspace(workspace) => {
+            resolve_code_context(state, id)
+                .await
+                .is_some_and(|current| &current.scope == scope)
+                && state.machine_control.workspace_scope_is_current(workspace)
+        }
     }
 }
 
@@ -15837,27 +15844,25 @@ async fn api_code_manifest(
         } else {
             false
         };
-        let manifest =
-            match remote_code_request(&state, &context.machine_id, &cwd, CodeOperation::Manifest)
-                .await
-            {
-                Ok(Some(crate::code_adapter::CodeAdapterResponse::Manifest(manifest))) => manifest,
-                Ok(Some(_)) | Err(_) => {
-                    return (StatusCode::BAD_GATEWAY, "remote worktree unavailable")
+        let manifest = match remote_code_request(&state, &context.scope, CodeOperation::Manifest)
+            .await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Manifest(manifest))) => manifest,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote worktree unavailable").into_response();
+            }
+            Ok(None) => {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(cwd).manifest()
+                })
+                .await;
+                let Ok(Ok(manifest)) = result else {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable")
                         .into_response();
-                }
-                Ok(None) => {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::code_review::LocalCodeProvider::new(cwd).manifest()
-                    })
-                    .await;
-                    let Ok(Ok(manifest)) = result else {
-                        return (StatusCode::UNPROCESSABLE_ENTITY, "worktree unavailable")
-                            .into_response();
-                    };
-                    manifest
-                }
-            };
+                };
+                manifest
+            }
+        };
         let language_state = if language_ready {
             "ready"
         } else {
@@ -15928,27 +15933,24 @@ async fn api_code_changes(
     let context_id = session_id.clone();
     code_reads::scoped(&owner, &context_id, |context| async move {
         let cwd = context.cwd;
-        let result =
-            match remote_code_request(&state, &context.machine_id, &cwd, CodeOperation::Changes)
-                .await
-            {
-                Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
-                Ok(Some(_)) | Err(_) => {
-                    return (StatusCode::BAD_GATEWAY, "remote git changes unavailable")
+        let result = match remote_code_request(&state, &context.scope, CodeOperation::Changes).await
+        {
+            Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
+            Ok(Some(_)) | Err(_) => {
+                return (StatusCode::BAD_GATEWAY, "remote git changes unavailable").into_response();
+            }
+            Ok(None) => {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
+                })
+                .await;
+                let Ok(Ok(changes)) = result else {
+                    return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable")
                         .into_response();
-                }
-                Ok(None) => {
-                    let result = tokio::task::spawn_blocking(move || {
-                        crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
-                    })
-                    .await;
-                    let Ok(Ok(changes)) = result else {
-                        return (StatusCode::UNPROCESSABLE_ENTITY, "git changes unavailable")
-                            .into_response();
-                    };
-                    changes
-                }
-            };
+                };
+                changes
+            }
+        };
         Json(CodeChangesResponse {
             api_version: 1,
             head: result.head,
@@ -15990,8 +15992,7 @@ async fn api_code_repository(
         let after = query.after;
         let result = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::Repository {
                 after: after.clone(),
             },
@@ -16040,8 +16041,7 @@ async fn api_code_commit(
         let oid = query.oid;
         let result = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::Commit { oid: oid.clone() },
         )
         .await
@@ -16084,8 +16084,7 @@ async fn api_code_commit_diff(
         let path = query.path;
         let result = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::CommitDiff {
                 oid: oid.clone(),
                 path: path.clone(),
@@ -16175,8 +16174,7 @@ async fn api_code_diff(
         };
         let remote_document = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &key.owner,
             CodeOperation::Diff {
                 path: path.clone(),
                 context: query.context,
@@ -16255,8 +16253,7 @@ async fn api_code_file(
         let cwd = context.cwd;
         let result = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::File {
                 path: query.path.clone(),
                 cursor: query.cursor.clone(),
@@ -16331,8 +16328,7 @@ async fn api_code_file_raw(
         let cwd = context.cwd;
         let result = match remote_code_request(
             &state,
-            &context.machine_id,
-            &cwd,
+            &context.scope,
             CodeOperation::FileRaw {
                 path: query.path.clone(),
             },

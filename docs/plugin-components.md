@@ -175,6 +175,12 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.13.0 records app-shell 1.1.4's already-integrated gallery image
+contract. Only app-shell's version/digest changes; it still has no component or
+Plugin consumers. Current independently released Claude Code 3.1.28 and Zed
+1.20.0 sources are snapshotted without changing their manifests, signed bytes
+or 3.11.0 component pins. No Catalog publication or Machine upgrade is needed.
+
 Run:
 
 ```sh
