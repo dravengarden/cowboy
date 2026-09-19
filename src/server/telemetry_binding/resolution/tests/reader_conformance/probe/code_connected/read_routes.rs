@@ -41,3 +41,42 @@ pub(super) async fn refused(pair: &Pair<'_>, continuation: &str) -> Result<(), F
     // Refusal must precede native I/O even though the source path was removed.
     check(pair.proxy.counts()?.commands == before)
 }
+
+/// Hold bytes from the actual core adapter, revoke only this disposable login
+/// through the product API, then deliver the original correlated reply. The
+/// retained main login and native owners are independent and must remain usable.
+pub(super) async fn authorization(pair: &Pair<'_>, password: &str) -> Result<(), Failure> {
+    let mut reader = Http::new(pair.address)?;
+    reader.login(password).await?;
+    let path = format!("/api/code/sessions/{SESSION}/file?path={FILE}");
+    let before = pair.proxy.counts()?.commands;
+    let gate = pair.proxy.hold("coreFile")?;
+    let request = reader.call(Method::GET, &path, None);
+    tokio::pin!(request);
+    tokio::select! {
+        held = gate.held() => held?,
+        _ = &mut request => return Err(Failure::WrongObservation),
+    }
+    let logout = reader
+        .call(Method::POST, "/api/auth/logout", Some(json!({})))
+        .await?;
+    check(logout.status == StatusCode::OK)?;
+    gate.release();
+    let reply = request.await?;
+    check(
+        reply.status == StatusCode::UNAUTHORIZED
+            && reply.no_store
+            && !reply.has_etag
+            && reply.value.is_null(),
+    )?;
+    let mut expected = before;
+    *expected.entry("coreFile".into()).or_default() += 1;
+    check(pair.proxy.counts()?.commands == expected)?;
+    // Revoked credentials cannot admit another read or pick the other login.
+    reader.denied(Method::GET, &path, None).await?;
+    check(pair.proxy.counts()?.commands == expected)?;
+    let fresh = pair.http.get(&path).await?;
+    check(fresh["apiVersion"] == 1 && fresh["path"] == FILE)?;
+    *expected.entry("coreFile".into()).or_default() += 1;
+    check(pair.proxy.counts()?.commands == expected)
+}

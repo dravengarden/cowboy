@@ -13,6 +13,8 @@ pub(in super::super) struct Http {
 pub(in super::super) struct Reply {
     pub status: StatusCode,
     pub value: Value,
+    pub no_store: bool,
+    pub has_etag: bool,
     cookie: Option<String>,
 }
 
@@ -160,6 +162,11 @@ impl Http {
             Failure::WrongObservation
         })?;
         let status = response.status();
+        let no_store = response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .is_some_and(|value| value == "no-store");
+        let has_etag = response.headers().contains_key(header::ETAG);
         if core_file
             && status == StatusCode::GONE
             && (response
@@ -234,6 +241,8 @@ impl Http {
         Ok(Reply {
             status,
             value,
+            no_store,
+            has_etag,
             cookie: cookies.into_iter().next(),
         })
     }

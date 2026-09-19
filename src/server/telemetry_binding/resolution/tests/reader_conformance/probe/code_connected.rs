@@ -203,7 +203,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v7",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v8",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -235,7 +235,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 20;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 21;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
@@ -301,7 +301,13 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         installation::run(&pair, &seeded.install).await?;
         receipt.checks.push("authenticated_code_installation");
         navigation::configure(&pair, &seeded.install, &receipt.test_lsp)?;
-        exercise::run(&mut pair, &mut receipt.stage, &mut receipt.checks).await
+        exercise::run(
+            &mut pair,
+            &seeded.password,
+            &mut receipt.stage,
+            &mut receipt.checks,
+        )
+        .await
     })
     .await
     .unwrap_or(Err(Failure::Timeout));

@@ -69,7 +69,11 @@ async fn session_read_route_discards_buffered_responses_after_reconnect() {
             unreachable!()
         };
         let response = super::super::guarded_response(
-            || async { current(&hub, &control, &original) },
+            || async {
+                current(&hub, &control, &original)
+                    .then_some(())
+                    .ok_or(super::super::Denial::Context)
+            },
             || async {
                 let (_replacement, _new_commands) = connect(&control, "machine", false);
                 (status, [(header::ETAG, "\"old\"")], "old bytes").into_response()
@@ -159,7 +163,11 @@ async fn stale_session_read_route_cannot_start_a_reader_or_choose_local_io() {
     let (_new, mut commands) = connect(&control, "machine", true);
     let invoked = std::cell::Cell::new(false);
     let response = super::super::guarded_response(
-        || async { current(&hub, &control, &original) },
+        || async {
+            current(&hub, &control, &original)
+                .then_some(())
+                .ok_or(super::super::Denial::Context)
+        },
         || {
             invoked.set(true);
             async { "invalid".into_response() }

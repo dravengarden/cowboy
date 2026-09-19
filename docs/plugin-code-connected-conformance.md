@@ -45,7 +45,7 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Twenty checks cover (receipt schema `...code-buffer-connected-conformance/v7`,
+Twenty-one checks cover (receipt schema `...code-buffer-connected-conformance/v8`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -113,6 +113,12 @@ Historical v3 receipts cover only the first eleven checks:
     its source path is gone. The relay admits only the named fixture's typed
     file operation and a bounded page envelope. Historical v6 does not accept
     this Session-route extension; it does not prove filesystem/inode continuity.
+21. Hold one actual core file reply after admission under a separate disposable
+    product login. Log out that exact login through the product API, then
+    release the unchanged reply. Require `401/no-store/no-ETag`, no retry or
+    extra dispatch for the revoked request, and continued reading by the
+    independent original login. Historical v7 does not accept this original
+    credential continuation; no production cookie or database edit is used.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills

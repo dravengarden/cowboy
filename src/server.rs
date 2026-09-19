@@ -77,6 +77,7 @@ mod plugin_install;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
+mod product_continuation;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
@@ -15534,12 +15535,12 @@ struct CodeFileResponse {
 /// with `[]`.
 async fn api_search_files(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
@@ -15569,12 +15570,12 @@ async fn api_search_files(
 
 async fn api_code_search(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
@@ -15614,13 +15615,13 @@ async fn api_code_search(
 /// Git Changes remains scoped to the owning repository.
 async fn api_file_tree(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileTreeQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(20, 500);
         let path = query.path;
@@ -15824,12 +15825,12 @@ async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadSco
 
 async fn api_code_manifest(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd.clone();
         let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
             match ensure_zed_worktree_for_session(&state, &context).await {
@@ -15925,11 +15926,11 @@ async fn api_code_manifest(
 
 async fn api_code_changes(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let result = match remote_code_request(&state, &context.scope, CodeOperation::Changes).await
         {
@@ -15980,12 +15981,12 @@ async fn api_code_changes(
 
 async fn api_code_repository(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeRepositoryQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let after = query.after;
         let result = match remote_code_request(
@@ -16029,12 +16030,12 @@ async fn api_code_repository(
 
 async fn api_code_commit(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let oid = query.oid;
         let result = match remote_code_request(
@@ -16071,12 +16072,12 @@ async fn api_code_commit(
 
 async fn api_code_commit_diff(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitDiffQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let oid = query.oid;
         let path = query.path;
@@ -16126,12 +16127,12 @@ async fn api_code_commit_diff(
 
 async fn api_code_diff(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeDiffQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let owner = context.scope;
         if let Some(cursor) = query.cursor.as_deref() {
             let page = state.diff_snapshots.next_page(&owner, cursor).await;
@@ -16227,13 +16228,13 @@ async fn api_code_diff(
 
 async fn api_code_file(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         // Browser tokens bind the original context/path before local or remote I/O.
         let continuation =
             match state
@@ -16316,13 +16317,13 @@ async fn api_code_file(
 
 async fn api_code_file_raw(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let result = match remote_code_request(
             &state,

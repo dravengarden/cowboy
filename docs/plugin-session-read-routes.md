@@ -75,6 +75,7 @@ historical v6 receipts cannot accept it.
 No Plugin/SDK version, Machine wire protocol, native ABI, journal, SQL baseline
 or private policy changes. Only the Controller requires activation. This is not
 Machine-owned filesystem/inode identity, proof of native runtime continuity,
-principal authority, a state reader/writer lease, atomic HTTP delivery or
+principal authority (now separately checked at finite boundaries by
+[buffered read authority](plugin-code-read-authority.md)), a state reader/writer lease, atomic HTTP delivery or
 independent post-effect recovery. Those broader exits remain in the
 [completion ledger](plugin-refactor-completion.md).

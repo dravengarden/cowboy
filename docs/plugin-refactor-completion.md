@@ -506,6 +506,16 @@ and accepting a production effect are different milestones.
 
 ## Code work still required
 
+The [buffered read authority](plugin-code-read-authority.md) now attaches original
+product credentials and current Session visibility to those eleven readers.
+It shares credential continuation with Operator approval without granting
+Viewer/automation reads mutation authority. It discards cached, conditional,
+raw and error replies after observed logout/revocation or visibility loss.
+The connected v8 gate adds a held real core file reply and product-API logout;
+artifact acceptance and production activation must be recorded separately.
+This is finite request authorization, not continuous security-domain epochs,
+unobserved principal ABA protection or an atomic delivery fence.
+
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both

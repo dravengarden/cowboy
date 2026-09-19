@@ -122,7 +122,11 @@ async fn scope_change_after_projection_still_discards_a_file_page_response() {
         unreachable!()
     };
     let result = crate::server::code_reads::guarded_response(
-        || async { hub.code_scope_is_current(session.session()) },
+        || async {
+            hub.code_scope_is_current(session.session())
+                .then_some(())
+                .ok_or(crate::server::code_reads::Denial::Context)
+        },
         || async {
             let first = cache
                 .project(&owner, "a.txt", None, page("a.txt", 0, true))

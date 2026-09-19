@@ -98,6 +98,7 @@ pub(super) async fn cancel(
 
 pub(super) async fn run(
     pair: &mut Pair<'_>,
+    password: &str,
     stage: &mut &'static str,
     checks: &mut Vec<&'static str>,
 ) -> Result<(), Failure> {
@@ -127,6 +128,10 @@ pub(super) async fn run(
 
     *stage = "session_file_read_route";
     let file_continuation = read_routes::prepare(pair).await?;
+
+    *stage = "original_read_credential_revocation";
+    read_routes::authorization(pair, password).await?;
+    checks.push("held_real_core_file_reply_is_discarded_after_original_cookie_logout");
 
     *stage = "cancelled_open";
     let first = prepare(pair).await?;

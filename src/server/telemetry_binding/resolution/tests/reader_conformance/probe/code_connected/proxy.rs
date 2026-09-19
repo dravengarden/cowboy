@@ -184,6 +184,7 @@ impl Proxy {
         check(
             record.hold.is_none()
                 && [
+                    "coreFile",
                     "openBufferLease",
                     "readBufferLease",
                     "releaseBufferLease",
