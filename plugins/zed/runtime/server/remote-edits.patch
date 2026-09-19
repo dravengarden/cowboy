@@ -1,0 +1,28 @@
+diff --git a/crates/text/src/text.rs b/crates/text/src/text.rs
+--- a/crates/text/src/text.rs
++++ b/crates/text/src/text.rs
+@@ -1,2 +1,3 @@
+ mod anchor;
+ pub mod cowboy_acquisition;
++mod cowboy_full_offsets;
+diff --git a/crates/project/src/buffer_store.rs b/crates/project/src/buffer_store.rs
+--- a/crates/project/src/buffer_store.rs
++++ b/crates/project/src/buffer_store.rs
+@@ -1188,2 +1188,17 @@
+         let buffer_id = BufferId::new(payload.buffer_id)?;
++        // The private local server owns already-acquired native buffers. An
++        // unknown ID is not authority to retain an unbounded pending op queue.
++        // Remote replica bootstrap keeps its upstream ordering separately.
++        if this.read_with(&cx, |this, _| matches!(this.state, BufferStoreState::Local(_))) {
++            return this.update(&mut cx, |this, cx| {
++                let buffer = this.get(buffer_id)
++                    .context("private native update requires an open buffer")?;
++                anyhow::ensure!(payload.project_id == proto::REMOTE_SERVER_PROJECT_ID
++                    && this.cowboy_navigation_owner(envelope.sender_id, &buffer, cx), "private native update requires its original peer");
++                buffer.update(cx, |buffer, cx| {
++                    buffer.cowboy_apply_remote_updates(payload.operations, cx)
++                })?;
++                Ok(proto::Ack {})
++            });
++        }
+         let ops = payload

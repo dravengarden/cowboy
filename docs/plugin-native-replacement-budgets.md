@@ -75,6 +75,11 @@ General snapshot/serialization/parsing lifetimes, LSP side effects, worktree
 scanning and process-wide history bytes remain unaccepted. No Close ACK or
 observer cancellation proves all native resources have drained.
 
+The later [private remote-edit candidate](plugin-native-remote-edits.md) applies
+these finite retained-history limits to local-server incoming edit/undo batches
+too, with original-peer admission, exact duplicate checks and atomic causal/
+UTF-8 validation. It does not cover the other writer and global limits above.
+
 Required tests cover shared job capacity, loader/result lifetimes, cross-thread
 last-holder release, cancellation, source-entity and version ABA, inclusive byte
 and operation caps, undo retention, aggregate parts, dense/deferred histories,
