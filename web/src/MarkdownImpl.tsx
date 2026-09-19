@@ -730,7 +730,24 @@ const MarkdownImpl = memo(function MarkdownImpl({
       }
       const lang = className?.replace("language-", "") ?? "";
       if (lang.toLowerCase() === "mermaid") {
-        return <MermaidDiagram key={`mermaid:${text}`} source={text} />;
+        return (
+          <MermaidDiagram
+            key={`mermaid:${text}`}
+            source={text}
+            fallback={
+              <MarkdownCodeBoundary code={text} dark={dark}>
+                <CodeBlock
+                  code={text}
+                  lang={lang}
+                  codeTheme={codeTheme}
+                  dark={dark}
+                  centerCopy={centerCopy}
+                  touchWrap={touchWrap}
+                />
+              </MarkdownCodeBoundary>
+            }
+          />
+        );
       }
       return (
         <MarkdownCodeBoundary key={`${lang}:${text}`} code={text} dark={dark}>

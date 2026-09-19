@@ -7,8 +7,8 @@ import {
 } from "@mui/material";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
-import { useEffect, useId, useMemo, useState } from "react";
-import { type GalleryImage, ImageLightbox } from "@cowboy/app-shell";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
+import { type GalleryMedia, ImageLightbox } from "@cowboy/app-shell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
 let configuredTheme: MermaidConfig["theme"];
@@ -31,39 +31,48 @@ async function renderMermaid(
   return svg;
 }
 
-function svgDataUrl(markup: string): string {
-  const document = new DOMParser().parseFromString(markup, "image/svg+xml");
-  const root = document.documentElement;
-  if (root.localName === "svg") {
-    if (!root.getAttribute("xmlns")) {
-      root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    }
-    const viewBox = root.getAttribute("viewBox")?.trim().split(/[ ,]+/)
-      .map(Number);
-    if (
-      viewBox?.length === 4 && Number.isFinite(viewBox[2]) &&
-      Number.isFinite(viewBox[3]) && viewBox[2]! > 0 && viewBox[3]! > 0
-    ) {
-      // Mermaid emits width="100%" for the in-page responsive figure. An SVG
-      // loaded through <img> has no containing block for that percentage, so
-      // pin its intrinsic size to the diagram's own viewBox before the shared
-      // lightbox fits and zooms it.
-      root.setAttribute("width", String(Math.ceil(viewBox[2]!)));
-      root.setAttribute("height", String(Math.ceil(viewBox[3]!)));
-      root.style.removeProperty("max-width");
-      root.style.removeProperty("width");
-      root.style.removeProperty("height");
-    }
-    root.style.backgroundColor = "transparent";
-    markup = new XMLSerializer().serializeToString(root);
+function prepareInlineSvg(markup: string): string {
+  // Mermaid's HTML labels live in foreignObject nodes and follow HTML parsing
+  // rules (for example, <br> is not XML-self-closing). Parsing the result as
+  // image/svg+xml turns an otherwise valid diagram into a parsererror document.
+  // An inert template preserves those labels exactly as the successful in-page
+  // render does, while still letting us validate and size the SVG root.
+  const template = document.createElement("template");
+  template.innerHTML = markup;
+  const root = template.content.firstElementChild;
+  if (!(root instanceof SVGSVGElement)) {
+    throw new Error("Mermaid returned invalid SVG markup");
   }
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
+  const viewBox = root.getAttribute("viewBox")?.trim().split(/[ ,]+/)
+    .map(Number);
+  if (
+    viewBox?.length !== 4 ||
+    !Number.isFinite(viewBox[2]) || !Number.isFinite(viewBox[3]) ||
+    viewBox[2]! <= 0 || viewBox[3]! <= 0
+  ) {
+    throw new Error("Mermaid returned an invalid SVG viewport");
+  }
+  if (!root.getAttribute("xmlns")) {
+    root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  }
+  // Mermaid's responsive page SVG uses width="100%". Give the inline
+  // lightbox copy an intrinsic size from its viewBox so normal max-width /
+  // max-height containment can fit it without loading it as another image.
+  root.setAttribute("width", String(Math.ceil(viewBox[2]!)));
+  root.setAttribute("height", String(Math.ceil(viewBox[3]!)));
+  root.style.removeProperty("max-width");
+  root.style.removeProperty("width");
+  root.style.removeProperty("height");
+  root.style.backgroundColor = "transparent";
+  return root.outerHTML;
 }
 
 export function MermaidDiagram({
   source,
+  fallback,
 }: {
   source: string;
+  fallback?: ReactNode;
 }): React.JSX.Element {
   const reactId = useId().replaceAll(":", "") || "diagram";
   const theme = useTheme().palette.mode === "dark" ? "dark" : "neutral";
@@ -77,7 +86,8 @@ export function MermaidDiagram({
     setPreviewOpen(false);
     void renderMermaid(`cowboy-mermaid-${reactId}`, source, theme)
       .then((next) => {
-        if (!cancelled) setSvg(next);
+        const prepared = prepareInlineSvg(next);
+        if (!cancelled) setSvg(prepared);
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -86,10 +96,11 @@ export function MermaidDiagram({
       cancelled = true;
     };
   }, [reactId, source, theme]);
-  const previewImages = useMemo<GalleryImage[]>(() =>
+  const previewImages = useMemo<GalleryMedia[]>(() =>
     svg
       ? [{
-        src: svgDataUrl(svg),
+        kind: "inline-svg",
+        markup: svg,
         alt: "Mermaid diagram",
         themed: true,
       }]
@@ -99,22 +110,24 @@ export function MermaidDiagram({
   });
   if (failed) {
     return (
-      <Box sx={{ px: 2, py: 2 }}>
+      <Box data-mermaid-source-fallback sx={{ px: 2, py: 2 }}>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Couldn’t render this Mermaid diagram. Showing the source.
+          Mermaid preview unavailable. Showing the Markdown source.
         </Typography>
-        <Box
-          component="pre"
-          sx={{
-            m: 0,
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: "0.875rem",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
-          }}
-        >
-          {source}
-        </Box>
+        {fallback ?? (
+          <Box
+            component="pre"
+            sx={{
+              m: 0,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              fontSize: "0.875rem",
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {source}
+          </Box>
+        )}
       </Box>
     );
   }
