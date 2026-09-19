@@ -164,6 +164,16 @@ Controller `bc28e8b0` and unchanged cold/candidate roles. All pass. This is
 separate from the earlier settled snapshot and still not connected native
 acceptance of that newer Controller.
 
+Source and this record were pushed to remote `main` at
+`a797a884b6195746f1922db8f4d0519d5aae3e80`. The
+[website workflow](https://github.com/dravengarden/cowboy/actions/runs/35423258062)
+completed successfully for that exact source. At
+`2026-09-19T05:11:52.993Z`, the
+[public website list](https://dravengarden.github.io/cowboy/plugins.json)
+advertises Zed `1.20.0`; its complete response SHA-256 is
+`3d9917875c33aebdfab1e33ba68ccf1428d567c732d08ae9de71c519e8c423cf`.
+Website metadata is not installation authority.
+
 ## Controller activation is held
 
 The exact source Agent-publication gate fails against the primary Catalog
@@ -261,3 +271,4 @@ It contains no private key or raw Service environment.
 | `handoff-installation.json` | `418b86bc549c064fc95fde91b89f9e79ca9ce7d4d56f77b312a05ea6c30be6f6` |
 | `handoff-floor.json` | `558841f288aa0a6e8affb712e7c2ff16c6608175278972a6e7c4d65cf3ac66ee` |
 | `integrated-check.log` | `7c331efc0b9b6b2a4a3ab1317bc0797a90a376c71a13e997a087f7c570d3af3c` |
+| `website.json` | `6798d68e364d9b54171361f30a3e19f962387601335d96f74ac92422a3a2403a` |
