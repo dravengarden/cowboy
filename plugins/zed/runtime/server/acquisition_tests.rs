@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Admission follows actual initial loads/results and native buffer entities.
+//! Admission follows loads/results, native entities and retained text snapshots.
 use super::*;
 use fs::FakeFs;
 use gpui::TestAppContext;
@@ -165,6 +165,128 @@ async fn cowboy_acquisition_loaded_result_keeps_charge(cx: &mut TestAppContext) 
     drop(f);
     assert_eq!(used(cx), 1);
     drop(loaded);
+    assert_eq!(used(cx), 0);
+}
+
+#[gpui::test]
+async fn cowboy_acquisition_snapshots_keep_the_original_charge(cx: &mut TestAppContext) {
+    let f = Fixture::new("/cowboy", cx).await;
+    let buffer = f.open("a", cx).await.unwrap();
+    let language = buffer.read_with(cx, |buffer, _| buffer.snapshot());
+    let raw = buffer.read_with(cx, |buffer, _| buffer.text_snapshot());
+    let language_clone = language.clone();
+    let raw_clone = raw.clone();
+    assert_eq!(used(cx), 1);
+    drop(buffer);
+    assert_eq!(used(cx), 1);
+    f.empty_indexes(cx);
+    drop(f);
+    assert_eq!(language.text(), "kept🙂\n");
+    assert_eq!(raw.text(), "kept🙂\n");
+    drop((language, raw, language_clone));
+    assert_eq!(used(cx), 1);
+    // The last real owner may finish outside GPUI, after every entity is gone.
+    std::thread::spawn(move || {
+        assert_eq!(raw_clone.text(), "kept🙂\n");
+        drop(raw_clone);
+    })
+    .join()
+    .unwrap();
+    assert_eq!(used(cx), 0);
+}
+
+#[gpui::test]
+async fn cowboy_acquisition_detached_snapshots_fence_capacity(cx: &mut TestAppContext) {
+    let first = Fixture::new("/cowboy", cx).await;
+    let second = Fixture::new("/other", cx).await;
+    let mut snapshots = Vec::new();
+    for i in 0..budget::MAX_BUFFERS {
+        let f = if i % 2 == 0 { &first } else { &second };
+        let buffer = f.open("a", cx).await.unwrap();
+        snapshots.push(buffer.read_with(cx, |buffer, _| buffer.text_snapshot()));
+        drop(buffer);
+        assert_eq!(used(cx), i + 1);
+        f.empty_indexes(cx);
+    }
+    cx.run_until_parked();
+    let before_io = first.fs.metadata_call_count();
+    capacity(first.open("a", cx).await);
+    assert_eq!(first.fs.metadata_call_count(), before_io);
+    let last_holder = snapshots.pop().unwrap();
+    let alias = last_holder.clone();
+    drop(last_holder);
+    assert_eq!(used(cx), budget::MAX_BUFFERS);
+    capacity(second.open("a", cx).await);
+    drop(alias);
+    assert_eq!(used(cx), budget::MAX_BUFFERS - 1);
+    let independent = second.open("a", cx).await.unwrap();
+    assert_eq!(used(cx), budget::MAX_BUFFERS);
+    assert!(
+        snapshots
+            .iter()
+            .all(|snapshot| snapshot.text() == "kept🙂\n")
+    );
+    drop(snapshots);
+    assert_eq!(used(cx), 1);
+    drop(independent);
+    assert_eq!(used(cx), 0);
+}
+
+#[gpui::test]
+async fn cowboy_acquisition_background_snapshot_result_retains_charge(cx: &mut TestAppContext) {
+    let f = Fixture::new("/cowboy", cx).await;
+    let buffer = f.open("a", cx).await.unwrap();
+    let result = buffer.update(cx, |buffer, cx| {
+        buffer.snapshot_with_edits([(0..4, "preview")], cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(buffer.read_with(cx, |buffer, _| buffer.text()), "kept🙂\n");
+    drop(buffer);
+    assert_eq!(used(cx), 1);
+    f.empty_indexes(cx);
+    drop(f);
+    // A completed but unobserved result is still an actual owner.
+    assert_eq!(used(cx), 1);
+    let result = result.await;
+    assert_eq!(result.snapshot().text(), "preview🙂\n");
+    let snapshot = result.snapshot().text.clone();
+    drop(result);
+    assert_eq!(used(cx), 1);
+    drop(snapshot);
+    assert_eq!(used(cx), 0);
+}
+
+#[gpui::test]
+async fn cowboy_acquisition_cancelled_snapshot_observer_drains(cx: &mut TestAppContext) {
+    let f = Fixture::new("/cowboy", cx).await;
+    let buffer = f.open("a", cx).await.unwrap();
+    let result = buffer.update(cx, |buffer, cx| {
+        buffer.snapshot_with_edits([(0..4, "preview")], cx)
+    });
+    drop(result);
+    drop(buffer);
+    drop(f);
+    cx.run_until_parked();
+    assert_eq!(used(cx), 0);
+}
+
+#[gpui::test]
+fn cowboy_acquisition_text_branch_and_preview_keep_lineage(cx: &mut TestAppContext) {
+    let permit = cx.update(|cx| budget::acquire(cx).unwrap());
+    let mut buffer = text::Buffer::new(ReplicaId::LOCAL, BufferId::new(1).unwrap(), "original🙂\n");
+    buffer.cowboy_retain_acquisition(permit);
+    let branch = buffer.branch();
+    let unchanged = buffer.snapshot_with_edits(Vec::<(std::ops::Range<usize>, &str)>::new());
+    let edited = buffer.snapshot_with_edits([(0..8, "preview")]);
+    assert_eq!(buffer.text(), "original🙂\n");
+    assert_eq!(edited.snapshot.text(), "preview🙂\n");
+    drop(buffer);
+    assert_eq!(used(cx), 1);
+    let snapshot = branch.into_snapshot();
+    drop((edited, unchanged));
+    assert_eq!(used(cx), 1);
+    assert_eq!(snapshot.text(), "original🙂\n");
+    drop(snapshot);
     assert_eq!(used(cx), 0);
 }
 

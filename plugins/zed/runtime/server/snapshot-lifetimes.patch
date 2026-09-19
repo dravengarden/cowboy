@@ -1,0 +1,44 @@
+diff --git a/crates/text/src/text.rs b/crates/text/src/text.rs
+--- a/crates/text/src/text.rs
++++ b/crates/text/src/text.rs
+@@ -1,1 +1,2 @@
+ mod anchor;
++pub mod cowboy_acquisition;
+@@ -67,2 +68,4 @@
+     wait_for_version_txs: Vec<(clock::Global, oneshot::Sender<()>)>,
++    // Last holder cannot return capacity before this buffer's history drops.
++    cowboy_acquisition: Option<cowboy_acquisition::Permit>,
+ }
+@@ -124,2 +127,4 @@
+     line_ending: LineEnding,
++    // Last field: release only after this snapshot's retained text/trees.
++    cowboy_acquisition: Option<cowboy_acquisition::Permit>,
+ }
+@@ -818,2 +823,3 @@
+                 insertion_slices: Default::default(),
++                cowboy_acquisition: None,
+             },
+@@ -826,2 +832,3 @@
+             wait_for_version_txs: Default::default(),
++            cowboy_acquisition: None,
+         }
+@@ -833,1 +840,8 @@
++    pub fn cowboy_retain_acquisition(&mut self, permit: cowboy_acquisition::Permit) {
++        assert!(self.cowboy_acquisition.is_none());
++        assert!(self.snapshot.cowboy_acquisition.is_none());
++        self.snapshot.cowboy_acquisition = Some(permit.clone());
++        self.cowboy_acquisition = Some(permit);
++    }
++
+     pub fn snapshot(&self) -> &BufferSnapshot {
+@@ -842,2 +856,3 @@
+         Self {
++            cowboy_acquisition: self.cowboy_acquisition.clone(),
+             snapshot: self.snapshot.clone(),
+diff --git a/crates/language/src/buffer.rs b/crates/language/src/buffer.rs
+--- a/crates/language/src/buffer.rs
++++ b/crates/language/src/buffer.rs
+@@ -1158,2 +1158,3 @@
+         assert!(self.cowboy_acquisition.is_none());
++        self.text.cowboy_retain_acquisition(permit.clone());
+         self.cowboy_acquisition = Some(permit);

@@ -522,6 +522,11 @@ aggregate retained-history/background-effect limits in the Code row.
 The [acquisition lifetime candidate](plugin-native-acquisition-budgets.md) adds
 shared pre-load admission and actual-object release accounting across worktrees;
 retained history, detached snapshots and general background budgets remain open.
+The [text-snapshot lifetime candidate](plugin-native-snapshot-lifetimes.md)
+extends the original charge through native text snapshots, branches and
+background previews, including after BufferStore entity/index teardown.
+It addresses early release of acquisition capacity, not global snapshot
+counts, retained bytes/history or general background-effect budgets.
 The [sync/reload replacement candidate](plugin-native-replacement-budgets.md)
 adds shared actual-job/result lifetimes, bounded diff output and pre-mutation
 retained-history checks for those two writers. Its

@@ -54,6 +54,11 @@ and decoded input limits remain 4 MiB per file. A count cap cannot by itself
 bound retained CRDT history or the lifetime of snapshots held after an entity
 is destroyed. These need separate pre-effect/resource-lifetime designs.
 
+The later [text-snapshot lifetime candidate](plugin-native-snapshot-lifetimes.md)
+retains this original acquisition charge through native text snapshots,
+branches and background previews. It closes early capacity return after the
+language entity dies, not global snapshot counts, retained bytes or history.
+
 Required native tests cover shared cross-store capacity, reuse at saturation,
 pending-path deduplication and lost observers, untitled cancellation, failed
 loads, loaded-result retention, store teardown, cross-thread shared charges,
