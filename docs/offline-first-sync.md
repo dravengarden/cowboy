@@ -296,14 +296,17 @@ evidence of failure when the socket is down.
 
 ### Mobile
 
-**Status pill.** A compact pill centred under the system clearance inside
-the top bar, paint-only, no transform, no shadow, present only when the phase
-is not `live` and after a 1.5 s debounce so a foreground blip never flashes.
-Tapping it opens an `ObsidianSheet` with the phase, last synced time, queued
-and held counts grouped by session, and the actions Retry now, Reload, and
-Update when ready. The full-width banner is retained for decisions only:
-sign-in required, dataset changed, update ready. `MobileConnectionBanner`
-keeps its explicit Update tap.
+**Status pill.** The one connection indicator on the Agent surface: a
+tinted pill centred under the system clearance in the same language as the
+transcript's activity pills, paint-only, no transform, no shadow, present
+only when the phase is not `live` and after a 1.5 s debounce so a foreground
+blip never flashes. The transcript tail paints nothing about transport (the
+former "Reconnecting…" tail row is gone) and the Composer never reads it.
+Tapping the pill opens an `ObsidianSheet` with the phase, last synced time,
+queued count, the sessions that hold unsent rows with an Open action, and
+the actions Retry now, Reload, and Update when ready. The full-width banner
+is retained for decisions only: sign-in required, dataset changed, update
+ready. `MobileConnectionBanner` keeps its explicit Update tap.
 
 **Transcript.** A cached tail shows a one-line caption above the newest row:
 "Cached · updated 3 min ago". It fades when the session becomes `live`. A
@@ -316,14 +319,23 @@ Queued rows add the authored time ("Written 14:02 · sends when online").
 composer) and Discard. `rejected` rows show the server reason and the
 actions that fit it (see the conflict catalog).
 
-**Sessions drawer.** A row with pending obligations shows a small badge with
-the count. The drawer header shows "Last synced 3 min ago" while not `live`.
-Sessions without a cached tail show a subdued "Not cached" glyph offline so
-the user knows before tapping.
+**Sessions drawer.** Connection state is app-level, not per session, so the
+floating pill hides while the drawer is open and the drawer carries its own
+inline line at the top of the list: "Reconnecting… · list from 3 min ago",
+tappable into the same sheet. Row status dots keep meaning agent status. A
+row with pending or held rows shows a small badge with the count. Sessions
+without a cached tail show a subdued "Not cached" glyph while the Hub is not
+live so the user knows before tapping.
 
-**Reconnect.** The pill turns green "Synced" for 2 s, then disappears. If
-any row is `held` or `rejected`, the pill stays as "2 messages need
-attention" until they are resolved; tapping it jumps to the first one.
+**Reconnect.** The pill turns green "Synced" for 2 s, then disappears.
+
+**Attention.** Held or rejected rows outside the opened session raise the
+pill as "2 messages need attention"; rows of the opened session are not
+counted because their own chrome already offers Retry, Return and Discard.
+Tapping opens the sheet, which lists the sessions and opens one on tap.
+"Hide reminder" acknowledges exactly the rows held now, so a resolved row
+never re-raises the pill for the rest, while a new failure does. The
+acknowledgement persists across reloads.
 
 ### Desktop
 
@@ -546,7 +558,13 @@ Phase 3 shipped in part with the same release (service worker
 - Sessions list: a paint-only badge counts a session's unsent or held rows
   (`useSessionObligations`), a "not cached" glyph marks sessions without a
   cached tail while the Hub is not live (`useCachedTailSessions`), and the
-  Mobile drawer shows "Last synced …" once the presentation debounce passes.
+  Mobile drawer shows its own tappable connection line once the presentation
+  debounce passes while the floating pill hides.
+- One indicator per surface (service worker `cowboy-v1731`): the transcript
+  tail's "Reconnecting…" row is removed on both products; the Mobile pill is
+  restyled to the transcript pills' tinted language; "needs attention"
+  excludes the opened session, lists sessions with an Open action, and can
+  be hidden until a new row is held (`useHeldDeliveries`, `attentionCount`).
 
 Not yet implemented: the forward bootstrap cursor with `transcript_epoch`
 (a plain `after_seq` cursor is unsafe while canonical rows such as tool calls

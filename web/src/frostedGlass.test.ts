@@ -32,9 +32,7 @@ const geometrySource = await Deno.readTextFile(
 const turnStatusSource = await Deno.readTextFile(
   new URL("./TurnStatusOverlay.tsx", import.meta.url),
 );
-const transcriptActivitySource = await Deno.readTextFile(
-  new URL("./TranscriptTurnActivity.tsx", import.meta.url),
-);
+
 const permissionSource = await Deno.readTextFile(
   new URL("./PermissionOverlay.tsx", import.meta.url),
 );
@@ -118,37 +116,25 @@ Deno.test("the Explore page dock yields to the focused mobile composer", () => {
   );
 });
 
-Deno.test("reconnect activity is transcript-owned and judge UI stays retired", () => {
+Deno.test("transport state stays out of the transcript tail and judge UI stays retired", () => {
   assertEquals(TURN_STATUS_PILL_MIN_HEIGHT, 36);
-  assertEquals(
-    transcriptActivitySource.includes('data-transcript-turn-activity="reconnecting"'),
-    true,
-  );
-  assertEquals(
-    transcriptActivitySource.includes("TranscriptReconnectingActivity"),
-    true,
-  );
-  assertEquals(
-    transcriptActivitySource.includes("TURN_STATUS_PILL_MIN_HEIGHT"),
-    true,
-  );
   assertEquals(
     turnStatusSource.includes("TURN_STATUS_PILL_MIN_HEIGHT"),
     true,
   );
+  // The Mobile sync pill and the Desktop status line own reconnection
+  // (docs/offline-first-sync.md §4); the transcript paints no tail row for it.
   assertEquals(
-    transcriptActivitySource.includes("data-composer-stack-slot"),
+    transcriptSource.includes('data-transcript-tail-row="reconnecting"'),
     false,
   );
+  assertEquals(transcriptSource.includes("TranscriptReconnectingActivity"), false);
+  assertEquals(transcriptSource.includes("showReconnecting"), false);
+  assertEquals(turnStatusSource.includes('label: "Reconnecting…"'), false);
   assertEquals(
     transcriptSource.includes('data-transcript-tail-row="judging"'),
     false,
   );
-  assertEquals(
-    transcriptSource.includes('data-transcript-tail-row="reconnecting"'),
-    true,
-  );
-  assertEquals(turnStatusSource.includes('label: "Reconnecting…"'), false);
   assertEquals(transcriptSource.includes("showJudging && ("), false);
   assertEquals(
     transcriptSource.includes("<TranscriptJudgingActivity />"),
@@ -159,7 +145,6 @@ Deno.test("reconnect activity is transcript-owned and judge UI stays retired", (
     true,
   );
   assertEquals(appSource.includes("judging={judging}"), false);
-  assertEquals(transcriptActivitySource.includes("Judging…"), false);
 });
 
 Deno.test("mobile composer chrome restores resting frost without a swipe filter", () => {

@@ -123,7 +123,7 @@ import { PromptOriginNote } from "./PromptOriginNote";
 import { TranscriptFileChip } from "./TranscriptFileChip";
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
-import { TranscriptReconnectingActivity } from "./TranscriptTurnActivity";
+
 import {
   canonicalTimeline,
   discardMessage,
@@ -3640,18 +3640,9 @@ export function Transcript({
   // spinner is wrong; the ConnectionBanner conveys the disconnect and reconnect
   // re-broadcasts the real status.
   const working = connected && busy && liveTail;
-  // Reconnection is transient transport activity, not Composer state. Keep its
-  // debounced indication at the live Transcript tail so Plan/Pending/Input do
-  // not move when the socket reconnects.
-  const [showReconnecting, setShowReconnecting] = useState(false);
-  useEffect(() => {
-    if (connected || !liveTail) {
-      setShowReconnecting(false);
-      return undefined;
-    }
-    const timer = globalThis.setTimeout(() => setShowReconnecting(true), 600);
-    return () => globalThis.clearTimeout(timer);
-  }, [connected, liveTail]);
+  // Reconnection is app-level transport state, not transcript activity. The
+  // Mobile sync pill and the Desktop status line own it; nothing about it is
+  // painted at the transcript tail (docs/offline-first-sync.md §4).
   // No messages yet + a LIVE session (a freshly created session is Running-idle,
   // waiting for the first prompt) → show the "send a message to start" empty state
   // instead of a blank wall. Non-live empties (exited/interrupted/crashed) are
@@ -5622,11 +5613,7 @@ export function Transcript({
                   }}
                 />
               )}
-              {showReconnecting && (
-                <Box data-transcript-tail-row="reconnecting" sx={{ py: 0.625 }}>
-                  <TranscriptReconnectingActivity />
-                </Box>
-              )}
+
               {
                 /* Still-waiting row: after QUIET_BADGE_MIN of no turn activity
                 (timeline growth or live terminal output) on a working turn,

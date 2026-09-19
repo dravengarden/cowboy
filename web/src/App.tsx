@@ -98,6 +98,7 @@ import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedba
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
 import { sessionDisplayDirectory, sessionProjectLabel } from "./sessionProject";
+import { PICK_SESSION_EVENT, pickSessionDetail } from "./sessionPickRequest";
 import {
     SessionCacheGlyph,
     SessionObligationBadge,
@@ -3109,6 +3110,18 @@ export function App({
     useEffect(() => {
         if (active) openSession(active.id);
     }, [active?.id]);
+
+    // A surface outside this app (the Mobile connection sheet) opens a session
+    // through the same path as a sessions-list tap, so drawer settling and the
+    // persisted active id stay owned here.
+    useEffect(() => {
+        const onPickRequest = (event: Event): void => {
+            const id = pickSessionDetail(event);
+            if (id !== null) pick(id);
+        };
+        globalThis.addEventListener(PICK_SESSION_EVENT, onPickRequest);
+        return () => globalThis.removeEventListener(PICK_SESSION_EVENT, onPickRequest);
+    });
 
     function pick(id: string): void {
         globalThis.dispatchEvent(

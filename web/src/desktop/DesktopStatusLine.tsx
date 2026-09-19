@@ -2,8 +2,14 @@ import { alpha, Box, ButtonBase, Divider, Stack, Tooltip } from "@mui/material";
 import { useExploreSessionState } from "../explore/exploreStore";
 import type { Status } from "../protocol";
 import { useEffect, useState } from "react";
-import { retrySyncNow, useSyncStatus } from "../store";
-import { syncStatusDetail, syncStatusLabel, syncStatusTone } from "../syncStatus";
+import { retrySyncNow, useHeldDeliveries, useSyncStatus } from "../store";
+import {
+  attentionCount,
+  syncStatusDetail,
+  syncStatusLabel,
+  syncStatusTone,
+  withHeld,
+} from "../syncStatus";
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useComposerSourceMode } from "../composerSourceMode";
@@ -63,6 +69,9 @@ interface RegionHint {
   label: string;
   availability?: ShortcutAvailability;
 }
+
+// Desktop keeps the segment informational; only Mobile offers "Hide reminder".
+const NO_ACKNOWLEDGED: ReadonlySet<string> = new Set();
 
 const HISTORY_HINTS: RegionHint[] = [
   { keys: "J/K", label: "Scroll" },
@@ -166,7 +175,11 @@ export function DesktopStatusLine({
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
   const projection = useExploreSessionState(sessionId).projection;
-  const sync = useSyncStatus();
+  const rawSync = useSyncStatus();
+  const held = useHeldDeliveries();
+  // Held rows of this pane's session already show their failure in place;
+  // the segment points only at the ones the user is not looking at.
+  const sync = withHeld(rawSync, attentionCount(held.sessions, sessionId, NO_ACKNOWLEDGED));
   const syncLive = sync.phase === "live" && sync.outbox.held === 0;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

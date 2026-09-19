@@ -1,5 +1,6 @@
 import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import {
+  attentionCount,
   deriveSyncPhase,
   deriveSyncStatus,
   ordinal,
@@ -9,6 +10,7 @@ import {
   SYNC_RECOVERED_FLASH_MS,
   syncStatusLabel,
   type SyncStatusInput,
+  withHeld,
 } from "./syncStatus.ts";
 
 const base: SyncStatusInput = {
@@ -129,4 +131,24 @@ Deno.test("presentedSyncPhase debounces blips and flashes recovery once", () => 
   );
   const held = deriveSyncStatus({ ...base, outbox: { pending: 0, held: 1, sessions: ["a"] } }, live, start + 9000);
   assertEquals(presentedSyncPhase(held, null, undefined, start + 9000), "live");
+});
+
+Deno.test("attention counts held rows outside the opened session that were not dismissed", () => {
+  const sessions = [
+    { id: "a", ids: ["m1", "m2"] },
+    { id: "b", ids: ["m3"] },
+  ];
+  assertEquals(attentionCount(sessions, "a", new Set()), 1);
+  assertEquals(attentionCount(sessions, "c", new Set()), 3);
+  assertEquals(attentionCount(sessions, null, new Set(["m1", "m3"])), 1);
+  assertEquals(attentionCount(sessions, "b", new Set(["m1", "m2"])), 0);
+  assertEquals(attentionCount([], "a", new Set()), 0);
+});
+
+Deno.test("withHeld keeps identity when the held count is unchanged", () => {
+  const status = deriveSyncStatus(base, undefined, 1_000);
+  assertStrictEquals(withHeld(status, status.outbox.held), status);
+  const adjusted = withHeld(status, 2);
+  assertEquals(adjusted.outbox.held, 2);
+  assertEquals(adjusted.phase, status.phase);
 });

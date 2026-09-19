@@ -2626,18 +2626,31 @@ export interface SessionObligations {
 const NO_OBLIGATIONS: SessionObligations = { pending: 0, held: 0 };
 let obligationsBySession = new Map<string, SessionObligations>();
 
+/** Held rows grouped by session, with one key naming the whole set. */
+export interface HeldDeliverySummary {
+  readonly key: string;
+  readonly sessions: readonly { readonly id: string; readonly ids: readonly string[] }[];
+}
+
+let heldDeliveries: HeldDeliverySummary = { key: "", sessions: [] };
+
 /** Recount every session's obligations; per-session identity survives when
  * the counts did not change, so row subscribers do not re-render. */
 function refreshObligations(): boolean {
   const next = new Map<string, SessionObligations>();
+  const heldSessions: { id: string; ids: string[] }[] = [];
   let changed = false;
   for (const [sessionId, client] of qClients) {
     let pending = 0;
     let held = 0;
+    const heldIds: string[] = [];
     for (const mutation of client.pending()) {
-      if (qStatus.get(mutation.id) === "failed") held += 1;
-      else pending += 1;
+      if (qStatus.get(mutation.id) === "failed") {
+        held += 1;
+        heldIds.push(mutation.id);
+      } else pending += 1;
     }
+    if (heldIds.length > 0) heldSessions.push({ id: sessionId, ids: heldIds.sort() });
     if (pending + held === 0) continue;
     const previous = obligationsBySession.get(sessionId);
     if (previous !== undefined && previous.pending === pending && previous.held === held) {
@@ -2649,7 +2662,18 @@ function refreshObligations(): boolean {
   }
   if (next.size !== obligationsBySession.size) changed = true;
   obligationsBySession = next;
+  heldSessions.sort((left, right) => left.id.localeCompare(right.id));
+  const key = heldSessions.map((entry) => `${entry.id}:${entry.ids.join(",")}`).join("\n");
+  if (key !== heldDeliveries.key) {
+    heldDeliveries = { key, sessions: heldSessions };
+    changed = true;
+  }
   return changed;
+}
+
+/** Which sessions hold rows that need the user, for the attention surfaces. */
+export function useHeldDeliveries(): HeldDeliverySummary {
+  return useSyncExternalStore(subscribeSyncStatus, () => heldDeliveries, () => heldDeliveries);
 }
 
 function outboxSummary(): SyncStatusInput["outbox"] {
