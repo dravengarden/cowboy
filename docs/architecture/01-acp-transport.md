@@ -86,6 +86,15 @@ flowchart TB
   `session/load`; only that compatibility path suppresses replayed updates
   because Cowboy already holds the event log. If neither capability exists,
   startup fails closed instead of silently replacing the native thread.
+- **Resumability** is narrower than having an id. Providers persist a native
+  thread lazily: `session/new` returns an id before any transcript or rollout
+  exists, so a thread becomes resumable only once a prompt has started in it
+  (or it was itself resumed). The Controller derives this from its durable log
+  (`Hub::agent_session_id_for_resume`); the worker and Machine broker carry it
+  as `WorkerSnapshot::native_thread_materialized`, and every Machine-initiated
+  relaunch (generation cutover, fallback, Provider roll) resumes only
+  `resumable_agent_session_id()`. An empty context therefore reopens with
+  `session/new` rather than crashing on a strict resume.
 - **Startup liveness** is bounded per phase (`initialize`, session
   establishment, configuration). Only a pre-initialize stall is retried; an
   ambiguous session operation is surfaced once with its actual method name.

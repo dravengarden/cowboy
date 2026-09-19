@@ -5458,6 +5458,7 @@ mod runtime_reconciliation_tests {
             launch: None,
             state: WorkerState::Busy,
             agent_session_id: Some("agent-1".to_owned()),
+            native_thread_materialized: None,
             current_turn_id: Some("turn-1".to_owned()),
             last_runtime_seq: 7,
             pending_permissions: Vec::new(),

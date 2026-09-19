@@ -446,6 +446,7 @@ impl Broker {
                     .copied()
                     .unwrap_or(WorkerState::Starting),
                 agent_session_id: session.agent_session_id,
+                native_thread_materialized: None,
                 current_turn_id: None,
                 last_runtime_seq: 0,
                 pending_permissions: Vec::new(),
@@ -912,6 +913,7 @@ impl Broker {
                     launch: None,
                     state: crate::runtime_wire::WorkerState::Starting,
                     agent_session_id: None,
+                    native_thread_materialized: None,
                     current_turn_id: None,
                     last_runtime_seq: 0,
                     pending_permissions: Vec::new(),
@@ -1653,6 +1655,11 @@ impl Broker {
             .filter(|(_, session)| session.provider == provider)
             .map(|(session_id, session)| (session_id.clone(), session.clone()))
             .collect();
+        tracing::info!(
+            provider,
+            sessions = sessions.len(),
+            "rolling Provider workers"
+        );
         for (session_id, session) in sessions {
             self.revoke_cache_protection(&session, &session_id, "provider_roll");
             let snapshot = if let Some(worker) = self.workers.lock().get_mut(&session_id) {
@@ -1686,16 +1693,11 @@ impl Broker {
             return Vec::new();
         }
         worker.snapshot.last_runtime_seq = runtime_seq;
+        worker.snapshot.observe_native_thread(event);
         match event {
-            RuntimeEvent::Ready { agent_session_id } => {
+            RuntimeEvent::Ready { .. } => {
                 worker.snapshot.state = WorkerState::Running;
                 self.startup_failures.lock().remove(session_id);
-                if agent_session_id.is_some() {
-                    worker
-                        .snapshot
-                        .agent_session_id
-                        .clone_from(agent_session_id);
-                }
             }
             RuntimeEvent::Status { state, detail } => {
                 worker.snapshot.state = *state;
@@ -1718,9 +1720,6 @@ impl Broker {
                     worker.snapshot.current_turn_id = None;
                 }
             }
-            RuntimeEvent::AgentSessionId { agent_session_id } => {
-                worker.snapshot.agent_session_id = Some(agent_session_id.clone());
-            }
             RuntimeEvent::PermissionRequest { request_id, .. } => {
                 if !worker.snapshot.pending_permissions.contains(request_id) {
                     worker.snapshot.pending_permissions.push(request_id.clone());
@@ -1739,7 +1738,8 @@ impl Broker {
                 worker.snapshot.context_used = Some(*used);
                 worker.snapshot.context_size = Some(*size);
             }
-            RuntimeEvent::Update { .. }
+            RuntimeEvent::AgentSessionId { .. }
+            | RuntimeEvent::Update { .. }
             | RuntimeEvent::ScheduleWakeup { .. }
             | RuntimeEvent::UndeliveredPrompt { .. }
             | RuntimeEvent::CommandRejected { .. }
@@ -1843,7 +1843,9 @@ impl Broker {
         let Some(mut session) = self.sessions.lock().get(&session_id).cloned() else {
             return;
         };
-        session.agent_session_id = peer.snapshot.agent_session_id;
+        // A thread that never received a prompt has no Provider transcript;
+        // the replacement opens a fresh one instead of a strict resume.
+        session.agent_session_id = peer.snapshot.resumable_agent_session_id();
         session.generation = self.desired_generation.lock().clone();
         session.fallback_for = None;
         self.session_states
@@ -3470,6 +3472,104 @@ mod tests {
         );
     }
 
+    /// Roll an idle worker whose runtime events are `events` and return the
+    /// native thread its replacement launch would resume.
+    async fn provider_roll_resume_after(events: &[RuntimeEvent]) -> Option<String> {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees"),
+            worker_ready_timeout: Duration::from_millis(10),
+        }));
+        broker.sessions.lock().insert(
+            "sess-1".to_owned(),
+            StartSession {
+                session_id: "sess-1".to_owned(),
+                provider: "claude-code".to_owned(),
+                provider_version: String::new(),
+                provider_generation_digest: String::new(),
+                provider_auth_generation: None,
+                provider_behavior: None,
+                cwd: "/work".to_owned(),
+                agent_session_id: None,
+                system: false,
+                context_window: None,
+                auto_compact_token_limit: None,
+                cache_protection: None,
+                generation: "gen-1".to_owned(),
+                fallback_for: None,
+                adopt_only: false,
+            },
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-1".to_owned(),
+                epoch: "epoch-1".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 1,
+                tx,
+            })
+            .expect("register worker");
+        for (seq, event) in (1..).zip(events) {
+            broker.update_from_event("sess-1", 1, seq, event);
+        }
+        broker
+            .workers
+            .lock()
+            .get_mut("sess-1")
+            .unwrap()
+            .snapshot
+            .state = WorkerState::Running;
+
+        broker.roll_provider("claude-code");
+        let peer = broker.workers.lock().remove("sess-1").expect("worker");
+        broker
+            .worker_disconnected("sess-1".to_owned(), peer, None)
+            .await;
+        broker
+            .sessions
+            .lock()
+            .get("sess-1")
+            .and_then(|session| session.agent_session_id.clone())
+    }
+
+    #[tokio::test]
+    async fn provider_roll_opens_a_fresh_thread_for_a_session_without_a_prompt() {
+        // Claude and Codex persist a native thread only at its first prompt;
+        // a strict resume of a cleared, still-empty session would crash it.
+        let resume = provider_roll_resume_after(&[RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-empty".to_owned(),
+        }])
+        .await;
+        assert_eq!(resume, None);
+    }
+
+    #[tokio::test]
+    async fn provider_roll_resumes_a_thread_that_received_a_prompt() {
+        let resume = provider_roll_resume_after(&[
+            RuntimeEvent::AgentSessionId {
+                agent_session_id: "thread-used".to_owned(),
+            },
+            RuntimeEvent::TurnStarted {
+                turn_id: "turn-1".to_owned(),
+                command_id: "command-1".to_owned(),
+            },
+            RuntimeEvent::TurnEnded {
+                turn_id: "turn-1".to_owned(),
+                stop_reason: "end_turn".to_owned(),
+            },
+        ])
+        .await;
+        assert_eq!(resume.as_deref(), Some("thread-used"));
+    }
+
     #[tokio::test]
     async fn heartbeat_sweep_separates_broker_read_backlog_from_silent_workers() {
         let broker = Arc::new(Broker::new(MachineBrokerArgs {
@@ -3612,6 +3712,7 @@ mod tests {
                 launch: Some(launch.clone()),
                 state: WorkerState::Busy,
                 agent_session_id: Some("agent-1".to_owned()),
+                native_thread_materialized: None,
                 current_turn_id: Some("turn-1".to_owned()),
                 last_runtime_seq: 10,
                 pending_permissions: Vec::new(),
@@ -5049,6 +5150,7 @@ mod tests {
                     launch: None,
                     state: WorkerState::Busy,
                     agent_session_id: Some("agent-1".to_owned()),
+                    native_thread_materialized: None,
                     current_turn_id: Some("turn-1".to_owned()),
                     last_runtime_seq: 1,
                     pending_permissions: Vec::new(),

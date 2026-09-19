@@ -57,6 +57,13 @@ pub struct WorkerSnapshot {
     pub state: WorkerState,
     #[serde(default)]
     pub agent_session_id: Option<String>,
+    /// Whether the Provider has durably materialized `agent_session_id`.
+    /// Providers persist a native thread lazily: `session/new` returns an id
+    /// before any transcript or rollout exists, so resuming it before the
+    /// first prompt fails with "Resource not found". `None` comes from a
+    /// worker that predates this fact and keeps treating the id as resumable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_thread_materialized: Option<bool>,
     #[serde(default)]
     pub current_turn_id: Option<String>,
     #[serde(default)]
@@ -83,6 +90,49 @@ pub struct WorkerSnapshot {
 }
 
 impl WorkerSnapshot {
+    /// The native thread a replacement worker may pass to `--resume`.
+    ///
+    /// Every Machine-initiated relaunch (generation cutover, fallback,
+    /// Provider roll) must use this rather than `agent_session_id`: a thread
+    /// that never received a prompt has nothing to resume, and a strict resume
+    /// of it would crash a session whose context is intentionally empty. The
+    /// Controller applies the same rule to its durable log through
+    /// `Hub::agent_session_id_for_resume`.
+    #[must_use]
+    pub fn resumable_agent_session_id(&self) -> Option<String> {
+        if self.native_thread_materialized == Some(false) {
+            return None;
+        }
+        self.agent_session_id.clone()
+    }
+
+    /// Apply a runtime event's effect on native-thread identity. The worker
+    /// and its Machine broker mirror both use this so their snapshots cannot
+    /// disagree about resumability.
+    pub fn observe_native_thread(&mut self, event: &RuntimeEvent) {
+        match event {
+            RuntimeEvent::Ready {
+                agent_session_id: Some(agent_session_id),
+            } => {
+                self.agent_session_id = Some(agent_session_id.clone());
+            }
+            RuntimeEvent::AgentSessionId { agent_session_id } => {
+                if self.agent_session_id.as_deref() != Some(agent_session_id.as_str()) {
+                    // `session/new` announced a fresh thread; the Provider
+                    // writes nothing for it until the first prompt.
+                    self.native_thread_materialized = Some(false);
+                }
+                self.agent_session_id = Some(agent_session_id.clone());
+            }
+            RuntimeEvent::TurnStarted { .. } if self.agent_session_id.is_some() => {
+                // Drain waits for the turn to end, and a Provider records the
+                // user message before it answers.
+                self.native_thread_materialized = Some(true);
+            }
+            _ => {}
+        }
+    }
+
     /// Whether this snapshot came from a connected worker rather than the
     /// Machine broker's launch-registry placeholder.
     ///
@@ -550,6 +600,72 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn native_snapshot(resume: Option<&str>, materialized: Option<bool>) -> WorkerSnapshot {
+        WorkerSnapshot {
+            session_id: "s".to_owned(),
+            worker_epoch: "epoch".to_owned(),
+            generation: "gen".to_owned(),
+            executable: None,
+            launch: None,
+            state: WorkerState::Running,
+            agent_session_id: resume.map(str::to_owned),
+            native_thread_materialized: materialized,
+            current_turn_id: None,
+            last_runtime_seq: 0,
+            pending_permissions: Vec::new(),
+            config_options: None,
+            context_used: None,
+            context_size: None,
+            pending_prompt_count: 0,
+            drain_requested: false,
+            exit_detail: None,
+        }
+    }
+
+    #[test]
+    fn a_native_thread_is_resumable_only_after_a_prompt_or_a_resume() {
+        let mut fresh = native_snapshot(None, Some(false));
+        fresh.observe_native_thread(&RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-new".to_owned(),
+        });
+        assert_eq!(fresh.agent_session_id.as_deref(), Some("thread-new"));
+        assert_eq!(fresh.resumable_agent_session_id(), None);
+
+        fresh.observe_native_thread(&RuntimeEvent::TurnStarted {
+            turn_id: "turn-1".to_owned(),
+            command_id: "command-1".to_owned(),
+        });
+        assert_eq!(
+            fresh.resumable_agent_session_id().as_deref(),
+            Some("thread-new")
+        );
+
+        let mut resumed = native_snapshot(Some("thread-old"), Some(true));
+        resumed.observe_native_thread(&RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-old".to_owned(),
+        });
+        assert_eq!(
+            resumed.resumable_agent_session_id().as_deref(),
+            Some("thread-old")
+        );
+        resumed.observe_native_thread(&RuntimeEvent::AgentSessionId {
+            agent_session_id: "thread-cleared".to_owned(),
+        });
+        assert_eq!(resumed.resumable_agent_session_id(), None);
+    }
+
+    #[test]
+    fn a_legacy_snapshot_keeps_its_native_thread_resumable() {
+        let legacy = serde_json::to_value(native_snapshot(Some("thread-1"), None)).unwrap();
+        assert!(legacy.get("native_thread_materialized").is_none());
+        let decoded: WorkerSnapshot = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.native_thread_materialized, None);
+        assert_eq!(
+            decoded.resumable_agent_session_id().as_deref(),
+            Some("thread-1")
+        );
+    }
 
     #[test]
     fn telemetry_metadata_is_optional_bounded_and_cannot_reject_a_valid_command() {
