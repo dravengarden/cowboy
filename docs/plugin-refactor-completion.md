@@ -76,6 +76,17 @@ and accepting a production effect are different milestones.
   passed both complete gates and is published and activated with 16 workers
   retained; its independently built core adapter passed seven actual disposable
   process cases without upgrading a resident Machine.
+- [Continuous Workspace read scopes](plugin-workspace-read-scopes.md) replace
+  reconstructible snapshots with opaque per-root authenticated connection
+  observations. Removal/path ABA, ambiguous IDs, budget refusal and same-epoch
+  reconnect cannot revive original requests, buffered replies or file/diff
+  cursors; unchanged roots preserve continuity independently. The
+  [Controller release](releases/plugin-workspace-read-scopes-2026-09-19.md)
+  passes 14 new regressions, the complete gate, the existing 19-check connected
+  Code chain and actual 94-release Catalog/host floors. It is published and
+  activated with all 16 observed workers retained. This is Controller-observed
+  read continuity, not Machine-owned filesystem identity, a state lease,
+  general graph execution or post-effect restoration.
 - Zed Session operations now retain their original authenticated Machine
   connection or connected local Unix peer through worktree readiness and buffer
   open. Same-epoch reconnect and pathname replacement cannot redirect the
@@ -501,6 +512,8 @@ buffered responses and file/diff continuations. Observed removal/path ABA,
 duplicate IDs and same-epoch reconnection cannot revive old reads. This is a
 Controller observation fence, not the remaining Machine-owned filesystem,
 Session/security-domain identity or state reader/writer lease contract.
+Its [accepted Controller release](releases/plugin-workspace-read-scopes-2026-09-19.md)
+is active; those broader P0/P3 requirements remain open below.
 
 The [ordinary Review source consumer](plugin-review-owned-consumer.md) now selects
 owned language/Outline/hover and explicit refresh preparation from a protocol-20
