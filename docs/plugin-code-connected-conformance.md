@@ -182,3 +182,6 @@ The [read-authority rollout](releases/plugin-code-read-authority-2026-09-19.md)
 adds v8 check 21, rejects the prior Controller's post-logout HTTP 200 and accepts
 the corrected immutable Controller's full chain. Its component activation and
 later independent Provider-auth rotation are recorded separately.
+The [legacy-language rollout](releases/plugin-language-read-authority-2026-09-19.md)
+adds v9 checks 22–25, rejects the old artifact's post-logout language reply and
+accepts the corrected immutable Controller's complete 25-check chain.

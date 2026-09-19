@@ -519,6 +519,16 @@ deployment window and the later separate Claude authentication-generation roll.
 This is finite request authorization, not continuous security-domain epochs,
 unobserved principal ABA protection or an atomic delivery fence.
 
+The same boundary now covers the four legacy Session language queries through
+closed command types and the original pre-authorization connection observation.
+Its [accepted Controller rollout](releases/plugin-language-read-authority-2026-09-19.md)
+passes all 25 connected v9 checks, the old-artifact negative test and the
+complete quality gate. It retains all 16 original workers in its own bounded
+deployment window. Native open/close and original-ID resource cleanup remain
+separate; discarding a legacy navigation reply is not destination release or
+post-effect restoration. None of the broader exits below is closed by this
+finite extension.
+
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both

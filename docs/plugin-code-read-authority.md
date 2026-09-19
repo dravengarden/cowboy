@@ -79,6 +79,9 @@ The [accepted Controller rollout](releases/plugin-code-read-authority-2026-09-19
 records the old-artifact negative result, all 21 connected checks, complete
 source/build gates, actual reader floors and production activation. Its bounded
 deployment continuity and later Provider-auth roll are reported separately.
+The [legacy-language rollout](releases/plugin-language-read-authority-2026-09-19.md)
+extends acceptance to all 25 connected checks and records Controller-only
+activation with the 16 original workers retained in its own observation window.
 
 These are checks at finite boundaries, not a continuous principal epoch or an
 atomic database/network delivery transaction. An unobserved disable/re-enable
