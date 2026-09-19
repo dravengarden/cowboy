@@ -180,6 +180,7 @@ import {
   mobileFocusedComposerSurfaceSx,
 } from "./mobileComposerSurface";
 import { TurnStatusOverlay } from "./TurnStatusOverlay";
+import { ProviderQuotaStatus } from "./ProviderQuotaStatus";
 import { PermissionOverlay } from "./PermissionOverlay";
 import {
   composerTimelineSlice,
@@ -1920,9 +1921,21 @@ export function ComposerWorkspace({
       }}
     >
       {
-        /* Status is the first ordinary stack slot, not a second absolute layer.
-          A pending tool-permission outranks the turn-status pill (a blocking
-          decision beats a status), and the two remain mutually exclusive. */
+        /* Account quota is independent of ACP turn completion. Claude can keep
+          a prompt open while its native retry loop waits for a reset, so surface
+          the known exhausted window even though no transcript error exists. */
+      }
+      <ProviderQuotaStatus
+        provider={provider}
+        {...(providerVersion === undefined ? {} : { providerVersion })}
+        {...(providerDigest === undefined ? {} : { providerDigest })}
+        status={status}
+      />
+      {
+        /* Turn status remains an ordinary stack slot, not a second absolute
+          layer. A pending tool-permission outranks the turn-status pill (a
+          blocking decision beats a status), and the two remain mutually
+          exclusive. */
       }
       {pendingPermission
         ? (

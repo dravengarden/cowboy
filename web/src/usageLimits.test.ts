@@ -5,6 +5,7 @@ import {
   accountProviderLabel,
   accountProviderUsage,
   applyUsageHostPlugins,
+  exhaustedAccountUsageLimits,
   nearestAvailableResetCredit,
   providerUsage,
   providerUsageErrorMessage,
@@ -90,6 +91,37 @@ Deno.test("native Claude quota renders account and model progress without invent
     }),
     [],
   );
+});
+
+Deno.test("exhausted account quota expires at reset and ignores model-only windows", () => {
+  const reset = Date.parse("2026-09-19T06:10:00Z");
+  const usage = {
+    provider: "anthropic",
+    status: "available",
+    source: "Anthropic",
+    observed_at_ms: reset - 60_000,
+    ...quotaView({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: {
+          utilization: 100,
+          resets_at: new Date(reset).toISOString(),
+        },
+        seven_day: { utilization: 73, resets_at: null },
+        model_scoped: [{
+          display_name: "Sonnet",
+          utilization: 100,
+          resets_at: new Date(reset + 60_000).toISOString(),
+        }],
+      },
+    }),
+  };
+
+  assertEquals(
+    exhaustedAccountUsageLimits(usage, reset - 1).map((limit) => limit.label),
+    ["5h"],
+  );
+  assertEquals(exhaustedAccountUsageLimits(usage, reset), []);
 });
 
 Deno.test("usage plugin ids map account providers onto agent plugins", () => {
