@@ -220,3 +220,9 @@ adds v10 checks 26–28, rejects the old artifact's post-logout Open reply and
 accepts two complete 28-check runs against the supplied previous and current
 Machine artifacts. Original effects remain recorded before response refusal;
 Controller-only activation is separately observed with all 16 workers retained.
+The [continuation-finalization rollout](releases/plugin-continuation-finalization-2026-09-19.md)
+adds v11 checks 29–31, rejects the old artifact's failed owned read after logout,
+and accepts two complete 31-check chains with seven actual lost-reply timeouts.
+It records the initial insufficient test-budget failure separately from those
+successful runs. Final-source Controller activation retains all 14 workers in
+its own observed window; no Machine, Web or Plugin generation is replaced.

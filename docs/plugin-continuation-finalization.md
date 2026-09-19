@@ -60,6 +60,12 @@ cases: their effect remains Unknown until the independent Query observes it.
 No reply is fabricated, no live policy/database/credential is modified, and
 earlier cancellation, lost reply, uninstall and restart checks remain intact.
 
+The [accepted Controller rollout](releases/plugin-continuation-finalization-2026-09-19.md)
+records source and old-artifact negatives, two complete 31-check runs, final
+quality/build gates, 24 browser cases and actual Catalog/configuration floors.
+The published Controller-only activation retains all 14 workers observed in
+its bounded deployment window; Machine, Web and Plugin identities are unchanged.
+
 This changes no wire, SDK, Plugin/native executable, durable format, public
 permission API, navigation admission or Machine maintenance contract. General
 DAG/state leases, Machine-owned identity, global background budgets, supported
