@@ -543,12 +543,19 @@ retained-history checks for those two writers. Its
 passes the complete source gate, 43 native tests, the exact static pair,
 temporary signed lifecycle, 18 connected v5 and 24 browser checks. Other writers,
 global snapshot lifetimes remain open; no production native generation changed.
-The [private remote-edit candidate](plugin-native-remote-edits.md) extends finite
+The [private remote-edit admission](plugin-native-remote-edits.md) extends finite
 history admission to the local native server's incoming edit/undo batches.
 Unknown IDs cannot accumulate waiting operations, original sharing peers are
 checked, and a bounded native scratch branch validates the complete causal/
-Unicode/history result before publishing any prefix. This is not an all-writer
-or global memory budget, independent recovery, publication or native activation.
+Unicode/history result before publishing any prefix. Its
+[Zed 1.20.0 acceptance and signed publication](releases/native-remote-edit-budgets-2026-09-19.md)
+passes 57 native tests, two 19-check connected v6 runs, 24 browser checks and
+the complete source gate. All 89 Catalog releases pass actual-role reader
+preflights. Hawk remains on separately installed 1.19.0 in that observation;
+independent Machine/Controller changes invalidate an all-process continuity
+claim. The core Operator lock fix is source-verified but Controller activation
+is held by five missing exact Agent publications. This is not an all-writer
+or global memory budget, independent recovery or native activation.
 The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
 adds exact terminal-refusal projection and original-ID reconciliation through
 adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and

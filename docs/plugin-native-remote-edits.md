@@ -1,8 +1,10 @@
 # Private native remote-edit admission
 
 Zed Plugin/private adapter `1.20.0` selects private server `1.6.0` with the same
-exact upstream and third-party dependencies. This is the next source candidate,
-not a production installation or a new public Code writer. It extends the
+exact upstream and third-party dependencies. Its
+[acceptance and signed publication](releases/native-remote-edit-budgets-2026-09-19.md)
+are complete; live Hawk installation remains separate. This is not a new public
+Code writer. It extends the
 [sync/reload history bounds](plugin-native-replacement-budgets.md) to the private
 local server's incoming `UpdateBuffer` edit/undo route.
 
@@ -49,15 +51,16 @@ The ordinary request error is not a new cross-site no-effect/recovery grant.
 Native GPUI tests cover exact duplicates, conflicting identities, batch/clock/
 shape limits, missing history, Unicode tombstones and concurrent edits,
 inclusive retained-byte/operation limits, undo, visible-text and read-only
-refusal, and unknown-ID queue admission. The final static-pair gate must also
-exercise real RPC failures, exact duplicates, tombstone offsets and editing
+refusal, and unknown-ID queue admission. The accepted final static-pair gate also
+exercises real RPC failures, exact duplicates, tombstone offsets and editing
 after peer closure, with unchanged disk bytes. Since the native server does not
 echo a sender's own remote edits, independent exact-version plaintext queries
 verify the native result and stale-vector refusal; the direct GPUI tests verify
 complete content and retained history. An unchanged local mirror alone is not
-native no-mutation evidence. Complete source, temporary signed
-installation lifecycle, connected v6 and browser gates remain required before
-release acceptance; results belong in a separate dated receipt.
+native no-mutation evidence. Complete source, temporary signed installation
+lifecycle, 57 native tests, two 19-check connected v6 runs and 24 browser checks
+pass; the dated receipt retains exact supplied-role boundaries and an unrelated
+production continuity failure rather than claiming a live installation.
 
 This bounds one more writer, not every upstream mutation or total RSS. LSP
 workspace edits, desktop-only writers, remote-replica bootstrap, snapshot counts,
