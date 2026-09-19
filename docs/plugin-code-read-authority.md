@@ -47,6 +47,11 @@ through the real product API, then release the unchanged reply. The response
 must be denied without an ETag or another Machine command; the independent
 original login remains usable. This uses no production credentials.
 
+The [accepted Controller rollout](releases/plugin-code-read-authority-2026-09-19.md)
+records the old-artifact negative result, all 21 connected checks, complete
+source/build gates, actual reader floors and production activation. Its bounded
+deployment continuity and later Provider-auth roll are reported separately.
+
 These are checks at finite boundaries, not a continuous principal epoch or an
 atomic database/network delivery transaction. An unobserved disable/re-enable
 or role ABA is not detected. Already dispatched reads may execute; previously

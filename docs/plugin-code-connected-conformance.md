@@ -168,3 +168,7 @@ The [Session read-route rollout](releases/plugin-session-read-routes-2026-09-19.
 adds v7 check 20, rejects a supplied pre-fix Controller and accepts two corrected
 immutable Controllers. It separately records Controller-only activation with
 the resident Machine, native installation and original workers unchanged.
+The [read-authority rollout](releases/plugin-code-read-authority-2026-09-19.md)
+adds v8 check 21, rejects the prior Controller's post-logout HTTP 200 and accepts
+the corrected immutable Controller's full chain. Its component activation and
+later independent Provider-auth rotation are recorded separately.

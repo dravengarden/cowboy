@@ -511,8 +511,11 @@ product credentials and current Session visibility to those eleven readers.
 It shares credential continuation with Operator approval without granting
 Viewer/automation reads mutation authority. It discards cached, conditional,
 raw and error replies after observed logout/revocation or visibility loss.
-The connected v8 gate adds a held real core file reply and product-API logout;
-artifact acceptance and production activation must be recorded separately.
+Its [Controller rollout](releases/plugin-code-read-authority-2026-09-19.md)
+passes the connected v8/21-check chain (including a held real file reply and
+product-API logout), an old-artifact negative test and the clean complete gate.
+It is published and activated; the release records both its sixteen-worker
+deployment window and the later separate Claude authentication-generation roll.
 This is finite request authorization, not continuous security-domain epochs,
 unobserved principal ABA protection or an atomic delivery fence.
 
