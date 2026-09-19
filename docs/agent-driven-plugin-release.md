@@ -169,5 +169,8 @@ It reuses the immutable Controller/Machine matrix format documented in
 pair executes this test; this is not a replacement for the reader-floor matrix.
 The isolated fixture proves default-deny, real peer identity, TCP separation,
 one exact signed Machine installation, durable host attribution, revocation and
-saved-ID observation across restart without replay. It uses disposable state
+saved-ID observation across restart without replay. Its byte-preserving relay
+accepts installation-compatible protocols 19–21 only within the Machine's
+advertised range, records the negotiated protocol, and refuses missing Hello,
+older or unknown future protocols. It uses disposable state
 and identities, never production credentials or a real agent session.

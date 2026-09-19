@@ -172,6 +172,7 @@ async fn immutable_local_operator_installation() -> Result<()> {
         &json!({
             "schema":1, "purpose":"isolated_local_operator_installation", "source_revision":revision,
             "controller":controller, "machine":machine, "wire":wire,
+            "protocol":pair.proxy.protocol(),
             "accepted":result.is_ok() && cleanup.is_ok(),
             "checks":["default_closed", "kernel_uid", "public_router_separation", "exact_signed_install", "one_machine_effect", "saved_id_without_replay", "revocation", "durable_host_actor", "restart_without_replay"],
             "not_checked":["production_authority_and_installation", "provider_credentials_and_sessions", "distributed_power_loss"]
