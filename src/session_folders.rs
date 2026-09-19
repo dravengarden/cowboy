@@ -151,7 +151,7 @@ impl SessionFolders {
     }
 
     #[cfg(test)]
-    fn folders(&self) -> &[SessionFolder] {
+    pub(crate) fn folders(&self) -> &[SessionFolder] {
         &self.folders
     }
 
@@ -600,6 +600,32 @@ mod tests {
             .collect();
         rows.sort_by_key(|folder| folder.position);
         rows.iter().map(|folder| folder.id.clone()).collect()
+    }
+
+    #[test]
+    fn replayed_create_matches_only_the_identical_folder() {
+        let mut folders = SessionFolders::default();
+        create(&mut folders, &user("u1"), "f-a", "Cowboy", None);
+        let same = serde_json::json!({"id": "f-a", "name": " Cowboy ", "parent": null});
+        assert!(folders.is_replayed_create(&user("u1"), &same));
+        assert!(!folders.is_replayed_create(&user("u2"), &same));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Other"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Cowboy", "parent": "f-b"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Cowboy", "project": "cowboy"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-missing", "name": "Cowboy"})
+        ));
+        assert!(!folders.is_replayed_create(&user("u1"), &serde_json::json!({"name": "Cowboy"})));
     }
 
     #[test]

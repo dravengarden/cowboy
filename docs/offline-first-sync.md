@@ -1,9 +1,11 @@
 # Offline-first synchronization
 
-Status: design 2026-09-18; Phase 1 implemented on Web the same day (see
-[Implementation status](#implementation-status)). This is the app-level
-contract for how Cowboy Web opens, reads, composes, sends and reconciles when
-the controller is slow, unreachable, restarting or when the device is offline.
+Status: design 2026-09-18; Phase 1 implemented on Web the same day; the
+Phase 2 submission ledger, addressed results and idempotent sync landed
+2026-09-19 (see [Implementation status](#implementation-status)). This is
+the app-level contract for how Cowboy Web opens, reads, composes, sends and
+reconciles when the controller is slow, unreachable, restarting or when the
+device is offline.
 It is UX-first: implementation cost decides phase order, not whether a
 behaviour is in scope.
 
@@ -66,6 +68,9 @@ knew, and cannot tell the user honestly what state it is in.
   as is and is extended, not rewritten.
 
 ## Current facts the design builds on
+
+This section records the baseline the design started from;
+[Implementation status](#implementation-status) lists what has changed since.
 
 Client (`web/src`):
 
@@ -497,10 +502,39 @@ Phase 1 shipped as a Web-only release (service worker `cowboy-v1722`):
   line segment, `TranscriptCachedCaption`, the update banner restricted to
   the update decision and gated by `canApplyUpdateNow`.
 
-Not yet implemented: sessions drawer badges and "not cached" glyphs, the
-inline gap divider, drafts in IndexedDB, the hydration scheduler's P2/P3
-prefetch, and every server change in Phase 2. Replay correctness across a
-controller restart is therefore unchanged from before this work.
+Phase 2 shipped as a Controller and Web release (service worker
+`cowboy-v1725`):
+
+- Submission ledger: the Hub keeps a bounded window of client `cmid`s it
+  handed to a worker, and the user echo persists its `cmid` beside the event
+  (`src/persistence.rs`, read back by both stores). `submit` and
+  `force_submit` dedupe against the queue, that window and the restored log,
+  and answer a replay with a queue patch confirming the id; `add_draft`
+  confirms a replayed draft the same way. `requeue_prompt` releases the id
+  when a crashed turn hands the prompt back. Hub-synthesized ids
+  (`cowboy-*`, `__*`) stay reusable and never take part in this dedupe.
+- Addressed results: `Outbound::CommandResult { session_id, cmid, outcome,
+  message }` with `not_found` for a submit, draft or scheduled draft whose
+  session is gone and `rejected` for a session the principal may not mutate
+  or a view-only system session. The Web store holds the owning row with the
+  reason as its caption and, for `not_found`, parks the content in the opened
+  session's drafts before retiring the orphan.
+- Idempotent sync by id: a duplicate `Sync` delivery re-emits a `sync_patch`
+  confirming the id; a folder `create` that already produced the identical
+  folder for the same actor is confirmed after a restart; the per-session
+  `queue:` and `mobile-review:` dedupe sets are dropped with the session.
+- Cleared transcripts: a snapshot whose tail carries a `context_cleared`
+  boundary drops every cached row before it without paging history, and a
+  join gap the fill cannot close truncates the unjoined prefix instead of
+  leaving a hole; ordinary scrollback pages it back on demand.
+
+Not yet implemented: the forward bootstrap cursor with `transcript_epoch`,
+target-bound `cancel` / `permission` outcomes (`stale`,
+`already_resolved`), the sessions `revision`, sessions drawer badges and
+"not cached" glyphs, the inline gap divider, drafts in IndexedDB, and the
+hydration scheduler's P2/P3 prefetch. A replayed `edit_queued` or
+`remove_queued` for a row that already ran is still a silent server no-op;
+the client's orphan claim recovers the edited text.
 
 ## Open decisions
 

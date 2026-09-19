@@ -2553,6 +2553,13 @@ impl Hub {
             removed
         };
         if removed {
+            // The per-session sync states die with the session. Their dedupe
+            // sets must not keep growing for ids no client can replay any more.
+            {
+                let mut sync = self.inner.sync.lock();
+                sync.remove(&format!("queue:{session_id}"));
+                sync.remove(&format!("mobile-review:{session_id}"));
+            }
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
@@ -4358,7 +4365,10 @@ impl Hub {
         }
         Self::is_client_cmid(cmid)
             && (s.dispatched_cmids.iter().any(|seen| seen == cmid)
-                || s.log.iter().rev().any(|entry| entry.cmid.as_deref() == Some(cmid)))
+                || s.log
+                    .iter()
+                    .rev()
+                    .any(|entry| entry.cmid.as_deref() == Some(cmid)))
     }
 
     const DISPATCHED_CMID_WINDOW: usize = 64;
@@ -4626,6 +4636,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -4633,20 +4644,26 @@ impl Hub {
             };
             // Idempotent on cmid: when a send looked failed the client resends
             // with the SAME cmid, but the original may actually have landed — so
-            // a matching cmid means "already staged", don't double-add.
-            if let Some(c) = cmid.as_deref()
-                && s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c))
-            {
-                return;
+            // a matching cmid means "already staged", don't double-add. Confirm
+            // it again instead: the resending client missed the first patch.
+            duplicate = cmid
+                .as_deref()
+                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .map(str::to_owned);
+            if duplicate.is_none() {
+                let id = self.next_qid();
+                s.drafts.push(QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid,
+                    schedule: None,
+                });
             }
-            let id = self.next_qid();
-            s.drafts.push(QueuedMessage {
-                id,
-                text,
-                content,
-                cmid,
-                schedule: None,
-            });
+        }
+        if let Some(cmid) = duplicate {
+            self.confirm_delivered(session_id, &cmid);
+            return;
         }
         self.emit_pending(session_id);
     }
@@ -6044,6 +6061,210 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    // A reconnecting client resends every unconfirmed submit. Once the Hub has
+    // handed the prompt to a worker, the replay is confirmed, never run again.
+    #[tokio::test]
+    async fn replayed_submit_after_dispatch_is_confirmed_not_rerun() {
+        let hub = hub_with_session("replay");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("replay", Status::Running, None);
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "hello");
+
+        let mut live = hub.subscribe();
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert!(!hub.force_submit(
+            "replay",
+            "hello".to_owned(),
+            vec![],
+            Some("c-1".to_owned()),
+            true,
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "a replayed submit must not dispatch again"
+        );
+        assert!(queue_texts(&hub, "replay").is_empty());
+        let frame = live.try_recv().expect("addressed confirmation");
+        let Outbound::SyncPatch {
+            state, confirmed, ..
+        } = frame.outbound()
+        else {
+            panic!("expected a queue confirmation");
+        };
+        assert_eq!(state, "queue:replay");
+        assert_eq!(confirmed, &vec!["c-1".to_owned()]);
+    }
+
+    // After a Controller restart the dispatched-id window is empty, but the user
+    // echo restored from storage still carries the cmid of the prompt it ran.
+    #[tokio::test]
+    async fn replayed_submit_is_recognised_from_the_persisted_echo() {
+        let hub = hub_with_session("restored");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("restored", Status::Running, None);
+        let echo = || Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "hello"},
+            }),
+        };
+        hub.push_tagged("restored", echo(), Some("c-2".to_owned()));
+
+        hub.submit(
+            "restored",
+            "hello".to_owned(),
+            vec![],
+            Some("c-2".to_owned()),
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "an echoed prompt must not run again"
+        );
+        assert!(queue_texts(&hub, "restored").is_empty());
+
+        // Hub-synthesized ids are reusable on purpose and never deduped by the log.
+        let synthesized = "cowboy-retry:restored:1".to_owned();
+        hub.push_tagged("restored", echo(), Some(synthesized.clone()));
+        hub.submit("restored", "again".to_owned(), vec![], Some(synthesized));
+        assert_eq!(
+            rx.recv().await.expect("synthesized id dispatches").text,
+            "again"
+        );
+    }
+
+    // A replayed draft is confirmed again so a client that missed the first
+    // patch retires its outbox entry instead of waiting out a timeout.
+    #[test]
+    fn replayed_add_draft_is_confirmed_not_duplicated() {
+        let hub = hub_with_session("draft-replay");
+        hub.add_draft(
+            "draft-replay",
+            "later".to_owned(),
+            vec![],
+            Some("d-1".to_owned()),
+        );
+        let mut live = hub.subscribe();
+        hub.add_draft(
+            "draft-replay",
+            "later".to_owned(),
+            vec![],
+            Some("d-1".to_owned()),
+        );
+        let frame = live.try_recv().expect("replayed draft confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a queue patch");
+        };
+        assert_eq!(state, "queue:draft-replay");
+        assert_eq!(confirmed, &vec!["d-1".to_owned()]);
+        assert_eq!(value["drafts"].as_array().unwrap().len(), 1);
+    }
+
+    // A duplicate sync delivery is confirmed again, so a client that missed the
+    // original patch can retire its outbox entry.
+    #[test]
+    fn duplicate_sync_delivery_is_confirmed_again() {
+        let hub = hub_with_session("dup");
+        hub.sync_apply(
+            "title",
+            "m-1".to_owned(),
+            "rename",
+            &serde_json::json!({"session_id": "dup", "title": "First"}),
+        )
+        .unwrap();
+        let mut live = hub.subscribe();
+        hub.sync_apply(
+            "title",
+            "m-1".to_owned(),
+            "rename",
+            &serde_json::json!({"session_id": "dup", "title": "Ignored"}),
+        )
+        .unwrap();
+        let frame = live.try_recv().expect("replayed delivery confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a sync patch");
+        };
+        assert_eq!(state, "title");
+        assert_eq!(confirmed, &vec!["m-1".to_owned()]);
+        assert_eq!(value["dup"], "First");
+    }
+
+    // The arbiter's dedupe set does not survive a restart; a create that already
+    // produced exactly this folder is still the same retried delivery.
+    #[test]
+    fn folder_create_replayed_across_restart_is_confirmed() {
+        let hub = hub_with_session("filed-replay");
+        let args = serde_json::json!({"id": "f-r", "name": "Cowboy", "project": "cowboy"});
+        hub.sync_apply("folders", "m-1".to_owned(), "create", &args)
+            .unwrap();
+        let folders = hub.inner.folders.lock().folders().to_vec();
+
+        let restarted = hub_with_session("filed-replay");
+        restarted.restore_session_folders(folders);
+        let mut live = restarted.subscribe();
+        restarted
+            .sync_apply("folders", "m-1".to_owned(), "create", &args)
+            .unwrap();
+        let frame = live.try_recv().expect("replayed create confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a folders patch");
+        };
+        assert_eq!(state, "folders");
+        assert_eq!(confirmed, &vec!["m-1".to_owned()]);
+        assert_eq!(value["folders"].as_array().unwrap().len(), 1);
+        // A different folder under the same id is still a conflict.
+        assert_eq!(
+            restarted
+                .sync_apply(
+                    "folders",
+                    "m-2".to_owned(),
+                    "create",
+                    &serde_json::json!({"id": "f-r", "name": "Other"}),
+                )
+                .unwrap_err(),
+            "folder id already exists"
+        );
+    }
+
+    // Per-session sync dedupe sets are dropped with the session.
+    #[test]
+    fn deleting_a_session_drops_its_sync_states() {
+        let hub = hub_with_session("gone");
+        hub.sync_apply(
+            "mobile-review:gone",
+            "m-1".to_owned(),
+            "open",
+            &serde_json::json!({"path": "README.md"}),
+        )
+        .unwrap();
+        hub.add_draft("gone", "draft".to_owned(), vec![], Some("d-1".to_owned()));
+        assert!(hub.inner.sync.lock().contains_key("mobile-review:gone"));
+        assert!(hub.inner.sync.lock().contains_key("queue:gone"));
+        assert!(hub.delete_session("gone"));
+        assert!(!hub.inner.sync.lock().contains_key("mobile-review:gone"));
+        assert!(!hub.inner.sync.lock().contains_key("queue:gone"));
     }
 
     #[test]

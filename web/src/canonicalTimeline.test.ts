@@ -1,6 +1,8 @@
 import { assertEquals, assertStrictEquals } from "jsr:@std/assert";
 import type { Envelope } from "./protocol.ts";
 import {
+  dropEventsBefore,
+  lastContextClearSeq,
   mergeCanonicalTimeline,
   snapshotJoinGap,
 } from "./canonicalTimeline.ts";
@@ -65,4 +67,34 @@ Deno.test("an empty or older incoming window is not a join hole", () => {
     ),
     null,
   );
+});
+
+Deno.test("the newest clear boundary in a run is found from the tail", () => {
+  const cleared = (seq: number): Envelope => ({
+    session_id: "session",
+    seq,
+    kind: "update",
+    update: { sessionUpdate: "context_cleared", at: seq },
+  });
+  assertEquals(lastContextClearSeq([]), null);
+  assertEquals(lastContextClearSeq([message(1, "a"), message(2, "b")]), null);
+  assertEquals(
+    lastContextClearSeq([
+      message(1, "a"),
+      cleared(2),
+      message(3, "b"),
+      cleared(4),
+      message(5, "c"),
+    ]),
+    4,
+  );
+});
+
+Deno.test("dropping rows before a boundary keeps identity when nothing is older", () => {
+  const run = [message(4, "kept"), message(5, "tail")];
+  assertStrictEquals(dropEventsBefore(run, 4), run);
+  assertStrictEquals(dropEventsBefore(run, 1), run);
+  assertEquals(dropEventsBefore(run, 5).map((event) => event.seq), [5]);
+  assertEquals(dropEventsBefore(run, 6), []);
+  assertEquals(dropEventsBefore([], 3), []);
 });

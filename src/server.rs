@@ -43,8 +43,7 @@ use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
-    Outbound,
-    PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
+    Outbound, PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
     StoreWrite, project_sync_value,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};

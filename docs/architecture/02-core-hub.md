@@ -38,8 +38,10 @@ flowchart LR
 
 The Hub is the **sole writer**, so it stamps a monotonic `seq` (u64) per session.
 Every event becomes an **`Envelope`**: `Event` + `session_id` + `seq` + optional
-`cmid` (a client-message id for optimistic reconcile, live-only). Because one
-arbiter assigns `seq`, ordering is global and unambiguous across all clients.
+`cmid` (a client-message id for optimistic reconcile; the user echo of a
+client-submitted prompt persists it as the submission ledger, see
+[offline-first sync](../offline-first-sync.md)). Because one arbiter assigns
+`seq`, ordering is global and unambiguous across all clients.
 
 ## Events (Hub-internal)
 

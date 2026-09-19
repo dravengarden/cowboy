@@ -119,7 +119,12 @@ import {
   type SessionMeta,
   type WireQueued,
 } from "./protocol";
-import { mergeCanonicalTimeline, snapshotJoinGap } from "./canonicalTimeline";
+import {
+  dropEventsBefore,
+  lastContextClearSeq,
+  mergeCanonicalTimeline,
+  snapshotJoinGap,
+} from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { legacyRecordsAnnouncement } from "./legacyRecordsNotice";
@@ -175,6 +180,9 @@ export interface QueuedMessage {
    *  `sending` (awaiting service confirmation), or `failed`. A confirmed server
    *  row carries no status. */
   status?: DeliveryStatus;
+  /** Why the Hub refused this row for good (an addressed `command_result`).
+   *  Absent for an ordinary acknowledgement timeout. */
+  failure?: string;
   /** Where this local row came from, so a failed send can return there. */
   origin?: DeliveryOrigin;
   /** Present only on a DRAFT with a future fire time — the server auto-activates
@@ -1182,6 +1190,24 @@ function truncateUnjoinedPrefix(
   setState({ ...state, timelines, pagination });
 }
 
+/** Drop every cached row before a clear boundary carried by a fresh tail. Clear
+ * deletes those rows durably, so no history page can join them again; the
+ * snapshot that follows re-seeds pagination from the surviving run. */
+function dropClearedPrefix(sessionId: string, boundarySeq: number): void {
+  const timeline = state.timelines.get(sessionId);
+  if (timeline === undefined) return;
+  const kept = dropEventsBefore(timeline, boundarySeq);
+  if (kept === timeline) return;
+  // Any gap fill or older-page load still running for the cleared run is stale.
+  transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
+  completeQuestionPages.delete(sessionId);
+  const timelines = new Map(state.timelines);
+  timelines.set(sessionId, linkTimeline([...kept], timeline));
+  const pagination = new Map(state.pagination);
+  pagination.delete(sessionId);
+  setState({ ...state, timelines, pagination });
+}
+
 export async function loadOlder(sessionId: string): Promise<boolean> {
   const pg = state.pagination.get(sessionId);
   if (!pg || pg.reachedStart || pg.loadingOlder || pg.beforeSeq === null) return false;
@@ -1453,6 +1479,17 @@ function handle(msg: Outbound): void {
         discardReplicaTimeline(msg.session_id);
         existingTimeline = [];
       }
+      // Clear is destructive: every row before the newest boundary in the fresh
+      // tail was deleted durably while this device was away. Drop that prefix
+      // here instead of paging history for a hole that can never be filled.
+      const clearedBefore = lastContextClearSeq(msg.events);
+      if (
+        clearedBefore !== null &&
+        existingTimeline.some((event) => event.seq < clearedBefore)
+      ) {
+        dropClearedPrefix(msg.session_id, clearedBefore);
+        existingTimeline = state.timelines.get(msg.session_id) ?? [];
+      }
       const joinGap = snapshotJoinGap(existingTimeline, msg.events);
       const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
@@ -1519,6 +1556,7 @@ function handle(msg: Outbound): void {
             clearOptTimers(mutation.id);
             qStatus.delete(mutation.id);
             qStatus.delete(rowCmid);
+            forgetDeliveryFailure(mutation.id, rowCmid);
           }
           client.confirm(confirmedMutations.map((mutation) => mutation.id));
           commitQueue(msg.session_id);
@@ -1566,6 +1604,7 @@ function handle(msg: Outbound): void {
           clearOptTimers(cmid);
           qStatus.delete(cmid);
         }
+        forgetDeliveryFailure(cmid);
         commitQueue(env.session_id);
       }
       const pagination = clearsContext
@@ -1607,8 +1646,9 @@ function handle(msg: Outbound): void {
           timelines.get(env.session_id) ?? [],
         );
       }
-      // The cmid tag is live-only (persisted history carries none), so the
-      // timeline copy of an echo is not a reliable readiness witness. Remember
+      // Persisted history carries a cmid only for prompts echoed since the
+      // submission ledger shipped, so the timeline copy of an echo is not a
+      // reliable readiness witness. Remember
       // that this device's prompt was echoed; the turn's first agent work
       // proves every block landed. Retire the overlay there, or it keeps hiding
       // the newest human row and repaints this prompt as still sending.
@@ -1688,7 +1728,8 @@ function handle(msg: Outbound): void {
       if (client === undefined || pending === undefined) break;
       clearOptTimers(pending.id);
       const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
-      for (const id of new Set([pending.id, msg.cmid])) {
+      const rowCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
+      for (const id of new Set([pending.id, msg.cmid, ...(rowCmid === undefined ? [] : [rowCmid])])) {
         qStatus.set(id, "failed");
         qFailure.set(id, reason);
       }
@@ -2947,9 +2988,24 @@ const qStatus = new Map<string, DeliveryStatus>();
 // `command_result`). Absent for an ordinary acknowledgement timeout.
 const qFailure = new Map<string, string>();
 
-/** The Hub's reason a local row was refused, for the failed-row caption. */
-export function deliveryFailureReason(cmid: string | undefined): string | undefined {
-  return cmid === undefined ? undefined : qFailure.get(cmid);
+function forgetDeliveryFailure(...ids: readonly (string | undefined)[]): void {
+  for (const id of ids) {
+    if (id !== undefined) qFailure.delete(id);
+  }
+}
+
+/** Project the local delivery status onto a row, with the Hub's reason when it
+ * refused the row for good. A row that is retried or confirmed loses the stale
+ * reason instead of carrying it into its next timeout. */
+function withDelivery(row: QueuedMessage, status: DeliveryStatus): QueuedMessage {
+  const failure = status === "failed" && row.cmid !== undefined
+    ? qFailure.get(row.cmid)
+    : undefined;
+  if (failure !== undefined) return { ...row, status, failure };
+  if (row.failure === undefined) return { ...row, status };
+  const next = { ...row, status };
+  delete next.failure;
+  return next;
 }
 
 /** A prompt whose session was deleted has no surface left to show it on. Park
@@ -3240,7 +3296,7 @@ function commitQueue(sessionId: string): void {
       const status = (r.cmid === undefined ? undefined : qStatus.get(r.cmid)) ??
         pendingRowStatuses.get(r.id) ??
         (r.cmid !== undefined && pend.has(r.cmid) ? "pending" : undefined);
-      return status !== undefined ? { ...r, status } : r;
+      return status !== undefined ? withDelivery(r, status) : r;
     });
   const queues = new Map(state.queues);
   const drafts = new Map(state.drafts);
@@ -3259,9 +3315,11 @@ function commitQueue(sessionId: string): void {
     (!suppressedInFlight.has(message.cmid) && !inFlightCmids.has(message.cmid))
   ).map((message) => {
     const status = message.cmid === undefined ? undefined : qStatus.get(message.cmid);
-    return status !== undefined && status !== message.status
-      ? { ...message, status }
-      : message;
+    if (status === undefined) return message;
+    const next = withDelivery(message, status);
+    return next.status === message.status && next.failure === message.failure
+      ? message
+      : next;
   });
   const bubbles = [...kept];
   for (const row of view.inFlight ?? []) {
@@ -3272,10 +3330,10 @@ function commitQueue(sessionId: string): void {
     if (row.cmid !== undefined) {
       rememberSendImagePreviews(row.cmid, row.attachments);
     }
-    bubbles.push({
-      ...row,
-      status: (row.cmid !== undefined ? qStatus.get(row.cmid) : undefined) ?? row.status ?? "pending",
-    });
+    bubbles.push(withDelivery(
+      row,
+      (row.cmid !== undefined ? qStatus.get(row.cmid) : undefined) ?? row.status ?? "pending",
+    ));
   }
   const optimisticMessages = new Map(state.optimisticMessages);
   if (bubbles.length > 0) optimisticMessages.set(sessionId, bubbles);
@@ -3433,6 +3491,7 @@ export function retryQueued(sessionId: string, cmid: string): void {
   const pending = c.pending().find((mutation) => mutation.id === cmid);
   if (pending !== undefined) {
     c.bump(cmid);
+    forgetDeliveryFailure(cmid, (pending.args as { row?: QueuedMessage }).row?.cmid);
     if (pending.name === "activateDraft") {
       qStatus.set(cmid, "pending");
       dispatchQueueMutation(sessionId, pending);
@@ -3454,6 +3513,7 @@ export function retryQueued(sessionId: string, cmid: string): void {
   const inDrafts = view.drafts.some((r) => r.cmid === cmid);
   const row = (inDrafts ? view.drafts : view.queue).find((r) => r.cmid === cmid);
   if (row === undefined) return;
+  forgetDeliveryFailure(cmid);
   const attempt = retryDeliveryAttempt(send(
     inDrafts
       ? { type: "add_draft", session_id: sessionId, text: row.text, content: contentOf(row.text, row.attachments), cmid }
@@ -3484,6 +3544,7 @@ export async function discardQueued(sessionId: string, cmid: string): Promise<vo
   await discardQueueMutationDurably(sessionId, cmid);
   clearOptTimers(cmid);
   qStatus.delete(cmid);
+  forgetDeliveryFailure(cmid);
   commitQueue(sessionId);
   persistHeld(sessionId);
 }
@@ -3506,6 +3567,7 @@ export async function returnFailedQueued(sessionId: string, cmid: string): Promi
     clearOptTimers(pending.id);
     qStatus.delete(pending.id);
     const echoCmid = (pending.args as { row?: QueuedMessage }).row?.cmid;
+    forgetDeliveryFailure(pending.id, echoCmid);
     if (echoCmid !== undefined) {
       qStatus.delete(echoCmid);
       suppressedInFlight.add(echoCmid);
@@ -3609,6 +3671,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
       clearOptTimers(cmid);
       qStatus.delete(cmid);
     }
+    forgetDeliveryFailure(cmid);
     suppressedInFlight.delete(cmid);
   }
   for (const cmid of settledSuppressed) suppressedInFlight.delete(cmid);
@@ -3722,6 +3785,7 @@ export function retryMessage(sessionId: string, cmid: string): void {
     retryQueued(sessionId, pending.id);
     return;
   }
+  forgetDeliveryFailure(cmid);
   const attempt = retryDeliveryAttempt(send({
     type: "submit",
     session_id: sessionId,
@@ -3743,6 +3807,7 @@ export async function discardMessage(sessionId: string, cmid: string): Promise<v
   // Queue reconciliation intentionally retains chat bubbles until their echo.
   // Explicit discard must also remove that overlay and its local Page root.
   clearOptTimers(cmid);
+  forgetDeliveryFailure(cmid);
   patchMessage(sessionId, cmid, "drop");
 }
 
