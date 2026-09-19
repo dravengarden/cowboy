@@ -13,7 +13,7 @@ async fn update(zed: &ZedRuntime, buffer: u64, operations: Vec<proto::Operation>
     Ok(())
 }
 
-fn native_refusal(error: anyhow::Error) {
+fn native_refusal(error: &anyhow::Error) {
     assert!(
         error.to_string().starts_with("Zed request failed:"),
         "{error}"
@@ -36,17 +36,17 @@ pub(super) async fn exercise(zed: &ZedRuntime, root: &Path, worktree: u64) {
     };
     edit.replica_id = 65537;
     native_refusal(
-        update(zed, buffer, vec![first.clone(), bad])
+        &update(zed, buffer, vec![first.clone(), bad])
             .await
             .unwrap_err(),
     );
     native_refusal(
-        update(zed, buffer, vec![first.clone(); 129])
+        &update(zed, buffer, vec![first.clone(); 129])
             .await
             .unwrap_err(),
     );
     native_refusal(
-        update(zed, u64::MAX, vec![first.clone()])
+        &update(zed, u64::MAX, vec![first.clone()])
             .await
             .unwrap_err(),
     );
@@ -66,7 +66,7 @@ pub(super) async fn exercise(zed: &ZedRuntime, root: &Path, worktree: u64) {
     let mut conflict = edit;
     conflict.new_text[0] = "different".into();
     native_refusal(
-        update(
+        &update(
             zed,
             buffer,
             vec![proto::Operation {
@@ -85,14 +85,14 @@ pub(super) async fn exercise(zed: &ZedRuntime, root: &Path, worktree: u64) {
         unreachable!()
     };
     edit.ranges[0] = proto::Range { start: 7, end: 8 }; // Inside the deleted emoji.
-    native_refusal(update(zed, buffer, vec![bad]).await.unwrap_err());
+    native_refusal(&update(zed, buffer, vec![bad]).await.unwrap_err());
     update(zed, buffer, vec![next]).await.unwrap();
     assert_native_mirror(zed, buffer, "firstaokz").await;
     assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), base);
     zed.close_buffer(buffer).unwrap();
     // A following foreground request observes the earlier close; even if another
     // native holder remains, this peer can no longer edit the old resource.
-    native_refusal(update(zed, buffer, vec![]).await.unwrap_err());
+    native_refusal(&update(zed, buffer, vec![]).await.unwrap_err());
     println!(
         "native edit ingress: actual whole-batch/clock/unknown-ID refusal, exact deduplication, Unicode tombstones, unchanged disk and closed-peer refusal passed"
     );
