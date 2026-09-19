@@ -44,6 +44,9 @@ routinely breaks another.
 - App-shell primitives are Cowboy-owned under `src/components/app-shell`.
   Keep product-specific behavior in consumers and reusable interaction,
   accessibility, motion, and shell geometry inside that component boundary.
+- Treat rich Markdown renderers as progressive enhancements. Preserve their
+  source and route parse, render, or preview failures through the ordinary
+  Markdown/code renderer; never replace readable source with broken media.
 - Quality gate before commit: `deno check` + `oxlint` (the cowboy web gate). Do
   not run repo-wide `deno fmt`.
 
