@@ -308,6 +308,29 @@ impl SessionFolders {
         }
     }
 
+    /// Whether `create` with these arguments already produced exactly this
+    /// folder for this actor. The sync arbiter's mutation-id dedupe does not
+    /// survive a Controller restart, so a client that resends its durable
+    /// outbox would otherwise hit "folder id already exists" forever. Any
+    /// difference (owner, name, parent, project) is a genuine conflict and
+    /// still fails through the normal path.
+    pub(crate) fn is_replayed_create(&self, actor: &FolderActor, args: &serde_json::Value) -> bool {
+        let (Ok(id), Ok(name), Ok(parent), Ok(project)) = (
+            key_arg(args, "id"),
+            name_arg(args),
+            optional_key_arg(args, "parent"),
+            project_arg(args),
+        ) else {
+            return false;
+        };
+        self.find(&id).is_some_and(|folder| {
+            folder.owner_user_id == actor.user_id
+                && folder.name == name
+                && folder.parent == parent
+                && folder.project == project
+        })
+    }
+
     fn create(
         &mut self,
         actor: &FolderActor,

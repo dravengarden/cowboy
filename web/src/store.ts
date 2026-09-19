@@ -1108,6 +1108,11 @@ async function fillSnapshotJoinGap(
   snapshotGapFills.set(sessionId, fillId + 1);
   const thisFill = fillId + 1;
   let cursor = beforeSeq;
+  // Lowest seq known to be contiguous with the snapshot tail. When the join
+  // cannot be closed, everything older is dropped rather than left as a silent
+  // hole: the transcript stays one continuous run and ordinary scrollback
+  // (`loadOlder`) pages the rest back in on demand.
+  let coveredFrom = beforeSeq;
   for (let page = 0; page < SNAPSHOT_GAP_FILL_PAGES; page += 1) {
     if (
       (transcriptEpoch.get(sessionId) ?? 0) !== epoch ||
@@ -1128,18 +1133,53 @@ async function fillSnapshotJoinGap(
     ) {
       return;
     }
-    if (!data || data.events.length === 0) return;
+    if (!data || data.events.length === 0) {
+      truncateUnjoinedPrefix(sessionId, coveredFrom, data?.reached_start === true);
+      return;
+    }
     setState({
       ...state,
       timelines: mergeEvents(state.timelines, sessionId, data.events),
     });
-    if (data.events.some((event) => event.seq <= untilSeq) || data.reached_start) {
+    if (data.events.some((event) => event.seq <= untilSeq)) return; // joined
+    coveredFrom = Math.min(coveredFrom, data.events[0]?.seq ?? coveredFrom);
+    if (data.reached_start) {
+      // The durable log starts after the kept prefix: that prefix was cleared
+      // while this device was away and no longer exists.
+      truncateUnjoinedPrefix(sessionId, coveredFrom, true);
       return;
     }
     const next = data.next_before_seq;
-    if (next === null || next >= cursor) return;
+    if (next === null || next >= cursor) {
+      truncateUnjoinedPrefix(sessionId, coveredFrom, false);
+      return;
+    }
     cursor = next;
   }
+  truncateUnjoinedPrefix(sessionId, coveredFrom, false);
+}
+
+/** Drop the part of a timeline that could not be joined to the live tail and
+ * point scrollback at the first retained event. */
+function truncateUnjoinedPrefix(
+  sessionId: string,
+  fromSeq: number,
+  reachedStart: boolean,
+): void {
+  const timeline = state.timelines.get(sessionId);
+  if (timeline === undefined) return;
+  const kept = dropEventsBefore(timeline, fromSeq);
+  if (kept === timeline) return;
+  completeQuestionPages.delete(sessionId);
+  const timelines = new Map(state.timelines);
+  timelines.set(sessionId, linkTimeline([...kept], timeline));
+  const pagination = new Map(state.pagination);
+  pagination.set(sessionId, {
+    reachedStart,
+    loadingOlder: false,
+    beforeSeq: reachedStart ? null : kept[0]?.seq ?? null,
+  });
+  setState({ ...state, timelines, pagination });
 }
 
 export async function loadOlder(sessionId: string): Promise<boolean> {
@@ -1634,6 +1674,27 @@ function handle(msg: Outbound): void {
     }
     case "settings": {
       // Compatibility tombstone from controllers spanning the rollout.
+      break;
+    }
+    case "command_result": {
+      // An addressed refusal for a command THIS device authored. Every other
+      // client ignores an id it does not own. The row stops retrying, says
+      // why, and waits for a decision instead of timing out again and again.
+      const client = qClients.get(msg.session_id);
+      const pending = client?.pending().find((mutation) => {
+        const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
+        return mutation.id === msg.cmid || rowCmid === msg.cmid;
+      });
+      if (client === undefined || pending === undefined) break;
+      clearOptTimers(pending.id);
+      const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
+      for (const id of new Set([pending.id, msg.cmid])) {
+        qStatus.set(id, "failed");
+        qFailure.set(id, reason);
+      }
+      commitQueue(msg.session_id);
+      persistHeld(msg.session_id);
+      if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
       break;
     }
     case "error": {
@@ -2882,6 +2943,45 @@ const qMut = {
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
 const qStatus = new Map<string, DeliveryStatus>();
+// Why a held row will not send, when the Hub said so (an addressed
+// `command_result`). Absent for an ordinary acknowledgement timeout.
+const qFailure = new Map<string, string>();
+
+/** The Hub's reason a local row was refused, for the failed-row caption. */
+export function deliveryFailureReason(cmid: string | undefined): string | undefined {
+  return cmid === undefined ? undefined : qFailure.get(cmid);
+}
+
+/** A prompt whose session was deleted has no surface left to show it on. Park
+ * its content in the session the user is looking at, then retire the orphan. */
+async function rescueOrphanedDelivery(
+  orphanSessionId: string,
+  mutation: { id: string; args: unknown },
+): Promise<void> {
+  const row = (mutation.args as { row?: QueuedMessage }).row;
+  const home = openedSessionId;
+  try {
+    if (
+      row !== undefined && home !== undefined && home !== orphanSessionId &&
+      state.sessions.some((session) => session.id === home) &&
+      (row.text.trim() !== "" || row.attachments.length > 0)
+    ) {
+      // Persist the replacement first: if this write fails the orphan stays
+      // held as the recovery source instead of being discarded.
+      await qAdd("drafts", home, row.text, row.attachments, { origin: "composer" });
+      await discardQueued(orphanSessionId, mutation.id);
+      notify("A message for a deleted session was moved to this session's drafts.", "warning");
+      return;
+    }
+    if (row === undefined) {
+      // A move or edit of a row in a session that no longer exists has nothing
+      // left to act on and no content of its own to keep.
+      await discardQueued(orphanSessionId, mutation.id);
+    }
+  } catch (error) {
+    console.warn("orphaned delivery rescue failed", error);
+  }
+}
 const draftDispatches = new Set<string>();
 const SILENT_QUEUE_MUTATORS = new Set([
   "editDraft",
