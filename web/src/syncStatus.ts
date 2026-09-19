@@ -195,6 +195,39 @@ export function syncStatusDetail(status: SyncStatus, now: number): string {
   }
 }
 
+/** One session's held (timed out or refused) outbox rows, by mutation id. */
+export interface HeldSession {
+  readonly id: string;
+  readonly ids: readonly string[];
+}
+
+/**
+ * Held rows a status surface should point at. Rows of the opened session are
+ * excluded: their own chrome already shows the failure with Retry, Return and
+ * Discard. Rows the user has already dismissed stay quiet until a new one
+ * appears, so a resolved row never re-raises the reminder for the rest.
+ */
+export function attentionCount(
+  sessions: readonly HeldSession[],
+  activeId: string | null | undefined,
+  acknowledged: ReadonlySet<string>,
+): number {
+  let count = 0;
+  for (const session of sessions) {
+    if (session.id === activeId) continue;
+    for (const id of session.ids) {
+      if (!acknowledged.has(id)) count += 1;
+    }
+  }
+  return count;
+}
+
+/** The same status with a different held count; identity is kept when equal. */
+export function withHeld(status: SyncStatus, held: number): SyncStatus {
+  if (status.outbox.held === held) return status;
+  return { ...status, outbox: { ...status.outbox, held } };
+}
+
 /** Tone maps onto MUI palette keys; outages are calm, not alarms. */
 export function syncStatusTone(
   phase: SyncPhase,

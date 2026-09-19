@@ -1,10 +1,16 @@
 import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
 import CloudUploadOutlined from "@mui/icons-material/CloudUploadOutlined";
 import ErrorOutline from "@mui/icons-material/ErrorOutline";
-import { Box, Tooltip, Typography } from "@mui/material";
+import { Box, ButtonBase, CircularProgress, Tooltip, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { useCachedTailSessions, useSessionObligations, useSyncStatus } from "./store";
-import { relativeAge, SYNC_PRESENTATION_DEBOUNCE_MS } from "./syncStatus";
+import { requestSyncSheet } from "./syncSheetRequest";
+import {
+  relativeAge,
+  SYNC_PRESENTATION_DEBOUNCE_MS,
+  syncStatusLabel,
+  syncStatusTone,
+} from "./syncStatus";
 
 // Session-list chrome for the offline-first contract
 // (docs/offline-first-sync.md §User experience, "Sessions drawer"). Every
@@ -67,8 +73,11 @@ export function SessionCacheGlyph(
   );
 }
 
-/** "Last synced …" line for the sessions drawer while the Hub is not live. It
- * waits out the presentation debounce so a reconnect blip never flashes it. */
+/** The sessions drawer's own connection line while the Hub is not live: the
+ * phase, when the list was last synced, and a tap into the connection sheet.
+ * The floating pill hides while the drawer is open, so this is the single
+ * indicator on that surface. It waits out the presentation debounce so a
+ * reconnect blip never flashes it. */
 export function SessionsSyncedCaption(): React.JSX.Element | null {
   const status = useSyncStatus();
   const [now, setNow] = useState(() => Date.now());
@@ -76,18 +85,38 @@ export function SessionsSyncedCaption(): React.JSX.Element | null {
   useEffect(() => {
     if (live) return;
     setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 15_000);
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, [live, status.since]);
   if (live || now - status.since < SYNC_PRESENTATION_DEBOUNCE_MS) return null;
   const age = relativeAge(status.lastLiveAt, now);
+  const label = syncStatusLabel(status, now) ?? "Reconnecting…";
+  const tone = syncStatusTone(status.phase);
+  const busy = status.phase === "connecting" || status.phase === "waiting";
   return (
-    <Typography
-      variant="caption"
+    <ButtonBase
       role="status"
-      sx={{ display: "block", px: 2, py: 0.5, color: "text.secondary" }}
+      aria-live="polite"
+      onClick={requestSyncSheet}
+      sx={{
+        display: "flex",
+        width: "100%",
+        justifyContent: "flex-start",
+        alignItems: "center",
+        gap: 0.75,
+        px: 2,
+        py: 0.75,
+        textAlign: "left",
+        color: `${tone}.main`,
+      }}
     >
-      {age === null ? "Not synced on this device yet" : `Last synced ${age}`}
-    </Typography>
+      {busy
+        ? <CircularProgress size={12} color="inherit" thickness={5} />
+        : <CloudOffOutlined sx={{ fontSize: 15, flexShrink: 0 }} />}
+      <Typography variant="caption" sx={{ fontWeight: 600 }}>{label}</Typography>
+      <Typography variant="caption" sx={{ color: "text.secondary", minWidth: 0 }} noWrap>
+        {age === null ? "· list may be out of date" : `· list from ${age}`}
+      </Typography>
+    </ButtonBase>
   );
 }

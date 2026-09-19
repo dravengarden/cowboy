@@ -9,6 +9,7 @@ import { NativeReleaseUpdatePrompt } from "@cowboy/app-shell";
 import { isAnyDetentSheetOpen } from "@cowboy/app-shell";
 import { MobileConnectionBanner } from "../MobileConnectionBanner";
 import { MobileSyncPill } from "../MobileSyncPill";
+import { setSessionsDrawerOpen } from "../sessionsDrawerPresence";
 import {
   OBSIDIAN_DRAWER_FLICK_PX_PER_MS,
   obsidianDrawerAbandonsToScroll,
@@ -148,6 +149,7 @@ export function MobileProductShell({
   const workspace = useActiveWorkspaceBinding();
   const onAgentDrawerOpenChange = useCallback((open: boolean): void => {
     agentDrawerOpenRef.current = open;
+    setSessionsDrawerOpen(open);
   }, []);
   const onReviewDrawerOpenChange = useCallback((open: boolean): void => {
     reviewDrawerOpenRef.current = open;
