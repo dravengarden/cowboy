@@ -205,15 +205,15 @@ iPadOS 26/27 standalone WebKit can keep painting system status/window chrome
 while reporting `safe-area-inset-top: 0`. The system-owned band is outside the
 DOM and cannot be covered by a page overlay. Cowboy therefore defines
 `--cowboy-system-top-clearance`: it follows the real inset normally and has a
-24 px minimum only for wide, coarse-pointer standalone displays. Review,
+24 px minimum only for coarse-pointer standalone displays at least 700 px
+wide and tall, which excludes a landscape iPhone. Review,
 drawers, fullscreen, failure, and connection surfaces use that contract. The
-bottom-mode Transcript is the deliberate exception: it never consumes the
-24 px iPad floor. A physical iPhone installed PWA instead receives a 32 px
-in-page scroll-edge shelf through `cowboy-phone-standalone`; this makes the
-theme-aware material visible when iOS reports a zero inset while still letting
-continuous content pass beneath it. The class requires WebKit's standalone
-signal, a coarse pointer, and a physical screen short side below 700 px, so an
-iPad remains on the real inset even in split view. Keep iPad fallback surfaces
+bottom-mode Transcript and the status-strip material share the same iPad
+floor. Only the iPad PWA receives it: an iPhone PWA (`status-bar-style`
+`default`) starts below the opaque system bar and reports a zero inset, so it
+paints no strip. A synthetic floor there (the former 32 px
+`cowboy-phone-standalone` shelf, removed 2026-09-19) only added a blurred band
+under the system bar. Keep iPad fallback surfaces
 solid and move other transient glass below them; do not switch to
 `black-translucent`, spoof a user agent, or add a synthetic blurred band over
 the iPad system material.

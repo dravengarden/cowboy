@@ -1,9 +1,4 @@
 import { assert, assertEquals } from "jsr:@std/assert";
-import {
-  PHONE_STANDALONE_ROOT_CLASS,
-  prefersPhoneStandaloneStatusShelf,
-  syncPhoneStandaloneRootClass,
-} from "./platform.ts";
 
 const html = await Deno.readTextFile(
   new URL("../index.html", import.meta.url),
@@ -54,7 +49,7 @@ const passkeyHtml = await Deno.readTextFile(
 Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   assert(
     html.includes(
-      "@media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px)",
+      "@media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) and (min-height: 700px)",
     ),
   );
   assert(
@@ -80,20 +75,26 @@ Deno.test("wide standalone touch PWAs recover a missing iPad top inset", () => {
   );
 });
 
-Deno.test("phone standalone status material stays separate from iPad clearance", () => {
-  assert(
-    html.includes(`:root.${PHONE_STANDALONE_ROOT_CLASS}`),
-  );
+Deno.test("only the iPad PWA floor paints a synthetic status strip", () => {
+  // An iPhone PWA starts below its system-drawn status bar and reports a zero
+  // inset. A floor there would add a blurred band under that bar.
+  const floors = html.match(
+    /--cowboy-mobile-status-material-height: max\([^;]*\);/g,
+  ) ?? [];
+  assertEquals(floors, [
+    "--cowboy-mobile-status-material-height: max(env(safe-area-inset-top, 0px), 24px);",
+  ]);
   assert(
     html.includes(
-      "--cowboy-mobile-status-material-height: max(env(safe-area-inset-top, 0px), 32px)",
+      "--cowboy-mobile-status-material-height: env(safe-area-inset-top, 0px);",
     ),
   );
+  assertEquals(html.includes("cowboy-phone-standalone"), false);
+  assertEquals(themeSource.includes("PhoneStandalone"), false);
   assertEquals(
     appSource.match(/var\(--cowboy-mobile-status-material-height\)/g)?.length,
     2,
   );
-  assert(themeSource.includes("syncPhoneStandaloneRootClass();"));
   assert(appSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(reviewSource.includes('pt: "var(--cowboy-system-top-clearance)"'));
   assert(
@@ -109,53 +110,6 @@ Deno.test("phone standalone status material stays separate from iPad clearance",
   );
   assert(appSource.includes("frostedStatusChrome(t)"));
   assert(appSource.includes("data-mobile-status-strip-material={"));
-});
-
-Deno.test("only a coarse iPhone standalone PWA gets the status shelf", () => {
-  const iPhone = {
-    appleStandalone: true,
-    coarsePointer: true,
-    screenWidth: 393,
-    screenHeight: 852,
-  };
-  assertEquals(prefersPhoneStandaloneStatusShelf(iPhone), true);
-  assertEquals(
-    prefersPhoneStandaloneStatusShelf({
-      ...iPhone,
-      screenWidth: 852,
-      screenHeight: 393,
-    }),
-    true,
-  );
-  assertEquals(
-    prefersPhoneStandaloneStatusShelf({ ...iPhone, appleStandalone: false }),
-    false,
-  );
-  assertEquals(
-    prefersPhoneStandaloneStatusShelf({
-      ...iPhone,
-      screenWidth: 744,
-      screenHeight: 1133,
-    }),
-    false,
-  );
-
-  const classes = new Set<string>();
-  assertEquals(
-    syncPhoneStandaloneRootClass({
-      documentElement: {
-        classList: {
-          toggle(name, force): boolean {
-            if (force) classes.add(name);
-            else classes.delete(name);
-            return force;
-          },
-        },
-      },
-    }, iPhone),
-    true,
-  );
-  assertEquals(classes.has(PHONE_STANDALONE_ROOT_CLASS), true);
 });
 
 Deno.test("transient Explore glass clears rather than overlaps iPad system chrome", () => {
