@@ -1,6 +1,15 @@
-import { Box, CircularProgress, Typography, useTheme } from "@mui/material";
+import {
+  alpha,
+  Box,
+  CircularProgress,
+  Typography,
+  useTheme,
+} from "@mui/material";
+import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { type GalleryImage, ImageLightbox } from "@cowboy/app-shell";
+import { useReliableTouchTap } from "./useReliableTouchTap";
 
 let configuredTheme: MermaidConfig["theme"];
 
@@ -22,6 +31,35 @@ async function renderMermaid(
   return svg;
 }
 
+function svgDataUrl(markup: string): string {
+  const document = new DOMParser().parseFromString(markup, "image/svg+xml");
+  const root = document.documentElement;
+  if (root.localName === "svg") {
+    if (!root.getAttribute("xmlns")) {
+      root.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    }
+    const viewBox = root.getAttribute("viewBox")?.trim().split(/[ ,]+/)
+      .map(Number);
+    if (
+      viewBox?.length === 4 && Number.isFinite(viewBox[2]) &&
+      Number.isFinite(viewBox[3]) && viewBox[2]! > 0 && viewBox[3]! > 0
+    ) {
+      // Mermaid emits width="100%" for the in-page responsive figure. An SVG
+      // loaded through <img> has no containing block for that percentage, so
+      // pin its intrinsic size to the diagram's own viewBox before the shared
+      // lightbox fits and zooms it.
+      root.setAttribute("width", String(Math.ceil(viewBox[2]!)));
+      root.setAttribute("height", String(Math.ceil(viewBox[3]!)));
+      root.style.removeProperty("max-width");
+      root.style.removeProperty("width");
+      root.style.removeProperty("height");
+    }
+    root.style.backgroundColor = "transparent";
+    markup = new XMLSerializer().serializeToString(root);
+  }
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`;
+}
+
 export function MermaidDiagram({
   source,
 }: {
@@ -31,10 +69,12 @@ export function MermaidDiagram({
   const theme = useTheme().palette.mode === "dark" ? "dark" : "neutral";
   const [svg, setSvg] = useState<string>();
   const [failed, setFailed] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   useEffect(() => {
     let cancelled = false;
     setSvg(undefined);
     setFailed(false);
+    setPreviewOpen(false);
     void renderMermaid(`cowboy-mermaid-${reactId}`, source, theme)
       .then((next) => {
         if (!cancelled) setSvg(next);
@@ -46,6 +86,17 @@ export function MermaidDiagram({
       cancelled = true;
     };
   }, [reactId, source, theme]);
+  const previewImages = useMemo<GalleryImage[]>(() =>
+    svg
+      ? [{
+        src: svgDataUrl(svg),
+        alt: "Mermaid diagram",
+        themed: true,
+      }]
+      : [], [svg]);
+  const openTap = useReliableTouchTap<HTMLDivElement>(() => {
+    if (previewImages.length > 0) setPreviewOpen(true);
+  });
   if (failed) {
     return (
       <Box sx={{ px: 2, py: 2 }}>
@@ -75,19 +126,71 @@ export function MermaidDiagram({
     );
   }
   return (
-    <Box
-      data-review-mermaid-preview
-      sx={{
-        width: "100%",
-        maxWidth: 880,
-        mx: "auto",
-        px: 2,
-        py: 2,
-        overflow: "auto",
-        "& svg": { maxWidth: "100%", height: "auto" },
-      }}
-      // mermaid.render() returns sanitized SVG when securityLevel is strict.
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <>
+      <Box
+        data-review-mermaid-preview
+        role="button"
+        tabIndex={0}
+        aria-label="Open Mermaid diagram preview"
+        title="Open diagram preview"
+        {...openTap}
+        onKeyDown={(event): void => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          setPreviewOpen(true);
+        }}
+        sx={{
+          position: "relative",
+          width: "100%",
+          maxWidth: 880,
+          mx: "auto",
+          cursor: "zoom-in",
+          borderRadius: 1,
+          outline: 0,
+          "&:focus-visible": {
+            outline: 2,
+            outlineColor: "primary.main",
+            outlineOffset: 2,
+          },
+        }}
+      >
+        <Box
+          sx={{
+            px: 2,
+            py: 2,
+            overflow: "auto",
+            "& svg": { maxWidth: "100%", height: "auto" },
+          }}
+          // mermaid.render() returns sanitized SVG when securityLevel is strict.
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+        <Box
+          aria-hidden
+          sx={(muiTheme) => ({
+            position: "absolute",
+            top: 8,
+            right: 8,
+            display: "grid",
+            placeItems: "center",
+            width: 32,
+            height: 32,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1.5,
+            color: "text.secondary",
+            bgcolor: alpha(muiTheme.palette.background.paper, 0.88),
+            pointerEvents: "none",
+          })}
+        >
+          <OpenInFullRounded sx={{ fontSize: 18 }} />
+        </Box>
+      </Box>
+      <ImageLightbox
+        images={previewImages}
+        index={previewOpen ? 0 : null}
+        onIndex={(): void => undefined}
+        onClose={(): void => setPreviewOpen(false)}
+      />
+    </>
   );
 }
