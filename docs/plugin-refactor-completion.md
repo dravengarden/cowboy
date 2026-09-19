@@ -509,9 +509,12 @@ and accepting a production effect are different milestones.
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
 route. All eleven buffered readers, manifest readiness/selection and both
-continuation caches now preserve that route through reconnection. The v7
-connected gate adds actual core-page/reconnection/restart acceptance; source
-definitions alone do not establish an immutable artifact or production rollout.
+continuation caches now preserve that route through reconnection. Its
+[accepted Controller-only rollout](releases/plugin-session-read-routes-2026-09-19.md)
+includes an old-artifact negative test, two v7/20-check actual-process runs,
+complete integrated gates and activation retaining all 16 original workers.
+This is not Machine-owned filesystem identity, a state lease, native adoption
+or independent recovery; the broader exits below remain open.
 
 The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,

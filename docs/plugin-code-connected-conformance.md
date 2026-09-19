@@ -158,3 +158,7 @@ The later [signed Zed rollout](releases/zed-budget-rollout-2026-09-19.md) repeat
 the 19-check v6 chain against its exact supplied artifacts, then separately
 records actual Machine maintenance and Zed `1.18.0` installation. Its retained
 worker observations do not establish native resume or supported-device acceptance.
+The [Session read-route rollout](releases/plugin-session-read-routes-2026-09-19.md)
+adds v7 check 20, rejects a supplied pre-fix Controller and accepts two corrected
+immutable Controllers. It separately records Controller-only activation with
+the resident Machine, native installation and original workers unchanged.

@@ -66,6 +66,12 @@ actual authenticated core file pages and no-dispatch continuation refusal after
 connection replacement/restart. Artifact acceptance and production activation
 are separate from these source definitions.
 
+The [accepted Controller-only rollout](releases/plugin-session-read-routes-2026-09-19.md)
+records the expected old-artifact failure, two successful v7/20-check runs,
+complete integrated gates and actual activation retaining all 16 original
+workers. The canonical release skill now requires the v7 Session-route check;
+historical v6 receipts cannot accept it.
+
 No Plugin/SDK version, Machine wire protocol, native ABI, journal, SQL baseline
 or private policy changes. Only the Controller requires activation. This is not
 Machine-owned filesystem/inode identity, proof of native runtime continuity,
