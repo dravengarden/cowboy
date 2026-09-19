@@ -10,6 +10,7 @@ mod fixture;
 mod installation;
 mod navigation;
 mod proxy;
+mod read_routes;
 mod synchronization;
 
 const SESSION: &str = "sess-901";
@@ -202,7 +203,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v6",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v7",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -234,7 +235,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 19;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 20;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,

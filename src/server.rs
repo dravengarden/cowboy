@@ -39,7 +39,7 @@ use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
-use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
+use crate::code_adapter::CodeOperation;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
@@ -15349,17 +15349,14 @@ fn validate_zed_adapter_response(
 
 async fn zed_adapter_request_for_session(
     state: &AppState,
-    context: &ResolvedCodeContext,
+    context: &SessionCodeContext,
     request: serde_json::Value,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    let CodeReadScope::Session(scope) = &context.scope else {
-        anyhow::bail!("language request requires a Session scope");
-    };
     zed_request_in_scope(
         &state.hub,
         &state.machine_control,
         state.zed_adapter_socket.as_deref(),
-        scope,
+        &context.scope,
         request,
     )
     .await
@@ -15383,67 +15380,55 @@ async fn remote_code_request(
     scope: &CodeReadScope,
     operation: CodeOperation,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
-    if let CodeReadScope::Workspace(workspace) = scope {
-        if state
-            .machine_control
-            .workspace_scope_is_colocated(workspace)
-            .map_err(anyhow::Error::msg)?
-        {
-            return Ok(None);
+    let value = match scope {
+        CodeReadScope::Workspace(workspace) => {
+            if state
+                .machine_control
+                .workspace_scope_is_colocated(workspace)
+                .map_err(anyhow::Error::msg)?
+            {
+                return Ok(None);
+            }
+            Some(
+                state
+                    .machine_control
+                    .code_request_in_workspace(workspace, operation)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            )
         }
-        let value = state
-            .machine_control
-            .code_request_in_workspace(workspace, operation)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        return Ok(Some(serde_json::from_value(value)?));
-    }
-    let machine_id = scope.machine_id();
-    let cwd = scope.cwd();
-    if machine_id == "local" {
-        return Ok(None);
-    }
-    let colocated = match state.machine_control.is_colocated(machine_id) {
-        Some(value) => value,
-        None => match state.store.as_ref() {
-            Some(store) => store.machine_is_local(machine_id).await.unwrap_or(false),
-            None => false,
-        },
+        CodeReadScope::Session(session) => {
+            anyhow::ensure!(
+                code_reads::session::current(&state.hub, &state.machine_control, session),
+                "code context changed"
+            );
+            state
+                .machine_control
+                .code_request_in_session(session, operation)
+                .await
+                .map_err(anyhow::Error::msg)?
+        }
     };
-    if colocated {
-        return Ok(None);
-    }
-    let request = serde_json::to_value(CodeAdapterRequest {
-        root: cwd.to_owned(),
-        operation,
-    })?;
-    let value = state
-        .machine_control
-        .adapter_request(machine_id, "code", request)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    Ok(Some(serde_json::from_value(value)?))
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(Into::into)
 }
 
 async fn ensure_zed_worktree_for_session(
     state: &AppState,
     context: &ResolvedCodeContext,
-    cwd: &str,
 ) -> anyhow::Result<bool> {
-    match zed_adapter_request_for_session(
-        state,
-        context,
-        serde_json::json!({
-            "type": "ensureWorktree",
-            "path": cwd,
-            "trusted": true,
-        }),
+    let CodeReadScope::Session(scope) = &context.scope else {
+        anyhow::bail!("language request requires a Session scope");
+    };
+    code_reads::session::worktree_ready(
+        &state.hub,
+        &state.machine_control,
+        state.zed_adapter_socket.as_deref(),
+        scope,
     )
-    .await?
-    {
-        ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
-        _ => anyhow::bail!("unexpected Zed adapter response"),
-    }
+    .await
 }
 
 #[cfg(test)]
@@ -15752,9 +15737,16 @@ async fn api_file_tree(
 const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
 
 struct ResolvedCodeContext {
-    machine_id: String,
     cwd: String,
     scope: CodeReadScope,
+}
+
+// Legacy language/resource calls retain their separate original-connection
+// operation boundary. A logical Session observation is not a read-cache key.
+struct SessionCodeContext {
+    machine_id: String,
+    cwd: String,
+    scope: crate::core::SessionCodeScope,
 }
 
 fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
@@ -15795,26 +15787,32 @@ async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCode
         )
         .await?;
         return Some(ResolvedCodeContext {
-            machine_id: scope.machine_id().into(),
             cwd: scope.cwd().into(),
             scope,
         });
     }
-    session_code_context(state, id)
+    let scope =
+        code_reads::session::resolve(&state.hub, &state.machine_control, &state.service_id, id)?;
+    Some(ResolvedCodeContext {
+        cwd: scope.cwd().to_owned(),
+        scope,
+    })
 }
 
-fn session_code_context(state: &AppState, session_id: &str) -> Option<ResolvedCodeContext> {
+fn session_code_context(state: &AppState, session_id: &str) -> Option<SessionCodeContext> {
     let scope = state.hub.session_code_scope(session_id)?;
-    Some(ResolvedCodeContext {
-        machine_id: scope.machine_id().to_owned(),
-        cwd: scope.cwd().to_owned(),
-        scope: CodeReadScope::Session(scope),
+    Some(SessionCodeContext {
+        machine_id: scope.machine_id().into(),
+        cwd: scope.cwd().into(),
+        scope,
     })
 }
 
 async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadScope) -> bool {
     match scope {
-        CodeReadScope::Session(scope) => state.hub.code_scope_is_current(scope),
+        CodeReadScope::Session(scope) => {
+            code_reads::session::current(&state.hub, &state.machine_control, scope)
+        }
         CodeReadScope::Workspace(workspace) => {
             resolve_code_context(state, id)
                 .await
@@ -15834,7 +15832,7 @@ async fn api_code_manifest(
     code_reads::scoped(&owner, &context_id, |context| async move {
         let cwd = context.cwd.clone();
         let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
-            match ensure_zed_worktree_for_session(&state, &context, &cwd).await {
+            match ensure_zed_worktree_for_session(&state, &context).await {
                 Ok(ready) => ready,
                 Err(error) => {
                     tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
@@ -16700,14 +16698,11 @@ async fn api_code_buffer_lease(
         // run rust-analyzer there.
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
-    let CodeReadScope::Session(scope) = &context.scope else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
     let response = zed_session::buffer_request(
         &state.hub,
         &state.machine_control,
         state.zed_adapter_socket.as_deref(),
-        scope,
+        &context.scope,
         zed_session::BufferRequest {
             worktree: &worktree,
             path: &path,

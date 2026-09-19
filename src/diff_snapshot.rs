@@ -474,6 +474,14 @@ mod tests {
     #[tokio::test]
     async fn session_retarget_and_recreation_do_not_reuse_cached_pages() {
         let hub = crate::core::Hub::new();
+        let control = crate::machine_control::MachineControl::default();
+        let scope = || {
+            CodeReadScope::Session(
+                control
+                    .session_read_scope("service-test", hub.session_code_scope("session").unwrap())
+                    .unwrap(),
+            )
+        };
         let create = || {
             hub.create_local_session(
                 "session".into(),
@@ -485,7 +493,7 @@ mod tests {
             )
         };
         create();
-        let original = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        let original = scope();
         let mut snapshot_key = key("a.rs");
         snapshot_key.owner = original.clone();
         let cache = DiffSnapshotCache::new(24, 1024, 4, Duration::from_secs(60));
@@ -495,7 +503,7 @@ mod tests {
             .unwrap();
         hub.update_session_cwd("session", "/other".into()).unwrap();
         hub.update_session_cwd("session", "/work".into()).unwrap();
-        let retargeted = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        let retargeted = scope();
         assert_ne!(original, retargeted);
         assert!(
             cache
@@ -505,7 +513,7 @@ mod tests {
         );
         hub.delete_session("session");
         create();
-        let recreated = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+        let recreated = scope();
         assert_ne!(retargeted, recreated);
         assert!(
             cache

@@ -506,6 +506,13 @@ and accepting a production effect are different milestones.
 
 ## Code work still required
 
+The [Session read-route binding](plugin-session-read-routes.md) additionally
+separates logical Session identity from the original core/Machine execution
+route. All eleven buffered readers, manifest readiness/selection and both
+continuation caches now preserve that route through reconnection. The v7
+connected gate adds actual core-page/reconnection/restart acceptance; source
+definitions alone do not establish an immutable artifact or production rollout.
+
 The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,
 buffered responses and file/diff continuations. Observed removal/path ABA,

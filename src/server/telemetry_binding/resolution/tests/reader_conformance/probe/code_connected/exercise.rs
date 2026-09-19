@@ -125,6 +125,9 @@ pub(super) async fn run(
     check(manifest["bufferMode"] == "owned")?;
     checks.push("real_login_enrollment_and_effect_free_unready_refusal");
 
+    *stage = "session_file_read_route";
+    let file_continuation = read_routes::prepare(pair).await?;
+
     *stage = "cancelled_open";
     let first = prepare(pair).await?;
     let gate = pair.proxy.hold("openBufferLease")?;
@@ -254,6 +257,7 @@ pub(super) async fn run(
     let commands = pair.proxy.counts()?.commands;
     pair.proxy.cut()?;
     pair.connected(2).await?;
+    read_routes::refused(pair, &file_continuation).await?;
     synchronization::replacement_refused(pair, &sync).await?;
     navigation::unavailable(pair, &navigation, StatusCode::CONFLICT).await?;
     let observed = pair
@@ -281,6 +285,7 @@ pub(super) async fn run(
         .await?;
     pair.start_controller().await?;
     pair.connected(3).await?;
+    read_routes::refused(pair, &file_continuation).await?;
     let missing = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
@@ -295,5 +300,8 @@ pub(super) async fn run(
     navigation::unavailable(pair, &navigation, StatusCode::NOT_FOUND).await?;
     checks.push("navigation_replacement_connection_and_restart_refuse_adoption");
     checks.push("replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id");
+    checks.push(
+        "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+    );
     Ok(())
 }

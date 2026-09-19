@@ -51,7 +51,35 @@ fn only_original_text_reads_allow_a_json_escaped_native_page() {
     );
 }
 
+#[test]
+fn core_file_page_budget_is_closed_to_exact_session_file_routes() {
+    let path = "/api/code/sessions/session/file?path=route-read.txt";
+    assert_eq!(response_limit(&Method::GET, path, None), 2 * 1024 * 1024);
+    assert_eq!(response_limit(&Method::POST, path, None), 64 * 1024);
+    for other in [
+        "/api/code/sessions//file?path=a",
+        "/api/code/sessions/one/two/file?path=a",
+        "/api/code/sessions/one/file-raw?path=a",
+        "/api/code/sessions/one/manifest",
+        "/api/code/buffers/one/read",
+    ] {
+        assert_eq!(response_limit(&Method::GET, other, None), 64 * 1024);
+    }
+}
+
+fn core_file_read(method: &Method, path: &str) -> bool {
+    method == Method::GET
+        && path
+            .strip_prefix("/api/code/sessions/")
+            .and_then(|rest| rest.split_once("/file?"))
+            .is_some_and(|(id, _)| !id.is_empty() && !id.contains('/'))
+}
+
 fn response_limit(method: &Method, path: &str, body: Option<&Value>) -> usize {
+    if core_file_read(method, path) {
+        // One 256 KiB UTF-8 core page, including worst-case JSON escaping.
+        return 2 * 1024 * 1024;
+    }
     let original_read = path
         .strip_prefix("/api/code/buffers/")
         .and_then(|rest| rest.strip_suffix("/read"))
@@ -103,6 +131,7 @@ impl Http {
         body: Option<Value>,
     ) -> Result<Reply, Failure> {
         let max_bytes = response_limit(&method, path, body.as_ref());
+        let core_file = core_file_read(&method, path);
         let started = std::time::Instant::now();
         *self.last.lock() = Some(HttpObservation {
             status: None,
@@ -131,6 +160,17 @@ impl Http {
             Failure::WrongObservation
         })?;
         let status = response.status();
+        if core_file
+            && status == StatusCode::GONE
+            && (response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|h| h.to_str().ok())
+                != Some("no-store")
+                || response.headers().contains_key(header::ETAG))
+        {
+            return Err(Failure::WrongObservation);
+        }
         *self.last.lock() = Some(HttpObservation {
             status: Some(status.as_u16()),
             elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),

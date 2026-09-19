@@ -45,7 +45,7 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Nineteen checks cover (receipt schema `...code-buffer-connected-conformance/v6`,
+Twenty checks cover (receipt schema `...code-buffer-connected-conformance/v7`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -106,6 +106,13 @@ Historical v3 receipts cover only the first eleven checks:
     `refused/budget`. Duplicate Apply does not dispatch, original native text
     and changed disk bytes remain intact, and separate retirement/release
     complete without replay. Historical v5 does not accept this extension.
+20. Actual authenticated core filesystem pages reconstruct a file whose non-BMP
+    scalar crosses the 256 KiB boundary. After Machine connection replacement,
+    and again after Controller restart, the original continuation returns
+    `410/no-store` without an ETag or any additional Machine command, even after
+    its source path is gone. The relay admits only the named fixture's typed
+    file operation and a bounded page envelope. Historical v6 does not accept
+    this Session-route extension; it does not prove filesystem/inode continuity.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills

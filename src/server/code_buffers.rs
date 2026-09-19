@@ -28,13 +28,13 @@ pub(super) fn review_mode(control: &MachineControl, scope: &CodeReadScope) -> Re
     let CodeReadScope::Session(scope) = scope else {
         return ReviewMode::Legacy;
     };
-    if scope.machine_id() == "local" {
-        return ReviewMode::Legacy;
-    }
-    let Ok(connection) = control.operation_connection(scope.machine_id()) else {
+    if !control.session_read_scope_is_current(scope) {
         return ReviewMode::Unavailable;
+    }
+    let Some(connection) = scope.connection() else {
+        return ReviewMode::Legacy;
     };
-    if control.supports_code_buffer_sync(&connection) {
+    if control.supports_code_buffer_sync(connection) {
         ReviewMode::Owned
     } else {
         ReviewMode::Legacy
@@ -170,7 +170,7 @@ async fn prepare_inner(
     // reservation/I/O. A resource retains no client-provided paths after prepare.
     if request.path.len() > 4_096
         || authenticated.principal.user_id.len() > 256
-        || CodeReadScope::Session(scope.clone()).string_bytes() > 16 * 1024
+        || scope.string_bytes() > 16 * 1024
     {
         return Err(StatusCode::BAD_REQUEST);
     }

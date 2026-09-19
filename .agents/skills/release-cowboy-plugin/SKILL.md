@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  nineteen checks, including live authenticated Code installation into an empty
+  twenty checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v6; historical
+  and separately completed retirement. Require receipt schema v7; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -355,6 +355,11 @@ In addition, require all applicable Provider gates below:
   local timeouts cannot clear Unknown; all four typed readers and the browser
   confirmation surface must preserve one-use Apply and independent retirement.
   See `docs/plugin-sync-budget-outcomes.md`; native rejection is not restoration.
+  Session read-route changes additionally require v7 check 20: exact complete
+  core file paging with a non-BMP page boundary, then original-cursor refusal
+  after authenticated Machine reconnection and Controller restart, with no
+  additional Machine dispatch and `410/no-store/no-ETag`. The older v6 chain
+  does not accept this read-route extension or Machine-owned filesystem identity.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not

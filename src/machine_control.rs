@@ -17,12 +17,14 @@ use tokio::sync::{mpsc, oneshot};
 mod code_buffer_navigation;
 mod code_buffer_sync;
 mod installation;
+mod session_reads;
 mod site;
 mod telemetry_export;
 mod telemetry_recovery;
 mod telemetry_resolution;
 mod workspace;
 
+pub(crate) use session_reads::SessionReadScope;
 pub(crate) use telemetry_resolution::TelemetryInstallationLease;
 pub(crate) use workspace::WorkspaceCodeScope;
 
@@ -436,6 +438,7 @@ impl LiveState {
 
 pub struct MachineControl {
     service: crate::service_identity::ServiceIdentity,
+    read_owner: Arc<()>,
     live: RwLock<LiveState>,
     next_request: AtomicU64,
 }
@@ -451,6 +454,7 @@ impl MachineControl {
     pub(crate) fn new(service: crate::service_identity::ServiceIdentity) -> Self {
         Self {
             service,
+            read_owner: Arc::new(()),
             live: RwLock::new(LiveState::default()),
             next_request: AtomicU64::new(0),
         }

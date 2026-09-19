@@ -35,6 +35,12 @@ observation. Observed remove/re-add and connection replacement can no longer
 revive old reads or cursors. Unreported filesystem/configuration changes and
 Machine-owned state leases remain outside that finite Controller boundary.
 
+The later [Session read-route binding](plugin-session-read-routes.md) likewise
+joins the logical Session observation to the original core registry and Machine
+connection for buffered filesystem/Git reads and cache continuations. A logical
+Session alone is no longer their cache key; named colocated Machines cannot
+fall back to a saved local-route flag after disconnection.
+
 ## Existing consumers
 
 - Zed worktree readiness, buffer open/close, language, hover, navigation and

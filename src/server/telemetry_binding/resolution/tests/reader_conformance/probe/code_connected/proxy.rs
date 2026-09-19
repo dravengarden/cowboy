@@ -4,6 +4,10 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Notify, watch};
 
+// Includes the bounded 256 KiB core file page and its JSON/frame envelope.
+// Fixture text is explicit ASCII plus one non-BMP scalar, not arbitrary input.
+const MAX_FRAME_BYTES: usize = 512 * 1024;
+
 #[derive(Clone, Default, Serialize)]
 pub(super) struct Counts {
     pub connections: u32,
@@ -95,8 +99,8 @@ impl Proxy {
             while let Ok((stream, _)) = listener.accept().await {
                 let result = tokio::time::timeout(Duration::from_secs(4), async {
                     let config = WebSocketConfig::default()
-                        .max_message_size(Some(256 * 1024))
-                        .max_frame_size(Some(256 * 1024));
+                        .max_message_size(Some(MAX_FRAME_BYTES))
+                        .max_frame_size(Some(MAX_FRAME_BYTES));
                     let machine = tokio_tungstenite::accept_async_with_config(stream, Some(config))
                         .await
                         .ok()?;
@@ -233,7 +237,7 @@ fn inspect(
         check(matches!(message, Message::Ping(_) | Message::Pong(_)))?;
         return Ok(None);
     };
-    check(text.len() <= 256 * 1024)?;
+    check(text.len() <= MAX_FRAME_BYTES)?;
     let frame: MachineFrame = serde_json::from_str(text).map_err(|_| Failure::FrameDecode)?;
     match frame {
         MachineFrame::Command { command } if !from_machine => command_frame(command, record)?,
@@ -339,11 +343,15 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                 let request: crate::code_adapter::CodeAdapterRequest =
                     serde_json::from_value(payload.clone())
                         .map_err(|_| Failure::WrongObservation)?;
-                check(matches!(
-                    request.operation,
-                    crate::code_adapter::CodeOperation::Manifest
-                ))?;
-                "coreManifest"
+                match request.operation {
+                    crate::code_adapter::CodeOperation::Manifest => "coreManifest",
+                    crate::code_adapter::CodeOperation::File { path, .. }
+                        if path == read_routes::FILE =>
+                    {
+                        "coreFile"
+                    }
+                    _ => return Err(Failure::WrongObservation),
+                }
             };
             record.command(request_id, kind)
         }
@@ -460,6 +468,45 @@ fn relay_accepts_only_scoped_uninstall_preflight_and_bounds_correlation() {
             .command("overflow".into(), "readBufferLease")
             .is_err()
     );
+}
+
+#[test]
+fn relay_core_pages_are_limited_to_the_named_fixture_and_never_raw_or_arbitrary_reads() {
+    for (payload, accepted) in [
+        (
+            json!({"root":"/fixture", "type":"file", "path":read_routes::FILE, "cursor":null}),
+            true,
+        ),
+        (
+            json!({"root":"/fixture", "type":"file", "path":"other", "cursor":null}),
+            false,
+        ),
+        (
+            json!({"root":"/fixture", "type":"file_raw", "path":read_routes::FILE}),
+            false,
+        ),
+        (
+            json!({"root":"/fixture", "type":"directory", "path":"", "limit":20}),
+            false,
+        ),
+    ] {
+        let mut record = Record::default();
+        let result = command_frame(
+            MachineCommand::AdapterRequest {
+                request_id: "core-file".into(),
+                adapter: "code".into(),
+                payload,
+            },
+            &mut record,
+        );
+        assert_eq!(result.is_ok(), accepted);
+        if accepted {
+            assert_eq!(record.counts.commands.get("coreFile"), Some(&1));
+            assert!(record.reply("core-file").unwrap().is_none());
+        } else {
+            assert!(record.pending.is_empty());
+        }
+    }
 }
 
 #[test]
