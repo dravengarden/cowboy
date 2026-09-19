@@ -113,9 +113,10 @@ and accepting a production effect are different milestones.
   It retains the original Session incarnation and authenticated Machine
   connection; observer cancellation cannot cancel an admitted mutation, and
   ambiguous effects never replay or expire. Cleanup requires the original
-  resource user but not a still-existing Session/path. Ordinary Review language
-  reads and buffer calls remain legacy; native-generation rollout, abandoned
-  browser cleanup, restart restoration and independent recovery remain open.
+  resource user but not a still-existing Session/path. The subsequent owned
+  Review consumers below use this interface; abandoned-browser cleanup,
+  restart restoration and independent recovery remain open. Native-generation
+  rollout and consumer/device acceptance are separately recorded.
   Its [Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
   passed the complete gate (1,317 all-feature Rust tests) and immutable build.
   Its original six-publication prerequisite is now closed by
@@ -528,6 +529,19 @@ deployment window. Native open/close and original-ID resource cleanup remain
 separate; discarding a legacy navigation reply is not destination release or
 post-effect restoration. None of the broader exits below is closed by this
 finite extension.
+
+The [ordinary buffer outcome rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+now separates native effect recording from response authority for Open, Query
+and Release, including saved observations and remote failures. One original
+credential and absolute deadline span admission, the owned task and response;
+logout cannot discard an observed effect or rearm its mutation. Two complete
+28-check v10 runs accept the previous and current supplied Machine artifacts;
+the old Controller fails the actual post-logout Open test. The complete quality
+gate, 24 browser cases and actual Catalog/host floors pass. It is published and
+activated on Controller, retaining all 16 observed workers in its deployment
+window. The separately completed earlier Machine maintenance is recorded, not
+attributed to this Controller release. This does not close general graph/state
+authority, abandoned-browser/restart recovery or independent effect restoration.
 
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution

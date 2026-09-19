@@ -12,6 +12,9 @@ The additive [owned observation API](plugin-owned-buffer-reads.md) now implement
 diagnostic and symbol reads; its rollout remains separately recorded.
 The separate [synchronization API](plugin-service-buffer-sync.md) adds finite
 original-owner preparation/confirmation, independently of ordinary buffer reads.
+The [outcome-authority rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+adds fresh original-login checks without discarding recorded effects; it is
+accepted against two supplied Machine artifacts and activated on Controller.
 
 ## Fixed core ownership
 
@@ -97,8 +100,9 @@ retain their existing uncertainty and never rearm a consumed attempt.
 Per-resource jobs serialize by admission without holding a global lock across
 I/O. Other resources can progress independently. The owning task set imposes a
 60-second absolute request deadline including authority checks; handing work to
-the owned task cannot renew it, and expiry cannot begin an effect. It bounds concurrent jobs to 64,
-reaps completed tasks and aborts/drains outstanding tasks at Controller shutdown.
+the owned task cannot renew it, and expiry cannot begin an effect. It bounds
+concurrent jobs to 64, reaps completed tasks and aborts/drains outstanding tasks
+at Controller shutdown.
 Shutdown is not native cleanup or restoration: possible effects keep their
 process-local unknown evidence until this Controller goes away.
 

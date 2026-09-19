@@ -197,3 +197,8 @@ later independent Provider-auth rotation are recorded separately.
 The [legacy-language rollout](releases/plugin-language-read-authority-2026-09-19.md)
 adds v9 checks 22–25, rejects the old artifact's post-logout language reply and
 accepts the corrected immutable Controller's complete 25-check chain.
+The [owned-outcome rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+adds v10 checks 26–28, rejects the old artifact's post-logout Open reply and
+accepts two complete 28-check runs against the supplied previous and current
+Machine artifacts. Original effects remain recorded before response refusal;
+Controller-only activation is separately observed with all 16 workers retained.
