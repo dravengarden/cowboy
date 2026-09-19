@@ -23,6 +23,7 @@ pub(in crate::server::telemetry_binding) fn authority(
     intent: &ResolutionIntent,
 ) -> TelemetryResolutionAuthority {
     let verified = AuthenticatedProductRequest {
+        permissions: None,
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,

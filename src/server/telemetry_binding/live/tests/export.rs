@@ -117,6 +117,7 @@ impl Approval {
             self.auth(),
             "service-test",
             Some(&AuthenticatedProductRequest {
+                permissions: None,
                 principal: crate::product_auth::local_product_principal(),
                 cookie_session: None,
                 device_identity: None,

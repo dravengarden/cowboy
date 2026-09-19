@@ -1,59 +1,268 @@
 {
-  "default": "palette-103",
+  "default": "curlseal-026",
   "groups": [
     {
-      "id": "electric",
-      "name": "Electric",
-      "description": "Bright contrasts on ink",
+      "id": "flat",
+      "name": "Flat",
+      "description": "01–25 · One solid color across the whole mark",
       "styles": [
-        { "id": "palette-103", "name": "Neon", "themeColor": "#BB83FF" },
-        { "id": "palette-101", "name": "Ember", "themeColor": "#FF982D" },
-        { "id": "palette-108", "name": "Pop", "themeColor": "#FF48AE" },
-        { "id": "palette-111", "name": "Prism", "themeColor": "#E35EFF" }
+        {
+          "id": "curlseal-001",
+          "name": "Lilac Flat",
+          "themeColor": "#B99AF3"
+        },
+        {
+          "id": "curlseal-002",
+          "name": "Orchid Flat",
+          "themeColor": "#DA94D8"
+        },
+        {
+          "id": "curlseal-003",
+          "name": "Rose Flat",
+          "themeColor": "#EA8DB6"
+        },
+        {
+          "id": "curlseal-004",
+          "name": "Coral Flat",
+          "themeColor": "#F9917A"
+        },
+        {
+          "id": "curlseal-005",
+          "name": "Amber Flat",
+          "themeColor": "#F1BF70"
+        },
+        {
+          "id": "curlseal-006",
+          "name": "Gold Flat",
+          "themeColor": "#EBD58B"
+        },
+        {
+          "id": "curlseal-007",
+          "name": "Lime Flat",
+          "themeColor": "#CCD999"
+        },
+        {
+          "id": "curlseal-008",
+          "name": "Jade Flat",
+          "themeColor": "#8BD1B2"
+        },
+        {
+          "id": "curlseal-009",
+          "name": "Lagoon Flat",
+          "themeColor": "#78CED0"
+        },
+        {
+          "id": "curlseal-010",
+          "name": "Glacier Flat",
+          "themeColor": "#92CFF0"
+        },
+        {
+          "id": "curlseal-011",
+          "name": "Azure Flat",
+          "themeColor": "#8CABEF"
+        },
+        {
+          "id": "curlseal-012",
+          "name": "Indigo Flat",
+          "themeColor": "#A6A5EC"
+        },
+        {
+          "id": "curlseal-013",
+          "name": "Silver Flat",
+          "themeColor": "#CDD5E3"
+        },
+        {
+          "id": "curlseal-014",
+          "name": "Ivory Flat",
+          "themeColor": "#E9DDCC"
+        },
+        {
+          "id": "curlseal-015",
+          "name": "Copper Flat",
+          "themeColor": "#D3A181"
+        },
+        {
+          "id": "curlseal-016",
+          "name": "Lavender Paper Flat",
+          "themeColor": "#906CB6"
+        },
+        {
+          "id": "curlseal-017",
+          "name": "Rose Paper Flat",
+          "themeColor": "#AF5E82"
+        },
+        {
+          "id": "curlseal-018",
+          "name": "Terracotta Paper Flat",
+          "themeColor": "#AF7052"
+        },
+        {
+          "id": "curlseal-019",
+          "name": "Sage Paper Flat",
+          "themeColor": "#587D69"
+        },
+        {
+          "id": "curlseal-020",
+          "name": "Blue Paper Flat",
+          "themeColor": "#4777AD"
+        },
+        {
+          "id": "curlseal-021",
+          "name": "Cobalt Flat",
+          "themeColor": "#284FC0"
+        },
+        {
+          "id": "curlseal-022",
+          "name": "Violet Flat",
+          "themeColor": "#6643AB"
+        },
+        {
+          "id": "curlseal-023",
+          "name": "Cherry Flat",
+          "themeColor": "#A73152"
+        },
+        {
+          "id": "curlseal-024",
+          "name": "Evergreen Flat",
+          "themeColor": "#265B49"
+        },
+        {
+          "id": "curlseal-025",
+          "name": "Ink on Cream Flat",
+          "themeColor": "#534550"
+        }
       ]
     },
     {
-      "id": "soft",
-      "name": "Soft",
-      "description": "Gentle color and pastel accents",
+      "id": "flow",
+      "name": "Flow",
+      "description": "26–50 · One continuous gradient across both pieces",
       "styles": [
-        { "id": "palette-054", "name": "Frost", "themeColor": "#BDD2ED" },
-        { "id": "palette-055", "name": "Peach", "themeColor": "#F3B39A" },
-        { "id": "palette-072", "name": "Blush", "themeColor": "#C78FAD" },
-        { "id": "palette-080", "name": "Cloud", "themeColor": "#AF9AC7" }
-      ]
-    },
-    {
-      "id": "heritage",
-      "name": "Heritage",
-      "description": "Warm paper, denim and earth",
-      "styles": [
-        { "id": "palette-061", "name": "Rodeo", "themeColor": "#AD343B" },
-        { "id": "palette-063", "name": "Denim", "themeColor": "#35618B" },
-        { "id": "palette-069", "name": "Suede", "themeColor": "#715184" },
-        { "id": "palette-090", "name": "Sepia", "themeColor": "#805A42" }
-      ]
-    },
-    {
-      "id": "jewel",
-      "name": "Jewel",
-      "description": "Rich fields of saturated color",
-      "styles": [
-        { "id": "palette-077", "name": "Cobalt", "themeColor": "#4564CD" },
-        { "id": "palette-076", "name": "Mulberry", "themeColor": "#AB4979" },
-        { "id": "palette-129", "name": "Ruby", "themeColor": "#C33456" },
-        { "id": "palette-135", "name": "Amethyst", "themeColor": "#8F4ADA" }
-      ]
-    },
-    {
-      "id": "quiet",
-      "name": "Quiet",
-      "description": "Understated neutrals with a hint of color",
-      "styles": [
-        { "id": "palette-057", "name": "Silver", "themeColor": "#8898BD" },
-        { "id": "palette-081", "name": "Espresso", "themeColor": "#997252" },
-        { "id": "palette-085", "name": "Sand", "themeColor": "#A58A65" },
-        { "id": "palette-088", "name": "Slate", "themeColor": "#65798E" }
+        {
+          "id": "curlseal-026",
+          "name": "Lilac Flow",
+          "themeColor": "#B99AF3"
+        },
+        {
+          "id": "curlseal-027",
+          "name": "Orchid Flow",
+          "themeColor": "#DA94D8"
+        },
+        {
+          "id": "curlseal-028",
+          "name": "Rose Flow",
+          "themeColor": "#EA8DB6"
+        },
+        {
+          "id": "curlseal-029",
+          "name": "Coral Flow",
+          "themeColor": "#F9917A"
+        },
+        {
+          "id": "curlseal-030",
+          "name": "Amber Flow",
+          "themeColor": "#F1BF70"
+        },
+        {
+          "id": "curlseal-031",
+          "name": "Gold Flow",
+          "themeColor": "#EBD58B"
+        },
+        {
+          "id": "curlseal-032",
+          "name": "Lime Flow",
+          "themeColor": "#CCD999"
+        },
+        {
+          "id": "curlseal-033",
+          "name": "Jade Flow",
+          "themeColor": "#8BD1B2"
+        },
+        {
+          "id": "curlseal-034",
+          "name": "Lagoon Flow",
+          "themeColor": "#78CED0"
+        },
+        {
+          "id": "curlseal-035",
+          "name": "Glacier Flow",
+          "themeColor": "#92CFF0"
+        },
+        {
+          "id": "curlseal-036",
+          "name": "Azure Flow",
+          "themeColor": "#8CABEF"
+        },
+        {
+          "id": "curlseal-037",
+          "name": "Indigo Flow",
+          "themeColor": "#A6A5EC"
+        },
+        {
+          "id": "curlseal-038",
+          "name": "Silver Flow",
+          "themeColor": "#CDD5E3"
+        },
+        {
+          "id": "curlseal-039",
+          "name": "Ivory Flow",
+          "themeColor": "#E9DDCC"
+        },
+        {
+          "id": "curlseal-040",
+          "name": "Copper Flow",
+          "themeColor": "#D3A181"
+        },
+        {
+          "id": "curlseal-041",
+          "name": "Lavender Paper Flow",
+          "themeColor": "#906CB6"
+        },
+        {
+          "id": "curlseal-042",
+          "name": "Rose Paper Flow",
+          "themeColor": "#AF5E82"
+        },
+        {
+          "id": "curlseal-043",
+          "name": "Terracotta Paper Flow",
+          "themeColor": "#AF7052"
+        },
+        {
+          "id": "curlseal-044",
+          "name": "Sage Paper Flow",
+          "themeColor": "#587D69"
+        },
+        {
+          "id": "curlseal-045",
+          "name": "Blue Paper Flow",
+          "themeColor": "#4777AD"
+        },
+        {
+          "id": "curlseal-046",
+          "name": "Cobalt Flow",
+          "themeColor": "#284FC0"
+        },
+        {
+          "id": "curlseal-047",
+          "name": "Violet Flow",
+          "themeColor": "#6643AB"
+        },
+        {
+          "id": "curlseal-048",
+          "name": "Cherry Flow",
+          "themeColor": "#A73152"
+        },
+        {
+          "id": "curlseal-049",
+          "name": "Evergreen Flow",
+          "themeColor": "#265B49"
+        },
+        {
+          "id": "curlseal-050",
+          "name": "Ink on Cream Flow",
+          "themeColor": "#534550"
+        }
       ]
     }
   ]

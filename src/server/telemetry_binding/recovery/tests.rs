@@ -10,6 +10,7 @@ fn authority(
     before: &Operation,
 ) -> TelemetryRecoveryAuthority {
     let verified = AuthenticatedProductRequest {
+        permissions: None,
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,

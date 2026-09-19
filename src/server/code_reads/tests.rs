@@ -7,6 +7,8 @@ use tokio::sync::oneshot;
 use super::*;
 use crate::core::{Hub, SessionOrigin, Status};
 
+mod authority;
+
 fn create(hub: &Hub) {
     hub.create_local_session(
         "session".into(),
@@ -40,6 +42,8 @@ async fn stale_observation_never_invokes_the_read_closure() {
         || async {
             checks.set(checks.get() + 1);
             hub.code_scope_is_current(&scope)
+                .then_some(())
+                .ok_or(Denial::Context)
         },
         || {
             // Even synchronous setup, before constructing the future, is gated.
@@ -103,6 +107,8 @@ async fn changes_while_reading_discard_success_conditional_and_error_responses()
                 || async {
                     checks.set(checks.get() + 1);
                     hub.code_scope_is_current(&scope)
+                        .then_some(())
+                        .ok_or(Denial::Context)
                 },
                 || async {
                     started.send(()).unwrap();
@@ -141,7 +147,11 @@ async fn stable_cache_hits_keep_exact_headers_bytes_and_conditional_status() {
             headers.insert(header::IF_NONE_MATCH, "\"revision\"".parse().unwrap());
         }
         let response = guarded_response(
-            || async { hub.code_scope_is_current(&scope) },
+            || async {
+                hub.code_scope_is_current(&scope)
+                    .then_some(())
+                    .ok_or(Denial::Context)
+            },
             || async {
                 hub.rename_session("session", "renamed".into());
                 hub.set_status("session", Status::Running, None);
@@ -181,7 +191,11 @@ async fn an_immediate_conditional_cache_return_is_still_rechecked() {
     create(&hub);
     let scope = hub.session_code_scope("session").unwrap();
     let response = guarded_response(
-        || async { hub.code_scope_is_current(&scope) },
+        || async {
+            hub.code_scope_is_current(&scope)
+                .then_some(())
+                .ok_or(Denial::Context)
+        },
         || async {
             Change::Recreate.apply(&hub);
             let mut headers = HeaderMap::new();
@@ -199,7 +213,11 @@ async fn stable_context_preserves_read_errors_instead_of_masking_them() {
     create(&hub);
     let scope = hub.session_code_scope("session").unwrap();
     let response = guarded_response(
-        || async { hub.code_scope_is_current(&scope) },
+        || async {
+            hub.code_scope_is_current(&scope)
+                .then_some(())
+                .ok_or(Denial::Context)
+        },
         || async { (StatusCode::BAD_GATEWAY, "remote file unavailable").into_response() },
     )
     .await;
@@ -218,7 +236,7 @@ async fn asynchronous_recheck_finishes_before_releasing_the_response() {
         || async {
             tokio::task::yield_now().await;
             checks.set(checks.get() + 1);
-            !read_finished.get()
+            (!read_finished.get()).then_some(()).ok_or(Denial::Context)
         },
         || async {
             read_finished.set(true);

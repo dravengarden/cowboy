@@ -19,6 +19,10 @@ ROOT = Path(__file__).resolve().parent.parent
 PUBLIC = ROOT / 'web/public/app-icons/v5'
 CATALOG = ROOT / 'web/src/appIconCatalog.json'
 DEFAULT = json.loads((ROOT / 'web/src/appIconStyles.json').read_text())['default']
+if DEFAULT.startswith('curlseal-'):
+    import runpy
+    runpy.run_path(str(ROOT / 'tools/build-curlseal-icons.py'), run_name='__main__')
+    raise SystemExit(0)
 
 def write(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)

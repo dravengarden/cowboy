@@ -113,9 +113,10 @@ and accepting a production effect are different milestones.
   It retains the original Session incarnation and authenticated Machine
   connection; observer cancellation cannot cancel an admitted mutation, and
   ambiguous effects never replay or expire. Cleanup requires the original
-  resource user but not a still-existing Session/path. Ordinary Review language
-  reads and buffer calls remain legacy; native-generation rollout, abandoned
-  browser cleanup, restart restoration and independent recovery remain open.
+  resource user but not a still-existing Session/path. The subsequent owned
+  Review consumers below use this interface; abandoned-browser cleanup,
+  restart restoration and independent recovery remain open. Native-generation
+  rollout and consumer/device acceptance are separately recorded.
   Its [Controller candidate](releases/plugin-controller-buffer-owners-2026-09-15.md)
   passed the complete gate (1,317 all-feature Rust tests) and immutable build.
   Its original six-publication prerequisite is now closed by
@@ -505,6 +506,67 @@ and accepting a production effect are different milestones.
   adds nine database-backed role pairs and reopen/no-replay checks.
 
 ## Code work still required
+
+The [buffered read authority](plugin-code-read-authority.md) now attaches original
+product credentials and current Session visibility to those eleven readers.
+It shares credential continuation with Operator approval without granting
+Viewer/automation reads mutation authority. It discards cached, conditional,
+raw and error replies after observed logout/revocation or visibility loss.
+Its [Controller rollout](releases/plugin-code-read-authority-2026-09-19.md)
+passes the connected v8/21-check chain (including a held real file reply and
+product-API logout), an old-artifact negative test and the clean complete gate.
+It is published and activated; the release records both its sixteen-worker
+deployment window and the later separate Claude authentication-generation roll.
+This is finite request authorization, not continuous security-domain epochs,
+unobserved principal ABA protection or an atomic delivery fence.
+
+The same boundary now covers the four legacy Session language queries through
+closed command types and the original pre-authorization connection observation.
+Its [accepted Controller rollout](releases/plugin-language-read-authority-2026-09-19.md)
+passes all 25 connected v9 checks, the old-artifact negative test and the
+complete quality gate. It retains all 16 original workers in its own bounded
+deployment window. Native open/close and original-ID resource cleanup remain
+separate; discarding a legacy navigation reply is not destination release or
+post-effect restoration. None of the broader exits below is closed by this
+finite extension.
+
+The [ordinary buffer outcome rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+now separates native effect recording from response authority for Open, Query
+and Release, including saved observations and remote failures. One original
+credential and absolute deadline span admission, the owned task and response;
+logout cannot discard an observed effect or rearm its mutation. Two complete
+28-check v10 runs accept the previous and current supplied Machine artifacts;
+the old Controller fails the actual post-logout Open test. The complete quality
+gate, 24 browser cases and actual Catalog/host floors pass. It is published and
+activated on Controller, retaining all 16 observed workers in its deployment
+window. The separately completed earlier Machine maintenance is recorded, not
+attributed to this Controller release. This does not close general graph/state
+authority, abandoned-browser/restart recovery or independent effect restoration.
+
+The [core product permission lifetime](plugin-product-permission-lifetimes.md)
+now binds verified product requests to the effective role observed at original
+authentication. Core policy changes end affected observations before unlocking;
+role restoration without an intervening poll cannot revive old requests, and
+promotion cannot expand them. Unchanged users/roles retain their observations.
+Both current and ended generations count against bounded live retention.
+Code responses and Operator install/uninstall/telemetry continuations share this
+core-only boundary while recording actual native effects independently. Its
+[accepted Controller rollout](releases/plugin-product-permission-lifetimes-2026-09-19.md)
+passes the source role-ABA negative/positive gates, complete quality gate, all
+28 connected v10 checks, 24 browser cases and actual Catalog/host floors.
+It is published and activated, retaining all 16 original workers in its bounded
+deployment window. This does not open the single-user permission API, supply
+durable principal epochs or close the broader graph/state/recovery exits below.
+
+The [Session read-route binding](plugin-session-read-routes.md) additionally
+separates logical Session identity from the original core/Machine execution
+route. All eleven buffered readers, manifest readiness/selection and both
+continuation caches now preserve that route through reconnection. Its
+[accepted Controller-only rollout](releases/plugin-session-read-routes-2026-09-19.md)
+includes an old-artifact negative test, two v7/20-check actual-process runs,
+complete integrated gates and activation retaining all 16 original workers.
+This is not Machine-owned filesystem identity, a state lease, native adoption
+or independent recovery; the broader exits below remain open.
 
 The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,

@@ -45,7 +45,7 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Nineteen checks cover (receipt schema `...code-buffer-connected-conformance/v6`,
+Twenty-eight checks cover (receipt schema `...code-buffer-connected-conformance/v10`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -106,6 +106,41 @@ Historical v3 receipts cover only the first eleven checks:
     `refused/budget`. Duplicate Apply does not dispatch, original native text
     and changed disk bytes remain intact, and separate retirement/release
     complete without replay. Historical v5 does not accept this extension.
+20. Actual authenticated core filesystem pages reconstruct a file whose non-BMP
+    scalar crosses the 256 KiB boundary. After Machine connection replacement,
+    and again after Controller restart, the original continuation returns
+    `410/no-store` without an ETag or any additional Machine command, even after
+    its source path is gone. The relay admits only the named fixture's typed
+    file operation and a bounded page envelope. Historical v6 does not accept
+    this Session-route extension; it does not prove filesystem/inode continuity.
+21. Hold one actual core file reply after admission under a separate disposable
+    product login. Log out that exact login through the product API, then
+    release the unchanged reply. Require `401/no-store/no-ETag`, no retry or
+    extra dispatch for the revoked request, and continued reading by the
+    independent original login. Historical v7 does not accept this original
+    credential continuation; no production cookie or database edit is used.
+22. Legacy language diagnostics: query the already opened fixture, hold the next
+    real native reply, revoke only its disposable product login and require
+    `401/no-store/no-ETag`. Refuse further dispatch by that login; the independent
+    login remains usable, without reopen, release, reload or retry.
+23. Repeat the same exact authority/command-count checks for legacy hover.
+24. Repeat them for legacy navigation; response refusal is not evidence that
+    native destination acquisitions have been undone.
+25. Repeat them for legacy outline. The relay admits only the named pre-opened
+    fixture for these four query kinds; arbitrary paths and native mutations
+    remain refused. Historical v8 does not accept this extension.
+26. Ordinary owned Open: hold its real reply, revoke only the admitting product
+    login, then require `401/no-store/no-ETag` and no extra dispatch. An independent
+    original-user login observes saved Open by the same ID without reopening,
+    and explicitly queries the retained original native owner.
+27. Repeat the original-login revocation during ordinary Query. The independent
+    original-user login still observes the recorded Open; neither refusal nor
+    saved observation dispatches an extra command.
+28. Repeat during ordinary Release. Its actual terminal outcome remains
+    queryable by the independent original-user login, duplicate release does
+    not dispatch, and Open cannot revive that ID. Historical v9 does not accept
+    these three checks. Denying a response is not native undo or independently
+    authorized post-effect recovery; no outcome is dropped to simulate it.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills
@@ -151,3 +186,19 @@ The later [signed Zed rollout](releases/zed-budget-rollout-2026-09-19.md) repeat
 the 19-check v6 chain against its exact supplied artifacts, then separately
 records actual Machine maintenance and Zed `1.18.0` installation. Its retained
 worker observations do not establish native resume or supported-device acceptance.
+The [Session read-route rollout](releases/plugin-session-read-routes-2026-09-19.md)
+adds v7 check 20, rejects a supplied pre-fix Controller and accepts two corrected
+immutable Controllers. It separately records Controller-only activation with
+the resident Machine, native installation and original workers unchanged.
+The [read-authority rollout](releases/plugin-code-read-authority-2026-09-19.md)
+adds v8 check 21, rejects the prior Controller's post-logout HTTP 200 and accepts
+the corrected immutable Controller's full chain. Its component activation and
+later independent Provider-auth rotation are recorded separately.
+The [legacy-language rollout](releases/plugin-language-read-authority-2026-09-19.md)
+adds v9 checks 22–25, rejects the old artifact's post-logout language reply and
+accepts the corrected immutable Controller's complete 25-check chain.
+The [owned-outcome rollout](releases/plugin-buffer-outcome-authority-2026-09-19.md)
+adds v10 checks 26–28, rejects the old artifact's post-logout Open reply and
+accepts two complete 28-check runs against the supplied previous and current
+Machine artifacts. Original effects remain recorded before response refusal;
+Controller-only activation is separately observed with all 16 workers retained.

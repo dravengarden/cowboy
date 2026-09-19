@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-readme-icon-v6.png" width="128" height="128" alt="Cowboy — cyan crown and violet brim on ink">
+    <img src="site/assets/cowboy-readme-mark-v10.svg" width="128" height="112" alt="Cowboy — Lilac Flow — a continuous lilac gradient across the spiral hat">
   </a>
 </p>
 
@@ -17,16 +17,16 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-7b42b5?style=flat-square" alt="Cowboy website">
+    <img src="https://img.shields.io/badge/website-live-B99AF3?style=flat-square" alt="Cowboy website">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="Website build">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-98627d?style=flat-square" alt="MIT license">
+    <img src="https://img.shields.io/badge/license-MIT-9776DB?style=flat-square" alt="MIT license">
   </a>
   <a href="https://agentclientprotocol.com/">
-    <img src="https://img.shields.io/badge/protocol-ACP_native-4a90d9?style=flat-square" alt="ACP native">
+    <img src="https://img.shields.io/badge/protocol-ACP_native-B99AF3?style=flat-square" alt="ACP native">
   </a>
 </p>
 
@@ -37,6 +37,10 @@
   · <a href="#plugin-ecosystem">Plugins</a>
   · <a href="docs/INDEX.md">Documentation</a>
 </p>
+
+**Lilac Flow** is the default. Choose from **50 icon styles** in Settings → Appearance; light/dark mode and semantic status colors stay consistent.
+
+<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="Cowboy icon colorways"></p>
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">

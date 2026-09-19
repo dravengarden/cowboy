@@ -22,13 +22,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Cowboy" />
-    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1681" />
-    <link rel="icon" href="/cowboy-favicon-v9.ico" sizes="any" />
-    <link rel="icon" href="/cowboy-favicon-v9.svg" type="image/svg+xml" sizes="any" />
+    <link rel="manifest" href="/manifest.webmanifest?v=cowboy-v1736" />
+    <link rel="icon" href="/cowboy-favicon-v10.ico" sizes="any" />
+    <link rel="icon" href="/cowboy-favicon-v10.svg" type="image/svg+xml" sizes="any" />
     <!-- New filename: Safari caches apple-touch-icon.png by path and ignores
          query strings, so a redeploy cannot update Add to Home Screen. -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/cowboy-app-icon-180-v6.png" />
-    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/cowboy-app-icon-180-v6.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/cowboy-app-icon-180-v10.png" />
+    <link rel="apple-touch-icon-precomposed" sizes="180x180" href="/cowboy-app-icon-180-v10.png" />
     <title>Cowboy</title>
     <style>
       /* Hard reset so the root flex container has a 100% canvas to work on
@@ -54,18 +54,17 @@
            but affected standalone WebKit builds report zero while still
            painting that chrome above the page. */
         --cowboy-system-top-clearance: env(safe-area-inset-top, 0px);
-        /* The status-strip material normally follows the real safe area. iOS
-           standalone can report zero on phones, so platform.ts opts only a
-           physical iPhone PWA into a small in-page scroll-edge shelf. */
+        /* The status-strip material follows the real safe area. An iPhone PWA
+           (status-bar-style default) starts below the system-drawn bar and
+           reports zero, so it paints no strip; only the iPad rule below has a
+           floor. */
         --cowboy-mobile-status-material-height: env(safe-area-inset-top, 0px);
       }
-      :root.cowboy-phone-standalone {
-        --cowboy-mobile-status-material-height: max(env(safe-area-inset-top, 0px), 32px);
-      }
-      @media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) {
+      @media (display-mode: standalone) and (any-pointer: coarse) and (min-width: 700px) and (min-height: 700px) {
         :root {
           /* A quiet, solid-backed band keeps iPad window chrome away from
              Cowboy titles and transient controls when WebKit loses the inset.
+             min-height keeps a landscape iPhone (at most 440 px tall) out.
              max() preserves a larger real safe area when the OS provides one.
              The status-strip material uses the same floor so Transcript and
              cover sheets inset with the frost instead of painting under the

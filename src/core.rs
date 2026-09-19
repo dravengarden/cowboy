@@ -28,6 +28,8 @@ use crate::runtime_wire::{WorkerSnapshot, WorkerState};
 
 mod code_scope;
 pub(crate) use code_scope::{CodeReadScope, SessionCodeScope};
+mod product_permissions;
+pub(crate) use product_permissions::ProductPermissionObservation;
 mod persistence_queue;
 pub(crate) use persistence_queue::NORMAL_BYTES as STORE_BATCH_MAX_BYTES;
 pub use persistence_queue::{PersistenceHealth, StoreReceiver, StoreSink};
@@ -1457,6 +1459,7 @@ struct HubInner {
     sessions: Mutex<HashMap<String, Session>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
+    product_permissions: Mutex<product_permissions::Observations>,
     /// Persisted Busy sessions awaiting an authoritative, connected worker
     /// snapshot after the control plane restarts. Broker registry placeholders
     /// do not settle this set; a bounded server-side grace timer finalizes the
@@ -1652,6 +1655,7 @@ impl Hub {
             inner: std::sync::Arc::new(HubInner {
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
+                product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 history_reducer: Mutex::new(EventReducer::default()),
                 artifacts: Mutex::new(None),
@@ -2625,7 +2629,7 @@ impl Hub {
         f: impl FnOnce(&mut HashMap<String, serde_json::Value>) -> R,
     ) -> R {
         let mut settings = self.inner.settings.lock();
-        f(&mut settings)
+        product_permissions::mutate(self, &mut settings, f)
     }
 
     /// Snapshot internal settings for authenticated admin reads.
@@ -2636,7 +2640,7 @@ impl Hub {
 
     /// Restore internal auth/admin state before the HTTP server starts.
     pub fn load_settings(&self, entries: Vec<(String, serde_json::Value)>) {
-        self.inner.settings.lock().extend(entries);
+        self.with_settings_mut(|settings| settings.extend(entries));
     }
 
     /// Insert one setting while the caller holds the settings mutex.

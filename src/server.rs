@@ -39,7 +39,7 @@ use agent_client_protocol::schema::v1::ContentBlock;
 
 use crate::acp::AgentCommand;
 use crate::cli::ServeArgs;
-use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
+use crate::code_adapter::CodeOperation;
 use crate::code_review::CodeProvider as _;
 use crate::core::{
     CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
@@ -77,6 +77,7 @@ mod plugin_install;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
+mod product_continuation;
 mod provider_auth_sync;
 mod sync_dataset;
 mod telemetry_binding;
@@ -4559,6 +4560,7 @@ async fn resolve_product_api_request_principal(
             principal: crate::product_auth::local_product_principal(),
             cookie_session: None,
             device_identity: None,
+            permissions: None,
         }));
     }
     let bearer = crate::product_auth::bearer_token(headers);
@@ -4611,24 +4613,27 @@ async fn resolve_product_api_request_principal(
                     .await;
             });
         }
-        return Ok(Some(AuthenticatedProductRequest {
+        return AuthenticatedProductRequest {
             principal: product_principal(state.hub, &user),
             cookie_session: None,
             device_identity: Some(identity),
-        }));
+            permissions: None,
+        }
+        .observe_permissions(state.hub)
+        .map(Some);
     }
-    Ok(resolve_product_request_principal(
-        state.product_auth_enabled,
-        state.store,
-        state.hub,
-        headers,
-    )
-    .await
-    .map(|(principal, cookie_session)| AuthenticatedProductRequest {
-        principal,
-        cookie_session,
-        device_identity: None,
-    }))
+    resolve_product_request_principal(state.product_auth_enabled, state.store, state.hub, headers)
+        .await
+        .map(|(principal, cookie_session)| {
+            AuthenticatedProductRequest {
+                principal,
+                cookie_session,
+                device_identity: None,
+                permissions: None,
+            }
+            .observe_permissions(state.hub)
+        })
+        .transpose()
 }
 
 fn automation_route_allowed(
@@ -4661,6 +4666,20 @@ struct AuthenticatedProductRequest {
     principal: ProductPrincipal,
     cookie_session: Option<crate::store::ProductUserSession>,
     device_identity: Option<crate::client_auth::DeviceAccessIdentity>,
+    permissions: Option<crate::core::ProductPermissionObservation>,
+}
+
+impl AuthenticatedProductRequest {
+    /// Complete authentication by atomically observing current permissions.
+    /// Handlers may share this observation, but must never recapture it.
+    fn observe_permissions(mut self, hub: &Hub) -> Result<Self, ()> {
+        let permissions = hub
+            .observe_product_permissions(&self.principal.username)
+            .ok_or(())?;
+        self.principal.role = permissions.role();
+        self.permissions = Some(permissions);
+        Ok(self)
+    }
 }
 
 async fn product_user_from_store_cookie(
@@ -15347,24 +15366,6 @@ fn validate_zed_adapter_response(
     }
 }
 
-async fn zed_adapter_request_for_session(
-    state: &AppState,
-    context: &ResolvedCodeContext,
-    request: serde_json::Value,
-) -> anyhow::Result<ZedAdapterResponse> {
-    let CodeReadScope::Session(scope) = &context.scope else {
-        anyhow::bail!("language request requires a Session scope");
-    };
-    zed_request_in_scope(
-        &state.hub,
-        &state.machine_control,
-        state.zed_adapter_socket.as_deref(),
-        scope,
-        request,
-    )
-    .await
-}
-
 async fn zed_request_in_scope(
     hub: &Hub,
     control: &MachineControl,
@@ -15383,67 +15384,55 @@ async fn remote_code_request(
     scope: &CodeReadScope,
     operation: CodeOperation,
 ) -> anyhow::Result<Option<crate::code_adapter::CodeAdapterResponse>> {
-    if let CodeReadScope::Workspace(workspace) = scope {
-        if state
-            .machine_control
-            .workspace_scope_is_colocated(workspace)
-            .map_err(anyhow::Error::msg)?
-        {
-            return Ok(None);
+    let value = match scope {
+        CodeReadScope::Workspace(workspace) => {
+            if state
+                .machine_control
+                .workspace_scope_is_colocated(workspace)
+                .map_err(anyhow::Error::msg)?
+            {
+                return Ok(None);
+            }
+            Some(
+                state
+                    .machine_control
+                    .code_request_in_workspace(workspace, operation)
+                    .await
+                    .map_err(anyhow::Error::msg)?,
+            )
         }
-        let value = state
-            .machine_control
-            .code_request_in_workspace(workspace, operation)
-            .await
-            .map_err(anyhow::Error::msg)?;
-        return Ok(Some(serde_json::from_value(value)?));
-    }
-    let machine_id = scope.machine_id();
-    let cwd = scope.cwd();
-    if machine_id == "local" {
-        return Ok(None);
-    }
-    let colocated = match state.machine_control.is_colocated(machine_id) {
-        Some(value) => value,
-        None => match state.store.as_ref() {
-            Some(store) => store.machine_is_local(machine_id).await.unwrap_or(false),
-            None => false,
-        },
+        CodeReadScope::Session(session) => {
+            anyhow::ensure!(
+                code_reads::session::current(&state.hub, &state.machine_control, session),
+                "code context changed"
+            );
+            state
+                .machine_control
+                .code_request_in_session(session, operation)
+                .await
+                .map_err(anyhow::Error::msg)?
+        }
     };
-    if colocated {
-        return Ok(None);
-    }
-    let request = serde_json::to_value(CodeAdapterRequest {
-        root: cwd.to_owned(),
-        operation,
-    })?;
-    let value = state
-        .machine_control
-        .adapter_request(machine_id, "code", request)
-        .await
-        .map_err(anyhow::Error::msg)?;
-    Ok(Some(serde_json::from_value(value)?))
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(Into::into)
 }
 
 async fn ensure_zed_worktree_for_session(
     state: &AppState,
     context: &ResolvedCodeContext,
-    cwd: &str,
 ) -> anyhow::Result<bool> {
-    match zed_adapter_request_for_session(
-        state,
-        context,
-        serde_json::json!({
-            "type": "ensureWorktree",
-            "path": cwd,
-            "trusted": true,
-        }),
+    let CodeReadScope::Session(scope) = &context.scope else {
+        anyhow::bail!("language request requires a Session scope");
+    };
+    code_reads::session::worktree_ready(
+        &state.hub,
+        &state.machine_control,
+        state.zed_adapter_socket.as_deref(),
+        scope,
     )
-    .await?
-    {
-        ZedAdapterResponse::Worktree { state, .. } => Ok(state == "ready"),
-        _ => anyhow::bail!("unexpected Zed adapter response"),
-    }
+    .await
 }
 
 #[cfg(test)]
@@ -15549,12 +15538,12 @@ struct CodeFileResponse {
 /// with `[]`.
 async fn api_search_files(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
@@ -15584,12 +15573,12 @@ async fn api_search_files(
 
 async fn api_code_search(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileSearchQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(1, 100);
         let files = match remote_code_request(
@@ -15629,13 +15618,13 @@ async fn api_code_search(
 /// Git Changes remains scoped to the owning repository.
 async fn api_file_tree(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<FileTreeQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let limit = query.limit.clamp(20, 500);
         let path = query.path;
@@ -15752,9 +15741,16 @@ async fn api_file_tree(
 const WORKSPACE_CODE_CONTEXT_PREFIX: &str = "workspace::";
 
 struct ResolvedCodeContext {
-    machine_id: String,
     cwd: String,
     scope: CodeReadScope,
+}
+
+// Legacy resource calls retain their separate original-connection operation
+// boundary. Buffered language reads use code_reads' product and route binding.
+struct SessionCodeContext {
+    machine_id: String,
+    cwd: String,
+    scope: crate::core::SessionCodeScope,
 }
 
 fn parse_workspace_code_context(value: &str) -> Option<(&str, &str)> {
@@ -15795,26 +15791,32 @@ async fn resolve_code_context(state: &AppState, id: &str) -> Option<ResolvedCode
         )
         .await?;
         return Some(ResolvedCodeContext {
-            machine_id: scope.machine_id().into(),
             cwd: scope.cwd().into(),
             scope,
         });
     }
-    session_code_context(state, id)
+    let scope =
+        code_reads::session::resolve(&state.hub, &state.machine_control, &state.service_id, id)?;
+    Some(ResolvedCodeContext {
+        cwd: scope.cwd().to_owned(),
+        scope,
+    })
 }
 
-fn session_code_context(state: &AppState, session_id: &str) -> Option<ResolvedCodeContext> {
+fn session_code_context(state: &AppState, session_id: &str) -> Option<SessionCodeContext> {
     let scope = state.hub.session_code_scope(session_id)?;
-    Some(ResolvedCodeContext {
-        machine_id: scope.machine_id().to_owned(),
-        cwd: scope.cwd().to_owned(),
-        scope: CodeReadScope::Session(scope),
+    Some(SessionCodeContext {
+        machine_id: scope.machine_id().into(),
+        cwd: scope.cwd().into(),
+        scope,
     })
 }
 
 async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadScope) -> bool {
     match scope {
-        CodeReadScope::Session(scope) => state.hub.code_scope_is_current(scope),
+        CodeReadScope::Session(scope) => {
+            code_reads::session::current(&state.hub, &state.machine_control, scope)
+        }
         CodeReadScope::Workspace(workspace) => {
             resolve_code_context(state, id)
                 .await
@@ -15826,15 +15828,15 @@ async fn code_context_is_current(state: &AppState, id: &str, scope: &CodeReadSco
 
 async fn api_code_manifest(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd.clone();
         let language_ready = if matches!(context.scope, CodeReadScope::Session(_)) {
-            match ensure_zed_worktree_for_session(&state, &context, &cwd).await {
+            match ensure_zed_worktree_for_session(&state, &context).await {
                 Ok(ready) => ready,
                 Err(error) => {
                     tracing::warn!(session = %session_id, %error, "Zed adapter unavailable");
@@ -15927,11 +15929,11 @@ async fn api_code_manifest(
 
 async fn api_code_changes(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let result = match remote_code_request(&state, &context.scope, CodeOperation::Changes).await
         {
@@ -15982,12 +15984,12 @@ async fn api_code_changes(
 
 async fn api_code_repository(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeRepositoryQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let after = query.after;
         let result = match remote_code_request(
@@ -16031,12 +16033,12 @@ async fn api_code_repository(
 
 async fn api_code_commit(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let oid = query.oid;
         let result = match remote_code_request(
@@ -16073,12 +16075,12 @@ async fn api_code_commit(
 
 async fn api_code_commit_diff(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeCommitDiffQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let oid = query.oid;
         let path = query.path;
@@ -16128,12 +16130,12 @@ async fn api_code_commit_diff(
 
 async fn api_code_diff(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeDiffQuery>,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let owner = context.scope;
         if let Some(cursor) = query.cursor.as_deref() {
             let page = state.diff_snapshots.next_page(&owner, cursor).await;
@@ -16229,13 +16231,13 @@ async fn api_code_diff(
 
 async fn api_code_file(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         // Browser tokens bind the original context/path before local or remote I/O.
         let continuation =
             match state
@@ -16318,13 +16320,13 @@ async fn api_code_file(
 
 async fn api_code_file_raw(
     State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeFileQuery>,
     headers: HeaderMap,
 ) -> Response {
-    let owner = Arc::clone(&state);
     let context_id = session_id.clone();
-    code_reads::scoped(&owner, &context_id, |context| async move {
+    code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
         let result = match remote_code_request(
             &state,
@@ -16436,7 +16438,7 @@ struct CodeHoverQuery {
     column: u32,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum CodeNavigationKind {
     Definition,
@@ -16455,216 +16457,66 @@ struct CodeNavigationQuery {
 }
 
 async fn api_code_language(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferLanguage",
-            "worktree": worktree,
-            "path": path,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Language,
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferLanguage {
-            path,
-            version,
-            diagnostics,
-            inlay_hints,
-            semantic_tokens,
-            ..
-        }) => Json(CodeLanguageResponse {
-            api_version: 1,
-            path,
-            version,
-            diagnostics,
-            inlay_hints,
-            semantic_tokens,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::warn!(session = %session_id, %error, "Zed language query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "language intelligence unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_hover(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeHoverQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferHover",
-            "worktree": worktree,
-            "path": path,
-            "row": query.row,
-            "column": query.column,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Hover {
+            row: query.row,
+            column: query.column,
+        },
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferHover { path, contents, .. }) => Json(CodeHoverResponse {
-            api_version: 1,
-            path,
-            contents,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed hover query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "symbol information unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_navigation(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeNavigationQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferNavigate",
-            "worktree": worktree,
-            "path": path,
-            "row": query.row,
-            "column": query.column,
-            "kind": query.kind,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Navigation {
+            row: query.row,
+            column: query.column,
+            kind: query.kind,
+        },
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferNavigation {
-            path, locations, ..
-        }) => Json(CodeNavigationResponse {
-            api_version: 1,
-            path,
-            locations,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed navigation query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "symbol navigation unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_outline(
-    State(state): State<Arc<AppState>>,
+    authority: code_reads::Authority,
     Path(session_id): Path<String>,
     Query(query): Query<CodeLanguageQuery>,
 ) -> Response {
-    let Some(context) = session_code_context(&state, &session_id) else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
-    if query.path.is_empty() {
-        return (StatusCode::BAD_REQUEST, "invalid buffer path").into_response();
-    }
-    let Some((worktree, path)) =
-        zed_language_target(&context.machine_id, &context.cwd, &query.path)
-    else {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
-    };
-    match zed_adapter_request_for_session(
-        &state,
-        &context,
-        serde_json::json!({
-            "type": "bufferSymbols",
-            "worktree": worktree,
-            "path": path,
-        }),
+    code_reads::language::read(
+        authority,
+        &session_id,
+        &query.path,
+        code_reads::language::Query::Outline,
     )
     .await
-    {
-        Ok(ZedAdapterResponse::BufferSymbols { path, symbols, .. }) => Json(CodeOutlineResponse {
-            api_version: 1,
-            path,
-            symbols,
-        })
-        .into_response(),
-        Ok(_) => (
-            StatusCode::BAD_GATEWAY,
-            "unexpected language service response",
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::debug!(session = %session_id, %error, "Zed outline query failed");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "document outline unavailable",
-            )
-                .into_response()
-        }
-    }
 }
 
 async fn api_code_buffer_close(
@@ -16700,14 +16552,11 @@ async fn api_code_buffer_lease(
         // run rust-analyzer there.
         return (StatusCode::UNPROCESSABLE_ENTITY, "buffer lease unavailable").into_response();
     };
-    let CodeReadScope::Session(scope) = &context.scope else {
-        return (StatusCode::NOT_FOUND, "unknown session").into_response();
-    };
     let response = zed_session::buffer_request(
         &state.hub,
         &state.machine_control,
         state.zed_adapter_socket.as_deref(),
-        scope,
+        &context.scope,
         zed_session::BufferRequest {
             worktree: &worktree,
             path: &path,
@@ -19713,6 +19562,7 @@ mod auth_capacity_boundary_tests {
 
     fn cookie_request(user_id: &str) -> AuthenticatedProductRequest {
         AuthenticatedProductRequest {
+            permissions: None,
             principal: principal(user_id),
             cookie_session: Some(crate::store::ProductUserSession {
                 token_hash: "aa".repeat(32),
@@ -19746,6 +19596,7 @@ mod auth_capacity_boundary_tests {
         scopes: &[&str],
     ) -> AuthenticatedProductRequest {
         AuthenticatedProductRequest {
+            permissions: None,
             principal: principal(user_id),
             cookie_session: None,
             device_identity: Some(crate::client_auth::DeviceAccessIdentity {

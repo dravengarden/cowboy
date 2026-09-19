@@ -17,7 +17,16 @@ fn create(hub: &Hub, id: &str) -> CodeReadScope {
 }
 
 fn scope(hub: &Hub, id: &str) -> CodeReadScope {
-    CodeReadScope::Session(hub.session_code_scope(id).unwrap())
+    // Cache-only fixtures retain one core owner; route/registry replacement is
+    // covered independently by the actual Session resolver/transport tests.
+    static CONTROL: std::sync::OnceLock<crate::machine_control::MachineControl> =
+        std::sync::OnceLock::new();
+    let control = CONTROL.get_or_init(crate::machine_control::MachineControl::default);
+    CodeReadScope::Session(
+        control
+            .session_read_scope("service-test", hub.session_code_scope(id).unwrap())
+            .unwrap(),
+    )
 }
 
 fn page(path: &str, offset: usize, more: bool) -> FileDocument {

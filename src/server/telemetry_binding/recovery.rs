@@ -253,6 +253,7 @@ pub(super) async fn recover_fixture(
         .unwrap()
         .clone();
     let verified = crate::server::AuthenticatedProductRequest {
+        permissions: None,
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,

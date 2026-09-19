@@ -17,12 +17,14 @@ use tokio::sync::{mpsc, oneshot};
 mod code_buffer_navigation;
 mod code_buffer_sync;
 mod installation;
+mod session_reads;
 mod site;
 mod telemetry_export;
 mod telemetry_recovery;
 mod telemetry_resolution;
 mod workspace;
 
+pub(crate) use session_reads::SessionReadScope;
 pub(crate) use telemetry_resolution::TelemetryInstallationLease;
 pub(crate) use workspace::WorkspaceCodeScope;
 
@@ -436,6 +438,7 @@ impl LiveState {
 
 pub struct MachineControl {
     service: crate::service_identity::ServiceIdentity,
+    read_owner: Arc<()>,
     live: RwLock<LiveState>,
     next_request: AtomicU64,
 }
@@ -451,6 +454,7 @@ impl MachineControl {
     pub(crate) fn new(service: crate::service_identity::ServiceIdentity) -> Self {
         Self {
             service,
+            read_owner: Arc::new(()),
             live: RwLock::new(LiveState::default()),
             next_request: AtomicU64::new(0),
         }
@@ -496,15 +500,6 @@ impl MachineControl {
             .connections
             .get(machine_id)
             .map(|connection| connection.connected_at.elapsed())
-    }
-
-    #[must_use]
-    pub fn is_colocated(&self, machine_id: &str) -> Option<bool> {
-        self.live
-            .read()
-            .connections
-            .get(machine_id)
-            .map(|connection| connection.colocated)
     }
 
     pub(crate) fn remove_if_current(&self, token: &ConnectionToken) {
@@ -2648,15 +2643,15 @@ mod tests {
         let control = MachineControl::default();
         let (first, _) = mpsc::unbounded_channel();
         let first = control.install("hawk".to_owned(), "old".to_owned(), true, 3, first);
-        assert_eq!(control.is_colocated("hawk"), Some(true));
+        assert!(control.live.read().connections["hawk"].colocated);
 
         let (current, _) = mpsc::unbounded_channel();
         let current = control.install("hawk".to_owned(), "current".to_owned(), false, 3, current);
         control.remove_if_current(&first);
-        assert_eq!(control.is_colocated("hawk"), Some(false));
+        assert!(!control.live.read().connections["hawk"].colocated);
 
         control.remove_if_current(&current);
-        assert_eq!(control.is_colocated("hawk"), None);
+        assert!(!control.live.read().connections.contains_key("hawk"));
     }
 
     #[test]

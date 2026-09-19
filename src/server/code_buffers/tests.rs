@@ -4,11 +4,23 @@ use crate::machine_control::ConnectionToken;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 use serde_json::{Value, json};
 
+mod authority;
+
 #[tokio::test]
 async fn review_selection_is_effect_free_and_requires_the_connected_machine_floor() {
     let mut fixture = Fixture::new();
-    let scope = CodeReadScope::Session(fixture.context.hub.session_code_scope("session").unwrap());
     let control = &fixture.context.machine_control;
+    let capture = || {
+        CodeReadScope::Session(
+            control
+                .session_read_scope(
+                    "service-test",
+                    fixture.context.hub.session_code_scope("session").unwrap(),
+                )
+                .unwrap(),
+        )
+    };
+    let scope = capture();
     assert_eq!(review_mode(control, &scope), ReviewMode::Legacy);
     for (protocol, mode, wire) in [
         (20, ReviewMode::Owned, "owned"),
@@ -22,7 +34,8 @@ async fn review_selection_is_effect_free_and_requires_the_connected_machine_floo
             protocol,
             sender,
         );
-        assert_eq!(review_mode(control, &scope), mode);
+        assert_eq!(review_mode(control, &scope), ReviewMode::Unavailable);
+        assert_eq!(review_mode(control, &capture()), mode);
         assert_eq!(serde_json::to_value(mode).unwrap(), json!(wire));
         assert!(commands.try_recv().is_err());
         drop(connection);
@@ -34,7 +47,11 @@ async fn review_selection_is_effect_free_and_requires_the_connected_machine_floo
     );
     let hub = Hub::new();
     create(&hub, "local");
-    let local = CodeReadScope::Session(hub.session_code_scope("session").unwrap());
+    let local = CodeReadScope::Session(
+        control
+            .session_read_scope("service-test", hub.session_code_scope("session").unwrap())
+            .unwrap(),
+    );
     assert_eq!(review_mode(control, &local), ReviewMode::Legacy);
 }
 
@@ -92,6 +109,7 @@ pub(super) fn create_owned(hub: &Hub, machine: &str, user: &str) {
 
 pub(super) fn authenticated() -> AuthenticatedProductRequest {
     AuthenticatedProductRequest {
+        permissions: None,
         principal: crate::product_auth::local_product_principal(),
         cookie_session: None,
         device_identity: None,

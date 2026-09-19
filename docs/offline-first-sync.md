@@ -1,7 +1,7 @@
 # Offline-first synchronization
 
 Status: design 2026-09-18; the boot path became network-independent on
-2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1736));
+2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -496,7 +496,7 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 
 ## Implementation status
 
-### Boot on a weak connection (service worker `cowboy-v1736`)
+### Boot on a weak connection (service worker `cowboy-v1738`)
 
 Phase 1 opened from the replica only when requests FAILED. A weak connection
 is slow, not failed, so four steps still waited on the network and the

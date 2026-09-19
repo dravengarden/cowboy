@@ -18,7 +18,6 @@ import {
   COARSE_POINTER_ROOT_CLASS,
   prefersCoarsePointer,
   syncCoarsePointerRootClass,
-  syncPhoneStandaloneRootClass,
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 import { migrateThemeDefaultToSystem } from "./themeDefault";
@@ -96,7 +95,6 @@ function osBaseFontSize(): number {
 
 const OS_BASE_FONT_SIZE = osBaseFontSize();
 syncCoarsePointerRootClass();
-syncPhoneStandaloneRootClass();
 
 export interface ThemeControls {
   theme: Theme;
@@ -119,7 +117,6 @@ export function useThemeMode(): ThemeControls {
   const palette = useMemo(() => appearancePalette(icon, dark), [icon, dark]);
   useEffect(() => {
     syncCoarsePointerRootClass();
-    syncPhoneStandaloneRootClass();
     applyThemeColor(palette.background.default);
     // An iOS standalone PWA latches the status-bar colour and IGNORES later
     // updates across a background→resume: leave the app in dark, switch away,

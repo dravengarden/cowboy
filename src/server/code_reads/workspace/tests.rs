@@ -192,7 +192,13 @@ async fn workspace_buffered_responses_discard_aba_even_for_cache_hits_and_errors
         let fixture = Fixture::new().await;
         let original = fixture.scope().await.unwrap();
         let response = super::super::guarded_response(
-            || fixture.current(&original),
+            || async {
+                fixture
+                    .current(&original)
+                    .await
+                    .then_some(())
+                    .ok_or(super::super::Denial::Context)
+            },
             || async {
                 fixture.observe(vec![]).await;
                 fixture.observe(vec![workspace()]).await;
@@ -220,7 +226,13 @@ async fn workspace_stale_scope_cannot_invoke_read_setup() {
     fixture.observe(vec![workspace()]).await;
     let invoked = std::cell::Cell::new(false);
     let response = super::super::guarded_response(
-        || fixture.current(&original),
+        || async {
+            fixture
+                .current(&original)
+                .await
+                .then_some(())
+                .ok_or(super::super::Denial::Context)
+        },
         || {
             invoked.set(true);
             async { "invalid".into_response() }

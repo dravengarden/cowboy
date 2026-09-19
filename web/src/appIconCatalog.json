@@ -2398,5 +2398,905 @@
     "family": "orange",
     "source_sha256": "edd2a2837118fa6656d49017c54ab513543eb490e524397e413f8606176e16b9",
     "tone": "dark"
+  },
+  {
+    "id": "curlseal-001",
+    "number": 1,
+    "title": "Lilac Flat",
+    "collection": "curlseal",
+    "crown": "#B99AF3",
+    "brim": "#B99AF3",
+    "solid": "#B99AF3",
+    "gradient": [
+      "#D8C0FF",
+      "#9776DB"
+    ],
+    "mode": "fully-flat",
+    "background": "#211B34",
+    "family": "purple",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-002",
+    "number": 2,
+    "title": "Orchid Flat",
+    "collection": "curlseal",
+    "crown": "#DA94D8",
+    "brim": "#DA94D8",
+    "solid": "#DA94D8",
+    "gradient": [
+      "#F0B2E5",
+      "#B879CE"
+    ],
+    "mode": "fully-flat",
+    "background": "#2B1D32",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-003",
+    "number": 3,
+    "title": "Rose Flat",
+    "collection": "curlseal",
+    "crown": "#EA8DB6",
+    "brim": "#EA8DB6",
+    "solid": "#EA8DB6",
+    "gradient": [
+      "#FFB2CB",
+      "#CB699D"
+    ],
+    "mode": "fully-flat",
+    "background": "#321C2A",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-004",
+    "number": 4,
+    "title": "Coral Flat",
+    "collection": "curlseal",
+    "crown": "#F9917A",
+    "brim": "#F9917A",
+    "solid": "#F9917A",
+    "gradient": [
+      "#FFBA91",
+      "#E47577"
+    ],
+    "mode": "fully-flat",
+    "background": "#302024",
+    "family": "red",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-005",
+    "number": 5,
+    "title": "Amber Flat",
+    "collection": "curlseal",
+    "crown": "#F1BF70",
+    "brim": "#F1BF70",
+    "solid": "#F1BF70",
+    "gradient": [
+      "#FFE09A",
+      "#E7A655"
+    ],
+    "mode": "fully-flat",
+    "background": "#2E251C",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-006",
+    "number": 6,
+    "title": "Gold Flat",
+    "collection": "curlseal",
+    "crown": "#EBD58B",
+    "brim": "#EBD58B",
+    "solid": "#EBD58B",
+    "gradient": [
+      "#FFF0B4",
+      "#D1B568"
+    ],
+    "mode": "fully-flat",
+    "background": "#252631",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-007",
+    "number": 7,
+    "title": "Lime Flat",
+    "collection": "curlseal",
+    "crown": "#CCD999",
+    "brim": "#CCD999",
+    "solid": "#CCD999",
+    "gradient": [
+      "#E7ECC1",
+      "#9EB879"
+    ],
+    "mode": "fully-flat",
+    "background": "#242C21",
+    "family": "gold",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-008",
+    "number": 8,
+    "title": "Jade Flat",
+    "collection": "curlseal",
+    "crown": "#8BD1B2",
+    "brim": "#8BD1B2",
+    "solid": "#8BD1B2",
+    "gradient": [
+      "#B4E6C8",
+      "#62B5A0"
+    ],
+    "mode": "fully-flat",
+    "background": "#172E28",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-009",
+    "number": 9,
+    "title": "Lagoon Flat",
+    "collection": "curlseal",
+    "crown": "#78CED0",
+    "brim": "#78CED0",
+    "solid": "#78CED0",
+    "gradient": [
+      "#A8E5DD",
+      "#54ADC5"
+    ],
+    "mode": "fully-flat",
+    "background": "#142D32",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-010",
+    "number": 10,
+    "title": "Glacier Flat",
+    "collection": "curlseal",
+    "crown": "#92CFF0",
+    "brim": "#92CFF0",
+    "solid": "#92CFF0",
+    "gradient": [
+      "#B8E8FA",
+      "#72ADE5"
+    ],
+    "mode": "fully-flat",
+    "background": "#172C40",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-011",
+    "number": 11,
+    "title": "Azure Flat",
+    "collection": "curlseal",
+    "crown": "#8CABEF",
+    "brim": "#8CABEF",
+    "solid": "#8CABEF",
+    "gradient": [
+      "#B8CBFF",
+      "#698FDD"
+    ],
+    "mode": "fully-flat",
+    "background": "#18253E",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-012",
+    "number": 12,
+    "title": "Indigo Flat",
+    "collection": "curlseal",
+    "crown": "#A6A5EC",
+    "brim": "#A6A5EC",
+    "solid": "#A6A5EC",
+    "gradient": [
+      "#CBCBFF",
+      "#8C89D0"
+    ],
+    "mode": "fully-flat",
+    "background": "#252342",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-013",
+    "number": 13,
+    "title": "Silver Flat",
+    "collection": "curlseal",
+    "crown": "#CDD5E3",
+    "brim": "#CDD5E3",
+    "solid": "#CDD5E3",
+    "gradient": [
+      "#EAF1F9",
+      "#A6B4CE"
+    ],
+    "mode": "fully-flat",
+    "background": "#202631",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-014",
+    "number": 14,
+    "title": "Ivory Flat",
+    "collection": "curlseal",
+    "crown": "#E9DDCC",
+    "brim": "#E9DDCC",
+    "solid": "#E9DDCC",
+    "gradient": [
+      "#FFF0DC",
+      "#C8B7AC"
+    ],
+    "mode": "fully-flat",
+    "background": "#28232B",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-015",
+    "number": 15,
+    "title": "Copper Flat",
+    "collection": "curlseal",
+    "crown": "#D3A181",
+    "brim": "#D3A181",
+    "solid": "#D3A181",
+    "gradient": [
+      "#EDC5A2",
+      "#B37D69"
+    ],
+    "mode": "fully-flat",
+    "background": "#30231E",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-016",
+    "number": 16,
+    "title": "Lavender Paper Flat",
+    "collection": "curlseal",
+    "crown": "#906CB6",
+    "brim": "#906CB6",
+    "solid": "#906CB6",
+    "gradient": [
+      "#AA8DCB",
+      "#78569F"
+    ],
+    "mode": "fully-flat",
+    "background": "#F5EEFC",
+    "family": "purple",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-017",
+    "number": 17,
+    "title": "Rose Paper Flat",
+    "collection": "curlseal",
+    "crown": "#AF5E82",
+    "brim": "#AF5E82",
+    "solid": "#AF5E82",
+    "gradient": [
+      "#C37D98",
+      "#944C73"
+    ],
+    "mode": "fully-flat",
+    "background": "#FBEFF2",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-018",
+    "number": 18,
+    "title": "Terracotta Paper Flat",
+    "collection": "curlseal",
+    "crown": "#AF7052",
+    "brim": "#AF7052",
+    "solid": "#AF7052",
+    "gradient": [
+      "#C68B65",
+      "#935E4C"
+    ],
+    "mode": "fully-flat",
+    "background": "#F9EDDD",
+    "family": "red",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-019",
+    "number": 19,
+    "title": "Sage Paper Flat",
+    "collection": "curlseal",
+    "crown": "#587D69",
+    "brim": "#587D69",
+    "solid": "#587D69",
+    "gradient": [
+      "#7B9980",
+      "#3E655A"
+    ],
+    "mode": "fully-flat",
+    "background": "#F0F1E8",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-020",
+    "number": 20,
+    "title": "Blue Paper Flat",
+    "collection": "curlseal",
+    "crown": "#4777AD",
+    "brim": "#4777AD",
+    "solid": "#4777AD",
+    "gradient": [
+      "#7399C2",
+      "#345B8D"
+    ],
+    "mode": "fully-flat",
+    "background": "#EBF2FC",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-021",
+    "number": 21,
+    "title": "Cobalt Flat",
+    "collection": "curlseal",
+    "crown": "#F0EDFF",
+    "brim": "#F0EDFF",
+    "solid": "#F0EDFF",
+    "gradient": [
+      "#FFFFFF",
+      "#CBD8FF"
+    ],
+    "mode": "fully-flat",
+    "background": "#284FC0",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-022",
+    "number": 22,
+    "title": "Violet Flat",
+    "collection": "curlseal",
+    "crown": "#F3E6FF",
+    "brim": "#F3E6FF",
+    "solid": "#F3E6FF",
+    "gradient": [
+      "#FFF5FF",
+      "#D5BDF5"
+    ],
+    "mode": "fully-flat",
+    "background": "#6643AB",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-023",
+    "number": 23,
+    "title": "Cherry Flat",
+    "collection": "curlseal",
+    "crown": "#FFE5D8",
+    "brim": "#FFE5D8",
+    "solid": "#FFE5D8",
+    "gradient": [
+      "#FFF4DE",
+      "#EDB5BD"
+    ],
+    "mode": "fully-flat",
+    "background": "#A73152",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-024",
+    "number": 24,
+    "title": "Evergreen Flat",
+    "collection": "curlseal",
+    "crown": "#E8E3C8",
+    "brim": "#E8E3C8",
+    "solid": "#E8E3C8",
+    "gradient": [
+      "#FFF1CE",
+      "#BED9C0"
+    ],
+    "mode": "fully-flat",
+    "background": "#265B49",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-025",
+    "number": 25,
+    "title": "Ink on Cream Flat",
+    "collection": "curlseal",
+    "crown": "#534550",
+    "brim": "#534550",
+    "solid": "#534550",
+    "gradient": [
+      "#766076",
+      "#393643"
+    ],
+    "mode": "fully-flat",
+    "background": "#F6ECD9",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-026",
+    "number": 26,
+    "title": "Lilac Flow",
+    "collection": "curlseal",
+    "crown": "#D8C0FF",
+    "brim": "#9776DB",
+    "solid": "#B99AF3",
+    "gradient": [
+      "#D8C0FF",
+      "#9776DB"
+    ],
+    "mode": "shared-gradient",
+    "background": "#211B34",
+    "family": "purple",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-027",
+    "number": 27,
+    "title": "Orchid Flow",
+    "collection": "curlseal",
+    "crown": "#F0B2E5",
+    "brim": "#B879CE",
+    "solid": "#DA94D8",
+    "gradient": [
+      "#F0B2E5",
+      "#B879CE"
+    ],
+    "mode": "shared-gradient",
+    "background": "#2B1D32",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-028",
+    "number": 28,
+    "title": "Rose Flow",
+    "collection": "curlseal",
+    "crown": "#FFB2CB",
+    "brim": "#CB699D",
+    "solid": "#EA8DB6",
+    "gradient": [
+      "#FFB2CB",
+      "#CB699D"
+    ],
+    "mode": "shared-gradient",
+    "background": "#321C2A",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-029",
+    "number": 29,
+    "title": "Coral Flow",
+    "collection": "curlseal",
+    "crown": "#FFBA91",
+    "brim": "#E47577",
+    "solid": "#F9917A",
+    "gradient": [
+      "#FFBA91",
+      "#E47577"
+    ],
+    "mode": "shared-gradient",
+    "background": "#302024",
+    "family": "red",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-030",
+    "number": 30,
+    "title": "Amber Flow",
+    "collection": "curlseal",
+    "crown": "#FFE09A",
+    "brim": "#E7A655",
+    "solid": "#F1BF70",
+    "gradient": [
+      "#FFE09A",
+      "#E7A655"
+    ],
+    "mode": "shared-gradient",
+    "background": "#2E251C",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-031",
+    "number": 31,
+    "title": "Gold Flow",
+    "collection": "curlseal",
+    "crown": "#FFF0B4",
+    "brim": "#D1B568",
+    "solid": "#EBD58B",
+    "gradient": [
+      "#FFF0B4",
+      "#D1B568"
+    ],
+    "mode": "shared-gradient",
+    "background": "#252631",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-032",
+    "number": 32,
+    "title": "Lime Flow",
+    "collection": "curlseal",
+    "crown": "#E7ECC1",
+    "brim": "#9EB879",
+    "solid": "#CCD999",
+    "gradient": [
+      "#E7ECC1",
+      "#9EB879"
+    ],
+    "mode": "shared-gradient",
+    "background": "#242C21",
+    "family": "gold",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-033",
+    "number": 33,
+    "title": "Jade Flow",
+    "collection": "curlseal",
+    "crown": "#B4E6C8",
+    "brim": "#62B5A0",
+    "solid": "#8BD1B2",
+    "gradient": [
+      "#B4E6C8",
+      "#62B5A0"
+    ],
+    "mode": "shared-gradient",
+    "background": "#172E28",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-034",
+    "number": 34,
+    "title": "Lagoon Flow",
+    "collection": "curlseal",
+    "crown": "#A8E5DD",
+    "brim": "#54ADC5",
+    "solid": "#78CED0",
+    "gradient": [
+      "#A8E5DD",
+      "#54ADC5"
+    ],
+    "mode": "shared-gradient",
+    "background": "#142D32",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-035",
+    "number": 35,
+    "title": "Glacier Flow",
+    "collection": "curlseal",
+    "crown": "#B8E8FA",
+    "brim": "#72ADE5",
+    "solid": "#92CFF0",
+    "gradient": [
+      "#B8E8FA",
+      "#72ADE5"
+    ],
+    "mode": "shared-gradient",
+    "background": "#172C40",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-036",
+    "number": 36,
+    "title": "Azure Flow",
+    "collection": "curlseal",
+    "crown": "#B8CBFF",
+    "brim": "#698FDD",
+    "solid": "#8CABEF",
+    "gradient": [
+      "#B8CBFF",
+      "#698FDD"
+    ],
+    "mode": "shared-gradient",
+    "background": "#18253E",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-037",
+    "number": 37,
+    "title": "Indigo Flow",
+    "collection": "curlseal",
+    "crown": "#CBCBFF",
+    "brim": "#8C89D0",
+    "solid": "#A6A5EC",
+    "gradient": [
+      "#CBCBFF",
+      "#8C89D0"
+    ],
+    "mode": "shared-gradient",
+    "background": "#252342",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-038",
+    "number": 38,
+    "title": "Silver Flow",
+    "collection": "curlseal",
+    "crown": "#EAF1F9",
+    "brim": "#A6B4CE",
+    "solid": "#CDD5E3",
+    "gradient": [
+      "#EAF1F9",
+      "#A6B4CE"
+    ],
+    "mode": "shared-gradient",
+    "background": "#202631",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-039",
+    "number": 39,
+    "title": "Ivory Flow",
+    "collection": "curlseal",
+    "crown": "#FFF0DC",
+    "brim": "#C8B7AC",
+    "solid": "#E9DDCC",
+    "gradient": [
+      "#FFF0DC",
+      "#C8B7AC"
+    ],
+    "mode": "shared-gradient",
+    "background": "#28232B",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-040",
+    "number": 40,
+    "title": "Copper Flow",
+    "collection": "curlseal",
+    "crown": "#EDC5A2",
+    "brim": "#B37D69",
+    "solid": "#D3A181",
+    "gradient": [
+      "#EDC5A2",
+      "#B37D69"
+    ],
+    "mode": "shared-gradient",
+    "background": "#30231E",
+    "family": "orange",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "dark"
+  },
+  {
+    "id": "curlseal-041",
+    "number": 41,
+    "title": "Lavender Paper Flow",
+    "collection": "curlseal",
+    "crown": "#AA8DCB",
+    "brim": "#78569F",
+    "solid": "#906CB6",
+    "gradient": [
+      "#AA8DCB",
+      "#78569F"
+    ],
+    "mode": "shared-gradient",
+    "background": "#F5EEFC",
+    "family": "purple",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-042",
+    "number": 42,
+    "title": "Rose Paper Flow",
+    "collection": "curlseal",
+    "crown": "#C37D98",
+    "brim": "#944C73",
+    "solid": "#AF5E82",
+    "gradient": [
+      "#C37D98",
+      "#944C73"
+    ],
+    "mode": "shared-gradient",
+    "background": "#FBEFF2",
+    "family": "pink",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-043",
+    "number": 43,
+    "title": "Terracotta Paper Flow",
+    "collection": "curlseal",
+    "crown": "#C68B65",
+    "brim": "#935E4C",
+    "solid": "#AF7052",
+    "gradient": [
+      "#C68B65",
+      "#935E4C"
+    ],
+    "mode": "shared-gradient",
+    "background": "#F9EDDD",
+    "family": "red",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-044",
+    "number": 44,
+    "title": "Sage Paper Flow",
+    "collection": "curlseal",
+    "crown": "#7B9980",
+    "brim": "#3E655A",
+    "solid": "#587D69",
+    "gradient": [
+      "#7B9980",
+      "#3E655A"
+    ],
+    "mode": "shared-gradient",
+    "background": "#F0F1E8",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-045",
+    "number": 45,
+    "title": "Blue Paper Flow",
+    "collection": "curlseal",
+    "crown": "#7399C2",
+    "brim": "#345B8D",
+    "solid": "#4777AD",
+    "gradient": [
+      "#7399C2",
+      "#345B8D"
+    ],
+    "mode": "shared-gradient",
+    "background": "#EBF2FC",
+    "family": "blue",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
+  },
+  {
+    "id": "curlseal-046",
+    "number": 46,
+    "title": "Cobalt Flow",
+    "collection": "curlseal",
+    "crown": "#FFFFFF",
+    "brim": "#CBD8FF",
+    "solid": "#F0EDFF",
+    "gradient": [
+      "#FFFFFF",
+      "#CBD8FF"
+    ],
+    "mode": "shared-gradient",
+    "background": "#284FC0",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-047",
+    "number": 47,
+    "title": "Violet Flow",
+    "collection": "curlseal",
+    "crown": "#FFF5FF",
+    "brim": "#D5BDF5",
+    "solid": "#F3E6FF",
+    "gradient": [
+      "#FFF5FF",
+      "#D5BDF5"
+    ],
+    "mode": "shared-gradient",
+    "background": "#6643AB",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-048",
+    "number": 48,
+    "title": "Cherry Flow",
+    "collection": "curlseal",
+    "crown": "#FFF4DE",
+    "brim": "#EDB5BD",
+    "solid": "#FFE5D8",
+    "gradient": [
+      "#FFF4DE",
+      "#EDB5BD"
+    ],
+    "mode": "shared-gradient",
+    "background": "#A73152",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-049",
+    "number": 49,
+    "title": "Evergreen Flow",
+    "collection": "curlseal",
+    "crown": "#FFF1CE",
+    "brim": "#BED9C0",
+    "solid": "#E8E3C8",
+    "gradient": [
+      "#FFF1CE",
+      "#BED9C0"
+    ],
+    "mode": "shared-gradient",
+    "background": "#265B49",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "medium"
+  },
+  {
+    "id": "curlseal-050",
+    "number": 50,
+    "title": "Ink on Cream Flow",
+    "collection": "curlseal",
+    "crown": "#766076",
+    "brim": "#393643",
+    "solid": "#534550",
+    "gradient": [
+      "#766076",
+      "#393643"
+    ],
+    "mode": "shared-gradient",
+    "background": "#F6ECD9",
+    "family": "neutral",
+    "source_sha256": "e3b5651b0d40303c9a25d86c2c5913425bba4ae1f4fc55d6b055bce6e59f2db9",
+    "tone": "light"
   }
 ]

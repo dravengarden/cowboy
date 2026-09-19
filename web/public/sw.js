@@ -15,7 +15,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes. Desktop auto-reloads after its
 // visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1736";
+const VERSION = "cowboy-v1738";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the
@@ -84,8 +84,8 @@ function showSessionNotification(message) {
   const url = message.test === true ? "/" : `/?session=${encodeURIComponent(message.sessionId)}`;
   return self.registration.showNotification(message.title, {
     body: message.body,
-    icon: "/cowboy-app-icon-192-v6.png",
-    badge: "/cowboy-app-icon-192-v6.png",
+    icon: "/cowboy-app-icon-192-v10.png",
+    badge: "/cowboy-app-icon-192-v10.png",
     tag: `cowboy-session-${message.sessionId}`,
     data: { url, sessionId: message.test === true ? null : message.sessionId },
   });

@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="site/assets/cowboy-readme-icon-v6.png" width="128" height="128" alt="Cowboy — 亮蓝帽冠、紫色帽檐与近黑背景">
+    <img src="site/assets/cowboy-readme-mark-v10.svg" width="128" height="112" alt="Cowboy — Lilac Flow — 帽冠与卷曲帽檐采用统一淡紫渐变">
   </a>
 </p>
 
@@ -17,16 +17,16 @@
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
-    <img src="https://img.shields.io/badge/website-live-7b42b5?style=flat-square" alt="Cowboy 官网">
+    <img src="https://img.shields.io/badge/website-live-B99AF3?style=flat-square" alt="Cowboy 官网">
   </a>
   <a href="https://github.com/dravengarden/cowboy/actions/workflows/website.yml">
     <img src="https://github.com/dravengarden/cowboy/actions/workflows/website.yml/badge.svg" alt="官网构建状态">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-MIT-98627d?style=flat-square" alt="MIT 许可证">
+    <img src="https://img.shields.io/badge/license-MIT-9776DB?style=flat-square" alt="MIT 许可证">
   </a>
   <a href="https://agentclientprotocol.com/">
-    <img src="https://img.shields.io/badge/protocol-ACP_native-4a90d9?style=flat-square" alt="原生支持 ACP">
+    <img src="https://img.shields.io/badge/protocol-ACP_native-B99AF3?style=flat-square" alt="原生支持 ACP">
   </a>
 </p>
 
@@ -37,6 +37,10 @@
   · <a href="#插件生态">插件</a>
   · <a href="docs/INDEX.md">文档</a>
 </p>
+
+默认采用 **Lilac Flow**。在“设置 → 外观”中切换 **50 套图标配色**；明暗模式偏好和语义状态色保持一致。
+
+<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="Cowboy icon colorways"></p>
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">

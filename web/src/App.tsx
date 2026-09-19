@@ -3828,7 +3828,7 @@ export function App({
                     />
                 )}
                 {/* Top system-chrome material. Bottom-mode Transcript uses the real
-                    safe-area inset plus a phone-standalone or iPad-PWA floor: its
+                    safe-area inset plus the iPad-PWA floor only: its
                     continuous scrolling content can pass beneath this quiet,
                     theme-aware glass. The iPad floor is the same 24px clearance as
                     titles/sheets, so it is one band, not a second pad stacked on
@@ -4387,10 +4387,10 @@ export function App({
                                 // Gate the composer slab's up-shadow on real
                                 // scroll-overflow (content under the glass).
                                 onScrollableChange={setTranscriptScrollable}
-                                // Phone standalone and iPad PWA share this shelf:
-                                // content rests below the frost and may pass beneath
-                                // it after scrolling. The iPad floor lives in the
-                                // CSS variable, not a second Transcript pad.
+                                // The iPad PWA shelf: content rests below the frost
+                                // and may pass beneath it after scrolling. The iPad
+                                // floor lives in the CSS variable, not a second
+                                // Transcript pad; an iPhone PWA has no strip at all.
                                 topInset={navbarAtBottom
                                     ? "var(--cowboy-mobile-status-material-height)"
                                     : "var(--navbar-h, 0px)"}

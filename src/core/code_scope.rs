@@ -9,7 +9,7 @@ use super::{Hub, Session};
 /// A finite read/cache identity, not a filesystem identity proof or writer lease.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CodeReadScope {
-    Session(SessionCodeScope),
+    Session(crate::machine_control::SessionReadScope),
     Workspace(crate::machine_control::WorkspaceCodeScope),
 }
 
@@ -17,27 +17,14 @@ impl CodeReadScope {
     /// Logical string bytes retained by bounded read caches; not a wire identity.
     pub(crate) fn string_bytes(&self) -> usize {
         match self {
-            Self::Session(scope) => {
-                scope.session_id.len()
-                    + scope.machine_id.len()
-                    + scope.workspace_id.as_ref().map_or(0, String::len)
-                    + scope.cwd.len()
-                    + scope.owner_user_id.as_ref().map_or(0, String::len)
-            }
+            Self::Session(scope) => scope.string_bytes(),
             Self::Workspace(scope) => scope.string_bytes(),
-        }
-    }
-
-    pub(crate) fn machine_id(&self) -> &str {
-        match self {
-            Self::Session(scope) => scope.machine_id(),
-            Self::Workspace(scope) => scope.machine_id(),
         }
     }
 
     pub(crate) fn cwd(&self) -> &str {
         match self {
-            Self::Session(scope) => scope.cwd(),
+            Self::Session(scope) => scope.session().cwd(),
             Self::Workspace(scope) => scope.cwd(),
         }
     }
@@ -71,6 +58,14 @@ pub(crate) struct SessionCodeScope {
 }
 
 impl SessionCodeScope {
+    pub(crate) fn string_bytes(&self) -> usize {
+        self.session_id.len()
+            + self.machine_id.len()
+            + self.workspace_id.as_ref().map_or(0, String::len)
+            + self.cwd.len()
+            + self.owner_user_id.as_ref().map_or(0, String::len)
+    }
+
     fn observe(session: &Session) -> Self {
         Self {
             incarnation: session.code_incarnation.clone(),

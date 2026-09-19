@@ -14,7 +14,7 @@ fn content(text: &str, kind: &str) -> Value {
 fn snapshot(value: &Value, id: &str, state: &str, pending: bool) -> Result<(), Failure> {
     check(value == &json!({"apiVersion":1,"resourceId":id,"state":state,"pending":pending}))
 }
-async fn prepare(pair: &Pair<'_>) -> Result<String, Failure> {
+pub(super) async fn prepare(pair: &Pair<'_>) -> Result<String, Failure> {
     let value = pair.http.post("/api/code/buffers", target()).await?;
     let id = value["resourceId"]
         .as_str()
@@ -98,6 +98,7 @@ pub(super) async fn cancel(
 
 pub(super) async fn run(
     pair: &mut Pair<'_>,
+    password: &str,
     stage: &mut &'static str,
     checks: &mut Vec<&'static str>,
 ) -> Result<(), Failure> {
@@ -125,6 +126,13 @@ pub(super) async fn run(
     check(manifest["bufferMode"] == "owned")?;
     checks.push("real_login_enrollment_and_effect_free_unready_refusal");
 
+    *stage = "session_file_read_route";
+    let file_continuation = read_routes::prepare(pair).await?;
+
+    *stage = "original_read_credential_revocation";
+    read_routes::authorization(pair, password).await?;
+    checks.push("held_real_core_file_reply_is_discarded_after_original_cookie_logout");
+
     *stage = "cancelled_open";
     let first = prepare(pair).await?;
     let gate = pair.proxy.hold("openBufferLease")?;
@@ -148,6 +156,8 @@ pub(super) async fn run(
     operation(pair, Method::PUT, &second, "open").await?;
     operation(pair, Method::PUT, &retained, "open").await?;
     reads(pair, &first, TEXT, false).await?;
+    language_reads::authorization(pair, password, stage, checks).await?;
+    *stage = "content_and_independent_owners";
     std::fs::write(
         pair.root.join("workspace/fixture.txt"),
         "different disk text\n",
@@ -185,6 +195,8 @@ pub(super) async fn run(
     operation(pair, Method::DELETE, &first, "released").await?;
     reads(pair, &second, TEXT, false).await?;
     checks.push("cancelled_read_drains_before_explicit_release_without_closing_peer");
+
+    effect_authority::run(pair, password, stage, checks).await?;
 
     let navigation = navigation::prepare(pair, &second, stage, checks).await?;
 
@@ -254,6 +266,7 @@ pub(super) async fn run(
     let commands = pair.proxy.counts()?.commands;
     pair.proxy.cut()?;
     pair.connected(2).await?;
+    read_routes::refused(pair, &file_continuation).await?;
     synchronization::replacement_refused(pair, &sync).await?;
     navigation::unavailable(pair, &navigation, StatusCode::CONFLICT).await?;
     let observed = pair
@@ -281,6 +294,7 @@ pub(super) async fn run(
         .await?;
     pair.start_controller().await?;
     pair.connected(3).await?;
+    read_routes::refused(pair, &file_continuation).await?;
     let missing = pair
         .http
         .call(Method::GET, &endpoint(&retained), None)
@@ -295,5 +309,8 @@ pub(super) async fn run(
     navigation::unavailable(pair, &navigation, StatusCode::NOT_FOUND).await?;
     checks.push("navigation_replacement_connection_and_restart_refuse_adoption");
     checks.push("replacement_connection_fenced_and_restart_does_not_adopt_or_release_old_id");
+    checks.push(
+        "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
+    );
     Ok(())
 }

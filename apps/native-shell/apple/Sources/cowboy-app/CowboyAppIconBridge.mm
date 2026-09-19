@@ -3,7 +3,7 @@
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
-static NSString *const CowboyDefaultIcon = @"palette-103";
+static NSString *const CowboyDefaultIcon = @"curlseal-026";
 
 static BOOL cowboyIconTrustedMessage(WKScriptMessage *message) {
     WKSecurityOrigin *origin = message.frameInfo.securityOrigin;

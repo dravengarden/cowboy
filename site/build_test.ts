@@ -349,7 +349,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
     "repository landing pages should begin with reciprocal language choices and default to English",
   );
   assert(
-    readme.includes("site/assets/cowboy-readme-icon-v6.png") &&
+    readme.includes("site/assets/cowboy-readme-mark-v10.svg") &&
       readme.includes("site/assets/cowboy-remote-topology-light-v3.webp") &&
       readme.includes("site/assets/cowboy-remote-topology-dark-v4.webp") &&
       readme.includes("site/assets/cowboy-desktop-surface-light-v2.webp") &&
@@ -361,7 +361,7 @@ Deno.test("repository landing pages use only privacy-safe product artwork", asyn
   );
   for (
     const asset of [
-      "site/assets/cowboy-readme-icon-v6.png",
+      "site/assets/cowboy-readme-mark-v10.svg",
       "site/assets/cowboy-remote-topology-light-v3.webp",
       "site/assets/cowboy-remote-topology-dark-v4.webp",
       "site/assets/cowboy-desktop-surface-light-v2.webp",
@@ -505,8 +505,8 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
         (html.match(/class="brand-icon"/gu) ?? []).length === 2 &&
         html.includes('class="brand-crown"') &&
         html.includes('class="brand-brim"') &&
-        html.includes('class="brand-crown" fill="#51C9FF"') &&
-        html.includes('class="brand-brim" fill="#BB83FF"') &&
+        html.includes('class="brand-crown" fill="url(#curlseal-pigment-1)"') &&
+        html.includes('class="brand-brim" fill="url(#curlseal-pigment-1)"') &&
         !styles.includes(".brand-crown {") &&
         !styles.includes(".brand-brim {") &&
         (html.match(/class="brand-icon-stage"/gu) ?? []).length === 2,
@@ -514,9 +514,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       styles.includes("--canvas: #101014") &&
-        styles.includes("--primary: #bb83ff") &&
-        styles.includes("--secondary: #51c9ff") &&
-        styles.includes("--brand-cyan: #51c9ff") &&
+        styles.includes("--primary: #b99af3") &&
+        styles.includes("--secondary: #d8c0ff") &&
+        styles.includes("--brand-lilac: #d8c0ff") &&
         !styles.includes("filter: var(--brand-filter-rest)") &&
         !styles.includes("@keyframes brand-color-breathe"),
       "brand colors remain faithful to the selected icon in light and dark themes",
@@ -714,10 +714,10 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
     );
     assert(
       html.includes(
-        'href="assets/cowboy-tab-icon-v9.svg" type="image/svg+xml" sizes="any"',
+        'href="assets/cowboy-tab-icon-v10.svg" type="image/svg+xml" sizes="any"',
       ) &&
         html.includes(
-          'href="assets/cowboy-tab-icon-v9.ico" sizes="16x16 32x32 48x48"',
+          'href="assets/cowboy-tab-icon-v10.ico" sizes="16x16 32x32 48x48"',
         ),
       "browser tabs use transparent scalable marks with explicit raster fallbacks",
     );
@@ -752,9 +752,9 @@ Deno.test("website build produces a complete self-contained Pages artifact", asy
       const asset of [
         "cowboy-hero-devices-light.webp",
         "cowboy-brand-mark.png",
-        "cowboy-tab-icon-v9-16.png",
-        "cowboy-tab-icon-v9-32.png",
-        "cowboy-tab-icon-v9.ico",
+        "cowboy-tab-icon-v10-16.png",
+        "cowboy-tab-icon-v10-32.png",
+        "cowboy-tab-icon-v10.ico",
         "cowboy-desktop-surface-light.webp",
         "cowboy-mobile-light.webp",
       ]

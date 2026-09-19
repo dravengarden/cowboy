@@ -155,6 +155,7 @@ async fn installation_binds_complete_release_target_original_credential_and_budg
         "url",
         "logout",
         "role",
+        "role_aba",
         "disabled",
         "queued",
     ] {
@@ -210,6 +211,10 @@ async fn installation_binds_complete_release_target_original_credential_and_budg
                     .unwrap();
             }
             "role" => h.role(AdminRole::Viewer),
+            "role_aba" => {
+                h.role(AdminRole::Viewer);
+                h.role(AdminRole::Operator);
+            }
             "disabled" => {
                 h.store
                     .set_user_disabled_at(&h.user.id, Some(auth_now_ms()))
