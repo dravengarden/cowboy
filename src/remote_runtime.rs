@@ -1578,6 +1578,15 @@ fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
             .hub
             .project_runtime_status(&worker.session_id, status, detail);
     }
+    // A reconnect restores the live level; an exited worker has none left.
+    let background_tasks = if matches!(worker.state, WorkerState::Exited | WorkerState::Crashed) {
+        Some(0)
+    } else {
+        worker.background_tasks
+    };
+    if let Some(count) = background_tasks {
+        shared.hub.set_background_tasks(&worker.session_id, count);
+    }
     reconcile_idle_guard(shared, &worker.session_id, idle_guard);
     true
 }
@@ -1676,6 +1685,11 @@ fn update_snapshot_from_event(
             worker.context_used = Some(*used);
             worker.context_size = Some(*size);
         }
+        RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::background_tasks_count(update).is_some() =>
+        {
+            worker.background_tasks = crate::runtime_wire::background_tasks_count(update);
+        }
         RuntimeEvent::Update { .. }
         | RuntimeEvent::ScheduleWakeup { .. }
         | RuntimeEvent::UndeliveredPrompt { .. }
@@ -1722,6 +1736,14 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
         }
         RuntimeEvent::Status { state, detail } => {
             apply_worker_status(hub, session_id, state, detail);
+        }
+        RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::background_tasks_count(&update).is_some() =>
+        {
+            // Session metadata, never a transcript row.
+            if let Some(count) = crate::runtime_wire::background_tasks_count(&update) {
+                hub.set_background_tasks(session_id, count);
+            }
         }
         RuntimeEvent::Update { update, cmid } => {
             let compact_failure = remote_compact_failure(hub, session_id, &update);
@@ -1992,6 +2014,57 @@ fn reset_after_workspace_replacement(shared: &Shared, session_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn background_task_level_is_session_metadata_restored_from_snapshots() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "claude-code".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("s", Status::Running, None);
+        let background = |hub: &Hub| hub.session_info("s").unwrap().meta.background_tasks;
+        let before = hub.snapshot("s").unwrap().0.len();
+        apply_event(
+            &hub,
+            "s",
+            RuntimeEvent::Update {
+                update: crate::runtime_wire::background_tasks_update(2),
+                cmid: None,
+            },
+        );
+        assert_eq!(background(&hub), 2);
+        // Never a transcript row, and never a dispatch hold.
+        assert_eq!(hub.snapshot("s").unwrap().0.len(), before);
+        assert_eq!(hub.status("s"), Some(Status::Running));
+
+        // A Controller restart forgets the level; the worker snapshot restores it.
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        hub.set_background_tasks("s", 0);
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Running;
+        worker.current_turn_id = None;
+        worker.background_tasks = Some(1);
+        assert!(apply_snapshot(&runtime.shared, &worker));
+        assert_eq!(background(&hub), 1);
+        // A peer that predates the level leaves it untouched.
+        worker.background_tasks = None;
+        assert!(apply_snapshot(&runtime.shared, &worker));
+        assert_eq!(background(&hub), 1);
+        // Its worker's exit ends the background work it owned.
+        worker.state = WorkerState::Exited;
+        worker.background_tasks = Some(1);
+        assert!(apply_snapshot(&runtime.shared, &worker));
+        assert_eq!(background(&hub), 0);
+
+        hub.set_background_tasks("s", 3);
+        hub.set_status("s", Status::Starting, None);
+        assert_eq!(background(&hub), 0);
+    }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)] // Exercise one ordered refusal/reconnect/recovery sequence.
@@ -2396,6 +2469,7 @@ mod tests {
             pending_prompt_count: 0,
             drain_requested: false,
             exit_detail: None,
+            background_tasks: None,
         }
     }
 

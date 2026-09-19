@@ -47,6 +47,9 @@ impl AgentSink for HubSink {
     fn set_session_usage(&self, id: &str, usage: SessionUsage) {
         self.hub.set_session_usage(id, usage);
     }
+    fn set_background_tasks(&self, id: &str, count: u32) {
+        self.hub.set_background_tasks(id, count);
+    }
     fn schedule_wakeup(&self, _: &str, _: i64, _: String) {
         panic!("session startup must not schedule work");
     }
@@ -678,6 +681,73 @@ fn native_activity_ignores_history_other_sessions_and_unrelated_messages() {
     assert_eq!(observed_status(&other_sink), Status::Running);
 }
 
+fn native_background_tasks(tasks: &Value) -> ClaudeSdkMessageNotification {
+    ClaudeSdkMessageNotification {
+        session_id: NATIVE.to_owned(),
+        message: json!({
+            "type": "system", "subtype": "background_tasks_changed",
+            "session_id": NATIVE, "tasks": tasks,
+        }),
+    }
+}
+
+fn observed_background_tasks(sink: &HubSink) -> u32 {
+    sink.hub
+        .session_info(SESSION)
+        .unwrap()
+        .meta
+        .background_tasks
+}
+
+#[test]
+fn native_background_tasks_project_activity_without_holding_the_prompt() {
+    let (state, sink) = activity_fixture("claude-code");
+    // The prompt returned while a Monitor and a backgrounded shell still run.
+    handle_native_activity(
+        &state,
+        &native_background_tasks(&json!([
+            {"task_id": "m1", "task_type": "local_bash", "description": "watch gate"},
+            {"task_id": "b1", "task_type": "local_bash", "description": "build"},
+            {"task_id": "d1", "task_type": "dream", "description": "memory", "ambient": true},
+        ])),
+    );
+    assert_eq!(observed_background_tasks(&sink), 2);
+    // Presentation only: the idle prompt remains dispatchable.
+    assert_eq!(observed_status(&sink), Status::Running);
+    let before = sink.hub.snapshot(SESSION).unwrap().0.len();
+
+    // Another session's level, history replay, and malformed payloads are ignored.
+    let mut other = native_background_tasks(&json!([]));
+    other.session_id = "other".to_owned();
+    other.message["session_id"] = "other".into();
+    handle_native_activity(&state, &other);
+    state.suppress_updates.store(true, Ordering::SeqCst);
+    handle_native_activity(&state, &native_background_tasks(&json!([])));
+    state.suppress_updates.store(false, Ordering::SeqCst);
+    handle_native_activity(&state, &native_background_tasks(&json!(null)));
+    assert_eq!(observed_background_tasks(&sink), 2);
+
+    // REPLACE semantics: the level, not paired edges, drives the count.
+    handle_native_activity(
+        &state,
+        &native_background_tasks(&json!([
+            {"task_id": "m1", "task_type": "local_bash", "description": "watch gate"},
+        ])),
+    );
+    assert_eq!(observed_background_tasks(&sink), 1);
+    handle_native_activity(&state, &native_background_tasks(&json!([])));
+    assert_eq!(observed_background_tasks(&sink), 0);
+    // The level is session metadata, never a transcript row.
+    assert_eq!(sink.hub.snapshot(SESSION).unwrap().0.len(), before);
+
+    let (other_provider, other_sink) = activity_fixture("codex");
+    handle_native_activity(
+        &other_provider,
+        &native_background_tasks(&json!([{"task_id": "x", "task_type": "local_bash"}])),
+    );
+    assert_eq!(observed_background_tasks(&other_sink), 0);
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Keep the complete prompt/native lifecycle in wire order.
 async fn native_background_resume_restores_busy_after_prompt_response_over_acp() {
@@ -735,7 +805,8 @@ async fn native_background_resume_restores_busy_after_prompt_response_over_acp()
         assert_eq!(
             new["params"]["_meta"]["claudeCode"]["emitRawSDKMessages"],
             json!([
-                {"type": "system", "subtype": "session_state_changed"}
+                {"type": "system", "subtype": "session_state_changed"},
+                {"type": "system", "subtype": "background_tasks_changed"}
             ])
         );
         send_json(

@@ -930,10 +930,15 @@ fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
     // The SDK can resume on a background-task notification after session/prompt
     // already returned. Subscribe to its execution state, not its full raw
     // transcript, so those autonomous stretches retain truthful Busy/idle edges.
+    // Between those stretches the prompt is idle while the agent still waits on
+    // its background work; the task level keeps that wait visible.
     meta.insert(
         "claudeCode".to_owned(),
         serde_json::json!({
-            "emitRawSDKMessages": [{"type": "system", "subtype": "session_state_changed"}],
+            "emitRawSDKMessages": [
+                {"type": "system", "subtype": "session_state_changed"},
+                {"type": "system", "subtype": "background_tasks_changed"},
+            ],
         }),
     );
     Some(meta)
@@ -1092,7 +1097,8 @@ mod startup_mode_tests {
                 assert_eq!(
                     request.pointer("/_meta/claudeCode/emitRawSDKMessages"),
                     Some(&serde_json::json!([
-                        {"type": "system", "subtype": "session_state_changed"}
+                        {"type": "system", "subtype": "session_state_changed"},
+                        {"type": "system", "subtype": "background_tasks_changed"}
                     ]))
                 );
             }
@@ -1930,6 +1936,9 @@ struct SessionActivity {
     prompt_status: Status,
     prompt_failed: bool,
     native_busy: bool,
+    /// Live background tasks the SDK counts as activity. Presentation only:
+    /// a long-lived background server must never hold the prompt queue.
+    background_tasks: u32,
 }
 
 impl Default for SessionActivity {
@@ -1939,6 +1948,7 @@ impl Default for SessionActivity {
             prompt_status: Status::Starting,
             prompt_failed: false,
             native_busy: false,
+            background_tasks: 0,
         }
     }
 }
@@ -2628,11 +2638,18 @@ fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotificat
     if state.suppress_updates.load(Ordering::SeqCst)
         || !crate::provider::uses_stable_preset_system_prompt(&state.provider_id)
         || notif.message["type"] != "system"
-        || notif.message["subtype"] != "session_state_changed"
         || notif.message["session_id"] != notif.session_id
     {
         return;
     }
+    match notif.message["subtype"].as_str() {
+        Some("session_state_changed") => handle_native_state(state, notif),
+        Some("background_tasks_changed") => handle_native_background_tasks(state, notif),
+        _ => {}
+    }
+}
+
+fn handle_native_state(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
     let native_busy = match notif.message["state"].as_str() {
         Some("running" | "requires_action") => true,
         Some("idle") => false,
@@ -2648,6 +2665,29 @@ fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotificat
     if status != previous {
         state.sink.set_status(&state.session_id, status, None);
     }
+}
+
+/// The SDK replaces its whole live background-task set on every membership
+/// change. Ambient tasks (housekeeping, live-update watchers) are excluded by
+/// the SDK's own contract; a Monitor or backgrounded shell the agent waits on
+/// is activity.
+fn handle_native_background_tasks(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
+    let Some(tasks) = notif.message["tasks"].as_array() else {
+        return;
+    };
+    let count = tasks
+        .iter()
+        .filter(|task| task["ambient"].as_bool() != Some(true))
+        .count();
+    let count = u32::try_from(count).unwrap_or(u32::MAX);
+    let mut activity = state.activity.lock();
+    if activity.native_session_id.as_deref() != Some(notif.session_id.as_str())
+        || activity.background_tasks == count
+    {
+        return;
+    }
+    activity.background_tasks = count;
+    state.sink.set_background_tasks(&state.session_id, count);
 }
 
 fn handle_session_notification(state: &ClientState, notif: &SessionNotification) {
@@ -2908,7 +2948,16 @@ async fn run_session(
         session_meta = session.meta;
         session.session_id
     };
-    state.activity.lock().native_session_id = Some(acp_id.0.to_string());
+    {
+        // The SDK sends no level at startup; a newly attached native session
+        // starts with no background work of its own.
+        let mut activity = state.activity.lock();
+        activity.native_session_id = Some(acp_id.0.to_string());
+        if activity.background_tasks != 0 {
+            activity.background_tasks = 0;
+            state.sink.set_background_tasks(&state.session_id, 0);
+        }
+    }
     startup_phase.send_replace(StartupPhase::Configure);
     if crate::provider::uses_config_full_access(provider_id) {
         state.codex_full_access.store(

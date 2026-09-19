@@ -456,6 +456,7 @@ impl Broker {
                 pending_prompt_count: pending_prompts.get(&session_id).copied().unwrap_or(0),
                 drain_requested: false,
                 exit_detail: None,
+                background_tasks: None,
             });
         }
         snapshots.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -923,6 +924,7 @@ impl Broker {
                     pending_prompt_count: 0,
                     drain_requested: !desired.is_empty() && generation != desired && !pinned,
                     exit_detail: None,
+                    background_tasks: None,
                 },
                 last_seen: Instant::now(),
                 receive_probe: None,
@@ -1737,6 +1739,12 @@ impl Broker {
             RuntimeEvent::ContextUsage { used, size, .. } => {
                 worker.snapshot.context_used = Some(*used);
                 worker.snapshot.context_size = Some(*size);
+            }
+            RuntimeEvent::Update { update, .. }
+                if crate::runtime_wire::background_tasks_count(update).is_some() =>
+            {
+                worker.snapshot.background_tasks =
+                    crate::runtime_wire::background_tasks_count(update);
             }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
@@ -3722,6 +3730,7 @@ mod tests {
                 pending_prompt_count: 0,
                 drain_requested: false,
                 exit_detail: None,
+                background_tasks: None,
             },
             1,
         );
@@ -5160,6 +5169,7 @@ mod tests {
                     pending_prompt_count: 0,
                     drain_requested: false,
                     exit_detail: None,
+                    background_tasks: None,
                 }),
             },
         )
