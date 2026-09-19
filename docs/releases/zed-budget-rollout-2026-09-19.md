@@ -8,6 +8,10 @@ native owners, supported-device acceptance or independent post-effect recovery.
 The old NixOS cold Controller has a separately recorded, pre-existing Catalog
 compatibility failure; this record does not claim that reader passed.
 
+Later status: the separately owned [cold-reader host refresh](plugin-cold-reader-floor-2026-09-19.md)
+repairs that floor and supplies new actual-role acceptance. The negative evidence
+and transaction boundaries below remain the historical facts of this rollout.
+
 This continues the [Budget reader acceptance](sync-budget-outcomes-2026-09-19.md).
 Build/sign/maintenance source is clean, published
 `94382b94e8275c6ad21cfdb9da1907bf1dab8d7a`, with Zed subtree

@@ -1,7 +1,7 @@
 # Plugin refactor completion ledger
 
 Reviewed against the 2026-09-09 [target architecture](plugin-spatiotemporal-design.md)
-and current code on 2026-09-18. This is the current exit checklist, not a list of
+and current code on 2026-09-19. This is the current exit checklist, not a list of
 all historical slices. Passing a test, publishing a reader, enabling a policy
 and accepting a production effect are different milestones.
 
@@ -541,6 +541,12 @@ those 19 checks and 72 Machine installation-reader checks, activates the new
 resident generation and installs the exact Zed `1.18.0` pair on Hawk. All 16
 original ACP workers are retained in the bounded observation window; complete
 drain, native-owner migration/resume and supported-device acceptance remain open.
+The subsequent [Hawk cold-reader refresh](releases/plugin-cold-reader-floor-2026-09-19.md)
+closes the old Controller's current-Catalog runtime-binding incompatibility.
+The exact active/next-recovery/cold artifacts pass the complete 87-release
+Catalog and all 420 journal/dataset/policy checks before and after host activation.
+It retains the independently advanced resident Machine and all 18 observed ACP
+workers; this is not native-owner adoption or general post-effect recovery.
 
 The [install continuation repair](plugin-install-continuation.md) closes live
 HTTP cancellation, stale authority/connection and unsafe fence-release gaps. It
@@ -554,14 +560,6 @@ unconstrained workflow executor to hide these gaps.
 
 ## Production and supported-client acceptance still required
 
-- **Current cold Controller compatibility:** the [Zed 1.18 rollout](releases/zed-budget-rollout-2026-09-19.md#controller-reader-boundary-and-cold-failure)
-  accepts the actual active/next-transaction recovery Controller and retained
-  predecessor, but the NixOS cold Controller fails both the original Catalog
-  and staged Catalog on the same pre-existing Claude `3.1.27` runtime value.
-  Earlier cold-reader acceptance is not proof for today's Catalog. Repair the
-  owning complete Columbus host/recovery configuration and independently
-  recheck its exact reader before claiming compatible cold recovery; no Catalog
-  deletion, decoder relaxation or Agent downgrade substitutes for that check.
 - **Historical persistence loss:** the two append rejections after the
   [1.8.0 installation window](releases/zed-sync-owners-2026-09-16.md#later-persistence-degradation--unresolved)
   led to a separately [repaired and activated Controller admission queue](releases/persistence-admission-2026-09-16.md).

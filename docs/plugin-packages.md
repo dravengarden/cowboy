@@ -807,6 +807,20 @@ target and transaction contract, not a live fault-injection test or the ability
 to undo host/storage activation; the latter still needs its separate recovery
 acceptance.
 
+On targets with an absent-profile NixOS bootstrap, include that **actual cold
+Controller** as a separate Catalog reader floor. Resolve its immutable output
+from the active system's activation script, not a source pin, a retained
+predecessor or the ordinary component profile. Check the complete current and
+staged Catalog with that exact reader before publication: even an unchanged
+outer release schema can contain a newly unsupported runtime binding. A passing
+active/next-recovery reader does not compensate for a failing cold reader.
+Repair the owning complete host configuration through its separate maintenance
+boundary, then rebind and rerun the journal, dataset and policy reader gates on
+the actual activated outputs. Do not delete Catalog history, downgrade an Agent
+or relax decoding to make an old reader pass. The
+[2026-09-19 cold-floor acceptance](releases/plugin-cold-reader-floor-2026-09-19.md)
+records this distinction; it is not future-publication or native-resume authority.
+
 Inspect the actual service unit and configuration generator, not a stale source
 checkout or only the current private JSON. If `ExecStartPre` regenerates an
 Authentication selection, changing its output file will be undone at restart.
