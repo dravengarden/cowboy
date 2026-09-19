@@ -18,6 +18,10 @@ mod synchronization;
 
 const SESSION: &str = "sess-901";
 const TEXT: &str = "a🙂z\nowned native buffer\n";
+// Seven discarded real replies must each exhaust the production 40-second
+// command timeout. Preserve the prior 110-second allowance for other work;
+// this harness limit never changes a product timeout or shortens a fault.
+const RUN_DEADLINE: Duration = Duration::from_secs(7 * 40 + 110);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -281,7 +285,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         http: Http::with_timeout(address, Duration::from_secs(100))?,
     };
     drop(listener);
-    let result = tokio::time::timeout(Duration::from_secs(270), async {
+    let result = tokio::time::timeout(RUN_DEADLINE, async {
         receipt.stage = "authentication";
         pair.start_controller().await?;
         pair.http
