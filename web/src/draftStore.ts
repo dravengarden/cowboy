@@ -135,28 +135,22 @@ function persist(sessionId: string, draft: Draft | null): void {
   } else {
     const cache = draftCache(sessionId);
     if (cache !== undefined) {
+      // The text is the precious part: mirror it synchronously first, so a
+      // page that dies during the asynchronous byte write still keeps what
+      // was typed. The bytes follow; if the database refuses them, the record
+      // falls back to the old localStorage quota policy.
+      const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+      try {
+        ls.setItem(key, JSON.stringify(mirror));
+      } catch {
+        /* the database record below still holds the whole draft */
+      }
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
-      void cache.save(stored).then(
-        (): void => {
-          const mirror: DraftMirror = {
-            text: draft.text,
-            attachments: [],
-            attachmentsInDatabase: true,
-          };
-          try {
-            ls.setItem(key, JSON.stringify(mirror));
-          } catch {
-            /* the database holds the whole draft; the text mirror is optional */
-          }
-        },
-        (): void => {
-          // The database refused the bytes; fall back to the localStorage
-          // record with its old quota policy.
-          databaseDrafts.delete(sessionId);
-          persistLegacy(ls, key, draft);
-        },
-      );
+      void cache.save(stored).catch((): void => {
+        databaseDrafts.delete(sessionId);
+        persistLegacy(ls, key, draft);
+      });
       return;
     }
   }
