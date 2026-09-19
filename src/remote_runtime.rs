@@ -1689,9 +1689,12 @@ fn apply_worker_status(hub: &Hub, session_id: &str, state: WorkerState, detail: 
     // another completion. Preserve both the hold and any newer explicit send's
     // dispatch guard instead of re-emitting a terminal status that clears it.
     // Draining may carry a generation-handoff explanation; it is maintenance,
-    // not a successful turn or a new provider failure.
+    // not a successful turn or a new provider failure. Claude's native session
+    // can still report `running` after the refused prompt returns, so the
+    // worker emits Busy -> Running without a new turn. Only TurnStarted begins
+    // an explicit next turn and releases the hold.
     if (state == WorkerState::Draining
-        || (state == WorkerState::Running
+        || (matches!(state, WorkerState::Running | WorkerState::Busy)
             && detail
                 .as_deref()
                 .is_none_or(|detail| detail == crate::core::MODEL_REFUSAL_DETAIL)))
@@ -2026,6 +2029,20 @@ mod tests {
             assert_eq!(hub.status("s"), Some(Status::Crashed));
             assert!(rx.try_recv().is_err());
             assert!(!hub.session_has_in_flight_prompt("s"));
+            // Claude's native session can report idle only after the refused
+            // prompt returned, so the worker emits a trailing Busy -> Running.
+            for state in [WorkerState::Busy, WorkerState::Running] {
+                apply_event(
+                    &hub,
+                    "s",
+                    RuntimeEvent::Status {
+                        state,
+                        detail: None,
+                    },
+                );
+                assert_eq!(hub.status("s"), Some(Status::Crashed), "{state:?}");
+                assert!(rx.try_recv().is_err(), "{state:?}");
+            }
             apply_event(
                 &hub,
                 "s",

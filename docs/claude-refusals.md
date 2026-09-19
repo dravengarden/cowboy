@@ -47,6 +47,51 @@ documents separate availability fallback chains and category-based refusal
 fallback. `model_refusal_no_fallback` alone does not identify a missing setting.
 No automatic model change or unsupported fallback override is introduced.
 
+## Follow-up evidence
+
+The Controller and Web release from `15970ec0` were activated at 03:27 UTC.
+Three more refusals followed in the same two conversations: request
+`req_011CfC6X1Sd8HeDUUTjjWxf9` on Fable 5.1 and requests
+`req_011CfC6ZciURXxHbEM1kX4n6` and `req_011CfC6aUVtRB5jxbwoJDjX3` on
+Opus 5. All used the same category; no other conversation was refused. The
+metadata-only analysis below counts block types, tool names, sizes, and attachment
+kinds without reading conversation prose or thinking.
+
+- **Refusals persist within a conversation.** After the first refusal, 11 of
+  12 later model requests were refused. The exception was the request made
+  when the old Controller drained queued work. No explicit follow-up recovered
+  either conversation, even hours later or after a model change. This differs
+  from issue 88364, where most conversations recovered after one turn.
+- **The batching reminder does not explain these refusals.** Six of the 32
+  retained Fable 5/Opus 5 conversations contain `batching_reminder_sent`, but
+  only one was refused. The diagnostic conversation was refused without any
+  reminder. Silent-turn, token-budget, remote-session, and queued-command
+  attachments are also common in successful conversations.
+- **No visible reasoning was reproduced.** The official definition says the
+  request asks the model to reproduce its internal reasoning in response text.
+  Refused responses contained signed thinking, tool calls, and at most one short
+  text block. Cowboy's own guidance and preset system prompt contain no such
+  instruction. The first conversation had no raw thinking blocks in tool results;
+  its only match was the `agent_thought_chunk` identifier in source code. The
+  diagnostic conversation read native transcripts containing signed thinking
+  about 12 minutes before its first refusal. Its investigation confounds this
+  exposure, so it remains only a lead for that conversation.
+- **Partial output remains in the native chain.** The official guidance says
+  to discard partial output from a refusal before continuing the conversation.
+  Claude Code 2.1.272 executed client tool calls from four refused streaming
+  responses and recorded their results. Its `parentUuid` chain for each later
+  prompt contains every earlier refused thinking/tool block and the synthetic
+  refusal text. Local transcripts cannot show whether the CLI removes them when
+  building the next API request. They do not establish this retained output as
+  the cause.
+
+These points narrow the upstream report without identifying the classifier
+trigger. Useful evidence for Anthropic is the request IDs, the persistent
+per-conversation pattern, and a question about retaining refused partial
+output. Recovery options that remain inside supported behavior are to start a
+new session, or to use officially documented Claude Code refusal fallback
+configuration once it is verified for this CLI version.
+
 ## Cowboy defect and repair
 
 The Controller treated every successful protocol response as a completed turn,
@@ -56,7 +101,14 @@ on that stop reason, despite lacking a tool result.
 
 The Controller now holds the session in its existing recoverable failure state
 before releasing the dispatch guard. Idle events and reconnect snapshots retain
-that hold. The worker and native session stay alive; an explicit send can reuse
+that hold. The first production refusal after activation exposed one more
+edge. Claude's native `session_state_changed` can remain `running` after
+`session/prompt` returns. The worker then projects a trailing Busy -> Running
+without a new turn. The Controller had released the hold on that Busy, and the
+following Running could drain queued work. A detail-less worker Busy now
+preserves the hold as well; only `TurnStarted` for an explicit prompt starts the
+next turn. While the hold is active, an autonomous native stretch after a refusal
+shows the held state rather than Busy. The worker and native session stay alive; an explicit send can reuse
 them. No refusal is inferred from assistant prose. The incident is classified as
 `provider_refusal`, rather than a critical process crash.
 
@@ -72,8 +124,9 @@ no replacement for this correction.
 
 ## Verification
 
-The runtime regression exercises refusal, a queued task, a trailing idle event,
-reconnection, and an explicit next turn for Claude and Codex. Supervisor tests
+The runtime regression exercises refusal, a queued task, the trailing native
+Busy -> Running edge, a trailing idle event, reconnection, and an explicit next
+turn for Claude and Codex. Supervisor tests
 require reuse of the live worker without stop/resume commands. Web tests retain
 confirmed tools and diagnostics, interrupt outstanding tools, and keep ordinary
 prose on successful turns unchanged. These deterministic checks establish the
