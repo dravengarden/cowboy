@@ -73,3 +73,9 @@ every streaming/legacy handler, or change separate admin-cookie/host-delegation
 authority. Current credential revocation checks remain necessary. Atomic
 database/network delivery, Machine-owned authorization epochs, state leases,
 general DAG execution and independent post-effect recovery remain separate.
+
+The [accepted Controller-only rollout](releases/plugin-product-permission-lifetimes-2026-09-19.md)
+records the exact immutable artifact, source negative/positive gates, complete
+connected regression chain, browser cases and actual Catalog/host floors.
+Its deployment window retains all 16 original workers and unchanged Machine,
+Plugin installation/authentication, Web, host and Victoria identities.

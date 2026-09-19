@@ -550,9 +550,13 @@ role restoration without an intervening poll cannot revive old requests, and
 promotion cannot expand them. Unchanged users/roles retain their observations.
 Both current and ended generations count against bounded live retention.
 Code responses and Operator install/uninstall/telemetry continuations share this
-core-only boundary while recording actual native effects independently. This
-source extension does not open the single-user permission API, supply durable
-principal epochs or close the broader graph/state/recovery exits below.
+core-only boundary while recording actual native effects independently. Its
+[accepted Controller rollout](releases/plugin-product-permission-lifetimes-2026-09-19.md)
+passes the source role-ABA negative/positive gates, complete quality gate, all
+28 connected v10 checks, 24 browser cases and actual Catalog/host floors.
+It is published and activated, retaining all 16 original workers in its bounded
+deployment window. This does not open the single-user permission API, supply
+durable principal epochs or close the broader graph/state/recovery exits below.
 
 The [Session read-route binding](plugin-session-read-routes.md) additionally
 separates logical Session identity from the original core/Machine execution
