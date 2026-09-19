@@ -502,15 +502,6 @@ impl MachineControl {
             .map(|connection| connection.connected_at.elapsed())
     }
 
-    #[must_use]
-    pub fn is_colocated(&self, machine_id: &str) -> Option<bool> {
-        self.live
-            .read()
-            .connections
-            .get(machine_id)
-            .map(|connection| connection.colocated)
-    }
-
     pub(crate) fn remove_if_current(&self, token: &ConnectionToken) {
         let mut live = self.live.write();
         if live.is_current(token) {
@@ -2652,15 +2643,15 @@ mod tests {
         let control = MachineControl::default();
         let (first, _) = mpsc::unbounded_channel();
         let first = control.install("hawk".to_owned(), "old".to_owned(), true, 3, first);
-        assert_eq!(control.is_colocated("hawk"), Some(true));
+        assert!(control.live.read().connections["hawk"].colocated);
 
         let (current, _) = mpsc::unbounded_channel();
         let current = control.install("hawk".to_owned(), "current".to_owned(), false, 3, current);
         control.remove_if_current(&first);
-        assert_eq!(control.is_colocated("hawk"), Some(false));
+        assert!(!control.live.read().connections["hawk"].colocated);
 
         control.remove_if_current(&current);
-        assert_eq!(control.is_colocated("hawk"), None);
+        assert!(!control.live.read().connections.contains_key("hawk"));
     }
 
     #[test]

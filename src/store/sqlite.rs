@@ -1907,17 +1907,6 @@ impl SqliteStorage {
             .collect())
     }
 
-    pub(super) async fn machine_is_local(&self, machine_id: &str) -> Result<bool> {
-        let mode: Option<String> = sqlx::query_scalar(
-            "SELECT connection_mode FROM machines WHERE id = ?1 AND revoked_at_ms IS NULL",
-        )
-        .bind(machine_id)
-        .fetch_optional(&self.pool)
-        .await
-        .context("loading Machine connection mode")?;
-        Ok(mode.as_deref() == Some("local"))
-    }
-
     pub(super) async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
         anyhow::ensure!(machine_id != "local", "the local Machine cannot be revoked");
         let mut transaction = self

@@ -1362,10 +1362,6 @@ impl Store {
         dispatch_storage!(self, list_machines())
     }
 
-    pub async fn machine_is_local(&self, machine_id: &str) -> Result<bool> {
-        dispatch_storage!(self, machine_is_local(machine_id))
-    }
-
     pub async fn revoke_machine(&self, machine_id: &str) -> Result<()> {
         dispatch_storage!(self, revoke_machine(machine_id))
     }
@@ -2724,21 +2720,6 @@ impl PostgresStorage {
                     .and_then(|key| crate::machine_auth::fingerprint(key).ok()),
             })
             .collect())
-    }
-
-    /// Whether a registered Machine is colocated with this controller. This is
-    /// used only as a bounded fallback when its loopback adapter tunnel is
-    /// temporarily unavailable; remote Machines must never fall through to the
-    /// controller filesystem merely because they share a path spelling.
-    pub async fn machine_is_local(&self, machine_id: &str) -> Result<bool> {
-        let mode: Option<String> = sqlx::query_scalar(
-            "SELECT connection_mode FROM machines WHERE id = $1 AND revoked_at IS NULL",
-        )
-        .bind(machine_id)
-        .fetch_optional(&self.pool)
-        .await
-        .context("loading Machine connection mode")?;
-        Ok(mode.as_deref() == Some("local"))
     }
 
     /// Revoke a remote Machine identity and fence its current connection.
@@ -8830,7 +8811,9 @@ mod storage_contract_tests {
     }
 
     async fn assert_machine_contract(store: &Store) -> Result<()> {
-        assert!(store.machine_is_local("hawk").await?);
+        assert!(store.list_machines().await?.iter().any(|machine| {
+            machine.id == "hawk" && machine.connection_mode == "local" && !machine.revoked
+        }));
         let encryption_secret = x25519_dalek::StaticSecret::from([0x24_u8; 32]);
         let encryption_public = base64::engine::general_purpose::STANDARD
             .encode(x25519_dalek::PublicKey::from(&encryption_secret).as_bytes());
