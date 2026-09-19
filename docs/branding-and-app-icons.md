@@ -1,163 +1,71 @@
 # Cowboy brand and app icons
 
-The default is colorway **103**, **Neon**: cyan crown `#51C9FF`, violet brim `#BB83FF`,
-and ink background `#101014`. It uses the approved Boomerang West shape.
-The website and app accents follow these colors; CSS must not recolor the logo
-with hue rotation, a mask, or a rainbow overlay. Neon uses violet as primary and cyan as secondary; the light theme deepens
-both accents for readable text. The website keeps most headline text neutral
-and reserves the purple emphasis for “One workspace.”
+The official default is **26 · Lilac Flow** (`curlseal-026`) from the approved
+Curlseal v3 color study. The hat crown and spiral brim share one horizontal
+lilac gradient, `#D8C0FF` → `#9776DB`, on an opaque `#211B34` installation tile.
+The common silhouette is traced from the approved Curlseal shape; every export
+uses the same paths and global gradient coordinates. No per-part gradient reset,
+lighting, drop shadow or baked-in rounded corners is added.
 
-## Choosing an icon
+## Appearance
 
-Open **Settings → Appearance → Icon & theme → Choose**. The selector contains
-**20 curated styles** in five groups of four: Electric, Soft, Heritage, Jewel,
-and Quiet. Each style has a distinct accent, an accompanying secondary color,
-and primary/secondary accents. Preview both modes, then choose **Use this style**.
-The current Light / Dark / System preference is preserved. **Restore default**
-selects Neon (103). Previewing does not change the active style.
+**Settings → Appearance → Icon & theme → Choose** offers all **50** colorways:
+**Flat 01–25** use one solid pigment across both pieces; **Flow 26–50** use one
+continuous gradient. Numbers separated by 25 are paired color families.
+The preview is separate from **Use this style**; **Restore default** selects 26.
+System / Light / Dark and the reading-font preference are preserved. New installs
+retain System and Source Serif 4 defaults. Existing deliberate icon choices remain
+valid; the saved `default` sentinel follows the new brand.
 
-`web/src/appIconStyles.json` owns the selection, display names, theme seeds,
-and official default. `appearanceThemes.ts` derives readable light and dark
-palettes; tests cover text and button contrast for all 40 combinations.
-Bright artwork colors are darkened for light-mode text and buttons. Only primary
-and secondary vary by style. Backgrounds, text, dividers, and neutral interaction
-states are shared within each mode; error, warning, success, and info retain the
-existing MUI semantic palette.
+Only primary and secondary accents vary with an icon choice. The theme engine
+adjusts UI text/button colors for contrast on each mode. Backgrounds, neutral
+states and the error, warning, success and info palettes are unchanged. Artwork
+keeps the approved colors; UI contrast adjustment never recolors the logo.
 
-The previous 200 assets remain addressable for existing installations and saved
-choices, but are not offered as an expanded catalog. Old custom choices remain
-usable; a legacy default-54 preference follows the new default on migration.
-New default preferences use a sentinel so future brand changes can follow it.
-Unsupported native shells can apply the theme separately and download the icon.
+## Surfaces and installation
 
-| Surface | What changes | Completing the Home Screen / app icon change |
-| --- | --- | --- |
-| Browser tab | Favicon and the selected installation manifest | Selection is saved in this browser; other browsers/devices keep their own selection. |
-| iPhone / iPad Safari web app | Favicon and installation artwork | Open the selected installation page in Safari, Share → Add to Home Screen. Existing Home Screen artwork is not promised to update in place. |
-| Chromium installed web app | Versioned manifest icon URLs | Recent Chrome presents **Review app update** in its menu for identity changes. The user/browser controls acceptance; older browsers may need reinstallation. |
-| Safari on macOS | Selected installation artwork | Add the selected page to the Dock again if the installed icon does not update. |
-| Native iPhone / iPad | System alternate app icon | Requires a native build containing the requested icon. The UI commits only after UIKit reports that icon as current; rejection leaves the preference unchanged. |
-| Older native apps / other native platforms | Preview and downloadable PNG | Automatic switching is unavailable unless the shell advertises it. Use system icon controls where available, or update the iOS app. |
+- Website header/footer and README use transparent vector marks, with compact
+  proportional framing and the original gradient. Light and dark surfaces share
+  the same brand pigments. Website accents, focus states and prominent actions
+  follow the lilac family; semantic/provider identity colors stay independent.
+- Browser tabs use a separate optically centered transparent vector frame,
+  with a fine contrast edge for pale/dark marks on browser chrome. ICO fallback
+  contains actual 16/32/48px frames. App choices also update their tab favicon.
+- PWA tiles use versioned `/app-icons/v10/` assets, padded maskable exports and
+  per-style manifests/install pages. Manifest identity and scope remain `/`.
+  iPhone/iPad Safari Home Screen icons are installation snapshots: open the
+  selected installation page and Share → Add to Home Screen. Existing icons
+  are not promised to change automatically. Chromium may offer an app identity
+  update; other browsers may require adding the app again.
+- Native iPhone/iPad icon switching requires a binary containing these assets.
+  The trusted-origin bridge reports bundled inventory and commits only after
+  UIKit reports success. An older binary can apply the theme separately and
+  download the artwork. The primary icon and all 50 alternatives are exported
+  in source; Web deployment alone does not update an installed native binary.
+- Legacy `palette-*` and `original-*` assets and native alternate identifiers
+  remain intact for existing saved choices, but are not listed in the new picker.
+  The archived Neon alternate retains its light/dark appearance assets. Lilac Flow
+  retains its selected opaque background in both modes.
 
-No action deletes an installed app, its sessions, browser data, or login.
-Installation pages carry their selection through `start_url`; all manifests keep
-the same `id: "/"` and `scope: "/"`. A consumed installation handoff must not
-overwrite a later choice on every launch. The page also has a static Apple touch
-icon, so Safari need not rely on a React-time mutation to discover the artwork.
-Blocked local storage degrades to the current window; it must never crash startup.
+## Reproducible assets
 
-Platform references:
+`assets/brand/cowboy-curlseal-contours.json` records the traced paths and source
+hash. `assets/brand/cowboy-curlseal-palettes.json` owns all 50 approved color
+recipes. `tools/build-curlseal-icons.py` exports the catalog, picker groups,
+SVG/PNG tiles, manifests, installation pages, tab SVG/ICO, website/README marks,
+and Apple/Android/desktop native artwork. Production does not read exploratory
+session directories or call image generation. `tools/build-brand-icons.py`
+delegates to this exporter while Curlseal is the active brand.
 
-- [Apple: webpage-specific Home Screen icons](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariWebContent/ConfiguringWebApplications/ConfiguringWebApplications.html).
-- [WebKit: Apple touch icons take precedence over manifest icons](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/).
-- [Chrome 144: user-reviewed icon updates and changed icon URLs](https://developer.chrome.com/blog/improvements-to-web-app-updates).
-- [Apple: alternate app icons](https://developer.apple.com/documentation/xcode/configuring-your-app-to-use-alternate-app-icons).
-
-## Asset ownership and export
-
-`web/src/appIconCatalog.json` and the committed
-`web/public/app-icons/v5/<id>/icon-512.png` files are the export inputs. The catalog
-records the intended colors and the original generated file's SHA-256. The
-source images have subtle shading; a listed hex color is the design target,
-not a claim that every pixel has that exact RGB value. Production builds never
-read old session directories or make image-generation calls.
-
-Run from the repository root:
+Run from the repository root in the pinned shell, with ImageMagick on PATH:
 
 ```sh
-nix develop -c python3 tools/build-brand-icons.py
+nix develop -c python3 tools/build-curlseal-icons.py
 ```
 
-The exporter resizes approved artwork without redrawing its contours. It owns
-web icons, padded maskable icons, Apple touch icons, legacy compatibility aliases,
-static per-colorway installation pages/manifests, native icon sets, ICNS/ICO,
-README artwork, and website favicons/brand artwork. Rounded masks are supplied
-by the platform; the original artwork keeps its opaque background. Maskable
-exports add safe space for circular/adaptive launcher masks.
-
-To import another approved batch once, use `--import-batch palette=/path/to/batch`
-with numbered JSON/PNG pairs (`--only-imported` skips re-exporting old variants).
-Commit the resulting catalog, input PNGs, and exports together. The large
-exploration files remain outside Git under `output/`.
-
-## Native trust and release
-
-`CowboyAppIconBridge.mm` is core product appearance, separate from the Plugin
-capability ABI. Only the trusted HTTPS Cowboy main frame can query or change
-icons. Requested IDs must match compiled `CFBundleAlternateIcons`; arbitrary
-paths, URLs, and downloaded icon installation are not accepted. UIKit's
-completion and actual `alternateIconName` are authoritative. Calls are serialized
-and require the app to be active.
-
-Xcode includes all alternate AppIcon assets. A new web deployment cannot add
-icons to an already-installed binary; the web selector uses the installed
-binary's available-icon inventory. Native distribution requires rebuilding and
-publishing that binary separately from the web component. A successful Linux
-asset check is not a claim of an Apple build or physical-device acceptance.
-
-Web changes bump the service worker generation and use versioned icon URLs.
-Website publication follows the GitHub Pages workflow. Native checks include
-bridge coexistence and rejection of foreign-origin icon requests in an isolated
-Simulator; physical-device appearance remains a separate acceptance check.
-
-SideStore **0.1.29** is the first release containing all 200 colorways. The Apple
-build verifies that both iPhone and iPad declare the expected 199 alternatives
-plus the primary icon in that historical build. Publishing makes the update available in SideStore;
-installation and device acceptance remain separate steps.
-
-Primary-icon upgrades retain all existing alternate identifiers, including 103,
-and add 54 as an alternate. This preserves previously installed choices while
-the primary artwork becomes 103. The current native bundle therefore includes
-200 compatibility alternatives; the product selector exposes only 20 styles.
-
-SideStore **0.1.30** makes Neon (103) the primary icon. Its Apple release build
-and isolated Simulator conformance checks passed; both iPhone and iPad inventories
-contain the 200 compatibility alternatives. The public source and published IPA
-were verified after publication. Physical-device acceptance is not yet recorded.
-
-New preferences default to System appearance and Source Serif 4 for reading.
-Explicit saved theme and font choices remain unchanged. The Home Screen artwork
-has its own opaque background; the in-app System setting does not recolor it.
-
-Neon now supplies native Any (light) and Dark app-icon appearances, both for the
-primary icon and its existing alternate identifier. The Home Screen's Automatic
-appearance selects between them; an explicit system Home Screen appearance wins.
-This is independent of Cowboy's in-app Theme setting. Other curated artworks
-retain their chosen backgrounds. Installed PWA icons remain static snapshots.
-The approved light counterpart is `assets/brand/cowboy-neon-light-source.png`;
-`tools/build-icon-appearances.py` exports it without regenerating artwork.
-
-Browser tabs use an independent transparent SVG mark with less padding, stronger
-light-mode colors and bright dark-mode colors. `assets/brand/cowboy-tab-contours.json`
-retains contours traced from the approved 103 artwork; `tools/build-tab-icons.py`
-exports palette favicons and explicit 16/32/48px ICO fallback frames. Native and
-PWA installation artwork retain their own backgrounds. Browser appearance, not
-the page's manual theme selection, selects the favicon color treatment.
-
-The v8 browser-only optical frame gives the wide hat more vertical presence in
-a fixed 16px tab slot, with its ink center near the slot center. This optical
-proportion is independent of the unchanged website logo and installation icon.
-
-The v9 favicon keeps v8 sizing and shifts the artwork down by one logical pixel
-at 16px to align visually with browser tab titles. Horizontal position and
-shape remain unchanged. Raster exports check the intended optical offset.
-
-Website header/footer wordmarks inline `site/assets/cowboy-wordmark-v1.svg`.
-They use the original hat proportions, transparent negative space, a 40×28px
-header slot (36×26px footer), and fixed original cyan `#51C9FF` / violet `#BB83FF`
-for crown/brim. Brand artwork keeps these colors in both light and dark themes;
-only interface controls use contrast-adjusted primary/secondary colors.
-They do not reuse installation tiles or the browser favicon's optical frame.
-
-The website uses the original violet `#BB83FF` and cyan `#51C9FF` as
-brand pigments in both themes. Do not substitute darker violet or teal text
-variants. Primary actions, selected controls, and highlighted headings place dark
-`#21132F` text on original violet. Section labels place original cyan text on a
-solid `#17131F` badge with a violet rule. Body copy and small navigation text use
-neutral ink; link underlines, focus indicators, and diagrams carry brand colors.
-This keeps the original pigments visible without low-contrast text on white.
-The light canvas is `#FAF9FC`; the dark canvas is `#101014`. Browser theme-color,
-first-paint initialization, and runtime theme switching match these canvases.
-Plugin cards and the final call-to-action follow the selected theme. Terminal
-examples retain opaque dark surfaces. Provider identities and semantic status
-colors remain independent.
+The PNGs are rasterized from vectors, rather than enlarged small thumbnails.
+Platform launchers apply their own corner masks. Main native artwork is 1024px;
+the tiny browser mark has independent padding, without distorting the silhouette.
+Tests cover all 100 style/mode combinations for readable accents and unchanged
+semantic colors, installation identity, legacy choices, catalog assets and tab
+frames. Native source checks do not claim an Apple build or device acceptance.

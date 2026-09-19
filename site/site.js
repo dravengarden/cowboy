@@ -62,6 +62,10 @@ colorSchemeQuery.addEventListener?.("change", () => {
 });
 
 const zhMessages = {
+  "appearance.title": "一个标志，五十种风格。",
+  "appearance.description":
+    "默认 Lilac Flow。在设置中选择 25 套纯色或 25 套渐变，主题点缀色同步适配明暗模式。",
+  "appearance.imageAlt": "Cowboy 五十套图标配色中的部分方案",
   "meta.title": "Cowboy — 远程 Agent IDE",
   "meta.description":
     "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Gemini、Grok 与 DeepSeek runtime。",

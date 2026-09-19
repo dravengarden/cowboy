@@ -692,6 +692,7 @@
           jq
           go
           nodejs_24
+          imagemagick
           python3
           util-linux
           iproute2

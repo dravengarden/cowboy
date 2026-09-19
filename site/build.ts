@@ -129,7 +129,8 @@ const NON_AGENT_PRESENTATION: Record<
 };
 
 const REQUIRED_ASSETS = [
-  ["site/assets/cowboy-tab-icon-v9.svg", "assets/cowboy-tab-icon-v9.svg"],
+  ["site/assets/cowboy-colorways-v10.svg", "assets/cowboy-colorways-v10.svg"],
+  ["site/assets/cowboy-tab-icon-v10.svg", "assets/cowboy-tab-icon-v10.svg"],
   [
     "site/assets/cowboy-hero-devices-dark-v5.webp",
     "assets/cowboy-hero-devices-dark.webp",
@@ -141,17 +142,17 @@ const REQUIRED_ASSETS = [
   ["site/assets/cowboy-mobile-dark-v3.webp", "assets/cowboy-mobile-dark.webp"],
   ["site/assets/cowboy-hat-mark-v2.svg", "assets/cowboy-hat-mark.svg"],
   [
-    "site/assets/cowboy-tab-icon-v9-16.png",
-    "assets/cowboy-tab-icon-v9-16.png",
+    "site/assets/cowboy-tab-icon-v10-16.png",
+    "assets/cowboy-tab-icon-v10-16.png",
   ],
   [
-    "site/assets/cowboy-tab-icon-v9-32.png",
-    "assets/cowboy-tab-icon-v9-32.png",
+    "site/assets/cowboy-tab-icon-v10-32.png",
+    "assets/cowboy-tab-icon-v10-32.png",
   ],
-  ["site/assets/cowboy-tab-icon-v9.ico", "assets/cowboy-tab-icon-v9.ico"],
-  ["site/assets/cowboy-brand-icon-v6.png", "assets/cowboy-logo-512.png"],
+  ["site/assets/cowboy-tab-icon-v10.ico", "assets/cowboy-tab-icon-v10.ico"],
+  ["site/assets/cowboy-brand-icon-v10.png", "assets/cowboy-logo-512.png"],
   [
-    "site/assets/cowboy-brand-icon-v6.png",
+    "site/assets/cowboy-brand-icon-v10.png",
     "assets/cowboy-brand-mark.png",
   ],
   [
@@ -477,10 +478,18 @@ export async function buildSite(
     plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
   const template = await Deno.readTextFile(joinPath(root, "site/index.html"));
   const brandMark = await Deno.readTextFile(
-    joinPath(root, "site/assets/cowboy-wordmark-v1.svg"),
+    joinPath(root, "site/assets/cowboy-wordmark-v2.svg"),
   );
+  let brandIndex = 0;
   const html = template
-    .replaceAll("{{BRAND_MARK}}", brandMark)
+    .replaceAll(
+      "{{BRAND_MARK}}",
+      () =>
+        brandMark.replaceAll(
+          "curlseal-pigment",
+          `curlseal-pigment-${++brandIndex}`,
+        ),
+    )
     .replaceAll("{{PLUGIN_COUNT}}", String(plugins.length))
     .replaceAll("{{AGENT_PLUGIN_COUNT}}", String(agentCount))
     .replaceAll("{{CODE_PLUGIN_COUNT}}", String(codeCount))

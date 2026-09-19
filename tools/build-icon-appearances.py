@@ -14,7 +14,9 @@ def export(source, target, size):
                     '-define', 'png:exclude-chunk=date,time', 'PNG24:' + str(target)], check=True)
 
 
-for name in ('AppIcon', 'Cowboy-palette-103'):
+default = json.loads((ROOT / 'web/src/appIconStyles.json').read_text())['default']
+names = ('AppIcon', 'Cowboy-palette-103') if default == 'palette-103' else ('Cowboy-palette-103',)
+for name in names:
     directory = ROOT / f'apps/native-shell/apple/Assets.xcassets/{name}.appiconset'
     export(LIGHT, directory / 'icon-light.png', 1024)
     export(DARK, directory / 'icon-dark.png', 1024)
