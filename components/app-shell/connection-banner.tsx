@@ -57,9 +57,11 @@ export interface ConnectionStore {
   /** A Service Worker with a fresh shell took control. Surface the same visible
    *  countdown used by build-id probes instead of reloading immediately. */
   updateAvailable(): void;
-  /** The update overlay's reload action: clear EVERY cache (so a service worker
-   *  can't re-serve the old bundle) then hard-reload into the new build. */
-  applyUpdate(): Promise<void>;
+  /** The update action: have the service worker download the deployed shell
+   *  and its boot assets, then reload into it from cache. Resolves `true` when
+   *  the page is reloading and `false` when the new build could not be
+   *  downloaded yet, in which case this build keeps running. */
+  applyUpdate(): Promise<boolean>;
   /** Probe for a new build whenever the tab returns to the foreground. Returns a
    *  cleanup fn for the effect. */
   watchForegroundVersion(): () => void;
@@ -76,21 +78,55 @@ const DEFAULT_RECONNECT_BACKOFF_MAX_MS = 15_000;
 // How long the green "reconnected" flash lingers before auto-dismissing.
 const DEFAULT_RECONNECTED_DISMISS_MS = 4000;
 
-// The update overlay's reload action (fired when its countdown elapses): clear
-// every cache (so a service worker can't re-serve the old bundle) then hard-reload
-// into the new build. Ported from liveview's useAutoUpdate hardRefresh. Captures
-// no per-instance state, so it lives at module scope (shared across instances).
-async function applyUpdate(): Promise<void> {
-  try {
-    if ("caches" in globalThis) {
-      const keys = await globalThis.caches.keys();
-      await Promise.all(keys.map((k) => globalThis.caches.delete(k)));
+const SHELL_REFRESH_TIMEOUT_MS = 30_000;
+
+/** Ask the controlling service worker for the deployed shell. `undefined` means
+ *  no worker controls this page (native WKWebView, first install). */
+function refreshShellThroughServiceWorker(): Promise<boolean | undefined> {
+  const controller = globalThis.navigator?.serviceWorker?.controller;
+  if (!controller || typeof MessageChannel === "undefined") return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(false), SHELL_REFRESH_TIMEOUT_MS);
+    channel.port1.onmessage = (event: MessageEvent<{ ok?: boolean }>): void => {
+      clearTimeout(timer);
+      resolve(event.data?.ok === true);
+    };
+    try {
+      controller.postMessage({ type: "cowboy.refresh-shell" }, [channel.port2]);
+    } catch {
+      clearTimeout(timer);
+      resolve(undefined);
     }
-  } catch {
-    // non-fatal — the reload still pulls fresh content-hashed assets.
+  });
+}
+
+// The update action (a tap on Mobile, the elapsed countdown on Desktop). The
+// shell is served cache-first, so the new build is downloaded BEFORE the
+// reload: the reload then boots it from cache, and a weak connection leaves
+// this build running instead of a white page. Without a service worker the
+// reload itself is the download, so every cache is cleared first as before.
+// Captures no per-instance state, so it lives at module scope.
+async function applyUpdate(): Promise<boolean> {
+  const refreshed = await refreshShellThroughServiceWorker();
+  if (refreshed === false) return false;
+  if (refreshed === undefined) {
+    try {
+      if ("caches" in globalThis) {
+        const keys = await globalThis.caches.keys();
+        await Promise.all(keys.map((k) => globalThis.caches.delete(k)));
+      }
+    } catch {
+      // non-fatal — the reload still pulls fresh content-hashed assets.
+    }
   }
   globalThis.location.reload();
+  return true;
 }
+
+// After a download that did not finish, Desktop waits this long before its
+// countdown starts again.
+const UPDATE_RETRY_MS = 60_000;
 
 export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionStore {
   const { versionUrl } = opts;
@@ -323,8 +359,18 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
     // 3 means three real seconds: show 3, 2, 1, then apply as the counter reaches
     // zero. Waiting for -1 made the nominal three-second countdown last four.
     if (secs <= 0) {
-      void store.applyUpdate();
-      return;
+      let alive = true;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      void store.applyUpdate().then((reloading) => {
+        if (reloading || !alive) return;
+        // The new build could not be downloaded yet. Keep this one running
+        // and start the countdown again later.
+        retry = setTimeout(() => setSecs(countdownSecs), UPDATE_RETRY_MS);
+      });
+      return () => {
+        alive = false;
+        clearTimeout(retry);
+      };
     }
     const t = setTimeout(() => {
       const allowed = canApplyUpdate === undefined || canApplyUpdate();

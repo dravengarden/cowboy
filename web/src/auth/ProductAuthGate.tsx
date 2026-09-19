@@ -34,6 +34,7 @@ import {
   announceProductSessionEnd,
   type AuthGateDecision,
   type AuthGateView,
+  bootAuthDecision,
   cachedAuthDecision,
   classifyAuthStatus,
   deleteProductHistoryCache,
@@ -314,8 +315,19 @@ export function ProductAuthGate({
 }: {
   children: ReactNode;
 }): React.JSX.Element {
-  const [view, setView] = useState<AuthGateView>("loading");
-  const [me, setMe] = useState<ProductMe | null>(null);
+  // Offline-first boot: a still-valid cached principal mounts the app at once
+  // and the probe below decides for real. Resolved once, before the first
+  // paint; binding the same user again is a no-op, so StrictMode is harmless.
+  const bootMeRef = useRef<ProductMe | null | undefined>(undefined);
+  if (bootMeRef.current === undefined) {
+    const boot = bootAuthDecision();
+    bootMeRef.current = boot?.me && bindProductSyncPrincipal(boot.me.user_id)
+      ? boot.me
+      : null;
+  }
+  const bootMe = bootMeRef.current;
+  const [view, setView] = useState<AuthGateView>(bootMe ? "ready" : "loading");
+  const [me, setMe] = useState<ProductMe | null>(bootMe);
   const [setupRequired, setSetupRequired] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
   const [providers, setProviders] = useState<ProductOidcProvider[]>([]);
@@ -338,10 +350,13 @@ export function ProductAuthGate({
     ProductAutomationServerPolicy
   >();
   const attemptsRef = useRef(0);
-  const meRef = useRef<ProductMe | null>(null);
+  const meRef = useRef<ProductMe | null>(bootMe);
   const generationRef = useRef(0);
-  const cachedIdentityRef = useRef(false);
-  const [cachedIdentity, setCachedIdentity] = useState(false);
+  const cachedIdentityRef = useRef(bootMe !== null);
+  const [cachedIdentity, setCachedIdentity] = useState(bootMe !== null);
+  // One probe at a time: on a weak connection a newer probe would otherwise
+  // supersede the older one's generation and no answer would ever be applied.
+  const probeRef = useRef<Promise<void> | null>(null);
   const [pollTick, setPollTick] = useState(0);
   const recentAuthRef = useRef<
     {
@@ -412,7 +427,7 @@ export function ProductAuthGate({
     [],
   );
 
-  const loadStatus = useCallback(async (): Promise<void> => {
+  const runStatusProbe = useCallback(async (): Promise<void> => {
     const generation = ++generationRef.current;
     const probe = await authApi.status();
     if (probe.kind === "ok") {
@@ -433,6 +448,15 @@ export function ProductAuthGate({
     // local replica instead of a retry page. Contact later decides for real.
     await applyDecision(meRef.current ? decision : cachedAuthDecision(decision) ?? decision);
   }, [applyDecision]);
+
+  const loadStatus = useCallback((): Promise<void> => {
+    if (probeRef.current) return probeRef.current;
+    const run = runStatusProbe().finally(() => {
+      if (probeRef.current === run) probeRef.current = null;
+    });
+    probeRef.current = run;
+    return run;
+  }, [runStatusProbe]);
 
   useEffect(() => {
     void loadStatus();

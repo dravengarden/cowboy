@@ -109,6 +109,40 @@ export default defineConfig({
   plugins: [
     react(),
     {
+      // The service worker promotes a freshly deployed shell only after the
+      // assets it needs to paint are cached (web/public/sw.js). The document
+      // names its entry and static preloads, but the app surfaces are lazy
+      // chunks, so list their static closure here for both surfaces.
+      name: "cowboy-boot-assets",
+      apply: "build",
+      transformIndexHtml: {
+        order: "post",
+        handler(html, ctx): string {
+          if (!ctx.bundle || !ctx.filename.endsWith("index.html")) return html;
+          const chunks = new Map<string, readonly string[]>();
+          for (const output of Object.values(ctx.bundle)) {
+            if (output.type === "chunk") chunks.set(output.fileName, output.imports);
+          }
+          const pending = [...chunks.keys()].filter((fileName) =>
+            /(?:^|\/)(?:MobileApp|DesktopApp)-/.test(fileName)
+          );
+          const closure = new Set<string>();
+          while (pending.length > 0) {
+            const fileName = pending.pop()!;
+            if (closure.has(fileName)) continue;
+            closure.add(fileName);
+            pending.push(...(chunks.get(fileName) ?? []));
+          }
+          if (closure.size === 0) return html;
+          const list = JSON.stringify([...closure].map((fileName) => `/${fileName}`).sort());
+          return html.replace(
+            "</head>",
+            `<script type="application/json" id="cowboy-boot-assets">${list}</script></head>`,
+          );
+        },
+      },
+    },
+    {
       name: "cowboy-admin-routes",
       configureServer(server) {
         server.middlewares.use((request, _response, next) => {

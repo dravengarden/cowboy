@@ -108,6 +108,21 @@ export function readCachedAuthStatus(
   }
 }
 
+/** The decision the gate mounts from BEFORE its first probe answers. The
+ *  cookie is the credential and the probe still starts at once; a still-valid
+ *  cached principal only means the app opens from its local replica instead of
+ *  waiting on the network, which on a weak connection is slow rather than
+ *  failed (docs/offline-first-sync.md §Boot). The probe's answer then updates
+ *  the identity, or tears the app down on a login answer or another account. */
+export function bootAuthDecision(
+  now = Date.now(),
+  storage = statusStorage(),
+): AuthGateDecision | null {
+  const cached = readCachedAuthStatus(now, storage);
+  if (!cached) return null;
+  return { view: "ready", me: cached.me, cached: true };
+}
+
 /** A mountable decision from the cache, or `null` when the device must wait
  *  for the server. Only a `retry` probe (network or 5xx) may use it: a login
  *  answer, a changed account, or an incompatible controller always wins. */
@@ -117,9 +132,7 @@ export function cachedAuthDecision(
   storage = statusStorage(),
 ): AuthGateDecision | null {
   if (decision.view !== "retry") return null;
-  const cached = readCachedAuthStatus(now, storage);
-  if (!cached) return null;
-  return { view: "ready", me: cached.me, cached: true };
+  return bootAuthDecision(now, storage);
 }
 
 export function classifyAuthStatus(probe: AuthStatusProbe): AuthGateDecision {

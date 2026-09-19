@@ -9,6 +9,7 @@ import {
   createProductSyncDatabase,
   decodeSyncDataset,
   discoverSyncDataset,
+  localStorageDatasetCache,
   ProductSyncDatasetChangedError,
   type ProductSyncScope,
   type SyncDataset,
@@ -190,6 +191,48 @@ Deno.test("reconnect verifies the original Service and cannot follow a replaced 
   await assertRejects(() => owner.connection(), ProductSyncDatasetChangedError);
   assertEquals(factory.requests.length, 0);
   await owner.dispose();
+});
+
+Deno.test("a remembered dataset opens local data without discovery and is forgotten when replaced", async () => {
+  const data = new Map<string, string>();
+  const datasetCache = localStorageDatasetCache(() => ({
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => void data.set(key, value),
+    removeItem: (key) => void data.delete(key),
+  }));
+  let remote = descriptor();
+  let calls = 0;
+  const discover = async (): Promise<SyncDataset> => {
+    calls++;
+    return remote;
+  };
+  // First boot discovers over the network and remembers the identity.
+  const first = createProductSyncDatabase(() => "user-a", discover, {
+    factory: new FakeIndexedDb(),
+    datasetCache,
+  });
+  assertEquals((await first.ready()).dataset_id, descriptor().dataset_id);
+  assertEquals(calls, 1);
+  await first.dispose();
+
+  // The next boot adopts it at once: no request stands before cached paint.
+  const second = createProductSyncDatabase(() => "user-a", discover, {
+    factory: new FakeIndexedDb(),
+    datasetCache,
+  });
+  assertEquals((await second.ready()).dataset_id, descriptor().dataset_id);
+  assertEquals(calls, 1);
+  // Another user's record is never adopted.
+  assertEquals(datasetCache.read("user-b"), undefined);
+  // Socket admission still verifies; a replaced Service fences and forgets.
+  remote = descriptor("user-a", "b");
+  await assertRejects(() => second.connection(), ProductSyncDatasetChangedError);
+  assertEquals(datasetCache.read("user-a"), undefined);
+  await second.dispose();
+
+  // A corrupt record is ignored rather than adopted.
+  data.set("cowboy:sync-dataset:user-a", "{not json");
+  assertEquals(datasetCache.read("user-a"), undefined);
 });
 
 Deno.test("the folders service scope is a closed key beside title and order", async () => {

@@ -47,6 +47,17 @@ const MobileApp = lazy(async () => {
   return { default: module.MobileApp };
 });
 
+// The same markup as index.html's pre-mount splash, so the moment between the
+// gates resolving and the lazy surface chunk evaluating is never a white page.
+function BootSplash(): React.JSX.Element {
+  return (
+    <div id="app-splash" aria-label="Loading" role="status">
+      <div className="app-splash-spinner" />
+      <div className="app-splash-title">cowboy</div>
+    </div>
+  );
+}
+
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
   // Lazy-load + apply the selected reading font (sets --cowboy-reading-font).
@@ -75,7 +86,7 @@ function Root(): React.JSX.Element {
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
             <MachineSetupGate>
-              <Suspense fallback={null}>{app}</Suspense>
+              <Suspense fallback={<BootSplash />}>{app}</Suspense>
             </MachineSetupGate>
           </DeviceAuthorizationRoute>
         </ProductAuthGate>

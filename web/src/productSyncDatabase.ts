@@ -91,6 +91,57 @@ export async function discoverSyncDataset(user: string): Promise<SyncDataset> {
   }
 }
 
+/** Remembers the dataset this device adopted for a user, so the local replica
+ * and the outboxes open without a network round trip. A weak connection is
+ * slow rather than failed: waiting on discovery kept every cached paint behind
+ * an 8 s request (docs/offline-first-sync.md §Boot). The remembered identity
+ * is still verified by `connection()`, which fences the owner and forgets the
+ * record when the Service was replaced. */
+export interface SyncDatasetCache {
+  read(user: string): SyncDataset | undefined;
+  write(dataset: SyncDataset): void;
+  forget(user: string): void;
+}
+
+const DATASET_CACHE_PREFIX = "cowboy:sync-dataset:";
+
+export function localStorageDatasetCache(
+  storage: () => Pick<Storage, "getItem" | "setItem" | "removeItem"> | undefined = () => {
+    try {
+      return globalThis.localStorage;
+    } catch {
+      return undefined;
+    }
+  },
+): SyncDatasetCache {
+  return {
+    read(user): SyncDataset | undefined {
+      try {
+        const raw = storage()?.getItem(DATASET_CACHE_PREFIX + user);
+        return raw === null || raw === undefined
+          ? undefined
+          : decodeSyncDataset(JSON.parse(raw), user);
+      } catch {
+        return undefined;
+      }
+    },
+    write(dataset): void {
+      try {
+        storage()?.setItem(DATASET_CACHE_PREFIX + dataset.user_id, JSON.stringify(dataset));
+      } catch {
+        // Quota or privacy mode: the next boot simply discovers again.
+      }
+    },
+    forget(user): void {
+      try {
+        storage()?.removeItem(DATASET_CACHE_PREFIX + user);
+      } catch {
+        // nothing to forget
+      }
+    },
+  };
+}
+
 export type ProductSyncScope =
   | {
     readonly kind: "service";
@@ -161,9 +212,10 @@ export function createProductSyncDatabase(
   discover = discoverSyncDataset,
   opts: Pick<IdbOwnerOpts, "factory" | "dbName" | "openTimeoutMs"> & {
     readonly context?: AbortSignal;
+    readonly datasetCache?: SyncDatasetCache;
   } = {},
 ) {
-  const { context, ...storageOptions } = opts;
+  const { context, datasetCache, ...storageOptions } = opts;
   const owner: IdbPersistenceOwner = createIdbPersistenceOwner({
     ...storageOptions,
     schemaVersion: 2,
@@ -206,6 +258,14 @@ export function createProductSyncDatabase(
         new Error("Product dataset requires an authenticated principal"),
       );
     }
+    // The identity this device adopted last time opens local data at once.
+    // `connection()` still verifies it against the Service before any socket
+    // admission and fences this owner if the dataset was replaced.
+    const remembered = datasetCache?.read(principal);
+    if (remembered) {
+      dataset = remembered;
+      return Promise.resolve(dataset);
+    }
     // Only discovery before ownership may be retried. Never change an adopted
     // dataset to follow a new cookie, Service, user or schema version.
     loading = discover(principal).then((value) => {
@@ -215,6 +275,7 @@ export function createProductSyncDatabase(
         invalid();
       }
       dataset = decodeSyncDataset(value, principal);
+      datasetCache?.write(dataset);
       return dataset;
     }).finally(() => {
       loading = undefined;
@@ -246,10 +307,14 @@ export function createProductSyncDatabase(
       );
       assertAdmission();
       if (fresh.dataset_id !== identity.dataset_id) {
+        // The reload that follows must discover the replacement, not adopt
+        // the remembered identity again.
+        datasetCache?.forget(identity.user_id);
         changed = true;
         seal();
         throw new ProductSyncDatasetChangedError();
       }
+      datasetCache?.write(identity);
       return identity;
     },
     outbox<T>(scope: ProductSyncScope): LocalPersistence<ClientSnapshot<T>> {
@@ -464,5 +529,5 @@ export function createProductSyncDatabase(
 export const productSyncDatabase = createProductSyncDatabase(
   productSyncPrincipal,
   discoverSyncDataset,
-  { context: productSessionSignal() },
+  { context: productSessionSignal(), datasetCache: localStorageDatasetCache() },
 );

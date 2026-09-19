@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import type { AuthStatus } from "./authApi.ts";
 import {
   authStatusCacheExpiry,
+  bootAuthDecision,
   cachedAuthDecision,
   forgetAuthStatus,
   readCachedAuthStatus,
@@ -71,4 +72,19 @@ Deno.test("a status without a user id clears the cache instead of storing a labe
   assertEquals(readCachedAuthStatus(3, storage), null);
   storage.setItem("cowboy:auth-status-cache", "{not json");
   assertEquals(readCachedAuthStatus(3, storage), null);
+});
+
+Deno.test("the app boots from a still-valid cached principal before any probe answers", () => {
+  const storage = memoryStorage();
+  const now = 2_000_000;
+  assertEquals(bootAuthDecision(now, storage), null);
+  const me = { account: "draven", user_id: "user-a", role: "owner" as const };
+  rememberAuthStatus(status(me, { idle_timeout_ms: 60_000 } as AuthStatus["session"]), now, storage);
+  assertEquals(bootAuthDecision(now + 1_000, storage), { view: "ready", me, cached: true });
+  // Past the earliest server deadline the device waits for the server again.
+  assertEquals(bootAuthDecision(now + 60_001, storage), null);
+  // A sign-out or a login answer forgets the principal: no optimistic mount.
+  rememberAuthStatus(status(me), now, storage);
+  forgetAuthStatus(storage);
+  assertEquals(bootAuthDecision(now + 1, storage), null);
 });

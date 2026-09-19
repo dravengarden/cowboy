@@ -543,16 +543,27 @@ export async function fetchAuthStatus(): Promise<AuthStatusProbe> {
   }
 }
 
+const AUTH_STATUS_TIMEOUT_MS = 10_000;
+
 async function probeAuthStatus(
   read: ReturnType<typeof webPluginHosts.beginRead>,
 ): Promise<AuthStatusProbe> {
   let response: Response;
   try {
+    // A weak connection hangs rather than fails. Bound the probe so a cached
+    // identity keeps the app open while the next attempt is scheduled, instead
+    // of one request pinning the gate for minutes.
+    const timeout = typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(AUTH_STATUS_TIMEOUT_MS)
+      : undefined;
+    const signal = timeout !== undefined && typeof AbortSignal.any === "function"
+      ? AbortSignal.any([read.signal, timeout])
+      : read.signal;
     response = await fetch("/api/auth/status", {
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
-      signal: read.signal,
+      signal,
     });
   } catch {
     return { kind: "network" };

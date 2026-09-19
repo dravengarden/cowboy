@@ -24,9 +24,13 @@ export function MobileConnectionBanner(
   const banner = rawBanner?.kind === "update" ? rawBanner : undefined;
   const isUpdate = banner?.kind === "update";
   const [readyVersion, setReadyVersion] = useState<string>();
+  // The update is downloaded before the reload (the shell is cache-first), so
+  // the tap has a visible pending state and an honest failure on a weak link.
+  const [download, setDownload] = useState<"idle" | "pending" | "failed">("idle");
   useEffect(() => {
     if (!isUpdate) {
       setReadyVersion(undefined);
+      setDownload("idle");
       return undefined;
     }
     let cancelled = false;
@@ -54,6 +58,10 @@ export function MobileConnectionBanner(
     ? "Connection lost — reconnecting…"
     : banner.kind === "reconnected"
     ? "Reconnected"
+    : download === "pending"
+    ? "Downloading the update…"
+    : download === "failed"
+    ? "The update could not be downloaded yet"
     : mobileUpdateBannerLabel(readyVersion);
 
   return (
@@ -93,7 +101,13 @@ export function MobileConnectionBanner(
           color="inherit"
           size="small"
           variant="outlined"
-          onClick={() => void store.applyUpdate()}
+          disabled={download === "pending"}
+          onClick={() => {
+            setDownload("pending");
+            void store.applyUpdate().then((reloading) => {
+              if (!reloading) setDownload("failed");
+            });
+          }}
           sx={{
             ml: 0.5,
             minHeight: 32,
@@ -104,7 +118,7 @@ export function MobileConnectionBanner(
             textTransform: "none",
           }}
         >
-          Update
+          {download === "failed" ? "Try again" : "Update"}
         </Button>
       )}
     </Box>

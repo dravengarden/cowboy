@@ -1,24 +1,26 @@
-// Service worker for the cowboy PWA: makes the app installable and gives it an
-// offline shell. cowboy is a LIVE ACP UI, so freshness matters more than offline
-// fidelity — only the content-hashed bundle under /assets/ is cache-first (its
-// filenames change on every build, so a cached copy is never stale). Everything
-// else — navigations, API, AND the unhashed root files (favicon, icons,
-// manifest) — is network-first, so a redeploy of those shows up immediately
-// instead of being pinned to whatever the SW cached first. Bump VERSION to evict
-// the old caches on the next activation.
+// Service worker for the cowboy PWA: makes the app installable and opens it
+// from this device, not from the network (docs/offline-first-sync.md §Boot).
+//   - The app shell ("/") is CACHE-FIRST and refreshed in the background. A
+//     weak connection is slow, not failed, so a network-first shell left the
+//     installed PWA on a white page for as long as the request hung. A new
+//     shell is promoted only after its boot assets are cached, so the launch
+//     after a deploy is as instant as any other; the page's own build probe
+//     (main.tsx) still detects the new build and offers the update.
+//   - The content-hashed bundle under /assets/ is cache-first (its filenames
+//     change on every build, so a cached copy is never stale).
+//   - API and the unhashed root files (favicon, icons, manifest) stay
+//     network-first: a stale transcript or a pinned old icon is worse than an
+//     offline notice.
+// Bump VERSION to evict the old caches on the next activation.
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes. Desktop auto-reloads after its
 // visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1735";
+const VERSION = "cowboy-v1736";
 const ASSET_CACHE = `${VERSION}-assets`;
-// The app shell ("/" — index.html). Cowboy serves the independently switched
-// frontend on the same origin as the API/WS, so when the daemon is down (e.g. a
-// nixos-rebuild and not yet restarted) a navigation to "/" gets nothing and the
-// PWA shows a blank white page. We cache the shell on every successful navigation
-// so an offline reopen (or a backend outage) still loads the cached shell + the
-// cache-first /assets bundle, which then renders the app's OWN reconnect banner
-// instead of white. Network-first stays — the cache is a fallback only, never
-// pinned over a reachable daemon, so a redeploy is still picked up immediately.
+// The app shell ("/" — index.html). Served from here first; see the header.
+// A redeploy is never pinned away: every launch refreshes this cache in the
+// background, and the page compares its loaded entry with the deployed index
+// over the network to surface the update.
 const SHELL_CACHE = `${VERSION}-shell`;
 // Immutable history pages (GET /api/history/:id/:page?v=<build>). Their content
 // can never change (append-only log), and the `?v=` build token makes a new
@@ -89,8 +91,93 @@ function showSessionNotification(message) {
   });
 }
 
+// --- App shell: cache-first, refreshed in the background ---------------------
+// Navigations that ask for the deployed build explicitly (Desktop module
+// recovery, an applied update) go to the network first.
+const SHELL_NETWORK_PARAMS = ["cowboy-recover", "cowboy-update"];
+const BOOT_ASSET_FETCHES = 6;
+let shellRefresh;
+
+async function cachedShell() {
+  const current = await caches.match("/", { cacheName: SHELL_CACHE });
+  if (current) return current;
+  // A new worker generation starts with an empty shell cache. Until its first
+  // refresh lands, the previous generation's shell still opens the app at
+  // once: activation keeps that generation's hashed assets too.
+  const generations = (await caches.keys())
+    .filter((key) => /^cowboy-v\d+-shell$/.test(key) && key !== SHELL_CACHE)
+    .sort((a, b) => Number(/\d+/.exec(b)[0]) - Number(/\d+/.exec(a)[0]));
+  for (const key of generations) {
+    const hit = await caches.match("/", { cacheName: key });
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+// Everything a shell needs before the app can paint: the build-emitted boot
+// closure (vite.config.ts `cowboy-boot-assets`, both surfaces) plus whatever
+// the document itself references under /assets/.
+function bootAssetUrls(html) {
+  const urls = new Set();
+  const block = /<script[^>]*\bid="cowboy-boot-assets"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  if (block) {
+    try {
+      for (const url of JSON.parse(block[1])) {
+        if (typeof url === "string" && url.startsWith("/assets/")) urls.add(url);
+      }
+    } catch {
+      // A malformed list only loses the precache; the document scan remains.
+    }
+  }
+  for (const match of html.matchAll(/<(?:script|link)\b[^>]*\b(?:src|href)="(\/assets\/[^"]+)"/g)) {
+    urls.add(match[1]);
+  }
+  return [...urls];
+}
+
+// Fetch the deployed shell and cache its boot assets; promote it only when the
+// whole set is here, so a cached shell can always boot without the network.
+function refreshShell() {
+  shellRefresh ??= (async () => {
+    try {
+      const response = await fetch("/", { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok || response.type !== "basic") return false;
+      const html = await response.clone().text();
+      const urls = bootAssetUrls(html);
+      const assets = await caches.open(ASSET_CACHE);
+      for (let index = 0; index < urls.length; index += BOOT_ASSET_FETCHES) {
+        const batch = await Promise.all(
+          urls.slice(index, index + BOOT_ASSET_FETCHES).map(async (url) => {
+            if (await caches.match(url)) return true;
+            const asset = await fetch(url, { credentials: "same-origin" });
+            if (!asset.ok || asset.type !== "basic") return false;
+            await assets.put(url, asset);
+            return true;
+          }),
+        );
+        if (!batch.every(Boolean)) return false;
+      }
+      await (await caches.open(SHELL_CACHE)).put("/", response);
+      return true;
+    } catch {
+      return false;
+    }
+  })().finally(() => {
+    shellRefresh = undefined;
+  });
+  return shellRefresh;
+}
+
 self.addEventListener("message", (event) => {
   const message = event.data;
+  // The update action asks for the deployed shell before it reloads, so the
+  // reload boots the new build from cache instead of racing the network.
+  if (message?.type === "cowboy.refresh-shell") {
+    event.waitUntil(refreshShell().then((ok) => {
+      event.ports?.[0]?.postMessage({ ok });
+    }));
+    return;
+  }
   if (message?.type === "cowboy.active-session" && event.source?.id) {
     if (SAFE_SESSION_ID.test(message.sessionId ?? "")) ACTIVE_SESSIONS.set(event.source.id, message.sessionId);
     else ACTIVE_SESSIONS.delete(event.source.id);
@@ -226,10 +313,9 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Navigations: network-first, but populate SHELL_CACHE on every success so the
-  // offline fallback below actually has a shell to serve. Without this the
-  // `caches.match("/")` fallback was dead code (nothing ever cached "/"), so a
-  // dead daemon = blank white page instead of the cached shell + reconnect UI.
+  // Navigations: the cached shell answers at once and the deployed one is
+  // fetched behind it (see the header). Only a device with no shell at all, or
+  // an explicit request for the deployed build, waits for the network.
   if (request.mode === "navigate") {
     // The system-Safari Passkey ceremony is a short-lived security surface,
     // not the application shell. Never cache it as the offline root document.
@@ -248,17 +334,26 @@ self.addEventListener("fetch", (event) => {
       event.respondWith(fetch(request));
       return;
     }
-    event.respondWith(
-      fetch(request)
-        .then((resp) => {
-          if (resp.ok && resp.type === "basic") {
-            const copy = resp.clone();
-            void caches.open(SHELL_CACHE).then((c) => c.put("/", copy));
-          }
-          return resp;
-        })
-        .catch(async () => (await caches.match("/", { cacheName: SHELL_CACHE })) ?? Response.error()),
-    );
+    event.respondWith((async () => {
+      const wantsDeployed = SHELL_NETWORK_PARAMS.some((name) => url.searchParams.has(name));
+      if (!wantsDeployed) {
+        const cached = await cachedShell();
+        if (cached) {
+          event.waitUntil(refreshShell());
+          return cached;
+        }
+      }
+      try {
+        const resp = await fetch(request);
+        if (resp.ok && resp.type === "basic") {
+          const copy = resp.clone();
+          event.waitUntil(caches.open(SHELL_CACHE).then((c) => c.put("/", copy)));
+        }
+        return resp;
+      } catch {
+        return (await cachedShell()) ?? Response.error();
+      }
+    })());
     return;
   }
 

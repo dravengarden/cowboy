@@ -1,6 +1,8 @@
 # Offline-first synchronization
 
-Status: design 2026-09-18; Phase 1 implemented on Web the same day; the
+Status: design 2026-09-18; the boot path became network-independent on
+2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1736));
+Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
 [Implementation status](#implementation-status)). This is
@@ -493,6 +495,37 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 | 10 | Two tabs, one device, both queue offline | both rows survive and both drain once |
 
 ## Implementation status
+
+### Boot on a weak connection (service worker `cowboy-v1736`)
+
+Phase 1 opened from the replica only when requests FAILED. A weak connection
+is slow, not failed, so four steps still waited on the network and the
+installed PWA showed a white page, then a long splash, on every open:
+
+| Step | Before | Now |
+|---|---|---|
+| App shell | the service worker answered navigations network-first with no timeout, so the document itself waited | cache-first; the deployed shell is fetched behind it and promoted only once its boot assets (`cowboy-boot-assets`, emitted by `vite.config.ts` for both surfaces) are cached, so the launch after a deploy is just as instant. A new worker generation opens from the previous generation's shell until its own is ready. Explicit `cowboy-update` / `cowboy-recover` navigations stay network-first |
+| Identity | `ProductAuthGate` awaited `/api/auth/status` and used the cached principal only after the probe failed | mounts at once from a still-valid cached principal (`bootAuthDecision`); the probe runs in the background, is bounded to 10 s, is never superseded by a newer probe, and still tears the app down on a login answer or another account |
+| Dataset | every IndexedDB read awaited `GET /api/sync/dataset` (8 s timeout), so the replica could not paint | the adopted dataset is remembered per user (`localStorageDatasetCache`); `connection()` still verifies it before socket admission, fences the owner and forgets the record when the Service was replaced |
+| Surface chunk | `Suspense fallback={null}` painted white while the lazy surface evaluated | the same splash as the static document |
+
+Applying an update downloads the deployed shell and its boot assets through
+the worker first (`cowboy.refresh-shell`) and reloads only when they are
+cached; on a weak connection the running build stays and the banner says the
+download did not finish, instead of clearing every cache and reloading into a
+white page.
+
+Measured with a warm cache and EVERY response delayed by 12 s (in-page
+observer, Chrome, fake Hub; `web/src/serviceWorkerShell.test.ts` holds the
+worker's contract):
+
+| Build | Document | Session list | Transcript |
+|---|---|---|---|
+| before | 12.0 s (white until then) | never within 45 s | never |
+| now | 7 ms | 0.4 s | 1.1 s |
+
+The numbers now equal an undelayed open. The launch that installs this
+worker is still served by the old one; every later launch is cache-first.
 
 Phase 1 shipped as a Web-only release (service worker `cowboy-v1722`):
 
