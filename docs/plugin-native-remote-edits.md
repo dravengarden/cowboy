@@ -3,8 +3,9 @@
 Zed Plugin/private adapter `1.20.0` selects private server `1.6.0` with the same
 exact upstream and third-party dependencies. Its
 [acceptance and signed publication](releases/native-remote-edit-budgets-2026-09-19.md)
-are complete; live Hawk installation remains separate. This is not a new public
-Code writer. It extends the
+are complete, followed by the separately authorized
+[Hawk installation](releases/zed-remote-edit-install-2026-09-19.md). This is not
+a new public Code writer. It extends the
 [sync/reload history bounds](plugin-native-replacement-budgets.md) to the private
 local server's incoming `UpdateBuffer` edit/undo route.
 

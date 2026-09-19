@@ -553,9 +553,14 @@ passes 57 native tests, two 19-check connected v6 runs, 24 browser checks and
 the complete source gate. All 89 Catalog releases pass actual-role reader
 preflights. Hawk remains on separately installed 1.19.0 in that observation;
 independent Machine/Controller changes invalidate an all-process continuity
-claim. The core Operator lock fix is source-verified but Controller activation
-is held by five missing exact Agent publications. This is not an all-writer
-or global memory budget, independent recovery or native activation.
+claim. The later, separately authorized
+[Hawk 1.20.0 installation](releases/zed-remote-edit-install-2026-09-19.md) records
+Service `completed`, Machine `applied` and the matching new installation revision.
+It retains all 17 original ACP workers and unchanged component profiles in its
+own observation window, without revising the earlier continuity failure.
+The core Operator lock fix is source-verified but Controller activation is held
+by five missing exact Agent publications. This is not an all-writer or global
+memory budget, independent recovery or supported-device acceptance.
 The subsequent [Budget outcome continuation](plugin-sync-budget-outcomes.md)
 adds exact terminal-refusal projection and original-ID reconciliation through
 adapter/Machine/Service/Web, retaining Unknown for ambiguous evidence and

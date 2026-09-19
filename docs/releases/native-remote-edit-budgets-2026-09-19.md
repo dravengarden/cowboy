@@ -6,6 +6,12 @@ post-publication observation, **Hawk still has Zed 1.19.0 installed**. This task
 dispatched no production Plugin installation or Controller/Web/Machine/host
 activation. This is not whole-refactor completion or native-owner recovery.
 
+Later status: the separately authorized
+[Hawk 1.20.0 installation](zed-remote-edit-install-2026-09-19.md) is complete.
+That record verifies Service/Machine receipts and all 17 original ACP workers
+in its own bounded window; the publication-only facts and earlier failed
+continuity observation below remain historical evidence.
+
 Exact implementation/build/sign/publication source:
 `b5be5b752ca9612a311a043a5d4690717a16c4f9`. Subsequent integration merges preserve
 that commit rather than rewriting the provenance of the published artifacts.
