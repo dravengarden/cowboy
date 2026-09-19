@@ -124,6 +124,14 @@ Catalog advertises the exact version, kind, component release, package/composite
 digests, fingerprint and Linux x86_64 platform as `ready`. Anonymous
 `/api/plugins` remains HTTP 401; no browser credential is copied.
 
+Source and this record were pushed to remote `main` at `bdb3e131`. The
+[website workflow](https://github.com/dravengarden/cowboy/actions/runs/35417967887)
+completed successfully for that revision. At `2026-09-19T03:15:15.900Z`, the
+[public website list](https://dravengarden.github.io/cowboy/plugins.json)
+advertises Zed `1.19.0`; its complete response SHA-256 is
+`bf6385ae1b9e8ea08c2d1c0d957311873222a3c8fa1453b9f342e755069e414d`.
+Website metadata is not installation authority.
+
 ## Unchanged production and remaining work
 
 The post-publication observation retains all **20 original Cowboy process
@@ -132,6 +140,8 @@ Machine and Web profiles/receipts, the host closure, three Victoria process
 identities, local/public health and SPA version remain unchanged. Resident
 Machine generation is still `worker-795a7ae472286bc7993b`. Other Plugin
 installation identities are unchanged.
+The settled observation at `2026-09-19T03:15:27.595Z` repeats those continuity
+checks, including all 18 original ACP workers and unchanged Zed installation.
 
 Hawk Zed remains active `1.18.0`, composite
 `92b1078ab8bd8030cda30f32e13c7c7b355ffbd4e9a9dda0a8085c23c0ef89a1`.
@@ -163,9 +173,14 @@ or Service environment was written into these receipts.
 | `published-floor.json` | `88804fc63f813dfb39312022c9b4141532aeeb1c3a2e39f647bbae07ace07a97` |
 | `public-downloads.json` | `c88a4bd4a854e72ebfe28cfaf3c84ec8c7c7d36dc3f86dd8d2d1b395dce7ece6` |
 | `audit-published.json` | `dcd57dbfa9c1be1d81d2633a1712e3b1fecbd324070be951c262dc0ce17d3df4` |
+| `audit-settled.json` | `fbcc8fb7689f58b4f16b4148131e81ef3c6737bd1ccff7050dda61f227265b4c` |
+| `website.json` | `f4712b32da7b0386e18de51a14a6003790371fbbe33ee723fc33cd83a39fbc80` |
 
 Private audit-helper setup initially required Deno `/proc` permission and an
 explicit process-observation type; corrected helper checks pass. An initial
 combined source-boundary/helper command failed only at that helper type check;
 the independently repeated source-boundary command succeeds. These are not
 product failures or relaxed acceptance conditions.
+The website observation helper initially expected an object instead of the
+documented top-level array; correcting that private reader accepted the actual
+published response without changing the website or its version.
