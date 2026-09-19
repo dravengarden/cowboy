@@ -110,30 +110,45 @@ fn unrelated_metadata_is_stable_but_cwd_aba_and_recreation_never_adopt_cursors()
 #[test]
 fn every_advertised_workspace_identity_axis_is_required() {
     let cache = PageCursors::default();
-    let owner = CodeReadScope::Workspace {
-        service_id: "service".into(),
-        machine_id: "machine".into(),
-        workspace_id: "workspace".into(),
-        cwd: "/work".into(),
-    };
+    let owner = workspace_scope("machine", "workspace", "/work");
     let public = token(&cache, &owner, "a.txt");
-    for axis in 0..4 {
-        let mut changed = owner.clone();
-        let CodeReadScope::Workspace {
-            service_id,
-            machine_id,
-            workspace_id,
-            cwd,
-        } = &mut changed
-        else {
-            unreachable!()
-        };
-        [service_id, machine_id, workspace_id, cwd][axis].push_str("-changed");
+    for changed in [
+        workspace_scope("machine", "workspace", "/work"),
+        workspace_scope("different", "workspace", "/work"),
+        workspace_scope("machine", "different", "/work"),
+        workspace_scope("machine", "workspace", "/different"),
+    ] {
         assert_eq!(
             cache.resolve(&changed, "a.txt", Some(&public)).unwrap_err(),
             CursorError::Expired
         );
     }
+}
+
+fn workspace_scope(machine: &str, workspace: &str, cwd: &str) -> CodeReadScope {
+    use crate::machine_control::MachineControl;
+    use crate::machine_protocol::{MachineEvent, MachineWorkspace};
+    let control = MachineControl::default();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let connection = control.install(machine.into(), "epoch".into(), false, 21, tx);
+    control.record_remote(
+        &connection,
+        MachineEvent::Inventory {
+            components: vec![],
+            workspaces: Some(vec![MachineWorkspace {
+                id: workspace.into(),
+                display_name: "Workspace".into(),
+                canonical_path: cwd.into(),
+            }]),
+            workspace_revision: None,
+            observed_at_ms: 0,
+        },
+    );
+    CodeReadScope::Workspace(
+        control
+            .workspace_code_scope("service-test", machine, workspace)
+            .unwrap(),
+    )
 }
 
 #[test]
@@ -203,12 +218,7 @@ fn count_identity_byte_limits_and_lru_are_enforced() {
             .sum::<usize>()
             <= 400
     );
-    let large_owner = CodeReadScope::Workspace {
-        service_id: "service".into(),
-        machine_id: "machine".into(),
-        workspace_id: "workspace".into(),
-        cwd: "x".repeat(401),
-    };
+    let large_owner = workspace_scope("machine", "workspace", &format!("/{}", "x".repeat(401)));
     assert_eq!(
         bounded
             .project(&large_owner, "a.txt", None, page("a.txt", 0, true))

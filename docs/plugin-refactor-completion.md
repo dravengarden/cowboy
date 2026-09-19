@@ -495,6 +495,13 @@ and accepting a production effect are different milestones.
 
 ## Code work still required
 
+The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
+connects authenticated per-root observations to the finite Code executor,
+buffered responses and file/diff continuations. Observed removal/path ABA,
+duplicate IDs and same-epoch reconnection cannot revive old reads. This is a
+Controller observation fence, not the remaining Machine-owned filesystem,
+Session/security-domain identity or state reader/writer lease contract.
+
 The [ordinary Review source consumer](plugin-review-owned-consumer.md) now selects
 owned language/Outline/hover and explicit refresh preparation from a protocol-20
 Service observation. It retains content/owner lifetimes without legacy fallback;

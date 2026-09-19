@@ -6,17 +6,11 @@ use std::sync::Arc;
 
 use super::{Hub, Session};
 
-/// A finite read/cache identity. Workspace fields are the Service's current
-/// advertised snapshot, not a filesystem identity proof or writer lease.
+/// A finite read/cache identity, not a filesystem identity proof or writer lease.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum CodeReadScope {
     Session(SessionCodeScope),
-    Workspace {
-        service_id: String,
-        machine_id: String,
-        workspace_id: String,
-        cwd: String,
-    },
+    Workspace(crate::machine_control::WorkspaceCodeScope),
 }
 
 impl CodeReadScope {
@@ -30,12 +24,21 @@ impl CodeReadScope {
                     + scope.cwd.len()
                     + scope.owner_user_id.as_ref().map_or(0, String::len)
             }
-            Self::Workspace {
-                service_id,
-                machine_id,
-                workspace_id,
-                cwd,
-            } => service_id.len() + machine_id.len() + workspace_id.len() + cwd.len(),
+            Self::Workspace(scope) => scope.string_bytes(),
+        }
+    }
+
+    pub(crate) fn machine_id(&self) -> &str {
+        match self {
+            Self::Session(scope) => scope.machine_id(),
+            Self::Workspace(scope) => scope.machine_id(),
+        }
+    }
+
+    pub(crate) fn cwd(&self) -> &str {
+        match self {
+            Self::Session(scope) => scope.cwd(),
+            Self::Workspace(scope) => scope.cwd(),
         }
     }
 }

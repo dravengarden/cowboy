@@ -7,6 +7,7 @@
 use std::future::Future;
 
 pub(super) mod file_pages;
+pub(super) mod workspace;
 
 use super::{
     AppState, IntoResponse as _, ResolvedCodeContext, Response, StatusCode,

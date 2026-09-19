@@ -21,8 +21,10 @@ mod site;
 mod telemetry_export;
 mod telemetry_recovery;
 mod telemetry_resolution;
+mod workspace;
 
 pub(crate) use telemetry_resolution::TelemetryInstallationLease;
+pub(crate) use workspace::WorkspaceCodeScope;
 
 use crate::machine_protocol::plugin_recovery::RecoveryObservation;
 use crate::machine_protocol::plugin_step::{StepLookup, StepObservation, UninstallStep};
@@ -94,6 +96,7 @@ pub(crate) struct CommandRequestError {
 #[derive(Clone, Copy)]
 enum RequestBinding<'a> {
     Plugin(&'a PluginHostBinding),
+    Workspace(&'a WorkspaceCodeScope),
     Connection(&'a ConnectionToken),
     Reactivate(&'a ConnectionToken, RetainedPluginTarget<'a>),
     Telemetry(
@@ -277,6 +280,7 @@ struct LiveState {
     connections: HashMap<String, Connection>,
     events: HashMap<String, Vec<MachineEvent>>,
     plugin_inventory: HashMap<String, PluginInventorySnapshot>,
+    workspace_inventory: HashMap<String, HashMap<String, WorkspaceCodeScope>>,
     pending: HashMap<String, PendingResponse>,
 }
 
@@ -329,6 +333,7 @@ impl LiveState {
     fn disconnect(&mut self, machine_id: &str) {
         self.connections.remove(machine_id);
         self.plugin_inventory.remove(machine_id);
+        self.workspace_inventory.remove(machine_id);
         // Drop only this channel's RPC observation resources. Do not cancel
         // Machine operations, remove workers, or delete a session/worktree.
         self.pending
@@ -689,6 +694,13 @@ impl MachineControl {
                 if let MachineEvent::PluginInventory { plugins, .. } = &event {
                     live.observe_plugins(machine_id, plugins);
                 }
+                if let MachineEvent::Inventory {
+                    workspaces: Some(workspaces),
+                    ..
+                } = &event
+                {
+                    live.observe_workspaces(token, workspaces);
+                }
                 live.remember(machine_id, event);
             }
         }
@@ -719,6 +731,11 @@ impl MachineControl {
             .ok_or_else(|| "Machine is not connected".to_owned())?;
         self.check_command_site(&connection.token, &command)?;
         Self::check_protocol(connection, &command)?;
+        if let Some(RequestBinding::Workspace(scope)) = binding
+            && (scope.machine_id() != machine_id || !scope.matches(&live))
+        {
+            return Err("Workspace read scope ended before dispatch".to_owned());
+        }
         if let Some(
             RequestBinding::Connection(token)
             | RequestBinding::Reactivate(token, _)

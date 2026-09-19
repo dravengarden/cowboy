@@ -21,13 +21,19 @@ changing its status, or writing an unchanged cwd preserves continuity. These
 observations neither persist across Controller restart nor stop detached native
 workers. The Hub also compares the captured Machine/workspace/principal tuple.
 
-An advertised Workspace snapshot includes Service, Machine, workspace ID and
+The original advertised Workspace snapshot includes Service, Machine, workspace ID and
 advertised canonical path. The Service rereads its non-revoked Machine record
 when resolving or rechecking that snapshot. It does not canonicalize a remote
 path locally. This is snapshot comparison, not a continuous inventory lifetime,
 security grant or proof of filesystem identity: an unobserved Workspace
 remove/re-add cycle and a same-path filesystem replacement still need the
 Machine-owned resolution boundary.
+
+The later [continuous Workspace read scopes](plugin-workspace-read-scopes.md)
+replace that string-only snapshot with a private authenticated-registry
+observation. Observed remove/re-add and connection replacement can no longer
+revive old reads or cursors. Unreported filesystem/configuration changes and
+Machine-owned state leases remain outside that finite Controller boundary.
 
 ## Existing consumers
 

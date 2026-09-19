@@ -259,12 +259,38 @@ mod tests {
     }
 
     fn owner() -> CodeReadScope {
-        CodeReadScope::Workspace {
-            service_id: "service-test".to_owned(),
-            machine_id: "machine-test".to_owned(),
-            workspace_id: "workspace-test".to_owned(),
-            cwd: "/work".to_owned(),
-        }
+        // These cache-only fixtures share one immutable observation, not a
+        // constructor that manufactures equivalent identities from strings.
+        static OWNER: std::sync::OnceLock<CodeReadScope> = std::sync::OnceLock::new();
+        OWNER
+            .get_or_init(|| fresh_owner("machine-test", "workspace-test", "/work"))
+            .clone()
+    }
+
+    fn fresh_owner(machine: &str, workspace: &str, cwd: &str) -> CodeReadScope {
+        use crate::machine_control::MachineControl;
+        use crate::machine_protocol::{MachineEvent, MachineWorkspace};
+        let control = MachineControl::default();
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let connection = control.install(machine.into(), "epoch".into(), false, 21, tx);
+        control.record_remote(
+            &connection,
+            MachineEvent::Inventory {
+                components: vec![],
+                workspaces: Some(vec![MachineWorkspace {
+                    id: workspace.into(),
+                    display_name: "Workspace".into(),
+                    canonical_path: cwd.into(),
+                }]),
+                workspace_revision: None,
+                observed_at_ms: 0,
+            },
+        );
+        CodeReadScope::Workspace(
+            control
+                .workspace_code_scope("service-test", machine, workspace)
+                .unwrap(),
+        )
     }
 
     fn document(path: &str, lines: usize) -> DiffDocument {
@@ -316,12 +342,7 @@ mod tests {
         assert!(
             cache
                 .next_page(
-                    &CodeReadScope::Workspace {
-                        service_id: "other-service".to_owned(),
-                        machine_id: "machine-test".to_owned(),
-                        workspace_id: "workspace-test".to_owned(),
-                        cwd: "/work".to_owned(),
-                    },
+                    &fresh_owner("machine-test", "workspace-test", "/work"),
                     cursor.as_deref().unwrap()
                 )
                 .await
@@ -404,24 +425,12 @@ mod tests {
             .await
             .unwrap();
         let cursor = first.next_cursor.unwrap();
-        for axis in 0..4 {
-            let mut changed = owner();
-            let CodeReadScope::Workspace {
-                service_id,
-                machine_id,
-                workspace_id,
-                cwd,
-            } = &mut changed
-            else {
-                unreachable!()
-            };
-            match axis {
-                0 => *service_id = "other".into(),
-                1 => *machine_id = "other".into(),
-                2 => *workspace_id = "other".into(),
-                3 => *cwd = "/other".into(),
-                _ => unreachable!(),
-            }
+        for changed in [
+            fresh_owner("machine-test", "workspace-test", "/work"),
+            fresh_owner("other", "workspace-test", "/work"),
+            fresh_owner("machine-test", "other", "/work"),
+            fresh_owner("machine-test", "workspace-test", "/other"),
+        ] {
             assert_eq!(
                 cache.next_page(&changed, &cursor).await.unwrap_err(),
                 "diff snapshot expired"
