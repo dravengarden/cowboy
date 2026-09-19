@@ -4,6 +4,44 @@ use std::collections::HashMap;
 
 use crate::core::{Envelope, Event};
 
+/// Durable key carrying the originating client's message id beside the event.
+/// `Event` is internally tagged and ignores unknown keys, so a Controller that
+/// predates this field still reads every row.
+const PERSISTED_CMID_KEY: &str = "cmid";
+const PERSISTED_CMID_MAX_BYTES: usize = 128;
+
+/// Serialize an envelope's event for durable storage, keeping the `cmid` of a
+/// client-submitted prompt. A reconnecting client resends every unconfirmed
+/// submit with the same id; only a persisted echo lets the restored Hub (and a
+/// reloaded client reading its snapshot) recognise that the prompt already ran.
+pub(crate) fn persisted_event_payload(
+    envelope: &Envelope,
+) -> serde_json::Result<serde_json::Value> {
+    let mut payload = serde_json::to_value(&envelope.event)?;
+    if let (Some(cmid), Some(object)) = (envelope.cmid.as_deref(), payload.as_object_mut())
+        && !cmid.is_empty()
+        && cmid.len() <= PERSISTED_CMID_MAX_BYTES
+    {
+        object.insert(
+            PERSISTED_CMID_KEY.to_owned(),
+            serde_json::Value::String(cmid.to_owned()),
+        );
+    }
+    Ok(payload)
+}
+
+/// Remove and return the persisted `cmid`, leaving the plain event payload.
+pub(crate) fn take_persisted_cmid(payload: &mut serde_json::Value) -> Option<String> {
+    match payload.as_object_mut()?.remove(PERSISTED_CMID_KEY)? {
+        serde_json::Value::String(cmid)
+            if !cmid.is_empty() && cmid.len() <= PERSISTED_CMID_MAX_BYTES =>
+        {
+            Some(cmid)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 struct TextSlot {
     kind: String,
@@ -282,6 +320,30 @@ mod tests {
             },
             cmid: None,
         }
+    }
+
+    #[test]
+    fn persisted_payload_keeps_a_client_cmid_and_reads_legacy_rows() {
+        let mut envelope = update(1, "user_message_chunk", "");
+        envelope.cmid = Some("c-1".to_owned());
+        let mut payload = persisted_event_payload(&envelope).expect("serialize");
+        assert_eq!(payload["cmid"], "c-1");
+        assert_eq!(take_persisted_cmid(&mut payload).as_deref(), Some("c-1"));
+        assert!(payload.get("cmid").is_none());
+        let event: Event = serde_json::from_value(payload).expect("plain event");
+        assert!(matches!(event, Event::Update { .. }));
+
+        for cmid in [None, Some(String::new()), Some("x".repeat(129))] {
+            envelope.cmid = cmid;
+            let payload = persisted_event_payload(&envelope).expect("serialize");
+            assert!(
+                payload.get("cmid").is_none(),
+                "only a bounded client id is persisted"
+            );
+        }
+        let mut legacy = serde_json::to_value(&envelope.event).expect("legacy row");
+        assert!(take_persisted_cmid(&mut legacy).is_none());
+        assert!(take_persisted_cmid(&mut serde_json::Value::Null).is_none());
     }
 
     #[test]

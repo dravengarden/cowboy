@@ -323,6 +323,15 @@ export type Outbound =
   // Compatibility tombstone for clients cached before automatic resume was
   // retired. Current clients ignore the empty snapshot.
   | { type: "settings"; settings: Record<string, unknown> }
+  // Addressed refusal of one client-authored command. Only the device whose
+  // outbox owns `cmid` acts on it (docs/offline-first-sync.md §Conflict catalog).
+  | {
+    type: "command_result";
+    session_id: string;
+    cmid: string;
+    outcome: "not_found" | "rejected";
+    message: string;
+  }
   | { type: "error"; session_id?: string; message: string };
 
 /** Focused-session hydration returned by the HTTP bootstrap route. Every item

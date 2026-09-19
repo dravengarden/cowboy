@@ -151,7 +151,7 @@ impl SessionFolders {
     }
 
     #[cfg(test)]
-    fn folders(&self) -> &[SessionFolder] {
+    pub(crate) fn folders(&self) -> &[SessionFolder] {
         &self.folders
     }
 
@@ -306,6 +306,29 @@ impl SessionFolders {
             "remove" => self.remove(actor, args),
             _ => Err(format!("unknown folders mutation {mutation}")),
         }
+    }
+
+    /// Whether `create` with these arguments already produced exactly this
+    /// folder for this actor. The sync arbiter's mutation-id dedupe does not
+    /// survive a Controller restart, so a client that resends its durable
+    /// outbox would otherwise hit "folder id already exists" forever. Any
+    /// difference (owner, name, parent, project) is a genuine conflict and
+    /// still fails through the normal path.
+    pub(crate) fn is_replayed_create(&self, actor: &FolderActor, args: &serde_json::Value) -> bool {
+        let (Ok(id), Ok(name), Ok(parent), Ok(project)) = (
+            key_arg(args, "id"),
+            name_arg(args),
+            optional_key_arg(args, "parent"),
+            project_arg(args),
+        ) else {
+            return false;
+        };
+        self.find(&id).is_some_and(|folder| {
+            folder.owner_user_id == actor.user_id
+                && folder.name == name
+                && folder.parent == parent
+                && folder.project == project
+        })
     }
 
     fn create(
@@ -577,6 +600,32 @@ mod tests {
             .collect();
         rows.sort_by_key(|folder| folder.position);
         rows.iter().map(|folder| folder.id.clone()).collect()
+    }
+
+    #[test]
+    fn replayed_create_matches_only_the_identical_folder() {
+        let mut folders = SessionFolders::default();
+        create(&mut folders, &user("u1"), "f-a", "Cowboy", None);
+        let same = serde_json::json!({"id": "f-a", "name": " Cowboy ", "parent": null});
+        assert!(folders.is_replayed_create(&user("u1"), &same));
+        assert!(!folders.is_replayed_create(&user("u2"), &same));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Other"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Cowboy", "parent": "f-b"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-a", "name": "Cowboy", "project": "cowboy"})
+        ));
+        assert!(!folders.is_replayed_create(
+            &user("u1"),
+            &serde_json::json!({"id": "f-missing", "name": "Cowboy"})
+        ));
+        assert!(!folders.is_replayed_create(&user("u1"), &serde_json::json!({"name": "Cowboy"})));
     }
 
     #[test]

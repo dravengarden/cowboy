@@ -1,6 +1,34 @@
 import type { Envelope } from "./protocol.ts";
 
 /**
+ * Sequence of the newest `context_cleared` boundary in a run, or `null`. Clear
+ * deletes every earlier row durably while `seq` keeps counting, so anything a
+ * device still holds from before this boundary is history that no longer
+ * exists and must not be joined to the fresh run.
+ */
+export function lastContextClearSeq(events: readonly Envelope[]): number | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event !== undefined && event.kind === "update" &&
+      event.update.sessionUpdate === "context_cleared"
+    ) return event.seq;
+  }
+  return null;
+}
+
+/** Keep the events at or after `seq`; returns the same array when none fall
+ * before it, so callers can detect "nothing to drop" by identity. */
+export function dropEventsBefore(
+  events: readonly Envelope[],
+  seq: number,
+): readonly Envelope[] {
+  const first = events.findIndex((event) => event.seq >= seq);
+  if (first === 0) return events;
+  return first === -1 ? [] : events.slice(first);
+}
+
+/**
  * Merge two sequence-ordered timeline runs. Incoming rows come from daemon
  * history/snapshots and replace equal-sequence live rows: the daemon has
  * already reduced replayed streaming chunks into the canonical payload.

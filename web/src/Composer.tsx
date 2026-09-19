@@ -3996,7 +3996,7 @@ function OptimisticDraftRow({
         )}
         {failed && (
           <Typography variant="caption" sx={{ color: "error.main" }}>
-            Couldn't reach Cowboy
+            {message.failure ?? "Couldn't reach Cowboy"}
           </Typography>
         )}
         {previewTray.length > 0 && (

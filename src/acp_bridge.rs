@@ -1247,6 +1247,9 @@ impl Bridge {
             | Outbound::Machines { .. }
             | Outbound::Ping
             | Outbound::SyncPatch { .. }
+            // The bridge submits without a durable browser outbox; an addressed
+            // refusal belongs to the Web device that minted the cmid.
+            | Outbound::CommandResult { .. }
             | Outbound::Settings { .. } => {}
         }
         Ok(())
@@ -1592,6 +1595,7 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         | Outbound::Ping
         | Outbound::SyncPatch { .. }
         | Outbound::Settings { .. }
+        | Outbound::CommandResult { .. }
         | Outbound::Error { .. } => {}
     }
 }

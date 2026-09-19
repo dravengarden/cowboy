@@ -42,8 +42,8 @@ use crate::cli::ServeArgs;
 use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::code_review::CodeProvider as _;
 use crate::core::{
-    CodeReadScope, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound, Outbound,
-    PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
+    CodeReadScope, CommandOutcome, DispatchReq, Envelope, Event, FanoutFrame, Hub, Inbound,
+    Outbound, PersistenceHealth, RestoredSession, SessionOrigin, Status, StoreReceiver, StoreSink,
     StoreWrite, project_sync_value,
 };
 use crate::diff_snapshot::{DiffSnapshotCache, DiffSnapshotKey};
@@ -17637,7 +17637,11 @@ fn project_outbound(
             session_id: Some(ref session_id),
             ..
         } => session_is_visible(hub, principal, session_id).then_some(message),
-        Outbound::Error {
+        // An addressed refusal names an unguessable client message id and a
+        // generic reason; the session may already be gone, so it cannot be gated
+        // on visibility. Only the device that minted the id acts on it.
+        Outbound::CommandResult { .. }
+        | Outbound::Error {
             session_id: None, ..
         }
         | Outbound::Machines { .. }
@@ -18446,6 +18450,27 @@ fn handle_command(
         | Inbound::Sync { .. }
         | Inbound::SetSetting { .. } => None,
     };
+    // A client-authored prompt or draft carries its `cmid` from a durable
+    // outbox that is replayed after every reconnect. A refusal that can never
+    // change must name that id, otherwise the device retries it forever and the
+    // user only ever sees an unaddressed toast.
+    let authored_cmid: Option<String> = match &cmd {
+        Inbound::Submit { cmid, .. }
+        | Inbound::AddDraft { cmid, .. }
+        | Inbound::ScheduleDraft { cmid, .. } => cmid.clone(),
+        _ => None,
+    };
+    if let (Some(sid), Some(cmid)) = (&session_id_for_err, &authored_cmid)
+        && state.hub.session_info(sid).is_none()
+    {
+        state.hub.command_result(
+            sid,
+            cmid,
+            CommandOutcome::NotFound,
+            "this session no longer exists",
+        );
+        return false;
+    }
     if let Some(sid) = &session_id_for_err {
         let owner = state
             .hub
@@ -18456,6 +18481,14 @@ fn handle_command(
                 Some(sid.clone()),
                 "not allowed to mutate this session".to_owned(),
             );
+            if let Some(cmid) = &authored_cmid {
+                state.hub.command_result(
+                    sid,
+                    cmid,
+                    CommandOutcome::Rejected,
+                    "not allowed to mutate this session",
+                );
+            }
             return false;
         }
     }
@@ -18469,6 +18502,14 @@ fn handle_command(
             Some(sid.clone()),
             "view-only system session: input is disabled".to_owned(),
         );
+        if let Some(cmid) = &authored_cmid {
+            state.hub.command_result(
+                sid,
+                cmid,
+                CommandOutcome::Rejected,
+                "view-only system session: input is disabled",
+            );
+        }
         return false;
     }
     // Serialize runtime admission against Provider lifecycle changes. Holding

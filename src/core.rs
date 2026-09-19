@@ -15,7 +15,7 @@
 //! `session/load` resume (design §7) — both land in the same follow-up.
 
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -645,6 +645,12 @@ struct Session {
     /// reconciliation captures this before applying an idle lifecycle edge so
     /// it cannot clear a newer guard created while that edge drains the queue.
     in_flight_epoch: u64,
+    /// Client message ids of prompts this Hub recently handed to a worker. A
+    /// reconnecting client resends every unconfirmed submit; between the dispatch
+    /// and the persisted user echo only this window knows the prompt already
+    /// ran. Bounded; the echoed `cmid` in `log` covers the rest and survives a
+    /// Controller restart.
+    dispatched_cmids: VecDeque<String>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -1153,6 +1159,26 @@ pub enum Outbound {
         session_id: Option<String>,
         message: String,
     },
+    /// Addressed outcome for a client-authored command that will never take
+    /// effect. Unlike `Error` it names the originating `cmid`, so the device
+    /// holding that outbox entry can stop retrying and show why; every other
+    /// client ignores an id it does not own.
+    CommandResult {
+        session_id: String,
+        cmid: String,
+        outcome: CommandOutcome,
+        message: String,
+    },
+}
+
+/// Why a client-authored command was refused for good.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandOutcome {
+    /// The target session no longer exists for this principal.
+    NotFound,
+    /// The session exists but refuses this command.
+    Rejected,
 }
 
 /// One immutable live frame shared by every WebSocket and the Web Push observer.
@@ -1991,6 +2017,7 @@ impl Hub {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
                             }),
                         in_flight_epoch: 0,
+                        dispatched_cmids: VecDeque::new(),
                         turn_completion_latched: false,
                         lifecycle_epoch: 0,
                         mobile_review: MobileReviewState::from_stored(mobile_review_state),
@@ -2474,6 +2501,7 @@ impl Hub {
                     editing_epoch: 0,
                     in_flight: false,
                     in_flight_epoch: 0,
+                    dispatched_cmids: VecDeque::new(),
                     turn_completion_latched: false,
                     lifecycle_epoch: 0,
                     mobile_review: MobileReviewState::default(),
@@ -2525,6 +2553,13 @@ impl Hub {
             removed
         };
         if removed {
+            // The per-session sync states die with the session. Their dedupe
+            // sets must not keep growing for ids no client can replay any more.
+            {
+                let mut sync = self.inner.sync.lock();
+                sync.remove(&format!("queue:{session_id}"));
+                sync.remove(&format!("mobile-review:{session_id}"));
+            }
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }
@@ -3043,8 +3078,18 @@ impl Hub {
             }
             ("folders", name) => {
                 // A retried delivery must not be re-validated against the state
-                // it already changed ("folder id already exists").
+                // it already changed ("folder id already exists"). Confirm it
+                // again: the resending client may have missed the first patch.
                 if self.sync_already_seen(state, &id) {
+                    self.sync_broadcast(state, vec![id]);
+                    return Ok(());
+                }
+                // The dedupe set does not survive a Controller restart, but a
+                // create that already produced exactly this folder is the same
+                // retried delivery. Confirm it instead of rejecting the replay.
+                if name == "create" && self.inner.folders.lock().is_replayed_create(actor, args) {
+                    self.sync_first_seen(state, &id);
+                    self.sync_broadcast(state, vec![id]);
                     return Ok(());
                 }
                 // Dry-run against a copy so a rejected mutation never consumes
@@ -3082,7 +3127,10 @@ impl Hub {
             _ => return Err(format!("unknown sync mutation {state}/{name}")),
         };
         if !self.sync_first_seen(state, &id) {
-            return Ok(()); // duplicate delivery/retry — already applied + broadcast
+            // Duplicate delivery/retry: already applied. Confirm it again so a
+            // client that missed the original patch retires its outbox entry.
+            self.sync_broadcast(state, vec![id]);
+            return Ok(());
         }
         match op {
             Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
@@ -3851,6 +3899,24 @@ impl Hub {
         });
     }
 
+    /// Publish an addressed refusal for one client-authored command. Only the
+    /// device that owns `cmid` acts on it; no session error is recorded because
+    /// nothing went wrong with the agent.
+    pub fn command_result(
+        &self,
+        session_id: &str,
+        cmid: &str,
+        outcome: CommandOutcome,
+        message: &str,
+    ) {
+        self.fanout(Outbound::CommandResult {
+            session_id: session_id.to_owned(),
+            cmid: cmid.to_owned(),
+            outcome,
+            message: message.to_owned(),
+        });
+    }
+
     // --- Queue + drafts (server-authoritative, synced to every terminal) ------
 
     /// Current status of a session, if it exists. Lets the server decide
@@ -3993,6 +4059,7 @@ impl Hub {
             let head = s.queue.remove(0);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
+            Self::note_dispatched(s, head.cmid.as_deref());
             DispatchReq {
                 session_id: session_id.to_owned(),
                 text: head.text,
@@ -4116,6 +4183,11 @@ impl Hub {
             // The in-flight turn is over (it crashed); free the guard so the queue
             // can drain again once an agent is alive.
             s.in_flight = false;
+            // The prompt never ran: it is no longer "delivered", so the drain (or
+            // a client resend) may hand it to a worker again.
+            if let Some(c) = cmid.as_deref() {
+                s.dispatched_cmids.retain(|seen| seen != c);
+            }
             if let Some(c) = cmid.as_deref()
                 && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
             {
@@ -4156,22 +4228,25 @@ impl Hub {
         }
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
+        let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            // Idempotent on cmid (a retry whose original actually landed in the
-            // queue must not double-add). The dispatch branch (chat) doesn't
-            // store a QueuedMessage, so cmid reconciliation there is Phase 2.
-            if let Some(c) = cmid.as_deref()
-                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
-            {
-                return;
-            }
-            if wired && Self::ready(s, true) && s.queue.is_empty() {
+            // Idempotent on cmid: a retry whose original landed in the queue, was
+            // handed to a worker, or already echoed into the transcript must not
+            // run again. The reconnecting client resends every unconfirmed submit.
+            duplicate = cmid
+                .as_deref()
+                .filter(|c| Self::prompt_already_accepted(s, c))
+                .map(str::to_owned);
+            if duplicate.is_some() {
+                // fall through to the addressed confirmation below
+            } else if wired && Self::ready(s, true) && s.queue.is_empty() {
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
+                Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
                     text,
@@ -4188,6 +4263,10 @@ impl Hub {
                     schedule: None,
                 });
             }
+        }
+        if let Some(cmid) = duplicate {
+            self.confirm_delivered(session_id, &cmid);
+            return;
         }
         match dispatch {
             // Dispatched straight through — never touched a list, so no flicker
@@ -4218,20 +4297,23 @@ impl Hub {
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
         let mut interrupt = false;
+        let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if let Some(c) = cmid.as_deref()
-                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
-            {
-                return false;
-            }
-            if wired && Self::ready(s, true) && s.queue.is_empty() {
+            duplicate = cmid
+                .as_deref()
+                .filter(|c| Self::prompt_already_accepted(s, c))
+                .map(str::to_owned);
+            if duplicate.is_some() {
+                // fall through to the addressed confirmation below
+            } else if wired && Self::ready(s, true) && s.queue.is_empty() {
                 // Idle + nothing queued → straight dispatch, identical to submit.
                 s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
                 s.in_flight = true;
+                Self::note_dispatched(s, cmid.as_deref());
                 dispatch = Some(DispatchReq {
                     session_id: session_id.to_owned(),
                     text,
@@ -4256,11 +4338,72 @@ impl Hub {
                 interrupt = interrupt_on_busy;
             }
         }
+        if let Some(cmid) = duplicate {
+            self.confirm_delivered(session_id, &cmid);
+            return false;
+        }
         match dispatch {
             Some(req) => self.send_dispatch(req),
             None => self.emit_pending(session_id),
         }
         interrupt
+    }
+
+    /// Whether `cmid` names a prompt a browser client minted. Hub-synthesized
+    /// ids (scheduler wakeups, scheduled drafts, retry, legacy continuation)
+    /// are deliberately reusable and never participate in delivery dedupe.
+    fn is_client_cmid(cmid: &str) -> bool {
+        !cmid.is_empty() && !cmid.starts_with("__") && !cmid.starts_with("cowboy-")
+    }
+
+    /// True once this Hub has accepted the prompt in any durable form: still
+    /// queued, handed to a worker, or echoed into the transcript (which survives
+    /// a Controller restart because the echo persists its `cmid`).
+    fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
+        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid)) {
+            return true;
+        }
+        Self::is_client_cmid(cmid)
+            && (s.dispatched_cmids.iter().any(|seen| seen == cmid)
+                || s.log
+                    .iter()
+                    .rev()
+                    .any(|entry| entry.cmid.as_deref() == Some(cmid)))
+    }
+
+    const DISPATCHED_CMID_WINDOW: usize = 64;
+
+    fn note_dispatched(s: &mut Session, cmid: Option<&str>) {
+        let Some(cmid) = cmid.filter(|c| Self::is_client_cmid(c)) else {
+            return;
+        };
+        if s.dispatched_cmids.iter().any(|seen| seen == cmid) {
+            return;
+        }
+        if s.dispatched_cmids.len() >= Self::DISPATCHED_CMID_WINDOW {
+            s.dispatched_cmids.pop_front();
+        }
+        s.dispatched_cmids.push_back(cmid.to_owned());
+    }
+
+    /// Tell every client that `cmid` is already folded into this session, without
+    /// changing or re-persisting the queue. Confirmations are monotonic facts the
+    /// sync client accepts from any patch, so the resending device retires its
+    /// outbox entry instead of waiting out an acknowledgement timeout.
+    fn confirm_delivered(&self, session_id: &str, cmid: &str) {
+        let (queue, drafts) = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            (s.queue.clone(), s.drafts.clone())
+        };
+        let mut confirmed = Self::cmids_of(&queue, &drafts);
+        if !confirmed.iter().any(|seen| seen == cmid) {
+            confirmed.push(cmid.to_owned());
+        }
+        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
+        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
     }
 
     /// Drop one queued prompt.
@@ -4493,6 +4636,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -4500,20 +4644,26 @@ impl Hub {
             };
             // Idempotent on cmid: when a send looked failed the client resends
             // with the SAME cmid, but the original may actually have landed — so
-            // a matching cmid means "already staged", don't double-add.
-            if let Some(c) = cmid.as_deref()
-                && s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c))
-            {
-                return;
+            // a matching cmid means "already staged", don't double-add. Confirm
+            // it again instead: the resending client missed the first patch.
+            duplicate = cmid
+                .as_deref()
+                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .map(str::to_owned);
+            if duplicate.is_none() {
+                let id = self.next_qid();
+                s.drafts.push(QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid,
+                    schedule: None,
+                });
             }
-            let id = self.next_qid();
-            s.drafts.push(QueuedMessage {
-                id,
-                text,
-                content,
-                cmid,
-                schedule: None,
-            });
+        }
+        if let Some(cmid) = duplicate {
+            self.confirm_delivered(session_id, &cmid);
+            return;
         }
         self.emit_pending(session_id);
     }
@@ -5912,6 +6062,210 @@ mod core_tests {
             queue_texts(&hub, "r1"),
             vec!["second".to_owned(), "hello agent".to_owned()]
         );
+    }
+
+    // A reconnecting client resends every unconfirmed submit. Once the Hub has
+    // handed the prompt to a worker, the replay is confirmed, never run again.
+    #[tokio::test]
+    async fn replayed_submit_after_dispatch_is_confirmed_not_rerun() {
+        let hub = hub_with_session("replay");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("replay", Status::Running, None);
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert_eq!(rx.recv().await.expect("first dispatch").text, "hello");
+
+        let mut live = hub.subscribe();
+        hub.submit("replay", "hello".to_owned(), vec![], Some("c-1".to_owned()));
+        assert!(!hub.force_submit(
+            "replay",
+            "hello".to_owned(),
+            vec![],
+            Some("c-1".to_owned()),
+            true,
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "a replayed submit must not dispatch again"
+        );
+        assert!(queue_texts(&hub, "replay").is_empty());
+        let frame = live.try_recv().expect("addressed confirmation");
+        let Outbound::SyncPatch {
+            state, confirmed, ..
+        } = frame.outbound()
+        else {
+            panic!("expected a queue confirmation");
+        };
+        assert_eq!(state, "queue:replay");
+        assert_eq!(confirmed, &vec!["c-1".to_owned()]);
+    }
+
+    // After a Controller restart the dispatched-id window is empty, but the user
+    // echo restored from storage still carries the cmid of the prompt it ran.
+    #[tokio::test]
+    async fn replayed_submit_is_recognised_from_the_persisted_echo() {
+        let hub = hub_with_session("restored");
+        let (tx, mut rx) = mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        hub.set_status("restored", Status::Running, None);
+        let echo = || Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": "hello"},
+            }),
+        };
+        hub.push_tagged("restored", echo(), Some("c-2".to_owned()));
+
+        hub.submit(
+            "restored",
+            "hello".to_owned(),
+            vec![],
+            Some("c-2".to_owned()),
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "an echoed prompt must not run again"
+        );
+        assert!(queue_texts(&hub, "restored").is_empty());
+
+        // Hub-synthesized ids are reusable on purpose and never deduped by the log.
+        let synthesized = "cowboy-retry:restored:1".to_owned();
+        hub.push_tagged("restored", echo(), Some(synthesized.clone()));
+        hub.submit("restored", "again".to_owned(), vec![], Some(synthesized));
+        assert_eq!(
+            rx.recv().await.expect("synthesized id dispatches").text,
+            "again"
+        );
+    }
+
+    // A replayed draft is confirmed again so a client that missed the first
+    // patch retires its outbox entry instead of waiting out a timeout.
+    #[test]
+    fn replayed_add_draft_is_confirmed_not_duplicated() {
+        let hub = hub_with_session("draft-replay");
+        hub.add_draft(
+            "draft-replay",
+            "later".to_owned(),
+            vec![],
+            Some("d-1".to_owned()),
+        );
+        let mut live = hub.subscribe();
+        hub.add_draft(
+            "draft-replay",
+            "later".to_owned(),
+            vec![],
+            Some("d-1".to_owned()),
+        );
+        let frame = live.try_recv().expect("replayed draft confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a queue patch");
+        };
+        assert_eq!(state, "queue:draft-replay");
+        assert_eq!(confirmed, &vec!["d-1".to_owned()]);
+        assert_eq!(value["drafts"].as_array().unwrap().len(), 1);
+    }
+
+    // A duplicate sync delivery is confirmed again, so a client that missed the
+    // original patch can retire its outbox entry.
+    #[test]
+    fn duplicate_sync_delivery_is_confirmed_again() {
+        let hub = hub_with_session("dup");
+        hub.sync_apply(
+            "title",
+            "m-1".to_owned(),
+            "rename",
+            &serde_json::json!({"session_id": "dup", "title": "First"}),
+        )
+        .unwrap();
+        let mut live = hub.subscribe();
+        hub.sync_apply(
+            "title",
+            "m-1".to_owned(),
+            "rename",
+            &serde_json::json!({"session_id": "dup", "title": "Ignored"}),
+        )
+        .unwrap();
+        let frame = live.try_recv().expect("replayed delivery confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a sync patch");
+        };
+        assert_eq!(state, "title");
+        assert_eq!(confirmed, &vec!["m-1".to_owned()]);
+        assert_eq!(value["dup"], "First");
+    }
+
+    // The arbiter's dedupe set does not survive a restart; a create that already
+    // produced exactly this folder is still the same retried delivery.
+    #[test]
+    fn folder_create_replayed_across_restart_is_confirmed() {
+        let hub = hub_with_session("filed-replay");
+        let args = serde_json::json!({"id": "f-r", "name": "Cowboy", "project": "cowboy"});
+        hub.sync_apply("folders", "m-1".to_owned(), "create", &args)
+            .unwrap();
+        let folders = hub.inner.folders.lock().folders().to_vec();
+
+        let restarted = hub_with_session("filed-replay");
+        restarted.restore_session_folders(folders);
+        let mut live = restarted.subscribe();
+        restarted
+            .sync_apply("folders", "m-1".to_owned(), "create", &args)
+            .unwrap();
+        let frame = live.try_recv().expect("replayed create confirmation");
+        let Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } = frame.outbound()
+        else {
+            panic!("expected a folders patch");
+        };
+        assert_eq!(state, "folders");
+        assert_eq!(confirmed, &vec!["m-1".to_owned()]);
+        assert_eq!(value["folders"].as_array().unwrap().len(), 1);
+        // A different folder under the same id is still a conflict.
+        assert_eq!(
+            restarted
+                .sync_apply(
+                    "folders",
+                    "m-2".to_owned(),
+                    "create",
+                    &serde_json::json!({"id": "f-r", "name": "Other"}),
+                )
+                .unwrap_err(),
+            "folder id already exists"
+        );
+    }
+
+    // Per-session sync dedupe sets are dropped with the session.
+    #[test]
+    fn deleting_a_session_drops_its_sync_states() {
+        let hub = hub_with_session("gone");
+        hub.sync_apply(
+            "mobile-review:gone",
+            "m-1".to_owned(),
+            "open",
+            &serde_json::json!({"path": "README.md"}),
+        )
+        .unwrap();
+        hub.add_draft("gone", "draft".to_owned(), vec![], Some("d-1".to_owned()));
+        assert!(hub.inner.sync.lock().contains_key("mobile-review:gone"));
+        assert!(hub.inner.sync.lock().contains_key("queue:gone"));
+        assert!(hub.delete_session("gone"));
+        assert!(!hub.inner.sync.lock().contains_key("mobile-review:gone"));
+        assert!(!hub.inner.sync.lock().contains_key("queue:gone"));
     }
 
     #[test]

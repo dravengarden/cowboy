@@ -1584,12 +1584,14 @@ impl SqliteSessionRow {
 }
 
 fn decode_event_row(row: EventRow, session_id: &str, operation: &str) -> Option<Envelope> {
-    match serde_json::from_value::<Event>(row.payload) {
+    let mut payload = row.payload;
+    let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+    match serde_json::from_value::<Event>(payload) {
         Ok(event) => Some(Envelope {
             session_id: session_id.to_owned(),
             seq: u64::try_from(row.seq).unwrap_or(0),
             event,
-            cmid: None,
+            cmid,
         }),
         Err(error) => {
             tracing::warn!(
@@ -4972,8 +4974,8 @@ impl SqliteStorage {
             .await
             .context("begin SQLite event batch")?;
         for envelope in events {
-            let mut payload =
-                serde_json::to_value(&envelope.event).context("serialize SQLite event")?;
+            let mut payload = crate::persistence::persisted_event_payload(envelope)
+                .context("serialize SQLite event")?;
             strip_nul(&mut payload);
             self.artifacts.externalize_images(&mut payload)?;
             let sequence = i64::try_from(envelope.seq).context("seq i64 overflow")?;

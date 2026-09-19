@@ -110,7 +110,7 @@ Deno.test("unpresented overlays linger until the presented timeline can replace 
 });
 
 Deno.test("a live presentation follows the store even when the echo lost its cmid", () => {
-  // The daemon persists echoes without the live-only cmid. Once the renderer
+  // Echoes persisted before the submission ledger carry no cmid. Once the renderer
   // shows the canonical timeline, a retired overlay must not linger and hide
   // the next human prompt behind a repainted copy of this one.
   const overlay = { cmid: "c1", attachments: [{ isImage: true }] };

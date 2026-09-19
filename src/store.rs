@@ -3235,7 +3235,12 @@ impl PostgresStorage {
                 // bricks EVERY session — a blank UI for the user). Same
                 // "tolerate one bad row" philosophy as queue/drafts
                 // below. The skipped seq leaves a gap, which the client tolerates.
-                let event: Event = match serde_json::from_value(er.payload) {
+                let mut payload = er.payload;
+                // The echoed prompt's cmid survives a restart so the restored
+                // Hub can refuse a resent submit and a reloaded client can retire
+                // its outbox entry from the snapshot.
+                let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+                let event: Event = match serde_json::from_value(payload) {
                     Ok(ev) => ev,
                     Err(e) => {
                         tracing::warn!(
@@ -3252,8 +3257,7 @@ impl PostgresStorage {
                     session_id: id.clone(),
                     seq,
                     event,
-                    // cmid is a live-only reconcile tag, never persisted.
-                    cmid: None,
+                    cmid,
                 });
             }
             if crate::core::bound_restored_hot_log(&mut events) {
@@ -3312,12 +3316,14 @@ impl PostgresStorage {
         .with_context(|| format!("SELECT history page for {session_id}"))?;
         let mut events = Vec::with_capacity(rows.len());
         for row in rows.into_iter().rev() {
-            match serde_json::from_value::<Event>(row.payload) {
+            let mut payload = row.payload;
+            let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+            match serde_json::from_value::<Event>(payload) {
                 Ok(event) => events.push(Envelope {
                     session_id: session_id.to_owned(),
                     seq: u64::try_from(row.seq).unwrap_or(0),
                     event,
-                    cmid: None,
+                    cmid,
                 }),
                 Err(e) => tracing::warn!(
                     error = %e,
@@ -3404,12 +3410,14 @@ impl PostgresStorage {
         .with_context(|| format!("SELECT complete question page for {session_id}"))?;
         let mut events = Vec::with_capacity(rows.len());
         for row in rows {
-            match serde_json::from_value::<Event>(row.payload) {
+            let mut payload = row.payload;
+            let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+            match serde_json::from_value::<Event>(payload) {
                 Ok(event) => events.push(Envelope {
                     session_id: session_id.to_owned(),
                     seq: u64::try_from(row.seq).unwrap_or(0),
                     event,
-                    cmid: None,
+                    cmid,
                 }),
                 Err(error) => tracing::warn!(
                     %error,
@@ -3576,12 +3584,14 @@ impl PostgresStorage {
         let events = rows
             .into_iter()
             .filter_map(|row| {
-                serde_json::from_value::<Event>(row.payload)
+                let mut payload = row.payload;
+                let cmid = crate::persistence::take_persisted_cmid(&mut payload);
+                serde_json::from_value::<Event>(payload)
                     .map(|event| Envelope {
                         session_id: session_id.to_owned(),
                         seq: u64::try_from(row.seq).unwrap_or(0),
                         event,
-                        cmid: None,
+                        cmid,
                     })
                     .map_err(|error| {
                         tracing::warn!(
@@ -5794,7 +5804,8 @@ impl PostgresStorage {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin event batch")?;
         for env in events {
-            let mut payload = serde_json::to_value(&env.event).context("serialize event")?;
+            let mut payload =
+                crate::persistence::persisted_event_payload(env).context("serialize event")?;
             strip_nul(&mut payload);
             self.artifacts.externalize_images(&mut payload)?;
             let seq = i64::try_from(env.seq).context("seq i64 overflow")?;
