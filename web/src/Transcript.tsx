@@ -325,6 +325,8 @@ function TranscriptSkeleton({
   return (
     <Stack
       data-transcript-switch-skeleton
+      // Not a screen worth saving for the next open (bootSnapshot.ts).
+      data-boot-loading
       spacing={desktop ? 3 : 2.25}
       sx={{
         minHeight: desktop ? undefined : "100%",
@@ -421,6 +423,7 @@ function TranscriptLoadingFill({
   return (
     <Box
       data-transcript-loading-fill
+      data-boot-loading
       role="status"
       aria-live="polite"
       aria-label={label}

@@ -650,7 +650,15 @@
             .then((response) => response ? response.json() : null)
             .then((snap) => {
               if (boot.done || !snap || snap.v !== 1 || snap.user !== user) return;
-              if (Math.abs(snap.width - innerWidth) > 1 || Math.abs(snap.height - innerHeight) > 1) return;
+              // The copy is live DOM, so it reflows at the current size; only
+              // the pinned boxes (images, off-screen fillers) and the restored
+              // scroll offsets are measured at capture width. A tolerance is
+              // what makes this usable at all on Desktop, where the window is
+              // resized, and in a browser tab whose URL bar comes and goes.
+              // The feed is bottom-anchored and the frame clips, so a slightly
+              // short picture loses the top, which is the right end to lose.
+              if (Math.abs(snap.width - innerWidth) > innerWidth * 0.08) return;
+              if (Math.abs(snap.height - innerHeight) > innerHeight * 0.08) return;
               if (Date.now() - snap.savedAt > 7 * 86400000) return;
               // Only the screen the app is about to open: the same session
               // (a notification deep link wins, as it does in the app) on the
