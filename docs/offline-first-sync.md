@@ -561,10 +561,33 @@ jank this design exists to remove. Each capture therefore also writes a small
 synchronous hint to `localStorage` (everything but the markup and CSS). The
 document reads it before its first paint and, when it matches this open, holds
 the placeholder shapes back behind `html.boot-restoring` while still painting
-the canvas colour. Every path that then declines the saved screen — a
-mismatch, a failure, or a 350 ms grace timer — reveals the skeleton, so no
-route ends on a bare canvas. Measured at 6x slower CPU: the saved screen is
-mounted by 158 ms and the placeholder never becomes visible.
+the canvas colour. That hint is judged by the same predicate as the record it stands for
+(`window.__cowboyBootEligible`, defined once). Two copies of the rule drifted
+apart immediately: the hint checked only the viewport and the age, so a
+snapshot belonging to another session held the skeleton back and then released
+it — exactly the flash it exists to prevent. Every path that declines the
+saved screen reveals the skeleton, so no route ends on a bare canvas, and the
+grace timer behind them is a safety net for Cache Storage never answering
+rather than a deadline the parse can lose: a real phone fires a short timer on
+time while the parse runs long, which would show the placeholder and then
+replace it.
+
+The hand-off is a removal, not a cross-fade. The overlay is only let go once
+the app has painted the same screen, and dissolving one copy of that screen
+through another doubles every glyph for a fifth of a second, which reads as a
+flash rather than as a transition.
+
+Measured with a real capture, saved screen mounted by CPU speed:
+
+| CPU | Saved screen on screen | Placeholder shown |
+|---|---|---|
+| full speed | 29 ms | never |
+| 4x slower | 257 ms | never |
+| 10x slower | 500 ms | never |
+| 20x slower | 1043 ms | never |
+
+A snapshot that does not match this open — a different session, say — is
+declined synchronously, so the skeleton paints immediately instead of waiting.
 
 The overlay is a picture, never the app: closed shadow root (no shared ids,
 selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is

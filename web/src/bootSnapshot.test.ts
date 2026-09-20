@@ -101,10 +101,13 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   // The document must never be left on a bare canvas: every path that
   // declines the saved screen has to bring the skeleton back.
   assert(html.includes("boot-restoring"), "boot-restoring class");
-  assert(
-    html.split("return reveal()").length - 1 >= 7,
-    "each early return in the snapshot loader must reveal the skeleton",
-  );
+  // One predicate, read synchronously before the first paint and again when
+  // Cache Storage answers. Two copies drifted apart once already: the
+  // document held the skeleton back for a snapshot the loader then refused.
+  assertEquals(html.split("__cowboyBootEligible").length - 1, 3, "shared eligibility predicate");
+  // Whatever the loader decides, it must never end on a bare canvas.
+  assert(html.includes("return reveal()"), "declining the saved screen reveals the skeleton");
+  assert(html.includes(".catch(reveal)"), "a failed lookup reveals the skeleton");
   // The skeleton's chrome follows the app's own last answer, not a width.
   assert(html.includes("html.boot-desktop"), "boot-desktop class");
   assert(html.includes("html.boot-touch"), "boot-touch class");
@@ -114,8 +117,13 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(html.includes('attachShadow({ mode: "closed" })'));
   // A stuck app must never hide behind a picture of itself.
   assert(/setTimeout\(\(\) => boot\.ready\(\), \d+\)/.test(html));
-  // The same allow-list as restorableHtmlStyle.
-  assert(html.includes("^(font-size|background-color|--(cowboy|vv|kb)-[\\w-]+)$"));
+  // The same declarations restorableHtmlStyle captures, split by where they
+  // may be applied: only `font-size` has to reach <html>, because `rem`
+  // resolves against the document root. Putting the captured viewport
+  // variables there too would lay the booting app out against stale values.
+  assert(html.includes(`name === "font-size" || name === "background-color"`));
+  assert(html.includes("^--(cowboy|vv|kb)-[\\w-]+$"));
+  assert(html.includes("host.style.setProperty(name, value)"));
 });
 
 Deno.test("the static boot shell and BootSkeleton render the same markup", async () => {
