@@ -235,6 +235,14 @@
       body:has(#boot-snapshot) #app-splash {
         display: none;
       }
+      /* Cache Storage cannot answer within the first frame, so a document
+         that expects to restore a screen holds the placeholder shapes back
+         rather than painting them for one beat and replacing them — that
+         swap is what reads as a flash. The canvas colour still paints, and
+         the script below gives up on this after BOOT_RESTORE_GRACE_MS. */
+      html.boot-restoring #app-splash > * {
+        visibility: hidden;
+      }
       #app-splash.boot-shell {
         /* Below portalled sheets: a sign-in or Passkey prompt may have to
            appear while a first contact is still waiting. */
@@ -381,6 +389,15 @@
       // an appearance palette differs from the OS scheme the CSS above assumes.
       (() => {
         try {
+          // A saved screen is probably about to replace the skeleton: do not
+          // paint the placeholder shapes first. Only a hint that matches this
+          // open counts, and the loader below clears this the moment it knows.
+          const hint = JSON.parse(localStorage.getItem("cowboy:boot-snapshot") || "null");
+          if (hint && hint.v === 1 && Math.abs(hint.width - innerWidth) <= innerWidth * 0.08 &&
+              Math.abs(hint.height - innerHeight) <= innerHeight * 0.08 &&
+              Date.now() - hint.savedAt <= 7 * 86400000) {
+            document.documentElement.classList.add("boot-restoring");
+          }
           // The app's last surface answer beats any media-query guess.
           const surface = localStorage.getItem("cowboy:boot-surface");
           if (surface === "desktop") document.documentElement.classList.add("boot-desktop");
@@ -617,6 +634,12 @@
       // its first real paint and the overlay cross-fades away. Everything is
       // optional: any mismatch leaves the boot shell above in place.
       (() => {
+        const BOOT_RESTORE_GRACE_MS = 350;
+        const root = document.documentElement;
+        // Whatever happens below, the skeleton must become visible rather
+        // than leave the user on a bare canvas.
+        const reveal = () => root.classList.remove("boot-restoring");
+        setTimeout(reveal, BOOT_RESTORE_GRACE_MS);
         const boot = { done: false, host: null };
         // Removing the host also un-hides the skeleton (the :has rule above),
         // which is what the 4s safety timeout needs if the app never painted.
@@ -628,6 +651,7 @@
         boot.ready = () => {
           if (boot.done) return;
           boot.done = true;
+          reveal();
           const host = boot.host;
           if (!host) return;
           if (matchMedia("(prefers-reduced-motion: reduce)").matches) return remove();
@@ -639,17 +663,19 @@
         // A stuck app must never hide behind a picture of itself.
         setTimeout(() => boot.ready(), 4000);
         try {
-          if (!("caches" in window) || !Element.prototype.attachShadow) return;
+          if (!("caches" in window) || !Element.prototype.attachShadow) return reveal();
           const search = new URLSearchParams(location.search);
-          if (search.has("cowboy-recover") || location.pathname !== "/") return;
+          if (search.has("cowboy-recover") || location.pathname !== "/") return reveal();
           const identity = JSON.parse(localStorage.getItem("cowboy:auth-status-cache") || "null");
           const user = identity && identity.me && identity.me.user_id;
-          if (typeof user !== "string" || (identity.expiresAt !== null && identity.expiresAt <= Date.now())) return;
+          if (typeof user !== "string" || (identity.expiresAt !== null && identity.expiresAt <= Date.now())) return reveal();
           caches.open("cowboy-boot-snapshot-v1")
             .then((cache) => cache.match("/__boot/snapshot.json"))
             .then((response) => response ? response.json() : null)
             .then((snap) => {
-              if (boot.done || !snap || snap.v !== 1 || snap.user !== user) return;
+              // Every path from here either mounts the overlay or reveals the
+              // skeleton; none may leave the canvas empty.
+              if (boot.done || !snap || snap.v !== 1 || snap.user !== user) return reveal();
               // The copy is live DOM, so it reflows at the current size; only
               // the pinned boxes (images, off-screen fillers) and the restored
               // scroll offsets are measured at capture width. A tolerance is
@@ -657,17 +683,17 @@
               // resized, and in a browser tab whose URL bar comes and goes.
               // The feed is bottom-anchored and the frame clips, so a slightly
               // short picture loses the top, which is the right end to lose.
-              if (Math.abs(snap.width - innerWidth) > innerWidth * 0.08) return;
-              if (Math.abs(snap.height - innerHeight) > innerHeight * 0.08) return;
-              if (Date.now() - snap.savedAt > 7 * 86400000) return;
+              if (Math.abs(snap.width - innerWidth) > innerWidth * 0.08) return reveal();
+              if (Math.abs(snap.height - innerHeight) > innerHeight * 0.08) return reveal();
+              if (Date.now() - snap.savedAt > 7 * 86400000) return reveal();
               // Only the screen the app is about to open: the same session
               // (a notification deep link wins, as it does in the app) on the
               // Agent page. Review reads the workspace over the network.
               const opening = search.get("session") || localStorage.getItem("cowboy:active-session") || "";
-              if (opening !== (snap.sessionId || "")) return;
-              if (localStorage.getItem("cowboy:mobile-product") === "review") return;
+              if (opening !== (snap.sessionId || "")) return reveal();
+              if (localStorage.getItem("cowboy:mobile-product") === "review") return reveal();
               const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-              if (snap.themeMode === "system" && snap.scheme !== scheme) return;
+              if (snap.themeMode === "system" && snap.scheme !== scheme) return reveal();
               const template = document.createElement("template");
               template.innerHTML = String(snap.html);
               // Defence in depth: the capture already strips these.
@@ -677,7 +703,6 @@
                   if (/^on/i.test(attribute.name) || /^\s*javascript:/i.test(attribute.value)) node.removeAttribute(attribute.name);
                 }
               }
-              const root = document.documentElement;
               if (typeof snap.htmlClass === "string") {
                 for (const name of snap.htmlClass.split(/\s+/)) if (/^cowboy-[\w-]+$/.test(name)) root.classList.add(name);
               }
@@ -716,8 +741,10 @@
               boot.host = host;
               if (boot.done) remove();
             })
-            .catch(() => undefined);
-        } catch {}
+            .catch(reveal);
+        } catch {
+          reveal();
+        }
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

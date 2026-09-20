@@ -576,15 +576,37 @@ a narrow desktop window is not. Before that key has ever been written the
 shell approximates with `(pointer: fine) and (hover: hover)`, undone by
 `(any-pointer: coarse)`, in that order.
 
-Layer 2 is the SSG-like part. `bootSnapshot.ts` captures when the app is left
-(`visibilitychange` to hidden, `pagehide`) and at idle moments in between, but
-only from a *resting* screen: no sheet, dialog, drawer, keyboard, gesture,
-placeholder or Review page, and not mid-turn for the periodic capture. It
-clones `#root`, drops everything outside the viewport (the overlay cannot
-scroll, and this is what keeps a long transcript small), pins image and media
-boxes, records scroll offsets, strips scripts and event handlers, and
+Layer 2 is the SSG-like part. `bootSnapshot.ts` captures a few seconds after
+the screen settles, re-armed whenever what is on screen changes, and only from
+a *resting* screen: no sheet, dialog, drawer, keyboard, gesture, placeholder,
+Review page or turn in flight.
+
+Saving the screen *as the user leaves* looks like the obvious design and does
+not work. Writing to Cache Storage is asynchronous, and a document being
+discarded does not stay alive to finish it, so the write is simply lost;
+measured, a real navigation away saved nothing while a hand-dispatched
+`pagehide` on a live page saved fine. `pagehide` and a backgrounding
+`visibilitychange` are kept as best-effort extras, with a 60 s backstop, but
+what the next open restores is the capture that already happened while the app
+was alive.
+
+The capture clones `#root`, drops everything outside the viewport (the overlay
+cannot scroll, and this is what keeps a long transcript small), pins image and
+media boxes, records scroll offsets, strips scripts and event handlers, and
 serialises only the CSS rules that can still match. A capture of a real mobile
-session is about 122 KB: 25 KB markup, 84 KB CSS, 13 KB `@font-face`.
+session is about 113 KB: 25 KB markup, 75 KB CSS, 13 KB `@font-face`.
+
+Cache Storage cannot answer inside the first frame, so a document that simply
+painted the skeleton and replaced it a moment later would read as a flash —
+placeholder shapes appearing and then being swapped for content is exactly the
+jank this design exists to remove. Each capture therefore also writes a small
+synchronous hint to `localStorage` (everything but the markup and CSS). The
+document reads it before its first paint and, when it matches this open, holds
+the placeholder shapes back behind `html.boot-restoring` while still painting
+the canvas colour. Every path that then declines the saved screen — a
+mismatch, a failure, or a 350 ms grace timer — reveals the skeleton, so no
+route ends on a bare canvas. Measured at 6x slower CPU: the saved screen is
+mounted by 158 ms and the placeholder never becomes visible.
 
 The overlay is a picture, never the app: closed shadow root (no shared ids,
 selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is

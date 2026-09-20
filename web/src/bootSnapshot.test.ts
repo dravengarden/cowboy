@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
 import {
   BOOT_SNAPSHOT_CACHE,
+  BOOT_SNAPSHOT_HINT_KEY,
   BOOT_SNAPSHOT_URL,
   BOOT_SURFACE_KEY,
   BOOT_THEME_KEY,
@@ -96,6 +97,14 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_URL)), BOOT_SNAPSHOT_URL);
   assert(html.includes(JSON.stringify(BOOT_THEME_KEY)), BOOT_THEME_KEY);
   assert(html.includes(JSON.stringify(BOOT_SURFACE_KEY)), BOOT_SURFACE_KEY);
+  assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_HINT_KEY)), BOOT_SNAPSHOT_HINT_KEY);
+  // The document must never be left on a bare canvas: every path that
+  // declines the saved screen has to bring the skeleton back.
+  assert(html.includes("boot-restoring"), "boot-restoring class");
+  assert(
+    html.split("return reveal()").length - 1 >= 7,
+    "each early return in the snapshot loader must reveal the skeleton",
+  );
   // The skeleton's chrome follows the app's own last answer, not a width.
   assert(html.includes("html.boot-desktop"), "boot-desktop class");
   assert(html.includes("html.boot-touch"), "boot-touch class");
