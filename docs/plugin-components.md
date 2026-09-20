@@ -175,6 +175,15 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.19.0 records app-shell 1.1.10: a fullscreen preview also takes
+the document background and colour scheme to its backdrop while it is open. The
+iOS standalone status bar sits above the web view and a light iPhone PWA fills
+that strip from the document, not from `theme-color`, so the bar stayed white
+over a near-black preview; all three writes are snapshotted and restored on
+close. Only app-shell's version/digest changes; it still has no component or
+Plugin consumers, and no Plugin manifest, signed bytes or component pin
+changes. No Catalog publication or Machine upgrade is needed.
+
 Scoped release 3.18.0 records app-shell 1.1.9: the lightbox commits the neutral
 paint when it swaps the pan layer's layout size. A CSS transition starts from
 the previous style recalculation, so baking (or unbaking) the layout and

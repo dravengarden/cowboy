@@ -134,22 +134,41 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     }
     wasOpen.current = open;
   }, [open]);
-  // An iOS standalone PWA paints its status bar from <meta name="theme-color">,
-  // and that strip sits ABOVE the web view — a fixed, fullscreen backdrop cannot
-  // cover it. A light app therefore kept a bright band over the near-black
-  // preview. Take the bar to the backdrop colour while open and hand the app's
-  // own colour back on close, through the same writer the sheets use.
+  // The status bar sits ABOVE the web view in an iOS standalone PWA (status-bar
+  // style `default`), so a fixed, fullscreen backdrop cannot cover it: a light
+  // app kept a bright band over the near-black preview. Three writes reach that
+  // strip, and it takes all of them — `theme-color` is what a browser and the
+  // sheets use, while a standalone iPhone fills the strip from the DOCUMENT's
+  // own background and takes its glyph colour from the document colour scheme
+  // (the same pair `applyThemeColor` and CssBaseline own for the app). Each is
+  // snapshotted and handed back on close; none of them moves layout or the
+  // visual viewport (see the file header on what this overlay may touch).
   useEffect(() => {
-    if (!open) {
+    const doc = globalThis.document;
+    const root = doc?.documentElement;
+    if (!open || !doc || !root) {
       return undefined;
     }
-    const previous = globalThis.document?.head
+    const previousBarColor = doc.head
       ?.querySelector('meta[name="theme-color"]')
       ?.getAttribute("content");
+    const previousScheme = root.style.colorScheme;
+    const previousRootBackground = root.style.backgroundColor;
+    const previousBodyBackground = doc.body?.style.backgroundColor ?? "";
     setStatusBarColor(BACKDROP_COLOR);
+    root.style.colorScheme = "dark";
+    root.style.backgroundColor = BACKDROP_COLOR;
+    if (doc.body) {
+      doc.body.style.backgroundColor = BACKDROP_COLOR;
+    }
     return () => {
-      if (previous !== null && previous !== undefined) {
-        setStatusBarColor(previous);
+      if (previousBarColor !== null && previousBarColor !== undefined) {
+        setStatusBarColor(previousBarColor);
+      }
+      root.style.colorScheme = previousScheme;
+      root.style.backgroundColor = previousRootBackground;
+      if (doc.body) {
+        doc.body.style.backgroundColor = previousBodyBackground;
       }
     };
   }, [open]);

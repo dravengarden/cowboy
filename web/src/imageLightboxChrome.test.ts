@@ -75,19 +75,43 @@ Deno.test("swapping the layer's layout commits before an animated transform", ()
 });
 
 Deno.test("a fullscreen preview takes the standalone status bar with it", () => {
-  // An iOS standalone PWA paints its status bar from <meta name="theme-color">
-  // and that strip sits above the web view, so the backdrop cannot cover it. A
-  // light app otherwise keeps a bright band over the near-black preview.
+  // The iOS standalone status bar sits above the web view, so the backdrop
+  // cannot cover it and a light app keeps a bright band over the near-black
+  // preview. theme-color alone does not reach it on an iPhone: that strip is
+  // filled from the document background and takes its glyphs from the document
+  // colour scheme, so the overlay writes all three and restores all three.
   assert(detentSheetSource.includes("export function setStatusBarColor"));
   assert(lightboxSource.includes('import { setStatusBarColor } from "./detent-sheet.tsx"'));
   assert(lightboxSource.includes('const BACKDROP_COLOR = "#0b0b0e"'));
   assert(lightboxSource.includes("backgroundColor: BACKDROP_COLOR"));
   const effect = lightboxSource.slice(
-    lightboxSource.indexOf("const previous = globalThis.document?.head"),
+    lightboxSource.indexOf("const previousBarColor = doc.head"),
     lightboxSource.indexOf("// Key shortcuts while open"),
   );
-  assert(effect.includes("setStatusBarColor(BACKDROP_COLOR)"));
-  // Restore on close, and never write a colour we did not read.
-  assert(effect.indexOf("return () => {") < effect.indexOf("setStatusBarColor(previous)"));
-  assertEquals(effect.includes("document.body.style"), false);
+  const teardown = effect.indexOf("return () => {");
+  assert(teardown > 0);
+  for (
+    const [write, restore] of [
+      ["setStatusBarColor(BACKDROP_COLOR)", "setStatusBarColor(previousBarColor)"],
+      ['root.style.colorScheme = "dark"', "root.style.colorScheme = previousScheme"],
+      [
+        "root.style.backgroundColor = BACKDROP_COLOR",
+        "root.style.backgroundColor = previousRootBackground",
+      ],
+      [
+        "doc.body.style.backgroundColor = BACKDROP_COLOR",
+        "doc.body.style.backgroundColor = previousBodyBackground",
+      ],
+    ]
+  ) {
+    assert(effect.includes(write), `${write} is missing`);
+    assert(
+      effect.indexOf(restore) > teardown,
+      `${restore} must run on close`,
+    );
+  }
+  // Still no scroll lock: that mutation perturbs the iOS visual viewport.
+  // (The file header names the property it refuses to write, so match an
+  // assignment rather than the mention.)
+  assertEquals(/style\.overflow\s*=/u.test(lightboxSource), false);
 });
