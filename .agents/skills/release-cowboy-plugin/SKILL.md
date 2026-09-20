@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  thirty-one checks, including live authenticated Code installation into an empty
+  thirty-two checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v11; historical
+  and separately completed retirement. Require receipt schema v12; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -391,6 +391,17 @@ In addition, require all applicable Provider gates below:
   the original total budget. Historical v10 does not accept this extension;
   timer expiry is not proof of remote cancellation or native cleanup. See
   `docs/plugin-continuation-finalization.md`.
+  Machine-owned Workspace root identity additionally requires protocol 22 and
+  v12 check 32: read a separate advertised root, replace that directory with a
+  different object holding the same path and the same bytes, and require the
+  Machine to refuse the next read before touching it, with `410/no-store/no-ETag`
+  and exactly one dispatch. The Controller must then answer from no cache,
+  ETag or continuation for that root, and an explicit inventory refresh must
+  mint a new identity and restore reads. The Session fixture root must be
+  untouched throughout. Historical v11 does not accept this extension; the
+  Controller may never mint, derive or default an incarnation, and a refusal is
+  an ended observation, not a rollback, an undo or proof that an already
+  dispatched read stopped. See `docs/plugin-machine-workspace-identity.md`.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not

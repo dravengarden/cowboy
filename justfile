@@ -100,6 +100,10 @@ review-diff-browser-conformance BROWSER:
 review-destination-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-destination' conformance "{{BROWSER}}"
 
+# Actual Git review recovery after an unavailable Machine; no real account.
+review-recovery-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-recovery' conformance "{{BROWSER}}"
+
 idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts

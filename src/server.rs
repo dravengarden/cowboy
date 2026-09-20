@@ -66,8 +66,6 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
-#[cfg(test)]
-mod bootstrap_validator_tests;
 mod code_buffers;
 mod code_reads;
 #[cfg(unix)]
@@ -11240,14 +11238,20 @@ fn machine_request_id(prefix: &str) -> String {
     )
 }
 
+/// Machine-owned root identities travel with the workspace list they describe.
+/// A component-only refresh preserves both; a workspace observation replaces
+/// both, so an old identity can never outlive the roots it was minted for.
 fn apply_workspace_inventory(
     current: &mut Vec<crate::machine_protocol::MachineWorkspace>,
+    current_identities: &mut Vec<crate::machine_protocol::WorkspaceRootIdentity>,
     current_revision: &mut Option<String>,
     workspaces: Option<Vec<crate::machine_protocol::MachineWorkspace>>,
+    identities: Option<Vec<crate::machine_protocol::WorkspaceRootIdentity>>,
     revision: Option<String>,
 ) {
     if let Some(workspaces) = workspaces {
         *current = workspaces;
+        *current_identities = identities.unwrap_or_default();
         *current_revision = revision;
     }
 }
@@ -13504,6 +13508,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         crate::machine_protocol::MachineEvent::Inventory {
             components: hello.components.clone(),
             workspaces: Some(hello.workspaces.clone()),
+            workspace_identities: Some(hello.workspace_identities.clone()),
             workspace_revision: hello.workspace_revision.clone(),
             observed_at_ms: now_ms(),
         },
@@ -13613,6 +13618,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut runtime_registration_pending = true;
     let mut current_components = hello.components.clone();
     let mut current_workspaces = hello.workspaces.clone();
+    let mut current_workspace_identities = hello.workspace_identities.clone();
     let mut current_workspace_revision = hello.workspace_revision.clone();
     let mut current_providers = hello.plugins.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -13749,6 +13755,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     crate::machine_protocol::MachineEvent::Inventory {
                         components,
                         workspaces,
+                        workspace_identities,
                         workspace_revision,
                         ..
                     },
@@ -13756,8 +13763,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 current_components = components;
                 apply_workspace_inventory(
                     &mut current_workspaces,
+                    &mut current_workspace_identities,
                     &mut current_workspace_revision,
                     workspaces,
+                    workspace_identities,
                     workspace_revision,
                 );
                 state.machine_control.record_remote(
@@ -13765,6 +13774,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     crate::machine_protocol::MachineEvent::Inventory {
                         components: current_components.clone(),
                         workspaces: Some(current_workspaces.clone()),
+                        workspace_identities: Some(current_workspace_identities.clone()),
                         workspace_revision: current_workspace_revision.clone(),
                         observed_at_ms: now_ms(),
                     },
@@ -15290,20 +15300,50 @@ mod machine_provider_tests {
             display_name: id.to_owned(),
             canonical_path: format!("/srv/{id}"),
         };
+        let identity = |id: &str| crate::machine_protocol::WorkspaceRootIdentity {
+            workspace_id: id.to_owned(),
+            incarnation: format!("incarnation-{id}"),
+        };
         let mut workspaces = vec![workspace("old")];
+        let mut identities = vec![identity("old")];
         let mut revision = Some("revision-old".to_owned());
-        apply_workspace_inventory(&mut workspaces, &mut revision, None, None);
+        apply_workspace_inventory(
+            &mut workspaces,
+            &mut identities,
+            &mut revision,
+            None,
+            None,
+            None,
+        );
         assert_eq!(workspaces, vec![workspace("old")]);
+        assert_eq!(identities, vec![identity("old")]);
         assert_eq!(revision.as_deref(), Some("revision-old"));
 
         apply_workspace_inventory(
             &mut workspaces,
+            &mut identities,
             &mut revision,
             Some(vec![workspace("new")]),
+            Some(vec![identity("new")]),
             Some("revision-new".to_owned()),
         );
         assert_eq!(workspaces, vec![workspace("new")]);
+        assert_eq!(identities, vec![identity("new")]);
         assert_eq!(revision.as_deref(), Some("revision-new"));
+
+        // An older Machine's workspace observation drops stale identities
+        // rather than letting them outlive the roots they described.
+        apply_workspace_inventory(
+            &mut workspaces,
+            &mut identities,
+            &mut revision,
+            Some(vec![workspace("legacy")]),
+            None,
+            None,
+        );
+        assert_eq!(workspaces, vec![workspace("legacy")]);
+        assert!(identities.is_empty());
+        assert!(revision.is_none());
     }
 }
 
@@ -16961,69 +17001,18 @@ struct SessionBootstrapResponse {
 /// path deliberately carries global metadata only; replaying every transcript,
 /// config option and queue state made mobile reconnects multi-megabyte
 /// affairs. Live events can overlap this response and are deduplicated by seq.
-///
-/// The body is validated by a digest of itself, so reopening a session whose
-/// tail has not moved costs one conditional request instead of resending up
-/// to `SNAPSHOT_MAX_BYTES` (docs/offline-first-sync.md §Boot presentation).
-/// A digest, not a cursor: transcript rows are coalesced in place under an
-/// existing seq (`EventReducer::reduce`), so "everything after seq N" would
-/// silently miss a tool call that completed or a message that grew, while a
-/// digest over the whole tail cannot.
 async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
-    headers: HeaderMap,
 ) -> Response {
     let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
-    let body = SessionBootstrapResponse { messages };
-    let Ok(encoded) = serde_json::to_vec(&body) else {
-        return ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response();
-    };
-    let etag = bootstrap_etag(&encoded);
-    if if_none_match_has(
-        headers
-            .get(header::IF_NONE_MATCH)
-            .and_then(|value| value.to_str().ok()),
-        &etag,
-    ) {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [
-                (header::ETAG, etag.as_str()),
-                (header::CACHE_CONTROL, "no-store"),
-            ],
-        )
-            .into_response();
-    }
     (
-        [
-            (header::ETAG, etag.as_str()),
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        Json(body),
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(SessionBootstrapResponse { messages }),
     )
         .into_response()
-}
-
-/// Validate the bootstrap body by a digest of itself. `bootstrap-v1` guards
-/// the response shape: a deploy that grows it must not let an installed client
-/// keep revalidating into an older body.
-fn bootstrap_etag(encoded: &[u8]) -> String {
-    format!("\"bootstrap-v1-{}\"", crate::admin::hex_sha256(encoded))
-}
-
-/// Exact token match, not a substring search, and deliberately not `*`: this
-/// representation is private to one reader, so a wildcard revalidation would
-/// answer 304 for a body the caller has never seen.
-fn if_none_match_has(header: Option<&str>, etag: &str) -> bool {
-    header.is_some_and(|value| {
-        value
-            .split(',')
-            .map(|candidate| candidate.trim().trim_start_matches("W/"))
-            .any(|candidate| candidate == etag)
-    })
 }
 
 fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound>> {

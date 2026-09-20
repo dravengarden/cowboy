@@ -11,7 +11,7 @@ if (
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
   suite !== "review-document-refresh" && suite !== "review-diff" &&
-  suite !== "review-destination"
+  suite !== "review-destination" && suite !== "review-recovery"
 ) {
   throw new Error("unknown suite");
 }
@@ -30,7 +30,8 @@ await build({
         suite === "code-buffers" || suite === "code-buffer-context" ||
         suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
         suite === "review-code" || suite === "review-document-refresh" ||
-        suite === "review-diff" || suite === "review-destination"
+        suite === "review-diff" || suite === "review-destination" ||
+        suite === "review-recovery"
         ? "development"
         : "production",
     ),
@@ -66,7 +67,7 @@ await build({
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
     ...(suite === "review-diff" || suite === "review-document-refresh" ||
-        suite === "review-destination"
+        suite === "review-destination" || suite === "review-recovery"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
@@ -95,6 +96,8 @@ await build({
           ? "../web/src/reviewDiffBrowserConformance.tsx"
           : suite === "review-destination"
           ? "../web/src/reviewDestinationBrowserConformance.tsx"
+          : suite === "review-recovery"
+          ? "../web/src/reviewRecoveryBrowserConformance.tsx"
           : suite === "idb-outbox"
           ? "../web/src/idbOutboxBrowserConformance.ts"
           : "../web/src/idbBrowserConformance.ts",

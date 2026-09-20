@@ -14,6 +14,10 @@
 
 export const BOOT_SNAPSHOT_CACHE = "cowboy-boot-snapshot-v1";
 export const BOOT_SNAPSHOT_URL = "/__boot/snapshot.json";
+/** What the document can learn about the saved screen SYNCHRONOUSLY, before
+ *  Cache Storage answers: enough to decide whether one is coming, so the
+ *  skeleton is not painted only to be replaced a moment later. */
+export const BOOT_SNAPSHOT_HINT_KEY = "cowboy:boot-snapshot";
 export const BOOT_THEME_KEY = "cowboy:boot-theme";
 export const BOOT_SURFACE_KEY = "cowboy:boot-surface";
 /** Parsing a snapshot larger than this costs more than the wait it saves. */
@@ -334,6 +338,12 @@ export async function captureBootSnapshot(context: BootSnapshotContext): Promise
       BOOT_SNAPSHOT_URL,
       new Response(JSON.stringify(snapshot), { headers: { "content-type": "application/json" } }),
     );
+    try {
+      const { css: _css, fontCss: _fontCss, html: _html, ...hint } = snapshot;
+      globalThis.localStorage?.setItem(BOOT_SNAPSHOT_HINT_KEY, JSON.stringify(hint));
+    } catch {
+      // Without the hint the next open simply shows the skeleton first.
+    }
     return true;
   } catch {
     return false;
@@ -343,6 +353,7 @@ export async function captureBootSnapshot(context: BootSnapshotContext): Promise
 /** Forget the saved screen: sign-out, a login answer, another account. */
 export function clearBootSnapshot(): void {
   try {
+    globalThis.localStorage?.removeItem(BOOT_SNAPSHOT_HINT_KEY);
     if (typeof caches !== "undefined") {
       void caches.delete(BOOT_SNAPSHOT_CACHE).catch(() => undefined);
     }
@@ -389,34 +400,34 @@ export function rememberBootTheme(
   }
 }
 
-const IDLE_CAPTURE_MS = 30_000;
+/** Backstop for a screen that changes without the app noticing. */
+const PERIODIC_CAPTURE_MS = 60_000;
 
-/** Capture when the app is left — the true "last screen" — and at idle moments
- * in between, so a PWA killed in the background still reopens on a recent one. */
+/** Keep the saved screen current WHILE THE APP IS ALIVE.
+ *
+ * The obvious trigger — save the screen as the user leaves — does not work:
+ * writing to Cache Storage is asynchronous and a document being discarded
+ * does not stay alive to finish it, so the write is simply lost. `pagehide`
+ * and a backgrounding `visibilitychange` are therefore best-effort extras.
+ * What the next open actually depends on is the capture that already
+ * happened, a few seconds after the screen last settled. */
 export function installBootSnapshot(context: () => BootSnapshotContext | null): () => void {
-  const capture = (periodic: boolean): void => {
+  const capture = (): void => {
     const current = context();
-    if (current === null || (periodic && current.busy)) return;
-    void captureBootSnapshot(current);
+    if (current !== null && !current.busy) void captureBootSnapshot(current);
   };
   const onHidden = (): void => {
-    if (document.visibilityState === "hidden") capture(false);
+    if (document.visibilityState === "hidden") capture();
   };
-  const onLeave = (): void => capture(false);
-  const onIdle = (): void => {
-    if (document.visibilityState !== "visible") return;
-    const schedule = (globalThis as {
-      requestIdleCallback?: (run: () => void, opts?: { timeout: number }) => number;
-    }).requestIdleCallback;
-    if (schedule) schedule(() => capture(true), { timeout: 2_000 });
-    else setTimeout(() => capture(true), 0);
+  const onPeriodic = (): void => {
+    if (document.visibilityState === "visible") capture();
   };
   document.addEventListener("visibilitychange", onHidden);
-  globalThis.addEventListener("pagehide", onLeave);
-  const timer = setInterval(onIdle, IDLE_CAPTURE_MS);
+  globalThis.addEventListener("pagehide", capture);
+  const timer = setInterval(onPeriodic, PERIODIC_CAPTURE_MS);
   return () => {
     document.removeEventListener("visibilitychange", onHidden);
-    globalThis.removeEventListener("pagehide", onLeave);
+    globalThis.removeEventListener("pagehide", capture);
     clearInterval(timer);
   };
 }

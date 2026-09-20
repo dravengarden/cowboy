@@ -280,10 +280,12 @@ async fn manifest_readiness_uses_the_original_session_route_without_renewal() {
             request_id,
             adapter,
             payload,
+            workspace_incarnation,
         } = command
         else {
             panic!("wrong command")
         };
+        assert!(workspace_incarnation.is_none());
         assert_eq!(adapter, "zed");
         assert_eq!(
             payload,
@@ -295,6 +297,7 @@ async fn manifest_readiness_uses_the_original_session_route_without_renewal() {
                 request_id,
                 accepted: true,
                 detail: None,
+                refusal: None,
                 payload: Some(
                     serde_json::json!({"type":"worktree", "api_version":1, "state":"ready"}),
                 ),

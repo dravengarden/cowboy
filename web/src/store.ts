@@ -325,16 +325,6 @@ interface SessionHydration {
   controller: AbortController;
 }
 const sessionHydrations = new Map<string, SessionHydration>();
-// The `ETag` of the bootstrap response each hydrated timeline was reconciled
-// against. Replaying it turns reopening an unchanged session into a 304
-// instead of another tail download (docs/offline-first-sync.md §Reopening a
-// session). Dropped wherever the timeline it describes is dropped.
-const sessionBootstrapEtags = new Map<string, string>();
-/** Opening a session waits for its cached tail before revalidating, because
- *  that record carries the validator. The wait is the local read itself — the
- *  same read that paints the transcript, so nothing visible is behind it —
- *  and this is only the ceiling for a database that never answers. */
-const REPLICA_HEAD_START_MS = 2_000;
 const sessionHydrationRetryTimers = new Map<
   string,
   ReturnType<typeof setTimeout>
@@ -376,7 +366,6 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
     if (retry !== undefined) clearTimeout(retry);
     sessionHydrationRetryTimers.delete(sessionId);
     completeQuestionPages.delete(sessionId);
-    sessionBootstrapEtags.delete(sessionId);
     transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   }
 
@@ -1826,38 +1815,14 @@ async function hydrateSession(
   const promise = (async (): Promise<void> => {
     let retryableFailure = false;
     try {
-      // Only revalidate a timeline that is actually mounted from that exact
-      // response: a 304 carries no events, so there must be nothing to apply.
-      const known = state.hydrated.has(sessionId)
-        ? sessionBootstrapEtags.get(sessionId)
-        : undefined;
       const response = await fetch(
         `/api/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
-        {
-          cache: "no-store",
-          signal: controller.signal,
-          ...(known !== undefined ? { headers: { "if-none-match": known } } : {}),
-        },
+        { cache: "no-store", signal: controller.signal },
       );
-      if (response.status === 304) {
-        // The tail this device already shows is the tail Cowboy would have
-        // sent. Nothing to merge, and the reading is confirmed current.
-        confirmTranscriptFresh(sessionId);
-        // Same bookkeeping as a 200: a session created here can still be
-        // waiting for its source even though its transcript is up to date.
-        retryableFailure = needsDraftSource(sessionId);
-        return;
-      }
       if (!response.ok) {
         throw new Error(`session bootstrap failed: ${String(response.status)}`);
       }
-      const etag = response.headers.get("etag");
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
-      // Before the messages are applied, not after: a snapshot is a checkpoint
-      // and writes the cached tail synchronously, and that record is where the
-      // validator has to survive a reload.
-      if (etag !== null) sessionBootstrapEtags.set(sessionId, etag);
-      else sessionBootstrapEtags.delete(sessionId);
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
         configOptionsRevisionAtRequestStart,
         configOptionsRevisions.get(sessionId) ?? 0,
@@ -1869,7 +1834,6 @@ async function hydrateSession(
         handle(message);
       }
       if (!state.hydrated.has(sessionId)) {
-        sessionBootstrapEtags.delete(sessionId);
         throw new Error("session bootstrap contained no transcript snapshot");
       }
       // HTTP 200 is not a source acknowledgement: creation can still be racing,
@@ -2517,14 +2481,11 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     source: "replica",
     syncedAt: tail.receivedAt,
   });
-  // Carried back so the first bootstrap after a reload can be conditional.
-  if (tail.etag !== undefined) sessionBootstrapEtags.set(sessionId, tail.etag);
   setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
 }
 
 function discardReplicaTimeline(sessionId: string): void {
   transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
-  sessionBootstrapEtags.delete(sessionId);
   completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);
   timelines.delete(sessionId);
@@ -2535,17 +2496,6 @@ function discardReplicaTimeline(sessionId: string): void {
   const transcriptSources = new Map(state.transcriptSources);
   transcriptSources.delete(sessionId);
   setState({ ...state, timelines, hydrated, pagination, transcriptSources });
-}
-
-/** A conditional bootstrap answered 304: what is on screen is exactly what
- *  Cowboy holds, so it reads as live rather than as a cached copy, and the
- *  stored tail's freshness stamp moves with it. */
-function confirmTranscriptFresh(sessionId: string): void {
-  const transcriptSources = markTranscriptLive(state.transcriptSources, sessionId);
-  if (transcriptSources !== state.transcriptSources) {
-    setState({ ...state, transcriptSources });
-  }
-  scheduleReplicaTail(sessionId, false);
 }
 
 function markTranscriptLive(
@@ -2563,7 +2513,6 @@ function buildReplicaTail(sessionId: string): ReplicaTail | null {
   ) return null;
   const timeline = state.timelines.get(sessionId);
   if (timeline === undefined) return null;
-  const etag = sessionBootstrapEtags.get(sessionId);
   const events = trimReplicaTail(timeline);
   const pagination = state.pagination.get(sessionId);
   const configOptions = state.configOptions.get(sessionId);
@@ -2573,7 +2522,6 @@ function buildReplicaTail(sessionId: string): ReplicaTail | null {
     reachedStart: pagination?.reachedStart === true && events.length === timeline.length,
     events,
     ...(configOptions !== undefined ? { configOptions } : {}),
-    ...(etag !== undefined ? { etag } : {}),
   };
 }
 
@@ -4136,18 +4084,8 @@ export function openSession(id: string): void {
   prefetch.cancel(id);
   touchTranscriptSession(id);
   send({ type: "open_session", session_id: id });
-  // The cached tail carries the validator that makes the bootstrap
-  // conditional, so the reconciling fetch follows the local read rather than
-  // racing it. The transcript itself paints from that same read, so this
-  // delays no pixel; the ceiling only exists so a wedged database cannot
-  // withhold the network the way boot used to.
-  const restored = restoreReplicaTail(id);
-  const ceiling = new Promise<void>((resolve) =>
-    setTimeout(resolve, REPLICA_HEAD_START_MS)
-  );
-  void Promise.race([restored, ceiling])
-    .then(() => hydrateSession(id))
-    .then(schedulePrefetch);
+  void restoreReplicaTail(id);
+  void hydrateSession(id).then(schedulePrefetch);
 }
 
 // Mark a session hydrated WITHOUT waiting for a server snapshot — called the

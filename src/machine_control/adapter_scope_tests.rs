@@ -60,6 +60,7 @@ async fn cancelled_bound_adapter_wait_removes_only_its_own_correlation() {
                 accepted: true,
                 payload: Some(payload.clone()),
                 detail: None,
+                refusal: None,
             },
         );
     }
@@ -110,6 +111,7 @@ async fn disconnect_after_completion_still_rejects_the_parked_reply() {
             accepted: true,
             payload: Some(serde_json::json!({"type":"health"})),
             detail: None,
+            refusal: None,
         },
     );
     control.remove_if_current(&connection);

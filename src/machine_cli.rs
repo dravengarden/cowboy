@@ -30,6 +30,7 @@ mod installation;
 pub(crate) mod telemetry_binding;
 pub(crate) mod telemetry_export;
 pub(crate) mod telemetry_recovery;
+mod workspace_identity;
 
 #[cfg(test)]
 mod preflight_tests;
@@ -67,6 +68,9 @@ struct ControllerConfig {
 }
 
 const DEFAULT_WORKSPACE_CONFIG: &str = "/etc/cowboy-machine/workspaces.json";
+/// The Machine's workspace *configuration*. Root identities deliberately stay
+/// out of it: subscribers restart the Code adapter whenever this changes, and
+/// replacing a root's object changes no trusted path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceSnapshot {
     revision: Option<String>,
@@ -84,6 +88,7 @@ struct WorkspaceFile {
 struct WorkspaceConfig {
     path: PathBuf,
     fallback: Vec<String>,
+    identities: workspace_identity::SharedRootIdentities,
     updates: tokio::sync::watch::Sender<WorkspaceSnapshot>,
 }
 
@@ -94,8 +99,26 @@ impl WorkspaceConfig {
         Ok(Self {
             path,
             fallback,
+            identities: workspace_identity::SharedRootIdentities::default(),
             updates,
         })
+    }
+
+    /// The adapter path verifies against the same registry that minted the
+    /// advertised values; it never receives a copy it could reinterpret.
+    fn identities(&self) -> workspace_identity::SharedRootIdentities {
+        Arc::clone(&self.identities)
+    }
+
+    /// Re-observe the roots about to be advertised. Identities are refreshed
+    /// exactly when the Machine publishes them, never as a side effect of
+    /// reading configuration, so a replaced root cannot recycle the Code
+    /// adapter or any other workspace-configuration subscriber.
+    fn observe_roots(
+        &self,
+        workspaces: &[MachineWorkspace],
+    ) -> Vec<crate::machine_protocol::WorkspaceRootIdentity> {
+        self.identities.lock().observe_roots(workspaces)
     }
 
     fn snapshot(&self) -> WorkspaceSnapshot {
@@ -919,6 +942,9 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
             crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
         )),
+        workspace_identities: config
+            .workspaces
+            .observe_roots(&workspace_snapshot.workspaces),
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),
@@ -1795,6 +1821,7 @@ fn handle_machine_command(
                     accepted: result.is_ok(),
                     payload: result.ok(),
                     detail: None,
+                    refusal: None,
                 });
             });
         }
@@ -1817,6 +1844,7 @@ fn handle_machine_command(
                     accepted: result.is_ok(),
                     payload: result.ok(),
                     detail: None,
+                    refusal: None,
                 });
             });
         }
@@ -1927,6 +1955,7 @@ fn handle_machine_command(
                 if let Ok(snapshot) = &workspace_result {
                     let _ = events.send(MachineEvent::Inventory {
                         components,
+                        workspace_identities: Some(workspaces.observe_roots(&snapshot.workspaces)),
                         workspaces: Some(snapshot.workspaces.clone()),
                         workspace_revision: snapshot.revision.clone(),
                         observed_at_ms: unix_ms(),
@@ -2155,6 +2184,7 @@ fn handle_machine_command(
             request_id,
             adapter,
             payload,
+            workspace_incarnation,
         } => {
             tokio::spawn(run_adapter_request(
                 request_id,
@@ -2166,6 +2196,10 @@ fn handle_machine_command(
                     code_adapter_socket,
                     worktree_root,
                     workspaces: workspaces.snapshot().workspaces,
+                    // The live registry, not the advertised snapshot: the root
+                    // may have been replaced since the last advertisement.
+                    root_identities: workspaces.identities(),
+                    workspace_incarnation,
                     events,
                 },
             ));
@@ -2288,6 +2322,7 @@ fn handle_machine_command(
                 let _ = events.send(MachineEvent::Inventory {
                     components: inventory,
                     workspaces: None,
+                    workspace_identities: None,
                     workspace_revision: None,
                     observed_at_ms: unix_ms(),
                 });
@@ -2333,6 +2368,8 @@ struct AdapterRequestContext {
     code_adapter_socket: Option<PathBuf>,
     worktree_root: PathBuf,
     workspaces: Vec<MachineWorkspace>,
+    root_identities: workspace_identity::SharedRootIdentities,
+    workspace_incarnation: Option<String>,
     events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
 }
 
@@ -2355,8 +2392,37 @@ async fn run_adapter_request(
         code_adapter_socket,
         worktree_root,
         workspaces,
+        root_identities,
+        workspace_incarnation,
         events,
     } = context;
+    // A carried root identity is checked first, before decoding, path admission
+    // or any read. Refusal here touches no file and cancels no request the Code
+    // adapter has already started. Only an ended observation is typed as such.
+    if let Some(incarnation) = &workspace_incarnation
+        && let Err(refusal) =
+            verify_workspace_incarnation(&adapter, &payload, &root_identities, incarnation)
+    {
+        // Operators need to see which advertised root ended an observation;
+        // the response itself carries only a closed reason.
+        tracing::warn!(
+            adapter = adapter,
+            root = payload.get("root").and_then(serde_json::Value::as_str),
+            changed = refusal.is_changed(),
+            "refused a Code read: {}",
+            refusal.detail()
+        );
+        let _ = events.send(MachineEvent::AdapterResponse {
+            request_id,
+            accepted: false,
+            payload: None,
+            detail: Some(refusal.detail().to_owned()),
+            refusal: refusal
+                .is_changed()
+                .then_some(crate::machine_protocol::AdapterRefusal::WorkspaceRootIdentityChanged),
+        });
+        return;
+    }
     let result = async {
         if adapter == "provider-cache-status" {
             let request: ProviderCacheStatusRequest = serde_json::from_value(payload)
@@ -2431,12 +2497,16 @@ async fn run_adapter_request(
             accepted: true,
             payload: Some(payload),
             detail: None,
+            refusal: None,
         },
         Err(error) => MachineEvent::AdapterResponse {
             request_id,
             accepted: false,
             payload: None,
             detail: Some(format!("{error:#}")),
+            // Ordinary read failures are diagnostics, never evidence that a
+            // Controller observation ended.
+            refusal: None,
         },
     };
     let _ = events.send(event);
@@ -2456,6 +2526,30 @@ fn validate_session_workspace_root(
         bail!("session workspace is not an advertised Machine root");
     }
     Ok(())
+}
+
+/// Only the closed core Code reader carries a root identity, and only for its
+/// own declared root. Any other adapter, a missing root or a structurally
+/// invalid value is refused rather than silently read without the fence.
+fn verify_workspace_incarnation(
+    adapter: &str,
+    payload: &serde_json::Value,
+    identities: &workspace_identity::SharedRootIdentities,
+    incarnation: &str,
+) -> Result<(), workspace_identity::RootIdentityRefusal> {
+    use workspace_identity::RootIdentityRefusal::Unusable;
+    if adapter != "code" {
+        return Err(Unusable(
+            "workspace root identity is only carried by core Code reads",
+        ));
+    }
+    if incarnation.len() > crate::machine_protocol::MAX_WORKSPACE_INCARNATION_BYTES {
+        return Err(Unusable("workspace root identity is malformed"));
+    }
+    let Some(root) = payload.get("root").and_then(serde_json::Value::as_str) else {
+        return Err(Unusable("Code request has no root"));
+    };
+    identities.lock().verify(root, incarnation)
 }
 
 fn validate_adapter_workspace(
@@ -2503,6 +2597,7 @@ async fn reconcile_components(
         MachineEvent::Inventory {
             components: inventory,
             workspaces: None,
+            workspace_identities: None,
             workspace_revision: None,
             observed_at_ms: unix_ms(),
         },
@@ -2915,6 +3010,7 @@ async fn run_login(
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
             workspaces: None,
+            workspace_identities: None,
             workspace_revision: None,
             observed_at_ms: unix_ms(),
         });
@@ -2998,6 +3094,7 @@ async fn run_secret_input_login(
         let _ = events.send(MachineEvent::Inventory {
             components: inventory,
             workspaces: None,
+            workspace_identities: None,
             workspace_revision: None,
             observed_at_ms: unix_ms(),
         });
@@ -3982,5 +4079,93 @@ mod tests {
                 PathBuf::from("/work/project")
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod workspace_identity_tests {
+    use super::{WorkspaceConfig, workspace_identity};
+
+    /// Every workspace-configuration subscriber restarts the Code adapter, so
+    /// a replaced root object must not look like a configuration change. It
+    /// changes no trusted path, and the adapter resolves each request's root
+    /// from scratch. Fails if root identities rejoin the watched snapshot.
+    #[test]
+    fn replacing_a_root_object_is_not_a_workspace_configuration_change() {
+        let parent = tempfile::tempdir().expect("temp");
+        let root = parent.path().join("root");
+        std::fs::create_dir(&root).expect("create");
+        let config = WorkspaceConfig::new(
+            parent.path().join("absent-configuration.json"),
+            vec![format!("main={}", root.display())],
+        )
+        .expect("configuration");
+        let updates = config.subscribe();
+        let snapshot = config.reload().expect("reload");
+        let first = config.observe_roots(&snapshot.workspaces);
+        assert_eq!(first.len(), 1);
+        assert!(!updates.has_changed().expect("channel"));
+
+        std::fs::remove_dir_all(&root).expect("remove");
+        std::fs::create_dir(&root).expect("recreate");
+        let snapshot = config.reload().expect("reload");
+        let second = config.observe_roots(&snapshot.workspaces);
+        assert_ne!(second[0].incarnation, first[0].incarnation);
+        assert!(
+            !updates.has_changed().expect("channel"),
+            "a replaced root object must not recycle the Code adapter"
+        );
+
+        // A genuine configuration change still notifies subscribers.
+        let other = parent.path().join("other");
+        std::fs::create_dir(&other).expect("create");
+        let file = parent.path().join("workspaces.json");
+        let document = |roots: &str, revision: &str| {
+            format!(r#"{{"version":1,"revision":"{revision}","workspaces":[{roots}]}}"#)
+        };
+        std::fs::write(
+            &file,
+            document(&format!("\"main={}\"", root.display()), "one"),
+        )
+        .expect("write");
+        let changed = WorkspaceConfig::new(file.clone(), Vec::new()).expect("configuration");
+        let changed_updates = changed.subscribe();
+        changed.reload().expect("reload");
+        assert!(!changed_updates.has_changed().expect("channel"));
+        std::fs::write(
+            &file,
+            document(
+                &format!("\"main={}\",\"other={}\"", root.display(), other.display()),
+                "two",
+            ),
+        )
+        .expect("write");
+        changed.reload().expect("reload");
+        assert!(changed_updates.has_changed().expect("channel"));
+    }
+
+    /// The advertisement path and the adapter path share one registry, so an
+    /// advertised identity is immediately enforceable and nothing else is.
+    #[test]
+    fn advertised_identities_come_from_the_registry_the_adapter_checks() {
+        let parent = tempfile::tempdir().expect("temp");
+        let root = parent.path().join("root");
+        std::fs::create_dir(&root).expect("create");
+        let config = WorkspaceConfig::new(
+            parent.path().join("absent-configuration.json"),
+            vec![format!("main={}", root.display())],
+        )
+        .expect("configuration");
+        let snapshot = config.reload().expect("reload");
+        let advertised = config.observe_roots(&snapshot.workspaces);
+        let shared: workspace_identity::SharedRootIdentities = config.identities();
+        let canonical = &snapshot.workspaces[0].canonical_path;
+        assert!(
+            shared
+                .lock()
+                .verify(canonical, &advertised[0].incarnation)
+                .is_ok()
+        );
+        assert!(shared.lock().verify(canonical, "other-value").is_err());
     }
 }

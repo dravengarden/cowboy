@@ -146,6 +146,7 @@ pub(super) async fn seed(
     machine.enable_installation_tracking().await?;
     let password = super::super::super::connected::seed_operator(root, &machine).await?;
     private_write(&root.join("workspace/fixture.txt"), TEXT.as_bytes())?;
+    root_identity::seed(root)?;
     navigation::seed(root)?;
     budget::seed(root)?;
     // Both source files belong to the initial native worktree scan.

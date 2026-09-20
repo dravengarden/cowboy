@@ -44,6 +44,7 @@ import {
   directoryTreeSessionPrefix,
 } from "./directoryTreeModel";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
+import { useReviewRecovery } from "./useReviewRecovery";
 
 type DirectoryPage = CodeTreePage & { cachedAt: number };
 
@@ -256,6 +257,8 @@ export function ReviewFileTree({
   const prefetchGeneration = useRef(0);
   const treeScrollerRef = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+  const reload = useRef<() => void>(() => {});
+  const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
   const cacheScope = sessionId ? directoryTreeCacheScope(sessionId, cwd) : "";
 
   const resetPrefetch = useCallback((): void => {
@@ -360,6 +363,7 @@ export function ReviewFileTree({
       }
       setRevision((current) => current + 1);
     }
+    cancelRetry();
     setLoading(!cached);
     setError(false);
     controllerRef.current?.abort();
@@ -370,6 +374,7 @@ export function ReviewFileTree({
         ...(await fetchCodeTree(sessionId, "", controller.signal, true)),
         cachedAt: Date.now(),
       };
+      settleRetry();
       putDirectoryPage(key, page);
       setRoot(page);
       prefetchChildDirectories(page);
@@ -379,6 +384,7 @@ export function ReviewFileTree({
         !(error instanceof DOMException && error.name === "AbortError")
       ) {
         setError(true);
+        armRetry(error);
       }
     } finally {
       if (controllerRef.current === controller) {
@@ -386,7 +392,21 @@ export function ReviewFileTree({
         setLoading(false);
       }
     }
-  }, [cacheScope, prefetchChildDirectories, resetPrefetch, sessionId]);
+  }, [
+    armRetry,
+    cacheScope,
+    cancelRetry,
+    prefetchChildDirectories,
+    resetPrefetch,
+    sessionId,
+    settleRetry,
+  ]);
+
+  useEffect(() => {
+    reload.current = (): void => {
+      void load();
+    };
+  }, [load]);
 
   const reconcileFailedDirectory = useCallback(async (
     path: string,

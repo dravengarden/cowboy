@@ -19,7 +19,7 @@ pub mod telemetry_export;
 pub mod telemetry_recovery;
 pub mod telemetry_recovery_audit;
 
-pub const MACHINE_PROTOCOL_VERSION: u16 = 21;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 22;
 pub const MIN_MACHINE_PROTOCOL_VERSION: u16 = 1;
 pub const PLUGIN_HOST_EXECUTION_PROTOCOL_VERSION: u16 = 7;
 pub const TELEMETRY_PLUGIN_PROTOCOL_VERSION: u16 = 8;
@@ -48,6 +48,10 @@ pub const PLUGIN_INSTALL_ATTEMPT_PROTOCOL_VERSION: u16 = 19;
 pub const CODE_BUFFER_SYNC_PROTOCOL_VERSION: u16 = 20;
 /// Separate original-generation navigation acquisition, never generic forwarding.
 pub const CODE_BUFFER_NAVIGATION_PROTOCOL_VERSION: u16 = 21;
+/// The Machine mints and enforces a continuous identity for every advertised
+/// workspace root. Negotiation carries an opaque observation, never a grant,
+/// a filesystem proof the Controller can derive, or read authority.
+pub const CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION: u16 = 22;
 /// Upper bound for the Machine's exponential retry delay when reconnecting to
 /// the Controller. Controller startup reconciliation must cover this delay
 /// before deciding that a detached worker did not survive a deployment.
@@ -197,6 +201,9 @@ pub struct MachineHello {
     /// arbitrary controller-side path to a remote host.
     #[serde(default)]
     pub workspaces: Vec<MachineWorkspace>,
+    /// Machine-owned identity of the object behind each advertised root.
+    #[serde(default)]
+    pub workspace_identities: Vec<WorkspaceRootIdentity>,
     /// Immutable host-configuration revision that produced `workspaces`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_revision: Option<String>,
@@ -262,6 +269,46 @@ pub struct MachineWorkspace {
     pub id: String,
     pub display_name: String,
     pub canonical_path: String,
+}
+
+/// One Machine-minted observation of the object behind an advertised root.
+/// `incarnation` is opaque: the Controller stores and echoes it, and cannot
+/// derive, renew or compare it by any path, device, inode or revision value.
+/// It stays out of `MachineWorkspace` so it never reaches the product machine
+/// projection or the durable inventory document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRootIdentity {
+    pub workspace_id: String,
+    pub incarnation: String,
+}
+
+/// Bounds for one advertised incarnation. Longer or structurally ambiguous
+/// values are refused rather than truncated into a colliding identity.
+pub const MAX_WORKSPACE_INCARNATION_BYTES: usize = 128;
+
+/// Closed set of Machine-owned adapter refusals that the Controller is allowed
+/// to act on. This reports an observation the Machine already made; it is not
+/// an instruction, an effect, a retry hint or a recovery signal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdapterRefusal {
+    /// The advertised root no longer holds the object that minted the carried
+    /// incarnation. Nothing was read, so nothing needs to be reversed.
+    WorkspaceRootIdentityChanged,
+}
+
+impl WorkspaceRootIdentity {
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        !self.workspace_id.is_empty()
+            && self.workspace_id.len() <= 256
+            && !self.incarnation.is_empty()
+            && self.incarnation.len() <= MAX_WORKSPACE_INCARNATION_BYTES
+            && self
+                .incarnation
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }
 }
 
 /// Controller-derived Machine health. Clients render this projection instead
@@ -830,6 +877,12 @@ pub enum MachineCommand {
         request_id: String,
         adapter: String,
         payload: serde_json::Value,
+        /// The exact Machine-minted incarnation this request's Workspace
+        /// observation was resolved against. The Machine re-resolves its own
+        /// root and refuses before reading when that object no longer matches.
+        /// The Controller never mints, derives or defaults this value.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_incarnation: Option<String>,
     },
     CodeBufferSync {
         request_id: String,
@@ -865,6 +918,12 @@ impl MachineCommand {
     #[must_use]
     pub const fn minimum_protocol(&self) -> u16 {
         match self {
+            // Only a carried root identity needs the newer Machine. Ordinary
+            // adapter traffic keeps its original floor below.
+            Self::AdapterRequest {
+                workspace_incarnation: Some(_),
+                ..
+            } => CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION,
             Self::CodeBufferNavigation { .. } => CODE_BUFFER_NAVIGATION_PROTOCOL_VERSION,
             Self::CodeBufferSync { .. } => CODE_BUFFER_SYNC_PROTOCOL_VERSION,
             Self::QueryTelemetryRecoveryAudit { .. } => TELEMETRY_RECOVERY_AUDIT_PROTOCOL_VERSION,
@@ -1057,6 +1116,10 @@ pub enum MachineEvent {
         /// refreshes must preserve the controller's current workspace set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspaces: Option<Vec<MachineWorkspace>>,
+        /// Machine-owned identities for the roots in the same observation.
+        /// Absent on older Machines; present entries are matched by id only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_identities: Option<Vec<WorkspaceRootIdentity>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         workspace_revision: Option<String>,
         observed_at_ms: i64,
@@ -1195,6 +1258,11 @@ pub enum MachineEvent {
         payload: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
+        /// A closed, machine-readable reason the Machine refused before doing
+        /// any work. Free-text `detail` stays a diagnostic; only this typed
+        /// value may change Controller state.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refusal: Option<AdapterRefusal>,
     },
     ProviderUsageBatch {
         producer_id: String,
@@ -1488,6 +1556,7 @@ mod tests {
             provider_contracts: None,
             plugin_contracts: None,
             workspaces: Vec::new(),
+            workspace_identities: Vec::new(),
             workspace_revision: None,
             capacity: MachineCapacity::default(),
         };
@@ -1640,6 +1709,7 @@ mod tests {
                 provider_contracts: None,
                 plugin_contracts: None,
                 workspaces: Vec::new(),
+                workspace_identities: Vec::new(),
                 workspace_revision: None,
                 capacity: MachineCapacity::default(),
             },

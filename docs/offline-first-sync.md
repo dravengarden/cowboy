@@ -3,9 +3,7 @@
 Status: design 2026-09-18; the boot path became network-independent on
 2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738))
 and now opens on the user's real last screen (see
-[Boot presentation](#boot-presentation-service-worker-cowboy-v1740)) and
-revalidates a session instead of re-downloading it (see
-[Reopening a session](#reopening-a-session-controller-and-web-service-worker-cowboy-v1743));
+[Boot presentation](#boot-presentation-service-worker-cowboy-v1740));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -507,46 +505,6 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 
 ## Implementation status
 
-### Reopening a session (Controller and Web, service worker `cowboy-v1743`)
-
-Opening a session paints from the cached tail with no network, and then
-fetches `GET /api/sessions/<id>/bootstrap` to reconcile. That fetch sent no
-cursor and the response carried no validator, so every open re-downloaded a
-tail already on the device — up to `SNAPSHOT_MAX_BYTES` (128 KiB) of it,
-competing with the socket on exactly the weak connection this design is for.
-
-The response is now validated by a digest of its own body. A reader that still
-holds the timeline a given response produced replays that `ETag` as
-`If-None-Match` and gets `304` with no body.
-
-A digest rather than a `since_seq` cursor, deliberately. Transcript rows are
-coalesced in place under an existing seq (`EventReducer::reduce`): a streamed
-message grows inside its first row, and a tool call is rewritten from
-`pending` through `completed` under the seq it was created at. "Everything
-after seq N" would therefore report nothing new while a tool call the reader
-is watching has finished. `src/server/bootstrap_validator_tests.rs` pins
-exactly that: the last seq does not move, the validator does. A forward cursor
-remains possible later, but it needs a per-row update watermark first, which
-is a durable schema change on the hot write path.
-
-The client only revalidates a timeline that is actually mounted from that
-exact response, because a `304` carries nothing to apply. The validator rides
-in the cached tail (`ReplicaTail.etag`), so it survives a reload, and it is
-dropped wherever the timeline it describes is dropped — eviction, a discarded
-replica, an epoch bump. A `304` also promotes the transcript to `live`: the
-server has just confirmed the reading is current, so the caption says so
-instead of "cached".
-
-The reconciling fetch now follows the local tail read instead of racing it,
-because that record is where the validator lives. Nothing visible waits on
-it — the transcript paints from the same read — and a 2 s ceiling keeps a
-database that never answers from withholding the network.
-
-Verified end to end against a fake Hub in Chrome: a cold device sends no
-validator and gets `200`; reopening sends it and gets `304` with the
-transcript intact; and after the server's tail changes, the same validator
-correctly yields `200` and the new content appears.
-
 ### Boot presentation (service worker `cowboy-v1740`)
 
 Making boot network-independent removed the wait. It did not remove the
@@ -576,27 +534,66 @@ a narrow desktop window is not. Before that key has ever been written the
 shell approximates with `(pointer: fine) and (hover: hover)`, undone by
 `(any-pointer: coarse)`, in that order.
 
-Layer 2 is the SSG-like part. `bootSnapshot.ts` captures when the app is left
-(`visibilitychange` to hidden, `pagehide`) and at idle moments in between, but
-only from a *resting* screen: no sheet, dialog, drawer, keyboard, gesture,
-placeholder or Review page, and not mid-turn for the periodic capture. It
-clones `#root`, drops everything outside the viewport (the overlay cannot
-scroll, and this is what keeps a long transcript small), pins image and media
-boxes, records scroll offsets, strips scripts and event handlers, and
+Layer 2 is the SSG-like part. `bootSnapshot.ts` captures a few seconds after
+the screen settles, re-armed whenever what is on screen changes, and only from
+a *resting* screen: no sheet, dialog, drawer, keyboard, gesture, placeholder,
+Review page or turn in flight.
+
+Saving the screen *as the user leaves* looks like the obvious design and does
+not work. Writing to Cache Storage is asynchronous, and a document being
+discarded does not stay alive to finish it, so the write is simply lost;
+measured, a real navigation away saved nothing while a hand-dispatched
+`pagehide` on a live page saved fine. `pagehide` and a backgrounding
+`visibilitychange` are kept as best-effort extras, with a 60 s backstop, but
+what the next open restores is the capture that already happened while the app
+was alive.
+
+The capture clones `#root`, drops everything outside the viewport (the overlay
+cannot scroll, and this is what keeps a long transcript small), pins image and
+media boxes, records scroll offsets, strips scripts and event handlers, and
 serialises only the CSS rules that can still match. A capture of a real mobile
-session is about 122 KB: 25 KB markup, 84 KB CSS, 13 KB `@font-face`.
+session is about 113 KB: 25 KB markup, 75 KB CSS, 13 KB `@font-face`.
+
+Cache Storage cannot answer inside the first frame, so a document that simply
+painted the skeleton and replaced it a moment later would read as a flash —
+placeholder shapes appearing and then being swapped for content is exactly the
+jank this design exists to remove. Each capture therefore also writes a small
+synchronous hint to `localStorage` (everything but the markup and CSS). The
+document reads it before its first paint and, when it matches this open, holds
+the placeholder shapes back behind `html.boot-restoring` while still painting
+the canvas colour. That hint is judged by the same predicate as the record it stands for
+(`window.__cowboyBootEligible`, defined once). Two copies of the rule drifted
+apart immediately: the hint checked only the viewport and the age, so a
+snapshot belonging to another session held the skeleton back and then released
+it — exactly the flash it exists to prevent. Every path that declines the
+saved screen reveals the skeleton, so no route ends on a bare canvas, and the
+grace timer behind them is a safety net for Cache Storage never answering
+rather than a deadline the parse can lose: a real phone fires a short timer on
+time while the parse runs long, which would show the placeholder and then
+replace it.
+
+The hand-off is a removal, not a cross-fade. The overlay is only let go once
+the app has painted the same screen, and dissolving one copy of that screen
+through another doubles every glyph for a fifth of a second, which reads as a
+flash rather than as a transition.
+
+Measured with a real capture, saved screen mounted by CPU speed:
+
+| CPU | Saved screen on screen | Placeholder shown |
+|---|---|---|
+| full speed | 29 ms | never |
+| 4x slower | 257 ms | never |
+| 10x slower | 500 ms | never |
+| 20x slower | 1043 ms | never |
+
+A snapshot that does not match this open — a different session, say — is
+declined synchronously, so the skeleton paints immediately instead of waiting.
 
 The overlay is a picture, never the app: closed shadow root (no shared ids,
 selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is
-shown only when the user, the viewport, the colour scheme, the session about
-to open and a 7-day age check all agree, and it is sanitized again on mount.
-The viewport check is an 8% tolerance per axis, not an exact match: the copy
-is live DOM and reflows at the current size, so only the pinned boxes and the
-restored scroll offsets carry the capture's geometry. Requiring an exact match
-cost Desktop the feature entirely (any window resize) and lost it in a browser
-tab whenever the URL bar came or went; 8% still rejects a rotation or a halved
-window, and the feed is bottom-anchored under a clipping frame, so a slightly
-short picture loses the top, which is the right end to lose. `signalBootReady()` cross-fades it out two frames after the live
+shown only when every one of the user, the viewport, the colour scheme, the
+session about to open and a 7-day age check agree, and it is sanitized again
+on mount. `signalBootReady()` cross-fades it out two frames after the live
 app has painted the active session; a 4 s safety timeout guarantees a stuck
 app can never hide behind a picture of itself. `clearBootSnapshot()` runs on
 sign-out, a login answer and a changed account.
