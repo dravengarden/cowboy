@@ -932,12 +932,18 @@ fn stable_claude_session_meta(provider_id: &str) -> Option<Meta> {
     // transcript, so those autonomous stretches retain truthful Busy/idle edges.
     // Between those stretches the prompt is idle while the agent still waits on
     // its background work; the task level keeps that wait visible.
+    //
+    // `api_error` is the third execution fact: the SDK answers a 429 by sleeping
+    // until the limit resets and streams nothing for the entire wait, so without
+    // this frame a rate-limited turn is byte-for-byte a wedge. It is the only
+    // place the provider states why it went quiet and when it will try again.
     meta.insert(
         "claudeCode".to_owned(),
         serde_json::json!({
             "emitRawSDKMessages": [
                 {"type": "system", "subtype": "session_state_changed"},
                 {"type": "system", "subtype": "background_tasks_changed"},
+                {"type": "system", "subtype": "api_error"},
             ],
         }),
     );
@@ -1004,15 +1010,16 @@ mod session_conformance_tests;
 #[cfg(test)]
 mod startup_mode_tests {
     use super::{
-        ActivePrompt, ConfigChange, GrokPermissionMode, GrokSessionConfig, GrokSessionInfoRequest,
-        GrokSessionInfoResponse, ResumeMethod, StartupPhase, StartupTimeout,
-        codex_full_access_available, codex_full_access_selected, deepseek_session_environment,
+        ActivePrompt, BackoffVerdict, ConfigChange, GrokPermissionMode, GrokSessionConfig,
+        GrokSessionInfoRequest, GrokSessionInfoResponse, ProviderBackoff, ResumeMethod,
+        StartupPhase, StartupTimeout, backoff_verdict, codex_full_access_available,
+        codex_full_access_selected, current_model_label, deepseek_session_environment,
         grok_cowboy_options, grok_model_request, grok_permission_notification, grok_session_usage,
         is_empty_stream_message_update, is_turn_progress_update, load_session_request,
-        new_session_request, note_tool_liveness, permission_auto_approve_enabled,
-        preferred_allow_option, projected_auth_error, resume_session_request,
-        run_serial_config_queue, select_resume_method, session_config_value,
-        startup_full_access_mode, turn_is_wedged,
+        new_session_request, note_tool_liveness, parse_provider_backoff,
+        permission_auto_approve_enabled, preferred_allow_option, projected_auth_error,
+        resume_session_request, run_serial_config_queue, select_resume_method,
+        session_config_value, startup_full_access_mode, turn_is_wedged,
     };
     use agent_client_protocol::JsonRpcMessage as _;
     use agent_client_protocol::schema::v1::{
@@ -1023,7 +1030,7 @@ mod startup_mode_tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio::sync::{Notify, mpsc};
 
     #[test]
@@ -1098,7 +1105,8 @@ mod startup_mode_tests {
                     request.pointer("/_meta/claudeCode/emitRawSDKMessages"),
                     Some(&serde_json::json!([
                         {"type": "system", "subtype": "session_state_changed"},
-                        {"type": "system", "subtype": "background_tasks_changed"}
+                        {"type": "system", "subtype": "background_tasks_changed"},
+                        {"type": "system", "subtype": "api_error"}
                     ]))
                 );
             }
@@ -1703,6 +1711,85 @@ mod startup_mode_tests {
     }
 
     #[test]
+    fn a_scheduled_retry_is_not_a_wedge_until_it_outlives_the_turn() {
+        let now = Instant::now();
+        let soon = ProviderBackoff {
+            retry_at: now + Duration::from_mins(2),
+            reason: "soon".to_owned(),
+        };
+        let hour = ProviderBackoff {
+            retry_at: now + Duration::from_mins(58),
+            reason: "out of quota".to_owned(),
+        };
+        assert!(matches!(backoff_verdict(None, now), BackoffVerdict::None));
+        assert!(matches!(
+            backoff_verdict(Some(&soon), now),
+            BackoffVerdict::Waiting
+        ));
+        assert!(matches!(
+            backoff_verdict(Some(&hour), now),
+            BackoffVerdict::Hopeless(reason) if reason == "out of quota"
+        ));
+        // Once the stated deadline passes, the silence that follows it is
+        // unexplained again — ordinary wedge detection has to resume, or a
+        // provider that never actually retried would hold the turn forever.
+        assert!(matches!(
+            backoff_verdict(Some(&soon), now + Duration::from_mins(3)),
+            BackoffVerdict::None
+        ));
+    }
+
+    #[test]
+    fn a_rate_limit_frame_names_the_model_the_limit_and_the_deadline() {
+        let now = Instant::now();
+        let limited = serde_json::json!({
+            "type": "system",
+            "subtype": "api_error",
+            "error": {
+                "status": 429,
+                "rateLimits": {
+                    "rateLimitType": "seven_day_overage_included",
+                    "resetsAt": 1_789_884_000_i64
+                }
+            },
+            "retryInMs": 3_469_283_u64,
+            "retryAttempt": 1
+        });
+        let backoff =
+            parse_provider_backoff(&limited, Some("Fable 5.1"), now).expect("a scheduled retry");
+        assert!(backoff.reason.contains("Fable 5.1"), "{}", backoff.reason);
+        assert!(
+            backoff.reason.contains("seven_day_overage_included"),
+            "{}",
+            backoff.reason
+        );
+        assert!(backoff.retry_at > now + Duration::from_mins(57));
+        // An error the SDK retries at once explains no silence, so it must not
+        // buy the turn any patience.
+        let immediate = serde_json::json!({"error": {"status": 500}});
+        assert!(parse_provider_backoff(&immediate, None, now).is_none());
+    }
+
+    #[test]
+    fn the_model_label_prefers_the_name_the_agent_advertises() {
+        let advertised = serde_json::json!([
+            {"id": "mode", "currentValue": "default", "options": []},
+            {"id": "model", "currentValue": "claude-fable-5-1", "options": [
+                {"value": "claude-opus-5", "name": "Opus 5"},
+                {"value": "claude-fable-5-1", "name": "Fable 5.1"}
+            ]}
+        ]);
+        assert_eq!(
+            current_model_label(&advertised).as_deref(),
+            Some("Fable 5.1")
+        );
+        // An agent that advertises no candidate list still identifies the bucket.
+        let bare = serde_json::json!([{"id": "model", "currentValue": "claude-opus-5"}]);
+        assert_eq!(current_model_label(&bare).as_deref(), Some("claude-opus-5"));
+        assert!(current_model_label(&serde_json::json!([])).is_none());
+    }
+
+    #[test]
     fn prompt_retry_observation_is_isolated_per_turn() {
         let first = ActivePrompt::new(true);
         let second = ActivePrompt::new(true);
@@ -2023,6 +2110,14 @@ struct ClientState {
     /// This agent's containment cgroup, or None when the host can't contain
     /// it. A watchdog hard-recycle SIGKILLs the whole subtree.
     cgroup: Option<PathBuf>,
+    /// The provider's own scheduled retry, when it reported one. Cleared by any
+    /// turn progress and at the start of every prompt, so it only ever explains
+    /// the silence the current turn is sitting in.
+    backoff: Mutex<Option<ProviderBackoff>>,
+    /// Display name of the model this session is currently on, tracked from the
+    /// agent's config-option snapshots. Rate limits are per model bucket, so
+    /// naming the model is what turns "wait an hour" into "switch and continue".
+    model_label: Mutex<Option<String>>,
 }
 
 /// Retry and completion state belongs to one serialized prompt. Keeping it
@@ -2293,6 +2388,8 @@ async fn agent_main(
         last_progress: Mutex::new(Instant::now()),
         open_tools: Mutex::new(HashSet::new()),
         cgroup: agent_cgroup.clone(),
+        backoff: Mutex::new(None),
+        model_label: Mutex::new(None),
     });
 
     let notif_state = state.clone();
@@ -2545,6 +2642,9 @@ fn note_turn_progress(state: &ClientState, update: &serde_json::Value) {
     if !is_turn_progress_update(update) {
         return;
     }
+    // Streamed progress proves the request went through: whatever retry the
+    // provider had scheduled is spent and no longer explains anything.
+    state.backoff.lock().take();
     *state.last_progress.lock() = Instant::now();
     note_tool_liveness(&mut state.open_tools.lock(), update);
 }
@@ -2553,10 +2653,124 @@ struct PromptWait<R> {
     response: R,
     cancelled: bool,
     recycled: bool,
+    /// Set when the watchdog cancelled because the provider's scheduled retry
+    /// outlived the turn. Carries the reason the transcript must show, and is
+    /// what distinguishes this from a human Stop.
+    backoff: Option<String>,
 }
 
 fn turn_is_wedged(has_pending_permission: bool, idle: Duration) -> bool {
     !has_pending_permission && idle >= WATCHDOG_IDLE
+}
+
+/// A retry the provider scheduled for itself. The Claude SDK answers a 429 by
+/// sleeping until the limit resets — up to an hour, emitting nothing — so this
+/// is the only evidence that separates "waiting on a stated deadline" from
+/// "wedged".
+#[derive(Clone, Debug)]
+struct ProviderBackoff {
+    /// When the provider said it would try again.
+    retry_at: Instant,
+    /// One user-facing sentence naming the limit, the model and the deadline.
+    reason: String,
+}
+
+/// What a recorded backoff means for the turn waiting on it.
+#[derive(Debug)]
+enum BackoffVerdict {
+    /// Nothing scheduled, or its deadline already passed — silence after that
+    /// moment is unexplained again, so ordinary wedge detection applies.
+    None,
+    /// The provider retries soon enough that this turn can wait it out.
+    Waiting,
+    /// The provider will not retry within any wait a turn can justify. Sitting
+    /// through it is a blank stare of unbounded length; end the turn with the
+    /// reason instead, while the session is still immediately usable.
+    Hopeless(String),
+}
+
+fn backoff_verdict(backoff: Option<&ProviderBackoff>, now: Instant) -> BackoffVerdict {
+    let Some(backoff) = backoff else {
+        return BackoffVerdict::None;
+    };
+    let wait = backoff.retry_at.saturating_duration_since(now);
+    if wait.is_zero() {
+        BackoffVerdict::None
+    } else if wait > WATCHDOG_IDLE {
+        BackoffVerdict::Hopeless(backoff.reason.clone())
+    } else {
+        BackoffVerdict::Waiting
+    }
+}
+
+/// Wall-clock label for the provider's next attempt. `resetsAt` is the limit's
+/// own boundary and is what the user can act on; the relative `retryInMs` is
+/// the fallback for errors that carry no limit window.
+fn scheduled_retry_label(resets_at: Option<i64>, retry_in: Duration) -> String {
+    let at = resets_at
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .unwrap_or_else(|| {
+            chrono::Utc::now()
+                + chrono::TimeDelta::from_std(retry_in).unwrap_or(chrono::TimeDelta::zero())
+        });
+    at.with_timezone(&chrono::Local).format("%H:%M").to_string()
+}
+
+/// Read one SDK `api_error` frame into a scheduled retry. A frame without a
+/// wait is an error the SDK retries at once: it explains no silence and must
+/// not suppress wedge detection.
+fn parse_provider_backoff(
+    message: &serde_json::Value,
+    model: Option<&str>,
+    now: Instant,
+) -> Option<ProviderBackoff> {
+    let retry_in = Duration::from_millis(message["retryInMs"].as_u64()?);
+    let error = &message["error"];
+    let limits = &error["rateLimits"];
+    let at = scheduled_retry_label(limits["resetsAt"].as_i64(), retry_in);
+    let reason = if error["status"].as_u64() == Some(429) {
+        format!(
+            "{} is out of quota ({}). The provider will not retry before {at} — \
+             switch the model, or continue after the limit resets.",
+            model.unwrap_or("This session's model"),
+            limits["rateLimitType"].as_str().unwrap_or("rate limited"),
+        )
+    } else {
+        format!(
+            "The provider is retrying a failed request and will not try again before {at}: {}",
+            error["formatted"]
+                .as_str()
+                .or_else(|| error["message"].as_str())
+                .unwrap_or("no detail reported")
+                .chars()
+                .take(200)
+                .collect::<String>(),
+        )
+    };
+    Some(ProviderBackoff {
+        retry_at: now + retry_in,
+        reason,
+    })
+}
+
+/// The human-facing name of the model a session is currently on, read from the
+/// agent's own config-option snapshot.
+fn current_model_label(options: &serde_json::Value) -> Option<String> {
+    let model = options
+        .as_array()?
+        .iter()
+        .find(|option| option["id"] == "model")?;
+    let current = &model["currentValue"];
+    model["options"]
+        .as_array()
+        .and_then(|candidates| {
+            candidates
+                .iter()
+                .find(|candidate| candidate["value"] == *current)
+                .and_then(|candidate| candidate["name"].as_str())
+        })
+        .map(str::to_owned)
+        .or_else(|| current.as_str().map(str::to_owned))
 }
 
 fn turn_appears_stuck(state: &ClientState) -> bool {
@@ -2582,6 +2796,7 @@ async fn await_prompt_with_idle_watchdog<R>(
     let mut cancel_deadline: Option<Instant> = None;
     let mut cancelled = *cancellation.borrow_and_update() != cancellation_generation;
     let mut recycled = false;
+    let mut backoff: Option<String> = None;
     if cancelled {
         let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
     }
@@ -2593,7 +2808,7 @@ async fn await_prompt_with_idle_watchdog<R>(
         tokio::select! {
             biased;
             response = &mut prompt => {
-                return PromptWait { response, cancelled, recycled };
+                return PromptWait { response, cancelled, recycled, backoff };
             }
             changed = cancellation.changed() => {
                 if changed.is_ok()
@@ -2619,15 +2834,37 @@ async fn await_prompt_with_idle_watchdog<R>(
                     }
                     recycled = true;
                     cancel_deadline = None;
-                } else if !cancelled && turn_appears_stuck(state) {
-                    tracing::warn!(
-                        session = %state.session_id,
-                        idle_seconds = WATCHDOG_IDLE.as_secs(),
-                        "prompt watchdog: idle turn — cancelling, awaiting grace"
-                    );
-                    cancelled = true;
-                    let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
-                    cancel_deadline = Some(Instant::now() + WATCHDOG_CANCEL_GRACE);
+                } else if !cancelled {
+                    // Silence the provider already explained is not a wedge.
+                    // Wait out a short scheduled retry; end a wait no turn can
+                    // outlive right away, with the provider's own reason, rather
+                    // than staring for the full idle window and then reporting
+                    // a bare cancel that names nothing.
+                    let verdict = backoff_verdict(state.backoff.lock().as_ref(), Instant::now());
+                    let stop = match verdict {
+                        BackoffVerdict::Waiting => None,
+                        BackoffVerdict::Hopeless(reason) => {
+                            tracing::warn!(
+                                session = %state.session_id,
+                                %reason,
+                                "prompt watchdog: provider backoff outlives the turn — cancelling"
+                            );
+                            backoff = Some(reason);
+                            Some(())
+                        }
+                        BackoffVerdict::None => turn_appears_stuck(state).then(|| {
+                            tracing::warn!(
+                                session = %state.session_id,
+                                idle_seconds = WATCHDOG_IDLE.as_secs(),
+                                "prompt watchdog: idle turn — cancelling, awaiting grace"
+                            );
+                        }),
+                    };
+                    if stop.is_some() {
+                        cancelled = true;
+                        let _ = cx.send_notification(CancelNotification::new(acp_id.clone()));
+                        cancel_deadline = Some(Instant::now() + WATCHDOG_CANCEL_GRACE);
+                    }
                 }
             }
         }
@@ -2645,8 +2882,23 @@ fn handle_native_activity(state: &ClientState, notif: &ClaudeSdkMessageNotificat
     match notif.message["subtype"].as_str() {
         Some("session_state_changed") => handle_native_state(state, notif),
         Some("background_tasks_changed") => handle_native_background_tasks(state, notif),
+        Some("api_error") => handle_native_api_error(state, notif),
         _ => {}
     }
+}
+
+fn handle_native_api_error(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
+    let model = state.model_label.lock().clone();
+    let Some(backoff) = parse_provider_backoff(&notif.message, model.as_deref(), Instant::now())
+    else {
+        return;
+    };
+    tracing::warn!(
+        session = %state.session_id,
+        reason = %backoff.reason,
+        "provider scheduled its own retry — the turn is waiting, not wedged"
+    );
+    *state.backoff.lock() = Some(backoff);
 }
 
 fn handle_native_state(state: &ClientState, notif: &ClaudeSdkMessageNotification) {
@@ -2698,7 +2950,12 @@ fn handle_session_notification(state: &ClientState, notif: &SessionNotification)
     }
     if let SessionUpdate::ConfigOptionUpdate(ref update) = notif.update {
         match serde_json::to_value(&update.config_options) {
-            Ok(opts) => state.sink.set_config_options(&state.session_id, opts),
+            Ok(opts) => {
+                if let Some(label) = current_model_label(&opts) {
+                    *state.model_label.lock() = Some(label);
+                }
+                state.sink.set_config_options(&state.session_id, opts);
+            }
             Err(e) => tracing::warn!(error = %e, "serializing config options"),
         }
         return;
@@ -3270,8 +3527,13 @@ async fn run_session(
                     let mut retries = 0;
                     let mut cancelled_during_retry = false;
                     let mut recycled_by_watchdog = false;
+                    let mut backoff_failure: Option<String> = None;
                     *state.last_progress.lock() = Instant::now();
                     state.open_tools.lock().clear();
+                    // A retry the previous turn was waiting on says nothing
+                    // about this one: this prompt gets its own request, and its
+                    // own 429 if the limit is still there.
+                    state.backoff.lock().take();
                     sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
                         let request =
@@ -3298,6 +3560,7 @@ async fn run_session(
                         let response = waited.response;
                         cancelled_during_retry |= waited.cancelled;
                         recycled_by_watchdog |= waited.recycled;
+                        backoff_failure = backoff_failure.or(waited.backoff);
                         if recycled_by_watchdog || cancelled_during_retry {
                             break response;
                         }
@@ -3344,6 +3607,32 @@ async fn run_session(
                         }
                     };
                     state.clear_prompt(&prompt);
+                    if let Some(reason) = backoff_failure.take()
+                        && !recycled_by_watchdog
+                    {
+                        // Reporting this as a plain Cancel is what made a rate
+                        // limit indistinguishable from a human Stop — and from
+                        // a hang. End it as a named provider failure so the
+                        // transcript carries the reason and the usual continue
+                        // affordance.
+                        prompt.pending_empty_stream_update.lock().take();
+                        if let Some(tx) = completion {
+                            prompt.capture.lock().take();
+                            let _ = tx.send(Err(reason.clone()));
+                        }
+                        sink.prompt_completed(&sid, cmid.as_deref(), "Error");
+                        sink.push(
+                            &sid,
+                            Event::TurnEnd {
+                                stop_reason: format!("error: {reason}"),
+                            },
+                        );
+                        // Only the turn died. The agent is alive and answers the
+                        // next prompt immediately — on a switched model it just
+                        // works — so the session stays Running and keeps draining.
+                        state.set_status(Status::Running, None);
+                        return Ok(());
+                    }
                     if cancelled_during_retry && !recycled_by_watchdog {
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         prompt.pending_empty_stream_update.lock().take();

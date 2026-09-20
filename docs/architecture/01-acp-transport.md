@@ -178,6 +178,12 @@ trust is **last agent-streamed turn progress**:
   human permission is not a wedge. A silent open tool is: Grok
   `exit_plan_mode` stays `pending` until the host confirms, and reconnect
   `available_commands_update` frames must not reset the clock.
+- **A wait the provider scheduled is not silence.** Claude's SDK answers a 429
+  by sleeping until the limit resets, streaming nothing meanwhile. Cowboy
+  subscribes to its `api_error` frames, waits out a retry that lands inside the
+  idle window, and ends a longer one immediately as a turn failure carrying the
+  provider's own reason — model, limit and reset time. See
+  [claude-stream-recovery.md](../claude-stream-recovery.md).
 - **15 minutes of true silence → Cancel, then recycle.** The prompt watchdog
   (`src/acp.rs`) sends `session/cancel` and **keeps awaiting** the prompt future
   for 60s (agent-acp's cancel floor is ~30s). If the agent still will not yield,

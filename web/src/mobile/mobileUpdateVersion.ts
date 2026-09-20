@@ -6,10 +6,27 @@ export function cowboyVersionFromServiceWorkerSource(
   return version && version.length > 0 ? version : undefined;
 }
 
-export function mobileUpdateBannerLabel(version: string | undefined): string {
-  return version
-    ? `New Cowboy version ${version} ready`
-    : "New Cowboy version ready";
+/** What the phone's update bar is narrating right now. The bar never asks for
+ *  a decision: the page applies the deployed build on its own. */
+export type MobileUpdatePhase =
+  | { readonly kind: "counting"; readonly secs: number }
+  | { readonly kind: "held" }
+  | { readonly kind: "applying" }
+  | { readonly kind: "failed" };
+
+export function mobileUpdateBannerLabel(
+  version: string | undefined,
+  phase: MobileUpdatePhase,
+): string {
+  const named = version ? `New Cowboy version ${version}` : "New Cowboy version";
+  if (phase.kind === "counting") {
+    return `${named} · updating in ${Math.max(0, phase.secs)}s`;
+  }
+  if (phase.kind === "held") return `${named} ready · updating when you pause`;
+  if (phase.kind === "applying") {
+    return version ? `Updating to ${version}…` : "Downloading the update…";
+  }
+  return "The update could not be downloaded yet · retrying";
 }
 
 export async function fetchReadyCowboyVersion(

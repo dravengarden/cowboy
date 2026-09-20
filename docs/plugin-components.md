@@ -175,6 +175,16 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.20.0 records app-shell 1.1.11: a deployed build is applied by
+the client itself on every surface. `useAutoUpdate` and the pure
+`update-policy` rules move the countdown out of the desktop banner so the phone
+runs the same policy, add the foreground dwell a resumed PWA needs, and re-arm
+the one-second check that a held countdown previously dropped — a busy page
+could stay on the old build until it was reloaded by hand. Only app-shell's
+version/digest changes; it still has no component or Plugin consumers, and no
+Plugin manifest, signed bytes or component pin changes. No Catalog publication
+or Machine upgrade is needed.
+
 Scoped release 3.19.0 records app-shell 1.1.10: a fullscreen preview also takes
 the document background and colour scheme to its backdrop while it is open. The
 iOS standalone status bar sits above the web view and a light iPhone PWA fills

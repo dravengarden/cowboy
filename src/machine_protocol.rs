@@ -66,7 +66,7 @@ pub enum ConnectionMode {
     OutboundTls,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComponentKind {
     MachineHost,
@@ -102,7 +102,7 @@ pub enum AuthState {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ComponentId {
     pub kind: ComponentKind,
     /// Provider id or Zed compatibility key (normally the exact client/server
@@ -331,6 +331,39 @@ pub struct MachineSummary {
     pub active_sessions: u32,
     #[serde(default)]
     pub pending_updates: Vec<ComponentId>,
+    /// Why an automatic component has not converged yet. Absent entries are
+    /// converged; this list never authorizes an install by itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub convergence: Vec<ComponentConvergence>,
+}
+
+/// One automatic component's distance from the Controller's desired state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentConvergence {
+    pub id: ComponentId,
+    pub state: ComponentConvergenceState,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_attempt_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentConvergenceState {
+    /// Eligible now; the Controller dispatches it on this pass.
+    Pending,
+    /// A live session still leases the installed generation.
+    Draining,
+    /// A previous attempt failed; waiting out its backoff.
+    Retrying,
+    /// The Machine acknowledged the Reconcile; waiting for the inventory that
+    /// proves the exact digest is active.
+    Verifying,
+    /// Repeated failure against this exact digest. Needs a person.
+    Blocked,
 }
 
 /// Build the exact version-one proof signed during a remote Machine handshake.

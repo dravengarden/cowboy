@@ -1,36 +1,45 @@
-import CheckIcon from "@mui/icons-material/Check";
-import { Box, Button, CircularProgress } from "@mui/material";
+import { Box, CircularProgress } from "@mui/material";
 import { useEffect, useState } from "react";
-import type { ConnectionStore } from "@cowboy/app-shell";
+import { type ConnectionStore, useAutoUpdate } from "@cowboy/app-shell";
+import { canApplyUpdateNow } from "../store";
 import {
   fetchReadyCowboyVersion,
   mobileUpdateBannerLabel,
+  type MobileUpdatePhase,
 } from "./mobileUpdateVersion";
 
 /**
- * Mobile owns update activation explicitly. A foreground service-worker check
- * may discover a deploy while the user is reading or composing; silently
- * replacing that page is much more disruptive on a phone than on Desktop.
- * Keep the update visible and let the user choose the safe reload point.
+ * The phone installs a deployed build by itself. A foreground service-worker
+ * check may discover a deploy while the user is reading or composing, so the
+ * page waits for a real pause instead of asking for a tap: no composer text,
+ * no running turn, nothing in flight, and a full minute of foreground since
+ * the app was last resumed (`useAutoUpdate` owns that policy). Until then the
+ * bar only narrates, and an update that never finds its pause is applied by
+ * the next launch anyway.
  *
- * Connectivity itself is no longer a banner here: the sync status pill
- * (`MobileSyncPill`) presents outages, reconnects and queued work, so this bar
- * only ever carries the one decision a phone user must make.
+ * Connectivity itself is not a banner here: the sync status pill
+ * (`MobileSyncPill`) presents outages, reconnects and queued work.
  */
+
+// A resumed PWA restores its frozen page. Reloading in the seconds after
+// someone opened the app reads as a crash, so the update waits out a minute of
+// uninterrupted foreground first.
+const MOBILE_UPDATE_DWELL_MS = 60_000;
+
 export function MobileConnectionBanner(
   { store }: { readonly store: ConnectionStore },
 ): React.JSX.Element | null {
   const rawBanner = store.useConnectionBanner();
   const banner = rawBanner?.kind === "update" ? rawBanner : undefined;
   const isUpdate = banner?.kind === "update";
+  const update = useAutoUpdate(store, {
+    canApplyUpdate: canApplyUpdateNow,
+    minVisibleMs: MOBILE_UPDATE_DWELL_MS,
+  });
   const [readyVersion, setReadyVersion] = useState<string>();
-  // The update is downloaded before the reload (the shell is cache-first), so
-  // the tap has a visible pending state and an honest failure on a weak link.
-  const [download, setDownload] = useState<"idle" | "pending" | "failed">("idle");
   useEffect(() => {
     if (!isUpdate) {
       setReadyVersion(undefined);
-      setDownload("idle");
       return undefined;
     }
     let cancelled = false;
@@ -49,20 +58,14 @@ export function MobileConnectionBanner(
     };
   }, [isUpdate]);
   if (!banner) return null;
-  const palette = banner.kind === "down"
-    ? "warning"
-    : banner.kind === "reconnected"
-    ? "success"
-    : "info";
-  const label = banner.kind === "down"
-    ? "Connection lost — reconnecting…"
-    : banner.kind === "reconnected"
-    ? "Reconnected"
-    : download === "pending"
-    ? "Downloading the update…"
-    : download === "failed"
-    ? "The update could not be downloaded yet"
-    : mobileUpdateBannerLabel(readyVersion);
+  const phase: MobileUpdatePhase = update.applying
+    ? { kind: "applying" }
+    : update.failed
+    ? { kind: "failed" }
+    : update.held
+    ? { kind: "held" }
+    : { kind: "counting", secs: update.secs };
+  const label = mobileUpdateBannerLabel(readyVersion, phase);
 
   return (
     <Box
@@ -84,43 +87,15 @@ export function MobileConnectionBanner(
         px: 2,
         py: 0.75,
         pt: "calc(var(--cowboy-system-top-clearance) + 6px)",
-        bgcolor: `${palette}.main`,
-        color: `${palette}.contrastText`,
+        bgcolor: "info.main",
+        color: "info.contrastText",
         fontSize: "0.8125rem",
         fontWeight: 600,
         zIndex: (theme) => theme.zIndex.tooltip + 1,
       }}
     >
-      {banner.kind === "down" && (
-        <CircularProgress size={14} color="inherit" thickness={5} />
-      )}
-      {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
+      {update.applying && <CircularProgress size={14} color="inherit" thickness={5} />}
       <span>{label}</span>
-      {isUpdate && (
-        <Button
-          color="inherit"
-          size="small"
-          variant="outlined"
-          disabled={download === "pending"}
-          onClick={() => {
-            setDownload("pending");
-            void store.applyUpdate().then((reloading) => {
-              if (!reloading) setDownload("failed");
-            });
-          }}
-          sx={{
-            ml: 0.5,
-            minHeight: 32,
-            borderColor: "currentColor",
-            borderRadius: 999,
-            fontSize: "inherit",
-            fontWeight: 700,
-            textTransform: "none",
-          }}
-        >
-          {download === "failed" ? "Try again" : "Update"}
-        </Button>
-      )}
     </Box>
   );
 }

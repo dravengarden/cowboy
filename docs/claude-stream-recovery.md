@@ -33,6 +33,28 @@ change: the plugin sets it after inherited `CLAUDE_`/`ANTHROPIC_` variables are
 removed (`src/acp.rs` spawns with removal first, then the plugin environment),
 so a host variable can neither enable nor suppress it.
 
+## A rate limit is a stated wait, not a wedge
+
+Keeping 429s inside the retry loop means the CLI answers a limit by sleeping
+until it resets — up to an hour, emitting nothing. Cowboy subscribes to the
+SDK's `api_error` frames (`emitRawSDKMessages` in `src/acp.rs`) so that wait is
+evidence instead of silence: the frame carries `retryInMs`, the limit type and
+the limit's own `resetsAt`.
+
+The prompt watchdog then reads the stated wait rather than only the clock. A
+retry scheduled inside the 15-minute idle window is explained silence and is
+waited out. A retry scheduled beyond it ends the turn at once with the
+provider's reason instead of staring through the full idle window and then
+reporting a bare cancel that names nothing. The session stays `Running`,
+because only the turn died: the transcript shows an ordinary turn failure with
+its continue affordance, and the next prompt goes out the moment the user
+switches model or the limit resets.
+
+Rate limits are per model bucket, so the reason names the model the session is
+on, read from the agent's own config-option snapshot. A session exhausted on one
+model continues immediately on another; without the model in the message, one
+bucket's limit reads as an account-wide outage.
+
 The transcript treats unfinished tools as interrupted after a failed or
 cancelled turn, or an interrupted/crashed lifecycle. Confirmed tool results
 remain unchanged; a later actual result can still settle an interrupted card.

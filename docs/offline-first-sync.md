@@ -5,7 +5,7 @@ Status: design 2026-09-18; the boot path became network-independent on
 and now opens on the user's real last screen (see
 [Boot presentation](#boot-presentation-service-worker-cowboy-v1740)) and
 revalidates a session instead of re-downloading it (see
-[Reopening a session](#reopening-a-session-controller-and-web-service-worker-cowboy-v1741));
+[Reopening a session](#reopening-a-session-controller-and-web-service-worker-cowboy-v1743));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -312,7 +312,8 @@ Tapping the pill opens an `ObsidianSheet` with the phase, last synced time,
 queued count, the sessions that hold unsent rows with an Open action, and
 the actions Retry now, Reload, and Update when ready. The full-width banner
 is retained for decisions only: sign-in required, dataset changed, update
-ready. `MobileConnectionBanner` keeps its explicit Update tap.
+ready. `MobileConnectionBanner` narrates the update it is about to apply;
+it carries no action.
 
 **Transcript.** A cached tail shows a one-line caption above the newest row:
 "Cached · updated 3 min ago". It fades when the session becomes `live`. A
@@ -354,13 +355,19 @@ time and the retry countdown. Click opens the command palette filtered to
 **Banners.** Only sign-in required, dataset changed, and update ready. The
 update banner no longer counts down while the user is composing.
 
-**Update policy (both products).** An update is never applied while any of
-these hold: composer text or attachments present, IME composition active, a
-row in `saving`/`sending`, a running turn in the active session, or the tab
-has been visible for less than 60 s. When all clear, Desktop applies after a
-visible 3 s countdown that a keypress cancels; Mobile still waits for the
-tap. An update is always applied on the next launch. The service worker
-keeps its two-generation cache so the open window survives the swap.
+**Update policy (both products).** A deployed build is applied by the client
+itself; no surface offers an update control to press. An update is never
+applied while any of these hold: composer text or attachments present, IME
+composition active, a row in `saving`/`sending`, a running turn in the active
+session, or a focused editor. When all clear, both products apply after a
+visible 3 s countdown; a busy moment rewinds it to its start rather than
+freezing it, and the check re-arms every second so the reload lands on the
+first real pause. Mobile requires 60 s of uninterrupted foreground on top of
+that, counted again from every resume, because an installed PWA restores a
+frozen page and an immediate reload reads as a crash. A download that does not
+finish keeps this build running and starts another countdown a minute later.
+An update is always applied on the next launch. The service worker keeps its
+two-generation cache so the open window survives the swap.
 
 ### Copy
 
@@ -500,7 +507,7 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 
 ## Implementation status
 
-### Reopening a session (Controller and Web, service worker `cowboy-v1741`)
+### Reopening a session (Controller and Web, service worker `cowboy-v1743`)
 
 Opening a session paints from the cached tail with no network, and then
 fetches `GET /api/sessions/<id>/bootstrap` to reconcile. That fetch sent no

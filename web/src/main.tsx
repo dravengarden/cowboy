@@ -124,9 +124,9 @@ if (el) {
 // Every production surface compares its loaded Vite entry with the deployed
 // index on foreground/resume. Native iOS WKWebView does not expose Service
 // Workers, so this network probe is the shared authority; browser/PWA surfaces
-// additionally ask their registration to update. Desktop owns its short
-// countdown and Mobile requires an explicit Update tap, so detection never
-// replaces a page while the user is reading or composing.
+// additionally ask their registration to update. Detection only raises the
+// update state; the shared countdown policy decides when the page may replace
+// itself, so a deploy never lands while the user is reading or composing.
 if (import.meta.env.PROD) {
   let updateReported = false;
   const loadedEntry = globalThis.document.querySelector<HTMLScriptElement>(
