@@ -72,6 +72,36 @@ cowboy operator inspect --machine hawk
 cowboy operator usage --refresh anthropic
 ```
 
+## Converging instead of typing digests
+
+One Plugin at a time is the exact-release path above. To bring whole Machines
+up to the Catalog's newest ready releases without authoring a digest:
+
+```sh
+cowboy operator converge --machine hawk --machine falcon
+cowboy operator converge --machine hawk --machine falcon --apply
+```
+
+The first form is a dry run and prints the plan. The `--machine` order is the
+rollout order and its first entry is the canary: the next Machine is attempted
+only after the previous one's re-read inventory proves it converged, so a bad
+release reaches one host rather than the fleet. With no `--machine`, every
+connected Machine converges in registry order; `--plugin` bounds the run.
+
+Targets come from the Catalog, so no digest is typed. A release that is not
+`ready`, or that does not declare that Machine's platform, is not a target. A
+Plugin holding an active session lease is reported rather than recycled under a
+live worker. An installed version ahead of the Catalog is reported, never
+downgraded. A Plugin the Machine does not already run is never installed —
+that is a separate decision. Each upgrade carries one deterministic identity
+(`<machine>-<plugin>-<version>-converge`), so repeating a run after a lost
+response observes the saved result instead of installing twice.
+
+Convergence runs the same durable installation transaction, the same signed
+Catalog resolution and the same host delegation as a single upgrade. It is not
+a second installer, and it cannot install a release the Controller would refuse
+by hand.
+
 The CLI prints JSON with an HTTP status, operation ID and response data. HTTP
 204 means the request completed; inspect the saved result and installed
 inventory for acceptance. HTTP 409 can return an already saved result, with
