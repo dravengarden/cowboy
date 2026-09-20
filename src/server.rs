@@ -255,6 +255,7 @@ struct AppState {
     desired_machine_components: Arc<crate::machine_convergence::DesiredComponentSource>,
     component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
     convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
+    desired_machine_plugins: Arc<crate::machine_convergence::PluginDesiredSource>,
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
@@ -370,6 +371,7 @@ struct MachineSnapshots {
     desired_components: Arc<crate::machine_convergence::DesiredComponentSource>,
     component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
     convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
+    desired_plugins: Arc<crate::machine_convergence::PluginDesiredSource>,
     product_auth_enabled: bool,
     revision: Arc<AtomicU64>,
 }
@@ -500,6 +502,7 @@ impl MachineSnapshots {
         let checked_at_ms = now_ms();
         let desired = self.desired_components.current();
         let frozen = self.convergence_freeze.is_frozen();
+        let desired_plugins = self.desired_plugins.current();
         Ok(machines
             .into_iter()
             .filter(|machine| product_machine_is_visible(machine, self.product_auth_enabled))
@@ -643,6 +646,11 @@ impl MachineSnapshots {
                     active_sessions,
                     pending_updates,
                     convergence: Vec::new(),
+                    plugin_lifecycle: if desired_plugins.value.manages(&machine_id) {
+                        crate::machine_protocol::PluginLifecycleOwner::Managed
+                    } else {
+                        crate::machine_protocol::PluginLifecycleOwner::Manual
+                    },
                 };
                 summary.convergence = crate::machine_convergence::plan_machine(
                     &summary,
@@ -1003,6 +1011,9 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let convergence_freeze = Arc::new(crate::machine_convergence::ConvergenceFreeze::new(
         &args.data_dir,
     ));
+    let desired_machine_plugins = Arc::new(crate::machine_convergence::PluginDesiredSource::new(
+        &args.data_dir,
+    ));
     init_tracing();
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
@@ -1205,6 +1216,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         desired_components: Arc::clone(&desired_machine_components),
         component_convergence: Arc::clone(&component_convergence),
         convergence_freeze: Arc::clone(&convergence_freeze),
+        desired_plugins: Arc::clone(&desired_machine_plugins),
         product_auth_enabled: args.product_auth_enabled,
         revision: Arc::new(AtomicU64::new(0)),
     };
@@ -1619,6 +1631,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             desired_machine_components,
             component_convergence,
             convergence_freeze,
+            desired_machine_plugins,
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -1742,6 +1755,16 @@ async fn run_component_convergence(
                 // The last accepted set stays in force; convergence continues
                 // against it rather than against a half-read file.
                 tracing::error!(%error, "rejected the Machine component manifest");
+            }
+        }
+        match state.desired_machine_plugins.reload(now_ms()) {
+            Ok(Some(generation)) => {
+                tracing::info!(generation, "Service-side Machine Plugin document reloaded");
+                state.machine_snapshots.publish().await;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::error!(%error, "rejected the Machine Plugin document");
             }
         }
         let desired = state.desired_machine_components.current();
@@ -9592,15 +9615,14 @@ async fn serve_axum(
     #[cfg(unix)]
     let local_operator = local_operator::start(&data_dir, Arc::clone(&state))?;
 
-    // Converge signed automatic components for as long as the Controller
-    // serves. A Controller without a manifest has no desired state to converge.
-    let convergence_task = state.desired_machine_components.is_configured().then(|| {
-        tokio::spawn(run_component_convergence(
-            Arc::clone(&state),
-            state.machine_snapshots.clone(),
-            state.shutdown.clone(),
-        ))
-    });
+    // Converge signed automatic components and keep the Service-side Plugin
+    // document fresh for as long as the Controller serves. A Controller with
+    // neither configured simply finds nothing to do on each pass.
+    let convergence_task = tokio::spawn(run_component_convergence(
+        Arc::clone(&state),
+        state.machine_snapshots.clone(),
+        state.shutdown.clone(),
+    ));
 
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
@@ -9612,9 +9634,7 @@ async fn serve_axum(
     .context("axum serve");
     #[cfg(unix)]
     local_operator.shutdown().await;
-    if let Some(task) = convergence_task {
-        task.abort();
-    }
+    convergence_task.abort();
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -11888,6 +11908,38 @@ async fn api_machine_plugin_uninstall_plan(
         Ok(actor) => actor,
         Err(status) => return status.into_response(),
     };
+    if let Some(refusal) = service_managed_refusal(&state, &machine_id) {
+        return refusal;
+    }
+    preview_machine_plugin_uninstall(state, machine_id, provider_id, actor).await
+}
+
+/// Refuse a client-initiated lifecycle change on a Machine whose Plugins are
+/// declared Service-side. The UI already hides these actions there; this is the
+/// authority behind that, so an old client or a direct call cannot fork the
+/// declared membership. Convergence itself does not pass through here: it runs
+/// under the host grant on the private Operator endpoint.
+fn service_managed_refusal(state: &AppState, machine_id: &str) -> Option<Response> {
+    state
+        .desired_machine_plugins
+        .current()
+        .value
+        .manages(machine_id)
+        .then(|| {
+            (
+                StatusCode::CONFLICT,
+                "This Machine's Plugins are declared Service-side; change the declaration instead of installing or removing from a client.",
+            )
+                .into_response()
+        })
+}
+
+async fn preview_machine_plugin_uninstall(
+    state: Arc<AppState>,
+    machine_id: String,
+    provider_id: String,
+    actor: crate::plugin_operation::Actor,
+) -> Response {
     if state
         .plugin_lifecycle_fences
         .read()

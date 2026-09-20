@@ -76,6 +76,37 @@ async fn install(
     plugin_install::confirmed_install(state, machine, plugin, request, approval).await
 }
 
+/// The same preview the browser gets, with the host grant as its actor. It
+/// lists the sessions an uninstall would take with it; nothing is removed here.
+async fn uninstall_plan(
+    State(state): State<Arc<AppState>>,
+    Path((machine, plugin)): Path<(String, String)>,
+    Extension(grant): Extension<Arc<Grant>>,
+) -> Response {
+    if !grant.current() {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    super::preview_machine_plugin_uninstall(state, machine, plugin, grant.actor()).await
+}
+
+/// Consume a preview this same grant created. The preview's owner, target and
+/// expiry are checked by the shared transaction, and a plan with active
+/// sessions still requires the explicit second confirmation.
+async fn uninstall(
+    State(state): State<Arc<AppState>>,
+    Path((machine, plugin)): Path<(String, String)>,
+    Extension(grant): Extension<Arc<Grant>>,
+    Json(request): Json<PluginUninstallRequest>,
+) -> Response {
+    let approval = match operator_approval::OperatorApproval::capture_host(&state.service_id, grant)
+    {
+        Ok(approval) => approval,
+        Err(status) => return status.into_response(),
+    };
+    tracing::info!(actor = ?approval.actor(), "local Operator requested Plugin uninstall");
+    plugin_uninstall::confirmed_uninstall(state, machine, plugin, request, approval).await
+}
+
 struct OwnerLock(File);
 
 impl Drop for OwnerLock {
@@ -128,6 +159,14 @@ pub(super) fn start(data_dir: &std::path::Path, state: Arc<AppState>) -> anyhow:
         .route("/v1/machines", get(api_machines))
         .route("/v1/machines/{id}/plugins", get(api_machine_plugins))
         .route("/v1/machines/{id}/plugins/{plugin}/install", post(install))
+        .route(
+            "/v1/machines/{id}/plugins/{plugin}/uninstall-plan",
+            post(uninstall_plan),
+        )
+        .route(
+            "/v1/machines/{id}/plugins/{plugin}/uninstall",
+            post(uninstall),
+        )
         .route(
             "/v1/machines/{id}/plugins/{plugin}/operations",
             get(plugin_install::api_machine_plugin_install_operations),

@@ -103,11 +103,6 @@ impl DesiredComponentSource {
         Arc::clone(&self.current.read())
     }
 
-    #[must_use]
-    pub fn is_configured(&self) -> bool {
-        self.path.is_some()
-    }
-
     /// Re-read the manifest. Returns the new generation when the accepted set
     /// changed. A missing, unreadable or invalid manifest keeps the previous
     /// accepted set and records why: an operator error must never widen into an
@@ -568,3 +563,172 @@ pub fn backoff(policy: ConvergencePolicy, attempts: u32) -> Duration {
 
 #[cfg(test)]
 mod tests;
+
+/// Which Plugins a Machine is meant to run, as a Service-side document rather
+/// than a decision somebody makes in the UI.
+///
+/// Membership and currency are different questions. The signed Catalog decides
+/// which bytes may run; this decides which Plugins a Machine should have at
+/// all. A Machine that is absent from this document is unmanaged: its Plugins
+/// stay exactly where they are and its lifecycle actions remain manual.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginDesiredState {
+    pub schema: u16,
+    #[serde(default)]
+    pub machines: std::collections::BTreeMap<String, MachinePlugins>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachinePlugins {
+    /// Every Plugin this Machine should run. Order is irrelevant.
+    pub plugins: std::collections::BTreeSet<String>,
+    /// What to do with an installed Plugin this list does not name.
+    #[serde(default)]
+    pub unlisted: UnlistedPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnlistedPolicy {
+    /// Leave it installed. The default, so adding a Machine to the document
+    /// cannot remove anything by omission alone.
+    #[default]
+    Keep,
+    /// Remove it. Convergence still refuses while any session would be
+    /// affected; a live conversation is never ended to satisfy a list.
+    Uninstall,
+}
+
+impl PluginDesiredState {
+    #[must_use]
+    pub fn machine(&self, machine_id: &str) -> Option<&MachinePlugins> {
+        self.machines.get(machine_id)
+    }
+
+    #[must_use]
+    pub fn manages(&self, machine_id: &str) -> bool {
+        self.machines.contains_key(machine_id)
+    }
+}
+
+/// The Service-side Plugin document, re-read in place. Its fixed name inside
+/// the data directory lets the Controller and a host-authorized convergence run
+/// find the same file without being told where it is.
+pub struct PluginDesiredSource {
+    path: PathBuf,
+    current: parking_lot::RwLock<Arc<Generation<PluginDesiredState>>>,
+}
+
+/// One accepted revision of a Service-side document.
+#[derive(Debug)]
+pub struct Generation<T> {
+    /// Monotonic within one process; 0 means "nothing configured".
+    pub generation: u64,
+    pub value: T,
+    pub loaded_at_ms: i64,
+    /// Why the most recent reload was rejected, if it was.
+    pub error: Option<String>,
+}
+
+impl PluginDesiredSource {
+    pub const FILE_NAME: &'static str = "machine-plugins.json";
+
+    #[must_use]
+    pub fn new(data_dir: &Path) -> Self {
+        let source = Self {
+            path: data_dir.join(Self::FILE_NAME),
+            current: parking_lot::RwLock::new(Arc::new(Generation {
+                generation: 0,
+                value: PluginDesiredState {
+                    schema: 1,
+                    machines: std::collections::BTreeMap::new(),
+                },
+                loaded_at_ms: 0,
+                error: None,
+            })),
+        };
+        // An absent document is a running Service with nothing declared, not a
+        // failure: every Machine simply stays unmanaged.
+        let _ = source.reload(0);
+        source
+    }
+
+    #[must_use]
+    pub fn current(&self) -> Arc<Generation<PluginDesiredState>> {
+        Arc::clone(&self.current.read())
+    }
+
+    /// Re-read the document. A missing file means "nothing declared"; an
+    /// unreadable or invalid one keeps the last accepted declaration, because a
+    /// half-written file must never be read as "uninstall everything".
+    pub fn reload(&self, now_ms: i64) -> Result<Option<u64>, String> {
+        let outcome = match std::fs::read(&self.path) {
+            Ok(bytes) => parse_plugin_desired_state(&bytes),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PluginDesiredState {
+                schema: 1,
+                machines: std::collections::BTreeMap::new(),
+            }),
+            Err(error) => Err(format!("reading {}: {error}", self.path.display())),
+        };
+        let mut current = self.current.write();
+        match outcome {
+            Ok(value) => {
+                if value == current.value {
+                    if current.error.is_some() {
+                        *current = Arc::new(Generation {
+                            generation: current.generation,
+                            value,
+                            loaded_at_ms: now_ms,
+                            error: None,
+                        });
+                    }
+                    return Ok(None);
+                }
+                let generation = current.generation.saturating_add(1);
+                *current = Arc::new(Generation {
+                    generation,
+                    value,
+                    loaded_at_ms: now_ms,
+                    error: None,
+                });
+                Ok(Some(generation))
+            }
+            Err(error) => {
+                *current = Arc::new(Generation {
+                    generation: current.generation,
+                    value: current.value.clone(),
+                    loaded_at_ms: current.loaded_at_ms,
+                    error: Some(error.clone()),
+                });
+                Err(error)
+            }
+        }
+    }
+}
+
+/// Accept a Plugin document only when every declaration is usable. A typo in a
+/// Plugin id would otherwise read as "this Machine should not have it".
+pub fn parse_plugin_desired_state(bytes: &[u8]) -> Result<PluginDesiredState, String> {
+    let state: PluginDesiredState =
+        serde_json::from_slice(bytes).map_err(|error| format!("parsing document: {error}"))?;
+    if state.schema != 1 {
+        return Err(format!("unsupported document schema {}", state.schema));
+    }
+    for (machine, declared) in &state.machines {
+        if machine.trim().is_empty() {
+            return Err("empty Machine id".to_owned());
+        }
+        for plugin in &declared.plugins {
+            if plugin.trim().is_empty()
+                || !plugin.chars().all(|character| {
+                    character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+                })
+            {
+                return Err(format!("{machine}: invalid Plugin id {plugin:?}"));
+            }
+        }
+    }
+    Ok(state)
+}

@@ -69,6 +69,9 @@ export interface MachineSummary {
   // Why an automatic component has not converged yet. Absent entries are
   // converged; the Controller owns the decision, this is only its report.
   convergence?: readonly MachineComponentConvergence[];
+  // Who owns this Machine's Plugin membership. Absent on a daemon that
+  // predates the Service-side declaration.
+  plugin_lifecycle?: "manual" | "managed";
 }
 
 export type MachineComponentConvergence = {

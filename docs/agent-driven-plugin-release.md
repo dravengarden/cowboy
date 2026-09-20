@@ -88,6 +88,13 @@ only after the previous one's re-read inventory proves it converged, so a bad
 release reaches one host rather than the fleet. With no `--machine`, every
 connected Machine converges in registry order; `--plugin` bounds the run.
 
+For a Machine declared in
+[the Service-side membership document](machine-plugin-membership.md),
+convergence also installs the declared Plugins it lacks and removes the ones it
+should not have. Removal takes the ordinary uninstall preview first and refuses
+as soon as that preview names an affected session, so a live conversation is
+never ended to satisfy a list.
+
 Targets come from the Catalog, so no digest is typed. A release that is not
 `ready`, or that does not declare that Machine's platform, is not a target. A
 Plugin holding an active session lease is reported rather than recycled under a
