@@ -61,8 +61,8 @@ Deno.test("swapping the layer's layout commits before an animated transform", ()
   // The commit is a forced read, so it must stay on gesture boundaries.
   assertEquals(
     gestureSource.split("commitPaint()").length - 1,
-    2,
-    "commitPaint is called by the two size swaps and nowhere else",
+    3,
+    "commitPaint is called by the two size swaps, the settle freeze, and nowhere else",
   );
   // An animated return to fit hands the baked layer back first, or it starts
   // from a collapsed figure.
@@ -114,4 +114,59 @@ Deno.test("a fullscreen preview takes the standalone status bar with it", () => 
   // (The file header names the property it refuses to write, so match an
   // assignment rather than the mention.)
   assertEquals(/style\.overflow\s*=/u.test(lightboxSource), false);
+});
+
+Deno.test("a released pan coasts instead of stopping dead", () => {
+  // A zoomed figure that halts the instant the finger lifts reads as the
+  // surface letting go of the hand. Every release at zoom hands its smoothed
+  // speed to one compositor transition; a lift with no throw still settles the
+  // elastic margin it was holding.
+  const settle = gestureSource.slice(
+    gestureSource.indexOf("const settlePan = useCallback"),
+    gestureSource.indexOf("const setBackdrop"),
+  );
+  assert(settle.includes("projectFlick("));
+  assert(settle.includes("cubic-bezier(0.32, 0.72, 0, 1)"));
+  assert(settle.includes("constrainPan();"), "a throwless lift still settles");
+  const end = gestureSource.slice(gestureSource.indexOf("const onPointerEnd"));
+  assertEquals(
+    end.split("settlePan(st.velX, st.velY)").length - 1,
+    2,
+    "both zoomed release branches coast",
+  );
+  // No per-frame JS spring: the coast is one transition the compositor owns.
+  assertEquals(/requestAnimationFrame/u.test(gestureSource), false);
+});
+
+Deno.test("a finger landing mid-settle takes the figure where it is", () => {
+  // The transition owns the painted transform while `tf` already holds its
+  // destination, so a pan started during a coast would jump to the target.
+  const down = gestureSource.slice(
+    gestureSource.indexOf("const onPointerDown"),
+    gestureSource.indexOf("const onPointerMove"),
+  );
+  assert(down.indexOf("stopSettle();") < down.indexOf("measureGeometry();"));
+  const stop = gestureSource.slice(
+    gestureSource.indexOf("const stopSettle = useCallback"),
+    gestureSource.indexOf("const unbakeScale"),
+  );
+  assert(stop.includes("new DOMMatrixReadOnly(painted)"));
+  // …but only once that transition has left its first frame. Reading it in the
+  // same task it was started rewinds the figure to where the settle began.
+  assert(stop.includes("img.getAnimations()"));
+  assert(stop.includes("animation.currentTime > 0"));
+  assert(stop.includes("tf.current.x = matrix.m41"));
+  assert(stop.includes("tf.current.scale = clamp(matrix.m11 * bakedScale.current)"));
+});
+
+Deno.test("a settle at zoom keeps the pan layer promoted", () => {
+  // Demoting the layer on the frame a release animation starts makes iOS
+  // rebuild it mid-transition — the hitch at the end of every pan. Every
+  // animated paint taken while zoomed passes the pan-layer flag.
+  assert(gestureSource.includes('img.style.willChange = scale <= 1 || panLayer ? "transform" : "auto"'));
+  assertEquals(
+    gestureSource.split("applyTransform(true);").length - 1,
+    0,
+    "no animated paint drops the pan layer",
+  );
 });
