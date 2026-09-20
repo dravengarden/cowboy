@@ -37,6 +37,7 @@ async fn remote_language_reply_is_discarded_after_retarget_without_followup() {
             request_id,
             adapter,
             payload,
+            workspace_incarnation: None,
         } = commands.recv().await.unwrap()
         else {
             panic!("adapter request expected")
@@ -54,6 +55,7 @@ async fn remote_language_reply_is_discarded_after_retarget_without_followup() {
                     serde_json::json!({"type":"worktree", "api_version":1, "state":"ready"}),
                 ),
                 detail: None,
+                refusal: None,
             },
         );
     };

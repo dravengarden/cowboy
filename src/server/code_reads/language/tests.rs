@@ -141,10 +141,12 @@ async fn language_queries_never_adopt_replacement_routes_or_changed_sessions() {
                 request_id,
                 adapter,
                 payload,
+                workspace_incarnation,
             } = command
             else {
                 panic!("expected adapter request")
             };
+            assert!(workspace_incarnation.is_none());
             assert_eq!(adapter, "zed");
             assert_eq!(payload, request);
             control.record_remote(
@@ -153,6 +155,7 @@ async fn language_queries_never_adopt_replacement_routes_or_changed_sessions() {
                     request_id,
                     accepted: true,
                     detail: None,
+                    refusal: None,
                     payload: Some(
                         json!({"type":"bufferHover","api_version":1,"path":"a.rs","contents":[]}),
                     ),

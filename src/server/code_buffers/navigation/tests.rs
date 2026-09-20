@@ -122,6 +122,7 @@ fn reply(fixture: &Fixture, command: MachineCommand, value: Value) {
             accepted: true,
             payload: Some(value),
             detail: None,
+            refusal: None,
         },
     );
 }

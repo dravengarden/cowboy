@@ -12,6 +12,11 @@ const MAX_FRAME_BYTES: usize = 512 * 1024;
 pub(super) struct Counts {
     pub connections: u32,
     pub configurations: u32,
+    /// Every protocol the supplied pair actually negotiated. The relay admits
+    /// an older negotiation so a pre-fix Controller reaches the product checks
+    /// instead of being rejected at the handshake; acceptance still requires
+    /// the exact current protocol.
+    pub protocols: Vec<u16>,
     pub commands: BTreeMap<String, u32>,
     pub replies: u32,
     pub held_replies: u32,
@@ -201,6 +206,7 @@ impl Proxy {
                     "codeNavigationQuery",
                     "codeNavigationDestination",
                     "codeNavigationRelease",
+                    "coreSwapFile",
                 ]
                 .contains(&kind),
         )?;
@@ -254,7 +260,8 @@ fn inspect(
             | MachineEvent::PluginInstallationTarget { request_id, .. }
             | MachineEvent::PluginInstallationStep { request_id, .. }
             | MachineEvent::PluginUninstallRecovery { request_id, .. }
-            | MachineEvent::PluginUninstallStep { request_id, .. } => {
+            | MachineEvent::PluginUninstallStep { request_id, .. }
+            | MachineEvent::CommandResult { request_id, .. } => {
                 return record.reply(&request_id);
             }
             MachineEvent::Inventory { .. } | MachineEvent::PluginInventory { .. } => {}
@@ -298,7 +305,11 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
             };
             record.command(request_id, kind)
         }
-        MachineCommand::RefreshInventory { .. } => Ok(()),
+        // Correlated like any other command so its acknowledgement cannot be
+        // an unsolicited event. It carries no path, payload or effect.
+        MachineCommand::RefreshInventory { request_id } => {
+            record.command(request_id, "refreshInventory")
+        }
         MachineCommand::ObservePluginInstallation { request_id, query } => {
             check(
                 query.service_id == SERVICE
@@ -327,7 +338,17 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
             request_id,
             adapter,
             payload,
+            workspace_incarnation,
         } => {
+            // Only the core Code reader may carry a Machine-minted root
+            // identity, and only as a bounded opaque token.
+            check(workspace_incarnation.as_ref().is_none_or(|value| {
+                adapter == "code"
+                    && !value.is_empty()
+                    && value.len() <= crate::machine_protocol::MAX_WORKSPACE_INCARNATION_BYTES
+                    && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            }))?;
+            let carried = workspace_incarnation.is_some();
             let kind = if adapter == "zed" {
                 let kind = payload["type"].as_str().ok_or(Failure::WrongObservation)?;
                 if language_reads::COMMANDS.contains(&kind) {
@@ -367,9 +388,22 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                     {
                         "coreFile"
                     }
+                    // The separate advertised root used only for the
+                    // Machine-owned root identity check.
+                    crate::code_adapter::CodeOperation::File { path, .. }
+                        if path == root_identity::FILE
+                            && request.root.ends_with(root_identity::ROOT) =>
+                    {
+                        "coreSwapFile"
+                    }
                     _ => return Err(Failure::WrongObservation),
                 }
             };
+            // A Session-route read has no advertised root, so it must never
+            // borrow a Workspace observation's identity. The converse is NOT
+            // enforced here: a pre-fix Controller carries nothing, and must
+            // reach the product check rather than be refused by the relay.
+            check(!carried || kind == "coreSwapFile")?;
             record.command(request_id, kind)
         }
         MachineCommand::QueryPluginUninstallStep { request_id, step }
@@ -400,8 +434,10 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
                 && hello.machine_id == MACHINE
                 && hello.challenge_signature.is_some()
                 && hello.encryption_public_key.is_some()
+                // The supplied Machine must be capable of owning root
+                // identities even when the supplied Controller is not.
                 && hello.min_protocol <= 21
-                && hello.max_protocol >= 21 =>
+                && hello.max_protocol >= 22 =>
         {
             record.generation = Some(
                 hello
@@ -416,10 +452,13 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
             record.configured = false;
         }
         MachineFrame::Welcome {
-            protocol: 21,
+            protocol,
             desired_components,
             ..
-        } if !from_machine && desired_components.is_empty() => record.counts.connections += 1,
+        } if !from_machine && desired_components.is_empty() && (21..=22).contains(&protocol) => {
+            record.counts.connections += 1;
+            record.counts.protocols.push(protocol);
+        }
         MachineFrame::Runtime { frame } => match frame {
             Frame::CoreCommand {
                 command:
@@ -513,6 +552,7 @@ fn relay_core_pages_are_limited_to_the_named_fixture_and_never_raw_or_arbitrary_
                 request_id: "core-file".into(),
                 adapter: "code".into(),
                 payload,
+                workspace_incarnation: None,
             },
             &mut record,
         );
@@ -523,6 +563,63 @@ fn relay_core_pages_are_limited_to_the_named_fixture_and_never_raw_or_arbitrary_
         } else {
             assert!(record.pending.is_empty());
         }
+    }
+}
+
+/// The relay admits a Machine-owned root identity only for the separate
+/// advertised root, and requires one for every read of that root.
+#[test]
+fn relay_root_identities_belong_only_to_the_separate_advertised_workspace() {
+    let swap = format!("/fixture/{}", root_identity::ROOT);
+    for (root, path, incarnation, accepted) in [
+        (
+            swap.as_str(),
+            root_identity::FILE,
+            Some("0123456789abcdef0123456789abcdef"),
+            true,
+        ),
+        // A pre-fix Controller carries nothing; the relay forwards that read
+        // so the product check, not the relay, records the failure.
+        (swap.as_str(), root_identity::FILE, None, true),
+        // The Session-route fixture must never borrow that identity.
+        (
+            "/fixture",
+            read_routes::FILE,
+            Some("0123456789abcdef0123456789abcdef"),
+            false,
+        ),
+        // Structurally invalid carried values are refused outright.
+        (swap.as_str(), root_identity::FILE, Some(""), false),
+        (swap.as_str(), root_identity::FILE, Some("has-dash"), false),
+        (
+            swap.as_str(),
+            root_identity::FILE,
+            Some(&"a".repeat(129)),
+            false,
+        ),
+        // The identified root serves only its own named fixture file.
+        (
+            swap.as_str(),
+            "other.txt",
+            Some("0123456789abcdef0123456789abcdef"),
+            false,
+        ),
+    ] {
+        let mut record = Record::default();
+        let result = command_frame(
+            MachineCommand::AdapterRequest {
+                request_id: "swap-file".into(),
+                adapter: "code".into(),
+                payload: json!({"root":root, "type":"file", "path":path, "cursor":null}),
+                workspace_incarnation: incarnation.map(str::to_owned),
+            },
+            &mut record,
+        );
+        assert_eq!(result.is_ok(), accepted, "{root} {path} {incarnation:?}");
+        assert_eq!(
+            record.counts.commands.get("coreSwapFile").copied(),
+            accepted.then_some(1)
+        );
     }
 }
 
@@ -542,6 +639,7 @@ fn relay_language_reads_require_the_preopened_fixture_and_an_absolute_worktree()
                     request_id: "language-read".into(),
                     adapter: "zed".into(),
                     payload: json!({"type":kind, "path":path, "worktree":root}),
+                    workspace_incarnation: None,
                 },
                 &mut record,
             );
@@ -575,11 +673,12 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
             request_id: "id".into(),
             adapter: "zed".into(),
             payload: json!({"type":kind}),
+            workspace_incarnation: None,
         };
         assert!(command_frame(command, &mut Record::default()).is_err());
     }
     assert!(Record::default().reply("unrequested").is_err());
-    for protocol in [18, 19, 20, 22] {
+    for protocol in [18, 19, 20, 23] {
         assert!(
             handshake(
                 MachineFrame::Welcome {
@@ -594,17 +693,23 @@ fn relay_refuses_path_reads_reload_and_unsolicited_replies() {
             .is_err()
         );
     }
-    handshake(
-        MachineFrame::Welcome {
-            protocol: 21,
-            controller_epoch: 1,
-            heartbeat_interval_ms: 1000,
-            desired_components: vec![],
-        },
-        false,
-        &mut Record::default(),
-    )
-    .unwrap();
+    // Both negotiations reach the product checks; only the receipt decides
+    // which one may be accepted.
+    for protocol in [21, 22] {
+        let mut record = Record::default();
+        handshake(
+            MachineFrame::Welcome {
+                protocol,
+                controller_epoch: 1,
+                heartbeat_interval_ms: 1000,
+                desired_components: vec![],
+            },
+            false,
+            &mut record,
+        )
+        .unwrap();
+        assert_eq!(record.counts.protocols, vec![protocol]);
+    }
 }
 
 #[test]

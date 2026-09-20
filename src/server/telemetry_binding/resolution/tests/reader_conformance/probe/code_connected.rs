@@ -14,6 +14,7 @@ mod language_reads;
 mod navigation;
 mod proxy;
 mod read_routes;
+mod root_identity;
 mod synchronization;
 
 const SESSION: &str = "sess-901";
@@ -210,7 +211,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v11",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v12",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -242,7 +243,16 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 31;
+    // The relay admits an older negotiation so a pre-fix Controller reaches
+    // the product checks. Acceptance still requires the exact protocol that
+    // carries Machine-owned root identities on every observed connection.
+    receipt.accepted = result.is_ok()
+        && receipt.cleanup
+        && receipt.checks.len() == 32
+        && !receipt.wire.protocols.is_empty()
+        && receipt.wire.protocols.iter().all(|protocol| {
+            *protocol == crate::machine_protocol::CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION
+        });
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
@@ -301,7 +311,15 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         command
             .arg("--plugin-operation-admission")
             .arg("--code-adapter-socket")
-            .arg(root.path().join("code.sock"));
+            .arg(root.path().join("code.sock"))
+            // A second advertised root used only by the Machine-owned root
+            // identity check. No Session, native owner or Plugin uses it.
+            .arg("--workspace")
+            .arg(format!(
+                "{}={}",
+                root_identity::ROOT,
+                root.path().join(root_identity::ROOT).display()
+            ));
         pair.machine = Some(Running::spawn(&mut command)?);
         pair.connected(1).await?;
         receipt.stage = "connected_installation";

@@ -152,10 +152,14 @@ async fn session_read_dispatch_derives_original_root_and_rechecks_parked_replies
             request_id,
             adapter,
             payload,
+            workspace_incarnation,
         } = command
         else {
             panic!("wrong command")
         };
+        // A Session route executes in a session worktree, not an advertised
+        // root, so it never borrows another observation's root identity.
+        assert!(workspace_incarnation.is_none());
         assert_eq!(adapter, "code");
         let decoded: CodeAdapterRequest = serde_json::from_value(payload).unwrap();
         assert_eq!(decoded.root, "/original");
@@ -167,6 +171,7 @@ async fn session_read_dispatch_derives_original_root_and_rechecks_parked_replies
                 accepted: true,
                 payload: Some(serde_json::json!({"original": true})),
                 detail: None,
+                refusal: None,
             },
         );
         let replacement = replace.then(|| connect(&control, "machine", false));

@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use super::{ConnectionToken, LiveState, MachineControl, RequestBinding};
 use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
-use crate::machine_protocol::MachineWorkspace;
+use crate::machine_protocol::{
+    CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION, MachineWorkspace, WorkspaceRootIdentity,
+};
 
 const MAX_WORKSPACES_PER_MACHINE: usize = 1024;
 const MAX_WORKSPACES: usize = 4096;
@@ -23,6 +25,10 @@ struct WorkspaceIdentity {
     connection: ConnectionToken,
     workspace_id: String,
     cwd: String,
+    /// The exact opaque value the Machine minted for the object behind this
+    /// root. The Controller stores and echoes it; it never derives, renews or
+    /// compares it against a path, revision or any other observation.
+    incarnation: Option<String>,
 }
 
 impl PartialEq for WorkspaceCodeScope {
@@ -51,6 +57,11 @@ impl WorkspaceCodeScope {
             + self.0.connection.0.epoch.len()
             + self.0.workspace_id.len()
             + self.cwd().len()
+            + self.0.incarnation.as_ref().map_or(0, String::len)
+    }
+
+    fn incarnation(&self) -> Option<String> {
+        self.0.incarnation.clone()
     }
 
     pub(super) fn matches(&self, live: &LiveState) -> bool {
@@ -63,13 +74,44 @@ impl WorkspaceCodeScope {
     }
 }
 
+/// Structurally invalid or duplicated identities are dropped, not merged: an
+/// ambiguous advertisement must end that root, never pick one of two values.
+fn unique_incarnations(identities: &[WorkspaceRootIdentity]) -> HashMap<&str, &str> {
+    let mut seen: HashMap<&str, Option<&str>> = HashMap::new();
+    for identity in identities {
+        if !identity.is_well_formed() {
+            seen.insert(identity.workspace_id.as_str(), None);
+            continue;
+        }
+        seen.entry(identity.workspace_id.as_str())
+            .and_modify(|entry| *entry = None)
+            .or_insert(Some(identity.incarnation.as_str()));
+    }
+    seen.into_iter()
+        .filter_map(|(id, value)| Some((id, value?)))
+        .collect()
+}
+
 impl LiveState {
     pub(super) fn observe_workspaces(
         &mut self,
         connection: &ConnectionToken,
         workspaces: &[MachineWorkspace],
+        identities: Option<&[WorkspaceRootIdentity]>,
     ) {
         let machine = &connection.0.machine_id;
+        // A Machine that owns root identities must supply one per advertised
+        // root. Older Machines supply none and keep the previous behaviour,
+        // which this slice deliberately does not widen.
+        let owned = self
+            .connections
+            .get(machine)
+            .is_some_and(|live| live.protocol >= CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION);
+        let minted = if owned {
+            unique_incarnations(identities.unwrap_or_default())
+        } else {
+            HashMap::new()
+        };
         // Count before allocating a second map. A rejected observation ends the
         // old lifetimes, rather than retaining apparently-current stale roots.
         let mut count = workspaces.len();
@@ -79,6 +121,7 @@ impl LiveState {
                 .saturating_add(item.canonical_path.len())
                 .saturating_add(connection.0.machine_id.len())
                 .saturating_add(connection.0.epoch.len())
+                .saturating_add(minted.get(item.id.as_str()).map_or(0, |value| value.len()))
         });
         for (id, slots) in &self.workspace_inventory {
             if id != machine {
@@ -89,6 +132,7 @@ impl LiveState {
             }
         }
         if workspaces.len() > MAX_WORKSPACES_PER_MACHINE
+            || identities.map_or(0, <[WorkspaceRootIdentity]>::len) > MAX_WORKSPACES_PER_MACHINE
             || count > MAX_WORKSPACES
             || bytes > MAX_STRING_BYTES
         {
@@ -117,11 +161,20 @@ impl LiveState {
                 {
                     return None;
                 }
+                // An owning Machine that cannot observe a root advertises no
+                // identity for it. Refuse that root rather than reading it
+                // under an identity nobody is enforcing.
+                let incarnation = if owned {
+                    Some((*minted.get(id)?).to_owned())
+                } else {
+                    None
+                };
                 let scope = previous
                     .and_then(|slots| slots.get(id))
                     .filter(|scope| {
                         scope.cwd() == workspace.canonical_path
                             && scope.0.connection.same(connection)
+                            && scope.0.incarnation == incarnation
                     })
                     .cloned()
                     .unwrap_or_else(|| {
@@ -129,6 +182,7 @@ impl LiveState {
                             connection: connection.clone(),
                             workspace_id: id.into(),
                             cwd: workspace.canonical_path.clone(),
+                            incarnation,
                         }))
                     });
                 Some((id.into(), scope))
@@ -186,15 +240,45 @@ impl MachineControl {
                 scope.machine_id(),
                 "code",
                 request,
+                // The Machine re-resolves its own root against this exact
+                // value before reading. The Controller supplies no default
+                // and cannot substitute another observation's identity.
+                scope.incarnation(),
                 Some(RequestBinding::Workspace(scope)),
             )
             .await;
+        // The Machine owns this identity, so its typed refusal is the earliest
+        // evidence that the observation ended. Retire the slot now: cached
+        // bytes, ETags and continuations keyed by it must not survive either.
+        // Retirement records an ended observation; it is not a rollback, an
+        // undo, or a claim about work the Code adapter already started.
+        if let Err(failure) = &response
+            && failure.workspace_root_identity_changed()
+        {
+            self.retire_workspace_scope(scope);
+            return Err("Workspace read scope ended".into());
+        }
         // A reply can complete immediately before a remove/re-add or reconnect
         // while its observer remains parked. Never deliver that stale payload.
         if !self.workspace_scope_is_current(scope) {
             return Err("Workspace read scope ended".into());
         }
-        response
+        response.map_err(String::from)
+    }
+
+    /// Remove exactly the ended slot. Another Workspace on the same Machine,
+    /// the connection and every other Machine keep their own observations.
+    fn retire_workspace_scope(&self, scope: &WorkspaceCodeScope) {
+        let mut live = self.live.write();
+        let Some(slots) = live.workspace_inventory.get_mut(scope.machine_id()) else {
+            return;
+        };
+        if slots
+            .get(&scope.0.workspace_id)
+            .is_some_and(|current| current == scope)
+        {
+            slots.remove(&scope.0.workspace_id);
+        }
     }
 }
 

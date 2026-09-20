@@ -67,8 +67,10 @@ persisted/live disagreement, revoked enrollment, pre-enqueue refusal, parked
 replies, cancellation, response headers and both continuation caches.
 
 This only detects observations accepted by the Controller. An unreported
-filesystem replacement or intermediate Machine configuration change still needs
-a Machine-owned continuous identity protocol. There is no inode proof, state
+filesystem replacement of an advertised root is now closed separately by
+[Machine-owned root identity](plugin-machine-workspace-identity.md), which the
+Machine mints and enforces on protocol 22; an intermediate Machine
+configuration change still has no owner. There is no state
 reader/writer lease, principal-policy grant, cancellation of a read already
 enqueued, atomic HTTP delivery or effect restoration. The Machine retains its
 own trusted-root checks. Detached Sessions, workers, Provider credentials and

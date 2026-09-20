@@ -27,6 +27,7 @@ pub(super) fn respond(
             accepted: true,
             payload: Some(payload),
             detail: None,
+            refusal: None,
         },
     );
 }

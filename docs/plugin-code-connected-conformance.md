@@ -45,13 +45,13 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-The v11 harness has a 390-second overall execution limit: seven deliberately
+The v12 harness has a 390-second overall execution limit: seven deliberately
 lost replies each require the normal 40-second product timeout, plus the existing
 110-second allowance for other work. This test-only limit does not extend any
 Controller, Machine or native timeout, or shorten any fault observation.
 
-Thirty-one checks cover (receipt schema `...code-buffer-connected-conformance/v11`,
-requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
+Thirty-two checks cover (receipt schema `...code-buffer-connected-conformance/v12`,
+requiring Machine protocol 22, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
 1. Anonymous installation refusal, actual signed Code installation, cancelled
@@ -159,6 +159,19 @@ Historical v3 receipts cover only the first eleven checks:
     repeating Execute or the LSP query. Historical v10 does not accept these
     three failed-response checks or the source-only deadline edge tests in
     [continuation finalization](plugin-continuation-finalization.md).
+32. A second advertised Machine root, used by no Session, native owner or
+    Plugin, serves one authenticated core file read. That directory is then
+    actually replaced by a different object at the same path holding the same
+    bytes, with no inventory refresh. The next read still dispatches once, and
+    the Machine refuses it before touching the replacement: `410/no-store` with
+    no ETag or body. That typed refusal ends the Controller observation, so the
+    following read returns `404` from no cache, ETag or continuation and does
+    not dispatch. An explicit inventory refresh mints a new identity and reads
+    resume, proving a fence rather than a lost root. The Session fixture root's
+    own dispatch count is unchanged throughout. Historical v11 does not accept
+    this extension. Refusal is an ended observation, not a rollback, an undo,
+    or proof that an already dispatched read stopped. See
+    [Machine-owned Workspace root identity](plugin-machine-workspace-identity.md).
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills
@@ -226,3 +239,11 @@ and accepts two complete 31-check chains with seven actual lost-reply timeouts.
 It records the initial insufficient test-budget failure separately from those
 successful runs. Final-source Controller activation retains all 14 workers in
 its own observed window; no Machine, Web or Plugin generation is replaced.
+The [root-identity rollout](releases/plugin-machine-workspace-identity-2026-09-20.md)
+adds v12 check 32 and raises the required Machine protocol to 22. Its supplied
+Machine is the only party that mints or enforces a root identity; the supplied
+Controller carries an opaque value it cannot construct. The old Controller and
+Machine pair serves the replaced root as if nothing had changed, so that pair is
+recorded as the expected negative. Controller-only activation is separate: the
+resident protocol-21 Machine advertises no identity and keeps its previous
+behaviour until its own maintenance boundary.
