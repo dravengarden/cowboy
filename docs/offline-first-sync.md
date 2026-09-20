@@ -1,7 +1,9 @@
 # Offline-first synchronization
 
 Status: design 2026-09-18; the boot path became network-independent on
-2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738));
+2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738))
+and now opens on the user's real last screen (see
+[Boot presentation](#boot-presentation-service-worker-cowboy-v1739));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
