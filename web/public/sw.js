@@ -13,9 +13,9 @@
 //     offline notice.
 // Bump VERSION to evict the old caches on the next activation.
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
-// detects a new worker when this string changes. Desktop auto-reloads after its
-// visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1738";
+// detects a new worker when this string changes. Every surface reloads itself
+// after a visible countdown, once its user is idle; nothing waits for a tap.
+const VERSION = "cowboy-v1739";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the

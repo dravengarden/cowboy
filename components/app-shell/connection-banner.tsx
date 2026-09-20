@@ -25,6 +25,7 @@
 import { Box, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { tickUpdateCountdown, updateAllowed, type UpdateCountdown } from "./update-policy.ts";
 
 export type BannerKind = "down" | "reconnected" | "update";
 export interface Banner {
@@ -101,7 +102,7 @@ function refreshShellThroughServiceWorker(): Promise<boolean | undefined> {
   });
 }
 
-// The update action (a tap on Mobile, the elapsed countdown on Desktop). The
+// The update action, taken by the page itself once its countdown elapses. The
 // shell is served cache-first, so the new build is downloaded BEFORE the
 // reload: the reload then boots it from cache, and a weak connection leaves
 // this build running instead of a white page. Without a service worker the
@@ -287,6 +288,122 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
 // Seconds the update bar counts down before reloading on its own.
 const DEFAULT_UPDATE_COUNTDOWN_SECS = 3;
 
+export interface AutoUpdateOptions {
+  /** Seconds the countdown runs before the update is applied. Default 3. */
+  readonly countdownSecs?: number;
+  /** Whether the surface is idle enough to be replaced right now. Default: always idle. */
+  readonly canApplyUpdate?: (() => boolean) | undefined;
+  /** Foreground dwell required before a reload. Default 0 — no dwell. */
+  readonly minVisibleMs?: number;
+  /** How long to wait after a download that did not finish. Default 60 s. */
+  readonly retryMs?: number;
+  /** Set false on a surface that does not present the update state at all. */
+  readonly enabled?: boolean;
+}
+
+/** A pending update, reduced to what a surface has to render. */
+export interface AutoUpdateState {
+  /** A deployed build is waiting for this page. */
+  readonly pending: boolean;
+  /** Seconds left in the visible countdown. */
+  readonly secs: number;
+  /** The countdown is parked because the user is busy or just resumed. */
+  readonly held: boolean;
+  /** The new shell is downloading and the page is about to reload. */
+  readonly applying: boolean;
+  /** The last download did not finish; another countdown follows. */
+  readonly failed: boolean;
+}
+
+// Apply a deployed build on the page's own initiative. Every surface runs the same
+// policy (docs/offline-first-sync.md §Update policy): count down while the user is
+// idle, rewind whenever they are not, then download the shell and reload into it.
+// Nothing here waits for a tap; the bar above it only narrates.
+export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions = {}): AutoUpdateState {
+  const {
+    countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS,
+    canApplyUpdate,
+    minVisibleMs = 0,
+    retryMs = UPDATE_RETRY_MS,
+    enabled = true,
+  } = options;
+  const banner = store.useConnectionBanner();
+  const pending = enabled && banner?.kind === "update";
+  const [countdown, setCountdown] = useState<UpdateCountdown>({ secs: countdownSecs, held: false });
+  const [applying, setApplying] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [visibleSince, setVisibleSince] = useState(() => Date.now());
+  // Re-arms the one-second check even when the countdown itself did not move. A held
+  // countdown rewinds to the same value, so without this the effect's dependencies
+  // never change, the next timer is never scheduled, and the update stalls for the
+  // rest of the page's life.
+  const [recheck, setRecheck] = useState(0);
+
+  // A resumed page earns its dwell again. iOS restores a frozen PWA instead of
+  // re-navigating, and its timers were paused the whole time it was away.
+  useEffect(() => {
+    if (minVisibleMs <= 0) return undefined;
+    const onVisibility = (): void => {
+      if (globalThis.document.visibilityState === "visible") setVisibleSince(Date.now());
+    };
+    globalThis.document.addEventListener("visibilitychange", onVisibility);
+    return () => globalThis.document.removeEventListener("visibilitychange", onVisibility);
+  }, [minVisibleMs]);
+
+  useEffect(() => {
+    if (!pending) {
+      setCountdown({ secs: countdownSecs, held: false });
+      setApplying(false);
+      setFailed(false);
+      return undefined;
+    }
+    // 3 means three real seconds: show 3, 2, 1, then apply as the counter reaches
+    // zero. Waiting for -1 made the nominal three-second countdown last four.
+    if (countdown.secs <= 0) {
+      let alive = true;
+      let retry: ReturnType<typeof setTimeout> | undefined;
+      setApplying(true);
+      void store.applyUpdate().then((reloading) => {
+        if (reloading || !alive) return;
+        // The new build could not be downloaded yet. Keep this one running
+        // and start the countdown again later.
+        setApplying(false);
+        setFailed(true);
+        retry = setTimeout(() => {
+          setFailed(false);
+          setCountdown({ secs: countdownSecs, held: false });
+        }, retryMs);
+      });
+      return () => {
+        alive = false;
+        clearTimeout(retry);
+      };
+    }
+    const t = setTimeout(() => {
+      const allowed = updateAllowed({
+        idle: canApplyUpdate === undefined || canApplyUpdate(),
+        visible: globalThis.document?.visibilityState !== "hidden",
+        visibleForMs: Date.now() - visibleSince,
+      }, minVisibleMs);
+      setCountdown((current) => tickUpdateCountdown(current, allowed, countdownSecs));
+      setRecheck((value) => value + 1);
+    }, 1000);
+    return () => clearTimeout(t);
+  }, [
+    pending,
+    countdown.secs,
+    recheck,
+    countdownSecs,
+    store,
+    canApplyUpdate,
+    minVisibleMs,
+    retryMs,
+    visibleSince,
+  ]);
+
+  return { pending, secs: countdown.secs, held: countdown.held, applying, failed };
+}
+
 // MUI palette per banner kind: an outage is a calm WARNING (yellow), not an
 // alarm — the app stays fully usable offline and retries are unbounded, so red
 // would overstate it. Green recovery flash; blue (info) update.
@@ -342,50 +459,20 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const banner = rawBanner !== undefined && kinds !== undefined && !kinds.includes(rawBanner.kind)
     ? undefined
     : rawBanner;
-  const isUpdate = banner?.kind === "update";
-  const [secs, setSecs] = useState(countdownSecs);
-  const [held, setHeld] = useState(false);
-
-  // Drive the update countdown (and only it). Resets whenever we're not on the
-  // update state so a later redeploy starts a fresh 3→0. While the surface says
-  // the user is busy (composing, sending, mid-turn) the count holds at its start
-  // and re-checks every second, so a reload never lands under their hands.
-  useEffect(() => {
-    if (!isUpdate) {
-      setSecs(countdownSecs);
-      setHeld(false);
-      return;
-    }
-    // 3 means three real seconds: show 3, 2, 1, then apply as the counter reaches
-    // zero. Waiting for -1 made the nominal three-second countdown last four.
-    if (secs <= 0) {
-      let alive = true;
-      let retry: ReturnType<typeof setTimeout> | undefined;
-      void store.applyUpdate().then((reloading) => {
-        if (reloading || !alive) return;
-        // The new build could not be downloaded yet. Keep this one running
-        // and start the countdown again later.
-        retry = setTimeout(() => setSecs(countdownSecs), UPDATE_RETRY_MS);
-      });
-      return () => {
-        alive = false;
-        clearTimeout(retry);
-      };
-    }
-    const t = setTimeout(() => {
-      const allowed = canApplyUpdate === undefined || canApplyUpdate();
-      setHeld(!allowed);
-      setSecs((s) => (allowed ? s - 1 : countdownSecs));
-    }, 1000);
-    return () => clearTimeout(t);
-  }, [isUpdate, secs, countdownSecs, store, canApplyUpdate]);
+  // One shared policy drives every surface: the countdown runs while the user is
+  // idle and rewinds whenever they are not, then the page reloads itself.
+  const update = useAutoUpdate(store, {
+    countdownSecs,
+    canApplyUpdate,
+    enabled: kinds === undefined || kinds.includes("update"),
+  });
 
   if (!banner) {
     return null;
   }
 
   const palette = bannerPalette(banner.kind);
-  const label = bannerLabel(banner.kind, secs, held);
+  const label = bannerLabel(banner.kind, update.secs, update.held);
 
   return (
     <Box

@@ -26,6 +26,8 @@ export {
 export { SettingsSheet, type SettingsSheetProps, ThemeModeControl } from "./settings-sheet.tsx";
 export { NavShell, type NavShellApi, type NavShellProps } from "./nav-shell.tsx";
 export {
+  type AutoUpdateOptions,
+  type AutoUpdateState,
   type Banner,
   type BannerKind,
   ConnectionBanner,
@@ -33,7 +35,14 @@ export {
   type ConnectionStore,
   type ConnectionStoreOptions,
   createConnectionStore,
+  useAutoUpdate,
 } from "./connection-banner.tsx";
+export {
+  tickUpdateCountdown,
+  updateAllowed,
+  type UpdateCountdown,
+  type UpdateGate,
+} from "./update-policy.ts";
 export {
   type GalleryImage,
   type GalleryInlineSvg,

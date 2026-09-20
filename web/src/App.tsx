@@ -3453,10 +3453,10 @@ export function App({
                 }),
             }}
         >
-            {/* The connection state is shared; activation policy is not.
-                Desktop keeps the short update countdown, while touch surfaces
-                require an explicit Update tap so foreground checks never
-                replace active mobile work. */}
+            {/* The connection state is shared; so is the update policy. Both
+                surfaces count down and reload on their own once the user is
+                idle; the phone additionally waits out a foreground minute
+                (MobileConnectionBanner) so a resume never reloads at once. */}
             {surface === "desktop" && (
                 <>
                     {/* Connectivity lives in the status line; the banner keeps
