@@ -125,3 +125,65 @@ export function desktopListItemSx() {
     },
   };
 }
+
+/** The house Desktop modal material. Dark mode's `background.paper` is very
+ * close to the canvas, so a dialog that keeps MUI's flat default paper reads
+ * as an undelimited black slab with no visible edge. Every Desktop dialog —
+ * `DesktopModal` and the `Sheet`'s Desktop branch — shares this one frosted,
+ * edged, shadowed material so no surface can drift back to the default. */
+export function desktopModalPaperSx() {
+  return {
+    overflow: "hidden",
+    borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
+    border: 1,
+    borderColor: (theme: Theme) => alpha(theme.palette.primary.main, 0.22),
+    bgcolor: (theme: Theme) => alpha(theme.palette.background.paper, 0.96),
+    backgroundImage: (theme: Theme) =>
+      `linear-gradient(145deg, ${
+        alpha(
+          theme.palette.common.white,
+          theme.palette.mode === "dark" ? 0.035 : 0.42,
+        )
+      }, transparent 48%)`,
+    backdropFilter: "blur(28px) saturate(145%)",
+    boxShadow: (theme: Theme) =>
+      `0 28px 80px ${
+        alpha(
+          theme.palette.common.black,
+          theme.palette.mode === "dark" ? 0.48 : 0.22,
+        )
+      }`,
+  };
+}
+
+/** Scrim behind a Desktop modal. Paired with `desktopModalPaperSx` so the
+ * dialog's own edge always has something to separate from. */
+export function desktopModalBackdropSx() {
+  return {
+    bgcolor: (theme: Theme) =>
+      alpha(
+        theme.palette.common.black,
+        theme.palette.mode === "dark" ? 0.56 : 0.34,
+      ),
+    backdropFilter: "blur(3px)",
+  };
+}
+
+/** A labelled group inside a Desktop modal. An outline-only group vanishes
+ * into dark mode's near-black paper, which is what made the control center
+ * read as one flat sheet of rows; a faint raised fill gives every section the
+ * same findable edge. */
+export function desktopPanelSx() {
+  return {
+    border: 1,
+    borderColor: "divider",
+    borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
+    bgcolor: (theme: Theme) =>
+      alpha(
+        theme.palette.mode === "dark"
+          ? theme.palette.common.white
+          : theme.palette.common.black,
+        theme.palette.mode === "dark" ? 0.035 : 0.018,
+      ),
+  };
+}

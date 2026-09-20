@@ -74,7 +74,16 @@ Deno.test("control center tab bar stays sticky on desktop", () => {
   );
   assertEquals(appSource.includes('position: "sticky"'), true);
   assertEquals(appSource.includes("top: -1"), true);
-  assertEquals(appSource.includes('bgcolor: "background.paper"'), true);
+  // The band still needs a fill so the sheet surface's scrolled content does
+  // not bleed through it, but it is the frosted modal material rather than an
+  // opaque paper fill, which printed a seam across the translucent dialog.
+  assertEquals(
+    appSource.includes(
+      "bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94)",
+    ),
+    true,
+  );
+  assertEquals(appSource.includes('backdropFilter: "blur(16px)"'), true);
   assertEquals(appSource.includes("borderRadius: 0"), true);
   assertEquals(appSource.includes("borderBottom: 0"), true);
   assertEquals(appSource.includes('borderColor: "divider"'), true);

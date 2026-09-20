@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useState } from "react";
+import { DesktopPanel } from "./desktop/DesktopPanel";
 import {
   notificationPermissionState,
   disableSystemNotifications,
@@ -113,33 +114,17 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
     ? "Enabled"
     : "Off";
 
-  return (
-    <Stack
-      spacing={2}
-      data-notification-settings="true"
-      sx={embedded
-        ? { pt: 0, pb: 0 }
-        : { pt: { xs: 1.5, md: 0 }, pb: { xs: 12, md: 0 } }}
-    >
-      <Stack direction="row" alignItems="flex-start" spacing={1.25}>
-        <Box sx={{ mt: 0.25, color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
-          {enabled ? <NotificationsActiveOutlined /> : <NotificationsOffOutlined />}
-        </Box>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle2">System notifications</Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.4, pr: 0.5 }}>
-            Alerts from the installed Cowboy app when a session needs attention
-          </Typography>
-        </Box>
-        <Chip
-          size="small"
-          label={status}
-          color={enabled ? "success" : "default"}
-          variant="outlined"
-          sx={{ mt: 0.125, flexShrink: 0 }}
-        />
-      </Stack>
-
+  const statusChip = (
+    <Chip
+      size="small"
+      label={status}
+      color={enabled ? "success" : "default"}
+      variant="outlined"
+      sx={{ mt: 0.125, flexShrink: 0 }}
+    />
+  );
+  const systemControls = (
+    <>
       {permission === "denied" && (
         <Alert severity="warning">
           Notifications are blocked. Allow Cowboy in iOS Settings or your browser site settings, then return here.
@@ -151,7 +136,6 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
         </Alert>
       )}
       {error && <Alert severity="error">{error}</Alert>}
-
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
         {!enabled && permission === "default" && (
           <Button variant="contained" disabled={requesting} onClick={() => void enable()}>
@@ -190,7 +174,6 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
           </Button>
         )}
       </Stack>
-
       <PreferenceRow
         label="Show session names"
         description="Include task names on the Lock Screen; off by default for privacy"
@@ -198,6 +181,102 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
         disabled={!enabled}
         onChange={(checked): void => updateSystemNotificationPreferences({ showSessionNames: checked })}
       />
+    </>
+  );
+  const categoryRows = (
+    <>
+      {CATEGORIES.map((category) => (
+        <PreferenceRow
+          key={category.key}
+          label={category.label}
+          description={category.description}
+          checked={preferences.categories[category.key]}
+          disabled={!enabled}
+          onChange={(checked): void => updateSystemNotificationPreferences({
+            categories: { [category.key]: checked },
+          })}
+        />
+      ))}
+      <Typography variant="caption" color="text.secondary">
+        Mute or unmute an individual session from its ••• menu. System permission always takes priority.
+      </Typography>
+    </>
+  );
+  const deliveryRows = (
+    <>
+      <PreferenceRow
+        label="In-app sound"
+        description="Play Cowboy's chime when the open app is in the background"
+        checked={sound}
+        onChange={setNotifySetting}
+      />
+      <PreferenceRow
+        label="In-app vibration"
+        description="Use Cowboy haptics when supported by the open app"
+        checked={vibration}
+        onChange={setVibrateSetting}
+      />
+    </>
+  );
+
+  // Desktop and tablet render inside the control center, where every other tab
+  // groups its rows into the shared panel. Divider-separated rows on the
+  // modal's own surface were the one tab that read as a flat black sheet.
+  if (!embedded) {
+    return (
+      <Stack spacing={2} data-notification-settings="true" sx={{ pt: { xs: 1.5, md: 0 }, pb: { xs: 12, md: 0 } }}>
+        <DesktopPanel
+          label="System notifications"
+          description="Alerts from the installed Cowboy app when a session needs attention"
+          actions={
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ flexShrink: 0 }}>
+              <Box sx={{ color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
+                {enabled
+                  ? <NotificationsActiveOutlined fontSize="small" />
+                  : <NotificationsOffOutlined fontSize="small" />}
+              </Box>
+              {statusChip}
+            </Stack>
+          }
+        >
+          <Stack spacing={1.75} sx={{ px: 1.5, pt: 1.25, pb: 0.75 }}>{systemControls}</Stack>
+        </DesktopPanel>
+        <DesktopPanel
+          label="Notify me when"
+          description="Visible active sessions stay quiet. Background and other sessions can alert you."
+        >
+          <Stack spacing={1.75} sx={{ px: 1.5, pt: 1.25, pb: 0.75 }}>{categoryRows}</Stack>
+        </DesktopPanel>
+        <DesktopPanel
+          label="Delivery"
+          description="Lock Screen notification sound and vibration follow your device settings."
+        >
+          <Stack spacing={1.75} sx={{ px: 1.5, pt: 1.25, pb: 0.75 }}>{deliveryRows}</Stack>
+        </DesktopPanel>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack
+      spacing={2}
+      data-notification-settings="true"
+      sx={{ pt: 0, pb: 0 }}
+    >
+      <Stack direction="row" alignItems="flex-start" spacing={1.25}>
+        <Box sx={{ mt: 0.25, color: enabled ? "success.main" : "text.secondary", display: "grid" }}>
+          {enabled ? <NotificationsActiveOutlined /> : <NotificationsOffOutlined />}
+        </Box>
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Typography variant="subtitle2">System notifications</Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", lineHeight: 1.4, pr: 0.5 }}>
+            Alerts from the installed Cowboy app when a session needs attention
+          </Typography>
+        </Box>
+        {statusChip}
+      </Stack>
+
+      {systemControls}
 
       <Divider />
       <Stack spacing={1.75}>
@@ -207,21 +286,7 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
             Visible active sessions stay quiet. Background and other sessions can alert you.
           </Typography>
         </Box>
-        {CATEGORIES.map((category) => (
-          <PreferenceRow
-            key={category.key}
-            label={category.label}
-            description={category.description}
-            checked={preferences.categories[category.key]}
-            disabled={!enabled}
-            onChange={(checked): void => updateSystemNotificationPreferences({
-              categories: { [category.key]: checked },
-            })}
-          />
-        ))}
-        <Typography variant="caption" color="text.secondary">
-          Mute or unmute an individual session from its ••• menu. System permission always takes priority.
-        </Typography>
+        {categoryRows}
       </Stack>
 
       <Divider />
@@ -232,20 +297,8 @@ export function NotificationSettingsContent({ embedded = false }: { embedded?: b
             Lock Screen notification sound and vibration follow your device settings.
           </Typography>
         </Box>
-        <PreferenceRow
-          label="In-app sound"
-          description="Play Cowboy's chime when the open app is in the background"
-          checked={sound}
-          onChange={setNotifySetting}
-        />
-        <PreferenceRow
-          label="In-app vibration"
-          description="Use Cowboy haptics when supported by the open app"
-          checked={vibration}
-          onChange={setVibrateSetting}
-        />
+        {deliveryRows}
       </Stack>
-
     </Stack>
   );
 }
