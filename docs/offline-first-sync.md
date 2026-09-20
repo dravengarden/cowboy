@@ -539,9 +539,15 @@ session is about 122 KB: 25 KB markup, 84 KB CSS, 13 KB `@font-face`.
 
 The overlay is a picture, never the app: closed shadow root (no shared ids,
 selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is
-shown only when every one of the user, the viewport, the colour scheme, the
-session about to open and a 7-day age check agree, and it is sanitized again
-on mount. `signalBootReady()` cross-fades it out two frames after the live
+shown only when the user, the viewport, the colour scheme, the session about
+to open and a 7-day age check all agree, and it is sanitized again on mount.
+The viewport check is an 8% tolerance per axis, not an exact match: the copy
+is live DOM and reflows at the current size, so only the pinned boxes and the
+restored scroll offsets carry the capture's geometry. Requiring an exact match
+cost Desktop the feature entirely (any window resize) and lost it in a browser
+tab whenever the URL bar came or went; 8% still rejects a rotation or a halved
+window, and the feed is bottom-anchored under a clipping frame, so a slightly
+short picture loses the top, which is the right end to lose. `signalBootReady()` cross-fades it out two frames after the live
 app has painted the active session; a 4 s safety timeout guarantees a stuck
 app can never hide behind a picture of itself. `clearBootSnapshot()` runs on
 sign-out, a login answer and a changed account.
