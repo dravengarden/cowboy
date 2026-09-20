@@ -112,3 +112,13 @@ Explicitly not closed by this slice, and still open in the
 - Machine activation. This changes the Machine wire protocol to 22; the
   resident Machine keeps protocol 21 until a separate maintenance boundary.
   Against a protocol-21 Machine the Controller behaves exactly as before.
+
+## Acceptance
+
+The [accepted Controller rollout](releases/plugin-machine-workspace-identity-2026-09-20.md)
+records the source negatives verified against the previous implementation, the
+retained-handle proof, the complete quality gate, two v12/32-check connected
+chains plus one against the published artifact, the production Controller's
+recorded HTTP 200 for a replaced root, 24 browser cases and actual
+Catalog/host floors before and after activation. Only the Controller is
+activated; the resident protocol-21 Machine is unchanged.
