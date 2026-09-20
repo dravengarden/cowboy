@@ -386,7 +386,16 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
 }
 
 function touchTranscriptSession(sessionId: string): void {
-  const update = touchTranscriptSessionCache(transcriptSessionCache, sessionId);
+  // Background prefetch touches this MRU too (see `prefetch`), and an evicted
+  // OPENED session never comes back: prefetch excludes the active id, and its
+  // snapshots and events are then dropped as uncached, so the transcript stays
+  // on its skeleton for good. Pin the opened session out of the victim list.
+  const update = touchTranscriptSessionCache(
+    transcriptSessionCache,
+    sessionId,
+    TRANSCRIPT_SESSION_CACHE_LIMIT,
+    openedSessionId,
+  );
   transcriptSessionCache = update.order;
   evictTranscriptSessions(update.evicted);
 }
@@ -1480,7 +1489,13 @@ function handle(msg: Outbound): void {
       // A hydration response can race an LRU eviction. Reopening the session
       // starts a fresh bootstrap; retaining this stale response would defeat the
       // cache bound and can overwrite a newer transcript epoch.
-      if (!transcriptIsCached(msg.session_id)) break;
+      // The OPENED session's snapshot is never a cache miss to discard: that is
+      // the one transcript the user is looking at, so it takes an MRU slot
+      // instead of leaving the skeleton up with no further snapshot coming.
+      if (!transcriptIsCached(msg.session_id)) {
+        if (msg.session_id !== openedSessionId) break;
+        touchTranscriptSession(msg.session_id);
+      }
       let existingTimeline = state.timelines.get(msg.session_id) ?? [];
       if (
         state.transcriptSources.get(msg.session_id)?.source === "replica" &&
@@ -2586,7 +2601,8 @@ function schedulePrefetch(): void {
     activeId: openedSessionId,
     recent: transcriptSessionCache,
     hydrated: state.hydrated,
-    // Never enough to push the opened session out of the transcript MRU.
+    // Leave one MRU slot for the opened session; it is also pinned against
+    // eviction, because prefetch rounds keep touching new ids over time.
     limit: TRANSCRIPT_SESSION_CACHE_LIMIT - 1,
   }));
 }
