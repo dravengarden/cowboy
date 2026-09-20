@@ -2668,3 +2668,21 @@ Desktop Vim + IME checks:
        from source; a real third-party IME, but not WeType's grammar.
 
     Recorded 2026-09-17 and deliberately not pursued in that session.
+
+112. **Inline images share one image ROW; one picture per line turns the
+    composer into a blank box.** A thumbnail is capped at 80px tall and about
+    a third of the composer's width, and every insertion used to open its own
+    line plus its own whitespace landing line. Two pasted screenshots
+    therefore cost 2×(88px image row + 24px landing line) and stacked down the
+    left edge, so a 290px composer card showed two small thumbnails against a
+    mostly empty canvas (reported 2026-09-20). `inlineImageInsertion` now joins
+    a batch with no separator, appends to the image row the caret already sits
+    on (or the one directly above its landing line), and mints a landing line
+    only when that row has none. The caret contract is unchanged: it still
+    never rests on the image row, and the row still ends in a real
+    whitespace text line for iOS (v1265). `isLoneImageTokenLine` therefore
+    means "a line holding nothing but image tokens" — do not narrow it back to
+    a single token, or Return/Backspace/landing-line repair will stop
+    recognising a multi-image row. Per-image deletion already falls back to a
+    token-only range when a row carries more than one token, so removing the
+    last one still takes the whole row.

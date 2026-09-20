@@ -27,6 +27,7 @@ import { openLightbox } from "./ResourceLightbox";
 import {
   imageDeletionRange,
   inlineImagePasteInsertion,
+  isImageOnlyLine,
   mapImageDeletionPosition,
 } from "./inlineImageSelection";
 
@@ -241,7 +242,7 @@ export const inlineImageField = StateField.define<DecorationSet>({
 function lastLineIsImageToken(text: string): boolean {
   const nl = text.lastIndexOf("\n");
   const last = nl === -1 ? text : text.slice(nl + 1);
-  return last.length > 0 && LONE_TOKEN_RE.test(last);
+  return last.length > 0 && isImageOnlyLine(last);
 }
 
 /// Seed-only: land on a normal-height line after the thumbnail, with a
@@ -281,7 +282,9 @@ export const inlineImageTheme = EditorView.theme({
     width: "auto",
     height: "auto",
     borderRadius: "8px",
-    margin: "4px 0",
+    // Images share one row, so the trailing gap separates neighbours. The row
+    // has `font-size: 0`, so nothing but this margin can space them apart.
+    margin: "4px 6px 4px 0",
     cursor: "pointer",
     // A theme-aware hairline guarantees the thumbnail has a visible EDGE on BOTH
     // themes. The old black drop-shadow vanished on the dark surface — a pasted

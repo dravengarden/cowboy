@@ -3,6 +3,7 @@ import {
   imageDeletionRange,
   inlineImageInsertion,
   inlineImagePasteInsertion,
+  isImageOnlyLine,
   mapImageDeletionPosition,
 } from "./inlineImageSelection";
 
@@ -47,6 +48,58 @@ Deno.test("a later paste does not replace an already placed image token", () => 
   const next = first.slice(0, edit.from) + edit.insert + first.slice(edit.to);
   assertEquals(next.includes("cowboy-att:image-1"), true);
   assertEquals(next.includes("cowboy-att:image-2"), true);
+});
+
+Deno.test("a batch paste fills one image row instead of one row per picture", () => {
+  const edit = inlineImageInsertion("", 0, 0, [
+    { id: "image-1", name: "one.png" },
+    { id: "image-2", name: "two.png" },
+  ]);
+  assertEquals(
+    edit.insert,
+    "![one.png](cowboy-att:image-1)![two.png](cowboy-att:image-2)\n ",
+  );
+});
+
+Deno.test("a second paste joins the existing image row and reuses its landing line", () => {
+  const first = "![one.png](cowboy-att:image-1)\n ";
+  // The caret rests at the end of the landing line after the first paste.
+  const edit = inlineImageInsertion(first, first.length, first.length, [
+    { id: "image-2", name: "two.png" },
+  ]);
+  const next = first.slice(0, edit.from) + edit.insert + first.slice(edit.to);
+  assertEquals(
+    next,
+    "![one.png](cowboy-att:image-1)![two.png](cowboy-att:image-2)\n ",
+  );
+  assertEquals(edit.caret, next.length);
+});
+
+Deno.test("an image row still gains a landing line when it has none", () => {
+  const row = "![one.png](cowboy-att:image-1)";
+  const edit = inlineImageInsertion(row, row.length, row.length, [
+    { id: "image-2", name: "two.png" },
+  ]);
+  const next = row.slice(0, edit.from) + edit.insert + row.slice(edit.to);
+  assertEquals(
+    next,
+    "![one.png](cowboy-att:image-1)![two.png](cowboy-att:image-2)\n ",
+  );
+  assertEquals(edit.caret, next.length);
+});
+
+Deno.test("a paste onto prose still opens its own image row", () => {
+  const edit = inlineImageInsertion("notes", 5, 5, [
+    { id: "image-1", name: "one.png" },
+  ]);
+  assertEquals(edit.insert, "\n![one.png](cowboy-att:image-1)\n ");
+});
+
+Deno.test("an image row is every line that holds only image tokens", () => {
+  assertEquals(isImageOnlyLine("![a](cowboy-att:1)"), true);
+  assertEquals(isImageOnlyLine("![a](cowboy-att:1)![b](cowboy-att:2)"), true);
+  assertEquals(isImageOnlyLine("look ![a](cowboy-att:1)"), false);
+  assertEquals(isImageOnlyLine(" "), false);
 });
 
 Deno.test("image deletion removes the insertion line breaks", () => {

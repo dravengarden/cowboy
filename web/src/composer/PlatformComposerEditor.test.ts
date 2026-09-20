@@ -230,7 +230,7 @@ Deno.test("native batch image promotion replaces selection and lands after every
   );
   assertEquals(
     edit.value,
-    "![one.png](cowboy-att:image-1)\n![two.png](cowboy-att:image-2)\n \n tail",
+    "![one.png](cowboy-att:image-1)![two.png](cowboy-att:image-2)\n \n tail",
   );
   assertEquals(edit.caret, edit.value.indexOf("\n \n tail") + 2);
 });
