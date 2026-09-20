@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 mod code_buffer_navigation;
 mod code_buffer_sync;
 mod installation;
+pub(crate) mod local_roots;
 mod session_reads;
 mod site;
 mod telemetry_export;

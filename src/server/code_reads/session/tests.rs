@@ -6,6 +6,12 @@ use axum::http::{StatusCode, header};
 use axum::response::IntoResponse as _;
 use tokio::sync::mpsc;
 
+/// The fixture's real worktree. A local read route only exists for a root the
+/// Controller can actually observe, so these must be real directories.
+fn worktree() -> String {
+    crate::machine_control::local_roots::test_root("code-reads-session")
+}
+
 fn create(hub: &Hub, id: &str, machine: &str) {
     hub.create_session(SessionRegistration {
         id: id.into(),
@@ -18,7 +24,7 @@ fn create(hub: &Hub, id: &str, machine: &str) {
         workspace_id: Some("workspace".into()),
         workspace_name: None,
         workspace_source_path: None,
-        cwd: "/original/worktree".into(),
+        cwd: worktree(),
         title: "fixture".into(),
         origin: SessionOrigin::default(),
         system: false,
@@ -137,8 +143,7 @@ fn session_read_routes_keep_metadata_and_independent_sessions_but_not_cwd_aba() 
     hub.set_status("one", crate::core::Status::Running, None);
     assert_eq!(scope(&hub, &control, "one"), first);
     hub.update_session_cwd("one", "/other".into()).unwrap();
-    hub.update_session_cwd("one", "/original/worktree".into())
-        .unwrap();
+    hub.update_session_cwd("one", worktree()).unwrap();
     assert_ne!(scope(&hub, &control, "one"), first);
     let CodeReadScope::Session(first) = first else {
         unreachable!()
@@ -289,7 +294,7 @@ async fn manifest_readiness_uses_the_original_session_route_without_renewal() {
         assert_eq!(adapter, "zed");
         assert_eq!(
             payload,
-            serde_json::json!({"type":"ensureWorktree", "path":"/original/worktree", "trusted":true})
+            serde_json::json!({"type":"ensureWorktree", "path":worktree(), "trusted":true})
         );
         control.record_remote(
             &connection,
@@ -335,7 +340,7 @@ async fn standalone_local_readiness_retains_the_existing_unix_socket_contract() 
         let mut line = String::new();
         BufReader::new(read).read_line(&mut line).await.unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(request["path"], "/original/worktree");
+        assert_eq!(request["path"], worktree());
         write
             .write_all(b"{\"type\":\"worktree\",\"api_version\":1,\"state\":\"ready\"}\n")
             .await

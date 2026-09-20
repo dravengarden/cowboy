@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::local_roots::LocalRoot;
 use super::{ConnectionToken, LiveState, MachineControl, RequestBinding};
 use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::machine_protocol::{
@@ -29,6 +30,10 @@ struct WorkspaceIdentity {
     /// root. The Controller stores and echoes it; it never derives, renews or
     /// compares it against a path, revision or any other observation.
     incarnation: Option<String>,
+    /// What the Controller itself observed, for a colocated Machine whose
+    /// roots it reads directly. `Remote` for a Machine whose roots the
+    /// Controller cannot and must not stat.
+    local: LocalRoot,
 }
 
 impl PartialEq for WorkspaceCodeScope {
@@ -112,6 +117,13 @@ impl LiveState {
         } else {
             HashMap::new()
         };
+        // The Controller reads a colocated Machine's roots itself, so it is
+        // the party that must observe the object behind each one. It never
+        // stats a remote Machine's paths.
+        let colocated = self
+            .connections
+            .get(machine)
+            .is_some_and(|live| live.colocated);
         // Count before allocating a second map. A rejected observation ends the
         // old lifetimes, rather than retaining apparently-current stale roots.
         let mut count = workspaces.len();
@@ -169,12 +181,22 @@ impl LiveState {
                 } else {
                     None
                 };
+                // Accepting an inventory never refuses a root: an unobservable
+                // colocated root is recorded as such and refused at the gate
+                // that would read it. A remote root is the Machine's to
+                // observe, never ours.
+                let local = if colocated {
+                    LocalRoot::observe(&workspace.canonical_path)
+                } else {
+                    LocalRoot::Remote
+                };
                 let scope = previous
                     .and_then(|slots| slots.get(id))
                     .filter(|scope| {
                         scope.cwd() == workspace.canonical_path
                             && scope.0.connection.same(connection)
                             && scope.0.incarnation == incarnation
+                            && scope.0.local == local
                     })
                     .cloned()
                     .unwrap_or_else(|| {
@@ -183,6 +205,7 @@ impl LiveState {
                             workspace_id: id.into(),
                             cwd: workspace.canonical_path.clone(),
                             incarnation,
+                            local,
                         }))
                     });
                 Some((id.into(), scope))
@@ -216,11 +239,24 @@ impl MachineControl {
         &self,
         scope: &WorkspaceCodeScope,
     ) -> Result<bool, String> {
-        let live = self.live.read();
-        if !scope.matches(&live) {
-            return Err("Workspace read scope ended".into());
+        let colocated = {
+            let live = self.live.read();
+            if !scope.matches(&live) {
+                return Err("Workspace read scope ended".into());
+            }
+            live.connections[scope.machine_id()].colocated
+        };
+        if !colocated {
+            return Ok(false);
         }
-        Ok(live.connections[scope.machine_id()].colocated)
+        // The Controller is about to read this root itself, so it re-observes
+        // the object before any filesystem I/O. A replacement ends exactly
+        // this observation; it is not a rollback and cancels nothing.
+        if let Err(detail) = scope.0.local.readable(scope.cwd()) {
+            self.retire_workspace_scope(scope);
+            return Err(format!("Workspace read scope ended: {detail}"));
+        }
+        Ok(true)
     }
 
     /// Only a typed Code operation is accepted. The original scope supplies the

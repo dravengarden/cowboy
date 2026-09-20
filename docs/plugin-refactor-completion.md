@@ -581,6 +581,40 @@ complete integrated gates and activation retaining all 16 original workers.
 This is not Machine-owned filesystem identity, a state lease, native adoption
 or independent recovery; the broader exits below remain open.
 
+[Controller-owned identity for locally executed reads](plugin-local-root-identity.md)
+states the other half of the same rule: the party that touches the filesystem
+owns the root's identity. A colocated Machine's advertised roots, and a
+colocated or standalone `local` Session's worktree, are read by the Controller
+itself and never reach a Machine, so the Machine-owned fence below never
+applied to them. The primary deployment is exactly that shape. The Controller
+now observes the object when it takes the observation and re-observes at the
+two gates that choose local execution; a replaced root retires a Workspace
+observation and makes a Session route unequal to the current one, so cached
+bytes, ETags and continuations stop answering. Device and inode alone would be
+unsound, because a recreated directory reuses its inode immediately on the
+deployed filesystem; the Controller compares creation time and refuses any root
+that cannot report one, rather than reading it unfenced. Resolution never
+refuses: an unobservable root is recorded as such and refused only where it
+would be read. Its [accepted Controller rollout](releases/plugin-local-root-identity-2026-09-21.md)
+records four source negatives verified against the previous behaviour, the
+complete quality gate and the unchanged connected chain. **Its colocated branch
+has source-test evidence only**: the connected harness cannot produce a
+colocated Machine without relying on the trust gap recorded below, so honest
+connected coverage waits on that fix.
+
+**Trust gap found while building the above, not fixed:** `colocated` — the
+switch that makes the Controller read its own filesystem — is taken verbatim
+from the Machine's self-declared `hello.connection_mode`, with no transport,
+peer or enrollment check anywhere. Enrollment deliberately writes
+`connection_mode = 'outbound_wss'`, and the connect path overwrites it from the
+hello. Any enrolled Machine can therefore declare local mode over TCP and have
+the Controller read Controller-host paths that the same Machine chose, through
+the authenticated Code read API. The Machine is an enrolled, challenge-signed
+component, so this is a trust-boundary crossing rather than an unauthenticated
+attack surface; it is unfixed and unexploited, and closing it needs its own
+slice because binding local execution to a real transport or to enrollment
+changes how the deployed Machine connects.
+
 [Machine-owned Workspace root identity](plugin-machine-workspace-identity.md)
 gives the advertised root an owner for the first time. The Machine mints one
 opaque incarnation per root object, pins that object with a retained directory

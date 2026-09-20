@@ -4,6 +4,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use super::local_roots::LocalRoot;
 use super::{ConnectionToken, MachineControl};
 use crate::code_adapter::{CodeAdapterRequest, CodeOperation};
 use crate::core::SessionCodeScope;
@@ -15,12 +16,18 @@ pub(crate) struct SessionReadScope {
     owner: Arc<()>,
     session: SessionCodeScope,
     connection: Option<ConnectionToken>,
+    /// What the Controller observed behind this route's cwd, when the
+    /// Controller is the party that will read it. A replacement makes this
+    /// route unequal to the current one, so cached representations, `ETags` and
+    /// page/diff continuations keyed by it stop answering.
+    local: LocalRoot,
 }
 
 impl PartialEq for SessionReadScope {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.owner, &other.owner)
             && self.session == other.session
+            && self.local == other.local
             && match (&self.connection, &other.connection) {
                 (None, None) => true,
                 (Some(left), Some(right)) => left.same(right),
@@ -33,6 +40,7 @@ impl Hash for SessionReadScope {
     fn hash<H: Hasher>(&self, state: &mut H) {
         Arc::as_ptr(&self.owner).hash(state);
         self.session.hash(state);
+        self.local.hash(state);
         self.connection
             .as_ref()
             .map(|connection| Arc::as_ptr(&connection.0))
@@ -66,22 +74,28 @@ impl MachineControl {
         if self.service.as_str() != service {
             return None;
         }
-        let connection = if session.machine_id() == "local" {
-            None
+        let (connection, colocated) = if session.machine_id() == "local" {
+            // The standalone core-owned `local` Session always executes here.
+            (None, true)
         } else {
-            Some(
-                self.live
-                    .read()
-                    .connections
-                    .get(session.machine_id())?
-                    .token
-                    .clone(),
-            )
+            let live = self.live.read();
+            let machine = live.connections.get(session.machine_id())?;
+            (Some(machine.token.clone()), machine.colocated)
+        };
+        // Observe the object only when the Controller is the party that will
+        // read it; a remote Machine's cwd is not ours to stat. Resolving a
+        // route never refuses: an unobservable root is recorded as such and
+        // refused at the single gate that would actually read it.
+        let local = if colocated {
+            LocalRoot::observe(session.cwd())
+        } else {
+            LocalRoot::Remote
         };
         Some(SessionReadScope {
             owner: Arc::clone(&self.read_owner),
             session,
             connection,
+            local,
         })
     }
 
@@ -91,6 +105,9 @@ impl MachineControl {
                 .connection
                 .as_ref()
                 .is_none_or(|connection| self.is_current(connection))
+            // A replaced root ends this route, including its cached bytes,
+            // ETag and `304`, without touching any other Session.
+            && scope.local.is_current(scope.session.cwd())
     }
 
     /// Local execution is chosen only from this original observation. Stored
@@ -99,17 +116,25 @@ impl MachineControl {
         &self,
         scope: &SessionReadScope,
     ) -> Result<bool, String> {
-        let live = self.live.read();
-        if !Arc::ptr_eq(&self.read_owner, &scope.owner) {
-            return Err("Session read route ended".into());
-        }
-        match &scope.connection {
-            None => Ok(true), // The standalone core-owned `local` Session.
-            Some(connection) if live.is_current(connection) => {
-                Ok(live.connections[&connection.0.machine_id].colocated)
+        let colocated = {
+            let live = self.live.read();
+            if !Arc::ptr_eq(&self.read_owner, &scope.owner) {
+                return Err("Session read route ended".into());
             }
-            Some(_) => Err("Session read route ended".into()),
+            match &scope.connection {
+                None => true, // The standalone core-owned `local` Session.
+                Some(connection) if live.is_current(connection) => {
+                    live.connections[&connection.0.machine_id].colocated
+                }
+                Some(_) => return Err("Session read route ended".into()),
+            }
+        };
+        if !colocated {
+            return Ok(false);
         }
+        // Re-observe immediately before the Controller reads the root itself.
+        scope.local.readable(scope.session.cwd())?;
+        Ok(true)
     }
 
     pub(crate) async fn code_request_in_session(

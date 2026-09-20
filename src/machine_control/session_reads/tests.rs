@@ -16,7 +16,7 @@ fn session(machine: &str) -> SessionCodeScope {
         workspace_id: None,
         workspace_name: None,
         workspace_source_path: None,
-        cwd: "/original".into(),
+        cwd: crate::machine_control::local_roots::test_root(&format!("session-reads-{machine}")),
         title: "fixture".into(),
         origin: SessionOrigin::default(),
         system: false,
@@ -162,7 +162,7 @@ async fn session_read_dispatch_derives_original_root_and_rechecks_parked_replies
         assert!(workspace_incarnation.is_none());
         assert_eq!(adapter, "code");
         let decoded: CodeAdapterRequest = serde_json::from_value(payload).unwrap();
-        assert_eq!(decoded.root, "/original");
+        assert_eq!(decoded.root, original.session().cwd());
         assert!(matches!(decoded.operation, CodeOperation::Manifest));
         control.record_remote(
             &connection,
@@ -204,4 +204,117 @@ async fn cancelled_session_read_drops_only_its_waiter_without_replay_or_cleanup(
     assert!(control.live.read().pending.is_empty());
     assert!(control.session_read_scope_is_current(&original));
     assert!(commands.try_recv().is_err());
+}
+
+/// A standalone `local` Session and a colocated Machine both execute on the
+/// Controller's filesystem. Fails against the previous implementation, which
+/// read the replacement object under the original route.
+#[tokio::test]
+async fn a_replaced_local_root_ends_the_route_and_refuses_local_execution() {
+    for colocated_machine in [false, true] {
+        let parent = tempfile::tempdir().expect("temp");
+        let path = parent.path().join("worktree");
+        std::fs::create_dir(&path).expect("create");
+        let hub = Hub::new();
+        let machine = if colocated_machine {
+            "machine"
+        } else {
+            "local"
+        };
+        hub.create_session(SessionRegistration {
+            id: "session".into(),
+            provider: "codex".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: machine.into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            cwd: path.display().to_string(),
+            title: "fixture".into(),
+            origin: SessionOrigin::default(),
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let control = MachineControl::default();
+        let mut commands = None;
+        if colocated_machine {
+            let (tx, rx) = mpsc::unbounded_channel();
+            control.install(machine.into(), "epoch".into(), true, 21, tx);
+            commands = Some(rx);
+        }
+        let logical = hub.session_code_scope("session").unwrap();
+        let original = control
+            .session_read_scope("service-test", logical.clone())
+            .unwrap();
+        assert_eq!(control.session_read_is_colocated(&original), Ok(true));
+        assert!(control.session_read_scope_is_current(&original));
+
+        // Same path, same session, different object.
+        std::fs::remove_dir_all(&path).expect("remove");
+        std::fs::create_dir(&path).expect("recreate");
+        assert!(control.session_read_is_colocated(&original).is_err());
+        // The route ended, so its cached bytes, ETag and `304` are gone too.
+        assert!(!control.session_read_scope_is_current(&original));
+        assert!(
+            control
+                .code_request_in_session(&original, CodeOperation::Manifest)
+                .await
+                .is_err()
+        );
+        // A new request resolves a new route against the live object without
+        // needing an inventory; the old one stays ended.
+        let replaced = control.session_read_scope("service-test", logical).unwrap();
+        assert_ne!(replaced, original);
+        assert_eq!(control.session_read_is_colocated(&replaced), Ok(true));
+        assert!(!control.session_read_scope_is_current(&original));
+        if let Some(mut commands) = commands {
+            assert!(commands.try_recv().is_err(), "no command was dispatched");
+        }
+    }
+}
+
+/// Resolution is not the place to refuse. An unobservable local root still
+/// produces a route, and only the execution gate refuses it.
+#[tokio::test]
+async fn an_unobservable_local_root_resolves_but_never_executes_locally() {
+    let parent = tempfile::tempdir().expect("temp");
+    let absent = parent.path().join("absent");
+    let hub = Hub::new();
+    hub.create_session(SessionRegistration {
+        id: "session".into(),
+        provider: "codex".into(),
+        provider_version: String::new(),
+        provider_generation_digest: String::new(),
+        provider_auth_generation: None,
+        provider_behavior: None,
+        machine_id: "local".into(),
+        workspace_id: None,
+        workspace_name: None,
+        workspace_source_path: None,
+        cwd: absent.display().to_string(),
+        title: "fixture".into(),
+        origin: SessionOrigin::default(),
+        system: false,
+        owner_user_id: None,
+        owner_username: None,
+    });
+    let control = MachineControl::default();
+    let scope = control
+        .session_read_scope("service-test", hub.session_code_scope("session").unwrap())
+        .expect("route resolves");
+    assert!(control.session_read_is_colocated(&scope).is_err());
+    assert!(control.session_read_scope_is_current(&scope));
+    assert!(
+        control
+            .code_request_in_session(&scope, CodeOperation::Manifest)
+            .await
+            .is_err()
+    );
+    // The root appearing is itself a change: the old observation ends.
+    std::fs::create_dir(&absent).expect("create");
+    assert!(!control.session_read_scope_is_current(&scope));
 }

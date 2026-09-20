@@ -490,3 +490,80 @@ async fn a_machine_root_identity_refusal_retires_exactly_that_observation() {
         assert!(rx.try_recv().is_err());
     }
 }
+
+/// The primary deployment's Machine is colocated, so these roots are read by
+/// the Controller and never reach a Machine. Fails against the previous
+/// implementation, which executed the read against the replacement object.
+#[tokio::test]
+async fn a_replaced_colocated_root_refuses_local_execution_and_retires_its_scope() {
+    let parent = tempfile::tempdir().expect("temp");
+    let path = parent.path().join("root");
+    let other = parent.path().join("other");
+    std::fs::create_dir(&path).expect("create");
+    std::fs::create_dir(&other).expect("create");
+    let (advertised, unrelated) = (
+        root("a", &path.display().to_string()),
+        root("b", &other.display().to_string()),
+    );
+    let control = MachineControl::default();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let connection = control.install("machine".into(), "epoch".into(), true, 21, tx);
+    observe(
+        &control,
+        &connection,
+        Some(vec![advertised.clone(), unrelated.clone()]),
+    );
+    let original = scope(&control, "machine", "a").unwrap();
+    let independent = scope(&control, "machine", "b").unwrap();
+    assert_eq!(control.workspace_scope_is_colocated(&original), Ok(true));
+
+    // Same path, same content, different object.
+    std::fs::remove_dir_all(&path).expect("remove");
+    std::fs::create_dir(&path).expect("recreate");
+    assert!(control.workspace_scope_is_colocated(&original).is_err());
+    // The refusal ended exactly this observation, so its cached pages, ETags
+    // and continuations cannot answer either. Nothing was dispatched.
+    assert!(!control.workspace_scope_is_current(&original));
+    assert!(scope(&control, "machine", "a").is_none());
+    assert!(rx.try_recv().is_err());
+    // Another advertised root on the same connection is untouched.
+    assert!(control.workspace_scope_is_current(&independent));
+    assert_eq!(control.workspace_scope_is_colocated(&independent), Ok(true));
+
+    // A fresh inventory observes the live object; a fence is not a lost root.
+    observe(&control, &connection, Some(vec![advertised, unrelated]));
+    let replaced = scope(&control, "machine", "a").unwrap();
+    assert_ne!(replaced, original);
+    assert_eq!(control.workspace_scope_is_colocated(&replaced), Ok(true));
+}
+
+/// A colocated root the Controller cannot observe still resolves — resolution
+/// is not the place to refuse — but it is never read locally.
+#[tokio::test]
+async fn an_unobservable_colocated_root_resolves_but_refuses_local_execution() {
+    let parent = tempfile::tempdir().expect("temp");
+    let absent = parent.path().join("absent").display().to_string();
+    let control = MachineControl::default();
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let connection = control.install("machine".into(), "epoch".into(), true, 21, tx);
+    observe(&control, &connection, Some(vec![root("a", &absent)]));
+    let original = scope(&control, "machine", "a").expect("route resolves");
+    assert!(control.workspace_scope_is_colocated(&original).is_err());
+    assert!(!control.workspace_scope_is_current(&original));
+}
+
+/// A remote Machine's roots are the Machine's to observe. The Controller must
+/// not stat them, so a path that does not exist here changes nothing.
+#[tokio::test]
+async fn a_remote_root_is_never_observed_by_the_controller() {
+    let control = MachineControl::default();
+    let (connection, _rx) = connect(&control, "machine");
+    observe(
+        &control,
+        &connection,
+        Some(vec![root("a", "/absent/on/purpose")]),
+    );
+    let original = scope(&control, "machine", "a").expect("route resolves");
+    assert_eq!(control.workspace_scope_is_colocated(&original), Ok(false));
+    assert!(control.workspace_scope_is_current(&original));
+}
