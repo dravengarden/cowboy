@@ -1,7 +1,9 @@
 # Offline-first synchronization
 
 Status: design 2026-09-18; the boot path became network-independent on
-2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738));
+2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738))
+and now opens on the user's real last screen (see
+[Boot presentation](#boot-presentation-service-worker-cowboy-v1740));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -502,6 +504,69 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 | 10 | Two tabs, one device, both queue offline | both rows survive and both drain once |
 
 ## Implementation status
+
+### Boot presentation (service worker `cowboy-v1740`)
+
+Making boot network-independent removed the wait. It did not remove the
+*impression* of one: the app still opened on a centred spinner and then cut to
+a finished screen. Cowboy is client-rendered and per-user, so it cannot be
+pre-rendered at build time — but it can pre-render itself. Three layers, each
+a strict improvement on the one below, and each optional:
+
+| Layer | What it paints | When |
+|---|---|---|
+| 1. Boot shell | a static skeleton of Cowboy's own layout (rail, bottom-anchored feed, composer, nav) in `index.html`, coloured from `cowboy:boot-theme` | with the document |
+| 2. Last screen | a sanitized static copy of the resting screen the user left, mounted in a closed shadow root above the app | as soon as Cache Storage answers |
+| 3. Live app | React, replacing content in place | when the active session's content is on screen |
+
+Layer 1 is the floor: whatever else fails, the first frame reads as Cowboy
+rather than as a blank canvas or a spinner. `BootSkeleton.tsx` renders the
+same markup, so `main.tsx`'s Suspense fallback, the auth gate's pre-probe view
+and the setup gate's pre-list view are all one shape — nothing flashes between
+the document's first frame and the app's first paint. `bootSnapshot.test.ts`
+holds the two copies together.
+
+Which chrome that skeleton wears — Desktop rail or Mobile bottom nav — is the
+app's own last answer, replayed from `cowboy:boot-surface`. It cannot be
+derived in CSS: `classifySurface` reads `navigator.maxTouchPoints` and the
+native host and has no width term at all, so an iPad in landscape is touch and
+a narrow desktop window is not. Before that key has ever been written the
+shell approximates with `(pointer: fine) and (hover: hover)`, undone by
+`(any-pointer: coarse)`, in that order.
+
+Layer 2 is the SSG-like part. `bootSnapshot.ts` captures when the app is left
+(`visibilitychange` to hidden, `pagehide`) and at idle moments in between, but
+only from a *resting* screen: no sheet, dialog, drawer, keyboard, gesture,
+placeholder or Review page, and not mid-turn for the periodic capture. It
+clones `#root`, drops everything outside the viewport (the overlay cannot
+scroll, and this is what keeps a long transcript small), pins image and media
+boxes, records scroll offsets, strips scripts and event handlers, and
+serialises only the CSS rules that can still match. A capture of a real mobile
+session is about 122 KB: 25 KB markup, 84 KB CSS, 13 KB `@font-face`.
+
+The overlay is a picture, never the app: closed shadow root (no shared ids,
+selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is
+shown only when every one of the user, the viewport, the colour scheme, the
+session about to open and a 7-day age check agree, and it is sanitized again
+on mount. `signalBootReady()` cross-fades it out two frames after the live
+app has painted the active session; a 4 s safety timeout guarantees a stuck
+app can never hide behind a picture of itself. `clearBootSnapshot()` runs on
+sign-out, a login answer and a changed account.
+
+Measured with a warm cache and EVERY response delayed by 12 s, mobile
+viewport (in-page observer, Chrome, fake Hub):
+
+| Moment | Time |
+|---|---|
+| document starts executing | 4 ms |
+| boot skeleton on screen | 11 ms |
+| the user's last screen on screen | 18 ms |
+| handed over to the live app | 903 ms |
+
+Not implemented: capturing the Review page (its content is the workspace, read
+over the network), restoring a snapshot for a different session than the one
+being opened, and any snapshot at all where Cache Storage is absent (native
+WKWebView) — those fall back to layer 1.
 
 ### Boot on a weak connection (service worker `cowboy-v1738`)
 

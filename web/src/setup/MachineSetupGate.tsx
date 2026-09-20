@@ -1,7 +1,9 @@
-import { Box, Button, CircularProgress, Stack, Typography } from "@mui/material";
+import { Box, Button, Typography } from "@mui/material";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { retrySyncNow, useStoreSelector, useSyncStatus } from "../store";
+import { BootSkeleton } from "../BootSkeleton";
+import { useBootReady } from "../useBootReady";
 import { MachineSetupPage } from "./MachineSetupPage";
 import {
   needsMachineSetup,
@@ -57,46 +59,38 @@ export function MachineSetupGate({
     return () => globalThis.clearTimeout(timer);
   }, [presented.loaded]);
 
+  const setupNeeded = presented.loaded && needsMachineSetup(presented.machines);
+  // The setup page is the real screen: a saved last screen must not cover it.
+  useBootReady(setupNeeded);
+
   if (!presented.loaded) {
     const unreachable = slow && (sync.phase === "offline" || sync.phase === "connecting");
+    // The same skeleton the document painted: a first contact keeps one shape
+    // until the app replaces it. The explanation appears over it, in place.
     return (
-      <Box
-        sx={{
-          minHeight: "100%",
-          display: "grid",
-          placeItems: "center",
-          bgcolor: "background.default",
-          color: "text.secondary",
-        }}
-      >
-        <Stack spacing={2} alignItems="center" sx={{ px: 3, textAlign: "center" }}>
-          <CircularProgress size={28} color="inherit" />
-          <Typography sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}>
-            cowboy
-          </Typography>
-          {unreachable && (
-            <>
-              <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
-                {sync.phase === "offline"
-                  ? "Cowboy is offline and this device has nothing cached yet."
-                  : "Still trying to reach Cowboy…"}
-              </Typography>
-              <Button
-                size="small"
-                variant="outlined"
-                color="inherit"
-                onClick={() => retrySyncNow()}
-                sx={{ borderRadius: 999, textTransform: "none" }}
-              >
-                Retry now
-              </Button>
-            </>
-          )}
-        </Stack>
-      </Box>
+      <BootSkeleton>
+        {unreachable && (
+          <>
+            <Typography sx={{ fontSize: 13, maxWidth: 320 }}>
+              {sync.phase === "offline"
+                ? "Cowboy is offline and this device has nothing cached yet."
+                : "Still trying to reach Cowboy…"}
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              color="inherit"
+              onClick={() => retrySyncNow()}
+              sx={{ borderRadius: 999, textTransform: "none" }}
+            >
+              Retry now
+            </Button>
+          </>
+        )}
+      </BootSkeleton>
     );
   }
-  if (needsMachineSetup(presented.machines)) {
+  if (setupNeeded) {
     return (
       <Box
         data-machine-setup-gate

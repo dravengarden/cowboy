@@ -2,7 +2,6 @@ import {
   Alert,
   Box,
   Button,
-  CircularProgress,
   Stack,
   TextField,
   Typography,
@@ -57,6 +56,9 @@ import {
   registerPasskey,
 } from "./passkeyFlow";
 import { ConfirmSheet } from "../Sheet";
+import { BootSkeleton } from "../BootSkeleton";
+import { clearBootSnapshot } from "../bootSnapshot";
+import { useBootReady } from "../useBootReady";
 import { ProductActiveCapacityGuard } from "../capacity/ProductActiveCapacityGuard";
 import { ProductLoginPage } from "./ProductLoginPage";
 import {
@@ -114,28 +116,6 @@ export async function signOutProductSession(options: {
   }
 }
 
-function ProductAuthSplash({ label }: { label: string }): React.JSX.Element {
-  return (
-    <Box
-      sx={{
-        minHeight: "100%",
-        display: "grid",
-        placeItems: "center",
-        bgcolor: "background.default",
-        color: "text.secondary",
-      }}
-    >
-      <Stack spacing={2} alignItems="center">
-        <CircularProgress size={28} color="inherit" />
-        <Typography
-          sx={{ fontSize: 14, letterSpacing: "0.06em", opacity: 0.75 }}
-        >
-          {label}
-        </Typography>
-      </Stack>
-    </Box>
-  );
-}
 
 function ProductControllerUnavailablePage({
   onRetry,
@@ -369,6 +349,9 @@ export function ProductAuthGate({
   const [recentAuthOptions, setRecentAuthOptions] = useState<
     RecentProductAuthOptions
   >({});
+  // Login, activation and retry pages are the real screen: a saved last screen
+  // must not sit on top of them.
+  useBootReady(view !== "loading" && view !== "ready");
 
   const applyDecision = useCallback(
     async (decision: AuthGateDecision): Promise<void> => {
@@ -395,6 +378,7 @@ export function ProductAuthGate({
           return;
         }
         forgetAuthStatus();
+        clearBootSnapshot();
         generationRef.current += 1;
         const ending = announceProductSessionEnd();
         await Promise.all([deleteProductHistoryCache(), ending]);
@@ -417,6 +401,8 @@ export function ProductAuthGate({
         return;
       }
       if (decision.view === "login") {
+        // Nobody is signed in: the saved last screen belongs to no one.
+        clearBootSnapshot();
         attemptsRef.current = 0;
         setView("login");
         return;
@@ -513,6 +499,7 @@ export function ProductAuthGate({
   } = {}): Promise<void> => {
     generationRef.current += 1;
     forgetAuthStatus();
+    clearBootSnapshot();
     await signOutProductSession(options);
   }, []);
 
@@ -680,5 +667,7 @@ export function ProductAuthGate({
   if (view === "retry") {
     return <ProductAuthRetryPage onRetry={() => void loadStatus()} />;
   }
-  return <ProductAuthSplash label="cowboy" />;
+  // First contact with no cached identity: the same skeleton the document
+  // painted, so the wait for `/api/auth/status` does not change the screen.
+  return <BootSkeleton />;
 }

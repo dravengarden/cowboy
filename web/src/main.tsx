@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from "react";
+import { lazy, StrictMode, Suspense, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
@@ -8,6 +8,8 @@ import {
   DeviceAuthorizationRoute,
 } from "./auth/DeviceAuthorizationPage";
 import { MachineSetupGate } from "./setup/MachineSetupGate";
+import { BootSkeleton } from "./BootSkeleton";
+import { rememberBootSurface } from "./bootSnapshot";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
@@ -47,16 +49,6 @@ const MobileApp = lazy(async () => {
   return { default: module.MobileApp };
 });
 
-// The same markup as index.html's pre-mount splash, so the moment between the
-// gates resolving and the lazy surface chunk evaluating is never a white page.
-function BootSplash(): React.JSX.Element {
-  return (
-    <div id="app-splash" aria-label="Loading" role="status">
-      <div className="app-splash-spinner" />
-      <div className="app-splash-title">cowboy</div>
-    </div>
-  );
-}
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
@@ -68,6 +60,10 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
+  // The static boot shell cannot run this rule, so it reuses the answer
+  // (docs/offline-first-sync.md §Boot presentation).
+  const desktop = surface.kind === "desktop";
+  useEffect(() => rememberBootSurface(desktop), [desktop]);
   const deviceAuthorizationActive = captureDeviceAuthorizationFromLocation();
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
@@ -86,7 +82,10 @@ function Root(): React.JSX.Element {
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
             <MachineSetupGate>
-              <Suspense fallback={<BootSplash />}>{app}</Suspense>
+              {/* The document's own boot skeleton, so the moment between the
+                  gates resolving and the lazy surface chunk evaluating neither
+                  goes white nor changes shape. */}
+              <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
             </MachineSetupGate>
           </DeviceAuthorizationRoute>
         </ProductAuthGate>
