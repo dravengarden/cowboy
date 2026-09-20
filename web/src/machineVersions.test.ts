@@ -1,5 +1,8 @@
 import { assertEquals } from "jsr:@std/assert";
-import { machineVersionPresentation } from "./machineVersions.ts";
+import {
+  machineConvergencePresentation,
+  machineVersionPresentation,
+} from "./machineVersions.ts";
 
 Deno.test("Machine version rows distinguish health from release freshness", () => {
   assertEquals(
@@ -38,4 +41,55 @@ Deno.test("unknown release state never claims a component is current", () => {
     status: "active",
     tone: "success",
   });
+});
+
+Deno.test("automatic convergence says what the Controller is doing", () => {
+  const id = { kind: "zed_server", slot: "zed" };
+  assertEquals(
+    machineConvergencePresentation({ id, state: "pending" }, 0).status,
+    "Updating automatically",
+  );
+  assertEquals(
+    machineConvergencePresentation({ id, state: "verifying" }, 0).status,
+    "Confirming the update",
+  );
+  assertEquals(
+    machineConvergencePresentation({ id, state: "draining" }, 0),
+    {
+      status: "Updates when sessions finish",
+      tone: "default",
+      detail: "A running session still uses the installed generation",
+    },
+  );
+  assertEquals(
+    machineConvergencePresentation(
+      { id, state: "retrying", next_attempt_at_ms: 4 * 60_000, detail: "probe failed" },
+      60_000,
+    ),
+    { status: "Retrying in 3 min", tone: "warning", detail: "probe failed" },
+  );
+  // A retry that is already due reads as a plain retry, never "in 0 min".
+  assertEquals(
+    machineConvergencePresentation({ id, state: "retrying", next_attempt_at_ms: 10 }, 60_000).status,
+    "Retrying",
+  );
+  assertEquals(
+    machineConvergencePresentation({ id, state: "blocked", attempts: 4 }, 0),
+    {
+      status: "Update blocked",
+      tone: "error",
+      detail: "Stopped after 4 attempts against this exact release",
+    },
+  );
+});
+
+Deno.test("a converging component offers no action that would race the Controller", async () => {
+  const app = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+  // Draining and blocked keep the per-component action: both are exactly where
+  // a person still decides.
+  const guard = app.indexOf("const converging = convergence !== undefined &&");
+  const drainingAndBlocked = app.slice(guard, guard + 200);
+  assertEquals(drainingAndBlocked.includes('convergence.state !== "draining"'), true);
+  assertEquals(drainingAndBlocked.includes('convergence.state !== "blocked"'), true);
+  assertEquals(app.includes("{componentPending && !converging && ("), true);
 });

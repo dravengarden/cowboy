@@ -42,6 +42,13 @@ controller's signed desired-component manifest and the Machine's configured
 artifact public key. Provider and Zed payloads are not resolved through the
 interactive shell, Homebrew, npm global state, `~/.zed_server`, or a Nix profile.
 
+An `automatic` record in that manifest converges continuously: the Controller
+compares every connected Machine with the desired set once a minute, drains
+leased generations first, backs off on failure and stops on a repeatedly
+failing digest. See
+[Machine component convergence](machine-component-convergence.md). A record
+without `automatic` stays a per-component action in Machines settings.
+
 The platform bootstrap bundle contains `cowboy`, `cowboy-machine`, and
 `cowboy-machine-install`. Build all three from the repository root with
 `just build-machine-bootstrap`; release packaging must keep them together.

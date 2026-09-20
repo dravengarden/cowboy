@@ -73,6 +73,8 @@ mod machine_code_plugins;
 mod machine_components;
 #[cfg(feature = "full")]
 mod machine_control;
+#[cfg(feature = "full")]
+mod machine_convergence;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub mod machine_install;
 #[cfg(feature = "machine-host")]

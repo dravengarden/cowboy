@@ -93,7 +93,7 @@ import { AppIconSettings } from "./AppIconSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { KEYBOARD_INSET_CHANGED_EVENT } from "./keyboardInset";
-import { machineVersionPresentation } from "./machineVersions";
+import { machineConvergencePresentation, machineVersionPresentation } from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
@@ -5538,6 +5538,18 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                     id.kind === component.id.kind && (id.slot ?? "") === (component.id.slot ?? "")
                                                 );
                                                 const componentKey = `${machine.id}:component:${component.id.kind}:${component.id.slot ?? ""}`;
+                                                // The Controller converges signed automatic components on its
+                                                // own. Report what it is doing instead of offering an action
+                                                // that would race it; draining and blocked keep theirs, because
+                                                // both are exactly where a person still decides.
+                                                const convergence = (machine.convergence ?? []).find((entry) =>
+                                                    entry.id.kind === component.id.kind &&
+                                                    (entry.id.slot ?? "") === (component.id.slot ?? "")
+                                                );
+                                                const converging = convergence !== undefined &&
+                                                    convergence.state !== "draining" && convergence.state !== "blocked";
+                                                const convergenceState = convergence &&
+                                                    machineConvergencePresentation(convergence, Date.now());
                                                 const update = component.update;
                                                 const release = machineVersionPresentation(
                                                     component.version,
@@ -5586,7 +5598,16 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                                 {component.generation ? ` · generation ${component.generation}` : ""}
                                                             </Typography>
                                                         </Box>
-                                                        {componentPending && (
+                                                        {convergenceState && (
+                                                            <Chip
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color={convergenceState.tone}
+                                                                label={convergenceState.status}
+                                                                title={convergenceState.detail}
+                                                            />
+                                                        )}
+                                                        {componentPending && !converging && (
                                                             <Button
                                                                 size="small"
                                                                 variant="outlined"
@@ -5601,7 +5622,7 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                                 onUpdate={() => requestNpmUpdate(machine.id, component)}
                                                             />
                                                         )}
-                                                        {!componentPending && !npmInstallable && (
+                                                        {!componentPending && !npmInstallable && !convergenceState && (
                                                             <Chip
                                                                 size="small"
                                                                 variant="outlined"

@@ -252,7 +252,8 @@ struct AppState {
     telemetry_writer_admission:
         Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
     plugin_lifecycle_fences: PluginLifecycleFences,
-    desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+    desired_machine_components: Arc<crate::machine_convergence::DesiredComponentSource>,
+    component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
@@ -365,7 +366,8 @@ struct MachineSnapshots {
     hub: Hub,
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
-    desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+    desired_components: Arc<crate::machine_convergence::DesiredComponentSource>,
+    component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
     product_auth_enabled: bool,
     revision: Arc<AtomicU64>,
 }
@@ -453,7 +455,8 @@ impl MachineSnapshots {
         hub: Hub,
         runtime_router: Arc<RuntimeRouter>,
         machine_control: Arc<MachineControl>,
-        desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+        desired_components: Arc<crate::machine_convergence::DesiredComponentSource>,
+        component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
         product_auth_enabled: bool,
     ) -> Self {
         Self {
@@ -462,6 +465,7 @@ impl MachineSnapshots {
             runtime_router,
             machine_control,
             desired_components,
+            component_convergence,
             product_auth_enabled,
             revision: Arc::new(AtomicU64::new(0)),
         }
@@ -487,6 +491,7 @@ impl MachineSnapshots {
             *provider_sessions = provider_sessions.saturating_add(1);
         }
         let checked_at_ms = now_ms();
+        let desired = self.desired_components.current();
         Ok(machines
             .into_iter()
             .filter(|machine| product_machine_is_visible(machine, self.product_auth_enabled))
@@ -567,11 +572,7 @@ impl MachineSnapshots {
                             _ => u64::from(active_sessions),
                         };
                     }
-                    if let Some(desired) = self
-                        .desired_components
-                        .iter()
-                        .find(|desired| desired.id == component.id)
-                    {
+                    if let Some(desired) = desired.find(&component.id) {
                         let available = component.state
                             != crate::machine_protocol::ComponentState::Active
                             || !component.digest.eq_ignore_ascii_case(&desired.digest);
@@ -584,8 +585,7 @@ impl MachineSnapshots {
                         });
                     }
                 }
-                let pending_updates: Vec<crate::machine_protocol::ComponentId> = self
-                    .desired_components
+                let pending_updates: Vec<crate::machine_protocol::ComponentId> = desired
                     .iter()
                     .filter(|desired| {
                         !components.iter().any(|current| {
@@ -596,10 +596,9 @@ impl MachineSnapshots {
                     })
                     .map(|desired| desired.id.clone())
                     .collect();
-                let automatic_update_pending = self
-                    .desired_components
-                    .iter()
-                    .any(|desired| desired.automatic && pending_updates.contains(&desired.id));
+                let automatic_update_pending = desired.iter().any(|component| {
+                    component.automatic && pending_updates.contains(&component.id)
+                });
                 let connected = self.runtime_router.connected(&machine.id);
                 let schedulable = connected
                     && !workspaces.is_empty()
@@ -613,7 +612,8 @@ impl MachineSnapshots {
                     checked_at_ms,
                     machine.last_seen_at_ms,
                 );
-                crate::machine_protocol::MachineSummary {
+                let machine_id = machine.id.clone();
+                let mut summary = crate::machine_protocol::MachineSummary {
                     local,
                     connected,
                     schedulable,
@@ -633,7 +633,16 @@ impl MachineSnapshots {
                     capacity,
                     active_sessions,
                     pending_updates,
-                }
+                    convergence: Vec::new(),
+                };
+                summary.convergence = crate::machine_convergence::plan_machine(
+                    &summary,
+                    &desired,
+                    &self.component_convergence.attempts(&machine_id),
+                    checked_at_ms,
+                )
+                .reported;
+                summary
             })
             .collect())
     }
@@ -884,17 +893,12 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         writer: telemetry_writer_admission,
         background: managed_export_policy,
     } = crate::telemetry_plugin::controller_policy::ControllerPolicy::load(&args, &service_id)?;
-    let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
-        serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
-            &std::fs::read(path).with_context(|| {
-                format!("reading Machine component manifest {}", path.display())
-            })?,
-        )
-        .with_context(|| format!("parsing Machine component manifest {}", path.display()))?
-    } else {
-        Vec::new()
-    };
-    let desired_machine_components = Arc::new(desired_machine_components);
+    let desired_machine_components =
+        Arc::new(crate::machine_convergence::DesiredComponentSource::load(
+            args.machine_components_manifest.as_deref(),
+            now_ms(),
+        )?);
+    let component_convergence = Arc::new(crate::machine_convergence::ConvergenceState::default());
     init_tracing();
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
@@ -1092,6 +1096,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         Arc::clone(&runtime_router),
         Arc::clone(&machine_control),
         Arc::clone(&desired_machine_components),
+        Arc::clone(&component_convergence),
         args.product_auth_enabled,
     );
     let machine_presence_task = store.as_ref().map(|store| {
@@ -1503,6 +1508,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             telemetry_writer_admission,
             plugin_lifecycle_fences,
             desired_machine_components,
+            component_convergence,
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -1580,6 +1586,157 @@ async fn run_machine_presence_sweeper(
                     break;
                 }
             }
+        }
+    }
+}
+
+/// How often the Controller compares every connected Machine with the desired
+/// component set and re-reads the manifest behind it.
+const MACHINE_CONVERGENCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A freshly connected Machine is already reconciling the automatic set its
+/// welcome carried. Convergence waits this long before adding its own dispatch,
+/// so the same generation is never activated twice in a row.
+const MACHINE_CONVERGENCE_CONNECTION_GRACE: std::time::Duration =
+    std::time::Duration::from_secs(120);
+
+/// Converge signed automatic components continuously instead of only at a
+/// Machine's welcome. Every dispatch here is the same signed record, the same
+/// Reconcile command and the same Machine-side verification a person would
+/// trigger by hand; what this loop adds is that nobody has to.
+async fn run_component_convergence(
+    state: Arc<AppState>,
+    machine_snapshots: MachineSnapshots,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let policy = crate::machine_convergence::ConvergencePolicy::default();
+    loop {
+        tokio::select! {
+            () = tokio::time::sleep(MACHINE_CONVERGENCE_INTERVAL) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+        }
+        if *shutdown.borrow() {
+            break;
+        }
+        match state.desired_machine_components.reload(now_ms()) {
+            Ok(Some(generation)) => {
+                tracing::info!(generation, "desired Machine component set reloaded");
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // The last accepted set stays in force; convergence continues
+                // against it rather than against a half-read file.
+                tracing::error!(%error, "rejected the Machine component manifest");
+            }
+        }
+        let desired = state.desired_machine_components.current();
+        if desired.is_empty() {
+            continue;
+        }
+        let machines = match machine_snapshots.load().await {
+            Ok(machines) => machines,
+            Err(error) => {
+                tracing::warn!(%error, "loading Machines for component convergence");
+                continue;
+            }
+        };
+        for summary in machines {
+            if state.component_convergence.is_in_flight(&summary.id) {
+                continue;
+            }
+            let attempts = state.component_convergence.attempts(&summary.id);
+            let plan =
+                crate::machine_convergence::plan_machine(&summary, &desired, &attempts, now_ms());
+            if summary.connected {
+                // A converged component keeps no history. An offline Machine
+                // reports nothing, so it never prunes: reconnecting must not
+                // become a way to clear a blocked digest.
+                state.component_convergence.retain(
+                    &summary.id,
+                    &plan.reported.iter().map(|entry| entry.id.clone()).collect(),
+                );
+            }
+            if plan.dispatch.is_empty() {
+                continue;
+            }
+            if state
+                .machine_control
+                .connection_age(&summary.id)
+                .is_none_or(|age| age < MACHINE_CONVERGENCE_CONNECTION_GRACE)
+            {
+                continue;
+            }
+            if !state.component_convergence.begin(&summary.id) {
+                continue;
+            }
+            let task_state = Arc::clone(&state);
+            let snapshots = machine_snapshots.clone();
+            tokio::spawn(async move {
+                let machine_id = summary.id;
+                let request_id = machine_request_id("converge");
+                let components: Vec<crate::machine_protocol::ComponentId> = plan
+                    .dispatch
+                    .iter()
+                    .map(|component| component.id.clone())
+                    .collect();
+                tracing::info!(
+                    %machine_id,
+                    %request_id,
+                    components = components.len(),
+                    "converging signed Machine components"
+                );
+                task_state.component_convergence.record_dispatch(
+                    &machine_id,
+                    &plan.dispatch,
+                    policy,
+                    now_ms(),
+                );
+                let outcome = task_state
+                    .machine_control
+                    .command_request_with_timeout(
+                        &machine_id,
+                        request_id.clone(),
+                        crate::machine_protocol::MachineCommand::Reconcile {
+                            request_id: request_id.clone(),
+                            components: plan.dispatch.clone(),
+                        },
+                        MACHINE_COMPONENT_COMMAND_TIMEOUT,
+                    )
+                    .await;
+                match outcome {
+                    Ok(()) => {
+                        task_state.component_convergence.record_outcome(
+                            &machine_id,
+                            &plan.dispatch,
+                            None,
+                        );
+                        tracing::info!(
+                            %machine_id,
+                            %request_id,
+                            "Machine accepted the component reconcile"
+                        );
+                    }
+                    Err(error) => {
+                        task_state.component_convergence.record_outcome(
+                            &machine_id,
+                            &plan.dispatch,
+                            Some(&error),
+                        );
+                        tracing::warn!(
+                            %machine_id,
+                            %request_id,
+                            %error,
+                            "Machine component convergence failed"
+                        );
+                    }
+                }
+                task_state.component_convergence.finish(&machine_id);
+                snapshots.publish().await;
+            });
         }
     }
 }
@@ -9307,6 +9464,16 @@ async fn serve_axum(
     #[cfg(unix)]
     let local_operator = local_operator::start(&data_dir, Arc::clone(&state))?;
 
+    // Converge signed automatic components for as long as the Controller
+    // serves. A Controller without a manifest has no desired state to converge.
+    let convergence_task = state.desired_machine_components.is_configured().then(|| {
+        tokio::spawn(run_component_convergence(
+            Arc::clone(&state),
+            state.machine_snapshots.clone(),
+            state.shutdown.clone(),
+        ))
+    });
+
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -9317,6 +9484,9 @@ async fn serve_axum(
     .context("axum serve");
     #[cfg(unix)]
     local_operator.shutdown().await;
+    if let Some(task) = convergence_task {
+        task.abort();
+    }
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -10974,7 +11144,8 @@ async fn api_machine_reconcile(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
 ) -> Response {
-    if state.desired_machine_components.is_empty() {
+    let desired = state.desired_machine_components.current();
+    if desired.is_empty() {
         return (
             StatusCode::PRECONDITION_FAILED,
             "no signed Machine component manifest is configured",
@@ -10988,7 +11159,7 @@ async fn api_machine_reconcile(
         request_id.clone(),
         crate::machine_protocol::MachineCommand::Reconcile {
             request_id: request_id.clone(),
-            components: state.desired_machine_components.as_ref().clone(),
+            components: desired.components.clone(),
         },
         "reconcile_components",
         MACHINE_COMPONENT_COMMAND_TIMEOUT,
@@ -11003,8 +11174,8 @@ async fn api_machine_reconcile_one(
 ) -> Response {
     let Some(component) = state
         .desired_machine_components
-        .iter()
-        .find(|component| component.id == component_id)
+        .current()
+        .find(&component_id)
         .cloned()
     else {
         return (StatusCode::NOT_FOUND, "no signed update for this component").into_response();
@@ -11055,6 +11226,7 @@ async fn api_machine_revoke(
         Ok(()) => {
             state.machine_control.disconnect(&machine_id);
             state.runtime_router.remove(&machine_id);
+            state.component_convergence.forget(&machine_id);
             state.machine_snapshots.publish().await;
             StatusCode::NO_CONTENT.into_response()
         }
@@ -13163,12 +13335,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             protocol,
             controller_epoch: 0,
             heartbeat_interval_ms: MACHINE_HEARTBEAT_MS,
-            desired_components: state
-                .desired_machine_components
-                .iter()
-                .filter(|component| component.automatic)
-                .cloned()
-                .collect(),
+            desired_components: state.desired_machine_components.current().automatic(),
         },
     )
     .await

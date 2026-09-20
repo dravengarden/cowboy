@@ -63,7 +63,18 @@ export interface MachineSummary {
   capacity: { max_sessions: number; draining: boolean };
   active_sessions: number;
   pending_updates?: readonly { kind: string; slot?: string }[];
+  // Why an automatic component has not converged yet. Absent entries are
+  // converged; the Controller owns the decision, this is only its report.
+  convergence?: readonly MachineComponentConvergence[];
 }
+
+export type MachineComponentConvergence = {
+  id: { kind: string; slot?: string };
+  state: "pending" | "draining" | "verifying" | "retrying" | "blocked";
+  attempts?: number;
+  next_attempt_at_ms?: number;
+  detail?: string;
+};
 
 // Which surface opened the session — for the sidebar badge. The wire values are
 // legacy implementation names: "web" also covers the PWA/native shell, while
