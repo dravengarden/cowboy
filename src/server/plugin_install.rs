@@ -490,6 +490,9 @@ pub(super) async fn api_machine_plugin_install(
     headers: HeaderMap,
     Json(request): Json<PluginInstallRequest>,
 ) -> Response {
+    if let Some(refusal) = super::service_managed_refusal(&state, &machine) {
+        return refusal;
+    }
     let approval = match OperatorApproval::capture(
         ProductRequestAuth::from(state.as_ref()),
         &state.service_id,

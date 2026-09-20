@@ -68,13 +68,32 @@ pub(super) struct MachineTarget {
     pub connected: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum StepKind {
+    /// The Machine should run this Plugin and does not.
+    Install,
+    /// The Machine runs an older release than the Catalog's newest ready one.
+    Upgrade,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct ConvergeStep {
+    pub kind: StepKind,
     pub plugin: String,
-    pub from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     pub to: String,
     pub digest: String,
     pub operation_id: String,
+}
+
+/// An installed Plugin the Service-side document does not declare, on a Machine
+/// whose policy is to remove those.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RemovalStep {
+    pub plugin: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -87,6 +106,8 @@ pub(super) struct SkippedPlugin {
 pub(super) struct MachinePlan {
     pub machine: String,
     pub steps: Vec<ConvergeStep>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<RemovalStep>,
     pub skipped: Vec<SkippedPlugin>,
 }
 
@@ -173,20 +194,46 @@ pub(super) fn operation_id(machine: &str, plugin: &str, version: &str) -> String
 }
 
 /// Decide what one Machine needs. Pure: every input is an observation.
+///
+/// `declared` is the Service-side membership for this Machine. Without one the
+/// Machine is unmanaged: its installed Plugins are kept current and nothing is
+/// added or removed, because "which Plugins belong here" was never stated.
 #[must_use]
 pub(super) fn plan_machine(
     machine: &MachineTarget,
     releases: &[CatalogRelease],
     installed: &[InstalledPlugin],
     only: &[String],
+    declared: Option<&crate::machine_convergence::MachinePlugins>,
 ) -> MachinePlan {
     let latest = latest_ready(releases, &machine.platform, &machine.architecture);
     let mut plan = MachinePlan {
         machine: machine.id.clone(),
         ..MachinePlan::default()
     };
+    let selected = |plugin: &str| only.is_empty() || only.iter().any(|id| id == plugin);
     for plugin in installed {
-        if !only.is_empty() && !only.contains(&plugin.plugin_id) {
+        if !selected(&plugin.plugin_id) {
+            continue;
+        }
+        if let Some(declared) =
+            declared.filter(|declared| !declared.plugins.contains(&plugin.plugin_id))
+        {
+            match declared.unlisted {
+                crate::machine_convergence::UnlistedPolicy::Uninstall => {
+                    plan.removals.push(RemovalStep {
+                        plugin: plugin.plugin_id.clone(),
+                        version: plugin.plugin_version.clone(),
+                    });
+                }
+                crate::machine_convergence::UnlistedPolicy::Keep => {
+                    plan.skipped.push(SkippedPlugin {
+                        plugin: plugin.plugin_id.clone(),
+                        reason: "not declared for this Machine; unlisted Plugins are kept"
+                            .to_owned(),
+                    });
+                }
+            }
             continue;
         }
         let Some(target) = latest.get(plugin.plugin_id.as_str()) else {
@@ -227,11 +274,38 @@ pub(super) fn plan_machine(
             continue;
         }
         plan.steps.push(ConvergeStep {
+            kind: StepKind::Upgrade,
             plugin: plugin.plugin_id.clone(),
-            from: plugin.plugin_version.clone(),
+            from: Some(plugin.plugin_version.clone()),
             to: target.plugin_version.clone(),
             digest: target.artifact_digest.clone(),
             operation_id: operation_id(&machine.id, &plugin.plugin_id, &target.plugin_version),
+        });
+    }
+    let Some(declared) = declared else {
+        return plan;
+    };
+    for plugin in &declared.plugins {
+        if !selected(plugin) || installed.iter().any(|current| current.plugin_id == *plugin) {
+            continue;
+        }
+        let Some(target) = latest.get(plugin.as_str()) else {
+            plan.skipped.push(SkippedPlugin {
+                plugin: plugin.clone(),
+                reason: format!(
+                    "declared but has no ready {}/{} release in the Catalog",
+                    machine.platform, machine.architecture
+                ),
+            });
+            continue;
+        };
+        plan.steps.push(ConvergeStep {
+            kind: StepKind::Install,
+            plugin: plugin.clone(),
+            from: None,
+            to: target.plugin_version.clone(),
+            digest: target.artifact_digest.clone(),
+            operation_id: operation_id(&machine.id, plugin, &target.plugin_version),
         });
     }
     plan
@@ -356,17 +430,83 @@ async fn inventory(client: &reqwest::Client, machine: &str) -> Result<Vec<Instal
     decode(data, "a Plugin inventory")
 }
 
+/// Remove one undeclared Plugin through the same durable transaction a
+/// browser confirmation uses. The preview names every session the removal
+/// would take with it; automation never confirms past one. A live conversation
+/// is not ended to satisfy a list — the Plugin stays until it is idle.
+async fn remove(
+    client: &reqwest::Client,
+    machine: &str,
+    removal: &RemovalStep,
+) -> Result<serde_json::Value> {
+    let (status, preview) = read_json(
+        client,
+        reqwest::Method::POST,
+        &[
+            "machines",
+            machine,
+            "plugins",
+            &removal.plugin,
+            "uninstall-plan",
+        ],
+        None,
+    )
+    .await?;
+    if status != 200 {
+        return Ok(json!({
+            "plugin": removal.plugin,
+            "removed": false,
+            "http_status": status,
+            "detail": preview,
+        }));
+    }
+    let affected = preview
+        .get("affected_sessions")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    if affected > 0 {
+        return Ok(json!({
+            "plugin": removal.plugin,
+            "removed": false,
+            "reason": format!("{affected} session(s) would be removed with it"),
+        }));
+    }
+    let Some(plan_id) = preview.get("plan_id").and_then(serde_json::Value::as_str) else {
+        return Ok(json!({
+            "plugin": removal.plugin,
+            "removed": false,
+            "reason": "the uninstall preview carried no identity",
+        }));
+    };
+    let (status, data) = read_json(
+        client,
+        reqwest::Method::POST,
+        &["machines", machine, "plugins", &removal.plugin, "uninstall"],
+        Some(json!({ "plan_id": plan_id, "confirm_active_sessions": false })),
+    )
+    .await?;
+    Ok(json!({
+        "plugin": removal.plugin,
+        "version": removal.version,
+        "removed": (200..300).contains(&status),
+        "http_status": status,
+        "detail": data,
+    }))
+}
+
 /// Converge the requested Machines and report exactly what happened. Returns an
 /// error — and therefore a non-zero exit — when an applied run leaves work
 /// behind, so an unattended caller cannot read silence as success.
 pub(super) async fn run(
     client: &reqwest::Client,
+    data_dir: &std::path::Path,
     requested: &[String],
     only: &[String],
     apply: bool,
 ) -> Result<()> {
     let releases = catalog(client).await?;
     let registry = machines(client).await?;
+    let declared = crate::machine_convergence::PluginDesiredSource::new(data_dir).current();
     let (ordered, mut unreachable) = rollout_order(&registry, requested);
     let mut reports = Vec::new();
     let mut stopped_at: Option<String> = None;
@@ -380,8 +520,10 @@ pub(super) async fn run(
             continue;
         }
         let installed = inventory(client, &machine.id).await?;
-        let plan = plan_machine(machine, &releases, &installed, only);
+        let membership = declared.value.machine(&machine.id);
+        let plan = plan_machine(machine, &releases, &installed, only, membership);
         let mut applied = Vec::new();
+        let mut removed = Vec::new();
         for step in &plan.steps {
             if !apply {
                 continue;
@@ -398,6 +540,7 @@ pub(super) async fn run(
             )
             .await?;
             applied.push(json!({
+                "kind": step.kind,
                 "plugin": step.plugin,
                 "from": step.from,
                 "to": step.to,
@@ -405,6 +548,12 @@ pub(super) async fn run(
                 "http_status": status,
                 "detail": data,
             }));
+        }
+        for removal in &plan.removals {
+            if !apply {
+                continue;
+            }
+            removed.push(remove(client, &machine.id, removal).await?);
         }
         // Re-read the inventory rather than trusting the submissions: an
         // accepted request and an installed generation are different facts.
@@ -414,20 +563,40 @@ pub(super) async fn run(
                 &releases,
                 &inventory(client, &machine.id).await?,
                 only,
+                membership,
             )
         } else {
             plan.clone()
         };
+        // A removal the Machine refused because a session would be affected is
+        // reported, not a rollout failure: the next run removes it once that
+        // conversation ends.
         if apply && !remaining.steps.is_empty() {
             stopped_at = Some(machine.id.clone());
         }
         reports.push(json!({
             "machine": machine.id,
             "attempted": true,
+            "managed": membership.is_some(),
             "planned": plan.steps,
             "applied": applied,
+            "planned_removals": plan.removals,
+            "removed": removed,
             "skipped": plan.skipped,
-            "remaining": remaining.steps.iter().map(|step| format!("{} {}→{}", step.plugin, step.from, step.to)).collect::<Vec<_>>(),
+            "remaining": remaining
+                .steps
+                .iter()
+                .map(|step| match &step.from {
+                    Some(from) => format!("{} {from}→{}", step.plugin, step.to),
+                    None => format!("{} install {}", step.plugin, step.to),
+                })
+                .chain(
+                    remaining
+                        .removals
+                        .iter()
+                        .map(|removal| format!("{} remove {}", removal.plugin, removal.version)),
+                )
+                .collect::<Vec<_>>(),
         }));
     }
     unreachable.sort_by(|left, right| left.plugin.cmp(&right.plugin));

@@ -240,7 +240,9 @@ schema version and host implementation; unknown members fail closed.
 
 Effect ownership is also structural: Service authentication and logout may be
 emitted only from `setup`, Machine installation only from `empty`, and Machine
-upgrade or uninstall only from `settings`. Documentation links are the only
+upgrade or uninstall only from `settings`. The host may additionally block a
+capability outright — an unpublished release, or a Machine whose Plugins are
+declared Service-side — and a blocked action renders nothing at all. Documentation links are the only
 lifecycle-neutral effect. Both Rust package validation and TypeScript Catalog
 validation enforce the same mapping before rendering.
 
@@ -305,6 +307,17 @@ silently adopting replacement runtime bytes.
 
 Publishing a Plugin release does not install it. Installing it on one Machine
 does not install it on another Machine.
+
+Which Plugins a Machine runs may instead be declared Service-side, per Machine,
+in the document described by
+[Machine Plugin membership](machine-plugin-membership.md). That declaration is
+the explicit installation decision this requirement asks for — publication
+still installs nothing — and convergence applies it. A declared Machine's
+clients therefore offer no lifecycle action: the Controller refuses
+client-initiated installs, uninstall previews and uninstalls for it, and the
+host blocks those capabilities so the Provider's settings surface renders
+nothing for them. An undeclared Machine is unchanged in every respect.
+Automatic removal never confirms past an affected session.
 
 The [core install continuation](plugin-install-continuation.md) requires an exact
 version/digest and binds the current Operator confirmation to the complete
