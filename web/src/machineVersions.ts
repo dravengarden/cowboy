@@ -73,3 +73,18 @@ function retryDelay(nextAttemptAtMs: number | undefined, nowMs: number): string 
   const minutes = Math.ceil((nextAttemptAtMs - nowMs) / 60_000);
   return minutes > 0 ? ` in ${String(minutes)} min` : "";
 }
+
+/** A legacy provider binary an installed Plugin already replaced. Sessions run
+ *  the Plugin's pinned generation, so an update here would maintain a runtime
+ *  Cowboy no longer executes — Cowboy never asks anyone to keep an adapter or
+ *  CLI current as a separate product component. */
+export function machineSupersessionPresentation(
+  supersededBy: string,
+): { status: string; tone: "default"; detail: string } {
+  return {
+    status: `Served by ${supersededBy}`,
+    tone: "default",
+    detail:
+      "Sessions run the installed Plugin's pinned generation. This host binary is the legacy fallback and is not updated from here.",
+  };
+}

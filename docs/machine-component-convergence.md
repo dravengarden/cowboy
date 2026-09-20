@@ -63,9 +63,29 @@ not converged:
 | `verifying` | the Reconcile was acknowledged; waiting for the inventory that proves the digest is active |
 | `retrying` | the last dispatch failed; waiting out its backoff |
 | `blocked` | repeated failure against these exact bytes; needs a person |
+| `frozen` | automatic convergence is stopped Service-wide |
 
 A converged component has no entry. The list is a projection — it never
 authorizes an install by itself.
+
+## Stopping it
+
+One Service-owned file stops every automatic path at once:
+
+```sh
+cowboy operator freeze --reason "investigating the 3.1.29 rollout"
+cowboy operator unfreeze
+```
+
+While it is frozen the Controller dispatches nothing and reports every pending
+automatic component as `frozen`, and `cowboy operator converge --apply`
+refuses. A dry run stays available, because reading the plan is how you decide
+to resume. Work already dispatched finishes under its own transaction: a stop
+prevents the next effect, it cannot undo one that already happened.
+
+The record keeps who froze it and why. An unreadable record still freezes —
+the only safe reading of "somebody left a stop here and it is damaged" is to
+stay stopped.
 
 ## Operating it
 

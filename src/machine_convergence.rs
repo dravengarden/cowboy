@@ -211,6 +211,99 @@ fn component_label(id: &ComponentId) -> String {
     }
 }
 
+/// Everything automatic convergence is allowed to stop for.
+///
+/// One Service-owned file, so the same stop reaches the Controller's component
+/// loop and every host-authorized Plugin convergence run without either having
+/// to reach the other. Presence is the whole signal: an unreadable or
+/// malformed record still freezes, because the only safe reading of "somebody
+/// left a stop here and it is damaged" is to stop.
+pub struct ConvergenceFreeze {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FreezeRecord {
+    pub schema: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub actor: String,
+    #[serde(default)]
+    pub frozen_at_ms: i64,
+}
+
+impl ConvergenceFreeze {
+    pub const FILE_NAME: &'static str = "convergence-freeze.json";
+
+    #[must_use]
+    pub fn new(data_dir: &Path) -> Self {
+        Self {
+            path: data_dir.join(Self::FILE_NAME),
+        }
+    }
+
+    /// The current stop, if any. A damaged record reports itself rather than
+    /// being treated as an absent one.
+    #[must_use]
+    pub fn current(&self) -> Option<FreezeRecord> {
+        let bytes = std::fs::read(&self.path).ok()?;
+        Some(serde_json::from_slice(&bytes).unwrap_or(FreezeRecord {
+            schema: 0,
+            reason: Some("the freeze record is unreadable".to_owned()),
+            actor: String::new(),
+            frozen_at_ms: 0,
+        }))
+    }
+
+    #[must_use]
+    pub fn is_frozen(&self) -> bool {
+        self.current().is_some()
+    }
+
+    pub fn freeze(
+        &self,
+        actor: &str,
+        reason: Option<&str>,
+        now_ms: i64,
+    ) -> std::io::Result<FreezeRecord> {
+        let record = FreezeRecord {
+            schema: 1,
+            reason: reason.map(str::to_owned),
+            actor: actor.to_owned(),
+            frozen_at_ms: now_ms,
+        };
+        let bytes = serde_json::to_vec_pretty(&record).unwrap_or_default();
+        let temporary = self.path.with_extension("json.partial");
+        write_private(&temporary, &bytes)?;
+        std::fs::rename(&temporary, &self.path)?;
+        Ok(record)
+    }
+
+    /// Resume convergence. Removing an absent stop is not an error: the caller
+    /// asked for "running", and running is what it gets.
+    pub fn thaw(&self) -> std::io::Result<()> {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    std::io::Write::write_all(&mut file, bytes)?;
+    file.sync_all()
+}
+
 /// How hard the Controller tries before it stops and reports.
 #[derive(Debug, Clone, Copy)]
 pub struct ConvergencePolicy {
@@ -274,6 +367,7 @@ pub fn plan_machine(
     summary: &MachineSummary,
     desired: &DesiredComponents,
     attempts: &HashMap<ComponentId, Attempt>,
+    frozen: bool,
     now_ms: i64,
 ) -> Plan {
     let mut plan = Plan::default();
@@ -295,6 +389,18 @@ pub fn plan_machine(
         let attempt = attempts
             .get(&component.id)
             .filter(|attempt| attempt.digest.eq_ignore_ascii_case(&component.digest));
+        // A stop is reported per component rather than hidden, so nobody has to
+        // guess why a published component is not arriving.
+        if frozen {
+            plan.reported.push(ComponentConvergence {
+                id: component.id.clone(),
+                state: ComponentConvergenceState::Frozen,
+                attempts: attempt.map_or(0, |attempt| attempt.attempts),
+                next_attempt_at_ms: None,
+                detail: None,
+            });
+            continue;
+        }
         if let Some(attempt) = attempt.filter(|attempt| attempt.blocked) {
             plan.reported.push(ComponentConvergence {
                 id: component.id.clone(),

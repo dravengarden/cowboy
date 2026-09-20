@@ -156,6 +156,7 @@ impl ComponentStore {
             auth: None,
             detail: None,
             update: None,
+            superseded_by: None,
         })
     }
 

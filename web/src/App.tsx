@@ -93,7 +93,11 @@ import { AppIconSettings } from "./AppIconSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
 import { claimKeyboard } from "./keyboardClaim";
 import { KEYBOARD_INSET_CHANGED_EVENT } from "./keyboardInset";
-import { machineConvergencePresentation, machineVersionPresentation } from "./machineVersions";
+import {
+    machineConvergencePresentation,
+    machineSupersessionPresentation,
+    machineVersionPresentation,
+} from "./machineVersions";
 import { DelayedNetworkProgress, NetworkIconButton } from "./NetworkActionFeedback";
 import { setObservabilityContext } from "./observability";
 import { Transcript } from "./Transcript";
@@ -5562,7 +5566,15 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                     : "No authoritative release comparison is available";
                                                 const npmUpdateKey = `${machine.id}:npm:${component.id.kind}:${component.id.slot ?? ""}`;
                                                 const npmUpdating = busy[npmUpdateKey];
-                                                const npmInstallable = update?.available === true && update.installable;
+                                                // An installed Plugin ships its own pinned runtime for this
+                                                // slot, so the legacy host binary is not what sessions run.
+                                                // Offering its unpinned `@latest` here would ask for
+                                                // maintenance of a runtime Cowboy no longer executes.
+                                                const supersession = component.superseded_by === undefined
+                                                    ? undefined
+                                                    : machineSupersessionPresentation(component.superseded_by);
+                                                const npmInstallable = update?.available === true &&
+                                                    update.installable && supersession === undefined;
                                                 return (
                                                     <Stack
                                                         key={`${component.id.kind}:${component.id.slot ?? ""}`}
@@ -5622,7 +5634,18 @@ function MachinesContent({ embedded = false }: { embedded?: boolean } = {}): Rea
                                                                 onUpdate={() => requestNpmUpdate(machine.id, component)}
                                                             />
                                                         )}
-                                                        {!componentPending && !npmInstallable && !convergenceState && (
+                                                        {!componentPending && !npmInstallable && !convergenceState &&
+                                                            supersession && (
+                                                            <Chip
+                                                                size="small"
+                                                                variant="outlined"
+                                                                color={supersession.tone}
+                                                                label={supersession.status}
+                                                                title={supersession.detail}
+                                                            />
+                                                        )}
+                                                        {!componentPending && !npmInstallable && !convergenceState &&
+                                                            !supersession && (
                                                             <Chip
                                                                 size="small"
                                                                 variant="outlined"

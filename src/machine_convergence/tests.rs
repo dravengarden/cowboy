@@ -59,6 +59,7 @@ fn installed(digest: &str, state: ComponentState, leases: u64) -> ComponentInven
         auth: None,
         detail: None,
         update: None,
+        superseded_by: None,
     }
 }
 
@@ -98,6 +99,7 @@ fn an_outdated_automatic_component_is_dispatched() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(plan.dispatch.len(), 1);
@@ -110,6 +112,7 @@ fn a_converged_component_produces_no_work_at_all() {
         &summary(true, vec![installed(DIGEST, ComponentState::Active, 0)]),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(plan, super::Plan::default());
@@ -123,6 +126,7 @@ fn a_staged_but_inactive_generation_still_converges() {
         &summary(true, vec![installed(DIGEST, ComponentState::Failed, 0)]),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(plan.dispatch.len(), 1);
@@ -134,6 +138,7 @@ fn convergence_never_replaces_a_leased_generation() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 2)]),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert!(plan.dispatch.is_empty());
@@ -146,6 +151,7 @@ fn a_component_the_manifest_does_not_automate_is_left_to_its_owner() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
         &desired_set(vec![desired(false, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(plan, super::Plan::default());
@@ -157,6 +163,7 @@ fn a_disconnected_machine_is_never_dispatched_to() {
         &summary(false, Vec::new()),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(plan, super::Plan::default());
@@ -173,7 +180,7 @@ fn a_failing_component_backs_off_and_then_stops() {
     state.record_dispatch("hawk", &dispatched, policy, 1_000);
     state.record_outcome("hawk", &dispatched, Some("probe failed"));
     let attempts = state.attempts("hawk");
-    let plan = plan_machine(&machine, &set, &attempts, 1_000);
+    let plan = plan_machine(&machine, &set, &attempts, false, 1_000);
     assert!(plan.dispatch.is_empty(), "the backoff must be respected");
     assert_eq!(plan.reported[0].state, ComponentConvergenceState::Retrying);
     assert_eq!(plan.reported[0].detail.as_deref(), Some("probe failed"));
@@ -181,7 +188,7 @@ fn a_failing_component_backs_off_and_then_stops() {
     // Once the backoff elapses the same digest is retried.
     let elapsed = attempts[&component_id()].next_attempt_at_ms;
     assert_eq!(
-        plan_machine(&machine, &set, &attempts, elapsed)
+        plan_machine(&machine, &set, &attempts, false, elapsed)
             .dispatch
             .len(),
         1
@@ -192,7 +199,7 @@ fn a_failing_component_backs_off_and_then_stops() {
         state.record_dispatch("hawk", &dispatched, policy, now);
         state.record_outcome("hawk", &dispatched, Some("probe failed"));
     }
-    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), i64::MAX);
+    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), false, i64::MAX);
     assert!(
         plan.dispatch.is_empty(),
         "a blocked component must not be retried"
@@ -213,7 +220,7 @@ fn an_acknowledged_reconcile_that_never_converges_still_stops() {
 
     state.record_dispatch("hawk", &dispatched, policy, 1_000);
     state.record_outcome("hawk", &dispatched, None);
-    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), 1_000);
+    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), false, 1_000);
     assert!(plan.dispatch.is_empty());
     assert_eq!(plan.reported[0].state, ComponentConvergenceState::Verifying);
     assert_eq!(plan.reported[0].detail, None);
@@ -222,7 +229,7 @@ fn an_acknowledged_reconcile_that_never_converges_still_stops() {
         state.record_dispatch("hawk", &dispatched, policy, 1_000 * i64::from(attempt));
         state.record_outcome("hawk", &dispatched, None);
     }
-    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), i64::MAX);
+    let plan = plan_machine(&machine, &set, &state.attempts("hawk"), false, i64::MAX);
     assert_eq!(plan.reported[0].state, ComponentConvergenceState::Blocked);
 }
 
@@ -242,6 +249,7 @@ fn a_new_digest_starts_its_own_history() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
         &fixed,
         &state.attempts("hawk"),
+        false,
         1_000,
     );
     assert_eq!(
@@ -265,6 +273,7 @@ fn a_converged_component_forgets_its_history() {
         &summary(true, vec![installed(DIGEST, ComponentState::Active, 0)]),
         &desired_set(dispatched.clone()),
         &state.attempts("hawk"),
+        false,
         1_000,
     );
     assert!(plan.reported.is_empty());
@@ -286,6 +295,7 @@ fn a_still_pending_component_keeps_its_history_through_a_prune() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
         &desired_set(dispatched.clone()),
         &state.attempts("hawk"),
+        false,
         1_000,
     );
     state.retain(
@@ -405,6 +415,7 @@ fn the_reported_plan_survives_a_machine_with_no_inventory_yet() {
         &summary(true, Vec::new()),
         &desired_set(vec![desired(true, DIGEST)]),
         &HashMap::new(),
+        false,
         1_000,
     );
     assert_eq!(
@@ -431,8 +442,55 @@ fn a_blocked_attempt_reports_without_a_retry_time() {
         &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
         &desired_set(vec![desired(true, DIGEST)]),
         &attempts,
+        false,
         1_000,
     );
     assert!(plan.dispatch.is_empty());
     assert_eq!(plan.reported[0].next_attempt_at_ms, None);
+}
+
+#[test]
+fn a_freeze_stops_every_dispatch_and_says_so() {
+    let plan = plan_machine(
+        &summary(true, vec![installed(OLD_DIGEST, ComponentState::Active, 0)]),
+        &desired_set(vec![desired(true, DIGEST)]),
+        &HashMap::new(),
+        true,
+        1_000,
+    );
+    assert!(plan.dispatch.is_empty());
+    assert_eq!(plan.reported[0].state, ComponentConvergenceState::Frozen);
+}
+
+#[test]
+fn a_freeze_is_recorded_reversible_and_fails_safe() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let freeze = super::ConvergenceFreeze::new(directory.path());
+    assert!(!freeze.is_frozen());
+    // Resuming something that is already running is not an error.
+    freeze.thaw().expect("thaw");
+
+    let record = freeze
+        .freeze("unix-uid:1000", Some("investigating a bad release"), 42)
+        .expect("freeze");
+    assert_eq!(record.actor, "unix-uid:1000");
+    assert_eq!(record.frozen_at_ms, 42);
+    let current = freeze.current().expect("frozen");
+    assert_eq!(
+        current.reason.as_deref(),
+        Some("investigating a bad release")
+    );
+
+    // A damaged stop is still a stop: the only safe reading of "somebody left
+    // a stop here and it is unreadable" is to stay stopped.
+    std::fs::write(
+        directory.path().join(super::ConvergenceFreeze::FILE_NAME),
+        b"{ not json",
+    )
+    .expect("damage the record");
+    assert!(freeze.is_frozen());
+    assert_eq!(freeze.current().expect("frozen").schema, 0);
+
+    freeze.thaw().expect("thaw");
+    assert!(!freeze.is_frozen());
 }

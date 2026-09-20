@@ -136,6 +136,11 @@ pub struct ComponentInventory {
     /// comparison; it must not be interpreted as "up to date".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<ComponentUpdate>,
+    /// An installed Plugin already supplies this slot from its own pinned
+    /// generation, so the legacy host binary is not what sessions run. Set by
+    /// the Controller projection; a Machine never reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -411,6 +416,8 @@ pub enum ComponentConvergenceState {
     Verifying,
     /// Repeated failure against this exact digest. Needs a person.
     Blocked,
+    /// Automatic convergence is stopped Service-wide.
+    Frozen,
 }
 
 /// Build the exact version-one proof signed during a remote Machine handshake.
@@ -1731,6 +1738,7 @@ mod tests {
                 auth: None,
                 detail: None,
                 update: None,
+                superseded_by: None,
             })
             .collect::<Vec<_>>();
         let json = serde_json::to_value(inventory).expect("serialize inventory");

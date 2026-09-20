@@ -56,6 +56,9 @@ export interface MachineSummary {
       checked_at_ms: number;
       installable: boolean;
     };
+    // An installed Plugin already serves this slot from its own pinned
+    // generation, so the legacy host binary is not what sessions run.
+    superseded_by?: string;
   }[];
   plugins: readonly unknown[];
   provider_contracts?: ProviderContractInventory;
