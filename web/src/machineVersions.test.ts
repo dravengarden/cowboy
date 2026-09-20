@@ -1,6 +1,7 @@
 import { assertEquals } from "jsr:@std/assert";
 import {
   machineConvergencePresentation,
+  machineSupersessionPresentation,
   machineVersionPresentation,
 } from "./machineVersions.ts";
 
@@ -92,4 +93,18 @@ Deno.test("a converging component offers no action that would race the Controlle
   assertEquals(drainingAndBlocked.includes('convergence.state !== "draining"'), true);
   assertEquals(drainingAndBlocked.includes('convergence.state !== "blocked"'), true);
   assertEquals(app.includes("{componentPending && !converging && ("), true);
+});
+
+Deno.test("a Plugin-served slot offers no legacy update to press", async () => {
+  const presentation = machineSupersessionPresentation("claude-code");
+  assertEquals(presentation.status, "Served by claude-code");
+  assertEquals(presentation.tone, "default");
+
+  const app = await Deno.readTextFile(new URL("./App.tsx", import.meta.url));
+  // The npm action is the unpinned `@latest` path; it must not be offered for a
+  // slot an installed Plugin already serves from its pinned generation.
+  assertEquals(
+    app.includes("update.installable && supersession === undefined"),
+    true,
+  );
 });

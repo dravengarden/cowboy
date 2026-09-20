@@ -1226,6 +1226,7 @@ async fn collect_inventory(
         auth: None,
         detail: None,
         update: None,
+        superseded_by: None,
     }];
     let mut managed = store.active().unwrap_or_default();
     managed.retain(|(component, _)| {
@@ -1250,6 +1251,7 @@ async fn collect_inventory(
             auth: None,
             detail: None,
             update: None,
+            superseded_by: None,
         }
     }));
     if !has_managed_acp {
@@ -1332,6 +1334,7 @@ async fn collect_inventory(
             auth: Some(auth),
             detail: auth_detail.or(detail),
             update: None,
+            superseded_by: None,
         });
     }
     inventory.push(probe_zed_inventory(zed_adapter_socket).await);
@@ -1400,6 +1403,7 @@ async fn collect_inventory(
             auth: None,
             detail,
             update: None,
+            superseded_by: None,
         });
     }
     for (plugin_id, origin) in crate::plugin_runtime_args::loopback_plugins() {
@@ -1435,6 +1439,7 @@ async fn collect_inventory(
                     .to_owned()
             }),
             update: None,
+            superseded_by: None,
         });
     }
     apply_npm_release_status(&mut inventory).await;
@@ -1467,6 +1472,7 @@ fn bootstrap_acp_inventory(generation: &str) -> ComponentInventory {
         auth: None,
         detail: Some("bootstrap generation".to_owned()),
         update: None,
+        superseded_by: None,
     }
 }
 
@@ -1655,6 +1661,7 @@ async fn probe_zed_inventory(socket: Option<&std::path::Path>) -> ComponentInven
         auth: None,
         detail: Some("Cowboy Zed adapter is not configured".to_owned()),
         update: None,
+        superseded_by: None,
     };
     let Some(socket) = socket else {
         return component;
@@ -3595,6 +3602,7 @@ mod tests {
                 checked_at_ms: 1,
                 installable: true,
             }),
+            superseded_by: None,
         };
         assert!(npm_update_is_confirmed_by_inventory(
             &id,

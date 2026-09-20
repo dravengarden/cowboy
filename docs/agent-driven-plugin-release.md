@@ -102,6 +102,11 @@ Catalog resolution and the same host delegation as a single upgrade. It is not
 a second installer, and it cannot install a release the Controller would refuse
 by hand.
 
+`cowboy operator freeze --reason "..."` stops it, together with the
+Controller's own component convergence; `unfreeze` resumes. A frozen Service
+refuses `--apply` and still allows a dry run. Freezing cannot undo an effect
+that already happened — dispatched work finishes under its own transaction.
+
 The CLI prints JSON with an HTTP status, operation ID and response data. HTTP
 204 means the request completed; inspect the saved result and installed
 inventory for acceptance. HTTP 409 can return an already saved result, with

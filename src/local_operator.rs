@@ -186,6 +186,15 @@ enum OperatorCommand {
     Disable,
     /// Inspect the local endpoint and its authenticated host identity.
     Status,
+    /// Stop every automatic convergence path Service-wide until it is resumed.
+    /// Already dispatched work finishes under its existing transaction.
+    Freeze {
+        /// Recorded with the stop so the next person knows why it is there.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Resume automatic convergence.
+    Unfreeze,
     /// List trusted published Plugin releases.
     Catalog,
     /// Refresh the signed Catalog through the running Controller.
@@ -259,6 +268,30 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
             println!("{}", json!({"schema":1,"local_operator":"disabled"}));
             return Ok(());
         }
+        OperatorCommand::Freeze { reason } => {
+            let freeze = crate::machine_convergence::ConvergenceFreeze::new(&args.data_dir);
+            let record = freeze
+                .freeze(
+                    &format!("unix-uid:{}", uid()),
+                    reason.as_deref(),
+                    crate::usage::now_ms(),
+                )
+                .context("recording the convergence freeze")?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &json!({"schema":1,"convergence":"frozen","record":record})
+                )?
+            );
+            return Ok(());
+        }
+        OperatorCommand::Unfreeze => {
+            crate::machine_convergence::ConvergenceFreeze::new(&args.data_dir)
+                .thaw()
+                .context("removing the convergence freeze")?;
+            println!("{}", json!({"schema":1,"convergence":"running"}));
+            return Ok(());
+        }
         _ => {}
     }
     let client = reqwest::Client::builder()
@@ -274,7 +307,22 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         apply,
     } = &args.command
     {
+        let freeze = crate::machine_convergence::ConvergenceFreeze::new(&args.data_dir);
         if *apply {
+            // A stop must reach every path that could install, including this
+            // one. A dry run stays available: reading is how you decide to
+            // resume.
+            if let Some(record) = freeze.current() {
+                bail!(
+                    "convergence is frozen by {} ({}); run `cowboy operator unfreeze` before applying",
+                    if record.actor.is_empty() {
+                        "an unknown actor"
+                    } else {
+                        &record.actor
+                    },
+                    record.reason.as_deref().unwrap_or("no reason recorded")
+                );
+            }
             eprintln!(
                 "Convergence submits durable installations. A lost response requires receipt inspection before the same run is repeated."
             );
@@ -344,9 +392,11 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
             ),
             None => (reqwest::Method::GET, vec!["usage".into()], None, None),
         },
-        OperatorCommand::Enable | OperatorCommand::Disable | OperatorCommand::Converge { .. } => {
-            unreachable!()
-        }
+        OperatorCommand::Enable
+        | OperatorCommand::Disable
+        | OperatorCommand::Freeze { .. }
+        | OperatorCommand::Unfreeze
+        | OperatorCommand::Converge { .. } => unreachable!(),
     };
     let mut url = reqwest::Url::parse("http://localhost/v1/")?;
     {
