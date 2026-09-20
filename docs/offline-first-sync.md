@@ -296,6 +296,15 @@ retry with backoff 2 s, 5 s, 15 s, then become `held`. Rows that time out
 because the phase is not `live` simply return to `queued`; a timeout is not
 evidence of failure when the socket is down.
 
+**Watchdog totality.** Every unconfirmed phase has exactly one owner that ends
+it, and the shipped phases (`committing`, `pending`, `sending`, `failed`) name
+theirs in `deliveryStallMs`. `sending` is owned by the acknowledgement timeout;
+`pending` on a live socket and `committing` are owned by the stall deadlines
+reconciled in `commitQueue`; `pending` with the socket down is deliberately
+unbounded, per the paragraph above. A row that cannot reach a terminal phase is
+a bug, not a quiet wait: it shows a spinner no user can act on. Adding a phase
+means adding its owner.
+
 ## User experience
 
 ### Mobile

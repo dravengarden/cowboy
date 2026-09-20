@@ -1,6 +1,9 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "jsr:@std/assert";
 import {
   canReturnFromPendingRow,
+  COMMITTING_STALL_MS,
+  CONNECTED_PENDING_STALL_MS,
+  deliveryStallMs,
   destinationForPrompt,
   firstDeliveryAttempt,
   homeForOrigin,
@@ -49,6 +52,36 @@ Deno.test("every unconfirmed phase has explicit chrome", () => {
   assertEquals(pendingSyncAppearance("sending", false), "syncing");
   assertEquals(pendingSyncAppearance("sending", true), "sending");
   assertEquals(pendingSyncAppearance("failed", true), "failed");
+});
+
+Deno.test("a connected row that never leaves the tab is given an escape", () => {
+  assertEquals(deliveryStallMs("pending", true), CONNECTED_PENDING_STALL_MS);
+  // Waiting IS the contract while the socket is down; a deadline here would
+  // call a healthy queued prompt a failure.
+  assertEquals(deliveryStallMs("pending", false), null);
+});
+
+Deno.test("a durability barrier that never settles still releases the row", () => {
+  // IndexedDB has no timeout of its own: a `versionchange` blocked by another
+  // tab leaves the write unresolved, and being offline changes nothing about a
+  // local write.
+  assertEquals(deliveryStallMs("committing", true), COMMITTING_STALL_MS);
+  assertEquals(deliveryStallMs("committing", false), COMMITTING_STALL_MS);
+});
+
+Deno.test("phases with another owner get no second deadline", () => {
+  // The acknowledgement timeout owns `sending`, and `failed` already carries
+  // Retry / Return / Discard.
+  assertEquals(deliveryStallMs("sending", true), null);
+  assertEquals(deliveryStallMs("sending", false), null);
+  assertEquals(deliveryStallMs("failed", true), null);
+  assertEquals(deliveryStallMs(undefined, true), null);
+});
+
+Deno.test("the stall deadline outlasts an ordinary reconnect", () => {
+  // The reconnect replay is the primary recovery; the deadline only catches the
+  // row that replay could not carry, so it must not preempt it.
+  assert(CONNECTED_PENDING_STALL_MS > 10_000);
 });
 
 Deno.test("an explicit send paints loading as soon as the frame leaves", () => {

@@ -43,6 +43,7 @@ import {
 import {
   type DeliveryOrigin,
   type DeliveryStatus,
+  deliveryStallMs,
   destinationForPrompt,
   homeForOrigin,
   retryDeliveryAttempt,
@@ -456,6 +457,7 @@ function abandonProductSocket(reason: AbandonReason): Promise<void> {
   const closing = closeProductSync([...syncClients.values(), ...qClients.values(), replicaShutdown]);
   void closing.catch(() => console.warn("sync owner cleanup failed"));
   if (state.connected) setState({ ...state, connected: false });
+  reconcileStallWatchdogsForEverySession();
   current?.close();
   publishSyncStatus();
   return closing;
@@ -469,6 +471,7 @@ function pauseProductSocketForAuth(): void {
   socket = undefined;
   socketReady = false;
   if (state.connected) setState({ ...state, connected: false });
+  reconcileStallWatchdogsForEverySession();
   current?.close();
   publishSyncStatus();
   globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
@@ -555,6 +558,7 @@ function reconnectNow(reason: string): void {
   clearReconnectTimer();
   stopLiveness();
   if (state.connected) setState({ ...state, connected: false });
+  reconcileStallWatchdogsForEverySession();
   stale?.close();
   nextConnectReason = reason;
   openSocket();
@@ -2189,6 +2193,9 @@ function openBoundSocket(dataset: SyncDataset): void {
     }
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
+    // Behind the replay, not instead of it: a row the replay could not carry
+    // (durable admission still open) now gets a bounded deadline.
+    reconcileStallWatchdogsForEverySession();
     if (!state.sessionsLoaded) {
       setTimeout(() => {
         if (
@@ -2248,6 +2255,7 @@ function openBoundSocket(dataset: SyncDataset): void {
     if (ready) lastLiveAt = Date.now();
     outageFailures += 1;
     setState({ ...state, connected: false });
+    reconcileStallWatchdogsForEverySession();
     outageStartedAt ??= Date.now();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
       code: event.code,
@@ -3399,7 +3407,7 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
 
 function needsDraftSource(sessionId: string): boolean {
   return qClients.get(sessionId)?.pending().some((mutation) =>
-    mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null
+    awaitsDraftSource(sessionId, mutation)
   ) === true;
 }
 
@@ -3416,7 +3424,12 @@ function dispatchQueueMutation(sessionId: string, m: { name: string; id: string;
   draftDispatches.add(m.id);
   qStatus.set(m.id, "committing");
   commitQueue(sessionId);
-  void sendAfterDurableSnapshot(store, m.id, () => transmitQueueMutation(sessionId, m))
+  void sendAfterDurableSnapshot(store, m.id, () => {
+    // Same hold as the reconnect replay above: a barrier the stall watchdog
+    // already gave up on must not send behind the user's failed row.
+    if (qStatus.get(m.id) === "failed") return;
+    transmitQueueMutation(sessionId, m);
+  })
     .catch((error: unknown) => {
       if (!store.pending().some((mutation) => mutation.id === m.id)) return;
       qStatus.set(m.id, "failed");
@@ -3435,6 +3448,10 @@ function transmitQueueMutation(sessionId: string, m: { name: string; id: string;
     // no remaining row to annotate.
     if (mutationRow !== undefined) {
       qStatus.set(m.id, statusAfterExplicitSend(sent));
+      // Same watchdog contract as every other visible phase: an edit whose
+      // frame left the tab must not rest on "Sending…" when no echo arrives.
+      // `pending` here is picked up by the stall deadline in `commitQueue`.
+      if (sent) armQTimers(sessionId, m.id, mutationRow.cmid);
       commitQueue(sessionId);
     }
     return;
@@ -3589,6 +3606,33 @@ function commitQueue(sessionId: string): void {
   if (bubbles.length > 0) optimisticMessages.set(sessionId, bubbles);
   else optimisticMessages.delete(sessionId);
   setInteractiveState({ ...state, queues, drafts, optimisticMessages });
+  // Arms/retires the stall deadlines alongside the statuses just projected, so
+  // no phase this function can paint is left without an owner.
+  reconcileStallWatchdogs(sessionId);
+}
+
+/** The one way an unconfirmed row reaches its terminal, escapable phase: red
+ * chrome with Retry / Return / Discard. Both watchdogs end here. */
+function failDelivery(sessionId: string, statusIds: readonly string[]): void {
+  let changed = false;
+  for (const id of statusIds) {
+    if (qStatus.has(id) && qStatus.get(id) !== "failed") {
+      qStatus.set(id, "failed");
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  commitQueue(sessionId);
+  persistHeld(sessionId);
+}
+
+function deliveryStatusIds(
+  mutationId: string,
+  echoCmid: string | undefined,
+): readonly string[] {
+  return echoCmid === undefined || echoCmid === mutationId
+    ? [mutationId]
+    : [mutationId, echoCmid];
 }
 
 /** Arm the acknowledgement timeout for an optimistic queue row. The loader is
@@ -3599,25 +3643,120 @@ function armQTimers(
   echoCmid?: string,
 ): void {
   clearOptTimers(mutationId);
-  const statusIds = echoCmid === undefined || echoCmid === mutationId
-    ? [mutationId]
-    : [mutationId, echoCmid];
+  const statusIds = deliveryStatusIds(mutationId, echoCmid);
   optTimers.set(mutationId, {
     fail: setTimeout(() => {
-      let changed = false;
-      for (const id of statusIds) {
-        if (qStatus.has(id) && qStatus.get(id) !== "failed") {
-          qStatus.set(id, "failed");
-          changed = true;
-        }
-      }
-      if (changed) {
-        commitQueue(sessionId);
-        persistHeld(sessionId);
-      }
+      failDelivery(sessionId, statusIds);
       clearOptTimers(mutationId);
     }, SEND_TIMEOUT_MS),
   });
+}
+
+// --- Delivery stall watchdogs ----------------------------------------------
+//
+// `sending` has the acknowledgement timeout above; `pending` and `committing`
+// had no owner at all. `pending` is meant to be re-driven by the next
+// reconnect, but that replay reads `pendingForSend()`, which skips a mutation
+// whose durable admission is still open — so a row committed across a socket
+// bounce could be silently dropped by the very resend meant to rescue it and
+// then sit on "Waiting for Cowboy…" forever on a live socket, with no failure
+// chrome and no Retry. `committing` waits on an IndexedDB request, which has no
+// timeout of its own. Reconcile one watchdog per stalled mutation from
+// `commitQueue`, the single place that already projects every row's status,
+// and again whenever connectivity flips.
+const stallTimers = new Map<string, {
+  readonly session: string;
+  readonly phase: DeliveryStatus;
+  readonly timer: ReturnType<typeof setTimeout>;
+}>();
+
+function clearStallTimer(mutationId: string): void {
+  const entry = stallTimers.get(mutationId);
+  if (entry === undefined) return;
+  clearTimeout(entry.timer);
+  stallTimers.delete(mutationId);
+}
+
+/** An activation whose server-side source id has not arrived yet. Already owned
+ * by the bounded bootstrap retry in `hydrateSession`, which ends in `failed`;
+ * a second watchdog would only preempt it with a worse diagnosis. */
+function awaitsDraftSource(
+  sessionId: string,
+  m: { name: string; id: string; args: unknown },
+): boolean {
+  return m.name === "activateDraft" &&
+    commandForQueueMutation(sessionId, m) === null;
+}
+
+function reconcileStallWatchdogs(sessionId: string): void {
+  const connected = isConnected();
+  const watched = new Set<string>();
+  for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
+    const phase = qStatus.get(mutation.id) ?? "pending";
+    const delay = deliveryStallMs(phase, connected);
+    if (delay === null || awaitsDraftSource(sessionId, mutation)) continue;
+    watched.add(mutation.id);
+    // Re-entering the same phase must not extend an already-running deadline,
+    // or a chatty re-render would postpone the escape indefinitely.
+    if (stallTimers.get(mutation.id)?.phase === phase) continue;
+    clearStallTimer(mutation.id);
+    stallTimers.set(mutation.id, {
+      session: sessionId,
+      phase,
+      timer: setTimeout(() => {
+        stallTimers.delete(mutation.id);
+        resolveStalledDelivery(sessionId, mutation.id, phase);
+      }, delay),
+    });
+  }
+  // Collect before clearing: `clearStallTimer` deletes from the map being read.
+  const retired: string[] = [];
+  for (const [id, entry] of stallTimers) {
+    if (entry.session === sessionId && !watched.has(id)) retired.push(id);
+  }
+  for (const id of retired) clearStallTimer(id);
+}
+
+/** Going offline retires the `pending` deadline (waiting is correct with the
+ * socket down); coming back arms it behind the reconnect replay. */
+function reconcileStallWatchdogsForEverySession(): void {
+  for (const sessionId of qClients.keys()) reconcileStallWatchdogs(sessionId);
+}
+
+/** A stalled transport frame gets one silent, idempotent re-drive before the row
+ * fails. Deliberately not `retryQueued`: an explicit Retry re-anchors the row to
+ * the end of the queue, and transport recovery must never reorder work the user
+ * did not touch.
+ *
+ * A stalled durability barrier gets no re-drive. An IndexedDB request cannot be
+ * cancelled and the rollback would need the same wedged database, so all this
+ * watchdog can honestly do is stop the spinner from claiming progress and offer
+ * the decision to the user. Releasing the dispatch guard keeps that Retry real;
+ * a late acknowledgement is held behind the failed row exactly like a reconnect
+ * replay is. */
+function resolveStalledDelivery(
+  sessionId: string,
+  mutationId: string,
+  phase: DeliveryStatus,
+): void {
+  const mutation = qClients.get(sessionId)?.pending().find((m) =>
+    m.id === mutationId
+  );
+  // Confirmed, discarded or moved on while the deadline ran.
+  if (mutation === undefined || qStatus.get(mutationId) !== phase) return;
+  const statusIds = deliveryStatusIds(
+    mutationId,
+    (mutation.args as { row?: QueuedMessage }).row?.cmid,
+  );
+  if (phase === "committing") {
+    for (const id of statusIds) qFailure.set(id, "Couldn't save on this device");
+    draftDispatches.delete(mutationId);
+  } else if (isConnected()) {
+    transmitQueueMutation(sessionId, mutation);
+    // The frame left the tab: the acknowledgement timeout owns it from here.
+    if (qStatus.get(mutationId) !== phase) return;
+  }
+  failDelivery(sessionId, statusIds);
 }
 
 /** Optimistic add to drafts or queue: mutate (id = cmid, so the server echo
