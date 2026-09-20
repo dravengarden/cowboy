@@ -2,6 +2,7 @@ import { alpha, Box, ButtonBase, CircularProgress } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ConnectionStore,
+  UpdateActionPill,
   updateFillShare,
   updateFillSx,
   updateHairlineSx,
@@ -13,7 +14,8 @@ import { canApplyUpdateNow } from "../store";
 import { markUpdateSwapping } from "../updateAttempt";
 import {
   fetchReadyCowboyVersion,
-  mobileUpdateBannerLabel,
+  mobileUpdateAnnouncement,
+  mobileUpdateBanner,
   type MobileUpdatePhase,
 } from "./mobileUpdateVersion";
 
@@ -103,7 +105,8 @@ export function MobileConnectionBanner(
     : update.phase === "downloading"
     ? { kind: "downloading", progress: update.progress, requested: update.requested }
     : { kind: "ready", secs: update.held ? undefined : update.secs };
-  const label = mobileUpdateBannerLabel(readyVersion, phase);
+  const copy = mobileUpdateBanner(readyVersion, phase);
+  const label = mobileUpdateAnnouncement(copy);
   const share = updateFillShare(update.phase, update.progress);
 
   // A download nobody asked for is a line at the top edge of the app, under the
@@ -179,7 +182,8 @@ export function MobileConnectionBanner(
         (update.phase === "downloading" && update.progress === undefined)) && (
         <CircularProgress size={14} color="inherit" thickness={5} />
       )}
-      <span>{label}</span>
+      <span>{copy.text}</span>
+      {copy.action !== undefined && <UpdateActionPill action={copy.action} />}
     </ButtonBase>
   );
 }

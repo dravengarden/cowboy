@@ -384,6 +384,16 @@ arrive at the speed of the network. The bar — the words, the version, the pres
 the bar, because answering a press with a hairline reads as the press having
 been dropped.
 
+The bar states what happened and draws what pressing it does as an outlined
+pill, rather than phrasing the whole thing as an imperative sentence: a
+full-width tinted slab at the top of a screen already means "notice" in this
+app, so a verb inside one reads as a notice phrased oddly, not as a control.
+The pill is decoration — `pointer-events: none`, `aria-hidden` — so the touch
+target stays as wide as the screen and a screen reader hears one control. Its
+words name what the *next* press does: Reload when the build is waiting, Cancel
+once a press is already standing, Retry after a paused download, Try again
+after a rollback. A swap already under way offers no pill at all.
+
 Or by press: the whole update bar is the control, on both surfaces. A press
 outranks the idle gate and the dwell, which exist to protect someone who did
 not ask. It is never disabled while the download runs — a press then means

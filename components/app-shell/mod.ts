@@ -35,6 +35,7 @@ export {
   type ConnectionStore,
   type ConnectionStoreOptions,
   createConnectionStore,
+  UpdateActionPill,
   type UpdateDownload,
   useAutoUpdate,
 } from "./connection-banner.tsx";

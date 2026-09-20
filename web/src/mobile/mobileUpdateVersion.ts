@@ -32,40 +32,61 @@ function percentLabel(progress: number | undefined): string {
   return `${String(percent)}%`;
 }
 
-export function mobileUpdateBannerLabel(
+/** What the phone's bar says, and what pressing it does.
+ *
+ *  The two are separate because the bar is a control that looks like a
+ *  notice: a full-width tinted slab at the top of the screen is what this app
+ *  has always used to tell the user something, so an imperative sentence
+ *  inside one does not read as a button. The action is named on its own so it
+ *  can be drawn as one. `action` is absent while the swap is already running
+ *  and there is nothing left to press. */
+export interface MobileUpdateBanner {
+  readonly text: string;
+  readonly action?: string;
+}
+
+export function mobileUpdateBanner(
   version: string | undefined,
   phase: MobileUpdatePhase,
-): string {
+): MobileUpdateBanner {
   const named = version ?? "the new version";
   if (phase.kind === "downloading") {
     const progress = percentLabel(phase.progress);
-    if (phase.requested) return `Reloading when ready · ${progress}`;
-    return version
-      ? `Cowboy ${version} · ${progress}`
-      : `New Cowboy version · ${progress}`;
-  }
-  if (phase.kind === "ready") {
-    // The press is the whole offer, so the label is the verb. The countdown
-    // rides along only while it is really running.
-    return phase.secs === undefined
-      ? `Reload to ${named}`
-      : `Reload to ${named} · ${String(Math.max(0, phase.secs))}s`;
+    // Pressing again takes the request back; saying so is the only honest
+    // label for a control whose meaning just inverted.
+    if (phase.requested) {
+      return { text: `Reloading when ready · ${progress}`, action: "Cancel" };
+    }
+    return {
+      text: version ? `Cowboy ${version} · ${progress}` : `New Cowboy version · ${progress}`,
+    };
   }
   if (phase.kind === "rejected") {
-    return version
-      ? `${version} didn't start · tap to try again`
-      : "The new version didn't start · tap to try again";
+    return { text: `${named} didn't start`, action: "Try again" };
+  }
+  if (phase.kind === "failed") {
+    return {
+      text: phase.requested ? "Download paused · retrying" : "Download paused",
+      action: "Retry",
+    };
   }
   if (phase.kind === "reloading") {
-    return version ? `Updating to ${version}…` : "Updating…";
+    return { text: version ? `Updating to ${version}…` : "Updating…" };
   }
-  // A standing request outlives the attempt that failed: the user asked once
-  // and is owed the update, not a second prompt to ask again.
-  return phase.requested
-    ? "Download paused · retrying, then reloading"
-    : "Download paused · tap to retry";
+  // Ready. The countdown rides along only while it is really running; a parked
+  // one has nothing to say now that the press is right there.
+  return {
+    text: phase.secs === undefined
+      ? `${named} is ready`
+      : `${named} is ready · ${String(Math.max(0, phase.secs))}s`,
+    action: "Reload",
+  };
 }
 
+/** One sentence for a screen reader, which hears a control, not a layout. */
+export function mobileUpdateAnnouncement(banner: MobileUpdateBanner): string {
+  return banner.action === undefined ? banner.text : `${banner.text}. ${banner.action}`;
+}
 export async function fetchReadyCowboyVersion(
   fetchText: (url: string) => Promise<string> = defaultFetchText,
   waitingScriptUrl?: string,

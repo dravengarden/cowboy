@@ -28,6 +28,7 @@ import { alpha, Box, ButtonBase, CircularProgress } from "@mui/material";
 import type { SxProps } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import {
   type ReactNode,
   useCallback,
@@ -614,38 +615,84 @@ function bannerPalette(kind: BannerKind): "warning" | "success" | "info" {
   return "info";
 }
 
+/** What the bar says, and what pressing it does. `action` is absent when
+ *  there is nothing to press — the swap is already under way. */
+export interface BannerCopy {
+  readonly text: string;
+  readonly action?: string;
+}
+
 // Liveview's exact English labels. The update line narrates its phase: the
-// download's progress, then the live 3→0 countdown, and in every state it names
-// the press that brings the reload forward.
-function bannerLabel(kind: BannerKind, update: AutoUpdateState): string {
+// download's progress, then the live 3→0 countdown, with the press it offers
+// named separately so the bar can show it as a control rather than bury it in
+// a sentence.
+function bannerCopy(kind: BannerKind, update: AutoUpdateState): BannerCopy {
   if (kind === "down") {
-    return "Connection lost — reconnecting…";
+    return { text: "Connection lost — reconnecting…" };
   }
   if (kind === "reconnected") {
-    return "Reconnected";
+    return { text: "Reconnected" };
   }
   if (update.phase === "reloading") {
-    return "Reloading into the new version…";
+    return { text: "Reloading into the new version…" };
   }
   if (update.phase === "rejected") {
-    return "The new version did not start · you are back on the one that works";
+    return {
+      text: "The new version did not start · you are back on the one that works",
+      action: "Try again",
+    };
   }
   if (update.phase === "failed") {
-    return update.requested
-      ? "New version · download paused, retrying"
-      : "New version · download paused, click to retry";
+    return { text: "New version · download paused", action: "Retry" };
   }
   if (update.phase === "downloading") {
     const percent = updatePercentLabel(update.progress, false);
     const suffix = percent === undefined ? "downloading…" : percent;
     return update.requested
-      ? `Reloading when ready · ${suffix}`
-      : `New version · ${suffix}`;
+      ? { text: `Reloading when ready · ${suffix}`, action: "Cancel" }
+      : { text: `New version · ${suffix}` };
   }
-  if (update.held) {
-    return "New version ready · click to reload";
-  }
-  return `New version · reloading in ${String(Math.max(0, update.secs))}s`;
+  return {
+    text: update.held ? "New version ready" : `New version ready · reloading in ${String(Math.max(0, update.secs))}s`,
+    action: "Reload",
+  };
+}
+/** The bar says what happened; this says what pressing it does.
+ *
+ *  A full-width tinted bar at the top of a screen already means "notice" to
+ *  anyone who has used the app, so an imperative sentence inside one is not an
+ *  affordance — it reads as a notice phrased oddly. An outlined pill is the
+ *  shape people press. It is decoration, not a nested button: the whole bar
+ *  takes the touch, so the target stays as wide as the screen and a screen
+ *  reader hears one control rather than two.
+ *
+ *  Paint-only, like everything else that may sit over the phone's moving
+ *  chrome: a border and a radius, no shadow and no transform. */
+export function UpdateActionPill({ action }: { readonly action: string }): ReactNode {
+  return (
+    <Box
+      component="span"
+      aria-hidden
+      sx={{
+        pointerEvents: "none",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.5,
+        ml: 0.5,
+        px: 1,
+        py: 0.125,
+        borderRadius: 999,
+        border: "1px solid",
+        borderColor: "currentColor",
+        fontWeight: 700,
+        lineHeight: 1.5,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <RefreshIcon sx={{ fontSize: "0.9375rem" }} />
+      {action}
+    </Box>
+  );
 }
 
 export interface ConnectionBannerProps {
@@ -703,7 +750,8 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const palette = update.phase === "rejected" && banner.kind === "update"
     ? "warning"
     : bannerPalette(banner.kind);
-  const label = bannerLabel(banner.kind, update);
+  const copy = bannerCopy(banner.kind, update);
+  const label = copy.action === undefined ? copy.text : `${copy.text}. ${copy.action}`;
   const isUpdate = banner.kind === "update";
 
   // A download nobody asked for is a hairline at the top edge and nothing
@@ -765,7 +813,8 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
       {banner.kind === "down" && <CircularProgress size={14} color="inherit" thickness={5} />}
       {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
       {isUpdate && busy && <CircularProgress size={14} color="inherit" thickness={5} />}
-      <span>{label}</span>
+      <span>{copy.text}</span>
+      {copy.action !== undefined && <UpdateActionPill action={copy.action} />}
     </>
   );
 

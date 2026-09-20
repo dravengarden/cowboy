@@ -218,3 +218,24 @@ Deno.test("the fill is one paint-only background, and it never sweeps a lie", ()
   const keys = Object.keys(updateFillSx("#0288d1", "#01579b", 1, false));
   assertEquals(keys.some((key) => key.includes("transform") || key.includes("Shadow")), false);
 });
+
+Deno.test("the bar shows its press as a control, not as a sentence", () => {
+  // A full-width tinted slab at the top of the screen is what this app has
+  // always used to *tell* the user something. An imperative sentence inside
+  // one does not read as a button, so the verb leaves the sentence.
+  assert(bannerSource.includes("export function UpdateActionPill"));
+  assert(bannerSource.includes("<UpdateActionPill action={copy.action} />"));
+  assert(mobileSource.includes("<UpdateActionPill action={copy.action} />"));
+
+  // Decoration, not a nested button: the whole bar takes the touch, so the
+  // target stays screen-wide and a screen reader hears one control.
+  const pill = bannerSource.slice(
+    bannerSource.indexOf("export function UpdateActionPill"),
+    bannerSource.indexOf("export interface ConnectionBannerProps"),
+  );
+  assert(pill.includes('pointerEvents: "none"'));
+  assert(pill.includes("aria-hidden"));
+  // Paint-only, like everything else that may sit over the moving chrome.
+  assert(!pill.includes("boxShadow"));
+  assert(!pill.includes("transform"));
+});

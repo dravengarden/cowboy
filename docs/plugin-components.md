@@ -175,6 +175,16 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.25.0 records app-shell 1.1.16: the update bar shows its press
+as a control. A full-width tinted bar at the top of a screen already means
+"notice", so the imperative sentence inside it did not read as a button; the
+verb now leaves the sentence and is drawn as an outlined `UpdateActionPill`
+naming what the next press does. The pill is decoration — `pointer-events:
+none` and `aria-hidden` — so the target stays screen-wide and a screen reader
+still hears one control. Only app-shell's version/digest changes; it still has
+no component or Plugin consumers, and no Plugin manifest, signed bytes or
+component pin changes. No Catalog publication or Machine upgrade is needed.
+
 Scoped release 3.24.0 records app-shell 1.1.15: a download nobody asked for is
 a translucent hairline at the top edge rather than a bar of text the user can
 only watch, and the bar arrives with the thing it announces
