@@ -15,6 +15,7 @@
 export const BOOT_SNAPSHOT_CACHE = "cowboy-boot-snapshot-v1";
 export const BOOT_SNAPSHOT_URL = "/__boot/snapshot.json";
 export const BOOT_THEME_KEY = "cowboy:boot-theme";
+export const BOOT_SURFACE_KEY = "cowboy:boot-surface";
 /** Parsing a snapshot larger than this costs more than the wait it saves. */
 export const BOOT_SNAPSHOT_MAX_CHARS = 1_000_000;
 const INLINE_IMAGE_MAX_CHARS = 65_536;
@@ -362,6 +363,18 @@ export function signalBootReady(): void {
   if (boot === undefined || boot.done) return;
   const frame = globalThis.requestAnimationFrame ?? ((run: () => void) => setTimeout(run, 16));
   frame(() => frame(() => boot.ready()));
+}
+
+/** Record which chrome the app actually chose, so the next open's skeleton
+ * wears the same one. The app's rule reads `navigator.maxTouchPoints` and the
+ * native host, neither of which CSS can see; the static shell approximates it
+ * with media queries only until this has been written once. */
+export function rememberBootSurface(desktop: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(BOOT_SURFACE_KEY, desktop ? "desktop" : "touch");
+  } catch {
+    // Privacy mode: the shell keeps its media-query approximation.
+  }
 }
 
 /** Record the app's real canvas colours for the static boot shell, so the

@@ -1,4 +1,4 @@
-import { lazy, StrictMode, Suspense } from "react";
+import { lazy, StrictMode, Suspense, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { CssBaseline, ThemeProvider } from "@mui/material";
 import { AppErrorBoundary } from "./AppErrorBoundary";
@@ -9,6 +9,7 @@ import {
 } from "./auth/DeviceAuthorizationPage";
 import { MachineSetupGate } from "./setup/MachineSetupGate";
 import { BootSkeleton } from "./BootSkeleton";
+import { rememberBootSurface } from "./bootSnapshot";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
@@ -59,6 +60,10 @@ function Root(): React.JSX.Element {
   // the keyboard + its iOS-native accessory bar.
   useKeyboardInset();
   const surface = useSurfaceProfile();
+  // The static boot shell cannot run this rule, so it reuses the answer
+  // (docs/offline-first-sync.md §Boot presentation).
+  const desktop = surface.kind === "desktop";
+  useEffect(() => rememberBootSurface(desktop), [desktop]);
   const deviceAuthorizationActive = captureDeviceAuthorizationFromLocation();
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />

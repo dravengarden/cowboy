@@ -3,7 +3,7 @@
 Status: design 2026-09-18; the boot path became network-independent on
 2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738))
 and now opens on the user's real last screen (see
-[Boot presentation](#boot-presentation-service-worker-cowboy-v1739));
+[Boot presentation](#boot-presentation-service-worker-cowboy-v1740));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -498,7 +498,7 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 
 ## Implementation status
 
-### Boot presentation (service worker `cowboy-v1739`)
+### Boot presentation (service worker `cowboy-v1740`)
 
 Making boot network-independent removed the wait. It did not remove the
 *impression* of one: the app still opened on a centred spinner and then cut to
@@ -518,6 +518,14 @@ same markup, so `main.tsx`'s Suspense fallback, the auth gate's pre-probe view
 and the setup gate's pre-list view are all one shape — nothing flashes between
 the document's first frame and the app's first paint. `bootSnapshot.test.ts`
 holds the two copies together.
+
+Which chrome that skeleton wears — Desktop rail or Mobile bottom nav — is the
+app's own last answer, replayed from `cowboy:boot-surface`. It cannot be
+derived in CSS: `classifySurface` reads `navigator.maxTouchPoints` and the
+native host and has no width term at all, so an iPad in landscape is touch and
+a narrow desktop window is not. Before that key has ever been written the
+shell approximates with `(pointer: fine) and (hover: hover)`, undone by
+`(any-pointer: coarse)`, in that order.
 
 Layer 2 is the SSG-like part. `bootSnapshot.ts` captures when the app is left
 (`visibilitychange` to hidden, `pagehide`) and at idle moments in between, but

@@ -192,6 +192,33 @@
         --boot-ink: #665f74;
         --boot-paper: rgba(102, 95, 116, 0.07);
         --boot-line: rgba(102, 95, 116, 0.16);
+        /* Which chrome the skeleton wears. The app's own rule is
+           `finePointer && hover && !touchCapable` with no width in it
+           (surface/profile.ts), so these two queries approximate it in that
+           order; the class the head script restores below is the app's ACTUAL
+           last answer and overrides them. */
+        --boot-rail: none;
+        --boot-nav: flex;
+      }
+      @media (pointer: fine) and (hover: hover) {
+        :root {
+          --boot-rail: flex;
+          --boot-nav: none;
+        }
+      }
+      @media (any-pointer: coarse) {
+        :root {
+          --boot-rail: none;
+          --boot-nav: flex;
+        }
+      }
+      html.boot-desktop {
+        --boot-rail: flex;
+        --boot-nav: none;
+      }
+      html.boot-touch {
+        --boot-rail: none;
+        --boot-nav: flex;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -220,7 +247,19 @@
         color: var(--boot-ink);
       }
       .boot-rail {
-        display: none;
+        display: var(--boot-rail);
+        flex-direction: column;
+        gap: 10px;
+        width: 300px;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        padding: 72px 12px 12px;
+        border-right: 1px solid var(--boot-line);
+      }
+      .boot-rail .boot-bar {
+        height: 36px;
+        width: 100%;
+        border-radius: 10px;
       }
       .boot-main {
         flex: 1;
@@ -289,7 +328,7 @@
       }
       .boot-nav {
         height: 56px;
-        display: flex;
+        display: var(--boot-nav);
         align-items: center;
         gap: 14px;
         padding: 0 22px;
@@ -315,30 +354,13 @@
         text-align: center;
         font-size: 13px;
       }
-      @media (pointer: fine) and (hover: hover) and (min-width: 900px) {
-        .boot-rail {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-          width: 300px;
-          flex-shrink: 0;
-          box-sizing: border-box;
-          padding: 72px 12px 12px;
-          border-right: 1px solid var(--boot-line);
-        }
-        .boot-rail .boot-bar {
-          height: 36px;
-          width: 100%;
-          border-radius: 10px;
-        }
+      /* A wide window centres the column whatever the surface is. */
+      @media (min-width: 900px) {
         .boot-feed {
           padding: 24px max(24px, calc((100% - 860px) / 2));
         }
         .boot-composer {
           margin: 0 max(24px, calc((100% - 860px) / 2)) 12px;
-        }
-        .boot-nav {
-          display: none;
         }
       }
       @keyframes boot-shimmer {
@@ -359,6 +381,10 @@
       // an appearance palette differs from the OS scheme the CSS above assumes.
       (() => {
         try {
+          // The app's last surface answer beats any media-query guess.
+          const surface = localStorage.getItem("cowboy:boot-surface");
+          if (surface === "desktop") document.documentElement.classList.add("boot-desktop");
+          else if (surface === "touch") document.documentElement.classList.add("boot-touch");
           const theme = JSON.parse(localStorage.getItem("cowboy:boot-theme") || "null");
           if (!theme || typeof theme !== "object") return;
           const colour = /^(#[0-9a-f]{3,8}|rgba?\([0-9.,%\s]+\))$/i;
