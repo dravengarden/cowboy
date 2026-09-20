@@ -210,6 +210,21 @@ enum OperatorCommand {
         #[arg(long)]
         operation_id: String,
     },
+    /// Converge installed Plugins to the Catalog's newest ready releases.
+    /// Dry run by default. The `--machine` order is the rollout order and its
+    /// first entry is the canary: a Machine that does not converge stops the
+    /// rest. Digests are resolved from the Catalog, never authored.
+    Converge {
+        /// Rollout order. Repeatable. Omitted: every connected Machine.
+        #[arg(long)]
+        machine: Vec<String>,
+        /// Bound the run to these Plugins. Repeatable.
+        #[arg(long)]
+        plugin: Vec<String>,
+        /// Submit the upgrades. Without it nothing is installed.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Read durable installation receipts without repeating any operation.
     Operations {
         #[arg(long)]
@@ -253,6 +268,19 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
         .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(330))
         .build()?;
+    if let OperatorCommand::Converge {
+        machine,
+        plugin,
+        apply,
+    } = &args.command
+    {
+        if *apply {
+            eprintln!(
+                "Convergence submits durable installations. A lost response requires receipt inspection before the same run is repeated."
+            );
+        }
+        return converge::run(&client, machine, plugin, *apply).await;
+    }
     let (method, segments, body, operation) = match args.command {
         OperatorCommand::Status => (reqwest::Method::GET, vec!["status".into()], None, None),
         OperatorCommand::Catalog => (reqwest::Method::GET, vec!["plugins".into()], None, None),
@@ -316,7 +344,9 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
             ),
             None => (reqwest::Method::GET, vec!["usage".into()], None, None),
         },
-        OperatorCommand::Enable | OperatorCommand::Disable => unreachable!(),
+        OperatorCommand::Enable | OperatorCommand::Disable | OperatorCommand::Converge { .. } => {
+            unreachable!()
+        }
     };
     let mut url = reqwest::Url::parse("http://localhost/v1/")?;
     {
@@ -363,6 +393,8 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
     }
     Ok(())
 }
+
+mod converge;
 
 #[cfg(test)]
 mod tests;

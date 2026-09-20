@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  thirty-one checks, including live authenticated Code installation into an empty
+  thirty-two checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v11; historical
+  and separately completed retirement. Require receipt schema v12; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -391,6 +391,17 @@ In addition, require all applicable Provider gates below:
   the original total budget. Historical v10 does not accept this extension;
   timer expiry is not proof of remote cancellation or native cleanup. See
   `docs/plugin-continuation-finalization.md`.
+  Machine-owned Workspace root identity additionally requires protocol 22 and
+  v12 check 32: read a separate advertised root, replace that directory with a
+  different object holding the same path and the same bytes, and require the
+  Machine to refuse the next read before touching it, with `410/no-store/no-ETag`
+  and exactly one dispatch. The Controller must then answer from no cache,
+  ETag or continuation for that root, and an explicit inventory refresh must
+  mint a new identity and restore reads. The Session fixture root must be
+  untouched throughout. Historical v11 does not accept this extension; the
+  Controller may never mint, derive or default an incarnation, and a refusal is
+  an ended observation, not a rollback, an undo or proof that an already
+  dispatched read stopped. See `docs/plugin-machine-workspace-identity.md`.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not
@@ -658,17 +669,26 @@ do not bump an envelope or add a dummy host merely to make the old reader skip.
    a Machine installation or upgrade endpoint unless the user separately asks
    to install it on a specific Machine.
 
-When the user does ask to converge a Machine, use the repository-owned
-`scripts/converge-machine.ts <machine> [--apply]`. It resolves each target from
-the Catalog it just read, so the digest — the entire trust claim — is never
-typed by hand, and it derives one deterministic operation identity per
-(machine, plugin, version) so a retry after a lost response reuses the same one
-instead of installing twice. A dry run is the default. It refuses rather than
-guesses: a Plugin holding an active session lease is left alone, a target that
-is not `ready` is skipped, an installed version ahead of the Catalog is never
-downgraded, and every skip is reported with its reason. After applying it
-re-reads the inventory, because an applied receipt and an installed generation
-are different facts, and exits nonzero while anything remains unconverged.
+When the user does ask to converge, use `cowboy operator converge` — the
+repository-owned `scripts/converge-machine.ts [<machine>...] [--apply]` is a
+wrapper around that same shipped planner, so a release agent and an unattended
+timer converge a fleet to identical bytes. It resolves each target from the
+Catalog it just read, so the digest — the entire trust claim — is never typed
+by hand, and it derives one deterministic operation identity per (machine,
+plugin, version) so a retry after a lost response reuses the same one instead
+of installing twice. A dry run is the default. It refuses rather than guesses:
+a Plugin holding an active session lease is left alone, a release that is not
+`ready` or that does not declare that Machine's platform is not a target, an
+installed version ahead of the Catalog is never downgraded, a Plugin the
+Machine does not already run is never installed, and every skip is reported
+with its reason. After applying it re-reads the inventory, because an applied
+receipt and an installed generation are different facts, and exits nonzero
+while anything remains unconverged.
+
+The `--machine` order is the rollout order and its first entry is the canary: a
+Machine that does not converge stops the rest, so a bad release reaches one
+host rather than the fleet. With no `--machine` at all, every connected Machine
+converges in registry order.
 
 Installation through the local Operator is currently accepted for the
 Controller's own Machine. A remote Machine can return HTTP 409 "preconditions

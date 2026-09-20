@@ -282,6 +282,7 @@ mod tests {
                     display_name: "Workspace".into(),
                     canonical_path: cwd.into(),
                 }]),
+                workspace_identities: None,
                 workspace_revision: None,
                 observed_at_ms: 0,
             },

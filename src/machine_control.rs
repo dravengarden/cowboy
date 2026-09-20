@@ -160,6 +160,33 @@ pub(crate) enum PluginUninstallTransport {
     Leased,
 }
 
+/// One refused adapter request. `detail` stays a diagnostic string; only the
+/// closed `refusal` may end a Controller observation.
+#[derive(Debug, Clone)]
+pub(crate) struct AdapterFailure {
+    detail: String,
+    refusal: Option<crate::machine_protocol::AdapterRefusal>,
+}
+
+impl AdapterFailure {
+    fn local(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            refusal: None,
+        }
+    }
+
+    pub(crate) fn workspace_root_identity_changed(&self) -> bool {
+        self.refusal == Some(crate::machine_protocol::AdapterRefusal::WorkspaceRootIdentityChanged)
+    }
+}
+
+impl From<AdapterFailure> for String {
+    fn from(failure: AdapterFailure) -> Self {
+        failure.detail
+    }
+}
+
 enum Reply {
     InstallationTarget(Box<crate::machine_protocol::plugin_install::InstallTargetObservation>),
     InstallationStep(Box<crate::machine_protocol::plugin_install::InstallObservation>),
@@ -173,7 +200,7 @@ enum Reply {
     TelemetryRecoveryAudit(
         Box<crate::machine_protocol::telemetry_recovery_audit::RecoveryAuditObservation>,
     ),
-    Adapter(Result<serde_json::Value, String>),
+    Adapter(Result<serde_json::Value, AdapterFailure>),
     Command(Result<(), String>),
     PluginHost {
         accepted: bool,
@@ -645,11 +672,15 @@ impl MachineControl {
                 accepted,
                 payload,
                 detail,
+                refusal,
             } => {
                 let result = if accepted {
-                    payload.ok_or_else(|| "adapter response has no payload".to_owned())
+                    payload.ok_or_else(|| AdapterFailure::local("adapter response has no payload"))
                 } else {
-                    Err(detail.unwrap_or_else(|| "adapter request rejected".to_owned()))
+                    Err(AdapterFailure {
+                        detail: detail.unwrap_or_else(|| "adapter request rejected".to_owned()),
+                        refusal,
+                    })
                 };
                 live.complete(token, &request_id, Reply::Adapter(result));
             }
@@ -691,10 +722,11 @@ impl MachineControl {
                 }
                 if let MachineEvent::Inventory {
                     workspaces: Some(workspaces),
+                    workspace_identities,
                     ..
                 } = &event
                 {
-                    live.observe_workspaces(token, workspaces);
+                    live.observe_workspaces(token, workspaces, workspace_identities.as_deref());
                 }
                 live.remember(machine_id, event);
             }
@@ -822,8 +854,9 @@ impl MachineControl {
         adapter: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        self.adapter_request_bound(machine_id, adapter, payload, None)
+        self.adapter_request_bound(machine_id, adapter, payload, None, None)
             .await
+            .map_err(String::from)
     }
 
     /// Keep a multi-call operation on its original authenticated connection.
@@ -839,6 +872,10 @@ impl MachineControl {
                 &connection.0.machine_id,
                 adapter,
                 payload,
+                // Session routes execute in a session worktree, not in an
+                // advertised root, so there is no Machine-owned identity to
+                // carry. That gap stays recorded, never faked with another.
+                None,
                 Some(RequestBinding::Connection(connection)),
             )
             .await;
@@ -847,33 +884,42 @@ impl MachineControl {
         if !self.is_current(connection) {
             return Err("Machine operation connection is no longer current".to_owned());
         }
-        response
+        response.map_err(String::from)
     }
 
+    /// `workspace_incarnation` is the Machine-minted root identity the calling
+    /// observation was resolved against, or `None` for reads that have no
+    /// advertised root. It is never synthesised here.
     async fn adapter_request_bound(
         &self,
         machine_id: &str,
         adapter: &str,
         payload: serde_json::Value,
+        workspace_incarnation: Option<String>,
         binding: Option<RequestBinding<'_>>,
-    ) -> Result<serde_json::Value, String> {
-        let request_id = self.request_id("adapter")?;
-        let (rx, _pending) = self.begin_request(
-            machine_id,
-            &request_id,
-            MachineCommand::AdapterRequest {
-                request_id: request_id.clone(),
-                adapter: adapter.to_owned(),
-                payload,
-            },
-            ReplyKind::Adapter,
-            binding,
-        )?;
+    ) -> Result<serde_json::Value, AdapterFailure> {
+        let request_id = self.request_id("adapter").map_err(AdapterFailure::local)?;
+        let (rx, _pending) = self
+            .begin_request(
+                machine_id,
+                &request_id,
+                MachineCommand::AdapterRequest {
+                    request_id: request_id.clone(),
+                    adapter: adapter.to_owned(),
+                    payload,
+                    workspace_incarnation,
+                },
+                ReplyKind::Adapter,
+                binding,
+            )
+            .map_err(AdapterFailure::local)?;
         match tokio::time::timeout(adapter_timeout(adapter), rx).await {
             Ok(Ok(Reply::Adapter(result))) => result,
-            Ok(Ok(_)) => Err("Machine adapter reply kind mismatch".to_owned()),
-            Ok(Err(_)) => Err("Machine adapter response channel closed".to_owned()),
-            Err(_) => Err("Machine adapter request timed out".to_owned()),
+            Ok(Ok(_)) => Err(AdapterFailure::local("Machine adapter reply kind mismatch")),
+            Ok(Err(_)) => Err(AdapterFailure::local(
+                "Machine adapter response channel closed",
+            )),
+            Err(_) => Err(AdapterFailure::local("Machine adapter request timed out")),
         }
     }
 
@@ -2037,6 +2083,7 @@ mod tests {
                 accepted: true,
                 payload: Some(serde_json::json!({})),
                 detail: None,
+                refusal: None,
             },
             MachineEvent::PluginHostResponse {
                 request_id: "one".to_owned(),
@@ -2312,6 +2359,7 @@ mod tests {
             accepted: true,
             payload: Some(serde_json::json!({"source":"fixture"})),
             detail: None,
+            refusal: None,
         };
         control.record_remote(&falcon, response.clone());
         assert!(
@@ -2544,6 +2592,7 @@ mod tests {
                 accepted: true,
                 payload: Some(serde_json::json!({ "type": "health", "apiVersion": 1 })),
                 detail: None,
+                refusal: None,
             },
         );
         assert_eq!(
