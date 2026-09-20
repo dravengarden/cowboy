@@ -135,6 +135,16 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     : current?.src ?? null;
   const canPrev = open && index !== null && index > 0;
   const canNext = open && index !== null && index < images.length - 1;
+  // Per-image plate: a self-themed figure (mermaid) is already correct for the
+  // mode, so it's never inverted and gets a mode-matched plate (a subtle dark
+  // card in dark mode, white in light); a fixed-colour figure keeps the white
+  // plate + dark-mode invert.
+  const selfThemed = current?.themed === true;
+  const invertPlate = plate && !selfThemed && isDarkMode;
+  let plateBg = "transparent";
+  if (plate) {
+    plateBg = selfThemed && isDarkMode ? "rgba(255, 255, 255, 0.06)" : "#ffffff";
+  }
 
   const goPrev = useCallback(() => {
     if (index !== null && index > 0) {
@@ -168,12 +178,18 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     const svg = inlineSvgHostRef.current?.querySelector(":scope > svg");
     if (!(svg instanceof SVGSVGElement)) return undefined;
     if (!svg.hasAttribute("aria-label")) svg.setAttribute("aria-label", current.alt);
+    // A host renderer paints its own background on the SVG root — Mermaid's
+    // markup carries an inline `background-color` so the in-page copy sits on
+    // the page surface — and an inline style beats this component's class rule.
+    // Write the plate straight onto the element, or a light figure loses its
+    // white plate and its dark strokes disappear into the near-black backdrop.
+    svg.style.backgroundColor = plateBg;
     imgRef.current = svg;
     onImageLoad();
     return () => {
       if (imgRef.current === svg) imgRef.current = null;
     };
-  }, [current, open, onImageLoad]);
+  }, [current, open, onImageLoad, plateBg]);
 
   // Key shortcuts while open. No body-scroll lock — see the file header.
   useEffect(() => {
@@ -199,17 +215,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     return null;
   }
 
-  // Per-image plate: a self-themed figure (mermaid) is already correct for the
-  // mode, so it's never inverted and gets a mode-matched plate (a subtle dark
-  // card in dark mode, white in light); a fixed-colour figure keeps the white
-  // plate + dark-mode invert.
-  const selfThemed = current.themed === true;
-  const invertPlate = plate && !selfThemed && isDarkMode;
-  let plateBg = "transparent";
-  if (plate) {
-    plateBg = selfThemed && isDarkMode ? "rgba(255, 255, 255, 0.06)" : "#ffffff";
-  }
-  const previousIcon = <ControlIcon path="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />;
+  const previousIcon =<ControlIcon path="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />;
   const nextIcon = <ControlIcon path="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />;
   const zoomOutIcon = <ControlIcon path="M19 13H5v-2h14z" />;
   const zoomInIcon = <ControlIcon path="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" />;

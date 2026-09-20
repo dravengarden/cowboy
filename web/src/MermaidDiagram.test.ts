@@ -81,6 +81,12 @@ Deno.test("dark diagrams are legible inline and enlarged", () => {
     );
   }
   assert(mermaidSource.includes("bgcolor: DARK_SURFACE"));
+  // The prepared markup carries its own inline background so the in-page copy
+  // sits on the page surface. An inline style beats the lightbox's class rule,
+  // so the plate is written onto the element — otherwise a light diagram keeps
+  // a transparent background and its dark strokes vanish on the backdrop.
+  assert(mermaidSource.includes('root.style.backgroundColor = "transparent"'));
+  assert(lightboxSource.includes("svg.style.backgroundColor = plateBg"));
   // A self-themed figure is never inverted — the palette above is already
   // mode-correct, so a second correction would flip it back to light.
   assert(lightboxSource.includes("const invertPlate = plate && !selfThemed && isDarkMode"));

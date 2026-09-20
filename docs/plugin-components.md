@@ -175,6 +175,14 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.16.0 records app-shell 1.1.7: the lightbox writes its plate
+onto an inline-SVG figure's own element. A host renderer paints a background on
+the SVG root, and that inline style beat the component's class rule, so a light
+figure lost its white plate and its dark strokes disappeared into the near-black
+backdrop. Only app-shell's version/digest changes; it still has no component or
+Plugin consumers, and no Plugin manifest, signed bytes or component pin changes.
+No Catalog publication or Machine upgrade is needed.
+
 Scoped release 3.15.0 records app-shell 1.1.6: a zoomed lightbox figure keeps
 `flexShrink: 0`, so the baked pan layer is no longer shrunk back to the viewport
 by the centring flex row — an inline SVG diagram stayed pinned at fit size
