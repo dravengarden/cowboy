@@ -124,6 +124,13 @@ three Victoria units keep their identities. Only `cowboy.service` restarted,
 from PID `2387427` to `2517463`; the Machine reconnected within the same
 window. No retained worker was force-replaced.
 
+A later settled observation at `2026-09-20T07:48:47.737Z` — outside that
+window — shows the Controller, Machine, both Code processes and every Plugin
+generation still unchanged, with 14 of those 15 workers retained: one exited
+and one unrelated worker started afterwards, both with start ticks later than
+the activation. That is ordinary session lifecycle, not deployment continuity,
+and it is recorded here rather than folded into the window above.
+
 Local and public `/healthz`, `/version`, `/` and `/sw.js` return 200. SPA and
 service-worker bytes are byte-identical across the window and the Web version
 remains `e026fca4a2aea9156ef8f80419041eb2`. The Web release and its receipt
@@ -159,6 +166,7 @@ evidence is under `published/`.
 | `published/floor-after/floor.json` | `31fabd0a6f832936978b1c96ec5ffff9491e05dca914207b0c770b128db852c0` |
 | `published/observed-before.json` | `9fcd8a8e05fd54002e01cc43c69e2143707d5de8a18297abc0e620519f371146` |
 | `published/observed-after.json` | `bfd92d9212dc8b259676c7caf5e7b4754d6a1ef748b16491c27170a04ef52900` |
+| `published/observed-settled.json` | `2aafd691849f7c2127b42df3ccf2dc8886836a078a7137bb00a35d3962822ba5` |
 | `published/activation.log` | `74d00dd8e43a2ed86b09f5619840197b070f5daca3b9735f4fad2236447d2012` |
 
 This closes one root-object fence for advertised Workspace reads. It does not
