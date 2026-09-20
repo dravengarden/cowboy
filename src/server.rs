@@ -252,7 +252,9 @@ struct AppState {
     telemetry_writer_admission:
         Option<Arc<crate::telemetry_plugin::writer_admission::WriterAdmission>>,
     plugin_lifecycle_fences: PluginLifecycleFences,
-    desired_machine_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+    desired_machine_components: Arc<crate::machine_convergence::DesiredComponentSource>,
+    component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
+    convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
     web_root: PathBuf,
     usage: UsageService,
     diff_snapshots: DiffSnapshotCache,
@@ -365,7 +367,9 @@ struct MachineSnapshots {
     hub: Hub,
     runtime_router: Arc<RuntimeRouter>,
     machine_control: Arc<MachineControl>,
-    desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
+    desired_components: Arc<crate::machine_convergence::DesiredComponentSource>,
+    component_convergence: Arc<crate::machine_convergence::ConvergenceState>,
+    convergence_freeze: Arc<crate::machine_convergence::ConvergenceFreeze>,
     product_auth_enabled: bool,
     revision: Arc<AtomicU64>,
 }
@@ -447,26 +451,33 @@ fn project_machine_health(
     }
 }
 
-impl MachineSnapshots {
-    fn new(
-        store: Option<Store>,
-        hub: Hub,
-        runtime_router: Arc<RuntimeRouter>,
-        machine_control: Arc<MachineControl>,
-        desired_components: Arc<Vec<crate::machine_protocol::DesiredComponent>>,
-        product_auth_enabled: bool,
-    ) -> Self {
-        Self {
-            store,
-            hub,
-            runtime_router,
-            machine_control,
-            desired_components,
-            product_auth_enabled,
-            revision: Arc::new(AtomicU64::new(0)),
-        }
+/// The installed Plugin that already serves a legacy provider component slot.
+/// A session runs that Plugin's own pinned generation, so the host binary this
+/// component reports is not what executes. Offering to update it would ask
+/// someone to maintain a runtime Cowboy no longer runs — and CR-2 is explicit
+/// that an adapter or CLI is never a separate product component.
+fn superseding_plugin(
+    component: &crate::machine_protocol::ComponentId,
+    plugins: &[crate::machine_protocol::PluginInventory],
+) -> Option<String> {
+    if !matches!(
+        component.kind,
+        crate::machine_protocol::ComponentKind::ProviderAdapter
+            | crate::machine_protocol::ComponentKind::ProviderCli
+    ) {
+        return None;
     }
+    let occupants = crate::plugin_runtime_args::occupancy_provider_ids(&component.slot);
+    plugins
+        .iter()
+        .find(|plugin| {
+            plugin.state == crate::machine_protocol::PluginInstallationState::Active
+                && occupants.contains(&plugin.plugin_id.as_str())
+        })
+        .map(|plugin| plugin.plugin_id.clone())
+}
 
+impl MachineSnapshots {
     async fn load(&self) -> anyhow::Result<Vec<crate::machine_protocol::MachineSummary>> {
         let Some(store) = self.store.as_ref() else {
             return Ok(Vec::new());
@@ -487,6 +498,8 @@ impl MachineSnapshots {
             *provider_sessions = provider_sessions.saturating_add(1);
         }
         let checked_at_ms = now_ms();
+        let desired = self.desired_components.current();
+        let frozen = self.convergence_freeze.is_frozen();
         Ok(machines
             .into_iter()
             .filter(|machine| product_machine_is_visible(machine, self.product_auth_enabled))
@@ -567,11 +580,8 @@ impl MachineSnapshots {
                             _ => u64::from(active_sessions),
                         };
                     }
-                    if let Some(desired) = self
-                        .desired_components
-                        .iter()
-                        .find(|desired| desired.id == component.id)
-                    {
+                    component.superseded_by = superseding_plugin(&component.id, &plugins);
+                    if let Some(desired) = desired.find(&component.id) {
                         let available = component.state
                             != crate::machine_protocol::ComponentState::Active
                             || !component.digest.eq_ignore_ascii_case(&desired.digest);
@@ -584,8 +594,7 @@ impl MachineSnapshots {
                         });
                     }
                 }
-                let pending_updates: Vec<crate::machine_protocol::ComponentId> = self
-                    .desired_components
+                let pending_updates: Vec<crate::machine_protocol::ComponentId> = desired
                     .iter()
                     .filter(|desired| {
                         !components.iter().any(|current| {
@@ -596,10 +605,9 @@ impl MachineSnapshots {
                     })
                     .map(|desired| desired.id.clone())
                     .collect();
-                let automatic_update_pending = self
-                    .desired_components
-                    .iter()
-                    .any(|desired| desired.automatic && pending_updates.contains(&desired.id));
+                let automatic_update_pending = desired.iter().any(|component| {
+                    component.automatic && pending_updates.contains(&component.id)
+                });
                 let connected = self.runtime_router.connected(&machine.id);
                 let schedulable = connected
                     && !workspaces.is_empty()
@@ -613,7 +621,8 @@ impl MachineSnapshots {
                     checked_at_ms,
                     machine.last_seen_at_ms,
                 );
-                crate::machine_protocol::MachineSummary {
+                let machine_id = machine.id.clone();
+                let mut summary = crate::machine_protocol::MachineSummary {
                     local,
                     connected,
                     schedulable,
@@ -633,7 +642,17 @@ impl MachineSnapshots {
                     capacity,
                     active_sessions,
                     pending_updates,
-                }
+                    convergence: Vec::new(),
+                };
+                summary.convergence = crate::machine_convergence::plan_machine(
+                    &summary,
+                    &desired,
+                    &self.component_convergence.attempts(&machine_id),
+                    frozen,
+                    checked_at_ms,
+                )
+                .reported;
+                summary
             })
             .collect())
     }
@@ -652,6 +671,97 @@ impl MachineSnapshots {
         match self.load().await {
             Ok(machines) => self.hub.broadcast_machines(revision, machines),
             Err(error) => tracing::warn!(%error, revision, "publishing Machine snapshot"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod component_supersession_tests {
+    use super::superseding_plugin;
+    use crate::machine_protocol::{
+        ComponentId, ComponentKind, PluginInstallationState, PluginInventory,
+    };
+
+    fn plugin(id: &str, state: PluginInstallationState) -> PluginInventory {
+        PluginInventory {
+            plugin_id: id.to_owned(),
+            plugin_version: "3.1.28".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
+            generation_digest: "sha256:aa".to_owned(),
+            installation_revision: None,
+            contract_fingerprint: "sha256:bb".to_owned(),
+            state,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: None,
+            replica_state: crate::machine_protocol::ProviderReplicaState::Current,
+            materialization_state: crate::machine_protocol::ProviderMaterializationState::Current,
+            detail: None,
+        }
+    }
+
+    fn component(kind: ComponentKind, slot: &str) -> ComponentId {
+        ComponentId {
+            kind,
+            slot: slot.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_installed_plugin_supersedes_the_legacy_binary_in_its_slot() {
+        let plugins = [plugin("claude-code", PluginInstallationState::Active)];
+        assert_eq!(
+            superseding_plugin(&component(ComponentKind::ProviderCli, "claude"), &plugins),
+            Some("claude-code".to_owned())
+        );
+        assert_eq!(
+            superseding_plugin(
+                &component(ComponentKind::ProviderAdapter, "claude"),
+                &plugins
+            ),
+            Some("claude-code".to_owned())
+        );
+    }
+
+    #[test]
+    fn another_providers_plugin_never_supersedes_this_slot() {
+        let plugins = [plugin("codex", PluginInstallationState::Active)];
+        assert_eq!(
+            superseding_plugin(&component(ComponentKind::ProviderCli, "claude"), &plugins),
+            None
+        );
+    }
+
+    #[test]
+    fn only_an_active_installation_supersedes() {
+        for state in [
+            PluginInstallationState::Missing,
+            PluginInstallationState::Installing,
+            PluginInstallationState::Failed,
+            PluginInstallationState::Incompatible,
+            PluginInstallationState::Uninstalling,
+        ] {
+            let plugins = [plugin("claude-code", state)];
+            assert_eq!(
+                superseding_plugin(&component(ComponentKind::ProviderCli, "claude"), &plugins),
+                None,
+                "a Plugin that is not active does not run anybody's session"
+            );
+        }
+    }
+
+    #[test]
+    fn a_machine_owned_component_is_never_superseded() {
+        let plugins = [plugin("claude-code", PluginInstallationState::Active)];
+        for kind in [
+            ComponentKind::MachineHost,
+            ComponentKind::AcpRuntime,
+            ComponentKind::ZedServer,
+        ] {
+            assert_eq!(
+                superseding_plugin(&component(kind, "claude"), &plugins),
+                None
+            );
         }
     }
 }
@@ -884,17 +994,15 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
         writer: telemetry_writer_admission,
         background: managed_export_policy,
     } = crate::telemetry_plugin::controller_policy::ControllerPolicy::load(&args, &service_id)?;
-    let desired_machine_components = if let Some(path) = &args.machine_components_manifest {
-        serde_json::from_slice::<Vec<crate::machine_protocol::DesiredComponent>>(
-            &std::fs::read(path).with_context(|| {
-                format!("reading Machine component manifest {}", path.display())
-            })?,
-        )
-        .with_context(|| format!("parsing Machine component manifest {}", path.display()))?
-    } else {
-        Vec::new()
-    };
-    let desired_machine_components = Arc::new(desired_machine_components);
+    let desired_machine_components =
+        Arc::new(crate::machine_convergence::DesiredComponentSource::load(
+            args.machine_components_manifest.as_deref(),
+            now_ms(),
+        )?);
+    let component_convergence = Arc::new(crate::machine_convergence::ConvergenceState::default());
+    let convergence_freeze = Arc::new(crate::machine_convergence::ConvergenceFreeze::new(
+        &args.data_dir,
+    ));
     init_tracing();
     if args.cardea_oidc_config.is_some() && !args.product_auth_enabled {
         tracing::warn!("Cardea OIDC is configured but product authentication is disabled");
@@ -1086,14 +1194,20 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let runtime_router = RuntimeRouter::new();
     // Usage collectors and authenticated Machine connections must share this
     // registry; a second instance leaves collectors permanently without routes.
-    let machine_snapshots = MachineSnapshots::new(
-        store.clone(),
-        hub.clone(),
-        Arc::clone(&runtime_router),
-        Arc::clone(&machine_control),
-        Arc::clone(&desired_machine_components),
-        args.product_auth_enabled,
-    );
+    // Built here rather than through a constructor: every field is a clone of
+    // something this scope already owns, and the list is long enough that
+    // naming each one at the call site reads better than an argument order.
+    let machine_snapshots = MachineSnapshots {
+        store: store.clone(),
+        hub: hub.clone(),
+        runtime_router: Arc::clone(&runtime_router),
+        machine_control: Arc::clone(&machine_control),
+        desired_components: Arc::clone(&desired_machine_components),
+        component_convergence: Arc::clone(&component_convergence),
+        convergence_freeze: Arc::clone(&convergence_freeze),
+        product_auth_enabled: args.product_auth_enabled,
+        revision: Arc::new(AtomicU64::new(0)),
+    };
     let machine_presence_task = store.as_ref().map(|store| {
         let store = store.clone();
         let machine_snapshots = machine_snapshots.clone();
@@ -1503,6 +1617,8 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             telemetry_writer_admission,
             plugin_lifecycle_fences,
             desired_machine_components,
+            component_convergence,
+            convergence_freeze,
             web_root: args.web_root,
             usage,
             diff_snapshots: DiffSnapshotCache::default(),
@@ -1580,6 +1696,175 @@ async fn run_machine_presence_sweeper(
                     break;
                 }
             }
+        }
+    }
+}
+
+/// How often the Controller compares every connected Machine with the desired
+/// component set and re-reads the manifest behind it.
+const MACHINE_CONVERGENCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A freshly connected Machine is already reconciling the automatic set its
+/// welcome carried. Convergence waits this long before adding its own dispatch,
+/// so the same generation is never activated twice in a row.
+const MACHINE_CONVERGENCE_CONNECTION_GRACE: std::time::Duration =
+    std::time::Duration::from_secs(120);
+
+/// Converge signed automatic components continuously instead of only at a
+/// Machine's welcome. Every dispatch here is the same signed record, the same
+/// Reconcile command and the same Machine-side verification a person would
+/// trigger by hand; what this loop adds is that nobody has to.
+async fn run_component_convergence(
+    state: Arc<AppState>,
+    machine_snapshots: MachineSnapshots,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let policy = crate::machine_convergence::ConvergencePolicy::default();
+    let mut was_frozen = false;
+    loop {
+        tokio::select! {
+            () = tokio::time::sleep(MACHINE_CONVERGENCE_INTERVAL) => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+            }
+        }
+        if *shutdown.borrow() {
+            break;
+        }
+        match state.desired_machine_components.reload(now_ms()) {
+            Ok(Some(generation)) => {
+                tracing::info!(generation, "desired Machine component set reloaded");
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // The last accepted set stays in force; convergence continues
+                // against it rather than against a half-read file.
+                tracing::error!(%error, "rejected the Machine component manifest");
+            }
+        }
+        let desired = state.desired_machine_components.current();
+        if desired.is_empty() {
+            continue;
+        }
+        let frozen = state.convergence_freeze.current();
+        if frozen.is_some() != was_frozen {
+            was_frozen = frozen.is_some();
+            match &frozen {
+                Some(record) => tracing::warn!(
+                    actor = %record.actor,
+                    reason = record.reason.as_deref().unwrap_or("unstated"),
+                    "component convergence is frozen"
+                ),
+                None => tracing::info!("component convergence resumed"),
+            }
+        }
+        let machines = match machine_snapshots.load().await {
+            Ok(machines) => machines,
+            Err(error) => {
+                tracing::warn!(%error, "loading Machines for component convergence");
+                continue;
+            }
+        };
+        for summary in machines {
+            if state.component_convergence.is_in_flight(&summary.id) {
+                continue;
+            }
+            let attempts = state.component_convergence.attempts(&summary.id);
+            let plan = crate::machine_convergence::plan_machine(
+                &summary,
+                &desired,
+                &attempts,
+                frozen.is_some(),
+                now_ms(),
+            );
+            if summary.connected {
+                // A converged component keeps no history. An offline Machine
+                // reports nothing, so it never prunes: reconnecting must not
+                // become a way to clear a blocked digest.
+                state.component_convergence.retain(
+                    &summary.id,
+                    &plan.reported.iter().map(|entry| entry.id.clone()).collect(),
+                );
+            }
+            if plan.dispatch.is_empty() {
+                continue;
+            }
+            if state
+                .machine_control
+                .connection_age(&summary.id)
+                .is_none_or(|age| age < MACHINE_CONVERGENCE_CONNECTION_GRACE)
+            {
+                continue;
+            }
+            if !state.component_convergence.begin(&summary.id) {
+                continue;
+            }
+            let task_state = Arc::clone(&state);
+            let snapshots = machine_snapshots.clone();
+            tokio::spawn(async move {
+                let machine_id = summary.id;
+                let request_id = machine_request_id("converge");
+                let components: Vec<crate::machine_protocol::ComponentId> = plan
+                    .dispatch
+                    .iter()
+                    .map(|component| component.id.clone())
+                    .collect();
+                tracing::info!(
+                    %machine_id,
+                    %request_id,
+                    components = components.len(),
+                    "converging signed Machine components"
+                );
+                task_state.component_convergence.record_dispatch(
+                    &machine_id,
+                    &plan.dispatch,
+                    policy,
+                    now_ms(),
+                );
+                let outcome = task_state
+                    .machine_control
+                    .command_request_with_timeout(
+                        &machine_id,
+                        request_id.clone(),
+                        crate::machine_protocol::MachineCommand::Reconcile {
+                            request_id: request_id.clone(),
+                            components: plan.dispatch.clone(),
+                        },
+                        MACHINE_COMPONENT_COMMAND_TIMEOUT,
+                    )
+                    .await;
+                match outcome {
+                    Ok(()) => {
+                        task_state.component_convergence.record_outcome(
+                            &machine_id,
+                            &plan.dispatch,
+                            None,
+                        );
+                        tracing::info!(
+                            %machine_id,
+                            %request_id,
+                            "Machine accepted the component reconcile"
+                        );
+                    }
+                    Err(error) => {
+                        task_state.component_convergence.record_outcome(
+                            &machine_id,
+                            &plan.dispatch,
+                            Some(&error),
+                        );
+                        tracing::warn!(
+                            %machine_id,
+                            %request_id,
+                            %error,
+                            "Machine component convergence failed"
+                        );
+                    }
+                }
+                task_state.component_convergence.finish(&machine_id);
+                snapshots.publish().await;
+            });
         }
     }
 }
@@ -9307,6 +9592,16 @@ async fn serve_axum(
     #[cfg(unix)]
     let local_operator = local_operator::start(&data_dir, Arc::clone(&state))?;
 
+    // Converge signed automatic components for as long as the Controller
+    // serves. A Controller without a manifest has no desired state to converge.
+    let convergence_task = state.desired_machine_components.is_configured().then(|| {
+        tokio::spawn(run_component_convergence(
+            Arc::clone(&state),
+            state.machine_snapshots.clone(),
+            state.shutdown.clone(),
+        ))
+    });
+
     let code_buffers = Arc::clone(&state.code_buffers);
     let result = axum::serve(
         listener,
@@ -9317,6 +9612,9 @@ async fn serve_axum(
     .context("axum serve");
     #[cfg(unix)]
     local_operator.shutdown().await;
+    if let Some(task) = convergence_task {
+        task.abort();
+    }
     code_buffers.shutdown().await;
     result?;
     Ok(())
@@ -10940,14 +11238,20 @@ fn machine_request_id(prefix: &str) -> String {
     )
 }
 
+/// Machine-owned root identities travel with the workspace list they describe.
+/// A component-only refresh preserves both; a workspace observation replaces
+/// both, so an old identity can never outlive the roots it was minted for.
 fn apply_workspace_inventory(
     current: &mut Vec<crate::machine_protocol::MachineWorkspace>,
+    current_identities: &mut Vec<crate::machine_protocol::WorkspaceRootIdentity>,
     current_revision: &mut Option<String>,
     workspaces: Option<Vec<crate::machine_protocol::MachineWorkspace>>,
+    identities: Option<Vec<crate::machine_protocol::WorkspaceRootIdentity>>,
     revision: Option<String>,
 ) {
     if let Some(workspaces) = workspaces {
         *current = workspaces;
+        *current_identities = identities.unwrap_or_default();
         *current_revision = revision;
     }
 }
@@ -10974,7 +11278,8 @@ async fn api_machine_reconcile(
     State(state): State<Arc<AppState>>,
     Path(machine_id): Path<String>,
 ) -> Response {
-    if state.desired_machine_components.is_empty() {
+    let desired = state.desired_machine_components.current();
+    if desired.is_empty() {
         return (
             StatusCode::PRECONDITION_FAILED,
             "no signed Machine component manifest is configured",
@@ -10988,7 +11293,7 @@ async fn api_machine_reconcile(
         request_id.clone(),
         crate::machine_protocol::MachineCommand::Reconcile {
             request_id: request_id.clone(),
-            components: state.desired_machine_components.as_ref().clone(),
+            components: desired.components.clone(),
         },
         "reconcile_components",
         MACHINE_COMPONENT_COMMAND_TIMEOUT,
@@ -11003,8 +11308,8 @@ async fn api_machine_reconcile_one(
 ) -> Response {
     let Some(component) = state
         .desired_machine_components
-        .iter()
-        .find(|component| component.id == component_id)
+        .current()
+        .find(&component_id)
         .cloned()
     else {
         return (StatusCode::NOT_FOUND, "no signed update for this component").into_response();
@@ -11055,6 +11360,7 @@ async fn api_machine_revoke(
         Ok(()) => {
             state.machine_control.disconnect(&machine_id);
             state.runtime_router.remove(&machine_id);
+            state.component_convergence.forget(&machine_id);
             state.machine_snapshots.publish().await;
             StatusCode::NO_CONTENT.into_response()
         }
@@ -13163,12 +13469,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
             protocol,
             controller_epoch: 0,
             heartbeat_interval_ms: MACHINE_HEARTBEAT_MS,
-            desired_components: state
-                .desired_machine_components
-                .iter()
-                .filter(|component| component.automatic)
-                .cloned()
-                .collect(),
+            desired_components: state.desired_machine_components.current().automatic(),
         },
     )
     .await
@@ -13207,6 +13508,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
         crate::machine_protocol::MachineEvent::Inventory {
             components: hello.components.clone(),
             workspaces: Some(hello.workspaces.clone()),
+            workspace_identities: Some(hello.workspace_identities.clone()),
             workspace_revision: hello.workspace_revision.clone(),
             observed_at_ms: now_ms(),
         },
@@ -13316,6 +13618,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut runtime_registration_pending = true;
     let mut current_components = hello.components.clone();
     let mut current_workspaces = hello.workspaces.clone();
+    let mut current_workspace_identities = hello.workspace_identities.clone();
     let mut current_workspace_revision = hello.workspace_revision.clone();
     let mut current_providers = hello.plugins.clone();
     let mut revocation_check = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -13452,6 +13755,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     crate::machine_protocol::MachineEvent::Inventory {
                         components,
                         workspaces,
+                        workspace_identities,
                         workspace_revision,
                         ..
                     },
@@ -13459,8 +13763,10 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 current_components = components;
                 apply_workspace_inventory(
                     &mut current_workspaces,
+                    &mut current_workspace_identities,
                     &mut current_workspace_revision,
                     workspaces,
+                    workspace_identities,
                     workspace_revision,
                 );
                 state.machine_control.record_remote(
@@ -13468,6 +13774,7 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
                     crate::machine_protocol::MachineEvent::Inventory {
                         components: current_components.clone(),
                         workspaces: Some(current_workspaces.clone()),
+                        workspace_identities: Some(current_workspace_identities.clone()),
                         workspace_revision: current_workspace_revision.clone(),
                         observed_at_ms: now_ms(),
                     },
@@ -14993,20 +15300,50 @@ mod machine_provider_tests {
             display_name: id.to_owned(),
             canonical_path: format!("/srv/{id}"),
         };
+        let identity = |id: &str| crate::machine_protocol::WorkspaceRootIdentity {
+            workspace_id: id.to_owned(),
+            incarnation: format!("incarnation-{id}"),
+        };
         let mut workspaces = vec![workspace("old")];
+        let mut identities = vec![identity("old")];
         let mut revision = Some("revision-old".to_owned());
-        apply_workspace_inventory(&mut workspaces, &mut revision, None, None);
+        apply_workspace_inventory(
+            &mut workspaces,
+            &mut identities,
+            &mut revision,
+            None,
+            None,
+            None,
+        );
         assert_eq!(workspaces, vec![workspace("old")]);
+        assert_eq!(identities, vec![identity("old")]);
         assert_eq!(revision.as_deref(), Some("revision-old"));
 
         apply_workspace_inventory(
             &mut workspaces,
+            &mut identities,
             &mut revision,
             Some(vec![workspace("new")]),
+            Some(vec![identity("new")]),
             Some("revision-new".to_owned()),
         );
         assert_eq!(workspaces, vec![workspace("new")]);
+        assert_eq!(identities, vec![identity("new")]);
         assert_eq!(revision.as_deref(), Some("revision-new"));
+
+        // An older Machine's workspace observation drops stale identities
+        // rather than letting them outlive the roots they described.
+        apply_workspace_inventory(
+            &mut workspaces,
+            &mut identities,
+            &mut revision,
+            Some(vec![workspace("legacy")]),
+            None,
+            None,
+        );
+        assert_eq!(workspaces, vec![workspace("legacy")]);
+        assert!(identities.is_empty());
+        assert!(revision.is_none());
     }
 }
 

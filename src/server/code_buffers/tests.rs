@@ -151,6 +151,7 @@ pub(super) fn reply(
             accepted: true,
             payload: Some(value),
             detail: None,
+            refusal: None,
         },
     );
 }

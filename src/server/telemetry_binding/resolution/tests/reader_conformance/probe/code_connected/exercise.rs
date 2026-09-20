@@ -133,6 +133,8 @@ pub(super) async fn run(
     read_routes::authorization(pair, password).await?;
     checks.push("held_real_core_file_reply_is_discarded_after_original_cookie_logout");
 
+    root_identity::run(pair, stage, checks).await?;
+
     *stage = "cancelled_open";
     let first = prepare(pair).await?;
     let gate = pair.proxy.hold("openBufferLease")?;

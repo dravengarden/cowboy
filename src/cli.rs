@@ -297,7 +297,9 @@ pub struct ServeArgs {
 
     /// Controller-owned signed desired-component manifest sent to every
     /// authenticated Machine. The browser can request reconciliation but
-    /// cannot supply artifact URLs, hashes, or signatures.
+    /// cannot supply artifact URLs, hashes, or signatures. Re-read in place:
+    /// `automatic` records converge continuously, and an invalid manifest
+    /// keeps the last accepted set.
     #[arg(long, env = "COWBOY_MACHINE_COMPONENTS_MANIFEST")]
     pub machine_components_manifest: Option<PathBuf>,
 

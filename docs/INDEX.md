@@ -103,6 +103,7 @@ primary phone/desktop product path.
 - [`offline-first-sync.md`](offline-first-sync.md) — Offline-first design: local replica boot, prioritized hydration, one sync status, outbox classes, conflict catalog and required server changes
 - [`sessions-folders.md`](sessions-folders.md) — Sessions sidebar folders: synced tree with project binding, Mobile and Desktop UX, keyboard contract
 - [`ios-simulator.md`](ios-simulator.md) — Local iOS Simulator bridge and verification workflow
+- [`machine-component-convergence.md`](machine-component-convergence.md) — Continuous convergence of signed automatic Machine components: authority, drain, backoff and reported state
 - [`machine-operations.md`](machine-operations.md) — Machine operations, including Provider installation and Service-auth replica convergence
 - [`plugin-packages.md`](plugin-packages.md) — Package, typed UI, authentication/Transcript presentation, and release contract for independently released, Machine-scoped Provider packages
 - [`provider-auth-sync-coordination.md`](provider-auth-sync-coordination.md) — Bounded same-generation reconciliation on one authenticated connection, cancellation and late-receipt fencing

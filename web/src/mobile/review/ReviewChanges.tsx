@@ -38,6 +38,7 @@ import {
   type GitChangeTreeNode,
 } from "./gitChangeTree";
 import { reviewEntryKey } from "./diffNavigationModel";
+import { useReviewRecovery } from "./useReviewRecovery";
 
 const statusLabel: Record<CodeChangeStatus, string> = {
   modified: "M",
@@ -201,6 +202,8 @@ export function ReviewChanges({
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+  const reload = useRef<() => void>(() => {});
+  const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
   const sections = useMemo(() => groupGitChanges(changes), [changes]);
   const queue = useMemo(() => reviewQueue(sections), [sections]);
   const sectionCounts = useMemo(
@@ -218,10 +221,12 @@ export function ReviewChanges({
       setChanges([]);
       return;
     }
+    cancelRetry();
     setLoading(true);
     setError(false);
     try {
       const result = await fetchCodeChanges(sessionId, signal);
+      settleRetry();
       setChanges(result.changes);
       setHead(result.head);
       setTruncated(result.truncated);
@@ -231,11 +236,18 @@ export function ReviewChanges({
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
         setError(true);
+        armRetry(reason);
       }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [onRevision, sessionId]);
+  }, [armRetry, cancelRetry, onRevision, sessionId, settleRetry]);
+
+  useEffect(() => {
+    reload.current = (): void => {
+      void load();
+    };
+  }, [load]);
 
   useEffect(() => {
     const controller = new AbortController();

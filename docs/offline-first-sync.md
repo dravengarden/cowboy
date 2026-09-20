@@ -534,15 +534,69 @@ a narrow desktop window is not. Before that key has ever been written the
 shell approximates with `(pointer: fine) and (hover: hover)`, undone by
 `(any-pointer: coarse)`, in that order.
 
-Layer 2 is the SSG-like part. `bootSnapshot.ts` captures when the app is left
-(`visibilitychange` to hidden, `pagehide`) and at idle moments in between, but
-only from a *resting* screen: no sheet, dialog, drawer, keyboard, gesture,
-placeholder or Review page, and not mid-turn for the periodic capture. It
-clones `#root`, drops everything outside the viewport (the overlay cannot
-scroll, and this is what keeps a long transcript small), pins image and media
-boxes, records scroll offsets, strips scripts and event handlers, and
+Layer 2 is the SSG-like part. `bootSnapshot.ts` captures a few seconds after
+the screen settles, re-armed whenever what is on screen changes, and only from
+a *resting* screen: no sheet, dialog, drawer, keyboard, gesture, placeholder,
+Review page or turn in flight.
+
+Saving the screen *as the user leaves* looks like the obvious design and does
+not work. Writing to Cache Storage is asynchronous, and a document being
+discarded does not stay alive to finish it, so the write is simply lost;
+measured, a real navigation away saved nothing while a hand-dispatched
+`pagehide` on a live page saved fine. `pagehide` and a backgrounding
+`visibilitychange` are kept as best-effort extras, with a 60 s backstop, but
+what the next open restores is the capture that already happened while the app
+was alive.
+
+The capture clones `#root`, drops everything outside the viewport (the overlay
+cannot scroll, and this is what keeps a long transcript small), pins image and
+media boxes, records scroll offsets, strips scripts and event handlers, and
 serialises only the CSS rules that can still match. A capture of a real mobile
-session is about 122 KB: 25 KB markup, 84 KB CSS, 13 KB `@font-face`.
+session is about 113 KB: 25 KB markup, 75 KB CSS, 13 KB `@font-face`.
+
+Cache Storage cannot answer inside the first frame, so a document that simply
+painted the skeleton and replaced it a moment later would read as a flash —
+placeholder shapes appearing and then being swapped for content is exactly the
+jank this design exists to remove. Each capture therefore also writes a small
+synchronous hint to `localStorage` (everything but the markup and CSS). The
+document reads it before its first paint and, when it matches this open, holds
+the placeholder shapes back behind `html.boot-restoring` while still painting
+the canvas colour. That hint is judged by the same predicate as the record it stands for
+(`window.__cowboyBootEligible`, defined once). Two copies of the rule drifted
+apart immediately: the hint checked only the viewport and the age, so a
+snapshot belonging to another session held the skeleton back and then released
+it — exactly the flash it exists to prevent. Every path that declines the
+saved screen reveals the skeleton, so no route ends on a bare canvas, and the
+grace timer behind them is a safety net for Cache Storage never answering
+rather than a deadline the parse can lose: a real phone fires a short timer on
+time while the parse runs long, which would show the placeholder and then
+replace it.
+
+The overlay is also mounted before it is shown: `opacity: 0` so the browser
+actually renders it and therefore fetches the faces the saved screen uses,
+then revealed once `document.fonts.check` passes FOR THAT SCREEN'S OWN TEXT.
+A bare family name only pulls the default unicode subset, so a Chinese
+transcript would be drawn in a fallback and reflow when the real subset
+arrived. Text drawn in a fallback has different metrics from the same text in
+the real face, and the app repaints it in the real one — which is a jump a
+moment after the content appears. The wait is bounded.
+
+The hand-off is a removal, not a cross-fade. The overlay is only let go once
+the app has painted the same screen, and dissolving one copy of that screen
+through another doubles every glyph for a fifth of a second, which reads as a
+flash rather than as a transition.
+
+Measured with a real capture, saved screen mounted by CPU speed:
+
+| CPU | Saved screen on screen | Placeholder shown |
+|---|---|---|
+| full speed | 29 ms | never |
+| 4x slower | 257 ms | never |
+| 10x slower | 500 ms | never |
+| 20x slower | 1043 ms | never |
+
+A snapshot that does not match this open — a different session, say — is
+declined synchronously, so the skeleton paints immediately instead of waiting.
 
 The overlay is a picture, never the app: closed shadow root (no shared ids,
 selectors or focus), `inert`, `aria-hidden`, `pointer-events: none`. It is

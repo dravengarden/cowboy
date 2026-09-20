@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
 import {
   BOOT_SNAPSHOT_CACHE,
+  BOOT_SNAPSHOT_HINT_KEY,
   BOOT_SNAPSHOT_URL,
   BOOT_SURFACE_KEY,
   BOOT_THEME_KEY,
@@ -96,6 +97,17 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_URL)), BOOT_SNAPSHOT_URL);
   assert(html.includes(JSON.stringify(BOOT_THEME_KEY)), BOOT_THEME_KEY);
   assert(html.includes(JSON.stringify(BOOT_SURFACE_KEY)), BOOT_SURFACE_KEY);
+  assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_HINT_KEY)), BOOT_SNAPSHOT_HINT_KEY);
+  // The document must never be left on a bare canvas: every path that
+  // declines the saved screen has to bring the skeleton back.
+  assert(html.includes("boot-restoring"), "boot-restoring class");
+  // One predicate, read synchronously before the first paint and again when
+  // Cache Storage answers. Two copies drifted apart once already: the
+  // document held the skeleton back for a snapshot the loader then refused.
+  assertEquals(html.split("__cowboyBootEligible").length - 1, 3, "shared eligibility predicate");
+  // Whatever the loader decides, it must never end on a bare canvas.
+  assert(html.includes("return reveal()"), "declining the saved screen reveals the skeleton");
+  assert(html.includes(".catch(reveal)"), "a failed lookup reveals the skeleton");
   // The skeleton's chrome follows the app's own last answer, not a width.
   assert(html.includes("html.boot-desktop"), "boot-desktop class");
   assert(html.includes("html.boot-touch"), "boot-touch class");
@@ -105,8 +117,24 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(html.includes('attachShadow({ mode: "closed" })'));
   // A stuck app must never hide behind a picture of itself.
   assert(/setTimeout\(\(\) => boot\.ready\(\), \d+\)/.test(html));
-  // The same allow-list as restorableHtmlStyle.
-  assert(html.includes("^(font-size|background-color|--(cowboy|vv|kb)-[\\w-]+)$"));
+  // The same declarations restorableHtmlStyle captures, split by where they
+  // may be applied: only `font-size` has to reach <html>, because `rem`
+  // resolves against the document root. Putting the captured viewport
+  // variables there too would lay the booting app out against stale values.
+  assert(html.includes(`name === "font-size" || name === "background-color"`));
+  assert(html.includes("^--(cowboy|vv|kb)-[\\w-]+$"));
+  assert(html.includes("host.style.setProperty(name, value)"));
+  // The saved screen must not be shown in a face that is about to change:
+  // the same text in a fallback has different metrics, so revealing it early
+  // makes the whole screen reflow when the app repaints it.
+  assert(html.includes("opacity:0"), "the overlay mounts rendered but invisible");
+  // By the text this screen contains, not by family alone: a bare family name
+  // only pulls the default unicode subset, so a Chinese transcript would be
+  // drawn in a fallback and reflow when the real subset arrived.
+  assert(html.includes("document.fonts.check(spec, sample)"), "checked against its own text");
+  assert(html.includes("document.fonts.load(spec, sample)"), "and loaded with it");
+  assert(/BOOT_FONT_WAIT_MS = \d+/.test(html), "with a bounded wait");
+  assert(/BOOT_FONT_WAIT_MS = \d+/.test(html), "with a bounded wait");
 });
 
 Deno.test("the static boot shell and BootSkeleton render the same markup", async () => {

@@ -581,6 +581,30 @@ complete integrated gates and activation retaining all 16 original workers.
 This is not Machine-owned filesystem identity, a state lease, native adoption
 or independent recovery; the broader exits below remain open.
 
+[Machine-owned Workspace root identity](plugin-machine-workspace-identity.md)
+gives the advertised root an owner for the first time. The Machine mints one
+opaque incarnation per root object, pins that object with a retained directory
+handle so reused device/inode numbers cannot alias a replacement, and re-checks
+it on every workspace-scoped Code request before reading. The Controller only
+carries the value: it has no constructor, no serde path and no derived
+comparison, and it requires equality to preserve an observation across an
+inventory. A protocol-22 Machine that cannot observe a root advertises no
+identity, and the Controller refuses that root rather than reading it unfenced.
+The Machine's closed `WorkspaceRootIdentityChanged` refusal — not a detail
+string — retires exactly that slot, so the Controller's own caches, ETags and
+page/diff continuations cannot answer for a replaced root either; the next
+inventory mints a new identity, so a fence is not a lost root. Its
+[accepted Controller rollout](releases/plugin-machine-workspace-identity-2026-09-20.md)
+records the source regressions that fail against the previous implementation,
+the complete quality gate and two v12/32-check connected runs including an
+actual advertised-root replacement. Only the Controller is activated: the
+resident protocol-21 Machine advertises no identity and keeps its previous
+behaviour until its own maintenance boundary, which is not scheduled here.
+This is one root-object fence. Session routes executing in session worktrees,
+Controller-local (colocated) execution, intermediate Machine configuration
+changes, Session/security-domain identity, state leases, general graph
+contracts and independent post-effect restoration all remain open below.
+
 The [continuous Workspace read scope](plugin-workspace-read-scopes.md) now
 connects authenticated per-root observations to the finite Code executor,
 buffered responses and file/diff continuations. Observed removal/path ABA,
@@ -603,7 +627,7 @@ record exact accepted artifacts and bounded production continuity observations.
 
 | Exit | Remaining implementation | Required evidence |
 | --- | --- | --- |
-| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Workspace/Session/security-domain identity, state leases and policy; link exact resolved results to finite domain executors | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader and telemetry installation fences and shared structural link vectors; no serialized authorization |
+| P0 / typed resolution | Extend verified release observations, finite Service/Machine Site checks, telemetry resolution and code-read observations to applicable graph contracts, continuous Machine-owned Session and security-domain identity, state leases and policy; link exact resolved results to finite domain executors. Machine-owned Workspace **root** identity is implemented and Controller-activated above, but only for advertised roots on a protocol-22 Machine: session-worktree routes, Controller-local execution and intermediate Machine configuration changes still have no owner | General graph/site/state-lease vectors beyond accepted-Catalog, finite Site, code-reader, advertised-root and telemetry installation fences and shared structural link vectors; no serialized authorization |
 | P3 / state compatibility | General state-dataset identity and reader/writer coexistence beyond the finite security, telemetry and now-deployed browser namespaces | Actual old/new readers and writers, exclusive fenced ownership, principal changes, crash/reopen, version-change and independent workspace/generation coexistence |
 | P4 / capability acceptance | The core [connected installation writer](releases/plugin-install-writers-2026-09-14.md) is active and its Victoria installation/reinstall/fault matrix is accepted; the supplied Code HTTP installation/read/uninstall chain is now accepted separately. Extend this to Agent authentication projection and actual native-generation replacement | Each supported Plugin lifecycle, cancellation/crash at its additional capability boundaries, same-ID deduplication and changed-input refusal; no native restoration inferred from telemetry or forced fixture teardown |
 | P4 / Code consumer | The [Review destination reader](plugin-review-owned-destinations.md) connects explicit navigation, original-target handoff, independently owned native-text display and passive Settings recovery. The [native input candidate](plugin-native-input-bounds.md) bounds single inputs; the [whole-query candidate](plugin-native-navigation-budgets.md) adds aggregate pre-acquisition location/target budgets, original-worktree-only opens and typed refusal. [Single-use Open](plugin-native-open-once.md) removes implicit replay and fences unobserved acquisition; [native close confirmation](plugin-native-close-confirmation.md) verifies original-peer removal. Global retained-history/background-effect limits and independent acceptance of the deployed Machine/exact native pair remain open | Actual deployed consumer cancellation, stale text/positions, independent readers and mismatch refusal; no legacy fallback after an owned attempt or reload disguised as a read; aggregate native lifetime/resource limits and supported-client native acceptance |

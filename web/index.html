@@ -235,6 +235,14 @@
       body:has(#boot-snapshot) #app-splash {
         display: none;
       }
+      /* Cache Storage cannot answer within the first frame, so a document
+         that expects to restore a screen holds the placeholder shapes back
+         rather than painting them for one beat and replacing them — that
+         swap is what reads as a flash. The canvas colour still paints, and
+         the script below gives up on this after BOOT_RESTORE_GRACE_MS. */
+      html.boot-restoring #app-splash > * {
+        visibility: hidden;
+      }
       #app-splash.boot-shell {
         /* Below portalled sheets: a sign-in or Passkey prompt may have to
            appear while a first contact is still waiting. */
@@ -380,7 +388,49 @@
       // The app records its real canvas colours: a manual light/dark choice or
       // an appearance palette differs from the OS scheme the CSS above assumes.
       (() => {
+        // ONE place decides whether a saved screen may be shown, so the
+        // synchronous hint read here and the asynchronous record read at the
+        // end of the body can never disagree. They did: the hint checked only
+        // the viewport and the age, so a snapshot for another session or
+        // colour scheme held the skeleton back and then released it — the
+        // very flash this is meant to prevent.
+        window.__cowboyBootEligible = (snap) => {
+          try {
+            if (!snap || snap.v !== 1) return false;
+            const search = new URLSearchParams(location.search);
+            if (search.has("cowboy-recover") || location.pathname !== "/") return false;
+            const identity = JSON.parse(localStorage.getItem("cowboy:auth-status-cache") || "null");
+            const user = identity && identity.me && identity.me.user_id;
+            if (typeof user !== "string") return false;
+            if (identity.expiresAt !== null && identity.expiresAt <= Date.now()) return false;
+            if (snap.user !== user) return false;
+            // The copy is live DOM and reflows at the current size; only the
+            // pinned boxes and the restored scroll offsets carry the capture's
+            // geometry. An exact match would cost Desktop the feature on any
+            // resize, and a browser tab whenever the URL bar came or went.
+            if (Math.abs(snap.width - innerWidth) > innerWidth * 0.08) return false;
+            if (Math.abs(snap.height - innerHeight) > innerHeight * 0.08) return false;
+            if (Date.now() - snap.savedAt > 7 * 86400000) return false;
+            // Only the screen the app is about to open: the same session (a
+            // notification deep link wins, as it does in the app) on the Agent
+            // page. Review reads the workspace over the network.
+            const opening = search.get("session") || localStorage.getItem("cowboy:active-session") || "";
+            if (opening !== (snap.sessionId || "")) return false;
+            if (localStorage.getItem("cowboy:mobile-product") === "review") return false;
+            const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+            if (snap.themeMode === "system" && snap.scheme !== scheme) return false;
+            return true;
+          } catch {
+            return false;
+          }
+        };
         try {
+          // A saved screen is about to replace the skeleton, so do not paint
+          // the placeholder shapes first. The hint carries everything the
+          // decision needs except the markup and the CSS.
+          if (window.__cowboyBootEligible(JSON.parse(localStorage.getItem("cowboy:boot-snapshot") || "null"))) {
+            document.documentElement.classList.add("boot-restoring");
+          }
           // The app's last surface answer beats any media-query guess.
           const surface = localStorage.getItem("cowboy:boot-surface");
           if (surface === "desktop") document.documentElement.classList.add("boot-desktop");
@@ -617,6 +667,20 @@
       // its first real paint and the overlay cross-fades away. Everything is
       // optional: any mismatch leaves the boot shell above in place.
       (() => {
+        // Only a safety net for Cache Storage never answering: every real
+        // outcome below reveals the skeleton explicitly. It must be long
+        // enough that a slow device parsing a saved screen is not interrupted
+        // by it — on a real phone this timer fires on time while the parse
+        // does not, which would show the placeholder for a moment and then
+        // replace it.
+        const BOOT_RESTORE_GRACE_MS = 2500;
+        /** Ceiling on waiting for the saved screen's own web fonts. */
+        const BOOT_FONT_WAIT_MS = 600;
+        const root = document.documentElement;
+        // Whatever happens below, the skeleton must become visible rather
+        // than leave the user on a bare canvas.
+        const reveal = () => root.classList.remove("boot-restoring");
+        setTimeout(reveal, BOOT_RESTORE_GRACE_MS);
         const boot = { done: false, host: null };
         // Removing the host also un-hides the skeleton (the :has rule above),
         // which is what the 4s safety timeout needs if the app never painted.
@@ -628,38 +692,27 @@
         boot.ready = () => {
           if (boot.done) return;
           boot.done = true;
+          reveal();
           const host = boot.host;
           if (!host) return;
-          if (matchMedia("(prefers-reduced-motion: reduce)").matches) return remove();
-          host.style.transition = "opacity 200ms ease-out";
-          host.style.opacity = "0";
-          setTimeout(remove, 240);
+          // Removed outright rather than cross-faded. The overlay is only let
+          // go once the app has painted the same screen, and dissolving one
+          // copy of that screen through another doubles every glyph for a
+          // fifth of a second — which reads as a flash, not as a transition.
+          remove();
         };
         window.__cowboyBoot = boot;
         // A stuck app must never hide behind a picture of itself.
         setTimeout(() => boot.ready(), 4000);
         try {
-          if (!("caches" in window) || !Element.prototype.attachShadow) return;
-          const search = new URLSearchParams(location.search);
-          if (search.has("cowboy-recover") || location.pathname !== "/") return;
-          const identity = JSON.parse(localStorage.getItem("cowboy:auth-status-cache") || "null");
-          const user = identity && identity.me && identity.me.user_id;
-          if (typeof user !== "string" || (identity.expiresAt !== null && identity.expiresAt <= Date.now())) return;
+          if (!("caches" in window) || !Element.prototype.attachShadow) return reveal();
           caches.open("cowboy-boot-snapshot-v1")
             .then((cache) => cache.match("/__boot/snapshot.json"))
             .then((response) => response ? response.json() : null)
             .then((snap) => {
-              if (boot.done || !snap || snap.v !== 1 || snap.user !== user) return;
-              if (Math.abs(snap.width - innerWidth) > 1 || Math.abs(snap.height - innerHeight) > 1) return;
-              if (Date.now() - snap.savedAt > 7 * 86400000) return;
-              // Only the screen the app is about to open: the same session
-              // (a notification deep link wins, as it does in the app) on the
-              // Agent page. Review reads the workspace over the network.
-              const opening = search.get("session") || localStorage.getItem("cowboy:active-session") || "";
-              if (opening !== (snap.sessionId || "")) return;
-              if (localStorage.getItem("cowboy:mobile-product") === "review") return;
-              const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-              if (snap.themeMode === "system" && snap.scheme !== scheme) return;
+              // The same rule the document already applied to the hint, so a
+              // held-back skeleton is always followed by the saved screen.
+              if (boot.done || !window.__cowboyBootEligible(snap)) return reveal();
               const template = document.createElement("template");
               template.innerHTML = String(snap.html);
               // Defence in depth: the capture already strips these.
@@ -669,14 +722,21 @@
                   if (/^on/i.test(attribute.name) || /^\s*javascript:/i.test(attribute.value)) node.removeAttribute(attribute.name);
                 }
               }
-              const root = document.documentElement;
               if (typeof snap.htmlClass === "string") {
                 for (const name of snap.htmlClass.split(/\s+/)) if (/^cowboy-[\w-]+$/.test(name)) root.classList.add(name);
               }
+              // Everything the picture needs, applied to the picture. Only
+              // `font-size` has to go on <html>, because `rem` always resolves
+              // against the document root; the rest are custom properties the
+              // shadow tree inherits from its host. Writing the captured
+              // viewport variables onto the live document instead would leave
+              // the booting app laying out against a stale `--vv-height` until
+              // it recomputed them, which is a jump the user sees.
+              const hostStyle = [];
               for (const [name, value] of Array.isArray(snap.htmlStyle) ? snap.htmlStyle : []) {
-                if (/^(font-size|background-color|--(cowboy|vv|kb)-[\w-]+)$/.test(name) && typeof value === "string" && !/[;{}<>]/.test(value)) {
-                  root.style.setProperty(name, value);
-                }
+                if (typeof value !== "string" || /[;{}<>]/.test(value)) continue;
+                if (name === "font-size" || name === "background-color") root.style.setProperty(name, value);
+                else if (/^--(cowboy|vv|kb)-[\w-]+$/.test(name)) hostStyle.push([name, value]);
               }
               if (typeof snap.fontCss === "string" && snap.fontCss) {
                 // @font-face is ignored inside a shadow tree.
@@ -689,9 +749,17 @@
               host.id = "boot-snapshot";
               host.inert = true;
               host.setAttribute("aria-hidden", "true");
-              // Opaque and visible from the first frame it exists in: there is
-              // nothing to fade IN from, only the hand-off out.
-              host.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none;opacity:1;background:var(--boot-bg, #f7fdff);overflow:hidden";
+              // Laid out immediately — that is what makes the browser fetch
+              // the faces the saved screen uses — but not shown until they
+              // arrive. Text drawn in a fallback face has different metrics
+              // from the same text in the real one, so revealing it early
+              // means the whole screen reflows when the app repaints it: the
+              // "it jumps a moment after the content appears" report.
+              // `opacity: 0` rather than `visibility: hidden`: the point of
+              // mounting early is to make the browser fetch the faces, and
+              // only content that is actually rendered does that.
+              host.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none;opacity:0;background:var(--boot-bg, #f7fdff);overflow:hidden";
+              for (const [name, value] of hostStyle) host.style.setProperty(name, value);
               const shadow = host.attachShadow({ mode: "closed" });
               const style = document.createElement("style");
               style.textContent = String(snap.css || "");
@@ -706,10 +774,45 @@
                 node.scrollLeft = left || 0;
               }
               boot.host = host;
-              if (boot.done) remove();
+              if (boot.done) return remove();
+              const show = () => {
+                if (boot.host === host && !boot.done) host.style.opacity = "1";
+              };
+              void host.offsetHeight;
+              // Ask for the reading face BY THE TEXT THIS SCREEN CONTAINS.
+              // `fonts.ready` alone settles too early, and a bare family name
+              // only pulls the default unicode subset — a Chinese transcript
+              // would still be drawn in a fallback and reflow when the real
+              // subset arrived. `check` is what decides; the load merely
+              // starts it.
+              const reading = (snap.htmlStyle || []).find((entry) => entry[0] === "--cowboy-reading-font");
+              const spec = reading ? "1rem " + String(reading[1]).split(",")[0].trim() : "";
+              const sample = String(frame.textContent || "").replace(/\s+/g, " ").slice(0, 200);
+              const ready = () => {
+                if (!document.fonts || !spec) return true;
+                try {
+                  return document.fonts.check(spec, sample);
+                } catch {
+                  return true;
+                }
+              };
+              if (ready()) show();
+              else {
+                try {
+                  document.fonts.load(spec, sample).catch(() => undefined);
+                } catch {}
+                const deadline = Date.now() + BOOT_FONT_WAIT_MS;
+                const poll = () => {
+                  if (boot.done || ready() || Date.now() > deadline) show();
+                  else setTimeout(poll, 30);
+                };
+                poll();
+              }
             })
-            .catch(() => undefined);
-        } catch {}
+            .catch(reveal);
+        } catch {
+          reveal();
+        }
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>
