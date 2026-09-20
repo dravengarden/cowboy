@@ -19,17 +19,21 @@ Deno.test("control center numeric shortcuts select one stable tab", () => {
       ["4", "machines"],
       ["5", "info"],
       ["6", "logs"],
+      ["7", "account"],
     ],
   );
   assertEquals(controlCenterTabForShortcut("1"), "settings");
   assertEquals(controlCenterTabForShortcut("6"), "logs");
+  assertEquals(controlCenterTabForShortcut("7"), "account");
   assertEquals(controlCenterTabForShortcut("x"), null);
 });
 
 Deno.test("control center bracket navigation wraps across tabs", () => {
-  assertEquals(adjacentControlCenterTab("settings", -1), "logs");
+  assertEquals(adjacentControlCenterTab("settings", -1), "account");
   assertEquals(adjacentControlCenterTab("settings", 1), "notifications");
-  assertEquals(adjacentControlCenterTab("logs", 1), "settings");
+  assertEquals(adjacentControlCenterTab("logs", 1), "account");
+  assertEquals(adjacentControlCenterTab("account", 1), "settings");
+  assertEquals(adjacentControlCenterTab("account", -1), "logs");
 });
 
 Deno.test("desktop control center keeps one stable semantic tab panel", () => {
@@ -87,4 +91,41 @@ Deno.test("control center tab bar stays sticky on desktop", () => {
   assertEquals(appSource.includes("borderRadius: 0"), true);
   assertEquals(appSource.includes("borderBottom: 0"), true);
   assertEquals(appSource.includes('borderColor: "divider"'), true);
+});
+
+/** Panel components rendered between two markers, in source order. */
+function panelSequence(start: string, end: string): string[] {
+  const from = appSource.indexOf(start);
+  assertEquals(from >= 0, true, `missing marker: ${start}`);
+  const to = appSource.indexOf(end, from + start.length);
+  assertEquals(to >= 0, true, `missing terminator for: ${start}`);
+  return [...appSource.slice(from, to).matchAll(/<(Product[A-Za-z]+)\b/g)]
+    .map((match) => match[1]);
+}
+
+Deno.test("desktop Account tab renders the mobile account route's panels", () => {
+  const desktop = panelSequence(
+    "function DesktopAccountTabContent(): React.JSX.Element {",
+    "\n}",
+  );
+  const mobile = panelSequence(
+    "<Stack data-mobile-account-sections spacing={2}>",
+    "</Stack>",
+  );
+  assertEquals(desktop, [
+    "ProductSessionCapacityPanel",
+    "ProductAccountSecurity",
+    "ProductDevicesPanel",
+    "ProductAccountMenu",
+  ]);
+  assertEquals(desktop, mobile);
+});
+
+Deno.test("desktop control center routes the account tab to that content", () => {
+  assertEquals(
+    appSource.includes(
+      'renderedTab === "account" ? <DesktopAccountTabContent />',
+    ),
+    true,
+  );
 });

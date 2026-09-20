@@ -41,7 +41,10 @@ Deno.test("desktop settings use compact section tabs and expose product sign out
   assert(settings.includes("data-desktop-settings-section-tabs"));
   assert(settings.includes('width: "fit-content"'));
   assert(settings.includes('label="Code & diff"'));
-  assert(settings.includes('label="Account"'));
+  // Account is its own control center tab rather than a Settings block, so
+  // sign out sits beside Passkeys and client credentials exactly as it does
+  // in the mobile account route. controlCenterTabs.test.ts pins that parity.
+  assert(settings.includes("function DesktopAccountTabContent("));
   assert(settings.includes("<ProductAccountMenu />"));
   assertEquals(settings.includes("<SegmentedPill"), false);
 });
