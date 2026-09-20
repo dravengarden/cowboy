@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v1751";
+const VERSION = "cowboy-v1752";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the
@@ -194,15 +194,25 @@ self.addEventListener("message", (event) => {
   // The page asks for the deployed shell the moment it detects a deploy, long
   // before it reloads: the reload then boots the new build from cache instead of
   // racing the network, and the control that brings it forward can promise that.
+  // Progress is OPT-IN, and it has to stay that way. This reply port's consumer
+  // is the PREVIOUS build's client — the one asking to be replaced — and that
+  // client resolves on the first message it receives, reading anything without
+  // `ok` as a failed download. Streaming progress at it unasked strands it on
+  // "could not be downloaded yet" for the rest of its life, retrying every
+  // minute against a download that in fact succeeded. So the legacy request
+  // keeps its exact one-message contract, and only a client that asks by
+  // sending `progress: true` is told about batches. Never widen what an
+  // unflagged `cowboy.refresh-shell` sends back.
   if (message?.type === "cowboy.refresh-shell") {
     const port = event.ports?.[0];
-    if (port) {
+    const watching = port && message.progress === true;
+    if (watching) {
       shellProgressPorts.add(port);
       if (shellProgress) port.postMessage(shellProgress);
     }
     event.waitUntil(refreshShell().then((ok) => {
       if (!port) return;
-      shellProgressPorts.delete(port);
+      if (watching) shellProgressPorts.delete(port);
       port.postMessage({ ok });
     }));
     return;

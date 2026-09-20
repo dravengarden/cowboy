@@ -125,7 +125,10 @@ function refreshShellThroughServiceWorker(
       resolve(message?.ok === true);
     };
     try {
-      controller.postMessage({ type: "cowboy.refresh-shell" }, [channel.port2]);
+      // Ask for batches explicitly. An older worker ignores the flag and still
+      // answers with its single {ok}, which this handler reads the same way, so
+      // a new page never hangs on a service worker that predates progress.
+      controller.postMessage({ type: "cowboy.refresh-shell", progress: true }, [channel.port2]);
     } catch {
       clearTimeout(timer);
       resolve(undefined);

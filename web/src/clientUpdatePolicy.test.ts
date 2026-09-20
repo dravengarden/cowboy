@@ -136,6 +136,15 @@ Deno.test("both surfaces update themselves, and both offer to be pressed", () =>
   assert(bannerSource.includes('disabled={update.phase === "reloading"}'));
 });
 
+Deno.test("the page asks for progress rather than assuming it", () => {
+  // The worker on the other end may predate progress entirely, and the worker
+  // this page talks to has the previous build as its other caller. Opting in by
+  // flag keeps both directions of that transition working.
+  assert(bannerSource.includes(
+    `controller.postMessage({ type: "cowboy.refresh-shell", progress: true }, [channel.port2])`,
+  ));
+});
+
 Deno.test("a stalled download keeps the ground it took", () => {
   assertEquals(updateFillShare("downloading", 0.4), 0.4);
   assertEquals(updateFillShare("failed", 0.4), 0.4);

@@ -175,6 +175,17 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.23.0 records app-shell 1.1.14: the shell-refresh progress
+added in 3.22.0 is opt-in. That reply port's other caller is the previous
+build's client, which resolves on the first message it receives and reads one
+without `ok` as a failed download, so an unasked progress message stranded
+every open older page on "could not be downloaded yet · retrying" against a
+download that had in fact succeeded. The worker now streams batches only to a
+client that sends `progress: true`, and an unflagged request keeps its exact
+single-reply shape. Only app-shell's version/digest changes; it still has no
+component or Plugin consumers, and no Plugin manifest, signed bytes or
+component pin changes. No Catalog publication or Machine upgrade is needed.
+
 Scoped release 3.22.0 records app-shell 1.1.13: the update banner is now the
 update control. The deployed build is downloaded as soon as a deploy is
 detected and the service worker streams its boot-asset count back, so the bar

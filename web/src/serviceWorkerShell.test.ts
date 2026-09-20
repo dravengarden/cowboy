@@ -225,6 +225,20 @@ Deno.test("the update action learns whether the deployed shell was downloaded", 
   assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
 });
 
+Deno.test("an unflagged refresh still gets exactly one reply", async () => {
+  // The client on the other end of this port is the PREVIOUS build, the one
+  // asking to be replaced, and it resolves on the first message it receives:
+  // anything without `ok` reads as a failed download. Progress sent at it
+  // unasked strands it on "could not be downloaded yet", retrying every minute
+  // against a download that actually succeeded. This legacy shape is a
+  // compatibility contract, not an implementation detail.
+  const worker = startWorker();
+  const boot = Array.from({ length: 8 }, (_, index) => `/assets/chunk-${String(index)}.js`);
+  worker.network = (url) =>
+    Promise.resolve(basic(url === "/" ? shellHtml("/assets/main.js", boot) : "asset"));
+  assertEquals(await worker.message({ type: "cowboy.refresh-shell" }), [{ ok: true }]);
+});
+
 Deno.test("the refresh reports the boot assets as they land", async () => {
   // The page fills its update bar from this count, so it has to arrive during
   // the download and end on the real total — a bar that only ever reads 0%
@@ -233,7 +247,7 @@ Deno.test("the refresh reports the boot assets as they land", async () => {
   const boot = Array.from({ length: 8 }, (_, index) => `/assets/chunk-${String(index)}.js`);
   worker.network = (url) =>
     Promise.resolve(basic(url === "/" ? shellHtml("/assets/main.js", boot) : "asset"));
-  const replies = await worker.message({ type: "cowboy.refresh-shell" });
+  const replies = await worker.message({ type: "cowboy.refresh-shell", progress: true });
   assertEquals(replies.at(-1), { ok: true });
   // 9 urls (the entry plus eight chunks) in batches of six.
   assertEquals(replies.slice(0, -1), [
@@ -253,7 +267,7 @@ Deno.test("a refresh that fails stops short of a full count", async () => {
     if (url === "/assets/chunk-7.js") return Promise.resolve(basic("gone", 404));
     return Promise.resolve(basic("asset"));
   };
-  const replies = await worker.message({ type: "cowboy.refresh-shell" });
+  const replies = await worker.message({ type: "cowboy.refresh-shell", progress: true });
   assertEquals(replies.at(-1), { ok: false });
   assertEquals(replies.slice(0, -1), [
     { type: "progress", done: 0, total: 9 },
