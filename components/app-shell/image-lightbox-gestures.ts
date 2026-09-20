@@ -81,6 +81,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       viewportHeight: number;
       imageWidth: number;
       imageHeight: number;
+      padding: number;
     } | null
   >(null);
   const g = useRef({
@@ -115,11 +116,19 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     const imageHeight = img instanceof HTMLImageElement
       ? img.offsetHeight / bakedScale.current
       : mediaRect.height / tf.current.scale;
+    // The plate's padding is part of the element's border box, so a transform
+    // scales it along with the artwork while a baked layer would keep it at its
+    // CSS size. Recover the unscaled value (a baked layer already carries
+    // `padding × bakedScale`) so the bake can scale it to match.
+    const padding = Number.parseFloat(
+      globalThis.getComputedStyle(img).paddingTop || "0",
+    ) / bakedScale.current;
     geometry.current = {
       centerX: rect.left + overlay.clientWidth / 2,
       centerY: rect.top + overlay.clientHeight / 2,
       viewportWidth: overlay.clientWidth,
       viewportHeight: overlay.clientHeight,
+      padding: Number.isFinite(padding) ? padding : 0,
       // SVG has no offsetWidth/offsetHeight. Its client rect includes the
       // current transform, so divide out the logical scale to recover the
       // base layout size. Keep the established offset geometry for <img>.
@@ -187,6 +196,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     img.style.height = `${box.imageHeight}px`;
     img.style.maxWidth = "100%";
     img.style.maxHeight = "100%";
+    img.style.padding = "";
     bakedScale.current = 1;
   }, [imgRef]);
 
@@ -204,6 +214,11 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     img.style.height = `${box.imageHeight * tf.current.scale}px`;
     img.style.maxWidth = "none";
     img.style.maxHeight = "none";
+    // Scale the plate's padding with the layer. Leaving it at its CSS size
+    // keeps the border box right but widens the content box, so the artwork
+    // jumped outwards (and up-left) on the frame the bake landed — the visible
+    // twitch at the end of a pinch.
+    img.style.padding = `${box.padding * tf.current.scale}px`;
     bakedScale.current = tf.current.scale;
     paintTransform(false, true);
   }, [imgRef, paintTransform]);
@@ -236,6 +251,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       img.style.height = "";
       img.style.maxWidth = "100%";
       img.style.maxHeight = "100%";
+      img.style.padding = "";
     }
     bakedScale.current = 1;
     tf.current = { scale: 1, x: 0, y: 0 };

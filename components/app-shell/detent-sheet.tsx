@@ -204,7 +204,8 @@ function dimHex(base: string, dim: number): string {
 }
 
 // The single document-level write this overlay permits (see header): repaint the
-// standalone status bar. REPLACE the <meta name="theme-color"> node rather than
+// standalone status bar. Shared with the lightbox, which owns the same problem
+// over a fullscreen backdrop. REPLACE the <meta name="theme-color"> node rather than
 // mutate its `content`: iOS standalone PWAs frequently ignore an in-place
 // attribute change (the bar keeps the colour it read at launch) but re-read a
 // freshly-inserted node. This matches each app's own theme-color writer (e.g.
@@ -212,7 +213,7 @@ function dimHex(base: string, dim: number): string {
 // agree on the mechanism — the sheet's restore-on-close (the page surface) then
 // reliably lands the post-switch colour instead of leaving it stuck. No-op-safe
 // when no meta exists (we just append one).
-function setStatusBarColor(color: string): void {
+export function setStatusBarColor(color: string): void {
   const { head } = globalThis.document;
   if (!head) {
     return;

@@ -175,6 +175,15 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.17.0 records app-shell 1.1.8: the lightbox's baked pan layer
+scales the plate's padding with it, so settling a pinch no longer widens the
+content box and twitches the artwork, and a fullscreen preview takes the iOS
+standalone status bar to its backdrop colour (through the sheets' own
+`setStatusBarColor`, now shared) and restores the app's colour on close. Only
+app-shell's version/digest changes; it still has no component or Plugin
+consumers, and no Plugin manifest, signed bytes or component pin changes. No
+Catalog publication or Machine upgrade is needed.
+
 Scoped release 3.16.0 records app-shell 1.1.7: the lightbox writes its plate
 onto an inline-SVG figure's own element. A host renderer paints a background on
 the SVG root, and that inline style beat the component's class rule, so a light

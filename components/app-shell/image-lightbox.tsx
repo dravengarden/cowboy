@@ -35,11 +35,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Box, IconButton, SvgIcon, useTheme } from "@mui/material";
 import { FloatingActionIsland } from "./bottom-sheet.tsx";
+import { setStatusBarColor } from "./detent-sheet.tsx";
 import {
   type LightboxMediaElement,
   useLightboxGestures,
 } from "./image-lightbox-gestures.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
+
+// The frosted-dark-glass backdrop. Also the colour the standalone status bar
+// takes while the overlay is up (see the theme-color effect below).
+const BACKDROP_COLOR = "#0b0b0e";
 
 interface GalleryMediaBase {
   alt: string;
@@ -128,6 +133,25 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
       fireHaptic("light");
     }
     wasOpen.current = open;
+  }, [open]);
+  // An iOS standalone PWA paints its status bar from <meta name="theme-color">,
+  // and that strip sits ABOVE the web view — a fixed, fullscreen backdrop cannot
+  // cover it. A light app therefore kept a bright band over the near-black
+  // preview. Take the bar to the backdrop colour while open and hand the app's
+  // own colour back on close, through the same writer the sheets use.
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const previous = globalThis.document?.head
+      ?.querySelector('meta[name="theme-color"]')
+      ?.getAttribute("content");
+    setStatusBarColor(BACKDROP_COLOR);
+    return () => {
+      if (previous !== null && previous !== undefined) {
+        setStatusBarColor(previous);
+      }
+    };
   }, [open]);
   const current = open && index !== null ? images[index] : undefined;
   const mediaKey = current?.kind === "inline-svg"
@@ -244,7 +268,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         // the table), styled to read as a lit pane of glass rather than flat
         // black — a near-black surface + a soft top sheen + a blur/saturate that
         // frosts the thin edges around the grab handle / controls. Fade-in 0→1.
-        backgroundColor: "#0b0b0e",
+        backgroundColor: BACKDROP_COLOR,
         backgroundImage: "radial-gradient(130% 90% at 50% 0%, rgba(255,255,255,0.06), rgba(255,255,255,0) 55%)",
         backdropFilter: "blur(28px) saturate(160%)",
         WebkitBackdropFilter: "blur(28px) saturate(160%)",
