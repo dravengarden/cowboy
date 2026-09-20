@@ -1,10 +1,11 @@
 import { type EditorState } from "@codemirror/state";
 import { type EditorView } from "@codemirror/view";
+import { isImageOnlyLine } from "../inlineImageSelection";
 
-const LONE_IMAGE_TOKEN_RE = /^\s*!\[([^\]]*)\]\(cowboy-att:([^)]+)\)\s*$/;
-
+/** An image ROW: a line that carries nothing but inline image tokens. Pasting
+ * two pictures fills one row, so this must not require a single token. */
 export function isLoneImageTokenLine(text: string): boolean {
-  return LONE_IMAGE_TOKEN_RE.test(text);
+  return isImageOnlyLine(text);
 }
 
 /** Positions of every empty line whose previous line is a block image. */
