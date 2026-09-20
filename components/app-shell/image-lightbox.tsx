@@ -268,6 +268,15 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
                 maxHeight: "100%",
                 width: "auto",
                 height: "auto",
+                // Zooming bakes the settled scale into the element's own width /
+                // height (see the gestures' pan layer). An inline SVG is not a
+                // replaced element, so its automatic flex minimum is zero and
+                // this centred flex item would shrink straight back to the
+                // viewport — the zoom springing back as soon as it settled. An
+                // <img> survives that on its intrinsic size; the SVG needs the
+                // shrink switched off. Fit size still comes from max-width /
+                // max-height, which apply regardless.
+                flexShrink: 0,
                 touchAction: "none",
                 userSelect: "none",
                 WebkitUserSelect: "none",
@@ -295,6 +304,10 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
               maxWidth: "100%",
               maxHeight: "100%",
               objectFit: "contain",
+              // Same contract as the inline SVG above: a zoomed image is laid
+              // out at its baked size and must never be shrunk back by the
+              // centring flex row.
+              flexShrink: 0,
               touchAction: "none",
               userSelect: "none",
               WebkitUserSelect: "none",

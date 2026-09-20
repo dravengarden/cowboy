@@ -11,21 +11,56 @@ import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { type GalleryMedia, ImageLightbox } from "@cowboy/app-shell";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 
-let configuredTheme: MermaidConfig["theme"];
+// The surface a dark diagram is read against: the in-page plate below and the
+// lightbox's plate for a self-themed figure resolve to the same near-black
+// card, so Mermaid's own opaque boxes (edge labels, subgraphs) are tuned to sit
+// on it instead of cutting holes in it.
+const DARK_SURFACE = "#14161c";
+
+// Mermaid's stock dark palette paints near-black nodes, grey borders, and dim
+// labels — on Cowboy's dark page (and on the lightbox's near-black backdrop)
+// the whole diagram collapses into one flat smudge, which is exactly what it
+// looked like on device. Lift the node fill clearly above the surface, brighten
+// borders, edges, and text, and keep subgraphs a distinct recessed plane.
+const DARK_THEME_VARIABLES: MermaidConfig["themeVariables"] = {
+  darkMode: true,
+  background: "transparent",
+  mainBkg: "#2b3242",
+  primaryColor: "#2b3242",
+  primaryBorderColor: "#8fa3c8",
+  primaryTextColor: "#f2f5fa",
+  secondaryColor: "#353d51",
+  tertiaryColor: "#1e2330",
+  nodeBorder: "#8fa3c8",
+  nodeTextColor: "#f2f5fa",
+  textColor: "#e8edf7",
+  titleColor: "#f2f5fa",
+  lineColor: "#a9b8d6",
+  clusterBkg: "#1a1e29",
+  clusterBorder: "#5a6780",
+  edgeLabelBackground: DARK_SURFACE,
+};
+
+type DiagramMode = "dark" | "light";
+
+let configuredMode: DiagramMode | undefined;
 
 async function renderMermaid(
   id: string,
   source: string,
-  theme: NonNullable<MermaidConfig["theme"]>,
+  mode: DiagramMode,
 ): Promise<string> {
   const mermaid = (await import("mermaid")).default;
-  if (configuredTheme !== theme) {
+  if (configuredMode !== mode) {
+    // initialize() rebuilds the site config from Mermaid's defaults, so the
+    // dark overrides do not leak into a later light render.
     mermaid.initialize({
       startOnLoad: false,
       securityLevel: "strict",
-      theme,
+      theme: mode === "dark" ? "dark" : "neutral",
+      ...(mode === "dark" ? { themeVariables: DARK_THEME_VARIABLES } : {}),
     });
-    configuredTheme = theme;
+    configuredMode = mode;
   }
   const { svg } = await mermaid.render(id, source);
   return svg;
@@ -75,7 +110,8 @@ export function MermaidDiagram({
   fallback?: ReactNode;
 }): React.JSX.Element {
   const reactId = useId().replaceAll(":", "") || "diagram";
-  const theme = useTheme().palette.mode === "dark" ? "dark" : "neutral";
+  const isDark = useTheme().palette.mode === "dark";
+  const mode: DiagramMode = isDark ? "dark" : "light";
   const [svg, setSvg] = useState<string>();
   const [failed, setFailed] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -84,7 +120,7 @@ export function MermaidDiagram({
     setSvg(undefined);
     setFailed(false);
     setPreviewOpen(false);
-    void renderMermaid(`cowboy-mermaid-${reactId}`, source, theme)
+    void renderMermaid(`cowboy-mermaid-${reactId}`, source, mode)
       .then((next) => {
         const prepared = prepareInlineSvg(next);
         if (!cancelled) setSvg(prepared);
@@ -95,7 +131,7 @@ export function MermaidDiagram({
     return () => {
       cancelled = true;
     };
-  }, [reactId, source, theme]);
+  }, [reactId, source, mode]);
   const previewImages = useMemo<GalleryMedia[]>(() =>
     svg
       ? [{
@@ -172,6 +208,18 @@ export function MermaidDiagram({
             px: 2,
             py: 2,
             overflow: "auto",
+            // In dark mode the diagram sits on its own recessed card. Without
+            // it the tuned node fills still read against whatever surface the
+            // transcript happens to use, and a wide diagram's edges trail off
+            // into the page with no figure boundary.
+            ...(isDark
+              ? {
+                borderRadius: 1,
+                bgcolor: DARK_SURFACE,
+                border: 1,
+                borderColor: "rgba(255, 255, 255, 0.09)",
+              }
+              : {}),
             "& svg": { maxWidth: "100%", height: "auto" },
           }}
           // mermaid.render() returns sanitized SVG when securityLevel is strict.
