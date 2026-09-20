@@ -21,6 +21,7 @@ import {
 } from "./platform";
 import { browserTooltipListenerPolicy } from "./tooltipPolicy";
 import { migrateThemeDefaultToSystem } from "./themeDefault";
+import { rememberBootTheme } from "./bootSnapshot";
 
 // cowboy's selection surface (Settings dialog, theme toggle) speaks the same
 // system/light/dark vocabulary as the shared hook.
@@ -118,6 +119,14 @@ export function useThemeMode(): ThemeControls {
   useEffect(() => {
     syncCoarsePointerRootClass();
     applyThemeColor(palette.background.default);
+    // The static boot shell paints before any of this exists, so it reads the
+    // colours from here (docs/offline-first-sync.md §Boot presentation).
+    rememberBootTheme({
+      bg: palette.background.default,
+      ink: palette.text.secondary,
+      paper: alpha(palette.text.secondary, 0.07),
+      line: alpha(palette.text.secondary, 0.16),
+    });
     // An iOS standalone PWA latches the status-bar colour and IGNORES later
     // updates across a background→resume: leave the app in dark, switch away,
     // come back, and the bar is stuck on a stale (light) colour over a dark app
@@ -134,7 +143,7 @@ export function useThemeMode(): ThemeControls {
       globalThis.removeEventListener("visibilitychange", onVisible);
       globalThis.removeEventListener("pageshow", reassert);
     };
-  }, [palette.background.default]);
+  }, [palette.background.default, palette.text.secondary]);
 
   const theme = useMemo(
     () =>

@@ -1,0 +1,119 @@
+// The boot presentation's pure policy, plus the contract that index.html's
+// inline loader and this module still agree (docs/offline-first-sync.md
+// §Boot presentation). The capture itself needs a live document and is
+// verified in the browser.
+import { assert, assertEquals, assertFalse } from "jsr:@std/assert";
+import {
+  BOOT_SNAPSHOT_CACHE,
+  BOOT_SNAPSHOT_URL,
+  BOOT_THEME_KEY,
+  classTokens,
+  keepStyleRule,
+  outsideViewport,
+  restorableHtmlStyle,
+  scopedSelector,
+  splitSelectorList,
+  strippedAttribute,
+} from "./bootSnapshot.ts";
+
+Deno.test("a selector list splits only on its top-level commas", () => {
+  assertEquals(splitSelectorList(".a, .b > .c"), [".a", ".b > .c"]);
+  assertEquals(splitSelectorList(":is(.a, .b) .c"), [":is(.a, .b) .c"]);
+  assertEquals(splitSelectorList("[title='a,b'], .c"), ["[title='a,b']", ".c"]);
+});
+
+Deno.test("classTokens reads every class a selector names", () => {
+  assertEquals(classTokens(".css-1ab .css-2cd:hover"), ["css-1ab", "css-2cd"]);
+  assertEquals(classTokens("div[data-x='.y']"), ["y"]); // harmless over-read
+  assertEquals(classTokens("html"), []);
+});
+
+Deno.test("a rule survives only when some alternative can still match", () => {
+  const used = new Set(["css-a", "css-b"]);
+  // Global rules always survive: they carry the reset and the type styles.
+  assert(keepStyleRule("html, body", used));
+  assert(keepStyleRule("*, *::before", used));
+  assert(keepStyleRule(".css-a", used));
+  // Every class of a plain compound must be present, or it cannot match.
+  assertFalse(keepStyleRule(".css-a.css-missing", used));
+  assertFalse(keepStyleRule(".css-missing .css-a", used));
+  // One matching alternative is enough.
+  assert(keepStyleRule(".css-missing, .css-b", used));
+  // A functional pseudo-class breaks the implication, so any hit keeps it.
+  assert(keepStyleRule(".css-a:not(.css-missing)", used));
+  assertFalse(keepStyleRule(".css-missing:not(.css-other)", used));
+});
+
+Deno.test("document-level selectors are retargeted at the shadow host", () => {
+  assertEquals(scopedSelector(":root"), ":host");
+  assertEquals(scopedSelector("html, body"), ":host, :host");
+  assertEquals(scopedSelector("body .css-a"), ":host .css-a");
+  assertEquals(scopedSelector("html body .css-a"), ":host .css-a");
+  // Never rewrite a class, attribute value or custom element that merely
+  // contains the word.
+  assertEquals(scopedSelector(".bodybuilder"), ".bodybuilder");
+  assertEquals(scopedSelector("[data-x='body']"), "[data-x='body']");
+  assertEquals(scopedSelector(".css-a"), ".css-a");
+});
+
+Deno.test("only presentation-critical html declarations are restorable", () => {
+  // Every `rem` in the snapshot depends on the global font scale.
+  assert(restorableHtmlStyle("font-size"));
+  assert(restorableHtmlStyle("background-color"));
+  assert(restorableHtmlStyle("--cowboy-font-scale"));
+  assert(restorableHtmlStyle("--vv-height"));
+  assert(restorableHtmlStyle("--kb-inset"));
+  assertFalse(restorableHtmlStyle("position"));
+  assertFalse(restorableHtmlStyle("--other-app"));
+});
+
+Deno.test("a static copy carries no script surface", () => {
+  assert(strippedAttribute("onclick", "run()"));
+  assert(strippedAttribute("ONCLICK", "run()"));
+  assert(strippedAttribute("href", " javascript:run()"));
+  assert(strippedAttribute("autofocus", ""));
+  assert(strippedAttribute("contenteditable", "true"));
+  // `id` stays: the shadow root scopes it, and SVG `url(#id)` paint servers
+  // stop rendering without it.
+  assertFalse(strippedAttribute("id", "gradient-1"));
+  assertFalse(strippedAttribute("class", "css-a"));
+  assertFalse(strippedAttribute("href", "/sessions/1"));
+});
+
+Deno.test("only boxes wholly off the viewport are dropped", () => {
+  const box = (top: number, bottom: number) => ({ left: 0, right: 390, top, bottom });
+  assertFalse(outsideViewport(box(0, 100), 390, 844));
+  assertFalse(outsideViewport(box(800, 900), 390, 844)); // straddles the fold
+  assertFalse(outsideViewport(box(-40, -10), 390, 844, 64)); // inside the margin
+  assert(outsideViewport(box(-900, -800), 390, 844));
+  assert(outsideViewport(box(2000, 2100), 390, 844));
+});
+
+Deno.test("index.html's inline loader and this module agree", async () => {
+  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_CACHE)), BOOT_SNAPSHOT_CACHE);
+  assert(html.includes(JSON.stringify(BOOT_SNAPSHOT_URL)), BOOT_SNAPSHOT_URL);
+  assert(html.includes(JSON.stringify(BOOT_THEME_KEY)), BOOT_THEME_KEY);
+  // The overlay must stay inert, unfocusable and out of the accessibility
+  // tree: it is a picture, not the app.
+  assert(html.includes("host.inert = true"));
+  assert(html.includes('attachShadow({ mode: "closed" })'));
+  // A stuck app must never hide behind a picture of itself.
+  assert(/setTimeout\(\(\) => boot\.ready\(\), \d+\)/.test(html));
+  // The same allow-list as restorableHtmlStyle.
+  assert(html.includes("^(font-size|background-color|--(cowboy|vv|kb)-[\\w-]+)$"));
+});
+
+Deno.test("the static boot shell and BootSkeleton render the same markup", async () => {
+  const html = await Deno.readTextFile(new URL("../index.html", import.meta.url));
+  const skeleton = await Deno.readTextFile(new URL("./BootSkeleton.tsx", import.meta.url));
+  // Both must paint one shape, or the document's first frame would jump when
+  // React takes over.
+  for (const name of ["boot-shell", "boot-rail", "boot-main", "boot-feed", "boot-card", "boot-own", "boot-composer", "boot-tools", "boot-nav", "boot-gap", "boot-dot", "boot-bar"]) {
+    assert(html.includes(name), `index.html is missing .${name}`);
+    assert(skeleton.includes(name), `BootSkeleton is missing .${name}`);
+  }
+  const count = (source: string, token: string): number =>
+    source.split(token).length - 1;
+  assertEquals(count(html, 'class="boot-card'), count(skeleton, 'className="boot-card'));
+});

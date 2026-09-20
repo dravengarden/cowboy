@@ -267,6 +267,7 @@ import {
 import { defaultNewSessionProvider } from "./newSessionProvider";
 import { defaultNewSessionWorkspace } from "./newSessionWorkspace";
 import { resolveActiveSession } from "./sessionSelection";
+import { useBootPresentation } from "./useBootPresentation";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopModal as DesktopModalShell } from "./desktop/DesktopModal";
 import {
@@ -3061,6 +3062,19 @@ export function App({
         ? [pendingCreatedSession, ...sessions]
         : sessions;
     const active = resolveActiveSession(sessions, activeId, pendingCreatedSession);
+    // The boot overlay is showing a picture of the last screen; hand over as
+    // soon as the real one is on screen (docs/offline-first-sync.md §Boot
+    // presentation). A cached tail counts: it is what the user came to read.
+    const activePainted = useStoreSelector((snapshot) =>
+        active === null || snapshot.hydrated.has(active.id) ||
+        (snapshot.timelines.get(active.id)?.length ?? 0) > 0
+    );
+    useBootPresentation({
+        painted: sessionsLoaded && activePainted,
+        sessionId: active?.id ?? null,
+        themeMode,
+        busy: active?.status === "busy" || active?.status === "starting",
+    });
     useEffect(() => {
         if (pendingCreatedSession && sessions.some((session) => session.id === pendingCreatedSession.id)) {
             setPendingCreatedSession(null);
@@ -6951,7 +6965,7 @@ function LoadingState({ compact = false }: { compact?: boolean }): React.JSX.Ele
     // down so the list reads as "settling" rather than a wall of identical bars.
     if (compact) {
         return (
-            <Stack spacing={0.75} sx={{ px: 1, py: 1 }} aria-label="Loading sessions">
+            <Stack data-boot-loading spacing={0.75} sx={{ px: 1, py: 1 }} aria-label="Loading sessions">
                 {[0, 1, 2, 3, 4].map((i) => (
                     <Skeleton
                         key={i}
@@ -6977,6 +6991,8 @@ function LoadingState({ compact = false }: { compact?: boolean }): React.JSX.Ele
             // width so the bubbles fill it.
             sx={{ width: "min(720px, 90vw)", px: 2, py: 3 }}
             aria-label="Loading conversation"
+            // Never save a screen that is itself a placeholder (bootSnapshot.ts).
+            data-boot-loading
         >
             {[0, 1, 2].map((row) => (
                 <Stack key={row} spacing={0.75} sx={{ width: "100%", opacity: 1 - row * 0.2 }}>

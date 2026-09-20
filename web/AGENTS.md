@@ -152,6 +152,21 @@ contract, and `vite.config.ts` emits the boot asset list the worker precaches
 before it promotes a deployed shell. Background and measurements:
 [`docs/offline-first-sync.md`](../docs/offline-first-sync.md).
 
+What that boot PAINTS is three layers, in `index.html`, `BootSkeleton.tsx` and
+`bootSnapshot.ts`: a static skeleton of Cowboy's layout, then the user's real
+last screen restored from Cache Storage as an inert closed-shadow-root overlay,
+then the live app cross-fading in over it. Rules worth keeping:
+
+- The skeleton markup exists twice on purpose (document + React) so no gate
+  can flash a different shape. `bootSnapshot.test.ts` asserts they match —
+  change both, or the test fails.
+- The overlay is a picture: never give it focus, ids in the light DOM,
+  pointer events, or a path back into app state.
+- Only capture a resting screen, and only restore one whose user, viewport,
+  scheme, session and age all match. When in doubt, show the skeleton.
+- `signalBootReady()` must fire when the content the user came for is on
+  screen, not when React mounts, or the app is revealed mid-load.
+
 ## Deploy (web changes reach the installed PWA only via a SW version bump)
 
 1. Bump `web/public/sw.js` → `const VERSION = "cowboy-vNN"` (the foreground

@@ -180,7 +180,196 @@
           animation: none;
         }
       }
+      /* Boot shell (docs/offline-first-sync.md §Boot presentation): the app's
+         own layout as a static skeleton, so the first frame already reads as
+         Cowboy and content REPLACES placeholders instead of a spinner giving
+         way to a finished screen. The same markup is rendered by React while a
+         gate or the lazy surface resolves (BootSkeleton.tsx), so nothing
+         flashes between the document and the app. Colours follow the app's
+         real canvas through --boot-* (set below from the persisted theme). */
+      :root {
+        --boot-bg: #f7fdff;
+        --boot-ink: #665f74;
+        --boot-paper: rgba(102, 95, 116, 0.07);
+        --boot-line: rgba(102, 95, 116, 0.16);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --boot-bg: #101014;
+          --boot-ink: #a899c4;
+          --boot-paper: rgba(168, 153, 196, 0.08);
+          --boot-line: rgba(168, 153, 196, 0.18);
+        }
+      }
+      /* The saved last screen is the real thing, so it REPLACES the guess
+         rather than covering it. A CSS rule rather than a one-shot style
+         assignment, because React re-creates the skeleton when it mounts and
+         must not bring it back under the overlay. */
+      body:has(#boot-snapshot) #app-splash {
+        display: none;
+      }
+      #app-splash.boot-shell {
+        /* Below portalled sheets: a sign-in or Passkey prompt may have to
+           appear while a first contact is still waiting. */
+        z-index: auto;
+        flex-direction: row;
+        align-items: stretch;
+        justify-content: flex-start;
+        gap: 0;
+        background: var(--boot-bg);
+        color: var(--boot-ink);
+      }
+      .boot-rail {
+        display: none;
+      }
+      .boot-main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        box-sizing: border-box;
+        padding-top: var(--cowboy-system-top-clearance);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      /* Bottom-anchored like the transcript, so the newest placeholder sits
+         where the newest message will land. */
+      .boot-feed {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        gap: 12px;
+        padding: 12px;
+      }
+      .boot-card,
+      .boot-bar,
+      .boot-dot {
+        display: block;
+        flex-shrink: 0;
+        background-color: var(--boot-paper);
+        background-image: linear-gradient(100deg, transparent 30%, var(--boot-line) 50%, transparent 70%);
+        background-size: 220% 100%;
+        animation: boot-shimmer 1.6s linear infinite;
+      }
+      .boot-card {
+        height: var(--h, 64px);
+        width: var(--w, 100%);
+        border-radius: 14px;
+      }
+      .boot-card.boot-own {
+        align-self: flex-end;
+      }
+      .boot-bar {
+        height: 12px;
+        width: var(--w, 40%);
+        border-radius: 6px;
+      }
+      .boot-dot {
+        width: var(--d, 22px);
+        height: var(--d, 22px);
+        border-radius: 50%;
+      }
+      .boot-composer {
+        margin: 0 12px 6px;
+        min-height: 132px;
+        border: 1px solid var(--boot-line);
+        border-radius: 14px;
+        padding: 18px 18px 14px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .boot-tools {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .boot-nav {
+        height: 56px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 22px;
+      }
+      .boot-gap {
+        flex: 1;
+      }
+      .boot-note {
+        position: absolute;
+        left: 50%;
+        top: 38%;
+        transform: translateX(-50%);
+        width: min(320px, calc(100% - 48px));
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 16px 20px;
+        border: 1px solid var(--boot-line);
+        border-radius: 14px;
+        background: var(--boot-bg);
+        text-align: center;
+        font-size: 13px;
+      }
+      @media (pointer: fine) and (hover: hover) and (min-width: 900px) {
+        .boot-rail {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          width: 300px;
+          flex-shrink: 0;
+          box-sizing: border-box;
+          padding: 72px 12px 12px;
+          border-right: 1px solid var(--boot-line);
+        }
+        .boot-rail .boot-bar {
+          height: 36px;
+          width: 100%;
+          border-radius: 10px;
+        }
+        .boot-feed {
+          padding: 24px max(24px, calc((100% - 860px) / 2));
+        }
+        .boot-composer {
+          margin: 0 max(24px, calc((100% - 860px) / 2)) 12px;
+        }
+        .boot-nav {
+          display: none;
+        }
+      }
+      @keyframes boot-shimmer {
+        to {
+          background-position: -220% 0;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-card,
+        .boot-bar,
+        .boot-dot {
+          animation: none;
+        }
+      }
     </style>
+    <script>
+      // The app records its real canvas colours: a manual light/dark choice or
+      // an appearance palette differs from the OS scheme the CSS above assumes.
+      (() => {
+        try {
+          const theme = JSON.parse(localStorage.getItem("cowboy:boot-theme") || "null");
+          if (!theme || typeof theme !== "object") return;
+          const colour = /^(#[0-9a-f]{3,8}|rgba?\([0-9.,%\s]+\))$/i;
+          for (const [name, key] of [["--boot-bg", "bg"], ["--boot-ink", "ink"], ["--boot-paper", "paper"], ["--boot-line", "line"]]) {
+            if (typeof theme[key] === "string" && colour.test(theme[key])) {
+              document.documentElement.style.setProperty(name, theme[key]);
+            }
+          }
+        } catch {}
+      })();
+    </script>
     <script>
       // Desktop boot recovery must exist BEFORE the first module executes. A
       // stale installed window can request an old hashed entry/lazy chunk after
@@ -367,11 +556,136 @@
   </head>
   <body>
     <div id="root">
-      <div id="app-splash" aria-label="Loading" role="status">
-        <div class="app-splash-spinner"></div>
-        <div class="app-splash-title">cowboy</div>
+      <div id="app-splash" class="boot-shell" aria-label="Loading" role="status">
+        <div class="boot-rail">
+          <i class="boot-bar"></i><i class="boot-bar"></i><i class="boot-bar"></i><i class="boot-bar"></i>
+          <i class="boot-bar"></i><i class="boot-bar"></i><i class="boot-bar"></i>
+        </div>
+        <div class="boot-main">
+          <div class="boot-feed">
+            <i class="boot-card" style="--h: 88px"></i>
+            <i class="boot-card boot-own" style="--h: 48px; --w: 62%"></i>
+            <i class="boot-card" style="--h: 132px"></i>
+            <i class="boot-card" style="--h: 56px"></i>
+          </div>
+          <div class="boot-composer">
+            <i class="boot-bar" style="--w: 38%"></i>
+            <div class="boot-tools">
+              <i class="boot-dot"></i><i class="boot-dot"></i><i class="boot-dot"></i><i class="boot-dot"></i>
+              <i class="boot-dot"></i><i class="boot-dot"></i><i class="boot-dot"></i>
+            </div>
+          </div>
+          <div class="boot-nav">
+            <i class="boot-dot"></i><i class="boot-dot" style="--d: 12px"></i>
+            <i class="boot-bar" style="--w: 120px"></i><span class="boot-gap"></span>
+            <i class="boot-dot"></i><i class="boot-dot"></i><i class="boot-dot"></i>
+          </div>
+        </div>
       </div>
     </div>
+    <script>
+      // Last-screen snapshot (docs/offline-first-sync.md §Boot presentation).
+      // The app saves a sanitized static copy of its resting screen; it is
+      // mounted here as an inert overlay, in a closed shadow root so it shares
+      // no ids, selectors or focus with the live app, until the app reports
+      // its first real paint and the overlay cross-fades away. Everything is
+      // optional: any mismatch leaves the boot shell above in place.
+      (() => {
+        const boot = { done: false, host: null };
+        // Removing the host also un-hides the skeleton (the :has rule above),
+        // which is what the 4s safety timeout needs if the app never painted.
+        const remove = () => {
+          boot.host?.remove();
+          boot.host = null;
+          document.getElementById("boot-snapshot-fonts")?.remove();
+        };
+        boot.ready = () => {
+          if (boot.done) return;
+          boot.done = true;
+          const host = boot.host;
+          if (!host) return;
+          if (matchMedia("(prefers-reduced-motion: reduce)").matches) return remove();
+          host.style.transition = "opacity 200ms ease-out";
+          host.style.opacity = "0";
+          setTimeout(remove, 240);
+        };
+        window.__cowboyBoot = boot;
+        // A stuck app must never hide behind a picture of itself.
+        setTimeout(() => boot.ready(), 4000);
+        try {
+          if (!("caches" in window) || !Element.prototype.attachShadow) return;
+          const search = new URLSearchParams(location.search);
+          if (search.has("cowboy-recover") || location.pathname !== "/") return;
+          const identity = JSON.parse(localStorage.getItem("cowboy:auth-status-cache") || "null");
+          const user = identity && identity.me && identity.me.user_id;
+          if (typeof user !== "string" || (identity.expiresAt !== null && identity.expiresAt <= Date.now())) return;
+          caches.open("cowboy-boot-snapshot-v1")
+            .then((cache) => cache.match("/__boot/snapshot.json"))
+            .then((response) => response ? response.json() : null)
+            .then((snap) => {
+              if (boot.done || !snap || snap.v !== 1 || snap.user !== user) return;
+              if (Math.abs(snap.width - innerWidth) > 1 || Math.abs(snap.height - innerHeight) > 1) return;
+              if (Date.now() - snap.savedAt > 7 * 86400000) return;
+              // Only the screen the app is about to open: the same session
+              // (a notification deep link wins, as it does in the app) on the
+              // Agent page. Review reads the workspace over the network.
+              const opening = search.get("session") || localStorage.getItem("cowboy:active-session") || "";
+              if (opening !== (snap.sessionId || "")) return;
+              if (localStorage.getItem("cowboy:mobile-product") === "review") return;
+              const scheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+              if (snap.themeMode === "system" && snap.scheme !== scheme) return;
+              const template = document.createElement("template");
+              template.innerHTML = String(snap.html);
+              // Defence in depth: the capture already strips these.
+              for (const node of template.content.querySelectorAll("script,iframe,object,embed,link,meta,base")) node.remove();
+              for (const node of template.content.querySelectorAll("*")) {
+                for (const attribute of [...node.attributes]) {
+                  if (/^on/i.test(attribute.name) || /^\s*javascript:/i.test(attribute.value)) node.removeAttribute(attribute.name);
+                }
+              }
+              const root = document.documentElement;
+              if (typeof snap.htmlClass === "string") {
+                for (const name of snap.htmlClass.split(/\s+/)) if (/^cowboy-[\w-]+$/.test(name)) root.classList.add(name);
+              }
+              for (const [name, value] of Array.isArray(snap.htmlStyle) ? snap.htmlStyle : []) {
+                if (/^(font-size|background-color|--(cowboy|vv|kb)-[\w-]+)$/.test(name) && typeof value === "string" && !/[;{}<>]/.test(value)) {
+                  root.style.setProperty(name, value);
+                }
+              }
+              if (typeof snap.fontCss === "string" && snap.fontCss) {
+                // @font-face is ignored inside a shadow tree.
+                const fonts = document.createElement("style");
+                fonts.id = "boot-snapshot-fonts";
+                fonts.textContent = snap.fontCss;
+                document.head.appendChild(fonts);
+              }
+              const host = document.createElement("div");
+              host.id = "boot-snapshot";
+              host.inert = true;
+              host.setAttribute("aria-hidden", "true");
+              // Opaque and visible from the first frame it exists in: there is
+              // nothing to fade IN from, only the hand-off out.
+              host.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none;opacity:1;background:var(--boot-bg, #f7fdff);overflow:hidden";
+              const shadow = host.attachShadow({ mode: "closed" });
+              const style = document.createElement("style");
+              style.textContent = String(snap.css || "");
+              const frame = document.createElement("div");
+              frame.style.cssText = "position:absolute;inset:0;overflow:hidden";
+              frame.appendChild(template.content);
+              shadow.append(style, frame);
+              document.body.appendChild(host);
+              for (const node of frame.querySelectorAll("[data-boot-scroll]")) {
+                const [top, left] = node.getAttribute("data-boot-scroll").split(",").map(Number);
+                node.scrollTop = top || 0;
+                node.scrollLeft = left || 0;
+              }
+              boot.host = host;
+              if (boot.done) remove();
+            })
+            .catch(() => undefined);
+        } catch {}
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

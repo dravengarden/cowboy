@@ -8,6 +8,7 @@ import {
   DeviceAuthorizationRoute,
 } from "./auth/DeviceAuthorizationPage";
 import { MachineSetupGate } from "./setup/MachineSetupGate";
+import { BootSkeleton } from "./BootSkeleton";
 import { SurfaceProvider, useSurfaceProfile } from "./surface/SurfaceProfile";
 import { useThemeMode } from "./theme";
 import { useGlobalFontScale, useReadingFontFaces } from "./readingSettings";
@@ -47,16 +48,6 @@ const MobileApp = lazy(async () => {
   return { default: module.MobileApp };
 });
 
-// The same markup as index.html's pre-mount splash, so the moment between the
-// gates resolving and the lazy surface chunk evaluating is never a white page.
-function BootSplash(): React.JSX.Element {
-  return (
-    <div id="app-splash" aria-label="Loading" role="status">
-      <div className="app-splash-spinner" />
-      <div className="app-splash-title">cowboy</div>
-    </div>
-  );
-}
 
 function Root(): React.JSX.Element {
   const { theme, mode, setMode } = useThemeMode();
@@ -86,7 +77,10 @@ function Root(): React.JSX.Element {
         <ProductAuthGate>
           <DeviceAuthorizationRoute active={deviceAuthorizationActive}>
             <MachineSetupGate>
-              <Suspense fallback={<BootSplash />}>{app}</Suspense>
+              {/* The document's own boot skeleton, so the moment between the
+                  gates resolving and the lazy surface chunk evaluating neither
+                  goes white nor changes shape. */}
+              <Suspense fallback={<BootSkeleton />}>{app}</Suspense>
             </MachineSetupGate>
           </DeviceAuthorizationRoute>
         </ProductAuthGate>
