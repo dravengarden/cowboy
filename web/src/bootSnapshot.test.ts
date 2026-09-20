@@ -124,6 +124,17 @@ Deno.test("index.html's inline loader and this module agree", async () => {
   assert(html.includes(`name === "font-size" || name === "background-color"`));
   assert(html.includes("^--(cowboy|vv|kb)-[\\w-]+$"));
   assert(html.includes("host.style.setProperty(name, value)"));
+  // The saved screen must not be shown in a face that is about to change:
+  // the same text in a fallback has different metrics, so revealing it early
+  // makes the whole screen reflow when the app repaints it.
+  assert(html.includes("opacity:0"), "the overlay mounts rendered but invisible");
+  // By the text this screen contains, not by family alone: a bare family name
+  // only pulls the default unicode subset, so a Chinese transcript would be
+  // drawn in a fallback and reflow when the real subset arrived.
+  assert(html.includes("document.fonts.check(spec, sample)"), "checked against its own text");
+  assert(html.includes("document.fonts.load(spec, sample)"), "and loaded with it");
+  assert(/BOOT_FONT_WAIT_MS = \d+/.test(html), "with a bounded wait");
+  assert(/BOOT_FONT_WAIT_MS = \d+/.test(html), "with a bounded wait");
 });
 
 Deno.test("the static boot shell and BootSkeleton render the same markup", async () => {

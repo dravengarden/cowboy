@@ -674,6 +674,8 @@
         // does not, which would show the placeholder for a moment and then
         // replace it.
         const BOOT_RESTORE_GRACE_MS = 2500;
+        /** Ceiling on waiting for the saved screen's own web fonts. */
+        const BOOT_FONT_WAIT_MS = 600;
         const root = document.documentElement;
         // Whatever happens below, the skeleton must become visible rather
         // than leave the user on a bare canvas.
@@ -747,9 +749,16 @@
               host.id = "boot-snapshot";
               host.inert = true;
               host.setAttribute("aria-hidden", "true");
-              // Opaque and visible from the first frame it exists in: there is
-              // nothing to fade IN from, only the hand-off out.
-              host.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none;opacity:1;background:var(--boot-bg, #f7fdff);overflow:hidden";
+              // Laid out immediately — that is what makes the browser fetch
+              // the faces the saved screen uses — but not shown until they
+              // arrive. Text drawn in a fallback face has different metrics
+              // from the same text in the real one, so revealing it early
+              // means the whole screen reflows when the app repaints it: the
+              // "it jumps a moment after the content appears" report.
+              // `opacity: 0` rather than `visibility: hidden`: the point of
+              // mounting early is to make the browser fetch the faces, and
+              // only content that is actually rendered does that.
+              host.style.cssText = "position:fixed;inset:0;z-index:10000;pointer-events:none;opacity:0;background:var(--boot-bg, #f7fdff);overflow:hidden";
               for (const [name, value] of hostStyle) host.style.setProperty(name, value);
               const shadow = host.attachShadow({ mode: "closed" });
               const style = document.createElement("style");
@@ -765,7 +774,40 @@
                 node.scrollLeft = left || 0;
               }
               boot.host = host;
-              if (boot.done) remove();
+              if (boot.done) return remove();
+              const show = () => {
+                if (boot.host === host && !boot.done) host.style.opacity = "1";
+              };
+              void host.offsetHeight;
+              // Ask for the reading face BY THE TEXT THIS SCREEN CONTAINS.
+              // `fonts.ready` alone settles too early, and a bare family name
+              // only pulls the default unicode subset — a Chinese transcript
+              // would still be drawn in a fallback and reflow when the real
+              // subset arrived. `check` is what decides; the load merely
+              // starts it.
+              const reading = (snap.htmlStyle || []).find((entry) => entry[0] === "--cowboy-reading-font");
+              const spec = reading ? "1rem " + String(reading[1]).split(",")[0].trim() : "";
+              const sample = String(frame.textContent || "").replace(/\s+/g, " ").slice(0, 200);
+              const ready = () => {
+                if (!document.fonts || !spec) return true;
+                try {
+                  return document.fonts.check(spec, sample);
+                } catch {
+                  return true;
+                }
+              };
+              if (ready()) show();
+              else {
+                try {
+                  document.fonts.load(spec, sample).catch(() => undefined);
+                } catch {}
+                const deadline = Date.now() + BOOT_FONT_WAIT_MS;
+                const poll = () => {
+                  if (boot.done || ready() || Date.now() > deadline) show();
+                  else setTimeout(poll, 30);
+                };
+                poll();
+              }
             })
             .catch(reveal);
         } catch {

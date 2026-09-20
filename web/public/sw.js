@@ -13,9 +13,10 @@
 //     offline notice.
 // Bump VERSION to evict the old caches on the next activation.
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
-// detects a new worker when this string changes. Every surface reloads itself
-// after a visible countdown, once its user is idle; nothing waits for a tap.
-const VERSION = "cowboy-v1748";
+// detects a new worker when this string changes. Every surface downloads the
+// deployed build as soon as it is detected, then reloads itself after a visible
+// countdown once its user is idle; a press only brings that reload forward.
+const VERSION = "cowboy-v1753";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the
@@ -97,6 +98,23 @@ function showSessionNotification(message) {
 const SHELL_NETWORK_PARAMS = ["cowboy-recover", "cowboy-update"];
 const BOOT_ASSET_FETCHES = 6;
 let shellRefresh;
+// Pages watching the refresh that is running now. The update control fills from
+// this count, so every client sees one download — including a page that joined
+// the refresh a navigation had already started, which is told the current count
+// at once instead of waiting for the next batch.
+const shellProgressPorts = new Set();
+let shellProgress;
+
+function publishShellProgress(done, total) {
+  shellProgress = { type: "progress", done, total };
+  for (const port of shellProgressPorts) {
+    try {
+      port.postMessage(shellProgress);
+    } catch {
+      shellProgressPorts.delete(port);
+    }
+  }
+}
 
 async function cachedShell() {
   const current = await caches.match("/", { cacheName: SHELL_CACHE });
@@ -145,6 +163,7 @@ function refreshShell() {
       const html = await response.clone().text();
       const urls = bootAssetUrls(html);
       const assets = await caches.open(ASSET_CACHE);
+      publishShellProgress(0, urls.length);
       for (let index = 0; index < urls.length; index += BOOT_ASSET_FETCHES) {
         const batch = await Promise.all(
           urls.slice(index, index + BOOT_ASSET_FETCHES).map(async (url) => {
@@ -156,6 +175,7 @@ function refreshShell() {
           }),
         );
         if (!batch.every(Boolean)) return false;
+        publishShellProgress(Math.min(index + BOOT_ASSET_FETCHES, urls.length), urls.length);
       }
       await (await caches.open(SHELL_CACHE)).put("/", response);
       return true;
@@ -164,17 +184,36 @@ function refreshShell() {
     }
   })().finally(() => {
     shellRefresh = undefined;
+    shellProgress = undefined;
   });
   return shellRefresh;
 }
 
 self.addEventListener("message", (event) => {
   const message = event.data;
-  // The update action asks for the deployed shell before it reloads, so the
-  // reload boots the new build from cache instead of racing the network.
+  // The page asks for the deployed shell the moment it detects a deploy, long
+  // before it reloads: the reload then boots the new build from cache instead of
+  // racing the network, and the control that brings it forward can promise that.
+  // Progress is OPT-IN, and it has to stay that way. This reply port's consumer
+  // is the PREVIOUS build's client — the one asking to be replaced — and that
+  // client resolves on the first message it receives, reading anything without
+  // `ok` as a failed download. Streaming progress at it unasked strands it on
+  // "could not be downloaded yet" for the rest of its life, retrying every
+  // minute against a download that in fact succeeded. So the legacy request
+  // keeps its exact one-message contract, and only a client that asks by
+  // sending `progress: true` is told about batches. Never widen what an
+  // unflagged `cowboy.refresh-shell` sends back.
   if (message?.type === "cowboy.refresh-shell") {
+    const port = event.ports?.[0];
+    const watching = port && message.progress === true;
+    if (watching) {
+      shellProgressPorts.add(port);
+      if (shellProgress) port.postMessage(shellProgress);
+    }
     event.waitUntil(refreshShell().then((ok) => {
-      event.ports?.[0]?.postMessage({ ok });
+      if (!port) return;
+      if (watching) shellProgressPorts.delete(port);
+      port.postMessage({ ok });
     }));
     return;
   }

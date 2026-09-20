@@ -4,6 +4,13 @@
 // React surface is the handlers this hook returns.
 
 import { type RefObject, useCallback, useEffect, useRef } from "react";
+import {
+  constrainPanAxis,
+  NO_DESTINATION_RESISTANCE,
+  projectFlick,
+  SWIPE_COMMIT_VELOCITY,
+  trackPanVelocity,
+} from "./image-lightbox-motion.ts";
 
 export type LightboxMediaElement = HTMLImageElement | SVGSVGElement;
 
@@ -28,7 +35,6 @@ const TAP_NET_SLOP = 44;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_SLOP = 32;
 const TAP_ZOOM_SCALE = 2.5;
-const EDGE_RESISTANCE = 0.32;
 
 export interface LightboxGesturesParams {
   imgRef: RefObject<LightboxMediaElement | null>;
@@ -84,12 +90,22 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       padding: number;
     } | null
   >(null);
+  // True while a release animation is still interpolating the transform.
+  const settling = useRef(false);
   const g = useRef({
     startX: 0,
     startY: 0,
     lastX: 0,
     lastY: 0,
     moved: 0,
+    // Smoothed release speed (px/ms per axis) and the sample it was taken at.
+    velX: 0,
+    velY: 0,
+    sampleAt: 0,
+    // Raw finger travel at fit size. The painted x may be resisted when there
+    // is no neighbour to swipe to, so the release decisions read the finger.
+    fitX: 0,
+    fitY: 0,
     pinchDist: 0,
     pinchScale: 1,
     pinchMidX: 0,
@@ -137,43 +153,49 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     };
   }, [imgRef, overlayRef]);
 
+  // Half the overflow of the zoomed figure on each axis: how far the pan may
+  // travel before an edge comes into view. Zero means the figure already fits
+  // that axis, and constrainPanAxis then holds it rigid there.
+  const panBounds = useCallback((): { x: number; y: number } => {
+    const box = geometry.current;
+    if (!box || tf.current.scale <= 1) {
+      return { x: 0, y: 0 };
+    }
+    return {
+      x: Math.max(0, (box.imageWidth * tf.current.scale - box.viewportWidth) / 2),
+      y: Math.max(0, (box.imageHeight * tf.current.scale - box.viewportHeight) / 2),
+    };
+  }, []);
+
   // Keep a zoomed image covering the viewport axis it exceeds. Without this a
   // pinch near an edge (or a fast follow-up pan) can leave the whole image
   // floating off-screen with no visual way to recover it.
   const constrainPan = useCallback((elastic = false) => {
-    const box = geometry.current;
-    if (!box || tf.current.scale <= 1) {
+    if (!geometry.current || tf.current.scale <= 1) {
       return;
     }
-    const maxX = Math.max(
-      0,
-      (box.imageWidth * tf.current.scale - box.viewportWidth) / 2,
-    );
-    const maxY = Math.max(
-      0,
-      (box.imageHeight * tf.current.scale - box.viewportHeight) / 2,
-    );
-    const constrainAxis = (value: number, bound: number): number => {
-      if (value > bound) {
-        return elastic ? bound + (value - bound) * EDGE_RESISTANCE : bound;
-      }
-      if (value < -bound) {
-        return elastic ? -bound + (value + bound) * EDGE_RESISTANCE : -bound;
-      }
-      return value;
-    };
-    tf.current.x = constrainAxis(tf.current.x, maxX);
-    tf.current.y = constrainAxis(tf.current.y, maxY);
-  }, []);
+    const bounds = panBounds();
+    tf.current.x = constrainPanAxis(tf.current.x, bounds.x, elastic);
+    tf.current.y = constrainPanAxis(tf.current.y, bounds.y, elastic);
+  }, [panBounds]);
 
-  const paintTransform = useCallback((animate = false, panLayer = false) => {
+  // `animate` is the default 0.22s settle (true), no transition (false), or an
+  // explicit `transition` value — a released flick sizes its own coast, so its
+  // duration is not a constant.
+  const paintTransform = useCallback((animate: boolean | string = false, panLayer = false) => {
     const img = imgRef.current;
     if (!img) {
       return;
     }
     const { scale, x, y } = tf.current;
     const visualScale = scale / bakedScale.current;
-    img.style.transition = animate ? "transform 0.22s ease" : "none";
+    const transition = typeof animate === "string"
+      ? animate
+      : animate
+      ? "transform 0.22s ease"
+      : "none";
+    settling.current = transition !== "none";
+    img.style.transition = transition;
     img.style.transform = `translate(${x}px, ${y}px) scale(${visualScale})`;
     img.style.cursor = scale > 1 ? "grab" : "zoom-out";
     img.style.willChange = scale <= 1 || panLayer ? "transform" : "auto";
@@ -182,7 +204,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
   // Pointer events are already display-aligned by WebKit. Painting immediately
   // avoids adding a full frame of input latency; the operation is one transform
   // write and performs no layout reads.
-  const applyTransform = useCallback((animate = false, panLayer = false) => {
+  const applyTransform = useCallback((animate: boolean | string = false, panLayer = false) => {
     paintTransform(animate, panLayer);
   }, [paintTransform]);
 
@@ -197,6 +219,33 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
   const commitPaint = useCallback(() => {
     imgRef.current?.getBoundingClientRect();
   }, [imgRef]);
+
+  // A finger landing on a coasting figure must take it where it is, not where
+  // it was headed: the transition owns the painted transform, while `tf` already
+  // holds its destination. Freeze the interpolated value first or the next pan
+  // starts from the target and the image jumps out from under the touch.
+  const stopSettle = useCallback(() => {
+    const img = imgRef.current;
+    if (!img || !settling.current) {
+      return;
+    }
+    // Adopt the painted value only once the transition has actually advanced.
+    // Interrupting one in the same task that started it reads the frame it has
+    // not left yet, which would rewind the figure to where the settle began —
+    // a second zoom step tapped straight after the first lost that step.
+    const advanced = img.getAnimations().some((animation) =>
+      typeof animation.currentTime === "number" && animation.currentTime > 0
+    );
+    const painted = advanced ? globalThis.getComputedStyle(img).transform : "";
+    if (painted && painted !== "none") {
+      const matrix = new DOMMatrixReadOnly(painted);
+      tf.current.x = matrix.m41;
+      tf.current.y = matrix.m42;
+      tf.current.scale = clamp(matrix.m11 * bakedScale.current);
+    }
+    paintTransform(false, tf.current.scale > 1);
+    commitPaint();
+  }, [imgRef, paintTransform, commitPaint]);
 
   const unbakeScale = useCallback(() => {
     const img = imgRef.current;
@@ -249,6 +298,26 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       bakePanLayer();
     }, delay) as unknown as number;
   }, [bakePanLayer]);
+
+  // Release a zoomed pan the way a scroll view does: coast the smoothed release
+  // speed out on the compositor as ONE transition (never a per-frame JS spring),
+  // clipped by the same bounds the drag honoured. A lift that carried no throw
+  // just settles the elastic overshoot the finger was holding.
+  const settlePan = useCallback((velocityX: number, velocityY: number) => {
+    const flick = projectFlick(
+      { x: tf.current.x, y: tf.current.y },
+      { x: velocityX, y: velocityY },
+      panBounds(),
+    );
+    if (!flick) {
+      constrainPan();
+      applyTransform(true, true);
+      return;
+    }
+    tf.current.x = flick.x;
+    tf.current.y = flick.y;
+    applyTransform(`transform ${flick.durationMs}ms cubic-bezier(0.32, 0.72, 0, 1)`, true);
+  }, [panBounds, constrainPan, applyTransform]);
 
   const setBackdrop = useCallback((dimAlpha: number) => {
     const o = overlayRef.current;
@@ -324,16 +393,21 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
   }, [applyTransform, constrainPan, unbakeScale]);
 
   const zoomBy = useCallback((factor: number) => {
+    // A second step taken while the first is still easing would measure a
+    // mid-transition rect: two quick taps on + landed at 1.5x of a figure that
+    // had not finished growing, and left the pan bounds describing a size the
+    // figure never had. Freeze the animation into the model first.
+    stopSettle();
     measureGeometry();
     zoomAt({ factor, cx: globalThis.innerWidth / 2, cy: globalThis.innerHeight / 2, animate: true });
     schedulePanLayer(240);
-  }, [measureGeometry, zoomAt, schedulePanLayer]);
+  }, [stopSettle, measureGeometry, zoomAt, schedulePanLayer]);
 
   const settleGeometry = useCallback(() => {
     measureGeometry();
     if (tf.current.scale > 1) {
       constrainPan();
-      applyTransform(true);
+      applyTransform(true, true);
     } else if (tf.current.x !== 0 || tf.current.y !== 0) {
       reset(true);
     }
@@ -356,6 +430,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      stopSettle();
       if (!geometry.current) {
         measureGeometry();
       }
@@ -365,7 +440,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     return () => {
       overlay.removeEventListener("wheel", onWheel);
     };
-  }, [overlayRef, open, src, measureGeometry, zoomAt]);
+  }, [overlayRef, open, src, stopSettle, measureGeometry, zoomAt]);
 
   useEffect(() => {
     globalThis.addEventListener("resize", settleGeometry);
@@ -384,12 +459,18 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const st = g.current;
     if (pointers.current.size === 1) {
+      stopSettle();
       measureGeometry();
       st.startX = e.clientX;
       st.lastX = e.clientX;
       st.startY = e.clientY;
       st.lastY = e.clientY;
       st.moved = 0;
+      st.velX = 0;
+      st.velY = 0;
+      st.sampleAt = performance.now();
+      st.fitX = 0;
+      st.fitY = 0;
       st.panX = tf.current.x;
       st.panY = tf.current.y;
       // Did the press land on the image (vs the backdrop)? Drives tap behaviour:
@@ -410,7 +491,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
         st.pinched = true;
       }
     }
-  }, [imgRef, measureGeometry, unbakeScale, applyTransform]);
+  }, [imgRef, measureGeometry, stopSettle, unbakeScale, applyTransform]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!pointers.current.has(e.pointerId)) {
@@ -444,6 +525,10 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     st.lastX = e.clientX;
     st.lastY = e.clientY;
     st.moved += Math.abs(dx) + Math.abs(dy);
+    const now = performance.now();
+    st.velX = trackPanVelocity(st.velX, dx, now - st.sampleAt);
+    st.velY = trackPanVelocity(st.velY, dy, now - st.sampleAt);
+    st.sampleAt = now;
 
     if (tf.current.scale > 1) {
       // Pan the zoomed image.
@@ -457,12 +542,17 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       // At fit: follow the finger on both axes. The release handler decides
       // whether the dominant axis means navigate (horizontal) or dismiss
       // (vertical). Only vertical travel fades the backdrop.
-      tf.current.x = e.clientX - st.startX;
-      tf.current.y = e.clientY - st.startY;
+      st.fitX = e.clientX - st.startX;
+      st.fitY = e.clientY - st.startY;
+      // A single-figure preview has no neighbour to reach. Resist that axis
+      // rather than sliding the whole figure away only to spring it back.
+      const reachable = st.fitX > 0 ? canPrev : canNext;
+      tf.current.x = reachable ? st.fitX : st.fitX * NO_DESTINATION_RESISTANCE;
+      tf.current.y = st.fitY;
       applyTransform();
-      setBackdrop(0.92 * (1 - Math.min(1, Math.abs(tf.current.y) / 400)));
+      setBackdrop(0.92 * (1 - Math.min(1, Math.abs(st.fitY) / 400)));
     }
-  }, [zoomAt, applyTransform, constrainPan, setBackdrop]);
+  }, [zoomAt, applyTransform, constrainPan, setBackdrop, canPrev, canNext]);
 
   const onPointerEnd = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     pointers.current.delete(e.pointerId);
@@ -474,6 +564,11 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       if (remaining) {
         g.current.lastX = remaining.x;
         g.current.lastY = remaining.y;
+        // The surviving finger starts a fresh pan: a velocity carried over from
+        // the pinch would throw the figure the moment that finger lifts.
+        g.current.velX = 0;
+        g.current.velY = 0;
+        g.current.sampleAt = performance.now();
       }
       return; // still pinching
     }
@@ -499,9 +594,17 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     }
 
     if (tf.current.scale <= 1) {
-      const { x, y } = tf.current;
+      const { fitX: x, fitY: y } = st;
+      // A quick flick commits on speed alone even when it never travelled the
+      // threshold distance — the rule the drawers and the product pager use.
+      // The small-travel guard keeps a jittery tap out of it.
+      const flicked = (velocity: number, travel: number): boolean =>
+        Math.abs(velocity) >= SWIPE_COMMIT_VELOCITY && Math.abs(travel) > TAP_SLOP;
       // Horizontal swipe wins when it dominates → previous / next image.
-      if (Math.abs(x) > Math.abs(y) && Math.abs(x) > SWIPE_NAV_THRESHOLD) {
+      if (
+        Math.abs(x) > Math.abs(y) &&
+        (Math.abs(x) > SWIPE_NAV_THRESHOLD || flicked(st.velX, x))
+      ) {
         const moved = x > 0 ? canPrev : canNext;
         if (moved) {
           if (x > 0) {
@@ -514,8 +617,8 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
         reset(true); // at an end — rubber-band back
         return;
       }
-      // Vertical drag far enough → dismiss.
-      if (Math.abs(y) > DISMISS_THRESHOLD) {
+      // Vertical drag far enough — or thrown fast enough → dismiss.
+      if (Math.abs(y) > DISMISS_THRESHOLD || flicked(st.velY, y)) {
         onClose();
         return;
       }
@@ -544,8 +647,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
             schedulePanLayer(240);
           }
         } else if (tf.current.scale > 1) {
-          constrainPan();
-          applyTransform(true);
+          settlePan(st.velX, st.velY);
         }
       } else {
         onClose();
@@ -554,12 +656,11 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     }
 
     // A short drag that didn't dismiss / navigate → snap back to fit. A zoomed
-    // drag may be resting in the elastic margin, so settle it to hard bounds.
+    // drag coasts its release speed out and settles any elastic margin with it.
     if (tf.current.scale <= 1) {
       reset(true);
     } else {
-      constrainPan();
-      applyTransform(true);
+      settlePan(st.velX, st.velY);
     }
   }, [
     onClose,
@@ -567,6 +668,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     zoomAt,
     constrainPan,
     applyTransform,
+    settlePan,
     bakePanLayer,
     schedulePanLayer,
     canPrev,
@@ -591,7 +693,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       reset(true);
     } else {
       constrainPan();
-      applyTransform(true);
+      applyTransform(true, true);
       setBackdrop(0.92);
     }
   }, [reset, constrainPan, applyTransform, setBackdrop]);

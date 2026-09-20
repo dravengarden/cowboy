@@ -1,10 +1,4 @@
-import {
-  alpha,
-  Box,
-  CircularProgress,
-  Typography,
-  useTheme,
-} from "@mui/material";
+import { Box, CircularProgress, Typography, useTheme } from "@mui/material";
 import OpenInFullRounded from "@mui/icons-material/OpenInFullRounded";
 import type { MermaidConfig } from "mermaid";
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
@@ -201,6 +195,11 @@ export function MermaidDiagram({
             outlineColor: "primary.main",
             outlineOffset: 2,
           },
+          // The whole figure is the tap target, so the corner glyph is only a
+          // hint. It sits over diagram content, so keep it barely there and
+          // only resolve it once a pointer is on the figure.
+          "&:hover [data-mermaid-expand-hint], &:focus-visible [data-mermaid-expand-hint]":
+            { opacity: 0.85 },
         }}
       >
         <Box
@@ -227,7 +226,8 @@ export function MermaidDiagram({
         />
         <Box
           aria-hidden
-          sx={(muiTheme) => ({
+          data-mermaid-expand-hint
+          sx={{
             position: "absolute",
             top: 8,
             right: 8,
@@ -235,13 +235,12 @@ export function MermaidDiagram({
             placeItems: "center",
             width: 32,
             height: 32,
-            border: 1,
-            borderColor: "divider",
             borderRadius: 1.5,
             color: "text.secondary",
-            bgcolor: alpha(muiTheme.palette.background.paper, 0.88),
+            opacity: 0.2,
+            transition: "opacity 120ms ease",
             pointerEvents: "none",
-          })}
+          }}
         >
           <OpenInFullRounded sx={{ fontSize: 18 }} />
         </Box>
