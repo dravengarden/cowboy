@@ -175,6 +175,16 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.18.0 records app-shell 1.1.9: the lightbox commits the neutral
+paint when it swaps the pan layer's layout size. A CSS transition starts from
+the previous style recalculation, so baking (or unbaking) the layout and
+starting an animated transform in the same task interpolated the old transform
+against the new layout — a 3x figure flashed to 9x and eased back over the
+settle, the twitch at the end of a pinch. Only app-shell's version/digest
+changes; it still has no component or Plugin consumers, and no Plugin manifest,
+signed bytes or component pin changes. No Catalog publication or Machine
+upgrade is needed.
+
 Scoped release 3.17.0 records app-shell 1.1.8: the lightbox's baked pan layer
 scales the plate's padding with it, so settling a pinch no longer widens the
 content box and twitches the artwork, and a fullscreen preview takes the iOS

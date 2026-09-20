@@ -40,6 +40,40 @@ Deno.test("the baked pan layer scales the plate's padding with it", () => {
   assert(gestureSource.includes(") / bakedScale.current"));
 });
 
+Deno.test("swapping the layer's layout commits before an animated transform", () => {
+  // A transition starts from the previous style recalculation's value. Baking
+  // (or unbaking) the layout and starting an animated transform in the same
+  // task made the browser interpolate the OLD transform against the NEW layout:
+  // at 3x the figure flashed to 9x and eased back over the settle — the twitch
+  // users see when a pinch ends. Both size swaps repaint neutrally and commit
+  // that paint, so the transition only has the translation left to run.
+  const bake = gestureSource.slice(
+    gestureSource.indexOf("const bakePanLayer"),
+    gestureSource.indexOf("const schedulePanLayer"),
+  );
+  assert(bake.indexOf("paintTransform(false, true)") < bake.indexOf("commitPaint()"));
+  const unbake = gestureSource.slice(
+    gestureSource.indexOf("const unbakeScale"),
+    gestureSource.indexOf("const bakePanLayer"),
+  );
+  assert(unbake.indexOf("bakedScale.current = 1") < unbake.indexOf("paintTransform()"));
+  assert(unbake.indexOf("paintTransform()") < unbake.indexOf("commitPaint()"));
+  // The commit is a forced read, so it must stay on gesture boundaries.
+  assertEquals(
+    gestureSource.split("commitPaint()").length - 1,
+    2,
+    "commitPaint is called by the two size swaps and nowhere else",
+  );
+  // An animated return to fit hands the baked layer back first, or it starts
+  // from a collapsed figure.
+  const reset = gestureSource.slice(
+    gestureSource.indexOf("const reset = useCallback"),
+    gestureSource.indexOf("// Zoom by `factor`"),
+  );
+  assert(reset.indexOf("if (animate) {") < reset.indexOf("unbakeScale();"));
+  assert(reset.indexOf("unbakeScale();") < reset.indexOf('img.style.width = ""'));
+});
+
 Deno.test("a fullscreen preview takes the standalone status bar with it", () => {
   // An iOS standalone PWA paints its status bar from <meta name="theme-color">
   // and that strip sits above the web view, so the backdrop cannot cover it. A
