@@ -37,6 +37,7 @@ import {
   mergeHistoryPage,
 } from "./reviewHistoryPaging";
 import { ReviewChanges } from "./ReviewChanges";
+import { useReviewRecovery } from "./useReviewRecovery";
 
 type RepositorySection = "changes" | "history" | "worktrees";
 
@@ -196,6 +197,8 @@ export function ReviewRepository({
   const [error, setError] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  const reload = useRef<() => void>(() => {});
+  const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
   const graph = useMemo(
     () => buildGitGraph(commits),
     [commits],
@@ -209,22 +212,25 @@ export function ReviewRepository({
   }, [graph]);
   const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
     if (!sessionId) return;
+    cancelRetry();
     setLoading(true);
     setError(false);
     setMoreError(false);
     try {
       const snapshot = await fetchGitRepository(sessionId, signal);
+      settleRetry();
       setRepository(snapshot);
       setCommits(snapshot.commits);
       setTruncated(snapshot.historyTruncated);
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
         setError(true);
+        armRetry(reason);
       }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [sessionId]);
+  }, [armRetry, cancelRetry, sessionId, settleRetry]);
   const loadMore = useCallback(async (): Promise<void> => {
     if (!sessionId || loadingMoreRef.current || !truncated) return;
     const after = historyPageCursor(commits);
@@ -244,6 +250,11 @@ export function ReviewRepository({
       setLoadingMore(false);
     }
   }, [commits, sessionId, truncated]);
+  useEffect(() => {
+    reload.current = (): void => {
+      void load();
+    };
+  }, [load]);
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
