@@ -175,6 +175,14 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.15.0 records app-shell 1.1.6: a zoomed lightbox figure keeps
+`flexShrink: 0`, so the baked pan layer is no longer shrunk back to the viewport
+by the centring flex row — an inline SVG diagram stayed pinned at fit size
+because its automatic flex minimum is zero. Only app-shell's version/digest
+changes; it still has no component or Plugin consumers, and no Plugin manifest,
+signed bytes or component pin changes. No Catalog publication or Machine
+upgrade is needed.
+
 Scoped release 3.14.0 records app-shell 1.1.5: the connection banner's update
 action now downloads the deployed shell through the service worker before it
 reloads and reports whether that finished (`applyUpdate(): Promise<boolean>`),
