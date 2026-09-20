@@ -114,6 +114,8 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         last_progress: Mutex::new(std::time::Instant::now()),
         open_tools: Mutex::new(std::collections::HashSet::new()),
         cgroup: None,
+        backoff: Mutex::new(None),
+        model_label: Mutex::new(None),
     });
     (state, sink)
 }
@@ -681,6 +683,57 @@ fn native_activity_ignores_history_other_sessions_and_unrelated_messages() {
     assert_eq!(observed_status(&other_sink), Status::Running);
 }
 
+fn native_api_error(retry_in_ms: u64) -> ClaudeSdkMessageNotification {
+    ClaudeSdkMessageNotification {
+        session_id: NATIVE.to_owned(),
+        message: json!({
+            "type": "system", "subtype": "api_error", "session_id": NATIVE,
+            "error": {
+                "status": 429,
+                "rateLimits": {
+                    "rateLimitType": "seven_day_overage_included",
+                    "resetsAt": 1_789_884_000_i64
+                }
+            },
+            "retryInMs": retry_in_ms, "retryAttempt": 1, "maxRetries": 300,
+        }),
+    }
+}
+
+/// A rate limit is the provider explaining its own silence, and the SDK states
+/// it once and then says nothing for the whole wait. Cowboy has to hold that
+/// explanation for exactly as long as it is true: from the frame that states it
+/// until the turn proves the request finally landed.
+#[test]
+fn a_rate_limited_turn_holds_the_provider_reason_until_progress_resumes() {
+    let (state, _sink) = activity_fixture("claude-code");
+    *state.model_label.lock() = Some("Fable 5.1".to_owned());
+
+    handle_native_activity(&state, &native_api_error(3_469_283));
+    let reason = match backoff_verdict(state.backoff.lock().as_ref(), Instant::now()) {
+        BackoffVerdict::Hopeless(reason) => reason,
+        other => panic!("an hour-long wait must not read as a wedge or a short one: {other:?}"),
+    };
+    assert!(reason.contains("Fable 5.1"), "{reason}");
+    assert!(reason.contains("seven_day_overage_included"), "{reason}");
+
+    // Another native session's limit is not this turn's silence.
+    state.backoff.lock().take();
+    let mut elsewhere = native_api_error(3_469_283);
+    elsewhere.message["session_id"] = "other".into();
+    handle_native_activity(&state, &elsewhere);
+    assert!(state.backoff.lock().is_none());
+
+    // Streamed progress proves the request landed, so the wait is spent — a
+    // stale reason would otherwise end the next quiet stretch as a rate limit.
+    handle_native_activity(&state, &native_api_error(3_469_283));
+    note_turn_progress(
+        &state,
+        &json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hi"}}),
+    );
+    assert!(state.backoff.lock().is_none());
+}
+
 fn native_background_tasks(tasks: &Value) -> ClaudeSdkMessageNotification {
     ClaudeSdkMessageNotification {
         session_id: NATIVE.to_owned(),
@@ -806,7 +859,8 @@ async fn native_background_resume_restores_busy_after_prompt_response_over_acp()
             new["params"]["_meta"]["claudeCode"]["emitRawSDKMessages"],
             json!([
                 {"type": "system", "subtype": "session_state_changed"},
-                {"type": "system", "subtype": "background_tasks_changed"}
+                {"type": "system", "subtype": "background_tasks_changed"},
+                {"type": "system", "subtype": "api_error"}
             ])
         );
         send_json(
