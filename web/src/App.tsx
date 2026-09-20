@@ -5161,13 +5161,17 @@ function DesktopSettingsSectionTabs({
     );
 }
 
-function DesktopAccountSettingsBlock(): React.JSX.Element {
+/** Desktop mirror of the mobile `account` route. Keep these four panels in
+ *  the same order as that route so Passkey management, client credentials and
+ *  sign out stay reachable from every surface. */
+function DesktopAccountTabContent(): React.JSX.Element {
     return (
-        <DesktopModalBlock label="Account">
-            <Box sx={{ px: 1.5, py: 1 }}>
-                <ProductAccountMenu />
-            </Box>
-        </DesktopModalBlock>
+        <Stack spacing={2}>
+            <ProductSessionCapacityPanel />
+            <ProductAccountSecurity />
+            <ProductDevicesPanel hideWhenEmpty />
+            <ProductAccountMenu />
+        </Stack>
     );
 }
 
@@ -6464,9 +6468,8 @@ function SettingsShell({
                                             shortcutsAvailable={settingsShortcutsAvailable}
                                         />
                                     )}
-                                <DesktopAccountSettingsBlock />
                             </Stack>
-                        ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent providerIntent={initialProviderIntent} /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "info" ? (
+                        ) : renderedTab === "notifications" ? <NotificationSettingsContent /> : renderedTab === "providers" ? <ProvidersContent providerIntent={initialProviderIntent} /> : renderedTab === "machines" ? <MachinesContent /> : renderedTab === "account" ? <DesktopAccountTabContent /> : renderedTab === "info" ? (
                             <InfoContent desktop />
                         ) : <UsageLogs />}
                     </Box>
