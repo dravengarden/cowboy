@@ -35,39 +35,26 @@ async fn read_inner(
     headers: HeaderMap,
     request: Request,
 ) -> Result<ReadResponse, StatusCode> {
+    let deadline = tokio::time::Instant::now() + registry::JOB_TIMEOUT;
     request.validate().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let approval = approval(&state, &authenticated, &headers)?;
+    let approval = Arc::new(approval(&state, &authenticated, &headers)?);
     let owners = Arc::clone(&state.code_buffers);
     let job = owners.admit_read(&authenticated.principal.user_id, &id)?;
-    let worker_state = state.clone();
-    let deadline = tokio::time::Instant::now() + registry::JOB_TIMEOUT;
-    let receiver = owners.spawn(async move {
-        check_read(&worker_state, &approval, &job.binding).await?;
-        remote::read_support(
-            &worker_state.machine_control,
-            &job.binding.connection,
-            request.support_kind(),
-        )
-        .await
-        .map_err(|_| StatusCode::NOT_IMPLEMENTED)?;
-        check_read(&worker_state, &approval, &job.binding).await?;
-        let reply = remote::read(
-            &worker_state.machine_control,
-            &job.binding.connection,
-            &job.binding.native,
-            request,
-        )
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-        Ok((reply, job, approval))
-    })?;
+    let receiver = owners.spawn(run_read(
+        state.clone(),
+        Arc::clone(&approval),
+        job,
+        request,
+        deadline,
+    ))?;
     tokio::time::timeout_at(deadline, async {
-        let (reply, job, approval) = receiver
+        let result = receiver
             .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
-        // Session removal/ABA, account changes or revoked credentials discard
-        // the result at the response boundary. The borrow and original approval
-        // survive delivery from the owned task; a dropped observer grants nothing.
+            .unwrap_or(Err(StatusCode::SERVICE_UNAVAILABLE));
+        // Keep the original approval independently of task success. A failed
+        // support/read response cannot bypass original-user authorization.
+        check_user(&state, &approval, &authenticated.principal.user_id).await?;
+        let (reply, job) = result?;
         check_read(&state, &approval, &job.binding).await?;
         Ok(ReadResponse {
             api_version: 1,
@@ -78,6 +65,47 @@ async fn read_inner(
     })
     .await
     .map_err(|_| StatusCode::GATEWAY_TIMEOUT)?
+}
+
+async fn run_read(
+    state: Context,
+    approval: Arc<OperatorApproval>,
+    job: registry::ReadJob,
+    request: Request,
+    deadline: tokio::time::Instant,
+) -> Result<
+    (
+        crate::code_buffer_read::Reply<remote::NativeRef>,
+        registry::ReadJob,
+    ),
+    StatusCode,
+> {
+    // Cancellation drops only the observer; the actual borrow drains by this
+    // same original deadline, including both support and native read waits.
+    tokio::time::timeout_at(deadline, async {
+        check_read(&state, &approval, &job.binding).await?;
+        check_deadline(deadline)?;
+        remote::read_support(
+            &state.machine_control,
+            &job.binding.connection,
+            request.support_kind(),
+        )
+        .await
+        .map_err(|_| StatusCode::NOT_IMPLEMENTED)?;
+        check_read(&state, &approval, &job.binding).await?;
+        check_deadline(deadline)?;
+        let reply = remote::read(
+            &state.machine_control,
+            &job.binding.connection,
+            &job.binding.native,
+            request,
+        )
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        Ok((reply, job))
+    })
+    .await
+    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
 }
 
 async fn check_read(

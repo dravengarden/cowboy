@@ -35,11 +35,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Box, IconButton, SvgIcon, useTheme } from "@mui/material";
 import { FloatingActionIsland } from "./bottom-sheet.tsx";
+import { setStatusBarColor } from "./detent-sheet.tsx";
 import {
   type LightboxMediaElement,
   useLightboxGestures,
 } from "./image-lightbox-gestures.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
+
+// The frosted-dark-glass backdrop. Also the colour the standalone status bar
+// takes while the overlay is up (see the theme-color effect below).
+const BACKDROP_COLOR = "#0b0b0e";
 
 interface GalleryMediaBase {
   alt: string;
@@ -129,12 +134,60 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     }
     wasOpen.current = open;
   }, [open]);
+  // The status bar sits ABOVE the web view in an iOS standalone PWA (status-bar
+  // style `default`), so a fixed, fullscreen backdrop cannot cover it: a light
+  // app kept a bright band over the near-black preview. Three writes reach that
+  // strip, and it takes all of them — `theme-color` is what a browser and the
+  // sheets use, while a standalone iPhone fills the strip from the DOCUMENT's
+  // own background and takes its glyph colour from the document colour scheme
+  // (the same pair `applyThemeColor` and CssBaseline own for the app). Each is
+  // snapshotted and handed back on close; none of them moves layout or the
+  // visual viewport (see the file header on what this overlay may touch).
+  useEffect(() => {
+    const doc = globalThis.document;
+    const root = doc?.documentElement;
+    if (!open || !doc || !root) {
+      return undefined;
+    }
+    const previousBarColor = doc.head
+      ?.querySelector('meta[name="theme-color"]')
+      ?.getAttribute("content");
+    const previousScheme = root.style.colorScheme;
+    const previousRootBackground = root.style.backgroundColor;
+    const previousBodyBackground = doc.body?.style.backgroundColor ?? "";
+    setStatusBarColor(BACKDROP_COLOR);
+    root.style.colorScheme = "dark";
+    root.style.backgroundColor = BACKDROP_COLOR;
+    if (doc.body) {
+      doc.body.style.backgroundColor = BACKDROP_COLOR;
+    }
+    return () => {
+      if (previousBarColor !== null && previousBarColor !== undefined) {
+        setStatusBarColor(previousBarColor);
+      }
+      root.style.colorScheme = previousScheme;
+      root.style.backgroundColor = previousRootBackground;
+      if (doc.body) {
+        doc.body.style.backgroundColor = previousBodyBackground;
+      }
+    };
+  }, [open]);
   const current = open && index !== null ? images[index] : undefined;
   const mediaKey = current?.kind === "inline-svg"
     ? current.markup
     : current?.src ?? null;
   const canPrev = open && index !== null && index > 0;
   const canNext = open && index !== null && index < images.length - 1;
+  // Per-image plate: a self-themed figure (mermaid) is already correct for the
+  // mode, so it's never inverted and gets a mode-matched plate (a subtle dark
+  // card in dark mode, white in light); a fixed-colour figure keeps the white
+  // plate + dark-mode invert.
+  const selfThemed = current?.themed === true;
+  const invertPlate = plate && !selfThemed && isDarkMode;
+  let plateBg = "transparent";
+  if (plate) {
+    plateBg = selfThemed && isDarkMode ? "rgba(255, 255, 255, 0.06)" : "#ffffff";
+  }
 
   const goPrev = useCallback(() => {
     if (index !== null && index > 0) {
@@ -168,12 +221,18 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     const svg = inlineSvgHostRef.current?.querySelector(":scope > svg");
     if (!(svg instanceof SVGSVGElement)) return undefined;
     if (!svg.hasAttribute("aria-label")) svg.setAttribute("aria-label", current.alt);
+    // A host renderer paints its own background on the SVG root — Mermaid's
+    // markup carries an inline `background-color` so the in-page copy sits on
+    // the page surface — and an inline style beats this component's class rule.
+    // Write the plate straight onto the element, or a light figure loses its
+    // white plate and its dark strokes disappear into the near-black backdrop.
+    svg.style.backgroundColor = plateBg;
     imgRef.current = svg;
     onImageLoad();
     return () => {
       if (imgRef.current === svg) imgRef.current = null;
     };
-  }, [current, open, onImageLoad]);
+  }, [current, open, onImageLoad, plateBg]);
 
   // Key shortcuts while open. No body-scroll lock — see the file header.
   useEffect(() => {
@@ -199,17 +258,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
     return null;
   }
 
-  // Per-image plate: a self-themed figure (mermaid) is already correct for the
-  // mode, so it's never inverted and gets a mode-matched plate (a subtle dark
-  // card in dark mode, white in light); a fixed-colour figure keeps the white
-  // plate + dark-mode invert.
-  const selfThemed = current.themed === true;
-  const invertPlate = plate && !selfThemed && isDarkMode;
-  let plateBg = "transparent";
-  if (plate) {
-    plateBg = selfThemed && isDarkMode ? "rgba(255, 255, 255, 0.06)" : "#ffffff";
-  }
-  const previousIcon = <ControlIcon path="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />;
+  const previousIcon =<ControlIcon path="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />;
   const nextIcon = <ControlIcon path="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />;
   const zoomOutIcon = <ControlIcon path="M19 13H5v-2h14z" />;
   const zoomInIcon = <ControlIcon path="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z" />;
@@ -238,7 +287,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
         // the table), styled to read as a lit pane of glass rather than flat
         // black — a near-black surface + a soft top sheen + a blur/saturate that
         // frosts the thin edges around the grab handle / controls. Fade-in 0→1.
-        backgroundColor: "#0b0b0e",
+        backgroundColor: BACKDROP_COLOR,
         backgroundImage: "radial-gradient(130% 90% at 50% 0%, rgba(255,255,255,0.06), rgba(255,255,255,0) 55%)",
         backdropFilter: "blur(28px) saturate(160%)",
         WebkitBackdropFilter: "blur(28px) saturate(160%)",
@@ -268,6 +317,15 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
                 maxHeight: "100%",
                 width: "auto",
                 height: "auto",
+                // Zooming bakes the settled scale into the element's own width /
+                // height (see the gestures' pan layer). An inline SVG is not a
+                // replaced element, so its automatic flex minimum is zero and
+                // this centred flex item would shrink straight back to the
+                // viewport — the zoom springing back as soon as it settled. An
+                // <img> survives that on its intrinsic size; the SVG needs the
+                // shrink switched off. Fit size still comes from max-width /
+                // max-height, which apply regardless.
+                flexShrink: 0,
                 touchAction: "none",
                 userSelect: "none",
                 WebkitUserSelect: "none",
@@ -295,6 +353,10 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
               maxWidth: "100%",
               maxHeight: "100%",
               objectFit: "contain",
+              // Same contract as the inline SVG above: a zoomed image is laid
+              // out at its baked size and must never be shrunk back by the
+              // centring flex row.
+              flexShrink: 0,
               touchAction: "none",
               userSelect: "none",
               WebkitUserSelect: "none",

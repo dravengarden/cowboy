@@ -195,8 +195,10 @@ impl Proxy {
                     "releaseBufferLease",
                     "installationStep",
                     "codeSyncApply",
+                    "codeSyncQuery",
                     "codeSyncRetire",
                     "codeNavigationExecute",
+                    "codeNavigationQuery",
                     "codeNavigationDestination",
                     "codeNavigationRelease",
                 ]

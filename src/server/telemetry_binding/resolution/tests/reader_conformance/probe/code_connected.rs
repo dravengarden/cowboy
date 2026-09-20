@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 mod budget;
 mod effect_authority;
 mod exercise;
+mod failure_authority;
 mod fixture;
 mod installation;
 mod language_reads;
@@ -17,6 +18,10 @@ mod synchronization;
 
 const SESSION: &str = "sess-901";
 const TEXT: &str = "a🙂z\nowned native buffer\n";
+// Seven discarded real replies must each exhaust the production 40-second
+// command timeout. Preserve the prior 110-second allowance for other work;
+// this harness limit never changes a product timeout or shortens a fault.
+const RUN_DEADLINE: Duration = Duration::from_secs(7 * 40 + 110);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -205,7 +210,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v10",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v11",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -237,7 +242,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     };
     let result = run(&mut receipt).await;
     receipt.failure = result.err();
-    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 28;
+    receipt.accepted = result.is_ok() && receipt.cleanup && receipt.checks.len() == 31;
     write_receipt(&path, &receipt)?;
     ensure!(
         receipt.accepted,
@@ -280,7 +285,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         http: Http::with_timeout(address, Duration::from_secs(100))?,
     };
     drop(listener);
-    let result = tokio::time::timeout(Duration::from_secs(270), async {
+    let result = tokio::time::timeout(RUN_DEADLINE, async {
         receipt.stage = "authentication";
         pair.start_controller().await?;
         pair.http

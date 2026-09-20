@@ -279,75 +279,92 @@ async fn operate(
 ) -> Response {
     let deadline = Instant::now() + super::registry::JOB_TIMEOUT;
     let future = async {
-        let approval = approval(&context, &authenticated, &headers)?;
+        let approval = Arc::new(approval(&context, &authenticated, &headers)?);
         check_user(&context, &approval, &authenticated.principal.user_id).await?;
         if action.acquisition() && !context.code_navigation_admission {
             return Err(StatusCode::NOT_IMPLEMENTED);
         }
-        match context.code_buffers.navigations.admit(
-            &context.code_buffers,
-            &authenticated.principal.user_id,
-            &id,
-            action.clone(),
-        )? {
-            registry::Admission::Saved(snapshot, binding) => {
-                if let Some(binding) = binding {
-                    check(&context, &approval, &binding, action.acquisition()).await?;
+        let result = async {
+            match context.code_buffers.navigations.admit(
+                &context.code_buffers,
+                &authenticated.principal.user_id,
+                &id,
+                action.clone(),
+            )? {
+                registry::Admission::Saved(snapshot, binding) => {
+                    if let Some(binding) = binding {
+                        check(&context, &approval, &binding, action.acquisition()).await?;
+                    }
+                    Ok(*snapshot)
                 }
-                Ok(*snapshot)
-            }
-            registry::Admission::Run(job) => {
-                let worker = context.clone();
-                let receiver = context.code_buffers.spawn(async move {
-                    tokio::time::timeout_at(deadline, async {
-                        check(&worker, &approval, &job.binding, job.action.acquisition()).await?;
-                        let _source = if job.action == Action::Execute {
-                            let source = worker
-                                .code_buffers
-                                .navigation_source(&job.binding.user, &job.resource)?;
-                            if source.binding.native != job.binding.native
-                                || !source.binding.connection.same(&job.binding.connection)
-                            {
-                                return Err(StatusCode::CONFLICT);
-                            }
-                            Some(source)
-                        } else {
-                            None
-                        };
-                        job.begin()?;
-                        let observed = worker
-                            .machine_control
-                            .code_buffer_navigation(
-                                &job.binding.connection,
-                                NativeRequest {
-                                    service_id: worker.service_id.clone(),
-                                    machine_id: job.binding.scope.machine_id().to_owned(),
-                                    action: job.native_action(),
-                                },
-                            )
-                            .await
-                            .map_err(|_| StatusCode::BAD_GATEWAY)?;
-                        let snapshot = job.finish(&worker.code_buffers, observed)?;
-                        Ok((snapshot, approval, job))
-                    })
-                    .await
-                    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
-                })?;
-                let (snapshot, approval, job) = receiver
-                    .await
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
-                // Save effects even after revocation, but disclose no response
-                // without rechecking the original request's credential.
-                check(&context, &approval, &job.binding, action.acquisition()).await?;
-                Ok(snapshot)
+                registry::Admission::Run(job) => {
+                    let receiver = context.code_buffers.spawn(run_job(
+                        context.clone(),
+                        Arc::clone(&approval),
+                        *job,
+                        deadline,
+                    ))?;
+                    let (snapshot, job) = receiver
+                        .await
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
+                    // Save effects even after revocation, but disclose no response
+                    // without rechecking the original request's credential.
+                    check(&context, &approval, &job.binding, action.acquisition()).await?;
+                    Ok(snapshot)
+                }
             }
         }
+        .await;
+        check_user(&context, &approval, &authenticated.principal.user_id).await?;
+        result
     };
     response(
         tokio::time::timeout_at(deadline, future)
             .await
             .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT)),
     )
+}
+
+async fn run_job(
+    context: Context,
+    approval: Arc<OperatorApproval>,
+    job: registry::Job,
+    deadline: Instant,
+) -> Result<(Snapshot, registry::Job), StatusCode> {
+    tokio::time::timeout_at(deadline, async {
+        check(&context, &approval, &job.binding, job.action.acquisition()).await?;
+        let _source = if job.action == Action::Execute {
+            let source = context
+                .code_buffers
+                .navigation_source(&job.binding.user, &job.resource)?;
+            if source.binding.native != job.binding.native
+                || !source.binding.connection.same(&job.binding.connection)
+            {
+                return Err(StatusCode::CONFLICT);
+            }
+            Some(source)
+        } else {
+            None
+        };
+        check_deadline(deadline)?;
+        job.begin()?;
+        let observed = context
+            .machine_control
+            .code_buffer_navigation(
+                &job.binding.connection,
+                NativeRequest {
+                    service_id: context.service_id.clone(),
+                    machine_id: job.binding.scope.machine_id().to_owned(),
+                    action: job.native_action(),
+                },
+            )
+            .await
+            .map_err(|_| StatusCode::BAD_GATEWAY)?;
+        let snapshot = job.finish(&context.code_buffers, observed)?;
+        Ok((snapshot, job))
+    })
+    .await
+    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
 }
 
 #[cfg(test)]

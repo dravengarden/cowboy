@@ -30,6 +30,68 @@ Deno.test("Mermaid lightbox preserves HTML labels as inline SVG", () => {
   assert(gestureSource.includes("HTMLImageElement | SVGSVGElement"));
 });
 
+Deno.test("a zoomed diagram survives the lightbox's centring flex row", () => {
+  // Zooming bakes the settled scale into the element's own width/height. An
+  // inline SVG is not replaced content, so its automatic flex minimum is zero
+  // and the centred item shrinks straight back to the viewport — the zoom
+  // visibly springing back the moment it settled. Both media keep flexShrink
+  // off; fit sizing still comes from max-width / max-height.
+  assert(
+    gestureSource.includes(
+      "img.style.width = `${box.imageWidth * tf.current.scale}px`",
+    ),
+  );
+  const svgBlock = lightboxSource.slice(
+    lightboxSource.indexOf('"& > svg": {'),
+    lightboxSource.indexOf("dangerouslySetInnerHTML={{ __html: current.markup }}"),
+  );
+  assert(svgBlock.includes("flexShrink: 0"));
+  assert(svgBlock.includes('maxWidth: "100%"'));
+  const imgBlock = lightboxSource.slice(
+    lightboxSource.indexOf("<img"),
+    lightboxSource.indexOf("One bottom dock holds every control"),
+  );
+  assert(imgBlock.includes("flexShrink: 0"));
+});
+
+Deno.test("dark diagrams are legible inline and enlarged", () => {
+  // Mermaid's stock dark palette is near-black on near-black. The overrides
+  // lift node fills, borders, edges, and label text off the surface, and the
+  // in-page figure gets the same plate the lightbox gives a self-themed image.
+  assert(mermaidSource.includes('theme: mode === "dark" ? "dark" : "neutral"'));
+  assert(
+    mermaidSource.includes(
+      '...(mode === "dark" ? { themeVariables: DARK_THEME_VARIABLES } : {})',
+    ),
+  );
+  for (
+    const key of [
+      "mainBkg",
+      "nodeBorder",
+      "nodeTextColor",
+      "lineColor",
+      "clusterBkg",
+      "clusterBorder",
+      "edgeLabelBackground",
+    ]
+  ) {
+    assert(
+      mermaidSource.includes(`${key}:`),
+      `dark theme variable ${key} is missing`,
+    );
+  }
+  assert(mermaidSource.includes("bgcolor: DARK_SURFACE"));
+  // The prepared markup carries its own inline background so the in-page copy
+  // sits on the page surface. An inline style beats the lightbox's class rule,
+  // so the plate is written onto the element — otherwise a light diagram keeps
+  // a transparent background and its dark strokes vanish on the backdrop.
+  assert(mermaidSource.includes('root.style.backgroundColor = "transparent"'));
+  assert(lightboxSource.includes("svg.style.backgroundColor = plateBg"));
+  // A self-themed figure is never inverted — the palette above is already
+  // mode-correct, so a second correction would flip it back to light.
+  assert(lightboxSource.includes("const invertPlate = plate && !selfThemed && isDarkMode"));
+});
+
 Deno.test("Mermaid failures return to the ordinary Markdown code renderer", () => {
   assert(mermaidSource.includes("data-mermaid-source-fallback"));
   const branchStart = markdownSource.indexOf(

@@ -236,43 +236,60 @@ async fn operate(
 ) -> Response {
     let deadline = Instant::now() + super::registry::JOB_TIMEOUT;
     let future = async {
-        let approval = approval(&context, &authenticated, &headers)?;
+        let approval = Arc::new(approval(&context, &authenticated, &headers)?);
         check_user(&context, &approval, &authenticated.principal.user_id).await?;
-        match context.code_buffers.synchronizations.admit(
-            &authenticated.principal.user_id,
-            &id,
-            action,
-        )? {
-            registry::Admission::Saved(snapshot) => Ok(snapshot),
-            registry::Admission::Run(job) => {
-                let worker = context.clone();
-                let receiver = context.code_buffers.spawn(async move {
-                    // The original request's deadline includes authority waits;
-                    // an HTTP observer disappearing does not cancel this task.
-                    tokio::time::timeout_at(deadline, async {
-                        check(&worker, &approval, &job.binding, action).await?;
-                        job.begin()?;
-                        let snapshot = dispatch(&worker, &job).await?;
-                        Ok((snapshot, approval, job))
-                    })
-                    .await
-                    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
-                })?;
-                let (snapshot, approval, job) = receiver
-                    .await
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
-                // Record exact effects even if the original permission expires,
-                // but do not disclose their response under revoked authority.
-                check(&context, &approval, &job.binding, action).await?;
-                Ok(snapshot)
+        let result = async {
+            match context.code_buffers.synchronizations.admit(
+                &authenticated.principal.user_id,
+                &id,
+                action,
+            )? {
+                registry::Admission::Saved(snapshot) => Ok(snapshot),
+                registry::Admission::Run(job) => {
+                    let receiver = context.code_buffers.spawn(run_job(
+                        context.clone(),
+                        Arc::clone(&approval),
+                        *job,
+                        deadline,
+                    ))?;
+                    let (snapshot, job) = receiver
+                        .await
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)??;
+                    // Record exact effects even if the original permission expires,
+                    // but do not disclose their response under revoked authority.
+                    check(&context, &approval, &job.binding, action).await?;
+                    Ok(snapshot)
+                }
             }
         }
+        .await;
+        // Errors and saved snapshots must cross the same original-credential
+        // boundary as successful replies. This never modifies effect evidence.
+        check_user(&context, &approval, &authenticated.principal.user_id).await?;
+        result
     };
     response(
         tokio::time::timeout_at(deadline, future)
             .await
             .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT)),
     )
+}
+
+async fn run_job(
+    context: Context,
+    approval: Arc<OperatorApproval>,
+    job: registry::Job,
+    deadline: Instant,
+) -> Result<(Snapshot, registry::Job), StatusCode> {
+    tokio::time::timeout_at(deadline, async {
+        check(&context, &approval, &job.binding, job.action).await?;
+        check_deadline(deadline)?;
+        job.begin()?;
+        let snapshot = dispatch(&context, &job).await?;
+        Ok((snapshot, job))
+    })
+    .await
+    .unwrap_or(Err(StatusCode::GATEWAY_TIMEOUT))
 }
 
 async fn dispatch(context: &Context, job: &registry::Job) -> Result<Snapshot, StatusCode> {

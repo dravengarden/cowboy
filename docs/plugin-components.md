@@ -175,6 +175,50 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.19.0 records app-shell 1.1.10: a fullscreen preview also takes
+the document background and colour scheme to its backdrop while it is open. The
+iOS standalone status bar sits above the web view and a light iPhone PWA fills
+that strip from the document, not from `theme-color`, so the bar stayed white
+over a near-black preview; all three writes are snapshotted and restored on
+close. Only app-shell's version/digest changes; it still has no component or
+Plugin consumers, and no Plugin manifest, signed bytes or component pin
+changes. No Catalog publication or Machine upgrade is needed.
+
+Scoped release 3.18.0 records app-shell 1.1.9: the lightbox commits the neutral
+paint when it swaps the pan layer's layout size. A CSS transition starts from
+the previous style recalculation, so baking (or unbaking) the layout and
+starting an animated transform in the same task interpolated the old transform
+against the new layout — a 3x figure flashed to 9x and eased back over the
+settle, the twitch at the end of a pinch. Only app-shell's version/digest
+changes; it still has no component or Plugin consumers, and no Plugin manifest,
+signed bytes or component pin changes. No Catalog publication or Machine
+upgrade is needed.
+
+Scoped release 3.17.0 records app-shell 1.1.8: the lightbox's baked pan layer
+scales the plate's padding with it, so settling a pinch no longer widens the
+content box and twitches the artwork, and a fullscreen preview takes the iOS
+standalone status bar to its backdrop colour (through the sheets' own
+`setStatusBarColor`, now shared) and restores the app's colour on close. Only
+app-shell's version/digest changes; it still has no component or Plugin
+consumers, and no Plugin manifest, signed bytes or component pin changes. No
+Catalog publication or Machine upgrade is needed.
+
+Scoped release 3.16.0 records app-shell 1.1.7: the lightbox writes its plate
+onto an inline-SVG figure's own element. A host renderer paints a background on
+the SVG root, and that inline style beat the component's class rule, so a light
+figure lost its white plate and its dark strokes disappeared into the near-black
+backdrop. Only app-shell's version/digest changes; it still has no component or
+Plugin consumers, and no Plugin manifest, signed bytes or component pin changes.
+No Catalog publication or Machine upgrade is needed.
+
+Scoped release 3.15.0 records app-shell 1.1.6: a zoomed lightbox figure keeps
+`flexShrink: 0`, so the baked pan layer is no longer shrunk back to the viewport
+by the centring flex row — an inline SVG diagram stayed pinned at fit size
+because its automatic flex minimum is zero. Only app-shell's version/digest
+changes; it still has no component or Plugin consumers, and no Plugin manifest,
+signed bytes or component pin changes. No Catalog publication or Machine
+upgrade is needed.
+
 Scoped release 3.14.0 records app-shell 1.1.5: the connection banner's update
 action now downloads the deployed shell through the service worker before it
 reloads and reports whether that finished (`applyUpdate(): Promise<boolean>`),

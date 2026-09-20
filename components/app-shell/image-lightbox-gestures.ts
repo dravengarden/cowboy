@@ -81,6 +81,7 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       viewportHeight: number;
       imageWidth: number;
       imageHeight: number;
+      padding: number;
     } | null
   >(null);
   const g = useRef({
@@ -115,11 +116,19 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     const imageHeight = img instanceof HTMLImageElement
       ? img.offsetHeight / bakedScale.current
       : mediaRect.height / tf.current.scale;
+    // The plate's padding is part of the element's border box, so a transform
+    // scales it along with the artwork while a baked layer would keep it at its
+    // CSS size. Recover the unscaled value (a baked layer already carries
+    // `padding × bakedScale`) so the bake can scale it to match.
+    const padding = Number.parseFloat(
+      globalThis.getComputedStyle(img).paddingTop || "0",
+    ) / bakedScale.current;
     geometry.current = {
       centerX: rect.left + overlay.clientWidth / 2,
       centerY: rect.top + overlay.clientHeight / 2,
       viewportWidth: overlay.clientWidth,
       viewportHeight: overlay.clientHeight,
+      padding: Number.isFinite(padding) ? padding : 0,
       // SVG has no offsetWidth/offsetHeight. Its client rect includes the
       // current transform, so divide out the logical scale to recover the
       // base layout size. Keep the established offset geometry for <img>.
@@ -177,6 +186,18 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     paintTransform(animate, panLayer);
   }, [paintTransform]);
 
+  // A transition starts from the computed style of the LAST style recalculation.
+  // Swapping the layer's layout size (bake / unbake) and then starting an
+  // animated transform in the same task therefore interpolates the old
+  // transform against the new layout — at 2x the figure flashes to 4x (or
+  // collapses to fit) and rides that back over the whole settle. That is the
+  // twitch at the end of a pinch. Committing the neutral, transition-less paint
+  // first makes it the transition's starting value. One forced read per gesture
+  // boundary; never inside a move.
+  const commitPaint = useCallback(() => {
+    imgRef.current?.getBoundingClientRect();
+  }, [imgRef]);
+
   const unbakeScale = useCallback(() => {
     const img = imgRef.current;
     const box = geometry.current;
@@ -187,8 +208,13 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     img.style.height = `${box.imageHeight}px`;
     img.style.maxWidth = "100%";
     img.style.maxHeight = "100%";
+    img.style.padding = "";
     bakedScale.current = 1;
-  }, [imgRef]);
+    // Repaint at the scale the layer was carrying: same pixels on screen, now
+    // expressed as a transform again, and committed before any animation.
+    paintTransform();
+    commitPaint();
+  }, [imgRef, paintTransform, commitPaint]);
 
   const bakePanLayer = useCallback(() => {
     const img = imgRef.current;
@@ -204,9 +230,15 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
     img.style.height = `${box.imageHeight * tf.current.scale}px`;
     img.style.maxWidth = "none";
     img.style.maxHeight = "none";
+    // Scale the plate's padding with the layer. Leaving it at its CSS size
+    // keeps the border box right but widens the content box, so the artwork
+    // jumped outwards (and up-left) on the frame the bake landed — the visible
+    // twitch at the end of a pinch.
+    img.style.padding = `${box.padding * tf.current.scale}px`;
     bakedScale.current = tf.current.scale;
     paintTransform(false, true);
-  }, [imgRef, paintTransform]);
+    commitPaint();
+  }, [imgRef, paintTransform, commitPaint]);
 
   const schedulePanLayer = useCallback((delay = 0) => {
     if (promoteTimer.current !== 0) {
@@ -230,18 +262,24 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       clearTimeout(promoteTimer.current);
       promoteTimer.current = 0;
     }
+    // An animated return has to start from what is on screen, so give a baked
+    // layer back to CSS sizing (repainted and committed) before the settle.
+    if (animate) {
+      unbakeScale();
+    }
     const img = imgRef.current;
     if (img) {
       img.style.width = "";
       img.style.height = "";
       img.style.maxWidth = "100%";
       img.style.maxHeight = "100%";
+      img.style.padding = "";
     }
     bakedScale.current = 1;
     tf.current = { scale: 1, x: 0, y: 0 };
     applyTransform(animate);
     setBackdrop(0.92);
-  }, [applyTransform, setBackdrop]);
+  }, [imgRef, unbakeScale, applyTransform, setBackdrop]);
 
   // Zoom by `factor` keeping the viewport point (cx, cy) stationary.
   const zoomAt = useCallback((opts: {
@@ -452,7 +490,8 @@ export function useLightboxGestures(params: LightboxGesturesParams): LightboxGes
       // Convert to full-resolution CSS dimensions before any release
       // animation. The elastic correction below then animates only a scale(1)
       // translation, so lifting the fingers cannot expose a blurry scaled
-      // texture for the duration of the snap-back.
+      // texture for the duration of the snap-back. The bake commits its own
+      // paint, so that translation is all this transition has to interpolate.
       bakePanLayer();
       constrainPan();
       applyTransform(true, true);

@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  twenty-eight checks, including live authenticated Code installation into an empty
+  thirty-one checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v10; historical
+  and separately completed retirement. Require receipt schema v11; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -381,6 +381,16 @@ In addition, require all applicable Provider gates below:
   explicitly queries/releases the original native owner, and observes terminal
   Release without resending it. Historical v9 does not accept this extension;
   response refusal cannot discard effect evidence or claim compensation.
+  Continuation failure/deadline changes additionally require v11 checks 29–31:
+  actual owned-read, synchronization Query and navigation Query replies lost
+  after original-login logout, normal transport timeout, `401/no-store/no-ETag`,
+  no revoked-login dispatch and independent original-ID observation without
+  replay. Keep all earlier cancellation/lost Apply/Execute cases intact. Require
+  source no-dispatch/no-consumption tests at an already-expired deadline and
+  owned-read drain after observer cancellation across both native waits under
+  the original total budget. Historical v10 does not accept this extension;
+  timer expiry is not proof of remote cancellation or native cleanup. See
+  `docs/plugin-continuation-finalization.md`.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not

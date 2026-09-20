@@ -45,7 +45,12 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-Twenty-eight checks cover (receipt schema `...code-buffer-connected-conformance/v10`,
+The v11 harness has a 390-second overall execution limit: seven deliberately
+lost replies each require the normal 40-second product timeout, plus the existing
+110-second allowance for other work. This test-only limit does not extend any
+Controller, Machine or native timeout, or shorten any fault observation.
+
+Thirty-one checks cover (receipt schema `...code-buffer-connected-conformance/v11`,
 requiring Machine protocol 21, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -141,6 +146,19 @@ Historical v3 receipts cover only the first eleven checks:
     not dispatch, and Open cannot revive that ID. Historical v9 does not accept
     these three checks. Denying a response is not native undo or independently
     authorized post-effect recovery; no outcome is dropped to simulate it.
+29. Owned content read: hold its actual reply, revoke only its disposable login,
+    discard the reply and wait the normal 40-second transport timeout. Require
+    `401/no-store/no-ETag`, no further dispatch from the revoked login and an
+    independent original-user read on the same native owner without reopening.
+30. After the existing lost Apply, repeat the same failed-response authority
+    check during original-ID synchronization Query. Unknown stays fenced until
+    the independent login explicitly queries the exact applied content; Apply
+    is never repeated and original retirement checks remain intact.
+31. After the existing lost Execute, repeat during original-ID navigation Query.
+    The independent original login observes the retained locations without
+    repeating Execute or the LSP query. Historical v10 does not accept these
+    three failed-response checks or the source-only deadline edge tests in
+    [continuation finalization](plugin-continuation-finalization.md).
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills
@@ -202,3 +220,9 @@ adds v10 checks 26–28, rejects the old artifact's post-logout Open reply and
 accepts two complete 28-check runs against the supplied previous and current
 Machine artifacts. Original effects remain recorded before response refusal;
 Controller-only activation is separately observed with all 16 workers retained.
+The [continuation-finalization rollout](releases/plugin-continuation-finalization-2026-09-19.md)
+adds v11 checks 29–31, rejects the old artifact's failed owned read after logout,
+and accepts two complete 31-check chains with seven actual lost-reply timeouts.
+It records the initial insufficient test-budget failure separately from those
+successful runs. Final-source Controller activation retains all 14 workers in
+its own observed window; no Machine, Web or Plugin generation is replaced.

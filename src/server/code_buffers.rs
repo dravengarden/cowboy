@@ -250,6 +250,15 @@ async fn check_user(
     Ok(())
 }
 
+/// A ready authority future must not beat an already-expired timeout's poll.
+/// All stages use the original deadline; ownership handoff cannot renew it.
+fn check_deadline(deadline: tokio::time::Instant) -> Result<(), StatusCode> {
+    if tokio::time::Instant::now() >= deadline {
+        return Err(StatusCode::GATEWAY_TIMEOUT);
+    }
+    Ok(())
+}
+
 async fn open(
     State(state): State<Context>,
     Path(id): Path<String>,
@@ -340,9 +349,7 @@ async fn run_job(
         }
         // Do not rely on timer poll ordering when authority becomes ready at
         // the deadline. Expiry cannot start a fresh native effect.
-        if tokio::time::Instant::now() >= deadline {
-            return Err(StatusCode::GATEWAY_TIMEOUT);
-        }
+        check_deadline(deadline)?;
         job.begin()?;
         let observed = remote::request(
             &state.machine_control,
