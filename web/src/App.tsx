@@ -241,7 +241,14 @@ import {
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
 } from "@cowboy/app-shell";
+import { markUpdateSwapping } from "./updateAttempt";
 import { ConfirmSheet, Sheet } from "./Sheet";
+
+// Desktop has no deployed-version string to name, only the fact of the swap.
+// Module scope keeps the prop identity stable across renders.
+function markDesktopUpdateSwapping(): void {
+    markUpdateSwapping(globalThis.localStorage, "unknown", Date.now());
+}
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
@@ -3485,6 +3492,7 @@ export function App({
                         store={controlPlaneConnection}
                         kinds={["update"]}
                         canApplyUpdate={canApplyUpdateNow}
+                        beforeReload={markDesktopUpdateSwapping}
                     />
                     <NativeReleaseUpdatePrompt
                         appId="top.thundersparrow.cowboy"

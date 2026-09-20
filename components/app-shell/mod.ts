@@ -50,7 +50,9 @@ export {
 export {
   updateFillShare,
   updateFillSx,
+  updateHairlineSx,
   updatePercentLabel,
+  updateShowsHairline,
 } from "./update-presentation.ts";
 export {
   type GalleryImage,

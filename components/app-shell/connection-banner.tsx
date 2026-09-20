@@ -24,11 +24,18 @@
 // socket itself stays in the app, which just reports open/close here and reads
 // back the backoff delay.
 
-import { Box, ButtonBase, CircularProgress } from "@mui/material";
+import { alpha, Box, ButtonBase, CircularProgress } from "@mui/material";
 import type { SxProps } from "@mui/material";
 import type { Theme } from "@mui/material/styles";
 import CheckIcon from "@mui/icons-material/Check";
-import { type ReactNode, useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   tickUpdateCountdown,
   updateAllowed,
@@ -39,7 +46,9 @@ import {
 import {
   updateFillShare,
   updateFillSx,
+  updateHairlineSx,
   updatePercentLabel,
+  updateShowsHairline,
 } from "./update-presentation.ts";
 
 export type BannerKind = "down" | "reconnected" | "update";
@@ -76,7 +85,10 @@ export interface ConnectionStore {
   /** Have the service worker cache the deployed shell and its boot assets,
    *  reporting each landed batch. The running build is untouched, so this may
    *  start the moment a deploy is detected. */
-  downloadUpdate(onProgress: (done: number, total: number) => void): Promise<UpdateDownload>;
+  downloadUpdate(
+    onProgress: (done: number, total: number) => void,
+    retry?: boolean,
+  ): Promise<UpdateDownload>;
   /** Swap the running build for the downloaded one. */
   reloadIntoUpdate(downloaded: UpdateDownload): Promise<void>;
   /** Probe for a new build whenever the tab returns to the foreground. Returns a
@@ -97,7 +109,14 @@ const DEFAULT_RECONNECTED_DISMISS_MS = 4000;
 
 const SHELL_REFRESH_TIMEOUT_MS = 30_000;
 
-type ShellMessage = { ok?: boolean; type?: string; done?: number; total?: number };
+type ShellMessage = {
+  ok?: boolean;
+  type?: string;
+  done?: number;
+  total?: number;
+  rolledBack?: boolean;
+  attempts?: number;
+};
 
 /** Ask the controlling service worker for the deployed shell, reporting the
  *  boot-asset count as each batch lands. `undefined` means no worker controls
@@ -105,12 +124,13 @@ type ShellMessage = { ok?: boolean; type?: string; done?: number; total?: number
  *  and the reload itself remains the download. */
 function refreshShellThroughServiceWorker(
   onProgress: (done: number, total: number) => void,
-): Promise<boolean | undefined> {
+  retry: boolean,
+): Promise<ShellMessage | undefined> {
   const controller = globalThis.navigator?.serviceWorker?.controller;
   if (!controller || typeof MessageChannel === "undefined") return Promise.resolve(undefined);
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    let timer = setTimeout(() => resolve(false), SHELL_REFRESH_TIMEOUT_MS);
+    let timer = setTimeout(() => resolve({ ok: false }), SHELL_REFRESH_TIMEOUT_MS);
     channel.port1.onmessage = (event: MessageEvent<ShellMessage>): void => {
       const message = event.data;
       clearTimeout(timer);
@@ -118,17 +138,20 @@ function refreshShellThroughServiceWorker(
         // A download that is visibly advancing is slow, not stuck: the timeout
         // measures silence, not the whole transfer. A phone on a weak link
         // trickling in a large bundle must not be called a failure.
-        timer = setTimeout(() => resolve(false), SHELL_REFRESH_TIMEOUT_MS);
+        timer = setTimeout(() => resolve({ ok: false }), SHELL_REFRESH_TIMEOUT_MS);
         onProgress(message.done ?? 0, message.total ?? 0);
         return;
       }
-      resolve(message?.ok === true);
+      resolve(message ?? { ok: false });
     };
     try {
       // Ask for batches explicitly. An older worker ignores the flag and still
       // answers with its single {ok}, which this handler reads the same way, so
       // a new page never hangs on a service worker that predates progress.
-      controller.postMessage({ type: "cowboy.refresh-shell", progress: true }, [channel.port2]);
+      controller.postMessage(
+        { type: "cowboy.refresh-shell", progress: true, retry },
+        [channel.port2],
+      );
     } catch {
       clearTimeout(timer);
       resolve(undefined);
@@ -141,7 +164,12 @@ function refreshShellThroughServiceWorker(
  *  - `unsupported` — no service worker controls this page, so the reload is
  *                    still the download and nothing may be promised about it.
  *  - `failed`      — they are not all here; this build keeps running. */
-export type UpdateDownload = "ready" | "unsupported" | "failed";
+export type UpdateDownload = "ready" | "unsupported" | "failed" | "rejected" | "abandoned";
+
+/** How many failed starts turn "unlucky" into "broken". At this point the
+ *  surface stops offering the deploy at all: a control that has already led
+ *  twice to a build that does not run is not an offer, it is a trap. */
+const REJECTED_ATTEMPT_LIMIT = 2;
 
 // Fetch the deployed build without disturbing the running one. Started as soon
 // as a deploy is detected: what interrupts someone is the reload, never the
@@ -150,10 +178,13 @@ export type UpdateDownload = "ready" | "unsupported" | "failed";
 // module scope.
 async function downloadUpdate(
   onProgress: (done: number, total: number) => void,
+  retry = false,
 ): Promise<UpdateDownload> {
-  const refreshed = await refreshShellThroughServiceWorker(onProgress);
+  const refreshed = await refreshShellThroughServiceWorker(onProgress, retry);
   if (refreshed === undefined) return "unsupported";
-  return refreshed ? "ready" : "failed";
+  if (refreshed.ok === true) return "ready";
+  if (refreshed.rolledBack !== true) return "failed";
+  return (refreshed.attempts ?? 1) >= REJECTED_ATTEMPT_LIMIT ? "abandoned" : "rejected";
 }
 
 // Swap the running build for the downloaded one. After a `ready` download the
@@ -349,6 +380,10 @@ export interface AutoUpdateOptions {
   readonly retryMs?: number;
   /** Set false on a surface that does not present the update state at all. */
   readonly enabled?: boolean;
+  /** Called immediately before the page is replaced, on either road. The app
+   *  uses it to write down that a swap happened, so the build that follows can
+   *  be held to having started (web/src/updateAttempt.ts). */
+  readonly beforeReload?: (() => void) | undefined;
 }
 
 /** A pending update, reduced to what a surface has to render. */
@@ -400,6 +435,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
     minVisibleMs = 0,
     retryMs = UPDATE_RETRY_MS,
     enabled = true,
+    beforeReload,
   } = options;
   const banner = store.useConnectionBanner();
   const pending = enabled && banner?.kind === "update";
@@ -416,6 +452,10 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
   // rest of the page's life.
   const [recheck, setRecheck] = useState(0);
   const downloaded = download.result === "ready" || download.result === "unsupported";
+  // Set by a press, read once by the download it starts. A ref, not state: the
+  // effect must see the press that scheduled it, not the value it was rendered
+  // with, and re-running on every press is exactly what we do not want.
+  const retryRef = useRef(false);
 
   // A resumed page earns its dwell again. iOS restores a frozen PWA instead of
   // re-navigating, and its timers were paused the whole time it was away.
@@ -439,6 +479,8 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
       return undefined;
     }
     let alive = true;
+    const retry = retryRef.current;
+    retryRef.current = false;
     setDownload(IDLE_DOWNLOAD);
     void store.downloadUpdate((done, total) => {
       if (!alive) return;
@@ -452,7 +494,7 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
           }
           : current
       );
-    }).then((result) => {
+    }, retry).then((result) => {
       if (alive) setDownload((current) => ({ ...current, result }));
     });
     return () => {
@@ -511,12 +553,22 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
       return undefined;
     }
     setReloading(true);
+    beforeReload?.();
     void store.reloadIntoUpdate(result);
     return undefined;
-  }, [pending, reloading, download.result, requested, countdown.secs, store]);
+  }, [pending, reloading, download.result, requested, countdown.secs, store, beforeReload]);
 
   const requestUpdate = useCallback((): void => {
-    if (!pending || reloading) return;
+    if (!pending || reloading || download.result === "abandoned") return;
+    if (download.result === "rejected") {
+      // "Try it again": lift this device's rejection and fetch it afresh. The
+      // standing request rides along, so a build that starts this time is
+      // taken without asking twice.
+      retryRef.current = true;
+      setRequested(true);
+      setAttempt((value) => value + 1);
+      return;
+    }
     if (download.result === "failed") {
       // One press is both "try again" and "and then take it": nobody who asks
       // for the update wants to ask a second time once it arrives.
@@ -532,8 +584,9 @@ export function useAutoUpdate(store: ConnectionStore, options: AutoUpdateOptions
     pending,
     phase: reloading
       ? "reloading"
-      : download.result === "failed"
-      ? "failed"
+      : download.result === "rejected" || download.result === "abandoned" ||
+          download.result === "failed"
+      ? download.result
       : downloaded
       ? "ready"
       : "downloading",
@@ -574,6 +627,9 @@ function bannerLabel(kind: BannerKind, update: AutoUpdateState): string {
   if (update.phase === "reloading") {
     return "Reloading into the new version…";
   }
+  if (update.phase === "rejected") {
+    return "The new version did not start · you are back on the one that works";
+  }
   if (update.phase === "failed") {
     return update.requested
       ? "New version · download paused, retrying"
@@ -603,6 +659,8 @@ export interface ConnectionBannerProps {
    *  answers false the countdown holds at its start and the label says so; the
    *  reload happens only after the gate has stayed open for the whole count. */
   readonly canApplyUpdate?: () => boolean;
+  /** See AutoUpdateOptions.beforeReload. */
+  readonly beforeReload?: () => void;
 }
 
 // Full-width overlay bar tracking the app's socket + build version. All three
@@ -619,7 +677,7 @@ export interface ConnectionBannerProps {
 // it is the one that may be pressed — a full-width target needs no aim, and
 // pressing it only brings forward a reload that was coming anyway.
 export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
-  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, kinds, canApplyUpdate } = props;
+  const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS, kinds, canApplyUpdate, beforeReload } = props;
   const rawBanner = store.useConnectionBanner();
   const banner = rawBanner !== undefined && kinds !== undefined && !kinds.includes(rawBanner.kind)
     ? undefined
@@ -629,16 +687,48 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const update = useAutoUpdate(store, {
     countdownSecs,
     canApplyUpdate,
+    beforeReload,
     enabled: kinds === undefined || kinds.includes("update"),
   });
 
   if (!banner) {
     return null;
   }
+  // Twice is not bad luck. There is nothing useful left to say or offer, and a
+  // bar that cannot help is worse than no bar.
+  if (banner.kind === "update" && update.phase === "abandoned") {
+    return null;
+  }
 
-  const palette = bannerPalette(banner.kind);
+  const palette = update.phase === "rejected" && banner.kind === "update"
+    ? "warning"
+    : bannerPalette(banner.kind);
   const label = bannerLabel(banner.kind, update);
   const isUpdate = banner.kind === "update";
+
+  // A download nobody asked for is a hairline at the top edge and nothing
+  // else: it is not news, and it is not actionable until the bits are here.
+  if (isUpdate && updateShowsHairline(update.phase, update.requested)) {
+    return (
+      <Box
+        aria-hidden
+        sx={(theme) => ({
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 3,
+          pointerEvents: "none",
+          zIndex: theme.zIndex.tooltip + 1,
+          ...updateHairlineSx(
+            (opacity: number) => alpha(theme.palette.info.main, opacity),
+            updateFillShare(update.phase, update.progress),
+            update.streamed,
+          ),
+        })}
+      />
+    );
+  }
   const busy = update.phase === "reloading" ||
     (update.phase === "downloading" && update.progress === undefined);
   const barSx: SxProps<Theme> = (theme) => ({
@@ -663,8 +753,8 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
     zIndex: theme.zIndex.tooltip + 1,
     ...(isUpdate
       ? updateFillSx(
-        theme.palette.info.main,
-        theme.palette.info.dark,
+        theme.palette[palette].main,
+        theme.palette[palette].dark,
         updateFillShare(update.phase, update.progress),
         update.streamed,
       )

@@ -14,7 +14,9 @@ import type { UpdatePhase } from "./update-policy.ts";
  *  as the update giving up — and a page no service worker controls has no
  *  progress to show at all, so it fills only once it is ready to press. */
 export function updateFillShare(phase: UpdatePhase, progress: number | undefined): number {
-  if (phase === "ready" || phase === "reloading") return 1;
+  // A rollback notice is not a progress bar that stopped somewhere; it is a
+  // statement, and a statement is whole.
+  if (phase === "ready" || phase === "reloading" || phase === "rejected") return 1;
   return progress ?? 0;
 }
 
@@ -57,4 +59,28 @@ export function updateFillSx(
     // reports.
     transition: animate ? "background-size 400ms cubic-bezier(0.32, 0.72, 0, 1)" : "none",
   };
+}
+
+/** Whether the update presents as a hairline rather than as the full bar.
+ *
+ *  A download nobody asked for is not news. It is also not actionable: the
+ *  bits arrive at the speed of the network, and a bar of text that the user
+ *  can only watch is a slab of screen taken for nothing. So the unrequested
+ *  download is a line at the top edge and nothing else, and the bar — the
+ *  words, the version, the press — arrives with the thing it is announcing.
+ *
+ *  A download the user *did* ask for is the exception. They pressed something;
+ *  answering with a hairline would read as the press having been dropped. */
+export function updateShowsHairline(phase: UpdatePhase, requested: boolean): boolean {
+  return phase === "downloading" && !requested;
+}
+
+/** The hairline's own fill, over its own fainter track. Thin and translucent:
+ *  it should read as the app quietly doing something, not as chrome. */
+export function updateHairlineSx(
+  tint: (opacity: number) => string,
+  share: number,
+  animate: boolean,
+): Record<string, string> {
+  return updateFillSx(tint(0.55), tint(0.14), share, animate);
 }

@@ -22,6 +22,11 @@ import {
   latestBundleRecoveryUrl,
 } from "./moduleRecovery";
 import {
+  rollbackToPreviousBuild,
+  rolledBackNavigationUrl,
+  updateSwapInFlight,
+} from "./updateAttempt";
+import {
   CRASH_INCIDENT_SEVERITY,
   markClientReloadIntent,
   reportClientIncident,
@@ -143,8 +148,39 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, State> 
     reportClientIncident("client_render_failure", CRASH_INCIDENT_SEVERITY, error, {
       component_stack: componentStack,
     });
+    // Which way is safety? The established recovery goes FORWARD to the
+    // deployed build, because the usual crash is a stale window asking for a
+    // chunk that a deploy removed. But when the page is a swap that has not
+    // signed off yet, the deployed build is the thing that just crashed, and
+    // going forward means landing on it again. Then safety is BACKWARD: the
+    // previous build is still whole in cache, and it is the one known to run.
+    if (updateSwapInFlight(globalThis.localStorage)) {
+      void this.rollBack();
+      return;
+    }
     if (isModuleLoadError(error)) void this.recover(false);
   }
+
+  private readonly rollBack = async (): Promise<void> => {
+    if (this.state.recovering) return;
+    this.setState({ recovering: true, recoveryFailed: false });
+    reportClientLog(
+      "error",
+      "client_update_crash_rollback",
+      "A freshly updated Cowboy build crashed; rolling back",
+    );
+    const result = await rollbackToPreviousBuild();
+    if (!result.ok) {
+      // No cached predecessor. Fall back to the ordinary forward recovery,
+      // which at least retries the deployed build over the network.
+      await this.recover(false);
+      return;
+    }
+    markClientReloadIntent("update_crash_rollback", result.version);
+    globalThis.location.replace(
+      rolledBackNavigationUrl(globalThis.location.href, Date.now()),
+    );
+  };
 
   override render(): ReactNode {
     const { error, recovering, recoveryFailed } = this.state;

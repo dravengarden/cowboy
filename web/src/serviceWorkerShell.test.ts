@@ -24,6 +24,9 @@ class FakeCache {
   match(request: string | { url: string }): Promise<Response | undefined> {
     return Promise.resolve(this.entries.get(path(request))?.clone());
   }
+  delete(request: string | { url: string }): Promise<boolean> {
+    return Promise.resolve(this.entries.delete(path(request)));
+  }
 }
 
 class FakeCaches {
@@ -274,6 +277,91 @@ Deno.test("a refresh that fails stops short of a full count", async () => {
     { type: "progress", done: 6, total: 9 },
   ]);
   assertEquals(await cachedText(worker.caches, SHELL, "/"), undefined);
+});
+
+Deno.test("a build that did not start is put back to the one that did", async () => {
+  // The two-generation retention is what makes this possible: the build the
+  // user was running moments ago is still whole, document and assets alike.
+  const worker = startWorker();
+  const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
+  await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
+  await (await worker.caches.open(SHELL)).put("/", basic("the build that does not start"));
+
+  assertEquals(await worker.message({ type: "cowboy.rollback-shell" }), [{
+    ok: true,
+    version: previous,
+    attempts: 1,
+  }]);
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), "the build that works");
+
+  // And a navigation now opens it, with no network at all.
+  worker.network = () => Promise.reject(new TypeError("offline"));
+  assertEquals(await (await worker.navigate("/").response).text(), "the build that works");
+});
+
+Deno.test("a rolled-back device stops being handed the build it rejected", async () => {
+  const worker = startWorker();
+  const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
+  await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
+  await worker.message({ type: "cowboy.rollback-shell" });
+
+  // The deployed build is reachable and perfectly healthy. That is not the
+  // point: this device has watched it fail to start.
+  worker.network = (url) =>
+    Promise.resolve(basic(url === "/" ? shellHtml("/assets/main.js", []) : "asset"));
+  const replies = await worker.message({ type: "cowboy.refresh-shell", progress: true });
+  assertEquals(replies, [{ ok: false, rolledBack: true, attempts: 1 }]);
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), "the build that works");
+
+  // Not even a background navigation refresh may quietly put it back.
+  const visit = worker.navigate("/");
+  await visit.settled();
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), "the build that works");
+});
+
+Deno.test("asking again is what lifts a rejection", async () => {
+  const worker = startWorker();
+  const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
+  await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
+  await worker.message({ type: "cowboy.rollback-shell" });
+  worker.network = (url) =>
+    Promise.resolve(basic(url === "/" ? shellHtml("/assets/main.js", []) : "asset"));
+
+  const replies = await worker.message({
+    type: "cowboy.refresh-shell",
+    progress: true,
+    retry: true,
+  });
+  assertEquals(replies.at(-1), { ok: true });
+  assert((await cachedText(worker.caches, SHELL, "/"))?.includes("/assets/main.js"));
+});
+
+Deno.test("a second failed start is counted, so the surface can give up", async () => {
+  const worker = startWorker();
+  const previous = version.replace(/\d+$/, (n) => String(Number(n) - 1));
+  await (await worker.caches.open(`${previous}-shell`)).put("/", basic("the build that works"));
+  assertEquals((await worker.message({ type: "cowboy.rollback-shell" }))[0], {
+    ok: true,
+    version: previous,
+    attempts: 1,
+  });
+  assertEquals((await worker.message({ type: "cowboy.rollback-shell" }))[0], {
+    ok: true,
+    version: previous,
+    attempts: 2,
+  });
+});
+
+Deno.test("with nothing cached to fall back to, the rollback refuses", async () => {
+  // Refusing is the honest answer: the caller keeps running what it has, and
+  // the client falls through to its ordinary forward recovery.
+  const worker = startWorker();
+  await (await worker.caches.open(SHELL)).put("/", basic("the only build here"));
+  assertEquals(await worker.message({ type: "cowboy.rollback-shell" }), [{
+    ok: false,
+    attempts: 0,
+  }]);
+  assertEquals(await cachedText(worker.caches, SHELL, "/"), "the only build here");
 });
 
 Deno.test("admin, passkey and identity requests never touch the shell cache", async () => {

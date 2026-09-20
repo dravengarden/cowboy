@@ -38,8 +38,20 @@ export function updateAllowed(gate: UpdateGate, minVisibleMs: number): boolean {
 
 /** Where a pending update is. `downloading` until its bits are cached, `ready`
  *  while they wait for the swap, `reloading` during it, `failed` when they did
- *  not all arrive and this build keeps running. */
-export type UpdatePhase = "downloading" | "ready" | "reloading" | "failed";
+ *  not all arrive and this build keeps running.
+ *
+ *  The last two are what a rollback leaves behind: `rejected` once this device
+ *  has watched the deployed build fail to start and put back the one that did,
+ *  and `abandoned` once that has happened twice — at which point the deploy is
+ *  broken rather than unlucky, there is nothing useful left to offer, and the
+ *  surface says nothing at all until a different build is deployed. */
+export type UpdatePhase =
+  | "downloading"
+  | "ready"
+  | "reloading"
+  | "failed"
+  | "rejected"
+  | "abandoned";
 
 /** Everything that decides whether the running build is replaced this instant. */
 export interface UpdateIntent {

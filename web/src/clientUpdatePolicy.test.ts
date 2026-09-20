@@ -7,7 +7,9 @@ import {
 import {
   updateFillShare,
   updateFillSx,
+  updateHairlineSx,
   updatePercentLabel,
+  updateShowsHairline,
 } from "../../components/app-shell/update-presentation.ts";
 
 const bannerSource = await Deno.readTextFile(
@@ -108,6 +110,18 @@ Deno.test("a held countdown keeps re-arming its check", () => {
   assert(hook.includes("    recheck,\n"));
 });
 
+Deno.test("a crash inside a swap goes backward, never forward", () => {
+  // Forward recovery exists for a stale window asking for a chunk a deploy
+  // removed. During an unsigned swap the deployed build is the thing that just
+  // crashed, so forward lands on it again; backward is the build known to run.
+  const boundary = Deno.readTextFileSync(new URL("./AppErrorBoundary.tsx", import.meta.url));
+  assert(boundary.includes("rollbackToPreviousBuild"));
+  assert(
+    boundary.indexOf("updateSwapInFlight(globalThis.localStorage)") <
+      boundary.indexOf("if (isModuleLoadError(error)) void this.recover(false);"),
+  );
+});
+
 Deno.test("the download starts on detection, not on the idle gate", () => {
   // What interrupts someone is the reload, never the download. Gating the
   // fetch on idleness would put the wait back where the user can feel it and
@@ -140,9 +154,37 @@ Deno.test("the page asks for progress rather than assuming it", () => {
   // The worker on the other end may predate progress entirely, and the worker
   // this page talks to has the previous build as its other caller. Opting in by
   // flag keeps both directions of that transition working.
-  assert(bannerSource.includes(
-    `controller.postMessage({ type: "cowboy.refresh-shell", progress: true }, [channel.port2])`,
-  ));
+  assert(bannerSource.includes(`{ type: "cowboy.refresh-shell", progress: true, retry }`));
+});
+
+Deno.test("a download nobody asked for stays a hairline", () => {
+  // It is not news and it is not actionable: the bits arrive at the speed of
+  // the network, and a slab of text the user can only watch is screen taken
+  // for nothing.
+  assertEquals(updateShowsHairline("downloading", false), true);
+  // Unless they pressed. Answering a press with a hairline reads as the press
+  // having been dropped.
+  assertEquals(updateShowsHairline("downloading", true), false);
+  // Everything else is the bar: it arrives with the thing it announces.
+  for (const phase of ["ready", "reloading", "failed", "rejected"] as const) {
+    assertEquals(updateShowsHairline(phase, false), false);
+  }
+});
+
+Deno.test("the hairline is translucent, and it is the same one element", () => {
+  const seen: string[] = [];
+  const line = updateHairlineSx((opacity) => {
+    seen.push(String(opacity));
+    return `rgba(2,136,209,${String(opacity)})`;
+  }, 0.5, true);
+  // Fill over a much fainter track: present, not chrome.
+  assertEquals(seen, ["0.55", "0.14"]);
+  assertEquals(line.backgroundSize, "50% 100%");
+  assertEquals(Object.keys(line).some((key) => key.includes("transform")), false);
+});
+
+Deno.test("a rollback notice is whole, not a progress bar that stopped", () => {
+  assertEquals(updateFillShare("rejected", 0.3), 1);
 });
 
 Deno.test("a stalled download keeps the ground it took", () => {

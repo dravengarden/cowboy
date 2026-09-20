@@ -175,6 +175,19 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
+Scoped release 3.24.0 records app-shell 1.1.15: a download nobody asked for is
+a translucent hairline at the top edge rather than a bar of text the user can
+only watch, and the bar arrives with the thing it announces
+(`updateShowsHairline`, `updateHairlineSx`). `UpdatePhase` gains `rejected`
+and `abandoned` for a build this device watched fail to start: the worker
+serves the previous generation again, stops promoting that deploy in a
+version-scoped state cache, and the bar carries a warning-toned notice whose
+press lifts the rejection. `useAutoUpdate` gains `beforeReload` so the app can
+record the swap its next boot has to sign for. Only app-shell's version/digest
+changes; it still has no component or Plugin consumers, and no Plugin manifest,
+signed bytes or component pin changes. No Catalog publication or Machine
+upgrade is needed.
+
 Scoped release 3.23.0 records app-shell 1.1.14: the shell-refresh progress
 added in 3.22.0 is opt-in. That reply port's other caller is the previous
 build's client, which resolves on the first message it receives and reads one

@@ -86,6 +86,17 @@ Deno.test("the last two phases name what is happening to this build", () => {
   );
 });
 
+Deno.test("a rollback says what happened and offers the one useful action", () => {
+  assertEquals(
+    mobileUpdateBannerLabel("cowboy-v1753", { kind: "rejected" }),
+    "cowboy-v1753 didn't start · tap to try again",
+  );
+  assertEquals(
+    mobileUpdateBannerLabel(undefined, { kind: "rejected" }),
+    "The new version didn't start · tap to try again",
+  );
+});
+
 Deno.test("the mobile bar reads the version and keeps its hooks unconditional", async () => {
   const bannerSource = await Deno.readTextFile(
     new URL("./MobileConnectionBanner.tsx", import.meta.url),

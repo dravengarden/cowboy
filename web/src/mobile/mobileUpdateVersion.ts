@@ -19,7 +19,10 @@ export type MobileUpdatePhase =
   | { readonly kind: "ready"; readonly secs?: number | undefined }
   | { readonly kind: "reloading" }
   /** Not all of it arrived; this build keeps running and tries again. */
-  | { readonly kind: "failed"; readonly requested: boolean };
+  | { readonly kind: "failed"; readonly requested: boolean }
+  /** It arrived, it was taken, and it did not start. The build that did is
+   *  running again and this is the notice that says so. */
+  | { readonly kind: "rejected" };
 
 function percentLabel(progress: number | undefined): string {
   if (progress === undefined) return "downloading…";
@@ -47,6 +50,11 @@ export function mobileUpdateBannerLabel(
     return phase.secs === undefined
       ? `Reload to ${named}`
       : `Reload to ${named} · ${String(Math.max(0, phase.secs))}s`;
+  }
+  if (phase.kind === "rejected") {
+    return version
+      ? `${version} didn't start · tap to try again`
+      : "The new version didn't start · tap to try again";
   }
   if (phase.kind === "reloading") {
     return version ? `Updating to ${version}…` : "Updating…";

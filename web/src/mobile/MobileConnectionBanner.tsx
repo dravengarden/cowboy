@@ -1,13 +1,16 @@
-import { ButtonBase, CircularProgress } from "@mui/material";
-import { useEffect, useRef, useState } from "react";
+import { alpha, Box, ButtonBase, CircularProgress } from "@mui/material";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ConnectionStore,
   updateFillShare,
   updateFillSx,
+  updateHairlineSx,
+  updateShowsHairline,
   useAutoUpdate,
 } from "@cowboy/app-shell";
 import { confirmationHaptic } from "../haptic";
 import { canApplyUpdateNow } from "../store";
+import { markUpdateSwapping } from "../updateAttempt";
 import {
   fetchReadyCowboyVersion,
   mobileUpdateBannerLabel,
@@ -48,11 +51,14 @@ export function MobileConnectionBanner(
   const rawBanner = store.useConnectionBanner();
   const banner = rawBanner?.kind === "update" ? rawBanner : undefined;
   const isUpdate = banner?.kind === "update";
+  const [readyVersion, setReadyVersion] = useState<string>();
   const update = useAutoUpdate(store, {
     canApplyUpdate: canApplyUpdateNow,
     minVisibleMs: MOBILE_UPDATE_DWELL_MS,
+    beforeReload: useCallback((): void => {
+      markUpdateSwapping(globalThis.localStorage, readyVersion ?? "unknown", Date.now());
+    }, [readyVersion]),
   });
-  const [readyVersion, setReadyVersion] = useState<string>();
   useEffect(() => {
     if (!isUpdate) {
       setReadyVersion(undefined);
@@ -86,7 +92,11 @@ export function MobileConnectionBanner(
     if (globalThis.document.visibilityState === "visible") confirmationHaptic();
   }, [update.phase, update.streamed]);
   if (!banner) return null;
-  const phase: MobileUpdatePhase = update.phase === "reloading"
+  // Twice is not bad luck: nothing useful is left to offer (see UpdatePhase).
+  if (update.phase === "abandoned") return null;
+  const phase: MobileUpdatePhase = update.phase === "rejected"
+    ? { kind: "rejected" }
+    : update.phase === "reloading"
     ? { kind: "reloading" }
     : update.phase === "failed"
     ? { kind: "failed", requested: update.requested }
@@ -94,6 +104,33 @@ export function MobileConnectionBanner(
     ? { kind: "downloading", progress: update.progress, requested: update.requested }
     : { kind: "ready", secs: update.held ? undefined : update.secs };
   const label = mobileUpdateBannerLabel(readyVersion, phase);
+  const share = updateFillShare(update.phase, update.progress);
+
+  // A download nobody asked for is a line at the top edge of the app, under the
+  // system clearance so the status bar cannot cover it, and nothing else. It
+  // carries no words, takes no space anyone was using, and answers no touch.
+  if (updateShowsHairline(update.phase, update.requested)) {
+    return (
+      <Box
+        aria-hidden
+        data-cowboy-update-hairline={String(Math.round(share * 100))}
+        sx={(theme) => ({
+          position: "absolute",
+          top: "var(--cowboy-system-top-clearance, 0px)",
+          left: 0,
+          right: 0,
+          height: 3,
+          pointerEvents: "none",
+          zIndex: theme.zIndex.tooltip + 1,
+          ...updateHairlineSx(
+            (opacity: number) => alpha(theme.palette.info.main, opacity),
+            share,
+            update.streamed,
+          ),
+        })}
+      />
+    );
+  }
 
   return (
     <ButtonBase
@@ -121,17 +158,19 @@ export function MobileConnectionBanner(
         px: 2,
         py: 0.75,
         pt: "calc(var(--cowboy-system-top-clearance) + 6px)",
-        color: "info.contrastText",
+        color: update.phase === "rejected" ? "warning.contrastText" : "info.contrastText",
         fontSize: "0.8125rem",
         fontWeight: 600,
         zIndex: theme.zIndex.tooltip + 1,
         // The bar is its own progress bar: full width, so the press needs no
         // aim, and paint-only, so it never becomes a second moving layer over
         // the pager (docs/mobile-spatial-presentation.md §2.1).
+        // A rollback is not an announcement of something new; it is a warning
+        // about something that failed, and it wears that colour.
         ...updateFillSx(
-          theme.palette.info.main,
-          theme.palette.info.dark,
-          updateFillShare(update.phase, update.progress),
+          update.phase === "rejected" ? theme.palette.warning.main : theme.palette.info.main,
+          update.phase === "rejected" ? theme.palette.warning.dark : theme.palette.info.dark,
+          share,
           update.streamed,
         ),
       })}

@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v1752";
+const VERSION = "cowboy-v1753";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the
@@ -29,6 +29,13 @@ const SHELL_CACHE = `${VERSION}-shell`;
 // reload, post-recycle) is zero-network. Version-prefixed so the activate
 // cleanup evicts it on a SW update too.
 const HISTORY_CACHE = `${VERSION}-history`;
+// This generation's own notes. Version-scoped on purpose: the next deploy is a
+// new VERSION with a fresh, empty state cache, so a note about a build can
+// never outlive the build it was about.
+const STATE_CACHE = `${VERSION}-state`;
+// The deployed build was rolled back on this device because it did not start.
+// The body is the number of times that has happened.
+const ROLLBACK_MARK = "/cowboy-rolled-back";
 
 self.addEventListener("install", () => {
   void self.skipWaiting();
@@ -116,6 +123,34 @@ function publishShellProgress(done, total) {
   }
 }
 
+async function rollbackAttempts() {
+  const hit = await caches.match(ROLLBACK_MARK, { cacheName: STATE_CACHE });
+  if (!hit) return 0;
+  const count = Number(await hit.text());
+  return Number.isFinite(count) && count > 0 ? count : 1;
+}
+
+// Serve the newest generation that is not this one, and stop promoting the
+// deployed shell until someone asks again. The two-generation retention above
+// is what makes this possible: the build the user was running moments ago is
+// still whole in cache, document and hashed assets alike.
+async function rollbackShell() {
+  const keys = await caches.keys();
+  const generations = keys
+    .filter((key) => /^cowboy-v\d+-shell$/.test(key) && key !== SHELL_CACHE)
+    .sort((a, b) => Number(/\d+/.exec(b)[0]) - Number(/\d+/.exec(a)[0]));
+  for (const key of generations) {
+    const previous = await caches.match("/", { cacheName: key });
+    if (!previous) continue;
+    await (await caches.open(SHELL_CACHE)).put("/", previous.clone());
+    const attempts = (await rollbackAttempts()) + 1;
+    await (await caches.open(STATE_CACHE)).put(ROLLBACK_MARK, new Response(String(attempts)));
+    return { ok: true, version: /cowboy-v\d+/.exec(key)[0], attempts };
+  }
+  // Nothing to fall back to. The caller keeps running whatever it has.
+  return { ok: false, attempts: await rollbackAttempts() };
+}
+
 async function cachedShell() {
   const current = await caches.match("/", { cacheName: SHELL_CACHE });
   if (current) return current;
@@ -158,6 +193,9 @@ function bootAssetUrls(html) {
 function refreshShell() {
   shellRefresh ??= (async () => {
     try {
+      // A device that rolled back has already watched this build fail to
+      // start. Fetching it again would quietly put it back as the shell.
+      if (await rollbackAttempts() > 0) return false;
       const response = await fetch("/", { cache: "no-store", credentials: "same-origin" });
       if (!response.ok || response.type !== "basic") return false;
       const html = await response.clone().text();
@@ -177,6 +215,9 @@ function refreshShell() {
         if (!batch.every(Boolean)) return false;
         publishShellProgress(Math.min(index + BOOT_ASSET_FETCHES, urls.length), urls.length);
       }
+      // Re-checked: a rollback can land while this refresh is in flight, and
+      // promoting here would undo it.
+      if (await rollbackAttempts() > 0) return false;
       await (await caches.open(SHELL_CACHE)).put("/", response);
       return true;
     } catch {
@@ -206,15 +247,35 @@ self.addEventListener("message", (event) => {
   if (message?.type === "cowboy.refresh-shell") {
     const port = event.ports?.[0];
     const watching = port && message.progress === true;
-    if (watching) {
-      shellProgressPorts.add(port);
-      if (shellProgress) port.postMessage(shellProgress);
-    }
-    event.waitUntil(refreshShell().then((ok) => {
+    event.waitUntil((async () => {
+      // A press means "try that again", so it is also what lifts a rollback.
+      if (message.retry === true) {
+        await (await caches.open(STATE_CACHE)).delete(ROLLBACK_MARK);
+      }
+      const rejected = await rollbackAttempts();
+      if (rejected > 0) {
+        // Still exactly one message, and still shaped for the previous
+        // build: it reads the missing `ok` as "not downloaded", which is true.
+        port?.postMessage({ ok: false, rolledBack: true, attempts: rejected });
+        return;
+      }
+      if (watching) {
+        shellProgressPorts.add(port);
+        if (shellProgress) port.postMessage(shellProgress);
+      }
+      const ok = await refreshShell();
       if (!port) return;
       if (watching) shellProgressPorts.delete(port);
       port.postMessage({ ok });
-    }));
+    })());
+    return;
+  }
+
+  // The build that just replaced this one did not start. Put back the one
+  // that did, and remember not to promote this deploy again.
+  if (message?.type === "cowboy.rollback-shell") {
+    const port = event.ports?.[0];
+    event.waitUntil(rollbackShell().then((result) => port?.postMessage(result)));
     return;
   }
   if (message?.type === "cowboy.active-session" && event.source?.id) {

@@ -376,6 +376,14 @@ requires 60 s of uninterrupted foreground on top of that, counted again from
 every resume, because an installed PWA restores a frozen page and an immediate
 reload reads as a crash.
 
+While a download nobody asked for is running, the surface is a 3 px
+translucent line at the top edge of the app, under the system clearance, with
+no words and no touch target. It is not news and it is not actionable: the bits
+arrive at the speed of the network. The bar — the words, the version, the press
+— appears with the thing it announces. A download the user *did* ask for keeps
+the bar, because answering a press with a hairline reads as the press having
+been dropped.
+
 Or by press: the whole update bar is the control, on both surfaces. A press
 outranks the idle gate and the dwell, which exist to protect someone who did
 not ask. It is never disabled while the download runs — a press then means
@@ -389,8 +397,38 @@ sweeps for a build that was already cached. The percentage never reads 100
 before the bits are here.
 
 A download that does not finish keeps this build running and tries again a
-minute later. An update is always applied on the next launch. The service
-worker keeps its two-generation cache so the open window survives the swap.
+minute later. An update is always applied on the next launch.
+
+**A build that does not start is put back (both products).** Downloading the
+whole build before the swap removes the network from the failure modes, but a
+build that downloads perfectly can still fail to run, and a PWA that boots into
+a broken build is bricked until the next deploy. The service worker's
+two-generation cache is the way out: the build the user was running moments ago
+is still whole, document and hashed assets alike.
+
+Knowing *that* it failed is the hard part — a crash during boot looks like a
+slow boot, and a user who kills a white screen leaves no error behind. So the
+swap is written down and the build that follows has to sign for it:
+`swapping` written immediately before the reload; `booting` written by an
+inline script in `index.html` before the first module, because one of the
+failures watched for is "the entry chunk never evaluated"; and the marker
+removed once the build has stayed up for 8 s. A load that finds `booting`
+already there is therefore the load after one that reached the document and
+never came up, which is the one signature a white screen leaves. A marker older
+than 30 minutes, or from a clock that moved backwards, accuses nobody.
+
+On that signal — or on the error boundary catching anything while a swap is
+still unsigned — the page asks the worker to put the previous generation's
+shell back, and navigates to a fresh `?cowboy-rolled-back=` URL. Never a
+reload (WKWebView replays the document that just failed) and never a
+recovery param (those are network-first, and the network holds exactly the
+build being run away from). The rollback is marked in a version-scoped state
+cache, so the worker stops promoting that deploy and the next deploy clears the
+rejection for free. The bar then carries a warning-toned notice naming the
+build that did not start, and a press is what lifts the rejection and tries
+again. After two failed starts the deploy is broken rather than unlucky: the
+surface says nothing at all until a different build is deployed. A device with
+no cached predecessor falls through to the ordinary forward recovery.
 
 ### Copy
 
