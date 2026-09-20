@@ -2,6 +2,10 @@ import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps } from "@cowboy/app-shell";
+import {
+  desktopModalBackdropSx,
+  desktopModalPaperSx,
+} from "./desktop/DesktopEmbeddedControl";
 import { ObsidianSheet } from "./ObsidianSheet";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -42,14 +46,19 @@ export function Sheet(
         fullWidth
         maxWidth={false}
         slotProps={{
+          // A Desktop workbench is a Desktop modal: share DesktopModal's
+          // material instead of MUI's flat default paper, which in dark mode
+          // left the control center as an edgeless black slab.
           paper: {
             sx: {
+              ...desktopModalPaperSx(),
               width: `min(${desktopMaxWidth}px, calc(100vw - 64px))`,
               maxWidth: "none",
               maxHeight: "calc(100vh - 48px)",
               m: 3,
             },
           },
+          backdrop: { sx: desktopModalBackdropSx() },
         }}
       >
         {

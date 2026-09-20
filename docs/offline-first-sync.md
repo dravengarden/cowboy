@@ -351,21 +351,94 @@ time and the retry countdown. Click opens the command palette filtered to
 `Reconnect now`, `Retry held sends`, `Reload app`, `Update now`.
 
 **Banners.** Only sign-in required, dataset changed, and update ready. The
-update banner no longer counts down while the user is composing.
+update banner no longer counts down while the user is composing; it fills with
+the download instead, and pressing it takes the update at once.
 
 **Update policy (both products).** A deployed build is applied by the client
-itself; no surface offers an update control to press. An update is never
-applied while any of these hold: composer text or attachments present, IME
-composition active, a row in `saving`/`sending`, a running turn in the active
-session, or a focused editor. When all clear, both products apply after a
-visible 3 s countdown; a busy moment rewinds it to its start rather than
-freezing it, and the check re-arms every second so the reload lands on the
-first real pause. Mobile requires 60 s of uninterrupted foreground on top of
-that, counted again from every resume, because an installed PWA restores a
-frozen page and an immediate reload reads as a crash. A download that does not
-finish keeps this build running and starts another countdown a minute later.
-An update is always applied on the next launch. The service worker keeps its
-two-generation cache so the open window survives the swap.
+itself. No surface ever *requires* a control to be found: every rule below runs
+for a user who never presses anything.
+
+The download and the swap are separate. The bits are fetched the moment a
+deploy is detected, ungated — what interrupts someone is the reload, never the
+download — and the service worker reports each landed batch, so the update bar
+fills with the real count and only promotes the shell once the whole boot
+closure is cached. Nothing replaces a running build before its replacement is
+here; no intent waives that.
+
+The swap is then taken by whichever road arrives first. Automatically: an
+update is never applied while any of these hold — composer text or attachments
+present, IME composition active, a row in `saving`/`sending`, a running turn in
+the active session, or a focused editor — and when all clear, both products
+apply after a visible 3 s countdown that starts only once the bits are here. A
+busy moment rewinds it to its start rather than freezing it, and the check
+re-arms every second so the reload lands on the first real pause. Mobile
+requires 60 s of uninterrupted foreground on top of that, counted again from
+every resume, because an installed PWA restores a frozen page and an immediate
+reload reads as a crash.
+
+While a download nobody asked for is running, the surface is a 3 px
+translucent line at the top edge of the app, under the system clearance, with
+no words and no touch target. It is not news and it is not actionable: the bits
+arrive at the speed of the network. The bar — the words, the version, the press
+— appears with the thing it announces. A download the user *did* ask for keeps
+the bar, because answering a press with a hairline reads as the press having
+been dropped.
+
+The bar states what happened and draws what pressing it does as an outlined
+pill, rather than phrasing the whole thing as an imperative sentence: a
+full-width tinted slab at the top of a screen already means "notice" in this
+app, so a verb inside one reads as a notice phrased oddly, not as a control.
+The pill is decoration — `pointer-events: none`, `aria-hidden` — so the touch
+target stays as wide as the screen and a screen reader hears one control. Its
+words name what the *next* press does: Reload when the build is waiting, Cancel
+once a press is already standing, Retry after a paused download, Try again
+after a rollback. A swap already under way offers no pill at all.
+
+Or by press: the whole update bar is the control, on both surfaces. A press
+outranks the idle gate and the dwell, which exist to protect someone who did
+not ask. It is never disabled while the download runs — a press then means
+"take it as soon as it lands", so nobody has to watch a progress bar for
+permission to say what they already decided — and after a paused download it is
+also the retry. The bar is its own progress bar: one paint-only background fill
+over a darker track, no extra node, no transform and no shadow, so it can live
+over the phone's moving chrome (`mobile-spatial-presentation.md` §2.1). Its
+full state is simply the bar's ordinary solid colour, and it snaps rather than
+sweeps for a build that was already cached. The percentage never reads 100
+before the bits are here.
+
+A download that does not finish keeps this build running and tries again a
+minute later. An update is always applied on the next launch.
+
+**A build that does not start is put back (both products).** Downloading the
+whole build before the swap removes the network from the failure modes, but a
+build that downloads perfectly can still fail to run, and a PWA that boots into
+a broken build is bricked until the next deploy. The service worker's
+two-generation cache is the way out: the build the user was running moments ago
+is still whole, document and hashed assets alike.
+
+Knowing *that* it failed is the hard part — a crash during boot looks like a
+slow boot, and a user who kills a white screen leaves no error behind. So the
+swap is written down and the build that follows has to sign for it:
+`swapping` written immediately before the reload; `booting` written by an
+inline script in `index.html` before the first module, because one of the
+failures watched for is "the entry chunk never evaluated"; and the marker
+removed once the build has stayed up for 8 s. A load that finds `booting`
+already there is therefore the load after one that reached the document and
+never came up, which is the one signature a white screen leaves. A marker older
+than 30 minutes, or from a clock that moved backwards, accuses nobody.
+
+On that signal — or on the error boundary catching anything while a swap is
+still unsigned — the page asks the worker to put the previous generation's
+shell back, and navigates to a fresh `?cowboy-rolled-back=` URL. Never a
+reload (WKWebView replays the document that just failed) and never a
+recovery param (those are network-first, and the network holds exactly the
+build being run away from). The rollback is marked in a version-scoped state
+cache, so the worker stops promoting that deploy and the next deploy clears the
+rejection for free. The bar then carries a warning-toned notice naming the
+build that did not start, and a press is what lifts the rejection and tries
+again. After two failed starts the deploy is broken rather than unlucky: the
+surface says nothing at all until a different build is deployed. A device with
+no cached predecessor falls through to the ordinary forward recovery.
 
 ### Copy
 
@@ -408,7 +481,7 @@ and fixes each with a server outcome and a presentation.
 | 17 | Replay partially fails with an unaddressed broadcast error | addressed results replace broadcast errors for client-originated commands | only the originating row shows the reason; other clients are not toasted |
 | 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | stays held; never auto-resent |
 | 19 | Composer draft with images hits `localStorage` quota | drafts move to the dataset-scoped IndexedDB with text mirrored to `localStorage` for synchronous seed | no silent image loss; a pending paste placeholder is still lost on crash and stays documented |
-| 20 | Update becomes ready mid-composition | update policy above | no reload; banner or pill only |
+| 20 | Update becomes ready mid-composition | update policy above | no reload on its own; the bar narrates its download and stays pressable |
 
 ## Server changes
 

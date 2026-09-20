@@ -385,6 +385,52 @@
       }
     </style>
     <script>
+      // Did the build this document belongs to actually start? This has to run
+      // before the first module, because one of the failures it watches for is
+      // "the entry chunk never evaluated" — nothing of ours runs after that.
+      //
+      // The swap writes `swapping`; this signs it in as `booting`; the app
+      // removes it once it is up. A load that finds `booting` already there is
+      // therefore the load after one that reached this document and never came
+      // up, which is the single signature a white screen leaves behind.
+      //
+      // Keep the key, the phases and the TTL identical to web/src/updateAttempt.ts;
+      // updateAttempt.test.ts pins the two copies together.
+      (() => {
+        const KEY = "cowboy:update-attempt";
+        const TTL_MS = 30 * 60000;
+        let raw = null;
+        try {
+          raw = localStorage.getItem(KEY);
+        } catch {}
+        if (!raw) return;
+        let attempt = null;
+        try {
+          attempt = JSON.parse(raw);
+        } catch {}
+        const fresh = attempt && typeof attempt.at === "number" &&
+          Date.now() - attempt.at <= TTL_MS && Date.now() >= attempt.at;
+        if (!fresh) {
+          try {
+            localStorage.removeItem(KEY);
+          } catch {}
+          return;
+        }
+        if (attempt.phase === "swapping") {
+          try {
+            localStorage.setItem(KEY, JSON.stringify({ ...attempt, phase: "booting" }));
+          } catch {}
+          return;
+        }
+        if (attempt.phase === "booting") {
+          window.__cowboyUpdateBootFailed = attempt;
+          try {
+            localStorage.removeItem(KEY);
+          } catch {}
+        }
+      })();
+    </script>
+    <script>
       // The app records its real canvas colours: a manual light/dark choice or
       // an appearance palette differs from the OS scheme the CSS above assumes.
       (() => {

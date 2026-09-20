@@ -90,6 +90,7 @@ fn summary(connected: bool, components: Vec<ComponentInventory>) -> MachineSumma
         active_sessions: 0,
         pending_updates: Vec::new(),
         convergence: Vec::new(),
+        plugin_lifecycle: crate::machine_protocol::PluginLifecycleOwner::Manual,
     }
 }
 
@@ -404,7 +405,6 @@ fn a_broken_reload_keeps_the_last_accepted_desired_state() {
 #[test]
 fn an_unconfigured_controller_converges_nothing() {
     let source = DesiredComponentSource::load(None, 0).expect("load");
-    assert!(!source.is_configured());
     assert!(source.current().is_empty());
     assert_eq!(source.reload(0).expect("reload"), None);
 }
@@ -493,4 +493,73 @@ fn a_freeze_is_recorded_reversible_and_fails_safe() {
 
     freeze.thaw().expect("thaw");
     assert!(!freeze.is_frozen());
+}
+
+#[test]
+fn a_plugin_document_is_accepted_only_when_every_declaration_is_usable() {
+    let good = br#"{"schema":1,"machines":{"hawk":{"plugins":["codex","claude-code"],"unlisted":"uninstall"}}}"#;
+    let state = super::parse_plugin_desired_state(good).expect("accepted");
+    assert!(state.manages("hawk"));
+    assert!(
+        !state.manages("falcon"),
+        "an undeclared Machine stays unmanaged"
+    );
+    let hawk = state.machine("hawk").expect("declared");
+    assert_eq!(hawk.unlisted, super::UnlistedPolicy::Uninstall);
+    assert!(hawk.plugins.contains("codex"));
+
+    // Keeping is the default, so adding a Machine cannot remove anything by
+    // omission alone.
+    let defaulted =
+        super::parse_plugin_desired_state(br#"{"schema":1,"machines":{"hawk":{"plugins":[]}}}"#)
+            .expect("accepted");
+    assert_eq!(
+        defaulted.machine("hawk").expect("declared").unlisted,
+        super::UnlistedPolicy::Keep
+    );
+
+    for (bytes, expected) in [
+        (
+            &br#"{"schema":2,"machines":{}}"#[..],
+            "unsupported document schema",
+        ),
+        (
+            &br#"{"schema":1,"machines":{"hawk":{"plugins":["Codex"]}}}"#[..],
+            "invalid Plugin id",
+        ),
+        (
+            &br#"{"schema":1,"machines":{"hawk":{"plugins":[],"unknown":true}}}"#[..],
+            "parsing document",
+        ),
+        (&br#"{ not json"#[..], "parsing document"),
+    ] {
+        let error = super::parse_plugin_desired_state(bytes).expect_err("refused");
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn a_missing_plugin_document_manages_nothing_and_a_broken_one_keeps_the_last() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source = super::PluginDesiredSource::new(directory.path());
+    assert!(source.current().value.machines.is_empty());
+
+    let path = directory.path().join(super::PluginDesiredSource::FILE_NAME);
+    std::fs::write(
+        &path,
+        br#"{"schema":1,"machines":{"hawk":{"plugins":["codex"],"unlisted":"uninstall"}}}"#,
+    )
+    .expect("write document");
+    assert_eq!(source.reload(1).expect("reload"), Some(1));
+    assert!(source.current().value.manages("hawk"));
+    assert_eq!(source.reload(2).expect("reload"), None);
+
+    // A half-written file must never read as "uninstall everything".
+    std::fs::write(&path, b"{ not json").expect("damage the document");
+    let error = source.reload(3).expect_err("refused");
+    assert!(error.contains("parsing document"), "{error}");
+    let current = source.current();
+    assert!(current.value.manages("hawk"));
+    assert!(current.error.is_some());
+    assert_eq!(current.generation, 1);
 }

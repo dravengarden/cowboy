@@ -387,6 +387,20 @@ pub struct MachineSummary {
     /// converged; this list never authorizes an install by itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub convergence: Vec<ComponentConvergence>,
+    /// Who owns this Machine's Plugin membership. A managed Machine takes it
+    /// from a Service-side document; its clients offer no lifecycle action.
+    #[serde(default)]
+    pub plugin_lifecycle: PluginLifecycleOwner,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginLifecycleOwner {
+    /// Installed and removed per Machine by whoever operates it.
+    #[default]
+    Manual,
+    /// Declared Service-side and converged onto the Machine.
+    Managed,
 }
 
 /// One automatic component's distance from the Controller's desired state.

@@ -1,7 +1,8 @@
 use super::{
-    CatalogRelease, InstalledPlugin, MachineTarget, SupportedPlatform, compare_versions,
+    CatalogRelease, InstalledPlugin, MachineTarget, StepKind, SupportedPlatform, compare_versions,
     latest_ready, operation_id, plan_machine, rollout_order,
 };
+use crate::machine_convergence::{MachinePlugins, UnlistedPolicy};
 use std::cmp::Ordering;
 
 fn release(plugin: &str, version: &str, state: &str) -> CatalogRelease {
@@ -75,11 +76,19 @@ fn only_a_ready_release_for_this_platform_is_a_target() {
 #[test]
 fn an_upgrade_resolves_its_digest_from_the_catalog() {
     let releases = vec![release("codex", "3.1.22", "ready")];
-    let plan = plan_machine(&hawk(), &releases, &[installed("codex", "3.1.3", 0)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.3", 0)],
+        &[],
+        None,
+    );
     assert_eq!(plan.steps.len(), 1);
     assert_eq!(plan.steps[0].to, "3.1.22");
     assert_eq!(plan.steps[0].digest, "sha256:3.1.22");
     assert_eq!(plan.steps[0].operation_id, "hawk-codex-3-1-22-converge");
+    assert_eq!(plan.steps[0].kind, StepKind::Upgrade);
+    assert_eq!(plan.steps[0].from.as_deref(), Some("3.1.3"));
     assert!(crate::plugin_operation::installation::valid_operation_id(
         &plan.steps[0].operation_id
     ));
@@ -88,7 +97,13 @@ fn an_upgrade_resolves_its_digest_from_the_catalog() {
 #[test]
 fn a_converged_machine_plans_nothing() {
     let releases = vec![release("codex", "3.1.22", "ready")];
-    let plan = plan_machine(&hawk(), &releases, &[installed("codex", "3.1.22", 0)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.22", 0)],
+        &[],
+        None,
+    );
     assert!(plan.steps.is_empty());
     assert!(plan.skipped.is_empty());
 }
@@ -96,7 +111,13 @@ fn a_converged_machine_plans_nothing() {
 #[test]
 fn a_leased_plugin_is_reported_rather_than_recycled() {
     let releases = vec![release("codex", "3.1.22", "ready")];
-    let plan = plan_machine(&hawk(), &releases, &[installed("codex", "3.1.3", 2)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.3", 2)],
+        &[],
+        None,
+    );
     assert!(plan.steps.is_empty());
     assert_eq!(plan.skipped[0].reason, "holds 2 active session lease(s)");
 }
@@ -104,14 +125,26 @@ fn a_leased_plugin_is_reported_rather_than_recycled() {
 #[test]
 fn convergence_never_downgrades() {
     let releases = vec![release("codex", "3.1.3", "ready")];
-    let plan = plan_machine(&hawk(), &releases, &[installed("codex", "3.1.22", 0)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.22", 0)],
+        &[],
+        None,
+    );
     assert!(plan.steps.is_empty());
     assert!(plan.skipped[0].reason.contains("ahead of Catalog"));
 }
 
 #[test]
 fn a_plugin_without_a_catalog_release_is_named_not_silently_ignored() {
-    let plan = plan_machine(&hawk(), &[], &[installed("victoria", "1.1.0", 0)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &[],
+        &[installed("victoria", "1.1.0", 0)],
+        &[],
+        None,
+    );
     assert!(plan.steps.is_empty());
     assert_eq!(plan.skipped[0].plugin, "victoria");
     assert!(plan.skipped[0].reason.contains("linux/x86_64"));
@@ -122,7 +155,13 @@ fn convergence_installs_nothing_the_machine_does_not_already_run() {
     // A Plugin the Machine never installed is not "behind"; installing it is a
     // separate decision with its own confirmation.
     let releases = vec![release("gemini", "3.1.19", "ready")];
-    let plan = plan_machine(&hawk(), &releases, &[installed("codex", "3.1.22", 0)], &[]);
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.22", 0)],
+        &[],
+        None,
+    );
     assert!(plan.steps.is_empty());
     assert_eq!(plan.skipped.len(), 1);
     assert_eq!(plan.skipped[0].plugin, "codex");
@@ -138,7 +177,7 @@ fn a_plugin_filter_bounds_the_run() {
         installed("codex", "3.1.3", 0),
         installed("gemini", "3.1.0", 0),
     ];
-    let plan = plan_machine(&hawk(), &releases, &installed, &["codex".to_owned()]);
+    let plan = plan_machine(&hawk(), &releases, &installed, &["codex".to_owned()], None);
     assert_eq!(plan.steps.len(), 1);
     assert_eq!(plan.steps[0].plugin, "codex");
     assert!(plan.skipped.is_empty());
@@ -214,4 +253,125 @@ fn an_operation_identity_is_stable_and_accepted() {
     assert!(crate::plugin_operation::installation::valid_operation_id(
         &operation_id("m/../etc", "a b", "1.0")
     ));
+}
+
+fn declared(plugins: &[&str], unlisted: UnlistedPolicy) -> MachinePlugins {
+    MachinePlugins {
+        plugins: plugins.iter().map(|id| (*id).to_owned()).collect(),
+        unlisted,
+    }
+}
+
+#[test]
+fn a_declared_plugin_the_machine_lacks_is_installed() {
+    let releases = vec![release("codex", "3.1.22", "ready")];
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[],
+        &[],
+        Some(&declared(&["codex"], UnlistedPolicy::Keep)),
+    );
+    assert_eq!(plan.steps.len(), 1);
+    assert_eq!(plan.steps[0].kind, StepKind::Install);
+    assert_eq!(plan.steps[0].from, None);
+    assert_eq!(plan.steps[0].to, "3.1.22");
+    assert_eq!(plan.steps[0].digest, "sha256:3.1.22");
+}
+
+#[test]
+fn an_undeclared_plugin_is_kept_unless_the_policy_says_otherwise() {
+    let releases = vec![release("codex", "3.1.22", "ready")];
+    let installed = vec![installed("victoria", "1.1.0", 0)];
+    let keep = plan_machine(
+        &hawk(),
+        &releases,
+        &installed,
+        &[],
+        Some(&declared(&["codex"], UnlistedPolicy::Keep)),
+    );
+    assert!(
+        keep.removals.is_empty(),
+        "omission alone must not remove anything"
+    );
+    assert!(keep.skipped[0].reason.contains("unlisted Plugins are kept"));
+
+    let remove = plan_machine(
+        &hawk(),
+        &releases,
+        &installed,
+        &[],
+        Some(&declared(&["codex"], UnlistedPolicy::Uninstall)),
+    );
+    assert_eq!(remove.removals.len(), 1);
+    assert_eq!(remove.removals[0].plugin, "victoria");
+    assert_eq!(remove.removals[0].version, "1.1.0");
+}
+
+#[test]
+fn an_unmanaged_machine_gains_and_loses_nothing() {
+    // No declaration means "which Plugins belong here" was never stated, so
+    // convergence only keeps what is already installed current.
+    let releases = vec![
+        release("codex", "3.1.22", "ready"),
+        release("gemini", "3.1.19", "ready"),
+    ];
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("victoria", "1.1.0", 0)],
+        &[],
+        None,
+    );
+    assert!(plan.steps.is_empty());
+    assert!(plan.removals.is_empty());
+}
+
+#[test]
+fn a_declared_plugin_without_a_release_is_named_not_silently_dropped() {
+    let plan = plan_machine(
+        &hawk(),
+        &[],
+        &[],
+        &[],
+        Some(&declared(&["codex"], UnlistedPolicy::Uninstall)),
+    );
+    assert!(plan.steps.is_empty());
+    assert!(plan.removals.is_empty());
+    assert!(plan.skipped[0].reason.contains("declared but has no ready"));
+}
+
+#[test]
+fn a_declared_plugin_that_is_current_needs_nothing() {
+    let releases = vec![release("codex", "3.1.22", "ready")];
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("codex", "3.1.22", 0)],
+        &[],
+        Some(&declared(&["codex"], UnlistedPolicy::Uninstall)),
+    );
+    assert!(plan.steps.is_empty());
+    assert!(plan.removals.is_empty());
+    assert!(plan.skipped.is_empty());
+}
+
+#[test]
+fn a_plugin_filter_also_bounds_membership_changes() {
+    let releases = vec![
+        release("codex", "3.1.22", "ready"),
+        release("gemini", "3.1.19", "ready"),
+    ];
+    let plan = plan_machine(
+        &hawk(),
+        &releases,
+        &[installed("victoria", "1.1.0", 0)],
+        &["codex".to_owned()],
+        Some(&declared(&["codex"], UnlistedPolicy::Uninstall)),
+    );
+    assert_eq!(plan.steps.len(), 1, "only the named Plugin is installed");
+    assert!(
+        plan.removals.is_empty(),
+        "an unnamed Plugin is not removed by a bounded run"
+    );
 }

@@ -83,6 +83,8 @@ interface ProviderMachine {
   architecture: "x86_64" | "aarch64";
   status: string;
   schedulable: boolean;
+  /** Absent on a daemon that predates Service-side Plugin membership. */
+  plugin_lifecycle?: "manual" | "managed";
   plugins: readonly unknown[];
   provider_contracts?: ProviderContractInventory;
   plugin_contracts?: PluginContractInventory;
@@ -94,6 +96,15 @@ const UNPUBLISHED_RELEASE_EFFECTS: ReadonlySet<EffectCapability> = new Set([
 ]);
 const UNPUBLISHED_AUTH_EFFECTS: ReadonlySet<EffectCapability> = new Set([
   "begin_service_authentication",
+]);
+// A Machine whose Plugin membership is declared Service-side offers no
+// lifecycle action at all: the declaration decides what it runs, convergence
+// applies it, and a button here could only disagree with both. The Controller
+// refuses these requests for such a Machine regardless of what a client shows.
+const SERVICE_MANAGED_EFFECTS: ReadonlySet<EffectCapability> = new Set([
+  "install_on_machine",
+  "upgrade_on_machine",
+  "request_uninstall_plan",
 ]);
 
 type ProviderManagementProps =
@@ -1030,7 +1041,9 @@ function ProviderManagement(
           const credentialManagementOpen = readyCredential &&
             expandedCredentialScopes.has(entry.authentication_scope);
           const blockedCapabilities: ReadonlySet<EffectCapability> | undefined =
-            releaseReady
+            scope === "machine" && machine?.plugin_lifecycle === "managed"
+              ? SERVICE_MANAGED_EFFECTS
+              : releaseReady
               ? undefined
               : scope === "service"
               ? UNPUBLISHED_AUTH_EFFECTS

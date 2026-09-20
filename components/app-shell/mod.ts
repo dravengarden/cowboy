@@ -35,6 +35,8 @@ export {
   type ConnectionStore,
   type ConnectionStoreOptions,
   createConnectionStore,
+  UpdateActionPill,
+  type UpdateDownload,
   useAutoUpdate,
 } from "./connection-banner.tsx";
 export {
@@ -42,7 +44,17 @@ export {
   updateAllowed,
   type UpdateCountdown,
   type UpdateGate,
+  type UpdateIntent,
+  type UpdatePhase,
+  updateReloadsNow,
 } from "./update-policy.ts";
+export {
+  updateFillShare,
+  updateFillSx,
+  updateHairlineSx,
+  updatePercentLabel,
+  updateShowsHairline,
+} from "./update-presentation.ts";
 export {
   type GalleryImage,
   type GalleryInlineSvg,

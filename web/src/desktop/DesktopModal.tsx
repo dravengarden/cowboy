@@ -1,5 +1,4 @@
 import {
-  alpha,
   Box,
   Dialog,
   Divider,
@@ -11,7 +10,10 @@ import {
 import { Close } from "@mui/icons-material";
 import type { KeyboardEventHandler, ReactNode } from "react";
 import { isImeKeyEvent } from "../imeKey";
-import { DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
+import {
+  desktopModalBackdropSx,
+  desktopModalPaperSx,
+} from "./DesktopEmbeddedControl";
 import {
   DesktopShortcutBar,
   type DesktopShortcutGroup,
@@ -60,27 +62,13 @@ export function DesktopModal({
           : {}),
         paper: {
           sx: {
+            ...desktopModalPaperSx(),
             width: `min(${width}px, calc(100vw - 64px))`,
             maxHeight: "min(860px, calc(100vh - 64px))",
             m: 4,
-            overflow: "hidden",
-            borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
-            border: 1,
-            borderColor: (theme) => alpha(theme.palette.primary.main, 0.22),
-            bgcolor: (theme) => alpha(theme.palette.background.paper, 0.96),
-            backgroundImage: (theme) =>
-              `linear-gradient(145deg, ${alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.035 : 0.42)}, transparent 48%)`,
-            backdropFilter: "blur(28px) saturate(145%)",
-            boxShadow: (theme) =>
-              `0 28px 80px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.48 : 0.22)}`,
           },
         },
-        backdrop: {
-          sx: {
-            bgcolor: (theme) => alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.56 : 0.34),
-            backdropFilter: "blur(3px)",
-          },
-        },
+        backdrop: { sx: desktopModalBackdropSx() },
       }}
     >
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, py: 1.55 }}>

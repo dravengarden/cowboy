@@ -241,7 +241,14 @@ import {
     MobileSheetDismiss,
     NativeReleaseUpdatePrompt,
 } from "@cowboy/app-shell";
+import { markUpdateSwapping } from "./updateAttempt";
 import { ConfirmSheet, Sheet } from "./Sheet";
+
+// Desktop has no deployed-version string to name, only the fact of the swap.
+// Module scope keeps the prop identity stable across renders.
+function markDesktopUpdateSwapping(): void {
+    markUpdateSwapping(globalThis.localStorage, "unknown", Date.now());
+}
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { isImeKeyEvent } from "./imeKey";
@@ -261,6 +268,7 @@ import {
     desktopEmbeddedControlSx,
     desktopListItemSx,
 } from "./desktop/DesktopEmbeddedControl";
+import { DesktopPanel } from "./desktop/DesktopPanel";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import {
     controlPlaneConnection,
@@ -3472,9 +3480,11 @@ export function App({
             }}
         >
             {/* The connection state is shared; so is the update policy. Both
-                surfaces count down and reload on their own once the user is
+                surfaces download the deployed build at once, fill the bar with
+                it, and reload on their own after a countdown once the user is
                 idle; the phone additionally waits out a foreground minute
-                (MobileConnectionBanner) so a resume never reloads at once. */}
+                (MobileConnectionBanner) so a resume never reloads at once. On
+                both, pressing the bar only brings that reload forward. */}
             {surface === "desktop" && (
                 <>
                     {/* Connectivity lives in the status line; the banner keeps
@@ -3483,6 +3493,7 @@ export function App({
                         store={controlPlaneConnection}
                         kinds={["update"]}
                         canApplyUpdate={canApplyUpdateNow}
+                        beforeReload={markDesktopUpdateSwapping}
                     />
                     <NativeReleaseUpdatePrompt
                         appId="top.thundersparrow.cowboy"
@@ -4967,37 +4978,6 @@ function MobileSettingsRoute({
     );
 }
 
-// Dense visual grouping used inside the Settings tab. Runtime information,
-// Machines, and Logs own separate top-level tabs rather than nesting here.
-function DesktopModalBlock({
-    label,
-    children,
-    sx,
-}: {
-    label: string;
-    children: React.ReactNode;
-    sx?: SxProps<Theme>;
-}): React.JSX.Element {
-    return (
-        <Box
-            sx={[
-                {
-                    border: 1,
-                    borderColor: "divider",
-                    borderRadius: 2,
-                    p: 1,
-                },
-                ...(Array.isArray(sx) ? sx : sx ? [sx] : []),
-            ]}
-        >
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.5 }}>
-                <Typography variant="overline" color="text.secondary">{label}</Typography>
-            </Stack>
-            {children}
-        </Box>
-    );
-}
-
 function DesktopSettingsContent({
     themeMode,
     onSetThemeMode,
@@ -5024,7 +5004,7 @@ function DesktopSettingsContent({
                 },
             }}
         >
-            <DesktopModalBlock label="Appearance">
+            <DesktopPanel label="Appearance">
                 <Box sx={{ p: 1.5 }}><AppIconSettings /></Box>
                 <DesktopSettingsRow shortcut="T" shortcutAvailable={shortcutsAvailable} label="Theme" description="Follow the system or pin a palette">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 0.75 }}>
@@ -5061,8 +5041,8 @@ function DesktopSettingsContent({
                         Make the common path fast. 阅读输出时，密度、节奏和字形会立即反映在这里。
                     </Typography>
                 </Box>
-            </DesktopModalBlock>
-            <DesktopModalBlock label="Density">
+            </DesktopPanel>
+            <DesktopPanel label="Density">
                 <DesktopSettingsRow shortcut="Z" shortcutAvailable={shortcutsAvailable} label="Font size" description="Scale application text">
                     <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 0.75 }}>
                         {FONT_SCALE_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.fontScale, FONT_SCALE_PRESETS) === value} onClick={() => setFontScale(value)} ariaLabel={`${Math.round(value * 100)} percent font size`}>{Math.round(value * 100)}%</DesktopSettingsChoice>)}
@@ -5078,8 +5058,8 @@ function DesktopSettingsContent({
                         {LINE_HEIGHT_PRESETS.map((value) => <DesktopSettingsChoice key={value} active={nearestPreset(reading.lineHeight, LINE_HEIGHT_PRESETS) === value} onClick={() => setLineHeight(value)} ariaLabel={`${value.toFixed(1)} line height`}>{value.toFixed(1)}</DesktopSettingsChoice>)}
                     </Box>
                 </DesktopSettingsRow>
-            </DesktopModalBlock>
-            <DesktopModalBlock
+            </DesktopPanel>
+            <DesktopPanel
                 label="Workflow"
                 sx={{ "@media (max-width: 1279px)": { gridColumn: "1 / -1" } }}
             >
@@ -5103,7 +5083,7 @@ function DesktopSettingsContent({
                         <DesktopSettingsChoice active={composerDebug} onClick={() => { const next = !composerDebug; setComposerDebugSetting(next); reportComposerDebugModeChanged(next); }} ariaLabel="Toggle composer debug mode">{composerDebug ? "On" : "Off"}</DesktopSettingsChoice>
                     </DesktopSettingsRow>
                 </Box>
-            </DesktopModalBlock>
+            </DesktopPanel>
         </Box>
     );
 }
@@ -6332,7 +6312,13 @@ function SettingsShell({
                     position: "sticky",
                     top: -1,
                     zIndex: 4,
-                    bgcolor: "background.paper",
+                    // On the sheet surface this band really does sit over the
+                    // scrolling panel, so it keeps a fill. Frosted rather than
+                    // opaque: an opaque `background.paper` printed a lighter
+                    // seam across the translucent Desktop modal material. Same
+                    // material as the shortcut bar closing the other end.
+                    bgcolor: (theme) => alpha(theme.palette.background.paper, 0.94),
+                    backdropFilter: "blur(16px)",
                     pt: 0,
                     pb: 0,
                     borderRadius: 0,

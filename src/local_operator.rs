@@ -327,7 +327,7 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
                 "Convergence submits durable installations. A lost response requires receipt inspection before the same run is repeated."
             );
         }
-        return converge::run(&client, machine, plugin, *apply).await;
+        return converge::run(&client, &args.data_dir, machine, plugin, *apply).await;
     }
     let (method, segments, body, operation) = match args.command {
         OperatorCommand::Status => (reqwest::Method::GET, vec!["status".into()], None, None),

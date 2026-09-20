@@ -2,7 +2,8 @@ import { assertEquals } from "jsr:@std/assert";
 import {
   cowboyVersionFromServiceWorkerSource,
   fetchReadyCowboyVersion,
-  mobileUpdateBannerLabel,
+  mobileUpdateAnnouncement,
+  mobileUpdateBanner,
 } from "./mobileUpdateVersion.ts";
 
 Deno.test("the update bar names the ready service-worker version", () => {
@@ -20,48 +21,98 @@ Deno.test("the update bar names the ready service-worker version", () => {
   );
 });
 
-Deno.test("every phone update label narrates, never asks", () => {
+Deno.test("the phone bar narrates a download it does not offer to hurry", () => {
+  // A download nobody asked for shows as a hairline, so this copy only
+  // appears when there is something to say; either way it names no action,
+  // because there is nothing useful to press while bits are in flight.
+  const quiet = mobileUpdateBanner("cowboy-v1352", {
+    kind: "downloading",
+    progress: 0.62,
+    requested: false,
+  });
+  assertEquals(quiet, { text: "Cowboy cowboy-v1352 · 62%" });
   assertEquals(
-    mobileUpdateBannerLabel("cowboy-v1352", { kind: "counting", secs: 3 }),
-    "New Cowboy version cowboy-v1352 · updating in 3s",
+    mobileUpdateBanner("cowboy-v1352", { kind: "downloading", requested: false }).text,
+    "Cowboy cowboy-v1352 · downloading…",
   );
   assertEquals(
-    mobileUpdateBannerLabel(undefined, { kind: "counting", secs: 0 }),
-    "New Cowboy version · updating in 0s",
+    mobileUpdateBanner(undefined, { kind: "downloading", progress: 0.2, requested: false }).text,
+    "New Cowboy version · 20%",
   );
-  // A negative counter can never reach the copy.
+  // Never 100% before the bits are here, however the fraction rounds.
   assertEquals(
-    mobileUpdateBannerLabel(undefined, { kind: "counting", secs: -2 }),
-    "New Cowboy version · updating in 0s",
-  );
-  assertEquals(
-    mobileUpdateBannerLabel("cowboy-v1352", { kind: "held" }),
-    "New Cowboy version cowboy-v1352 ready · updating when you pause",
-  );
-  assertEquals(
-    mobileUpdateBannerLabel("cowboy-v1352", { kind: "applying" }),
-    "Updating to cowboy-v1352…",
-  );
-  assertEquals(
-    mobileUpdateBannerLabel(undefined, { kind: "applying" }),
-    "Downloading the update…",
-  );
-  assertEquals(
-    mobileUpdateBannerLabel("cowboy-v1352", { kind: "failed" }),
-    "The update could not be downloaded yet · retrying",
+    mobileUpdateBanner("cowboy-v1352", { kind: "downloading", progress: 0.999, requested: false })
+      .text,
+    "Cowboy cowboy-v1352 · 99%",
   );
 });
 
+Deno.test("a press names what a second press would do, not what the first did", () => {
+  // The control's meaning inverts once it has been pressed. Leaving it
+  // reading "Reload" would make the cancel a trap.
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "downloading", progress: 0.4, requested: true }),
+    { text: "Reloading when ready · 40%", action: "Cancel" },
+  );
+});
+
+Deno.test("every pressable phase draws its action as an action", () => {
+  // The bar looks like the notice it used to be, so the verb has to leave the
+  // sentence and become a control of its own.
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "ready" }),
+    { text: "cowboy-v1352 is ready", action: "Reload" },
+  );
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "ready", secs: 3 }),
+    { text: "cowboy-v1352 is ready · 3s", action: "Reload" },
+  );
+  assertEquals(
+    mobileUpdateBanner(undefined, { kind: "ready", secs: -2 }),
+    { text: "the new version is ready · 0s", action: "Reload" },
+  );
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "rejected" }),
+    { text: "cowboy-v1352 didn't start", action: "Try again" },
+  );
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "failed", requested: false }),
+    { text: "Download paused", action: "Retry" },
+  );
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "failed", requested: true }),
+    { text: "Download paused · retrying", action: "Retry" },
+  );
+});
+
+Deno.test("the swap itself offers nothing to press", () => {
+  assertEquals(
+    mobileUpdateBanner("cowboy-v1352", { kind: "reloading" }),
+    { text: "Updating to cowboy-v1352…" },
+  );
+  assertEquals(mobileUpdateBanner(undefined, { kind: "reloading" }), { text: "Updating…" });
+});
+
+Deno.test("a screen reader hears one control, not a layout", () => {
+  assertEquals(
+    mobileUpdateAnnouncement(mobileUpdateBanner("cowboy-v1352", { kind: "ready" })),
+    "cowboy-v1352 is ready. Reload",
+  );
+  assertEquals(
+    mobileUpdateAnnouncement(mobileUpdateBanner("cowboy-v1352", { kind: "reloading" })),
+    "Updating to cowboy-v1352…",
+  );
+});
 Deno.test("the mobile bar reads the version and keeps its hooks unconditional", async () => {
   const bannerSource = await Deno.readTextFile(
     new URL("./MobileConnectionBanner.tsx", import.meta.url),
   );
   assertEquals(
-    bannerSource.includes("mobileUpdateBannerLabel(readyVersion, phase)"),
+    bannerSource.includes("mobileUpdateBanner(readyVersion, phase)"),
     true,
   );
   assertEquals(bannerSource.includes("registration?.waiting?.scriptURL"), true);
-  const hooksEnd = bannerSource.indexOf("}, [isUpdate]);");
+  const hooksEnd = bannerSource.indexOf("}, [update.phase, update.streamed]);");
   const earlyReturn = bannerSource.indexOf("if (!banner) return null;");
   assertEquals(hooksEnd > 0 && earlyReturn > hooksEnd, true);
   assertEquals(bannerSource.indexOf("useAutoUpdate(store") < earlyReturn, true);

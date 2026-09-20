@@ -51,6 +51,7 @@ import {
   scheduleNearestReset,
 } from "./usageApi";
 import { ConfirmSheet } from "./Sheet";
+import { desktopPanelSx } from "./desktop/DesktopEmbeddedControl";
 import { TelemetryBindingPanel } from "./TelemetryBindingPanel";
 import { ProductSyncDataNotice } from "./ProductSyncDataNotice";
 import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
@@ -894,7 +895,7 @@ export function InfoContent({
         <Stack
           spacing={1}
           sx={desktop
-            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            ? { ...desktopPanelSx(), p: 1.5 }
             : undefined}
         >
           <Typography variant="overline" color="text.secondary">
@@ -929,7 +930,7 @@ export function InfoContent({
         <Stack
           spacing={0.5}
           sx={desktop
-            ? { p: 1.5, border: 1, borderColor: "divider", borderRadius: 2 }
+            ? { ...desktopPanelSx(), p: 1.5 }
             : undefined}
         >
           <Typography variant="overline" color="text.secondary">

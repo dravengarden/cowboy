@@ -25,8 +25,20 @@ import {
   createServiceWorkerUpdateCheck,
 } from "./serviceWorkerUpdates";
 import { isBundleRecoveryUrl } from "./moduleRecovery";
+import {
+  clearUpdateAttempt,
+  rollbackToPreviousBuild,
+  rolledBackNavigationUrl,
+  type UpdateAttempt,
+} from "./updateAttempt";
 import { initializeAppIcons } from "./appIcons";
 import { ownPluginHostLifecycle } from "./pluginHost/lifecycle";
+
+// How long a freshly swapped-in build has to stay up before it counts as
+// started. Long enough to cover the gates, the lazy surface chunk and its
+// first render; short enough that a user who kills a white screen has not
+// already outlasted it.
+const UPDATE_SETTLED_MS = 8_000;
 
 const releasePluginHostScope = ownPluginHostLifecycle(globalThis);
 import.meta.hot?.dispose(releasePluginHostScope);
@@ -64,6 +76,16 @@ function Root(): React.JSX.Element {
   // (docs/offline-first-sync.md §Boot presentation).
   const desktop = surface.kind === "desktop";
   useEffect(() => rememberBootSurface(desktop), [desktop]);
+  // Sign for the swap. Not on mount: a build that mounts and then throws has
+  // not started, and the boundary below needs the marker still there to know a
+  // crash belongs to the update. Staying up for this long is the evidence.
+  useEffect(() => {
+    const settled = globalThis.setTimeout(
+      () => clearUpdateAttempt(globalThis.localStorage),
+      UPDATE_SETTLED_MS,
+    );
+    return () => globalThis.clearTimeout(settled);
+  }, []);
   const deviceAuthorizationActive = captureDeviceAuthorizationFromLocation();
   const app = surface.kind === "desktop"
     ? <DesktopApp themeMode={mode} onSetThemeMode={setMode} />
@@ -109,6 +131,40 @@ function Root(): React.JSX.Element {
 // primitive's coalesce window — no double-buzz. Installed once, never torn down.
 installHaptics();
 installObservability();
+
+// The document's inline ledger found that the previous load reached this
+// point and never came up: the build we swapped into does not start here.
+// Put back the one that did before rendering anything — the tree we would
+// render is the tree that failed. The service worker keeps two generations,
+// so the previous build is whole in cache and this needs no network.
+const bootFailure = (globalThis as typeof globalThis & {
+  __cowboyUpdateBootFailed?: UpdateAttempt;
+}).__cowboyUpdateBootFailed;
+if (bootFailure) {
+  reportClientLog(
+    "error",
+    "client_update_boot_failed",
+    "A deployed Cowboy build did not start; rolling back",
+    { target_build: bootFailure.to },
+  );
+  void rollbackToPreviousBuild().then((result) => {
+    if (!result.ok) {
+      // Nothing to fall back to. Running the build we have beats showing
+      // nothing, and the next deploy is the way out.
+      reportClientLog(
+        "warn",
+        "client_update_rollback_unavailable",
+        "No previous Cowboy build was cached to roll back to",
+        { target_build: bootFailure.to },
+      );
+      return;
+    }
+    markClientReloadIntent("update_boot_failure_rollback", result.version);
+    globalThis.location.replace(
+      rolledBackNavigationUrl(globalThis.location.href, Date.now()),
+    );
+  });
+}
 
 const el = document.getElementById("root");
 if (el) {

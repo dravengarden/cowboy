@@ -108,3 +108,23 @@ Deno.test("a Plugin-served slot offers no legacy update to press", async () => {
     true,
   );
 });
+
+Deno.test("a Service-managed Machine offers no Plugin lifecycle action", async () => {
+  const management = await Deno.readTextFile(
+    new URL("./ProviderManagement.tsx", import.meta.url),
+  );
+  // Blocking the capability removes the button entirely (ProviderSurface
+  // renders nothing for a blocked action), so a managed Machine cannot be
+  // installed to, upgraded or uninstalled from a client.
+  const blocked = management.slice(
+    management.indexOf("const SERVICE_MANAGED_EFFECTS"),
+    management.indexOf("type ProviderManagementProps"),
+  );
+  for (const capability of ["install_on_machine", "upgrade_on_machine", "request_uninstall_plan"]) {
+    assertEquals(blocked.includes(`"${capability}"`), true, capability);
+  }
+  assertEquals(
+    management.includes(`machine?.plugin_lifecycle === "managed"`),
+    true,
+  );
+});

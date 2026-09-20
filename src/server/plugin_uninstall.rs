@@ -661,6 +661,9 @@ pub(super) async fn api_machine_plugin_uninstall(
         )
             .into_response();
     }
+    if let Some(refusal) = super::service_managed_refusal(&state, &machine_id) {
+        return refusal;
+    }
     let approval = match OperatorApproval::capture(
         ProductRequestAuth::from(state.as_ref()),
         &state.service_id,
@@ -670,6 +673,18 @@ pub(super) async fn api_machine_plugin_uninstall(
         Ok(approval) => approval,
         Err(status) => return status.into_response(),
     };
+    confirmed_uninstall(state, machine_id, provider_id, request, approval).await
+}
+
+/// The uninstall transaction itself, entered with a freshly captured approval.
+/// A host-authorized convergence and a browser confirmation run exactly this.
+pub(super) async fn confirmed_uninstall(
+    state: Arc<AppState>,
+    machine_id: String,
+    provider_id: String,
+    request: PluginUninstallRequest,
+    approval: OperatorApproval,
+) -> Response {
     let plan = match consume_preview(
         &mut state.plugin_uninstall_plans.lock(),
         approval.actor(),
