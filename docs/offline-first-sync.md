@@ -351,21 +351,46 @@ time and the retry countdown. Click opens the command palette filtered to
 `Reconnect now`, `Retry held sends`, `Reload app`, `Update now`.
 
 **Banners.** Only sign-in required, dataset changed, and update ready. The
-update banner no longer counts down while the user is composing.
+update banner no longer counts down while the user is composing; it fills with
+the download instead, and pressing it takes the update at once.
 
 **Update policy (both products).** A deployed build is applied by the client
-itself; no surface offers an update control to press. An update is never
-applied while any of these hold: composer text or attachments present, IME
-composition active, a row in `saving`/`sending`, a running turn in the active
-session, or a focused editor. When all clear, both products apply after a
-visible 3 s countdown; a busy moment rewinds it to its start rather than
-freezing it, and the check re-arms every second so the reload lands on the
-first real pause. Mobile requires 60 s of uninterrupted foreground on top of
-that, counted again from every resume, because an installed PWA restores a
-frozen page and an immediate reload reads as a crash. A download that does not
-finish keeps this build running and starts another countdown a minute later.
-An update is always applied on the next launch. The service worker keeps its
-two-generation cache so the open window survives the swap.
+itself. No surface ever *requires* a control to be found: every rule below runs
+for a user who never presses anything.
+
+The download and the swap are separate. The bits are fetched the moment a
+deploy is detected, ungated — what interrupts someone is the reload, never the
+download — and the service worker reports each landed batch, so the update bar
+fills with the real count and only promotes the shell once the whole boot
+closure is cached. Nothing replaces a running build before its replacement is
+here; no intent waives that.
+
+The swap is then taken by whichever road arrives first. Automatically: an
+update is never applied while any of these hold — composer text or attachments
+present, IME composition active, a row in `saving`/`sending`, a running turn in
+the active session, or a focused editor — and when all clear, both products
+apply after a visible 3 s countdown that starts only once the bits are here. A
+busy moment rewinds it to its start rather than freezing it, and the check
+re-arms every second so the reload lands on the first real pause. Mobile
+requires 60 s of uninterrupted foreground on top of that, counted again from
+every resume, because an installed PWA restores a frozen page and an immediate
+reload reads as a crash.
+
+Or by press: the whole update bar is the control, on both surfaces. A press
+outranks the idle gate and the dwell, which exist to protect someone who did
+not ask. It is never disabled while the download runs — a press then means
+"take it as soon as it lands", so nobody has to watch a progress bar for
+permission to say what they already decided — and after a paused download it is
+also the retry. The bar is its own progress bar: one paint-only background fill
+over a darker track, no extra node, no transform and no shadow, so it can live
+over the phone's moving chrome (`mobile-spatial-presentation.md` §2.1). Its
+full state is simply the bar's ordinary solid colour, and it snaps rather than
+sweeps for a build that was already cached. The percentage never reads 100
+before the bits are here.
+
+A download that does not finish keeps this build running and tries again a
+minute later. An update is always applied on the next launch. The service
+worker keeps its two-generation cache so the open window survives the swap.
 
 ### Copy
 
@@ -408,7 +433,7 @@ and fixes each with a server outcome and a presentation.
 | 17 | Replay partially fails with an unaddressed broadcast error | addressed results replace broadcast errors for client-originated commands | only the originating row shows the reason; other clients are not toasted |
 | 18 | Held row after reload | `held` persisted in `session:<sid>:delivery` | stays held; never auto-resent |
 | 19 | Composer draft with images hits `localStorage` quota | drafts move to the dataset-scoped IndexedDB with text mirrored to `localStorage` for synchronous seed | no silent image loss; a pending paste placeholder is still lost on crash and stays documented |
-| 20 | Update becomes ready mid-composition | update policy above | no reload; banner or pill only |
+| 20 | Update becomes ready mid-composition | update policy above | no reload on its own; the bar narrates its download and stays pressable |
 
 ## Server changes
 

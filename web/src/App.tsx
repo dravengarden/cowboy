@@ -3472,9 +3472,11 @@ export function App({
             }}
         >
             {/* The connection state is shared; so is the update policy. Both
-                surfaces count down and reload on their own once the user is
+                surfaces download the deployed build at once, fill the bar with
+                it, and reload on their own after a countdown once the user is
                 idle; the phone additionally waits out a foreground minute
-                (MobileConnectionBanner) so a resume never reloads at once. */}
+                (MobileConnectionBanner) so a resume never reloads at once. On
+                both, pressing the bar only brings that reload forward. */}
             {surface === "desktop" && (
                 <>
                     {/* Connectivity lives in the status line; the banner keeps
