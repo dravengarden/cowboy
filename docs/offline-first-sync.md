@@ -597,6 +597,15 @@ rather than a deadline the parse can lose: a real phone fires a short timer on
 time while the parse runs long, which would show the placeholder and then
 replace it.
 
+The overlay is also mounted before it is shown: `opacity: 0` so the browser
+actually renders it and therefore fetches the faces the saved screen uses,
+then revealed once `document.fonts.check` passes FOR THAT SCREEN'S OWN TEXT.
+A bare family name only pulls the default unicode subset, so a Chinese
+transcript would be drawn in a fallback and reflow when the real subset
+arrived. Text drawn in a fallback has different metrics from the same text in
+the real face, and the app repaints it in the real one — which is a jump a
+moment after the content appears. The wait is bounded.
+
 The hand-off is a removal, not a cross-fade. The overlay is only let go once
 the app has painted the same screen, and dissolving one copy of that screen
 through another doubles every glyph for a fifth of a second, which reads as a

@@ -175,7 +175,7 @@ so only its package version/digest changes. The current Plugin sources are
 snapshotted, including the independently versioned Zed 1.18.0 candidate; their
 historical component pins and existing signed releases remain unchanged.
 
-Scoped release 3.21.0 records app-shell 1.1.12: the update banner is now the
+Scoped release 3.22.0 records app-shell 1.1.13: the update banner is now the
 update control. The deployed build is downloaded as soon as a deploy is
 detected and the service worker streams its boot-asset count back, so the bar
 fills with a real download and a press swaps builds from cache alone
@@ -185,6 +185,19 @@ owns the fill). The automatic countdown is unchanged and still arrives for a
 user who never presses. Only app-shell's version/digest changes; it still has no
 component or Plugin consumers, and no Plugin manifest, signed bytes or
 component pin changes. No Catalog publication or Machine upgrade is needed.
+
+Scoped release 3.21.0 records app-shell 1.1.12: a zoomed preview figure moves
+like a scroll view instead of a dragged box. A released pan now coasts its
+smoothed speed out on one compositor transition whose curve leaves at exactly
+the speed the finger did, an axis the figure already fits is rigid rather than
+elastic — a wide Mermaid diagram no longer drifts vertically while it is panned
+sideways — a settle keeps its pan layer promoted instead of demoting it on the
+frame the animation starts, and a finger landing mid-settle freezes the figure
+where it is painted rather than jumping to the target. The same freeze fixes a
+second zoom step taken mid-animation, which used to measure a stale rect and
+bake a size the figure never had. Only app-shell's version/digest changes; it
+still has no component or Plugin consumers, and no Plugin manifest, signed bytes
+or component pin changes. No Catalog publication or Machine upgrade is needed.
 
 Scoped release 3.20.0 records app-shell 1.1.11: a deployed build is applied by
 the client itself on every surface. `useAutoUpdate` and the pure
