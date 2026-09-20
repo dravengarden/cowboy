@@ -74,6 +74,17 @@ Deno.test("decoders reject malformed cache records instead of painting them", ()
   assertEquals(decodeReplicaDelivery({ held: ["a"] }), { held: ["a"] });
 });
 
+Deno.test("a cached tail carries the validator that makes the next open conditional", () => {
+  const base = { receivedAt: 1, lastSeq: 1, reachedStart: true, events: [event(1)] };
+  assertEquals(decodeReplicaTail({ ...base, etag: '"bootstrap-v1-abc"' })?.etag, '"bootstrap-v1-abc"');
+  // A tail written before this existed simply revalidates unconditionally.
+  assertEquals(decodeReplicaTail(base)?.etag, undefined);
+  // Never replay a value that could not have come from a response header.
+  assertEquals(decodeReplicaTail({ ...base, etag: 42 })?.etag, undefined);
+  assertEquals(decodeReplicaTail({ ...base, etag: "" })?.etag, undefined);
+  assertEquals(decodeReplicaTail({ ...base, etag: "x".repeat(400) })?.etag, undefined);
+});
+
 Deno.test("replica coalesces bursts into one write and lands immediate checkpoints", async () => {
   const db = memoryDatabase();
   let clock = 1000;

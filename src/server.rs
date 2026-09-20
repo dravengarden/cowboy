@@ -66,6 +66,8 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, watch};
 use tokio_util::io::ReaderStream;
 
+#[cfg(test)]
+mod bootstrap_validator_tests;
 mod code_buffers;
 mod code_reads;
 #[cfg(unix)]
@@ -16664,18 +16666,69 @@ struct SessionBootstrapResponse {
 /// path deliberately carries global metadata only; replaying every transcript,
 /// config option and queue state made mobile reconnects multi-megabyte
 /// affairs. Live events can overlap this response and are deduplicated by seq.
+///
+/// The body is validated by a digest of itself, so reopening a session whose
+/// tail has not moved costs one conditional request instead of resending up
+/// to `SNAPSHOT_MAX_BYTES` (docs/offline-first-sync.md §Boot presentation).
+/// A digest, not a cursor: transcript rows are coalesced in place under an
+/// existing seq (`EventReducer::reduce`), so "everything after seq N" would
+/// silently miss a tool call that completed or a message that grew, while a
+/// digest over the whole tail cannot.
 async fn api_session_bootstrap(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(messages) = focused_session_bootstrap(&state.hub, &session_id) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
     };
+    let body = SessionBootstrapResponse { messages };
+    let Ok(encoded) = serde_json::to_vec(&body) else {
+        return ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response();
+    };
+    let etag = bootstrap_etag(&encoded);
+    if if_none_match_has(
+        headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok()),
+        &etag,
+    ) {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag.as_str()),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+        )
+            .into_response();
+    }
     (
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(SessionBootstrapResponse { messages }),
+        [
+            (header::ETAG, etag.as_str()),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        Json(body),
     )
         .into_response()
+}
+
+/// Validate the bootstrap body by a digest of itself. `bootstrap-v1` guards
+/// the response shape: a deploy that grows it must not let an installed client
+/// keep revalidating into an older body.
+fn bootstrap_etag(encoded: &[u8]) -> String {
+    format!("\"bootstrap-v1-{}\"", crate::admin::hex_sha256(encoded))
+}
+
+/// Exact token match, not a substring search, and deliberately not `*`: this
+/// representation is private to one reader, so a wildcard revalidation would
+/// answer 304 for a body the caller has never seen.
+fn if_none_match_has(header: Option<&str>, etag: &str) -> bool {
+    header.is_some_and(|value| {
+        value
+            .split(',')
+            .map(|candidate| candidate.trim().trim_start_matches("W/"))
+            .any(|candidate| candidate == etag)
+    })
 }
 
 fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound>> {

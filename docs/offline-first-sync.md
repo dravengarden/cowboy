@@ -3,7 +3,9 @@
 Status: design 2026-09-18; the boot path became network-independent on
 2026-09-19 (see [Boot on a weak connection](#boot-on-a-weak-connection-service-worker-cowboy-v1738))
 and now opens on the user's real last screen (see
-[Boot presentation](#boot-presentation-service-worker-cowboy-v1740));
+[Boot presentation](#boot-presentation-service-worker-cowboy-v1740)) and
+revalidates a session instead of re-downloading it (see
+[Reopening a session](#reopening-a-session-controller-and-web-service-worker-cowboy-v1741));
 Phase 1 implemented on Web the same day; the
 Phase 2 submission ledger, addressed results and idempotent sync, plus the
 Phase 3 prefetch and sessions-list affordances, landed 2026-09-19 (see
@@ -497,6 +499,46 @@ Manual matrix on the physical iPhone PWA and a Desktop window:
 | 10 | Two tabs, one device, both queue offline | both rows survive and both drain once |
 
 ## Implementation status
+
+### Reopening a session (Controller and Web, service worker `cowboy-v1741`)
+
+Opening a session paints from the cached tail with no network, and then
+fetches `GET /api/sessions/<id>/bootstrap` to reconcile. That fetch sent no
+cursor and the response carried no validator, so every open re-downloaded a
+tail already on the device — up to `SNAPSHOT_MAX_BYTES` (128 KiB) of it,
+competing with the socket on exactly the weak connection this design is for.
+
+The response is now validated by a digest of its own body. A reader that still
+holds the timeline a given response produced replays that `ETag` as
+`If-None-Match` and gets `304` with no body.
+
+A digest rather than a `since_seq` cursor, deliberately. Transcript rows are
+coalesced in place under an existing seq (`EventReducer::reduce`): a streamed
+message grows inside its first row, and a tool call is rewritten from
+`pending` through `completed` under the seq it was created at. "Everything
+after seq N" would therefore report nothing new while a tool call the reader
+is watching has finished. `src/server/bootstrap_validator_tests.rs` pins
+exactly that: the last seq does not move, the validator does. A forward cursor
+remains possible later, but it needs a per-row update watermark first, which
+is a durable schema change on the hot write path.
+
+The client only revalidates a timeline that is actually mounted from that
+exact response, because a `304` carries nothing to apply. The validator rides
+in the cached tail (`ReplicaTail.etag`), so it survives a reload, and it is
+dropped wherever the timeline it describes is dropped — eviction, a discarded
+replica, an epoch bump. A `304` also promotes the transcript to `live`: the
+server has just confirmed the reading is current, so the caption says so
+instead of "cached".
+
+The reconciling fetch now follows the local tail read instead of racing it,
+because that record is where the validator lives. Nothing visible waits on
+it — the transcript paints from the same read — and a 2 s ceiling keeps a
+database that never answers from withholding the network.
+
+Verified end to end against a fake Hub in Chrome: a cold device sends no
+validator and gets `200`; reopening sends it and gets `304` with the
+transcript intact; and after the server's tail changes, the same validator
+correctly yields `200` and the new content appears.
 
 ### Boot presentation (service worker `cowboy-v1740`)
 

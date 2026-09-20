@@ -15,7 +15,7 @@
 // Bump on EVERY web deploy — the app's foreground update-check (main.tsx) only
 // detects a new worker when this string changes. Desktop auto-reloads after its
 // visible countdown; Mobile waits for an explicit Update tap.
-const VERSION = "cowboy-v1740";
+const VERSION = "cowboy-v1741";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the

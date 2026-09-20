@@ -31,6 +31,10 @@ export interface ReplicaTail {
   readonly reachedStart: boolean;
   readonly events: readonly Envelope[];
   readonly configOptions?: readonly ConfigOption[];
+  /** The `ETag` of the bootstrap response this tail was reconciled against.
+   *  Replaying it as `If-None-Match` turns reopening an unchanged session
+   *  into a 304 (docs/offline-first-sync.md §Reopening a session). */
+  readonly etag?: string;
 }
 
 export interface ReplicaDelivery {
@@ -120,6 +124,10 @@ export function decodeReplicaTail(value: unknown): ReplicaTail | null {
     reachedStart: value.reachedStart,
     events,
     ...(configOptions !== undefined ? { configOptions } : {}),
+    ...(typeof value.etag === "string" && value.etag.length > 0 &&
+        value.etag.length <= 200
+      ? { etag: value.etag }
+      : {}),
   };
 }
 
