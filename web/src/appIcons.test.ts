@@ -176,13 +176,18 @@ Deno.test("every icon has installable files with a shared identity and an isolat
 });
 
 Deno.test("Curlseal previews preserve the approved artwork in both modes", () => {
+  // The opaque vector, not the 192px raster the installable files still use.
   assertEquals(
     appIconAppearanceAsset(DEFAULT_APP_ICON, false),
-    "/app-icons/v10/curlseal-026/icon-192.png",
+    "/app-icons/v10/curlseal-026/icon.svg",
   );
   assertEquals(
     appIconAppearanceAsset(DEFAULT_APP_ICON, true),
+    appIconAppearanceAsset(DEFAULT_APP_ICON, false),
+  );
+  assertEquals(
     appIconAsset(DEFAULT_APP_ICON, 192),
+    "/app-icons/v10/curlseal-026/icon-192.png",
   );
   for (const icon of APP_ICONS.filter((icon) => icon.id !== DEFAULT_APP_ICON)) {
     assertEquals(

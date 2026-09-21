@@ -67,11 +67,15 @@ export function appIconAsset(
   return `${appIconBase(id)}/icon-${size}.png`;
 }
 
-// Native Neon supplies paired appearances; archived styles retain their artwork.
+// Curlseal previews serve the artwork's own vector so the picker stays sharp at
+// any device pixel ratio. Native Neon supplies paired appearances; the other
+// archived styles predate the vector export and retain their raster artwork.
 export function appIconAppearanceAsset(id: string, dark: boolean): string {
-  return appIcon(id).id === "palette-103" && !dark
+  const icon = appIcon(id);
+  if (icon.collection === "curlseal") return `${appIconBase(icon.id)}/icon.svg`;
+  return icon.id === "palette-103" && !dark
     ? "/app-icons/v6/palette-103/icon-light-192.png"
-    : appIconAsset(id, 192);
+    : appIconAsset(icon.id, 192);
 }
 
 export function appIconTabAsset(id: string): string {

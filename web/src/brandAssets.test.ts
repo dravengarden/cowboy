@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert";
+import { appIconAppearanceAsset } from "./appIcons.ts";
 
 const repoRoot = new URL("../../", import.meta.url);
 const read = (path: string) => Deno.readTextFile(new URL(path, repoRoot));
@@ -97,17 +98,47 @@ Deno.test("entry points use the current icon and the service worker changes gene
   assert(sw.includes('icon: "/cowboy-app-icon-192-v10.png"'));
 });
 
-Deno.test("native alternate icon declarations cover the complete web catalog", async () => {
-  const rows = JSON.parse(await read("web/src/appIconCatalog.json")) as {
-    id: string;
-  }[];
-  for (const icon of rows) {
-    const base = "apps/native-shell/apple/Assets.xcassets/Cowboy-" + icon.id +
-      ".appiconset/";
+// SideStore re-signs every bundled file on device under a free team, so the
+// asset catalog carries only icons the picker can actually select. Archived
+// catalog entries keep their web artwork and lose Home Screen switching.
+Deno.test("native alternate icons ship exactly the curated picker styles", async () => {
+  const styles = JSON.parse(await read("web/src/appIconStyles.json")) as {
+    groups: { styles: { id: string }[] }[];
+  };
+  const curated = styles.groups.flatMap((group) =>
+    group.styles.map((style) => style.id)
+  );
+  for (const id of curated) {
+    const base =
+      `apps/native-shell/apple/Assets.xcassets/Cowboy-${id}.appiconset/`;
     const content = JSON.parse(await read(base + "Contents.json"));
     assertEquals(content.images[0].platform, "ios");
     assertEquals(await pngSize(base + "icon.png"), [1024, 1024]);
+    // The Home Screen icon must stay raster, but the picker renders the same
+    // artwork as its opaque vector. Keep both exports present for every style.
+    const svg = await read(
+      appIconAppearanceAsset(id, false).replace(
+        "/app-icons/",
+        "web/public/app-icons/",
+      ),
+    );
+    assert(svg.startsWith("<svg "), id);
+    assert(svg.includes('viewBox="0 0 1024 1024"'), id);
+    // Unlike the tab mark, a preview shows the Home Screen icon as installed:
+    // opaque, and never re-tinted by the page's color scheme.
+    assert(svg.includes('<rect width="1024" height="1024"'), id);
+    assert(!svg.includes("prefers-color-scheme"), id);
   }
+  const bundled: string[] = [];
+  for await (
+    const entry of Deno.readDir(
+      new URL("apps/native-shell/apple/Assets.xcassets", repoRoot),
+    )
+  ) {
+    const id = /^Cowboy-(.+)\.appiconset$/.exec(entry.name)?.[1];
+    if (id !== undefined) bundled.push(id);
+  }
+  assertEquals(bundled.sort(), [...curated].sort());
   const project = await read("apps/native-shell/apple/project.yml");
   assert(
     project.includes("ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES"),
@@ -122,21 +153,24 @@ Deno.test("native alternate icon declarations cover the complete web catalog", a
   assert(bridge.includes("setAlternateIconName:name"));
 });
 
-Deno.test("archived Neon retains its automatic light and dark appearances", async () => {
-  for (const name of ["Cowboy-palette-103"]) {
-    const base = `apps/native-shell/apple/Assets.xcassets/${name}.appiconset/`;
-    const catalog = JSON.parse(await read(base + "Contents.json"));
-    assertEquals(catalog.images.length, 2);
-    assertEquals(catalog.images[0].filename, "icon-light.png");
-    assertEquals(catalog.images[0].appearances, undefined);
-    assertEquals(catalog.images[1].appearances, [{
-      appearance: "luminosity",
-      value: "dark",
-    }]);
-    for (const image of catalog.images) {
-      assertEquals(await pngSize(base + image.filename), [1024, 1024]);
-    }
-  }
+// Neon was the default before curlseal-026, so a stored preference still
+// resolves. Its Home Screen variant is archived; the paired web appearances
+// that appIconAppearanceAsset() serves are not.
+Deno.test("archived Neon retains its light and dark web appearances", async () => {
+  for (
+    const path of [
+      "web/public/app-icons/v6/palette-103/icon-light-192.png",
+      "web/public/app-icons/v5/palette-103/icon-192.png",
+    ]
+  ) assertEquals(await pngSize(path), [192, 192], path);
+  assertEquals(
+    appIconAppearanceAsset("palette-103", false),
+    "/app-icons/v6/palette-103/icon-light-192.png",
+  );
+  assertEquals(
+    appIconAppearanceAsset("palette-103", true),
+    "/app-icons/v5/palette-103/icon-192.png",
+  );
 });
 
 Deno.test("tab SVGs are transparent vectors and ICO has native browser frames", async () => {
