@@ -173,6 +173,15 @@ if [ "$native_platform" != macos ]; then
     echo "Install the pinned Rust target first: rustup target add --toolchain $native_rust $native_triple" >&2
     exit 1
   }
+  # swift-rs globalizes the Swift side's @_cdecl exports with llvm-objcopy,
+  # which Xcode 27 otherwise internalizes. Without llvm-tools it degrades to a
+  # cargo:warning that cargo hides for registry dependencies, and the failure
+  # surfaces much later as undefined _register_plugin/_retain_object at link
+  # time. Fail here instead, where the cause is still legible.
+  test -x "$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/llvm-objcopy" || {
+    echo "Install the pinned toolchain's LLVM tools first: rustup component add llvm-tools --toolchain $native_rust-aarch64-apple-darwin" >&2
+    exit 1
+  }
 fi
 xcodebuild -version
 # Credentials are neither inputs to nor side effects of this unsigned/ad-hoc
