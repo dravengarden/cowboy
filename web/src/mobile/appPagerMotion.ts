@@ -66,6 +66,34 @@ export function pagerTargetOffset(
   return product === "agent" ? 0 : -Math.max(1, viewportWidth);
 }
 
+/** A claimed swipe belongs to the finger that claimed it.
+ *
+ *  iOS fires a fresh `touchstart` for every additional contact, including a
+ *  palm. Rebuilding the recognizer there loses `locked`, so the touchend that
+ *  follows takes the "never claimed" path and no settle runs: the pager stays
+ *  frozen between Agent and Review with no later event able to land it. Keep
+ *  tracking `touches[0]` and ignore the extra contact instead. */
+export function pagerIgnoresAdditionalTouch(
+  locked: boolean,
+  touchCount: number,
+): boolean {
+  return locked && touchCount > 1;
+}
+
+/** The pager rests on a page, never between two.
+ *
+ *  Any other offset with no gesture and no settle in flight is a wedge left by
+ *  a touch stream whose end never reached the recognizer. Nothing else
+ *  reconciles it: tracking writes an inline transform, which outlives every
+ *  later React render. Heal it before the next touch is interpreted. */
+export function pagerOffsetIsWedged(
+  offset: number,
+  product: MobileProduct,
+  viewportWidth: number,
+): boolean {
+  return Math.abs(offset - pagerTargetOffset(product, viewportWidth)) > 0.5;
+}
+
 export function nextMobileProduct(product: MobileProduct): MobileProduct {
   return product === "agent" ? "review" : "agent";
 }

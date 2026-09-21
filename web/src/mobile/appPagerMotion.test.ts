@@ -4,7 +4,9 @@ import {
   mobileProductFromEvent,
   nextMobileProduct,
   pagerDirectionAllowed,
+  pagerIgnoresAdditionalTouch,
   pagerOffset,
+  pagerOffsetIsWedged,
   pagerTargetOffset,
   predictPagerOffset,
   shouldReservePagerStart,
@@ -117,4 +119,35 @@ Deno.test("vertical transcript pans release horizontal recognizers", () => {
     pagerSource.includes("gesture.dominance"),
     true,
   );
+});
+
+Deno.test("an extra finger cannot restart a claimed pager swipe", () => {
+  assertEquals(pagerIgnoresAdditionalTouch(true, 2), true);
+  assertEquals(pagerIgnoresAdditionalTouch(true, 1), false);
+  // An unclaimed start is still free to re-arm on the newest contact.
+  assertEquals(pagerIgnoresAdditionalTouch(false, 3), false);
+  const start = pagerSource.slice(
+    pagerSource.indexOf("const onTouchStart = (event: TouchEvent): void => {"),
+  );
+  // The guard must precede the recognizer teardown, or the in-flight stream
+  // loses both its state and its detached-node backstop.
+  assert(
+    start.indexOf("pagerIgnoresAdditionalTouch(") <
+      start.indexOf("stopFollowingDetachedStream();"),
+  );
+});
+
+Deno.test("a pager offset between products is a wedge that the next touch lands", () => {
+  assertEquals(pagerOffsetIsWedged(0, "agent", 390), false);
+  assertEquals(pagerOffsetIsWedged(-390, "review", 390), false);
+  assertEquals(pagerOffsetIsWedged(-48, "agent", 390), true);
+  assertEquals(pagerOffsetIsWedged(-342, "review", 390), true);
+  // A page whose rest offset moved with the viewport is also reconciled.
+  assertEquals(pagerOffsetIsWedged(-390, "review", 400), true);
+  const start = pagerSource.slice(
+    pagerSource.indexOf("const onTouchStart = (event: TouchEvent): void => {"),
+  );
+  assert(start.includes("restoreWedgedPage();"));
+  // An orphaned claim settles its own page instead of being dropped.
+  assert(start.includes("settle(orphan.product, 0, orphan.width);"));
 });

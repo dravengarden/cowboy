@@ -358,8 +358,35 @@ export function bindMobileSpatialDrawer({
     settleTimer = globalThis.setTimeout(finish, duration + 20);
   };
 
+  // A peek that sits neither open nor closed, with no gesture and no settle in
+  // flight, is a wedge: a claimed swipe lost its stream before touchend. The
+  // tracking transform is inline and `data-mobile-drawer-moving` stays set, so
+  // the transcript keeps its frozen overflow and the product pager keeps
+  // yielding. Land the rest state on the next touch.
+  const restoreWedgedPeek = (): void => {
+    if (gesture || pendingSettle) return;
+    const width = presentationWidth > 1 ? presentationWidth : drawerWidth();
+    const open = getOpen();
+    if (Math.abs(currentOffset - (open ? width : 0)) <= 0.5) return;
+    presentationWidth = width;
+    settle(open, 0, releaseDirectManipulation, width);
+  };
   const onTouchStart = (event: TouchEvent): void => {
+    // Keep a claimed swipe on the finger that claimed it. iOS starts a fresh
+    // stream for a second contact (a palm included); rebuilding `gesture` here
+    // drops `locked`, and the touchend that follows then returns without
+    // settling, freezing the peek part-way.
+    if (gesture?.locked === true && event.touches.length > 1) return;
     stopFollowingDetachedStream();
+    if (gesture?.locked === true) {
+      // A single new contact while a swipe is still claimed means the previous
+      // stream never delivered its end. Revert that swipe, like a cancel.
+      const orphan = gesture;
+      gesture = null;
+      commit = false;
+      settle(orphan.startOpen, 0, releaseDirectManipulation, orphan.width);
+    }
+    restoreWedgedPeek();
     const touch = event.touches[0];
     const target = event.target instanceof Element ? event.target : null;
     const inputOverlay = target?.closest("[data-mobile-keyboard-open]");

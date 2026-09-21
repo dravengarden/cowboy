@@ -206,3 +206,25 @@ Deno.test("drawer and pager settle a stream whose start node was re-rendered", (
     assert(end.indexOf("stopFollowingDetachedStream();") < end.indexOf("if ("));
   }
 });
+
+Deno.test("a second contact cannot restart or strand a claimed drawer swipe", () => {
+  const start = drawerSource.slice(
+    drawerSource.indexOf("const onTouchStart = (event: TouchEvent): void => {"),
+  );
+  const guard = start.indexOf("event.touches.length > 1");
+  const teardown = start.indexOf("stopFollowingDetachedStream();");
+  // The extra-contact guard runs before the recognizer drops its state and its
+  // detached-node backstop; a single new contact reverts the orphaned claim.
+  assert(guard >= 0 && guard < teardown);
+  assert(start.includes(
+    "settle(orphan.startOpen, 0, releaseDirectManipulation, orphan.width);",
+  ));
+  assert(start.includes("restoreWedgedPeek();"));
+  const restore = drawerSource.slice(
+    drawerSource.indexOf("const restoreWedgedPeek = (): void => {"),
+  );
+  // A settle in flight already holds the rest state; only a stranded offset is
+  // healed, and it lands the open state React still believes in.
+  assert(restore.indexOf("if (gesture || pendingSettle) return;") >= 0);
+  assert(restore.indexOf("const open = getOpen();") > 0);
+});

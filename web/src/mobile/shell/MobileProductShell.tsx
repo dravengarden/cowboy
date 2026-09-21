@@ -47,7 +47,9 @@ import {
   nextMobileProduct,
   pagerDirectionAllowed,
   type PagerGesture,
+  pagerIgnoresAdditionalTouch,
   pagerOffset,
+  pagerOffsetIsWedged,
   pagerTargetOffset,
   shouldReservePagerStart,
   type MobileProduct,
@@ -264,8 +266,40 @@ export function MobileProductShell({
         if (directManipulationActive) releaseDirectManipulation();
       }, duration + 20);
     };
+    // A pager offset that is neither Agent nor Review, with no gesture in
+    // flight, is a wedge: a claimed swipe lost its stream before touchend, so
+    // nothing ever settled it. The tracking transform is inline, so no later
+    // render reconciles it either — land the current page on the next touch.
+    // During a settle `currentOffset` already equals the new page's rest
+    // offset, so an in-flight transition is not mistaken for a wedge.
+    const restoreWedgedPage = (): void => {
+      if (gesture) return;
+      // Cached geometry: every tap reaches this shell listener, and a fresh
+      // clientWidth read there would force layout on the touch path.
+      const width = presentationWidth > 1 ? presentationWidth : shell.clientWidth;
+      if (!pagerOffsetIsWedged(currentOffset, productRef.current, width)) return;
+      settle(productRef.current, 0, width);
+    };
     const onTouchStart = (event: TouchEvent): void => {
+      // Keep a claimed swipe on the finger that claimed it. Restarting the
+      // recognizer for a second contact drops `locked`, and the touchend that
+      // follows then returns without settling.
+      if (
+        pagerIgnoresAdditionalTouch(
+          gesture?.locked === true,
+          event.touches.length,
+        )
+      ) return;
       stopFollowingDetachedStream();
+      if (gesture?.locked === true) {
+        // A single new contact while this pager still believes a swipe is
+        // claimed means the previous stream never delivered its end. Land that
+        // page before interpreting the new touch.
+        const orphan = gesture;
+        gesture = null;
+        settle(orphan.product, 0, orphan.width);
+      }
+      restoreWedgedPage();
       const touch = event.touches[0];
       if (!touch) return;
       const ignored = ignoredGestureTarget(event.target, shell);

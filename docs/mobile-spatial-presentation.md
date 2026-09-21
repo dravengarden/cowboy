@@ -91,6 +91,19 @@ gesture root (shell)
     identities stable (Markdown `components`, host callbacks behind a
     ref), and keep `followDetachedTouchStream` wired in both recognizers
     as the backstop.
+12. **A claimed swipe survives a second contact, and a stranded offset
+    heals itself.** iOS opens a fresh `touchstart` for every extra
+    contact, a palm included. Rebuilding the recognizer there loses
+    `locked`, so the touchend that follows takes the never-claimed path,
+    no settle runs, and the page keeps its inline tracking transform —
+    a peek wedged between two products until reload, because nothing
+    else owns that transform. Ignore additional contacts while a swipe
+    is claimed, settle an orphaned claim when a new single contact
+    arrives, and reconcile an offset that is neither rest state on the
+    next `touchstart` (`restoreWedgedPage` in the pager,
+    `restoreWedgedPeek` in the drawer). The recognizer is the only owner
+    of that transform: no React render reconciles it, so recovery must
+    be part of the gesture path itself.
 
 ### 2.1 Surfaces that inherit the swipe compositor
 
