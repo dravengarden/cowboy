@@ -20,6 +20,15 @@ Frontend specifics live in `web/AGENTS.md`; this is the cross-cutting layer.
   remote `main`, and production activation by default. Do not stop at local
   edits or ask again for routine merge/deploy approval. Preserve the component
   and active-session boundaries below and report actual release receipts.
+
+**OPEN TODO:** iOS device releases are blocked since 2026-09-21. The build Mac
+went to Xcode 27, and swift-rs 1.0.8 leaves its own Swift runtime's `@_cdecl`
+exports internalized, so the link fails on `_retain_object`, `_release_object`
+and `_string_from_bytes`. Waiting on upstream; the last shipped IPA is 0.1.31.
+Ledger, the two fixed layers beneath it, and what not to retry (in particular:
+do not fork swift-rs through `[patch.crates-io]`):
+`apps/native-shell/README.md`. Web and Controller releases are unaffected.
+Do not claim an iOS release shipped.
 - Cowboy application releases use project-owned Nix artifacts rather than a
   full NixOS generation. From a clean committed task worktree, build the
   narrowest affected output: `.#cowboy-web-release`,

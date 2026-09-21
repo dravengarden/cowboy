@@ -40,9 +40,62 @@ Cargo, `cargo-tauri` and (for iOS) XcodeGen on PATH. Provision the versions in
 ```sh
 rustup toolchain install 1.97.1 --profile minimal
 rustup target add --toolchain 1.97.1 aarch64-apple-ios aarch64-apple-ios-sim
+rustup component add llvm-tools --toolchain 1.97.1-aarch64-apple-darwin
 cargo +1.97.1 install tauri-cli --version '=2.11.2' --locked
 # Install XcodeGen 2.46.0 through your managed Mac toolchain.
 ```
+
+swift-rs calls the `llvm-tools` component's `llvm-objcopy`; Apple ships no
+equivalent. `build-native-shell.sh` checks for it before every device build
+because its absence degrades to a `cargo:warning` that cargo hides for registry
+dependencies, and only surfaces ten minutes later as undefined symbols.
+
+## Blocked: iOS device builds need Xcode 26.x (2026-09-21)
+
+**Do not report an iOS release as shippable until this clears.** The last
+successful one is 0.1.31 (revision `ed8bad98`, 2026-09-15) built under Xcode
+26.6 (17F113). The Mac's Xcode was then upgraded in place to 27.0 (27A266a),
+leaving no 26.x to `xcode-select`, and `bash tools/build-native-shell.sh ios`
+has not produced an IPA since.
+
+Three failure layers, peeled in order. The first two are fixed and committed:
+
+1. swift-rs 1.0.7 fed swiftc an iOS `-sdk`/`-target` pair followed by a macOS
+   pair that overrode it, so iOS Swift sources compiled against MacOSX27.0.sdk
+   and died on `CIContext.h: 'OpenGLES/EAGL.h' file not found`. swift-rs 1.0.8
+   is the release carrying the Xcode 27 fixes; the lock now pins it.
+2. Xcode 27's SwiftPM internalizes `@_cdecl` exports in static products.
+   swift-rs 1.0.8 promotes them back with `llvm-objcopy`, which needs the
+   `llvm-tools` component above.
+3. **Open.** swift-rs 1.0.8 promotes only symbols from a package's own object
+   member, so its own Swift runtime exports stay local:
+
+   ```text
+   $ nm libTauri.a
+   000000000000b744 T _register_plugin     # Tauri.o    — promoted
+   0000000000000d38 t _release_object      # SwiftRs.o  — still local
+   0000000000000d30 t _retain_object       # SwiftRs.o  — still local
+   0000000000000e3c t _string_from_bytes   # SwiftRs.o  — still local
+   ```
+
+   The link then fails on exactly those three. The guard is deliberate:
+   `SwiftRs.o` is embedded in `libTauri.a`, `libtauri-plugin-haptics.a` and
+   `libtauri-plugin-opener.a` alike, and promoting it in each produces duplicate
+   globals that crash Xcode 27's `ld` with "malformed atom files with duplicate
+   names" — `-ld_classic` is gone, so there is no escape hatch. A correct fix
+   promotes the runtime in exactly one archive, which is upstream's call, not a
+   local patch. As of 2026-09-21 `Brendonovich/swift-rs` has no commit after the
+   1.0.8 release.
+
+Do not work around this by pointing `[patch.crates-io]` at a fork:
+`tools/check-native-shell.ts` requires every locked native package to carry a
+`registry+` source and a checksum, and a fork would violate that supply-chain
+policy rather than satisfy it. Changing the policy is a separate, explicit
+decision.
+
+Unblock when upstream ships the runtime-globalization fix (then bump the lock
+and rebuild), or when a Mac with Xcode 26.x is available (then the current lock
+already builds — swift-rs 1.0.8's objcopy path is Xcode-27-only).
 
 Fetch the Cowboy task commit on the Mac and create a session-owned Git worktree.
 Do not copy a working source tree over SCP or build from a stable checkout,
