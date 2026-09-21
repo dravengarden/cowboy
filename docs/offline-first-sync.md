@@ -280,6 +280,18 @@ Class C controls stay enabled. Pressing one offline resolves through the
 existing `NetworkActionFeedback` failure path in place with "Needs a
 connection"; no modal, no disabled-without-explanation.
 
+Every outbox-backed write runs the same local durability barrier: the client
+adopts that record's exact delta baseline (`hydrate()`) before writing, and the
+mutation reaches the transport only after the IndexedDB transaction commits.
+The service states (`title`, `order`, `folders`, `mobile-review`) run it too —
+their surfaces are interactive while the boot read is still in flight, so a
+rename authored then is not evidence that the record is loaded. A failed
+barrier rolls the optimistic value back, reports `sync_durable_write_failed`
+with the record's storage code, and names that code in the notification. A boot
+read that never adopts its baseline leaves the record write-fenced for the
+page's lifetime, so it reports `sync_outbox_hydrate_failed` at that moment
+rather than staying silent until the first user write fails.
+
 Delivery metadata per queued row is persisted in `session:<sid>:delivery`
 so a row's user-facing state survives reload:
 

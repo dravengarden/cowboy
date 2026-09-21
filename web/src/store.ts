@@ -2026,11 +2026,19 @@ function connect(): void {
       // unrelated title/order cache whose IndexedDB read is blocked. Hydrate
       // both classes concurrently; each client merges safely if live state
       // arrives before its cached snapshot.
-      await Promise.all([
+      const states = [...syncClients.keys()];
+      const [restored] = await Promise.all([
         Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
         Promise.allSettled([...qClients.values()].map((entry) => entry.hydrate())),
         hydrateCachedQueues(),
       ]);
+      // A service outbox that never adopted its baseline stays write-fenced for
+      // the whole page lifetime, and its only visible symptom is a later failed
+      // rename/reorder. Name the failing state and its storage code here.
+      restored.forEach((outcome, index) => {
+        if (outcome.status !== "rejected") return;
+        reportSyncStorageFailure("sync_outbox_hydrate_failed", states[index] ?? "", "hydrate", outcome.reason);
+      });
       // If the socket opened before a slow IndexedDB read completed, its
       // readiness callback could not see the restored outbox. Re-send now as
       // well. Mutation ids make the overlap with a simultaneous onopen safe and
@@ -2821,6 +2829,25 @@ export function canApplyUpdateNow(): boolean {
   return true;
 }
 
+/** One report for a local sync-storage failure. The IndexedDB code is what
+ * separates a boot race from a permanently fenced record, so it reaches both
+ * the telemetry log and the notification a reader can read back to us. */
+function reportSyncStorageFailure(
+  event: string,
+  syncState: string,
+  operation: string,
+  error: unknown,
+): string {
+  const code = error instanceof IdbPersistenceError ? error.code : "";
+  reportClientLog("warn", event, error, {
+    sync_state: syncState,
+    operation,
+    error_name: error instanceof Error ? error.name : typeof error,
+    error_code: code,
+  });
+  return code === "" ? "" : ` (${code})`;
+}
+
 /** Wire one synced state to the generic channel via the shared op-based tier
  *  (`replicatedStore`): instant optimistic mutate (auto-sent), patch fold,
  *  resend-on-reconnect, and an IndexedDB durable outbox. `onChange` = re-derive
@@ -2863,15 +2890,26 @@ function registerSync<T, M extends Mutators<T>>(
   // Clients created after bootstrap also need an explicit load handoff. A
   // missing local record is not permission to issue a blind first write.
   if (didHydrate) {
-    void store.hydrate().catch(() => {
-      if (!productSessionAbandoned) notify("Local state could not be restored; writes remain fenced.", "warning");
+    void store.hydrate().catch((error: unknown) => {
+      if (productSessionAbandoned) return;
+      const code = reportSyncStorageFailure("sync_outbox_hydrate_failed", syncState, "hydrate", error);
+      notify(`Local state could not be restored; writes remain fenced.${code}`, "warning");
     });
   }
   return {
     view: (): T => store.get(),
     mutate: (name, args): void => {
-      void store.mutateDurably(name, args).catch(() => {
-        if (!productSessionAbandoned) notify("Local change could not be durably saved; it was not sent. Check browser storage before retrying.", "warning");
+      // The sidebar paints from the local replica, so a rename or a reorder can
+      // be authored before this state's outbox read completes. Adopt the exact
+      // delta baseline first — the same barrier the send path runs before its
+      // own durable write — instead of reporting an unsaved change for a race.
+      void store.hydrate().then(() => store.mutateDurably(name, args)).catch((error: unknown) => {
+        if (productSessionAbandoned) return;
+        const code = reportSyncStorageFailure("sync_durable_write_failed", syncState, name, error);
+        notify(
+          `Local change could not be durably saved; it was not sent. Check browser storage before retrying.${code}`,
+          "warning",
+        );
       });
     },
   };
@@ -3513,8 +3551,10 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
         forgetSettledHeld(sessionId, held);
         commitQueue(sessionId);
         if (socketReady) created.resend();
-      }).catch(() => {
-        if (!productSessionAbandoned) notify("Local queue could not be restored; check browser storage before sending.", "warning");
+      }).catch((error: unknown) => {
+        if (productSessionAbandoned) return;
+        const code = reportSyncStorageFailure("sync_outbox_hydrate_failed", `queue:${sessionId}`, "hydrate", error);
+        notify(`Local queue could not be restored; check browser storage before sending.${code}`, "warning");
       });
     }
   }
@@ -3533,11 +3573,15 @@ async function hydrateCachedQueues(): Promise<void> {
   const outcomes = await Promise.allSettled(
     sessions.map((session) => qClient(session).hydrate()),
   );
-  for (const outcome of outcomes) {
-    if (outcome.status === "rejected") {
-      console.warn("queue outbox hydrate failed", outcome.reason);
-    }
-  }
+  outcomes.forEach((outcome, index) => {
+    if (outcome.status !== "rejected") return;
+    reportSyncStorageFailure(
+      "sync_outbox_hydrate_failed",
+      `queue:${sessions[index] ?? ""}`,
+      "hydrate",
+      outcome.reason,
+    );
+  });
 }
 
 /** Render queue + drafts for one session: the sync client's view (server base +
