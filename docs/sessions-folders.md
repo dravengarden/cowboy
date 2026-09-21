@@ -27,10 +27,11 @@ drive every deviation below:
 2. **Sessions are live agents.** A folder must surface the state of what it
    contains (a busy or attention-needing session inside a collapsed folder),
    and deleting a folder must never delete sessions.
-3. **Two products share one list component.** Mobile renders the drawer
-   newest-last with paint-only chrome inside the swipe compositor; Desktop is
-   keyboard-first with a checked-in binding policy. The tree is one data
-   structure with two presentations, never two lists.
+3. **Two products share one list component.** Both surfaces render the same
+   session direction; Mobile adds paint-only chrome inside the swipe
+   compositor, while Desktop is keyboard-first with a checked-in binding
+   policy. The tree is one data structure with two presentations, never two
+   lists.
 
 ## Model
 
@@ -63,9 +64,10 @@ reconnect, projected per principal.
   submits only that folder's ids, which `merge_session_order` permutes in
   place (server semantics unchanged).
 - Root shows folders first (by `position`), then unfiled sessions. Every
-  container follows the surface's session direction: Desktop newest-first,
-  Mobile newest-last (the drawer's existing reversal), so the newest session
-  stays nearest the thumb and the "+" island.
+  container follows one shared session direction on both surfaces: the synced
+  `"order"` array reversed, newest first. Desktop and the Mobile drawer must
+  never disagree about where a session sits; `Alt/Option+1…0` numbers that same
+  displayed order, so the keycaps read 1…0 down the Desktop rail.
 - Collapsed state is per device (`persisted("cowboy:session-folders:collapsed")`),
   like Obsidian's localStorage folds; it is presentation, not shared data.
   Folders start expanded. Opening a session (row tap, `Alt/Option+1…0`, push,

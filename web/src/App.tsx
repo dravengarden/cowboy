@@ -713,20 +713,18 @@ function SessionList({
     // session's tail so the switch paints at once (docs/offline-first-sync.md §3).
     const hoverPrefetchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     // --- Folders (docs/sessions-folders.md) ---------------------------------
-    // The synced folder tree is overlaid on the display-ordered session list;
-    // Mobile keeps its newest-last direction inside every container. Collapse
-    // state is per device. The sortable runs over the visible tree rows: folder
-    // rows have no grip, so only sessions drag, but they still open the gap.
+    // The synced folder tree is overlaid on the display-ordered session list.
+    // Both surfaces render the same direction — the synced `"order"` array
+    // reversed, newest first inside every container — so a session sits in the
+    // same place on Desktop and in the Mobile drawer. Collapse state is per
+    // device. The sortable runs over the visible tree rows: folder rows have no
+    // grip, so only sessions drag, but they still open the gap.
     const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [collapsed, setCollapsed] = useCollapsedSessionFolders();
+    const displayedSessions = useMemo(() => [...sessions].reverse(), [sessions]);
     const tree = useMemo(
-        () =>
-            buildSessionTree(
-                mobileDrawer ? [...sessions].reverse() : sessions,
-                sessionFolders,
-                collapsed,
-            ),
-        [collapsed, mobileDrawer, sessionFolders, sessions],
+        () => buildSessionTree(displayedSessions, sessionFolders, collapsed),
+        [collapsed, displayedSessions, sessionFolders],
     );
     const rowKeys = tree.rows.map(sessionTreeRowKey);
     const rowByKey = new Map(tree.rows.map((row): [string, SessionTreeRow] => [sessionTreeRowKey(row), row]));
@@ -808,7 +806,7 @@ function SessionList({
             .map((key) => rowByKey.get(key))
             .filter((row): row is SessionTreeRow & { kind: "session" } => row?.kind === "session")
             .map((row) => row.session.id);
-        reorderSessions(mobileDrawer ? [...sessionOrder].reverse() : sessionOrder);
+        reorderSessions([...sessionOrder].reverse());
     };
     const applyRowOrderRef = useRef(applyRowOrder);
     applyRowOrderRef.current = applyRowOrder;
@@ -872,7 +870,7 @@ function SessionList({
     runRowCommandRef.current = runRowCommand;
     const selectSessionSlot = (digit: string): boolean => {
         const slot = Number(digit);
-        const session = sessions[slot === 0 ? 9 : slot - 1];
+        const session = displayedSessions[slot === 0 ? 9 : slot - 1];
         if (!session) return false;
         revealSession(session.id);
         setPinned(false);
@@ -1338,9 +1336,10 @@ function SessionList({
                     }
                     const s = row.session;
                     const deleting = deletingSessionIds.has(s.id);
-                    // Alt/Option+1…0 slots follow the flat session order, never
-                    // the folded view, so a fold cannot renumber a session.
-                    const slot = desktop ? sessions.indexOf(s) : -1;
+                    // Alt/Option+1…0 slots follow the flat displayed session
+                    // order, never the folded view, so a fold cannot renumber a
+                    // session while the keycaps still read 1…0 down the rail.
+                    const slot = desktop ? displayedSessions.indexOf(s) : -1;
                     return (
                     <ReliableListItemButton
                         key={s.id}

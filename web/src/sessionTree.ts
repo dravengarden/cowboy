@@ -53,8 +53,8 @@ export function mostUrgentStatus(statuses: Iterable<Status>): Status | null {
 }
 
 /**
- * Build the visible rows. `sessions` arrives in the surface's display order
- * (Desktop newest-first, Mobile newest-last) and keeps that order inside each
+ * Build the visible rows. `sessions` arrives in display order — one shared
+ * direction for Desktop and Mobile — and keeps that order inside each
  * container; folders precede sessions in every container. Folders whose
  * parent is missing show at the root; a parent cycle is cut at the root too.
  */

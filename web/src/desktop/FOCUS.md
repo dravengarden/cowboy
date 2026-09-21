@@ -181,8 +181,9 @@ the continuation is optional.
   folder header files into that folder, a folder moves among its siblings, and
   `Esc` releases the mode. The trailing three-dot menu retains secondary
   actions such as Rename, Move to folder and Delete.
-- `Alt/Option+1…0` number sessions by their flat order, never by the folded
-  view, and reveal a target hidden inside a collapsed folder.
+- `Alt/Option+1…0` number sessions by their flat displayed order (the one the
+  Mobile drawer also renders), never by the folded view, so the keycaps read
+  1…0 down the rail; a target hidden inside a collapsed folder is revealed.
 - `i`: edit the item when it exposes an edit action.
 - `Esc`: close the current transient layer or leave editor Insert mode.
 Text inputs and CodeMirror retain their own Vim/IME semantics. Workspace list
