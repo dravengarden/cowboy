@@ -3,6 +3,7 @@ import type { SessionMeta, Status } from "./protocol";
 import { type SessionFoldersValue } from "./sessionFolders";
 import {
   buildSessionTree,
+  displayedSessionOrder,
   dropTargetFolder,
   folderIdFromRowKey,
   foldersRevealing,
@@ -154,4 +155,26 @@ Deno.test("row keys and the moved key are recovered from a reordered key list", 
   assertEquals(movedRowKey(["a", "b", "c", "d"], ["c", "a", "b", "d"]), "c");
   assertEquals(movedRowKey(["a", "b", "c", "d"], ["a", "c", "b", "d"]), "c");
   assertEquals(movedRowKey(["a", "b"], ["a", "b"]), null);
+});
+
+Deno.test("Desktop and the Mobile drawer render one session direction", () => {
+  const order = ["s1", "s2", "s3"];
+  // Newest (last in the synced `"order"` array) reads first on both surfaces.
+  assertEquals(displayedSessionOrder(order), ["s3", "s2", "s1"]);
+  // A drag hands back displayed row ids; the same call maps them back to the
+  // `reorderSessions` payload, so a no-op drag cannot rewrite the synced order.
+  assertEquals(displayedSessionOrder(displayedSessionOrder(order)), order);
+  // The input is never mutated — `sessions` is a store snapshot.
+  assertEquals(order, ["s1", "s2", "s3"]);
+});
+
+Deno.test("the list component takes its direction from one shared helper", async () => {
+  const source = await Deno.readTextFile(
+    new URL("./App.tsx", import.meta.url),
+  );
+  // A per-surface direction is what put the same session at opposite ends of
+  // Desktop and Mobile; both call sites must stay on `displayedSessionOrder`.
+  assertEquals(/mobileDrawer\s*\?\s*\[\.\.\.\w+\]\.reverse\(\)/.test(source), false);
+  assertEquals(source.includes("displayedSessionOrder(sessions)"), true);
+  assertEquals(source.includes("reorderSessions(displayedSessionOrder("), true);
 });

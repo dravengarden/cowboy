@@ -157,6 +157,7 @@ import {
 } from "./sessionFolders";
 import {
     buildSessionTree,
+    displayedSessionOrder,
     dropTargetFolder,
     folderIdFromRowKey,
     foldersRevealing,
@@ -721,7 +722,7 @@ function SessionList({
     // grip, so only sessions drag, but they still open the gap.
     const sessionFolders = useStoreSelector((snapshot) => snapshot.sessionFolders);
     const [collapsed, setCollapsed] = useCollapsedSessionFolders();
-    const displayedSessions = useMemo(() => [...sessions].reverse(), [sessions]);
+    const displayedSessions = useMemo(() => displayedSessionOrder(sessions), [sessions]);
     const tree = useMemo(
         () => buildSessionTree(displayedSessions, sessionFolders, collapsed),
         [collapsed, displayedSessions, sessionFolders],
@@ -806,7 +807,7 @@ function SessionList({
             .map((key) => rowByKey.get(key))
             .filter((row): row is SessionTreeRow & { kind: "session" } => row?.kind === "session")
             .map((row) => row.session.id);
-        reorderSessions([...sessionOrder].reverse());
+        reorderSessions(displayedSessionOrder(sessionOrder));
     };
     const applyRowOrderRef = useRef(applyRowOrder);
     applyRowOrderRef.current = applyRowOrder;

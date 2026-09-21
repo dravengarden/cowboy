@@ -53,6 +53,17 @@ export function mostUrgentStatus(statuses: Iterable<Status>): Status | null {
 }
 
 /**
+ * The one display direction both surfaces render: the synced `"order"` array
+ * reversed, newest first. Desktop used to render `"order"` untouched while the
+ * Mobile drawer reversed it, which put the same session at opposite ends of the
+ * two products. Its own inverse, so a drag's row order maps straight back to a
+ * `reorderSessions` payload.
+ */
+export function displayedSessionOrder<T>(sessions: readonly T[]): T[] {
+  return [...sessions].reverse();
+}
+
+/**
  * Build the visible rows. `sessions` arrives in display order — one shared
  * direction for Desktop and Mobile — and keeps that order inside each
  * container; folders precede sessions in every container. Folders whose
