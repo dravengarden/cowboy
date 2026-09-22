@@ -6,7 +6,7 @@ protocol used by the official Agent SDK's experimental
 `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` method, introduced
 in [SDK 0.3.169](https://github.com/anthropics/claude-agent-sdk-typescript/releases/tag/v0.3.169).
 It is not a stable public REST API. Validate the response contract when changing
-the CLI pin; the current CLI 2.1.272 / SDK 0.3.270 contract is the baseline.
+the CLI pin; the current CLI 2.1.278 / SDK 0.3.274 contract is the baseline.
 
 The CLI owns Service-managed authentication and token refresh. The collector
 does not read credential files, call an undocumented HTTP endpoint, run a user
@@ -17,7 +17,7 @@ native commands, leaving cleanup time before the host's process-group timeout.
 
 Version 3.1.25 disables auto-update, telemetry and error reporting individually.
 Do not set or inherit `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the collector:
-CLI 2.1.272 also suppresses the plan-usage request under that blanket switch,
+CLI 2.1.278 also suppresses the plan-usage request under that blanket switch,
 returning `rate_limits_available: true` with null limits for a signed-in Max
 account. The live subscriber check exposed this in 3.1.24; fake API-key probes
 could not detect it because those accounts do not have plan windows.
@@ -47,7 +47,6 @@ quota projections into the production card/top-bar parser. Runtime release
 probes separately exercise the exact pinned CLI with isolated fake credentials;
 they do not prove any particular subscriber's live quota.
 
-The 2026-09-16 upstream audit found CLI 2.1.273 and ACP 0.78.0 available. This
-collector release retains CLI 2.1.272 and ACP 0.77.0, whose native usage interface
-was verified. Those independent dependency updates require their own runtime
-and compatibility review.
+The 2026-09-22 dependency release advances the runtime to CLI 2.1.278 and ACP
+0.79.0. The native usage interface remains covered by the collector protocol
+tests and requires a live subscriber refresh after Machine activation.

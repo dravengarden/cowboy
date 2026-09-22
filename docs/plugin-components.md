@@ -131,6 +131,12 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.26.0 records provider-runtime 1.1.4. Claude Code advances from
+2.1.272 to 2.1.278 and Claude Agent ACP from 0.77.0 to 0.79.0, including the
+adapter's exact Agent SDK 0.3.274 lock. All six Agent Plugins move to the new
+runtime component closure and receive independent patch versions; Zed retains
+its unchanged source, version, and historical component-release pin.
+
 The first scoped release changes only `state-store` (2.0.0), `state-sync`
 (1.3.0) and `state-sync-idb` (1.3.0). All seven Plugin sources and their exact
 2.9.0 pins are unchanged. Their signed packages, private runtimes, Catalog
