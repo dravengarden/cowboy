@@ -304,6 +304,7 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
   let popupOpener: unknown = globalThis;
   let popupOpened = 0;
   let popupClosed = 0;
+  let popupIsClosed = false;
 
   class FakeWebSocket extends EventTarget {
     constructor(_url: string | URL) {
@@ -326,7 +327,7 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
 
   const popup = {
     get closed(): boolean {
-      return false;
+      return popupIsClosed;
     },
     get opener(): unknown {
       return popupOpener;
@@ -336,6 +337,7 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
     },
     close(): void {
       popupClosed += 1;
+      popupIsClosed = true;
     },
     location: {
       replace(url: string): void {
@@ -384,6 +386,103 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
     assertEquals(fetches.length, 1);
     assertEquals(fetches[0]?.input, "/api/auth/oidc/native/poll");
     assertEquals(popupClosed, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [name, descriptor] of [
+      ["location", previousLocation],
+      ["window", previousWindow],
+      ["open", previousOpen],
+      ["WebSocket", previousWebSocket],
+    ] as const) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete (globalThis as Record<string, unknown>)[name];
+    }
+  }
+});
+
+Deno.test("a sign-in window the engine refuses to close returns to Cowboy", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
+  const previousWebSocket = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "WebSocket",
+  );
+  const navigations: string[] = [];
+  const appView = "https://cowboy.example/s/9f2c";
+  let popupClosed = 0;
+  let returned: (url: string) => void = () => {};
+  const returnedToCowboy = new Promise<string>((resolve) => {
+    returned = resolve;
+  });
+
+  class FakeWebSocket extends EventTarget {
+    constructor(_url: string | URL) {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+
+    send(_data: string): void {
+      queueMicrotask(() =>
+        this.dispatchEvent(
+          new MessageEvent("message", {
+            data: JSON.stringify({ status: "ready" }),
+          }),
+        )
+      );
+    }
+
+    close(): void {}
+  }
+
+  // iOS Safari answers close() with a console warning and keeps the window.
+  const popup = {
+    get closed(): boolean {
+      return false;
+    },
+    opener: globalThis as unknown,
+    close(): void {
+      popupClosed += 1;
+    },
+    location: {
+      replace(url: string): void {
+        navigations.push(url);
+        if (new URL(url).pathname !== "/api/auth/oidc/start") returned(url);
+      },
+    },
+  } as unknown as Window;
+
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: new URL(appView),
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+  Object.defineProperty(globalThis, "open", {
+    configurable: true,
+    value: () => popup,
+  });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    value: FakeWebSocket,
+  });
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      Response.json({ account: "draven", role: "owner" }),
+    )) as typeof fetch;
+
+  try {
+    assertEquals(await runBrowserOidc(cardea), {
+      account: "draven",
+      role: "owner",
+    });
+    assertEquals(popupClosed, 1);
+    assertEquals(navigations.length, 1);
+    assertEquals(await returnedToCowboy, appView);
+    assertEquals(navigations.length, 2);
   } finally {
     globalThis.fetch = previousFetch;
     for (const [name, descriptor] of [

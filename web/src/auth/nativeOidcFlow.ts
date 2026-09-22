@@ -17,6 +17,7 @@ const RECONNECT_INITIAL_MS = 250;
 const RECONNECT_MAX_MS = 4_000;
 const START_RACE_GRACE_MS = 10_000;
 const AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1_000;
+const WINDOW_CLOSE_GRACE_MS = 400;
 
 type NativeOidcEventStatus = "ready" | "failed" | "unavailable";
 
@@ -259,6 +260,37 @@ export async function runNativeOidc(
 }
 
 /**
+ * Return the separate sign-in window to Cowboy once the flow is over.
+ *
+ * `close()` is the preferred ending, but it is not guaranteed: iOS Safari
+ * silently refuses to close a script-opened window that has since navigated,
+ * and this flow also severs the window's opener before the Provider sees it.
+ * A refused close used to strand the user on the fixed completion page, which
+ * carries no Cowboy navigation and — in a PWA window or a hidden Safari
+ * toolbar — no browser navigation either. Falling back to a same-origin
+ * navigation always lands them back in Cowboy. The browser itself keeps that
+ * fallback honest: a window still showing the Provider is cross-origin, so the
+ * navigation is refused rather than interrupting a sign-in in progress.
+ */
+function returnFromBrowserOidcWindow(popup: Window): void {
+  try {
+    popup.close();
+  } catch {
+    // A window the engine will not close is recovered by the fallback below.
+  }
+  if (popup.closed) return;
+  const destination = globalThis.location.href;
+  setTimeout(() => {
+    if (popup.closed) return;
+    try {
+      popup.location.replace(destination);
+    } catch {
+      // A cross-origin window cannot be recovered; leave it to the user.
+    }
+  }, WINDOW_CLOSE_GRACE_MS);
+}
+
+/**
  * Keep browser/PWA state alive while an external Provider verifies the user.
  * The blank window is opened synchronously from the click before PKCE work so
  * iOS does not block it. Its opener is severed before any Provider navigation;
@@ -331,6 +363,6 @@ export async function runBrowserOidc(
     throw reason;
   } finally {
     signal?.removeEventListener("abort", cancel);
-    popup.close();
+    returnFromBrowserOidcWindow(popup);
   }
 }
