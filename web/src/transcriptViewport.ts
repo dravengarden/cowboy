@@ -158,6 +158,18 @@ export function shouldMaskRestoringTranscript(input: {
   return input.desktop && input.canRestore && !input.savedFollowing;
 }
 
+/** A mounted anchor wins over the old offset after content or pane size changes. */
+export function transcriptRestoreTargetOffset(input: {
+  savedOffset: number;
+  currentOffset: number;
+  anchorTop: number | null;
+  savedAnchorTop: number;
+}): number {
+  return input.anchorTop === null
+    ? input.savedOffset
+    : input.currentOffset + input.anchorTop - input.savedAnchorTop;
+}
+
 export const TRANSCRIPT_VIEWPORT_RESTORE_FRAME_LIMIT = 480;
 
 export function shouldContinueTranscriptViewportRestore(input: {
