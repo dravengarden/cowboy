@@ -26,7 +26,7 @@ multi-platform runtime release is externally published and trusted:
 
 | Provider | Exact private dependencies | Internal on-ramp |
 |---|---|---|
-| `claude-code` | Claude Agent ACP `0.79.0`; Claude Code `2.1.278` | Claude Code ACP adapter |
+| `claude-code` | Claude Agent ACP `0.81.0`; Claude Code `2.1.280` | Claude Code ACP adapter |
 | `claude-deepseek` | the same two pins; Anthropic gateway `0.1.0` | Claude Code over the private DeepSeek Anthropic Messages gateway |
 | `codex` | Codex ACP `1.1.7`; Codex `0.147.0` | adapter over Codex App Server |
 | `codex-deepseek` | the same two pins; Responses gateway `0.2.0` | Codex over the private DeepSeek Responses gateway |

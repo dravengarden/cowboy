@@ -6,7 +6,7 @@ protocol used by the official Agent SDK's experimental
 `usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET()` method, introduced
 in [SDK 0.3.169](https://github.com/anthropics/claude-agent-sdk-typescript/releases/tag/v0.3.169).
 It is not a stable public REST API. Validate the response contract when changing
-the CLI pin; the current CLI 2.1.278 / SDK 0.3.274 contract is the baseline.
+the CLI pin; the current CLI 2.1.280 / SDK 0.3.280 contract is the baseline.
 
 The CLI owns Service-managed authentication and token refresh. The collector
 does not read credential files, call an undocumented HTTP endpoint, run a user
@@ -17,10 +17,10 @@ native commands, leaving cleanup time before the host's process-group timeout.
 
 Version 3.1.25 disables auto-update, telemetry and error reporting individually.
 Do not set or inherit `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` in the collector:
-CLI 2.1.278 also suppresses the plan-usage request under that blanket switch,
-returning `rate_limits_available: true` with null limits for a signed-in Max
-account. The live subscriber check exposed this in 3.1.24; fake API-key probes
-could not detect it because those accounts do not have plan windows.
+CLI 2.1.278 and later also suppress the plan-usage request under that blanket
+switch, returning `rate_limits_available: true` with null limits for a signed-in
+Max account. The live subscriber check exposed this in 3.1.24; fake API-key
+probes could not detect it because those accounts do not have plan windows.
 
 Native utilization is a percentage from 0 to 100; reset times are ISO 8601.
 The collector projects numeric five-hour, weekly and per-model windows into
@@ -50,3 +50,10 @@ they do not prove any particular subscriber's live quota.
 The 2026-09-22 dependency release advances the runtime to CLI 2.1.278 and ACP
 0.79.0. The native usage interface remains covered by the collector protocol
 tests and requires a live subscriber refresh after Machine activation.
+
+The 2026-09-23 dependency release advances the runtime to CLI 2.1.280 and ACP
+0.81.0. That CLI adds Claude Opus 5.5 (`claude-opus-5-5`) and makes it the
+default Opus model, so the Agent model list and the session model control pick
+it up from the pinned runtime; no Cowboy contract or preset changes with it.
+The native usage interface is unchanged and still requires a live subscriber
+refresh after Machine activation.

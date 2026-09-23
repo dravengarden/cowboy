@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.1.29",
+  "version": "3.1.30",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
@@ -47,7 +47,7 @@
     {
       "id": "opus-default",
       "name": "Default",
-      "detail": "Opus 5 (1M context) · Model default effort",
+      "detail": "Opus 5.5 (1M context) · Model default effort",
       "is_default": true,
       "values": { "model": "opus[1m]", "effort": "default" }
     },
@@ -61,7 +61,7 @@
     {
       "id": "opus-high",
       "name": "Opus · High",
-      "detail": "Opus 5 (1M context) · High effort",
+      "detail": "Opus 5.5 (1M context) · High effort",
       "is_default": false,
       "values": { "model": "opus[1m]", "effort": "high" }
     },
@@ -194,16 +194,16 @@
     "dependencies": [
       {
         "id": "claude-agent-acp",
-        "version": "0.79.0",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.79.0.tgz",
-        "integrity": "sha512-/liYDBHElfzgbeijv8EZzvDUUAC8wUi1WSCZ+bw/DIKHQ3t3DLid+LS+6lszuQamHAWijjaZl1i5xZVRTnNPoA==",
+        "version": "0.81.0",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.81.0.tgz",
+        "integrity": "sha512-mw7epCvm7HIMBM2BTmzZpRVfvpGnxA1ek4o14xyJ41vVF/1f+oehXQEFDQZuaD6L/laPZfH+2Ft4aQasBJdONw==",
         "private": true
       },
       {
         "id": "anthropic-claude-code",
-        "version": "2.1.278",
-        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.278.tgz",
-        "integrity": "sha512-mfNRqC0GaEXqmP97NiwJBeYBmRuqe2VzgLUreUUaEhyJxJWx2Z6ClW1tBOncGNNXdhj6EY4LPvUIWP+oq311CA==",
+        "version": "2.1.280",
+        "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.280.tgz",
+        "integrity": "sha512-EZlX8jqNf+e7q9v+UoPbLYAbEGth7aDbcTytHzPYYohbP/fCfrjboCbcv85ZYGEq1Rq7Amm8hXLhuCKxLsabwA==",
         "private": true
       }
     ],

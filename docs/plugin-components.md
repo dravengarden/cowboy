@@ -131,6 +131,15 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.27.0 records provider-runtime 1.1.5. Claude Code advances from
+2.1.278 to 2.1.280 and Claude Agent ACP from 0.79.0 to 0.81.0, including the
+adapter's exact Agent SDK 0.3.280 lock. The CLI release adds Claude Opus 5.5
+(`claude-opus-5-5`), so the Agent model list gains it without a Cowboy contract
+change. Both Anthropic Providers share the one runtime lock entry per component
+id, so `claude-deepseek` moves with `claude-code`; all six Agent Plugins take the
+new closure and independent patch versions, and Zed again retains its unchanged
+source, version, and historical component-release pin.
+
 Scoped release 3.26.0 records provider-runtime 1.1.4. Claude Code advances from
 2.1.272 to 2.1.278 and Claude Agent ACP from 0.77.0 to 0.79.0, including the
 adapter's exact Agent SDK 0.3.274 lock. All six Agent Plugins move to the new
