@@ -16,7 +16,7 @@
 // detects a new worker when this string changes. Every surface downloads the
 // deployed build as soon as it is detected, then reloads itself after a visible
 // countdown once its user is idle; a press only brings that reload forward.
-const VERSION = "cowboy-v1763";
+const VERSION = "cowboy-v1764";
 const ASSET_CACHE = `${VERSION}-assets`;
 // The app shell ("/" — index.html). Served from here first; see the header.
 // A redeploy is never pinned away: every launch refreshes this cache in the

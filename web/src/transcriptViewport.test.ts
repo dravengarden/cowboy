@@ -19,6 +19,7 @@ import {
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptRestoreTargetOffset,
   transcriptScrollSettleDecision,
   transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
@@ -740,4 +741,44 @@ Deno.test("only a streaming page magnetizes at its bottom", () => {
     shouldMagnetizeTranscript({ ...page, working: false }),
     false,
   );
+});
+
+Deno.test("shifted reading anchor settles without a reader scroll", () => {
+  // Newer content grew 240px while the session was closed (column-reverse).
+  let offset = -600;
+  let anchorTop = -120;
+  let stableFrames = 0;
+  let tries = 0;
+  do {
+    const target = transcriptRestoreTargetOffset({
+      savedOffset: -600,
+      currentOffset: offset,
+      anchorTop,
+      savedAnchorTop: 120,
+    });
+    anchorTop -= target - offset;
+    offset = target;
+    stableFrames = Math.abs(offset - target) < 0.5 ? stableFrames + 1 : 0;
+    tries += 1;
+  } while (shouldContinueTranscriptViewportRestore({ tries, stableFrames }));
+  assertEquals(offset, -840);
+  assertEquals(anchorTop, 120);
+  assertEquals(tries, 30);
+  assertEquals(transcriptViewportRestoreTimedOut({ tries, stableFrames }), false);
+});
+
+Deno.test("restore uses the saved offset until the anchor mounts", () => {
+  assertEquals(transcriptRestoreTargetOffset({
+    savedOffset: -600,
+    currentOffset: 0,
+    anchorTop: null,
+    savedAnchorTop: 120,
+  }), -600);
+  // A shorter layout moves the mounted anchor in the opposite direction.
+  assertEquals(transcriptRestoreTargetOffset({
+    savedOffset: -600,
+    currentOffset: -600,
+    anchorTop: 320,
+    savedAnchorTop: 120,
+  }), -400);
 });

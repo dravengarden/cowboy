@@ -198,6 +198,7 @@ import {
   shouldShowClearedConversationEmptyState,
   shouldShowFreshSessionEmptyState,
   shouldShowScrollbackLoadingSkeleton,
+  transcriptRestoreTargetOffset,
   transcriptScrollSettleDecision,
   transcriptViewportRestoreTimedOut,
   visibleTranscriptTopGap,
@@ -5155,30 +5156,38 @@ export function Transcript({
     const position = (): void => {
       if (!viewportRestoreActiveRef.current) return;
       const el = parentRef.current;
-      if (el && restoreOffset) {
-        // Exact offset is the reliable fallback while the cached anchor row is
-        // not mounted yet (page projection/history hydration can take frames).
-        el.scrollTop = saved.scrollOffset;
-      }
-      if (el && restoreDetached) {
-        const anchor: FreezeAnchor = {
-          key: saved.anchorKey,
-          top: saved.anchorOffset,
-          self: false,
-        };
-        restoreFreezeAnchor(el, anchor);
-        freezeRef.current = anchor;
-      } else if (el && stick.current) {
-        pinTranscriptToLatest(el);
-      } else if (el && mode === "page" && !restoreOffset) {
-        el.scrollTop = el.clientHeight - el.scrollHeight;
-      }
       if (el) {
+        const anchorRow = restoreDetached && saved.anchorKey !== null
+          ? el.querySelector<HTMLElement>(
+            `[data-key="${CSS.escape(saved.anchorKey)}"]`,
+          )
+          : null;
         const expected = restoreOffset
-          ? saved.scrollOffset
+          ? transcriptRestoreTargetOffset({
+            savedOffset: saved.scrollOffset,
+            currentOffset: el.scrollTop,
+            anchorTop: anchorRow
+              ? anchorRow.getBoundingClientRect().top -
+                el.getBoundingClientRect().top
+              : null,
+            savedAnchorTop: saved.anchorOffset,
+          })
           : stick.current
           ? 0
           : el.clientHeight - el.scrollHeight;
+        // Position and completion must agree on the same target. Reapplying
+        // the old offset before correcting a mounted anchor makes each frame
+        // jump twice and can keep the restore mask up until timeout.
+        if (Math.abs(el.scrollTop - expected) >= 0.5) {
+          el.scrollTop = expected;
+        }
+        if (restoreDetached) {
+          freezeRef.current = {
+            key: saved.anchorKey,
+            top: saved.anchorOffset,
+            self: false,
+          };
+        }
         const stable = Math.abs(el.scrollHeight - previousHeight) < 0.5 &&
           Math.abs(el.scrollTop - expected) < 0.5;
         stableFrames = stable ? stableFrames + 1 : 0;
