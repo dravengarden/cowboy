@@ -15,13 +15,14 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import { ExpandMore, Refresh } from "@mui/icons-material";
+import { ExpandMore, OpenInNew, Refresh } from "@mui/icons-material";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { NetworkButton, NetworkIconButton } from "./NetworkActionFeedback";
 import { PluginSlot } from "./pluginHost";
 import {
   acceptedScheduleTime,
+  accountManageUrl,
   accountProviderLabel,
   type JsonRecord,
   nearestAvailableResetCredit,
@@ -248,6 +249,7 @@ function ProviderUsageCardBody({
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const resetProvider = usageResetProvider(usage);
+  const manageUrl = accountManageUrl(usage.provider);
   const summary = record(usage.activity?.summary);
   const title = accountProviderLabel(usage.provider);
   const stale = usage.refresh?.stale === true;
@@ -528,6 +530,24 @@ function ProviderUsageCardBody({
               )}
             </AccordionDetails>
           </Accordion>
+        )}
+        {manageUrl !== undefined && (
+          <Button
+            href={manageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            size="small"
+            endIcon={<OpenInNew sx={{ fontSize: 15 }} />}
+            sx={{
+              alignSelf: "flex-start",
+              px: 0.5,
+              minHeight: 36,
+              textTransform: "none",
+              fontWeight: 600,
+            }}
+          >
+            Plan &amp; limit resets
+          </Button>
         )}
         {summary && num(summary.lifetimeTokens) !== undefined && (
           <Accordion

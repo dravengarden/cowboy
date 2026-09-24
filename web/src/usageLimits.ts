@@ -54,6 +54,21 @@ export function accountProviderLabel(provider: string): string {
   return usageProductLabel(provider);
 }
 
+/** External page where an account's plan usage and any banked limit resets are
+ * read and redeemed. Cowboy never claims a reset itself: the Provider CLIs
+ * expose no scriptable claim verb, and the vendor endpoints behind their
+ * interactive commands are private and flag-gated, so the card links out
+ * instead of speaking them. The usage host schema has no field for this yet;
+ * a Provider-owned `usage.manage_url` would replace this table. */
+const ACCOUNT_MANAGE_URLS: Record<string, string> = {
+  anthropic: "https://claude.ai/settings/usage",
+};
+
+/** Account page for a provider id, or undefined when none is published. */
+export function accountManageUrl(provider: string): string | undefined {
+  return ACCOUNT_MANAGE_URLS[provider];
+}
+
 /** Keep first-party account cards in product order and unknown cards stable. */
 export function usageCardProviders(
   snapshot: UsageSnapshot | null,

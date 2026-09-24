@@ -2,6 +2,7 @@ import { assertEquals } from "jsr:@std/assert";
 import { quotaView } from "../../plugins/claude-code/collector/usage.js";
 import {
   acceptedScheduleTime,
+  accountManageUrl,
   accountProviderLabel,
   accountProviderUsage,
   applyUsageHostPlugins,
@@ -198,6 +199,15 @@ Deno.test("account provider labels stay catalog-backed and pass unknown ids thro
   assertEquals(accountProviderLabel("xai"), "xAI");
   assertEquals(accountProviderLabel("openai"), "OpenAI");
   assertEquals(accountProviderLabel("future-labs"), "future-labs");
+});
+
+Deno.test("account manage links are published only for known accounts", () => {
+  assertEquals(
+    accountManageUrl("anthropic"),
+    "https://claude.ai/settings/usage",
+  );
+  assertEquals(accountManageUrl("openai"), undefined);
+  assertEquals(accountManageUrl("future-labs"), undefined);
 });
 
 Deno.test("datetime picker ignores iOS current-minute provisional values", () => {
