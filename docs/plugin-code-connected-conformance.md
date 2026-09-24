@@ -45,12 +45,12 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-The v12 harness has a 390-second overall execution limit: seven deliberately
+The v13 harness has a 390-second overall execution limit: seven deliberately
 lost replies each require the normal 40-second product timeout, plus the existing
 110-second allowance for other work. This test-only limit does not extend any
 Controller, Machine or native timeout, or shorten any fault observation.
 
-Thirty-two checks cover (receipt schema `...code-buffer-connected-conformance/v12`,
+Thirty-three checks cover (receipt schema `...code-buffer-connected-conformance/v13`,
 requiring Machine protocol 22, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -172,6 +172,21 @@ Historical v3 receipts cover only the first eleven checks:
     this extension. Refusal is an ended observation, not a rollback, an undo,
     or proof that an already dispatched read stopped. See
     [Machine-owned Workspace root identity](plugin-machine-workspace-identity.md).
+33. The colocated topology, which the checks above can never reach: both
+    processes restart with the Machine declaring local mode and the Controller
+    naming it, so a third advertised root is read by the Controller on its own
+    filesystem. Every assertion is anchored on the relay's command count,
+    because identical bytes prove nothing about which party read them. A
+    permitted local Machine's root is read with **no Machine command at all**;
+    replacing that directory with a different object at the same path holding
+    the same bytes returns `410/no-store` with no ETag and still no command;
+    and an explicit inventory refresh restores reads, again with no command.
+    Historical v12 does not accept this extension. The permission matrix — a
+    remote Machine claiming local mode, and a named Machine that did not claim
+    it — is covered by source tests rather than here, because restarting the
+    Controller twice in quick succession makes the fixture Machine reconnect
+    repeatedly. See
+    [Controller-owned identity for locally executed reads](plugin-local-root-identity.md).
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills
@@ -247,3 +262,9 @@ Machine pair serves the replaced root as if nothing had changed, so that pair is
 recorded as the expected negative. Controller-only activation is separate: the
 resident protocol-21 Machine advertises no identity and keeps its previous
 behaviour until its own maintenance boundary.
+The [colocated rollout](releases/plugin-colocated-connected-2026-09-25.md)
+adds v13 check 33 and is the first coverage of the topology the primary
+deployment actually runs. It became possible only once colocated execution
+required an explicit permission: before that, a fixture could have reached this
+branch solely by declaring local mode over TCP, which is the trust gap rather
+than a property worth building acceptance on.

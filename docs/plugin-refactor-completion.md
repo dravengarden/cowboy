@@ -597,10 +597,11 @@ that cannot report one, rather than reading it unfenced. Resolution never
 refuses: an unobservable root is recorded as such and refused only where it
 would be read. Its [accepted Controller rollout](releases/plugin-local-root-identity-2026-09-21.md)
 records four source negatives verified against the previous behaviour, the
-complete quality gate and the unchanged connected chain. **Its colocated branch
-has source-test evidence only**: the connected harness cannot produce a
-colocated Machine without relying on the trust gap recorded below, so honest
-connected coverage waits on that fix.
+complete quality gate and the unchanged connected chain. Its colocated branch now has
+real-process coverage too: [v13 check 33](releases/plugin-colocated-connected-2026-09-25.md)
+reads a permitted local Machine's root with no Machine command at all, refuses
+a replaced root, and restores reads by explicit refresh. That coverage became
+honest only once colocated execution required a permission.
 
 **That trust gap is now closed.** `colocated` — the switch that decides which
 of the two fences applies — was taken verbatim from the Machine's self-declared

@@ -328,13 +328,13 @@ In addition, require all applicable Provider gates below:
   It connects supplied immutable Controller/Machine releases and the exact
   native pair using disposable enrollment, password login and a temporary
   signed Code installation in isolated network/PID namespaces. Require all
-  thirty-two checks, including live authenticated Code installation into an empty
+  thirty-three checks, including live authenticated Code installation into an empty
   slot, original-ID release and no replay across held actual replies,
   uninstall/path removal, connection replacement and Controller restart. The
   protocol-20 Service synchronization extension also requires actual shared-owner
   refusal, explicit preparation/confirmation across uninstall, loss of one real
   Apply reply through the normal timeout, original-ID observation without replay
-  and separately completed retirement. Require receipt schema v12; historical
+  and separately completed retirement. Require receipt schema v13; historical
   v2/v3 results do not accept Service navigation. The protocol-21 extension
   also requires all five nonempty navigation kinds under actual product auth
   and enrollment, lost real Execute/Release replies without replay, ordinary
@@ -402,6 +402,15 @@ In addition, require all applicable Provider gates below:
   Controller may never mint, derive or default an incarnation, and a refusal is
   an ended observation, not a rollback, an undo or proof that an already
   dispatched read stopped. See `docs/plugin-machine-workspace-identity.md`.
+  Controller-executed reads additionally require v13 check 33: restart both
+  processes with the Machine declaring local mode and the Controller naming it,
+  then read a separate advertised root with **no Machine command at all**,
+  refuse a replaced root with `410/no-store/no-ETag` and still no command, and
+  restore reads by explicit inventory refresh. Anchor every assertion on the
+  relay's command count; identical bytes prove nothing about which party read
+  them. Historical v12 does not accept it. A permission is never an assertion:
+  naming a Machine must not convert a remote connection into a local one.
+  See `docs/plugin-local-root-identity.md`.
   Run `just code-buffer-browser-conformance <absolute-firefox>` for all twenty-four
   cases. No partial text, stale snapshot, timeout or old host may trigger a path
   read, reload, automatic retry or implicit new owner. This reader does not

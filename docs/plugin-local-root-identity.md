@@ -89,16 +89,22 @@ The [accepted Controller rollout](releases/plugin-local-root-identity-2026-09-21
 records the complete quality gate, four source regressions verified to fail
 against the previous behaviour, and the unchanged connected v12 chain.
 
-The connected gate does **not** cover the colocated branch, and that gap is
-structural rather than an omission. Its Machine reaches the Controller over
-TCP, and `colocated` is derived from the Machine's self-declared
-`connection_mode`. A fixture could therefore only become colocated by
-declaring local mode over a TCP transport — which is exactly the trust gap
-recorded in the completion ledger, not a property worth building acceptance
-on. Honest connected coverage of this branch requires binding local execution
-to the transport (or to enrollment) first; until then the colocated branch has
-source-test evidence only, and the remote branch is covered end-to-end by the
-unchanged connected chain.
+The connected gate now covers this branch: v13 check 33 restarts both
+processes with the Machine declaring local mode and the Controller naming it,
+then reads a separate advertised root with **no Machine command at all**,
+refuses a replaced root with `410/no-store`, and restores reads by explicit
+inventory refresh. Every assertion is anchored on the relay's command count,
+because identical bytes prove nothing about which party read them.
+
+That coverage only became honest once colocated execution required a
+permission. Before it, a fixture could reach this branch merely by declaring
+local mode over TCP — which was the trust gap itself, not a property worth
+building acceptance on.
+
+The permission matrix stays in source tests rather than the connected gate:
+restarting the Controller twice in quick succession makes the fixture Machine
+reconnect repeatedly, and a flapping fixture would make the gate unreliable
+rather than more convincing.
 
 Source tests use real directories, including the delete/recreate sequence that
 provably reuses an inode on the deployed filesystem. Before activation, all 32
