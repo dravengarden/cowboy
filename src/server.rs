@@ -263,6 +263,10 @@ struct AppState {
     code_cache: crate::code_cache::CodeCache,
     code_buffers: Arc<code_buffers::Owners>,
     code_navigation_admission: bool,
+    /// Machines permitted to have their Code reads executed on the
+    /// Controller's own filesystem. A hello's declared connection mode is a
+    /// request; this set is the permission.
+    colocated_machines: std::collections::BTreeSet<String>,
     zed_adapter_socket: Option<PathBuf>,
     observability: Observability,
     web_push: Arc<WebPushService>,
@@ -1640,6 +1644,7 @@ pub async fn serve(args: ServeArgs) -> anyhow::Result<()> {
             code_buffers: Arc::default(),
             code_navigation_admission: args.code_navigation_admission
                 == crate::cli::CodeNavigationAdmission::Candidate,
+            colocated_machines: args.colocated_machines.iter().cloned().collect(),
             zed_adapter_socket: args.zed_adapter_socket,
             observability,
             web_push,
@@ -11258,6 +11263,40 @@ fn machine_request_id(prefix: &str) -> String {
     )
 }
 
+/// Whether this Machine's Code reads may execute on the Controller's own
+/// filesystem. Both halves are required and neither is sufficient: a Machine
+/// must ask by declaring local mode, and an operator must have permitted it.
+/// Naming a Machine does not make a remote one local, and declaring local mode
+/// does not make an unpermitted Machine readable here.
+fn colocated_execution_permitted(
+    declared_local: bool,
+    machine_id: &str,
+    permitted: &std::collections::BTreeSet<String>,
+) -> bool {
+    declared_local && permitted.contains(machine_id)
+}
+
+#[cfg(test)]
+mod colocated_permission_tests {
+    use super::colocated_execution_permitted;
+
+    #[test]
+    fn a_declaration_and_a_permission_are_both_required() {
+        let permitted: std::collections::BTreeSet<String> =
+            ["hawk".to_owned()].into_iter().collect();
+        assert!(colocated_execution_permitted(true, "hawk", &permitted));
+        // An enrolled remote Machine cannot read this host by claiming local.
+        assert!(!colocated_execution_permitted(true, "falcon", &permitted));
+        // A permission is not an assertion: it never converts a remote
+        // connection into a local one.
+        assert!(!colocated_execution_permitted(false, "hawk", &permitted));
+        assert!(!colocated_execution_permitted(false, "falcon", &permitted));
+        // With nothing permitted, no Machine may be read on this host.
+        let empty = std::collections::BTreeSet::new();
+        assert!(!colocated_execution_permitted(true, "hawk", &empty));
+    }
+}
+
 /// Machine-owned root identities travel with the workspace list they describe.
 /// A component-only refresh preserves both; a workspace observation replaces
 /// both, so an old identity can never outlive the roots it was minted for.
@@ -13548,10 +13587,27 @@ async fn handle_machine_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let (machine_write_tx, machine_write_rx) = mpsc::unbounded_channel();
     let mut socket_writer = tokio::spawn(write_machine_messages(socket_sink, machine_write_rx));
     let (machine_command_tx, mut machine_command_rx) = mpsc::unbounded_channel();
+    // A declared connection mode is a request to be read on this host, not
+    // evidence of running on it: the transport is the same TCP socket either
+    // way, and a reverse proxy makes every peer look local. Require an
+    // explicit permission as well, so an enrolled remote Machine cannot name
+    // Controller-host paths and have them read back.
+    let colocated = colocated_execution_permitted(
+        connection_mode == "local",
+        &hello.machine_id,
+        &state.colocated_machines,
+    );
+    if connection_mode == "local" && !colocated {
+        tracing::warn!(
+            machine = %hello.machine_id,
+            "Machine declared local mode without colocation permission; \
+             its reads will execute on the Machine"
+        );
+    }
     let connection = state.machine_control.install(
         hello.machine_id.clone(),
         challenge_id.clone(),
-        connection_mode == "local",
+        colocated,
         protocol,
         machine_command_tx,
     );

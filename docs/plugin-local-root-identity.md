@@ -106,3 +106,25 @@ roots the primary deployment advertises were observed: 30 resolve to
 directories with a creation time and are unaffected; the two that refuse
 (`deepseek-harness-cloudflare`, `lasso`) are already-absent directories whose
 reads fail today, so only their refusal reason changes.
+
+## Who may be read on this host
+
+`colocated` decides which of the two fences applies, so it is itself a trust
+boundary. It used to be taken verbatim from the Machine's self-declared
+`hello.connection_mode`, with no transport, peer or enrollment check: an
+enrolled remote Machine could declare local mode, name Controller-host paths,
+and have them read back through the authenticated Code read API. Enrollment
+deliberately writes `outbound_wss`; the connect path then overwrote it from the
+hello.
+
+A peer-address check cannot separate the two cases, because the public origin
+is reverse-proxied to loopback and every proxied Machine therefore looks local.
+The declaration is now treated as a *request* and an explicit operator
+permission decides: `colocated = declared local && named in
+COWBOY_COLOCATED_MACHINES`. Both halves are required and neither is
+sufficient — naming a Machine never converts a remote connection into a local
+one, and declaring local mode never reaches this host's filesystem without the
+permission. With nothing named, no Machine may be read here.
+
+A Machine that asks without permission is logged and served remotely rather
+than silently downgraded.

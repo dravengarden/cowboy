@@ -602,18 +602,19 @@ has source-test evidence only**: the connected harness cannot produce a
 colocated Machine without relying on the trust gap recorded below, so honest
 connected coverage waits on that fix.
 
-**Trust gap found while building the above, not fixed:** `colocated` — the
-switch that makes the Controller read its own filesystem — is taken verbatim
-from the Machine's self-declared `hello.connection_mode`, with no transport,
-peer or enrollment check anywhere. Enrollment deliberately writes
-`connection_mode = 'outbound_wss'`, and the connect path overwrites it from the
-hello. Any enrolled Machine can therefore declare local mode over TCP and have
-the Controller read Controller-host paths that the same Machine chose, through
-the authenticated Code read API. The Machine is an enrolled, challenge-signed
-component, so this is a trust-boundary crossing rather than an unauthenticated
-attack surface; it is unfixed and unexploited, and closing it needs its own
-slice because binding local execution to a real transport or to enrollment
-changes how the deployed Machine connects.
+**That trust gap is now closed.** `colocated` — the switch that decides which
+of the two fences applies — was taken verbatim from the Machine's self-declared
+`hello.connection_mode`, with no transport, peer or enrollment check: an
+enrolled remote Machine could declare local mode, name Controller-host paths,
+and have them read back through the authenticated Code read API. A peer-address
+check cannot separate the cases, because the public origin is reverse-proxied
+to loopback. The declaration is now a request, and an explicit operator
+permission decides: both the declaration and membership of
+`COWBOY_COLOCATED_MACHINES` are required, and neither is sufficient. Its
+[accepted rollout](releases/plugin-colocated-permission-2026-09-24.md) lands the
+permission in the host unit first — an older Controller ignores an unknown
+environment variable, and the retained service does not restart — and then the
+Controller that enforces it, so the deployment is never in a broken order.
 
 [Machine-owned Workspace root identity](plugin-machine-workspace-identity.md)
 gives the advertised root an owner for the first time. The Machine mints one

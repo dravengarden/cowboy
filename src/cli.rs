@@ -382,6 +382,21 @@ pub struct ServeArgs {
         default_value = "closed"
     )]
     pub code_navigation_admission: CodeNavigationAdmission,
+
+    /// Machines this Controller may execute Code reads for on its OWN
+    /// filesystem. A Machine declares its connection mode in its authenticated
+    /// hello, and that declaration is not evidence of where it runs: an
+    /// enrolled remote Machine could otherwise name Controller-host paths and
+    /// have them read back. The declaration is now a request; this list is the
+    /// permission. Empty means no Machine may be colocated, so a local Machine
+    /// must be named here explicitly. Naming a Machine never makes it
+    /// colocated on its own — it must still declare local mode.
+    #[arg(
+        long = "colocated-machine",
+        env = "COWBOY_COLOCATED_MACHINES",
+        value_delimiter = ','
+    )]
+    pub colocated_machines: Vec<String>,
 }
 
 /// Explicit private rollout policy, independent of Machine protocol support.
@@ -757,6 +772,37 @@ mod tests {
         };
         assert_eq!(args.source, "postgresql:///cowboy");
         assert_eq!(args.destination, "sqlite:///tmp/cowboy.sqlite3");
+    }
+
+    #[test]
+    #[cfg(feature = "full")]
+    fn colocated_execution_is_denied_until_a_machine_is_named() {
+        let serve = |extra: &[&str]| {
+            let mut command_line = vec!["cowboy", "serve"];
+            command_line.extend_from_slice(extra);
+            let Command::Serve(args) = Cli::try_parse_from(command_line).unwrap().command else {
+                panic!("serve");
+            };
+            args.colocated_machines
+        };
+        // Empty by default: no Machine may be read on the Controller's own
+        // filesystem merely because it says so.
+        assert!(serve(&[]).is_empty());
+        assert_eq!(serve(&["--colocated-machine", "hawk"]), vec!["hawk"]);
+        // Repeated and comma-separated forms both name several Machines.
+        assert_eq!(
+            serve(&[
+                "--colocated-machine",
+                "hawk",
+                "--colocated-machine",
+                "spare"
+            ]),
+            vec!["hawk", "spare"]
+        );
+        assert_eq!(
+            serve(&["--colocated-machine", "hawk,spare"]),
+            vec!["hawk", "spare"]
+        );
     }
 
     #[test]
