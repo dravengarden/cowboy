@@ -5,6 +5,7 @@ use super::*;
 use serde_json::{Value, json};
 
 mod budget;
+mod colocated;
 mod effect_authority;
 mod exercise;
 mod failure_authority;
@@ -102,6 +103,12 @@ struct Pair<'a> {
     machine: Option<Running>,
     proxy: proxy::Proxy,
     http: Http,
+    /// Whether this Controller permits the fixture Machine to be read on its
+    /// own filesystem. A Machine's declaration alone must never suffice.
+    colocated_permission: bool,
+    /// Whether the fixture Machine declares local mode. Declaring it is a
+    /// request; the permission above decides.
+    machine_local: bool,
 }
 
 impl Pair<'_> {
@@ -116,6 +123,9 @@ impl Pair<'_> {
             .arg(self.root.join("catalog"))
             .arg("--code-navigation-admission")
             .arg("candidate");
+        if self.colocated_permission {
+            command.arg("--colocated-machine").arg(MACHINE);
+        }
         self.controller = Some(Running::spawn(&mut command)?);
         tokio::time::timeout(
             DEADLINE,
@@ -123,6 +133,34 @@ impl Pair<'_> {
         )
         .await
         .map_err(|_| Failure::Timeout)?
+    }
+
+    fn start_machine(&mut self) -> Result<(), Failure> {
+        let mut command = configured_command(&self.artifacts[1], self.root, self.proxy.address);
+        command
+            .arg("--plugin-operation-admission")
+            .arg("--code-adapter-socket")
+            .arg(self.root.join("code.sock"))
+            // A second advertised root used only by the Machine-owned root
+            // identity check. No Session, native owner or Plugin uses it.
+            .arg("--workspace")
+            .arg(format!(
+                "{}={}",
+                root_identity::ROOT,
+                self.root.join(root_identity::ROOT).display()
+            ))
+            // A third root, read only through the colocated topology.
+            .arg("--workspace")
+            .arg(format!(
+                "{}={}",
+                colocated::ROOT,
+                self.root.join(colocated::ROOT).display()
+            ));
+        if self.machine_local {
+            command.arg("--local");
+        }
+        self.machine = Some(Running::spawn(&mut command)?);
+        Ok(())
     }
 
     async fn connected(&self, minimum: u32) -> Result<(), Failure> {
@@ -211,7 +249,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v12",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v13",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -248,7 +286,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     // carries Machine-owned root identities on every observed connection.
     receipt.accepted = result.is_ok()
         && receipt.cleanup
-        && receipt.checks.len() == 32
+        && receipt.checks.len() == 33
         && !receipt.wire.protocols.is_empty()
         && receipt.wire.protocols.iter().all(|protocol| {
             *protocol == crate::machine_protocol::CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION
@@ -293,6 +331,8 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
         machine: None,
         proxy: relay,
         http: Http::with_timeout(address, Duration::from_secs(100))?,
+        colocated_permission: false,
+        machine_local: false,
     };
     drop(listener);
     let result = tokio::time::timeout(RUN_DEADLINE, async {
@@ -306,21 +346,7 @@ async fn run(receipt: &mut Receipt) -> Result<(), Failure> {
             )
             .await?;
         pair.http.login(&seeded.password).await?;
-        let mut command =
-            configured_command(&receipt.artifacts[1], root.path(), pair.proxy.address);
-        command
-            .arg("--plugin-operation-admission")
-            .arg("--code-adapter-socket")
-            .arg(root.path().join("code.sock"))
-            // A second advertised root used only by the Machine-owned root
-            // identity check. No Session, native owner or Plugin uses it.
-            .arg("--workspace")
-            .arg(format!(
-                "{}={}",
-                root_identity::ROOT,
-                root.path().join(root_identity::ROOT).display()
-            ));
-        pair.machine = Some(Running::spawn(&mut command)?);
+        pair.start_machine()?;
         pair.connected(1).await?;
         receipt.stage = "connected_installation";
         installation::run(&pair, &seeded.install).await?;

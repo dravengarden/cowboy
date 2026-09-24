@@ -207,6 +207,7 @@ impl Proxy {
                     "codeNavigationDestination",
                     "codeNavigationRelease",
                     "coreSwapFile",
+                    "coreColocatedFile",
                 ]
                 .contains(&kind),
         )?;
@@ -395,6 +396,14 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
                             && request.root.ends_with(root_identity::ROOT) =>
                     {
                         "coreSwapFile"
+                    }
+                    // The colocated root. Seeing this at all means the read
+                    // was executed by the Machine, which only happens once the
+                    // Controller's permission is withdrawn.
+                    crate::code_adapter::CodeOperation::File { path, .. }
+                        if path == colocated::FILE && request.root.ends_with(colocated::ROOT) =>
+                    {
+                        "coreColocatedFile"
                     }
                     _ => return Err(Failure::WrongObservation),
                 }

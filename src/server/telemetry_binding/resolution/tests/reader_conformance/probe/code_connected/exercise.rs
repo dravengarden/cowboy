@@ -318,5 +318,7 @@ pub(super) async fn run(
     checks.push(
         "authenticated_core_file_pages_refuse_replacement_route_and_restart_without_dispatch",
     );
+
+    colocated::run(pair, password, stage, checks).await?;
     Ok(())
 }
