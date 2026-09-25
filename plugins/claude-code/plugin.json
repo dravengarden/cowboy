@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "claude-code",
-  "version": "3.1.31",
+  "version": "3.1.32",
   "component_release": "3.28.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",

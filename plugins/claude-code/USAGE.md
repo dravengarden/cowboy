@@ -22,6 +22,17 @@ switch, returning `rate_limits_available: true` with null limits for a signed-in
 Max account. The live subscriber check exposed this in 3.1.24; fake API-key
 probes could not detect it because those accounts do not have plan windows.
 
+Version 3.1.32 stops depending on `rate_limits.model_scoped` alone. That legacy
+projection sits behind a feature gate that the collector's own `DISABLE_TELEMETRY=1`
+also closes, so a signed-in Max account with a per-model weekly window (Fable)
+reported five-hour and weekly rows and silently dropped the model row. The
+unified `rate_limits.limits` array is emitted with telemetry off and carries the
+same percentage and reset time as `kind: "weekly_scoped"` with
+`scope.model.display_name`. The collector now reads both shapes and dedupes by
+model name. This is the second gate of its kind: keep individual switches, and
+re-probe per-model windows with the collector's exact environment — not an
+inherited shell — when changing the CLI pin.
+
 Native utilization is a percentage from 0 to 100; reset times are ISO 8601.
 The collector projects numeric five-hour, weekly and per-model windows into
 Cowboy's generic usage buckets. Enabled extra usage may have a percentage but

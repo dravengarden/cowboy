@@ -65,6 +65,59 @@ Deno.test("native usage projects percentages, ISO resets, model windows and enab
   equal(Object.keys(buckets).length, 5);
 });
 
+// DISABLE_TELEMETRY=1 closes the gate behind `model_scoped`, so a collector
+// that keeps telemetry off only ever sees the unified `limits` array.
+Deno.test("model windows survive a response without the legacy model_scoped projection", () => {
+  const buckets = quota({
+    five_hour: window(14),
+    seven_day: window(47),
+    limits: [
+      { kind: "session", group: "session", percent: 14, scope: null },
+      { kind: "weekly_all", group: "weekly", percent: 47, scope: null },
+      {
+        kind: "weekly_scoped",
+        group: "weekly",
+        percent: 10,
+        resets_at: "2026-09-16T04:00:00Z",
+        scope: { model: { id: null, display_name: "Fable" }, surface: null },
+      },
+      {
+        kind: "weekly_scoped",
+        group: "weekly",
+        percent: 3,
+        scope: { surface: { display_name: "Cowork" } },
+      },
+    ],
+  }).rate_limits.rateLimitsByLimitId;
+  equal(buckets["claude-model-Fable"], {
+    limitName: "Fable",
+    primary: {
+      usedPercent: 10,
+      windowDurationMins: 10080,
+      resetsAt: Date.parse("2026-09-16T04:00:00Z") / 1000,
+    },
+  });
+  equal(Object.keys(buckets).length, 3);
+});
+
+// Both shapes together must not double-count the same model.
+Deno.test("a model reported by both projections yields one window", () => {
+  const buckets = quota({
+    seven_day: window(47),
+    model_scoped: [{ display_name: "Fable", ...window(10) }],
+    limits: [
+      {
+        kind: "weekly_scoped",
+        percent: 10,
+        resets_at: "2026-09-16T04:00:00Z",
+        scope: { model: { display_name: "Fable" } },
+      },
+    ],
+  }).rate_limits.rateLimitsByLimitId;
+  equal(buckets["claude-model-Fable"].primary.usedPercent, 10);
+  equal(Object.keys(buckets).length, 2);
+});
+
 Deno.test("unknown quota stays unknown and malformed responses are transient failures", async () => {
   equal(quotaView({ rate_limits_available: false, rate_limits: null }), {});
   equal(
@@ -93,6 +146,8 @@ Deno.test("unknown quota stays unknown and malformed responses are transient fai
       { five_hour: window(101) },
       { five_hour: window(NaN) },
       { model_scoped: {} },
+      { limits: {} },
+      { limits: ["weekly_scoped"] },
     ]
   ) {
     await rejects(

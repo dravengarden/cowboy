@@ -190,6 +190,33 @@ function quotaBucket(window, label, minutes) {
   };
 }
 
+/** Per-model weekly windows projected out of the unified `limits` array.
+ *
+ * `rate_limits.model_scoped` is a legacy projection behind a feature gate that
+ * `DISABLE_TELEMETRY=1` also closes, so a collector that keeps telemetry off
+ * never observes it even though the account has the window. The unified array
+ * is emitted unconditionally and carries the same percentage and reset time
+ * under `kind: "weekly_scoped"`. Verified against CLI 2.1.280; treat the two
+ * shapes as one source so neither gate nor rename empties the card.
+ */
+function scopedModelWindows(rows) {
+  const windows = [];
+  for (const row of rows) {
+    if (row == null) continue;
+    const entry = record(row);
+    if (!entry) throw nativeFailure();
+    if (entry.kind !== "weekly_scoped") continue;
+    const model = record(record(entry.scope)?.model);
+    if (typeof model?.display_name !== "string") continue;
+    windows.push({
+      display_name: model.display_name,
+      utilization: entry.percent,
+      resets_at: entry.resets_at,
+    });
+  }
+  return windows;
+}
+
 /** get_usage reports 0–100 percentages and ISO timestamps. */
 export function quotaView(response) {
   if (
@@ -203,23 +230,29 @@ export function quotaView(response) {
   if (
     !WINDOWS.some(([key]) => Object.hasOwn(limits, key)) &&
     !Object.hasOwn(limits, "model_scoped") &&
+    !Object.hasOwn(limits, "limits") &&
     !Object.hasOwn(limits, "extra_usage")
   ) {
     throw nativeFailure();
   }
-  if (
-    limits.model_scoped !== undefined && !Array.isArray(limits.model_scoped)
-  ) {
-    throw nativeFailure();
+  for (const key of ["model_scoped", "limits"]) {
+    if (limits[key] !== undefined && !Array.isArray(limits[key])) {
+      throw nativeFailure();
+    }
   }
+  const scoped = [
+    ...(limits.model_scoped ?? []),
+    ...scopedModelWindows(limits.limits ?? []),
+  ];
   const models = [];
-  for (const window of (limits.model_scoped ?? []).slice(0, 32)) {
+  for (const window of scoped.slice(0, 32)) {
     const label = typeof window?.display_name === "string"
       ? window.display_name.trim()
       : "";
     if (!label || label.length > 100 || /[\u0000-\u001f\u007f]/.test(label)) {
       continue;
     }
+    if (models.some(([name]) => name === label)) continue;
     const bucket = quotaBucket(window, label, 10080);
     if (bucket) models.push([label, bucket]);
   }
