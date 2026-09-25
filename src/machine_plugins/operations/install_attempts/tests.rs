@@ -80,6 +80,46 @@ fn every_pending_phase_reopens_as_fenced_evidence_without_completion_authority()
 }
 
 #[test]
+fn completed_staging_failure_retains_evidence_but_allows_fresh_target_cas() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(DIRECTORY);
+    let journal = Attempts::open(path.clone()).unwrap();
+    let step = fixture();
+    let mut pending = journal.begin(&step).unwrap();
+    journal
+        .advance(
+            &mut pending,
+            InstallOutcome::Pending {
+                phase: InstallPhase::Staging,
+            },
+        )
+        .unwrap();
+    journal
+        .advance(
+            &mut pending,
+            InstallOutcome::Unknown {
+                phase: InstallPhase::Staging,
+                reason: crate::machine_protocol::plugin_install::InstallUncertainty::EffectFailure,
+            },
+        )
+        .unwrap();
+    drop(journal);
+
+    let reopened = Attempts::open(path).unwrap();
+    assert!(matches!(reopened.query(&step), InstallLookup::Found { .. }));
+    assert!(reopened.ensure_unfenced(&step.plugin_id).is_ok());
+    assert!(
+        reopened.begin(&step).is_err(),
+        "the old identity stays immutable"
+    );
+
+    let mut retry = step;
+    retry.operation_id = "installation-fixture-retry-0001".into();
+    retry.plan_digest = crate::machine_protocol::plugin_step::digest(b"fresh retry plan");
+    assert!(reopened.begin(&retry).is_ok());
+}
+
+#[test]
 fn failed_intent_and_completion_flushes_poison_all_mutation_paths() {
     for after in [false, true] {
         let root = tempfile::tempdir().unwrap();

@@ -226,10 +226,28 @@ pub enum InstallOutcome {
     },
 }
 
+impl InstallOutcome {
+    /// Staging is content-addressed preparation only. Reaching activation
+    /// first requires durably advancing the receipt to `Activating`, so a
+    /// completed failure that still names `Staging` proves the active
+    /// installation was never touched. A fresh install still needs new
+    /// Service authority and an exact target CAS.
+    pub(crate) const fn retryable_staging_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Unknown {
+                phase: InstallPhase::Staging,
+                ..
+            }
+        )
+    }
+}
+
 #[cfg(any(feature = "machine-host", test))]
 impl InstallOutcome {
     pub(crate) fn fenced(&self) -> bool {
         matches!(self, Self::Pending { .. } | Self::Unknown { .. })
+            && !self.retryable_staging_failure()
     }
 
     pub(crate) fn follows(&self, previous: &Self) -> bool {

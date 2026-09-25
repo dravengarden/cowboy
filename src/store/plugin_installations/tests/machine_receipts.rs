@@ -3,6 +3,38 @@ use crate::machine_protocol::plugin_install::{
     InstallPhase as MachinePhase, InstallRejection, InstallTarget, InstallUncertainty,
 };
 use crate::plugin_operation::installation::machine_fixture;
+use crate::plugin_operation::installation::{
+    InstallStagingResolutionIntent, InstallStagingResolutionPermit,
+};
+
+fn staging_resolution_permit(
+    before: &InstallOperation,
+    target: InstallTarget,
+) -> InstallStagingResolutionPermit {
+    let intent = InstallStagingResolutionIntent {
+        schema: 1,
+        resolution_id: "install-staging-resolution-fixture-0001".into(),
+        operation_id: before.intent.operation_id.clone(),
+        service_id: before.intent.service_id.clone(),
+        actor: crate::plugin_operation::Actor::Admin {
+            account: "local-operator".into(),
+        },
+        machine_id: before.intent.machine_id.clone(),
+        plugin_id: before.intent.plugin_id.clone(),
+        operation_digest: crate::machine_protocol::plugin_step::digest(
+            &serde_json::to_vec(before).unwrap(),
+        ),
+        observed_target: target,
+    };
+    InstallStagingResolutionPermit::new(
+        intent,
+        crate::operation_budget::OperationBudget::new(
+            chrono::Utc::now().timestamp_millis() + 60_000,
+            std::time::Duration::from_mins(1),
+            crate::operation_budget::TimeSample::now(),
+        ),
+    )
+}
 
 fn receipt(intent: &InstallIntent, outcome: InstallOutcome) -> InstallReceipt {
     let step = intent.machine_step().unwrap();
@@ -180,6 +212,107 @@ async fn postgres_machine_receipt_atomic_contract() {
         .await
         .unwrap();
     contract(&store).await;
+}
+
+async fn staging_resolution_contract(store: &Store) {
+    store.migrate().await.unwrap();
+    let intent = machine_fixture("staging-resolution");
+    installing(store, &intent).await;
+    let uncertain = receipt(
+        &intent,
+        InstallOutcome::Unknown {
+            phase: MachinePhase::Staging,
+            reason: InstallUncertainty::EffectFailure,
+        },
+    );
+    let before = store
+        .record_plugin_install_receipt(&intent, &uncertain)
+        .await
+        .unwrap();
+    let target = intent.machine_target.clone().unwrap();
+
+    let wrong = staging_resolution_permit(
+        &before,
+        InstallTarget::Removed {
+            revision: format!("installation-{}", "e".repeat(64))
+                .try_into()
+                .unwrap(),
+        },
+    );
+    assert!(
+        store
+            .resolve_plugin_install_staging(&wrong, &before)
+            .await
+            .is_err(),
+        "a current target observation cannot replace the original CAS"
+    );
+
+    let permit = staging_resolution_permit(&before, target);
+    let expected = permit.intent().clone();
+    let resolution = store
+        .resolve_plugin_install_staging(&permit, &before)
+        .await
+        .unwrap();
+    assert_eq!(resolution.intent, expected);
+    assert_eq!(
+        store
+            .plugin_install_staging_resolution(&intent.operation_id)
+            .await
+            .unwrap(),
+        Some(resolution.clone())
+    );
+    assert_eq!(
+        store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap(),
+        Some(before.clone()),
+        "resolution must not rewrite the uncertain historical receipt"
+    );
+    assert!(
+        store
+            .resolve_plugin_install_staging(&permit, &before)
+            .await
+            .is_err(),
+        "one resolution cannot be replayed"
+    );
+
+    let mut retry = intent.clone();
+    retry.operation_id = "installation-staging-resolution-retry".into();
+    retry.request_id = format!("plugin-install-{}", retry.operation_id);
+    store.begin_plugin_install(&retry).await.unwrap();
+    let recovered = store.recover_plugin_installs("service-test").await.unwrap();
+    assert!(
+        recovered
+            .iter()
+            .all(|operation| operation.intent.operation_id != intent.operation_id),
+        "resolved staging evidence must not reconstruct a slot fence"
+    );
+    assert!(
+        recovered
+            .iter()
+            .any(|operation| operation.intent.operation_id == retry.operation_id)
+    );
+}
+
+#[tokio::test]
+async fn sqlite_failed_staging_resolution_is_audited_and_releases_the_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    staging_resolution_contract(&store).await;
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL fixture: just test-postgres"]
+async fn postgres_failed_staging_resolution_is_audited_and_releases_the_slot() {
+    let root = tempfile::tempdir().unwrap();
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL").expect("isolated PostgreSQL fixture");
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    staging_resolution_contract(&store).await;
 }
 
 #[tokio::test]

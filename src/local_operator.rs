@@ -241,7 +241,7 @@ enum OperatorCommand {
         #[arg(long)]
         plugin: String,
     },
-    /// Query and commit the exact terminal Machine receipt for one fenced install.
+    /// Reconcile an exact terminal receipt or activation-free staging failure.
     /// This never repeats the installation or infers its outcome from inventory.
     ReconcileInstall {
         #[arg(long)]

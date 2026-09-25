@@ -462,6 +462,14 @@ fn reconciliation_accepts_only_an_exact_interrupted_machine_boundary() {
         },
     ));
     assert!(!super::super::reconciliation_candidate(&operation));
+    operation.machine_receipt = Some(machine_receipt(
+        &intent.machine_step().unwrap(),
+        InstallOutcome::Unknown {
+            phase: crate::machine_protocol::plugin_install::InstallPhase::Staging,
+            reason: crate::machine_protocol::plugin_install::InstallUncertainty::EffectFailure,
+        },
+    ));
+    assert!(super::super::reconciliation_candidate(&operation));
     operation.machine_receipt = Some(machine_receipt(&intent.machine_step().unwrap(), applied()));
     assert!(!super::super::reconciliation_candidate(&operation));
 

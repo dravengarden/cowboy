@@ -85,6 +85,19 @@ fn only_forward_process_owned_phases_can_complete_and_never_reuse_a_revision() {
     };
     assert!(prepared.fenced());
     assert!(staging.fenced());
+    let failed_staging = InstallOutcome::Unknown {
+        phase: InstallPhase::Staging,
+        reason: InstallUncertainty::EffectFailure,
+    };
+    assert!(failed_staging.retryable_staging_failure());
+    assert!(!failed_staging.fenced());
+    assert!(
+        InstallOutcome::Unknown {
+            phase: InstallPhase::Activating,
+            reason: InstallUncertainty::EffectFailure,
+        }
+        .fenced()
+    );
     assert!(!receipt.outcome.fenced());
     assert!(staging.follows(&prepared));
     assert!(!prepared.follows(&staging));

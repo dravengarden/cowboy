@@ -82,4 +82,7 @@ authorized caller the installation transaction has always required.
   [Machine component convergence](machine-component-convergence.md#stopping-it).
 - If a dispatched installation lost its response, inspect its operation and run
   `cowboy operator reconcile-install` with that exact operation ID. This queries
-  the Machine's durable receipt; it does not repeat the installation.
+  the Machine's durable receipt; it does not repeat the installation. A failed
+  pre-activation Staging receipt is released only after the same action also
+  verifies the Machine still has the original durable target. Retry that release
+  with a fresh operation ID after the resolution succeeds.

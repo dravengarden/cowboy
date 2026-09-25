@@ -535,10 +535,12 @@ fn reconciliation_candidate(operation: &InstallOperation) -> bool {
     operation.intent.schema == 2
         && operation.phase == InstallPhase::NeedsAttention
         && match operation.attention_from {
-            Some(InstallPhase::Installing) => operation
-                .machine_receipt
-                .as_ref()
-                .is_none_or(|receipt| matches!(&receipt.outcome, InstallOutcome::Pending { .. })),
+            Some(InstallPhase::Installing) => {
+                operation.machine_receipt.as_ref().is_none_or(|receipt| {
+                    matches!(&receipt.outcome, InstallOutcome::Pending { .. })
+                        || receipt.outcome.retryable_staging_failure()
+                })
+            }
             Some(InstallPhase::MachineAcknowledged) => matches!(
                 operation
                     .machine_receipt
@@ -631,10 +633,31 @@ fn reconciliation_response(operation: &InstallOperation) -> Response {
     )
 }
 
+fn staging_resolution_response(
+    operation: &InstallOperation,
+    resolution: &crate::plugin_operation::installation::InstallStagingResolutionReceipt,
+) -> Response {
+    no_store_json(
+        StatusCode::OK,
+        serde_json::json!({
+            "schema": 1,
+            "operation_id": operation.intent.operation_id,
+            "phase": operation.phase,
+            "machine_receipt": operation.machine_receipt.as_ref().map(|receipt| &receipt.outcome),
+            "reconciliation_performed": true,
+            "staging_failure_resolved": true,
+            "resolution_id": resolution.intent.resolution_id,
+            "resolved_at_ms": resolution.resolved_at_ms,
+        }),
+    )
+}
+
 /// Fresh local-Operator recovery of one exact historical installation. This
-/// queries the Machine's original step and commits only a matching terminal
-/// receipt. It never sends InstallPluginStep, resolves from current inventory,
-/// or recreates the original confirmation.
+/// queries the Machine's original step and commits either a matching terminal
+/// receipt or an independently authorized resolution for a failed Staging
+/// receipt whose durable installation target is still exact. It never sends
+/// InstallPluginStep, resolves from inventory, or recreates the original
+/// confirmation.
 pub(super) async fn confirmed_reconcile_install(
     state: Arc<AppState>,
     machine: String,
@@ -662,7 +685,7 @@ pub(super) async fn confirmed_reconcile_install(
     if !reconciliation_candidate(&before) {
         return (
             StatusCode::CONFLICT,
-            "Installation has no exact terminal receipt recovery candidate",
+            "Installation has no exact receipt or failed-staging recovery candidate",
         )
             .into_response();
     }
@@ -692,6 +715,19 @@ pub(super) async fn confirmed_reconcile_install(
         .await
     {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    match store.plugin_install_staging_resolution(&operation_id).await {
+        Ok(Some(resolution)) => {
+            let previous = matches!(
+                before.intent.machine_target,
+                Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
+            )
+            .then_some(PluginFenceState::Uninstalled);
+            fence.finish(previous);
+            return staging_resolution_response(&before, &resolution);
+        }
+        Ok(None) => {}
+        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
     let receipt = if before.attention_from == Some(InstallPhase::MachineAcknowledged) {
         before
@@ -742,6 +778,82 @@ pub(super) async fn confirmed_reconcile_install(
             ) =>
             {
                 *receipt
+            }
+            Ok(InstallObservation {
+                result: InstallLookup::Found { receipt },
+                ..
+            }) if receipt.outcome.retryable_staging_failure() => {
+                let query = step.target_query();
+                let target = match state
+                    .machine_control
+                    .plugin_installation_target(&connection, &query)
+                    .await
+                {
+                    Ok(InstallTargetObservation::Observed {
+                        admission_enabled: true,
+                        target,
+                        ..
+                    }) if before.intent.machine_target.as_ref() == Some(&target) => target,
+                    _ => {
+                        return (
+                            StatusCode::CONFLICT,
+                            "Machine installation target changed or remains fenced; staging failure was not resolved",
+                        )
+                            .into_response();
+                    }
+                };
+                if !state.machine_control.is_current(&connection)
+                    || !authority
+                        .check(
+                            ProductRequestAuth::from(state.as_ref()),
+                            &state.service_id,
+                            &before,
+                        )
+                        .await
+                {
+                    return (
+                        StatusCode::CONFLICT,
+                        "Machine connection or Operator authority changed; installation remains fenced",
+                    )
+                        .into_response();
+                }
+                let permit = match authority
+                    .authorize_staging_resolution(
+                        ProductRequestAuth::from(state.as_ref()),
+                        &state.service_id,
+                        &before,
+                        target,
+                    )
+                    .await
+                {
+                    Ok(permit) => permit,
+                    Err(_) => return StatusCode::FORBIDDEN.into_response(),
+                };
+                let expected_intent = permit.intent().clone();
+                let resolution = match store.resolve_plugin_install_staging(&permit, &before).await
+                {
+                    Ok(resolution) => resolution,
+                    Err(error) => {
+                        match store.plugin_install_staging_resolution(&operation_id).await {
+                            Ok(Some(saved)) if saved.intent == expected_intent => saved,
+                            _ => {
+                                tracing::warn!(
+                                    %operation_id,
+                                    error = %error,
+                                    "install staging resolution commit was not observed"
+                                );
+                                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                            }
+                        }
+                    }
+                };
+                let previous = matches!(
+                    before.intent.machine_target,
+                    Some(crate::machine_protocol::plugin_install::InstallTarget::Removed { .. })
+                )
+                .then_some(PluginFenceState::Uninstalled);
+                fence.finish(previous);
+                return staging_resolution_response(&before, &resolution);
             }
             Ok(InstallObservation {
                 result: InstallLookup::Found { .. },

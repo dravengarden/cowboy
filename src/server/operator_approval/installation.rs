@@ -5,6 +5,9 @@ use super::*;
 use crate::machine_protocol::DesiredPlugin;
 use crate::machine_protocol::plugin_install::{InstallStep, InstallTarget};
 use crate::plugin_operation::installation::{InstallIntent, InstallOperation};
+use crate::plugin_operation::installation::{
+    InstallStagingResolutionIntent, InstallStagingResolutionPermit,
+};
 
 fn target_digest(machine: &str, desired: &DesiredPlugin) -> Result<String> {
     Ok(hex_sha256(&serde_json::to_vec(&(machine, desired))?))
@@ -144,5 +147,45 @@ impl InstallationReconciliationAuthority {
             self.revoked.store(true, Ordering::Release);
         }
         valid
+    }
+
+    /// Consume this fresh reconciliation authority into one local durability
+    /// commit after the caller has observed the original Machine receipt and
+    /// exact unchanged installation target on the captured connection.
+    pub(in crate::server) async fn authorize_staging_resolution(
+        self,
+        auth: ProductRequestAuth<'_>,
+        service: &str,
+        operation: &InstallOperation,
+        observed_target: InstallTarget,
+    ) -> Result<InstallStagingResolutionPermit> {
+        let operation_digest =
+            crate::machine_protocol::plugin_step::digest(&serde_json::to_vec(operation)?);
+        let intent = InstallStagingResolutionIntent {
+            schema: 1,
+            resolution_id: format!(
+                "install-staging-{}",
+                crate::product_auth::new_session_token()?
+            ),
+            operation_id: operation.intent.operation_id.clone(),
+            service_id: service.to_owned(),
+            actor: self.approval.actor.clone(),
+            machine_id: operation.intent.machine_id.clone(),
+            plugin_id: operation.intent.plugin_id.clone(),
+            operation_digest,
+            observed_target: observed_target.clone(),
+        };
+        ensure!(
+            intent.matches(operation, &observed_target)?
+                && hex_sha256(&serde_json::to_vec(operation)?) == self.operation_digest
+                && !self.revoked.load(Ordering::Acquire)
+                && !self.budget.expired()
+                && self.approval.service == service
+                && self.approval.current_operator(auth).await.as_ref()
+                    == Some(&self.approval.actor)
+                && !self.budget.expired(),
+            "install staging resolution is no longer authorized"
+        );
+        Ok(InstallStagingResolutionPermit::new(intent, self.budget))
     }
 }

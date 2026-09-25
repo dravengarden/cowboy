@@ -5,10 +5,44 @@ use super::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 use crate::machine_protocol::plugin_install::{InstallOutcome, InstallReceipt};
 use crate::plugin_operation::MAX_OPERATIONS;
 use crate::plugin_operation::installation::{
-    InstallIntent, InstallOperation, InstallPhase, InstallProblem, MAX_INSTALL_INTENT_BYTES,
+    InstallIntent, InstallOperation, InstallPhase, InstallProblem, InstallStagingResolutionIntent,
+    InstallStagingResolutionPermit, InstallStagingResolutionReceipt, MAX_INSTALL_INTENT_BYTES,
+    MAX_INSTALL_STAGING_RESOLUTION_BYTES,
 };
 use anyhow::{Context as _, Result, ensure};
 use sha2::{Digest as _, Sha256};
+
+#[derive(sqlx::FromRow)]
+struct StagingResolutionRecord {
+    operation_id: String,
+    resolution_id: String,
+    intent: String,
+    intent_sha256: String,
+    resolved_at_ms: i64,
+}
+
+impl StagingResolutionRecord {
+    fn decode(self) -> Result<InstallStagingResolutionReceipt> {
+        ensure!(
+            self.intent.len() <= MAX_INSTALL_STAGING_RESOLUTION_BYTES
+                && self.intent_sha256 == format!("{:x}", Sha256::digest(self.intent.as_bytes())),
+            "invalid install staging resolution integrity"
+        );
+        let intent: InstallStagingResolutionIntent = serde_json::from_str(&self.intent)
+            .map_err(|_| anyhow::anyhow!("invalid install staging resolution"))?;
+        intent.validate()?;
+        ensure!(
+            intent.operation_id == self.operation_id
+                && intent.resolution_id == self.resolution_id
+                && self.resolved_at_ms > 0,
+            "invalid install staging resolution identity"
+        );
+        Ok(InstallStagingResolutionReceipt {
+            intent,
+            resolved_at_ms: self.resolved_at_ms,
+        })
+    }
+}
 
 #[derive(sqlx::FromRow)]
 struct Record {
@@ -25,6 +59,7 @@ struct Record {
     updated_at_ms: i64,
     machine_receipt: Option<String>,
     machine_receipt_sha256: Option<String>,
+    staging_resolved_at_ms: Option<i64>,
 }
 
 impl Record {
@@ -94,6 +129,38 @@ macro_rules! dispatch {
 }
 
 impl Store {
+    pub(crate) async fn plugin_install_staging_resolution(
+        &self,
+        operation: &str,
+    ) -> Result<Option<InstallStagingResolutionReceipt>> {
+        dispatch!(self, plugin_install_staging_resolution(operation))
+    }
+
+    /// Commit a separately authorized conclusion that one exact Machine
+    /// attempt failed while still in content-addressed staging. The original
+    /// operation and receipt remain unchanged for audit and deduplication.
+    pub(crate) async fn resolve_plugin_install_staging(
+        &self,
+        permit: &InstallStagingResolutionPermit,
+        before: &InstallOperation,
+    ) -> Result<InstallStagingResolutionReceipt> {
+        before.validate()?;
+        let intent = permit.intent();
+        ensure!(
+            permit.within_budget() && intent.matches(before, &intent.observed_target)?,
+            "installation staging resolution is not authorized"
+        );
+        let document = serde_json::to_string(intent)?;
+        ensure!(
+            document.len() <= MAX_INSTALL_STAGING_RESOLUTION_BYTES,
+            "install staging resolution exceeds budget"
+        );
+        dispatch!(
+            self,
+            resolve_plugin_install_staging(permit, before, &document)
+        )
+    }
+
     /// Original forward observation only. Historical recovery needs a fresh,
     /// independent operation; this cannot overwrite terminal/uncertain state.
     pub(crate) async fn record_plugin_install_receipt(
@@ -233,6 +300,73 @@ impl Store {
 macro_rules! implement_journal {
     ($backend:ty, $durability:literal, $lock:literal) => {
         impl $backend {
+            async fn plugin_install_staging_resolution(&self, operation: &str) -> Result<Option<InstallStagingResolutionReceipt>> {
+                let Some(record) = sqlx::query_as::<_, StagingResolutionRecord>(
+                    "SELECT * FROM plugin_install_staging_resolutions WHERE operation_id = $1"
+                ).bind(operation).fetch_optional(&self.pool).await? else {
+                    return Ok(None);
+                };
+                let resolution = record.decode()?;
+                let saved = sqlx::query_as::<_, Record>(
+                    "SELECT * FROM plugin_install_operations WHERE operation_id = $1"
+                ).bind(operation).fetch_one(&self.pool).await?;
+                ensure!(
+                    saved.staging_resolved_at_ms == Some(resolution.resolved_at_ms),
+                    "install staging resolution marker is invalid"
+                );
+                let operation = saved.decode()?;
+                ensure!(
+                    resolution.intent.matches(&operation, &resolution.intent.observed_target)?,
+                    "install staging resolution does not match its operation"
+                );
+                Ok(Some(resolution))
+            }
+
+            async fn resolve_plugin_install_staging(
+                &self,
+                permit: &InstallStagingResolutionPermit,
+                before: &InstallOperation,
+                document: &str,
+            ) -> Result<InstallStagingResolutionReceipt> {
+                let intent = permit.intent();
+                let mut tx = self.pool.begin().await?;
+                sqlx::query($durability).execute(&mut *tx).await?;
+                sqlx::query($lock).execute(&mut *tx).await?;
+                let locked = sqlx::query(
+                    "UPDATE plugin_install_operations SET phase = phase \
+                     WHERE operation_id = $1 AND phase = 'needs_attention'"
+                ).bind(&intent.operation_id).execute(&mut *tx).await?;
+                ensure!(locked.rows_affected() == 1, "install staging resolution phase changed");
+                let saved = sqlx::query_as::<_, Record>(
+                    "SELECT * FROM plugin_install_operations WHERE operation_id = $1"
+                ).bind(&intent.operation_id).fetch_one(&mut *tx).await?;
+                ensure!(saved.staging_resolved_at_ms.is_none(), "install staging slot is already resolved");
+                let saved = saved.decode()?;
+                ensure!(
+                    saved == *before && intent.matches(&saved, &intent.observed_target)?,
+                    "install staging resolution evidence changed"
+                );
+                ensure!(permit.within_budget(), "install staging resolution approval expired while waiting");
+                let now = chrono::Utc::now().timestamp_millis();
+                let inserted = sqlx::query(
+                    "INSERT INTO plugin_install_staging_resolutions \
+                     (operation_id, resolution_id, intent, intent_sha256, resolved_at_ms) \
+                     VALUES ($1, $2, $3, $4, $5)"
+                ).bind(&intent.operation_id).bind(&intent.resolution_id).bind(document)
+                    .bind(format!("{:x}", Sha256::digest(document.as_bytes())))
+                    .bind(now).execute(&mut *tx).await?;
+                ensure!(inserted.rows_affected() == 1, "install staging resolution was not persisted");
+                let released = sqlx::query(
+                    "UPDATE plugin_install_operations SET staging_resolved_at_ms = $2 \
+                     WHERE operation_id = $1 AND phase = 'needs_attention' \
+                       AND staging_resolved_at_ms IS NULL"
+                ).bind(&intent.operation_id).bind(now).execute(&mut *tx).await?;
+                ensure!(released.rows_affected() == 1, "install staging slot was not released");
+                ensure!(permit.within_budget(), "install staging resolution approval expired before commit");
+                tx.commit().await.context("committing install staging resolution")?;
+                Ok(InstallStagingResolutionReceipt { intent: intent.clone(), resolved_at_ms: now })
+            }
+
             async fn begin_plugin_install(&self, intent: &InstallIntent, document: &str) -> Result<()> {
                 let mut tx = self.pool.begin().await?;
                 sqlx::query($durability).execute(&mut *tx).await?;
@@ -365,8 +499,36 @@ macro_rules! implement_journal {
                 let rows = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations ORDER BY operation_id ASC LIMIT 4097")
                     .fetch_all(&mut *tx).await?;
                 ensure!(rows.len() <= usize::try_from(MAX_OPERATIONS)?, "install recovery budget exceeded");
+                let resolution_markers = rows.iter()
+                    .filter_map(|record| record.staging_resolved_at_ms.map(|time| (record.operation_id.clone(), time)))
+                    .collect::<std::collections::BTreeMap<_, _>>();
                 let mut operations = rows.into_iter().map(Record::decode).collect::<Result<Vec<_>>>()?;
-                operations.retain(|op| !op.phase.terminal());
+                let resolution_rows = sqlx::query_as::<_, StagingResolutionRecord>(
+                    "SELECT * FROM plugin_install_staging_resolutions ORDER BY operation_id ASC LIMIT 4097"
+                ).fetch_all(&mut *tx).await?;
+                ensure!(resolution_rows.len() <= usize::try_from(MAX_OPERATIONS)?, "install staging resolution recovery budget exceeded");
+                let resolutions = resolution_rows.into_iter()
+                    .map(StagingResolutionRecord::decode)
+                    .collect::<Result<Vec<_>>>()?;
+                let mut resolved = std::collections::BTreeSet::new();
+                for resolution in resolutions {
+                    let operation = operations.iter()
+                        .find(|operation| operation.intent.operation_id == resolution.intent.operation_id)
+                        .context("install staging resolution lost its operation")?;
+                    ensure!(
+                        resolution.intent.matches(operation, &resolution.intent.observed_target)?
+                            && resolution_markers.get(&resolution.intent.operation_id) == Some(&resolution.resolved_at_ms)
+                            && resolved.insert(resolution.intent.operation_id.clone()),
+                        "install staging resolution does not match its operation"
+                    );
+                }
+                ensure!(
+                    resolved.len() == resolution_markers.len(),
+                    "install staging resolution marker lost its audit"
+                );
+                operations.retain(|op| {
+                    !op.phase.terminal() && !resolved.contains(&op.intent.operation_id)
+                });
                 ensure!(operations.iter().all(|op| op.intent.service_id == service), "unfinished install belongs to another Service");
                 let now = chrono::Utc::now().timestamp_millis();
                 ensure!(now > 0, "invalid recovery time");
@@ -394,7 +556,7 @@ macro_rules! implement_journal {
 implement_journal!(
     PostgresStorage,
     "SET LOCAL synchronous_commit = on",
-    "LOCK TABLE plugin_uninstall_operations, plugin_install_operations IN SHARE ROW EXCLUSIVE MODE"
+    "LOCK TABLE plugin_uninstall_operations, plugin_install_operations, plugin_install_staging_resolutions IN SHARE ROW EXCLUSIVE MODE"
 );
 implement_journal!(
     SqliteStorage,

@@ -6,10 +6,12 @@ use super::{Actor, bounded, digest};
 use crate::machine_protocol::plugin_install::{
     InstallOutcome, InstallReceipt, InstallStep, InstallTarget,
 };
+use crate::operation_budget::OperationBudget;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const MAX_INSTALL_INTENT_BYTES: usize = 4096;
+pub(crate) const MAX_INSTALL_STAGING_RESOLUTION_BYTES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -291,6 +293,108 @@ impl InstallOperation {
         );
         Ok(())
     }
+}
+
+/// Durable proof that a fresh Operator inspected one exact failed staging
+/// attempt and the Machine still reported its original installation target.
+/// This retires only the Service/Machine slot fence; it is not installation
+/// authority and carries no release envelope or credential.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InstallStagingResolutionIntent {
+    pub schema: u16,
+    pub resolution_id: String,
+    pub operation_id: String,
+    pub service_id: String,
+    pub actor: Actor,
+    pub machine_id: String,
+    pub plugin_id: String,
+    pub operation_digest: String,
+    pub observed_target: InstallTarget,
+}
+
+impl InstallStagingResolutionIntent {
+    pub(crate) fn validate(&self) -> Result<()> {
+        let actor = match &self.actor {
+            Actor::Product { user_id } => user_id,
+            Actor::Admin { account } => account,
+        };
+        ensure!(
+            self.schema == 1
+                && valid_operation_id(&self.resolution_id)
+                && valid_operation_id(&self.operation_id),
+            "invalid install staging resolution identity"
+        );
+        ensure!(
+            bounded(&self.service_id, 128) && bounded(actor, 256),
+            "invalid install staging resolution owner"
+        );
+        ensure!(
+            [&self.machine_id, &self.plugin_id]
+                .into_iter()
+                .all(|value| {
+                    bounded(value, 128)
+                        && value
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+                })
+                && digest(&self.operation_digest),
+            "invalid install staging resolution target"
+        );
+        self.observed_target.validate()
+    }
+
+    pub(crate) fn matches(
+        &self,
+        operation: &InstallOperation,
+        observed_target: &InstallTarget,
+    ) -> Result<bool> {
+        self.validate()?;
+        operation.validate()?;
+        let retryable = operation
+            .machine_receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.outcome.retryable_staging_failure());
+        Ok(retryable
+            && operation.intent.schema == 2
+            && operation.phase == InstallPhase::NeedsAttention
+            && operation.attention_from == Some(InstallPhase::Installing)
+            && operation.intent.machine_target.as_ref() == Some(observed_target)
+            && &self.observed_target == observed_target
+            && self.operation_id == operation.intent.operation_id
+            && self.service_id == operation.intent.service_id
+            && self.machine_id == operation.intent.machine_id
+            && self.plugin_id == operation.intent.plugin_id
+            && self.operation_digest
+                == crate::machine_protocol::plugin_step::digest(&serde_json::to_vec(operation)?))
+    }
+}
+
+/// Ephemeral authority for the local durability commit. It cannot be decoded
+/// from the serialized intent and retains the original monotonic time budget.
+pub(crate) struct InstallStagingResolutionPermit {
+    intent: InstallStagingResolutionIntent,
+    budget: OperationBudget,
+}
+
+impl InstallStagingResolutionPermit {
+    pub(crate) fn new(intent: InstallStagingResolutionIntent, budget: OperationBudget) -> Self {
+        Self { intent, budget }
+    }
+
+    pub(crate) fn intent(&self) -> &InstallStagingResolutionIntent {
+        &self.intent
+    }
+
+    pub(crate) fn within_budget(&self) -> bool {
+        !self.budget.expired()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct InstallStagingResolutionReceipt {
+    pub intent: InstallStagingResolutionIntent,
+    pub resolved_at_ms: i64,
 }
 
 #[cfg(test)]

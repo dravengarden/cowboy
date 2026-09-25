@@ -64,11 +64,17 @@ effects. A completed historical receipt does not prove current installation or
 restored native sessions.
 
 Prepared may become Rejected when its original lease ends before Staging. Once
-staging has begun, failure or lost authority is Unknown, even if no active link
-changed. An inline activation error may restore its local link snapshot while
-the original lease is still valid; this does not clear pending evidence or
-constitute durable independently authorized compensation. Credential authority
-is never rolled back.
+staging has begun, failure or lost authority is Unknown. The phase boundary is
+still useful evidence: activation cannot start until `Activating` is durably
+recorded, so a completed `Unknown/Staging` receipt proves that the active link
+and installation incarnation were not touched. Such a receipt keeps its exact
+historical bytes but no longer fences a fresh, separately authorized install;
+the Service must first commit its own Operator-authorized staging resolution
+against the unchanged durable target. Pending Staging and every Unknown at or
+after Activating remain fenced. An inline activation error may restore its local
+link snapshot while the original lease is still valid; this does not clear
+pending evidence or constitute durable independently authorized compensation.
+Credential authority is never rolled back.
 
 ## Storage, duplicates and recovery readers
 
@@ -88,9 +94,11 @@ oversized and symlinked records also fail closed; ambiguous writes poison local
 mutation authority until validated reopen.
 
 Attempt presence permanently prevents legacy install/reactivate/remove entry
-points from bypassing this namespace. Pending attempts share the existing
-uninstall and host-operation fences. Independent Service authentication
-authority is not revoked merely by an installation fence.
+points from bypassing this namespace. Pending attempts and post-Staging Unknown
+attempts share the existing uninstall and host-operation fences. A completed
+Unknown/Staging attempt is retained and deduplicated but permits only a fresh
+target-CAS install through the durable protocol. Independent Service
+authentication authority is not revoked merely by an installation fence.
 
 ## Acceptance
 

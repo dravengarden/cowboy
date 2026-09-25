@@ -67,7 +67,9 @@ replay or inverse is sent.
 Schema two atomically saves the full bounded, checksummed Machine receipt and
 Service phase in the same transaction. Only exact `Applied` can enter
 `MachineAcknowledged`, `Completed` or `AuthenticationPending`; Pending/Unknown
-becomes `NeedsAttention`. Receipt CAS requires the identical original intent,
+becomes `NeedsAttention`. A completed `Unknown/Staging` remains in that phase as
+historical evidence, but its pre-activation boundary is eligible for the
+separate audited staging resolution below. Receipt CAS requires the identical original intent,
 Installing phase and no existing receipt. Duplicate, uncertain and terminal rows
 cannot be overwritten by this forward writer, even with a later successful
 observation. Recording evidence does not require renewed effect authority.
@@ -89,16 +91,24 @@ The private action reloads the exact fenced schema-two Service record, binds a
 new two-minute Operator authority to that complete snapshot, and asks the
 currently authenticated Machine only for the original durable step. It never
 sends `InstallPluginStep` and never derives an outcome from current inventory.
-Only the matching terminal `Applied` receipt or a matching pre-Staging
-`Rejected` receipt can advance the Service journal and release the slot.
-Pending, Unknown, missing, conflicting, offline, revoked or expired observations
-leave the original fence in place. A saved Applied receipt interrupted after
+A matching terminal `Applied` receipt or matching pre-Staging `Rejected` receipt
+can advance the Service journal and release the slot. A matching completed
+`Unknown/Staging` receipt takes a separate path: the same live connection must
+report the original durable installation target exactly, then the Service
+atomically records the new actor, complete operation digest, target and time in
+`plugin_install_staging_resolutions`. The original operation and uncertain
+Machine receipt are never rewritten. This resolution permits a fresh operation
+identity; it does not repeat the old command or authorize installation itself.
+Pending, Unknown at Activating or later, changed targets, missing/conflicting
+evidence, offline Machines, revoked grants and expired observations leave the
+original fence in place. A saved Applied receipt interrupted after
 `MachineAcknowledged` can resume only post-install finalization; it cannot be
 replaced. Agent Providers repeat the ordinary post-install authentication sync,
 falling back to `AuthenticationPending` without replaying installation.
 
 Before dispatch/HTTP startup, the Controller validates the bounded journal and
-reconstructs all unfinished slot fences. It preserves the original interruption
+every staging-resolution record, then reconstructs all unresolved slot fences.
+It preserves the original interruption
 phase and closed problem code across repeated restarts. Corruption, unknown
 schema, identity mismatch and foreign unfinished Service ownership fail closed.
 Startup neither queries nor writes the Machine, synchronizes credentials,
@@ -107,6 +117,8 @@ restores sessions, clears uncertainty or treats current inventory as proof.
 The original migrations are PostgreSQL 0048 and SQLite 0022. Additive 0049/0023
 introduce paired nullable receipt/checksum columns, retaining existing intent
 bytes, phases and indexes; no applied migration is edited or table rebuilt.
+Additive 0051/0025 adds the staging-resolution audit and replaces the open-slot
+index so only an atomically resolved staging row stops owning the slot.
 SQLite retains WAL `synchronous=FULL`; PostgreSQL commits
 these transactions with `synchronous_commit=on`. All claim paths acquire their
 write locks before reading. The store-copy allowlist includes installation
@@ -174,6 +186,7 @@ actual Machine execution and activation remain separately unchecked.
 Before writer admission, accept both actual Controller/Machine reader floors and
 connected immutable execution/lost-response/restart gates. A recovery Controller
 must pause legacy admission too: the first Machine attempt permanently fences
-that path. Remaining P4 work includes post-effect exact worker verification,
-independently authorized restoration, and bounded evidence archival that
-preserves unresolved references. This bridge does not finish the refactor.
+that path. Remaining P4 work includes post-activation exact worker verification,
+independently authorized restoration of activation/projection uncertainty, and
+bounded evidence archival that preserves unresolved references. This bridge
+does not finish the refactor.

@@ -141,6 +141,74 @@ async fn installation_dispatch_cannot_substitute_a_step_or_revive_a_revoked_bind
 }
 
 #[tokio::test]
+async fn staging_resolution_binds_the_exact_uncertain_snapshot_target_and_fresh_operator() {
+    use crate::machine_protocol::plugin_install::{
+        InstallOutcome, InstallPhase as MachinePhase, InstallReceipt, InstallTarget,
+        InstallUncertainty,
+    };
+    use crate::plugin_operation::installation::{
+        InstallOperation, InstallPhase, InstallProblem, machine_fixture,
+    };
+
+    for change in ["none", "operation", "target", "role"] {
+        let h = Harness::new().await;
+        let (headers, verified) = h.cookie().await;
+        let intent = machine_fixture("staging-authority");
+        let step = intent.machine_step().unwrap();
+        let operation = InstallOperation {
+            intent: intent.clone(),
+            phase: InstallPhase::NeedsAttention,
+            problem: Some(InstallProblem::UnknownMachineOutcome),
+            attention_from: Some(InstallPhase::Installing),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            machine_receipt: Some(InstallReceipt {
+                request_digest: step.request_digest().unwrap(),
+                step,
+                outcome: InstallOutcome::Unknown {
+                    phase: MachinePhase::Staging,
+                    reason: InstallUncertainty::EffectFailure,
+                },
+            }),
+        };
+        let authority =
+            OperatorApproval::capture(h.context(), "service-test", Some(&verified), &headers)
+                .unwrap()
+                .bind_installation_reconciliation(&operation)
+                .unwrap();
+        let mut changed = operation.clone();
+        let target = match change {
+            "operation" => {
+                changed.updated_at_ms += 1;
+                InstallTarget::Vacant {}
+            }
+            "target" => InstallTarget::Removed {
+                revision: format!("installation-{}", "e".repeat(64))
+                    .try_into()
+                    .unwrap(),
+            },
+            "role" => {
+                h.role(AdminRole::Viewer);
+                InstallTarget::Vacant {}
+            }
+            _ => InstallTarget::Vacant {},
+        };
+        let result = authority
+            .authorize_staging_resolution(h.context(), "service-test", &changed, target)
+            .await;
+        assert_eq!(result.is_ok(), change == "none", "{change}");
+        if let Ok(permit) = result {
+            assert!(
+                permit
+                    .intent()
+                    .matches(&operation, &InstallTarget::Vacant {})
+                    .unwrap()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn installation_binds_complete_release_target_original_credential_and_budget() {
     for change in [
         "none",
