@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.1.25",
+  "version": "3.1.26",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
@@ -38,10 +38,17 @@
   "configuration_presets": [
     {
       "id": "sol-medium",
-      "name": "Sol · Medium",
+      "name": "Sol 5.6 · Medium",
       "detail": "GPT-5.6-Sol · Medium reasoning",
       "is_default": true,
       "values": { "model": "gpt-5.6-sol", "reasoning_effort": "medium" }
+    },
+    {
+      "id": "sol-6-medium",
+      "name": "Sol 6 · Medium",
+      "detail": "GPT-6-Sol · Medium reasoning",
+      "is_default": false,
+      "values": { "model": "gpt-6-sol", "reasoning_effort": "medium" }
     },
     {
       "id": "astra-medium",
@@ -59,17 +66,31 @@
     },
     {
       "id": "luna-max",
-      "name": "Luna · Max",
+      "name": "Luna 5.6 · Max",
       "detail": "GPT-5.6-Luna · Max reasoning",
       "is_default": false,
       "values": { "model": "gpt-5.6-luna", "reasoning_effort": "max" }
     },
     {
+      "id": "luna-6-max",
+      "name": "Luna 6 · Max",
+      "detail": "GPT-6-Luna · Max reasoning",
+      "is_default": false,
+      "values": { "model": "gpt-6-luna", "reasoning_effort": "max" }
+    },
+    {
       "id": "sol-max",
-      "name": "Sol · Max",
+      "name": "Sol 5.6 · Max",
       "detail": "GPT-5.6-Sol · Max reasoning",
       "is_default": false,
       "values": { "model": "gpt-5.6-sol", "reasoning_effort": "max" }
+    },
+    {
+      "id": "sol-6-max",
+      "name": "Sol 6 · Max",
+      "detail": "GPT-6-Sol · Max reasoning",
+      "is_default": false,
+      "values": { "model": "gpt-6-sol", "reasoning_effort": "max" }
     }
   ],
   "host": {
