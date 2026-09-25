@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.1.24",
+  "version": "3.1.25",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
@@ -129,16 +129,16 @@
     "dependencies": [
       {
         "id": "codex-acp",
-        "version": "1.11.0",
-        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-1.11.0.tgz",
-        "integrity": "sha512-opPKsRaekgdmQpOpHrR0EEDn9chgtiN+b+h0V78fTuQP84TNzB7vrn3EtKODwbiJQTBHJAlynjSFQazFfaT+VQ==",
+        "version": "1.13.1",
+        "source": "https://registry.npmjs.org/@agentclientprotocol/codex-acp/-/codex-acp-1.13.1.tgz",
+        "integrity": "sha512-NAbXTb6GRReox7B+8RN9VRB+sKUqFJh5Vg7Ex7RskYCO8EsYPJKN1WJvN7mOqjCKKK9lVDrNxtP7Bp/OUKPyAg==",
         "private": true
       },
       {
         "id": "openai-codex",
-        "version": "0.154.0",
-        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.154.0.tgz",
-        "integrity": "sha512-FV/x1OHXYv/ifjf3mXj9ThTTAWcUZN6cGIRQRhRxkKNOPuImu1WW0c8ev1vUkE9XGH90dEnYG1tBjIkxRikg0w==",
+        "version": "0.156.1",
+        "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.156.1.tgz",
+        "integrity": "sha512-nI1iVl/n2SO2lSvlwEsJx63zdSI4C4Me2gR7AG0OWMJiGSakz2tY2hx43E39Zq5aEoeB5bZjJXzp5Sqhog6vyA==",
         "private": true
       }
     ],
