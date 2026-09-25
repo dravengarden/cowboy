@@ -436,3 +436,60 @@ async fn legacy_intent_cannot_reenter_the_live_coordinator() {
     assert_eq!(effects.installs.load(Ordering::SeqCst), 0);
     assert_eq!(effects.syncs.load(Ordering::SeqCst), 0);
 }
+
+#[test]
+fn reconciliation_accepts_only_an_exact_interrupted_machine_boundary() {
+    let intent = fixture("reconciliation-candidate");
+    let mut operation = crate::plugin_operation::installation::InstallOperation {
+        intent: intent.clone(),
+        phase: InstallPhase::NeedsAttention,
+        problem: Some(InstallProblem::UnknownMachineOutcome),
+        attention_from: Some(InstallPhase::Installing),
+        created_at_ms: 1,
+        updated_at_ms: 2,
+        machine_receipt: None,
+    };
+    assert!(super::super::reconciliation_candidate(&operation));
+
+    operation.attention_from = Some(InstallPhase::Prepared);
+    assert!(!super::super::reconciliation_candidate(&operation));
+    operation.attention_from = Some(InstallPhase::Installing);
+    operation.machine_receipt = Some(machine_receipt(
+        &intent.machine_step().unwrap(),
+        InstallOutcome::Unknown {
+            phase: crate::machine_protocol::plugin_install::InstallPhase::Activating,
+            reason: crate::machine_protocol::plugin_install::InstallUncertainty::Interrupted,
+        },
+    ));
+    assert!(!super::super::reconciliation_candidate(&operation));
+    operation.machine_receipt = Some(machine_receipt(&intent.machine_step().unwrap(), applied()));
+    assert!(!super::super::reconciliation_candidate(&operation));
+
+    operation.attention_from = Some(InstallPhase::MachineAcknowledged);
+    assert!(super::super::reconciliation_candidate(&operation));
+    operation.intent.schema = 1;
+    operation.intent.machine_target = None;
+    assert!(!super::super::reconciliation_candidate(&operation));
+}
+
+#[test]
+fn interrupted_reconciliation_keeps_the_fence_until_terminal_progress_commits() {
+    let fences = fences(Some(PluginFenceState::NeedsReconcile));
+    {
+        let _owner =
+            super::super::InstallationReconciliationFence::acquire(&fences, slot()).unwrap();
+        assert_eq!(
+            fences.read().get(&slot()),
+            Some(&PluginFenceState::Installing)
+        );
+    }
+    assert_eq!(
+        fences.read().get(&slot()),
+        Some(&PluginFenceState::NeedsReconcile)
+    );
+    let mut owner =
+        super::super::InstallationReconciliationFence::acquire(&fences, slot()).unwrap();
+    owner.finish(None);
+    drop(owner);
+    assert!(fences.read().get(&slot()).is_none());
+}

@@ -93,3 +93,34 @@ fn install_cli_requires_a_version_digest_and_durable_operation_identity() {
     );
     assert!(TestCli::try_parse_from(["operator", "shell", "anything"]).is_err());
 }
+
+#[test]
+fn installation_reconciliation_cli_requires_the_exact_fenced_identity() {
+    assert!(
+        TestCli::try_parse_from([
+            "operator",
+            "reconcile-install",
+            "--machine",
+            "macbook-air",
+            "--plugin",
+            "claude-code",
+        ])
+        .is_err()
+    );
+    let args = TestCli::try_parse_from([
+        "operator",
+        "reconcile-install",
+        "--machine",
+        "macbook-air",
+        "--plugin",
+        "claude-code",
+        "--operation-id",
+        "macbook-air-claude-code-3-1-30-converge",
+    ])
+    .unwrap();
+    assert!(matches!(
+        args.args.command,
+        OperatorCommand::ReconcileInstall { operation_id, .. }
+            if operation_id == "macbook-air-claude-code-3-1-30-converge"
+    ));
+}

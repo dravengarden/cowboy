@@ -73,10 +73,13 @@ authorized caller the installation transaction has always required.
 ## Operating it
 
 - Add a Plugin to a Machine: name it in that Machine's list. The next
-  convergence installs it.
+  `cowboy operator converge --apply` run installs it.
 - Remove one: take it out of the list on a Machine whose policy is `uninstall`,
   and make sure its sessions are finished.
 - Take a Machine back under manual control: delete its entry. Its Plugins stay
   exactly as they are and its clients offer the ordinary actions again.
 - Stop everything: `cowboy operator freeze`. See
   [Machine component convergence](machine-component-convergence.md#stopping-it).
+- If a dispatched installation lost its response, inspect its operation and run
+  `cowboy operator reconcile-install` with that exact operation ID. This queries
+  the Machine's durable receipt; it does not repeat the installation.

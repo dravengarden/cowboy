@@ -816,6 +816,8 @@ function ProviderManagement(
             >
               {scope === "service"
                 ? "Configure once; encrypted credentials synchronize to every enrolled Machine"
+                : machine.plugin_lifecycle === "managed"
+                ? "Plugin membership and updates are managed by Cowboy Service"
                 : "Installed, upgraded, and uninstalled independently on this Machine"}
             </Typography>
           </Box>
@@ -825,6 +827,14 @@ function ProviderManagement(
         </Stack>
       )}
       {catalogError ? <Alert severity="error">{catalogError}</Alert> : null}
+      {scope === "machine" && machine.plugin_lifecycle === "managed"
+        ? (
+          <Alert severity="info" data-service-managed-plugins>
+            Updates are applied by Cowboy Service. Lifecycle buttons are hidden
+            because this Machine follows its Service declaration.
+          </Alert>
+        )
+        : null}
       {!flow && authenticationError
         ? <Alert severity="error">{authenticationError}</Alert>
         : null}
@@ -1000,6 +1010,14 @@ function ProviderManagement(
           const releaseReady = operationEntry.release_state === "ready" &&
             operationEntry.artifact_digest !== null &&
             (scope === "service" || latestCompatibleEntry !== undefined);
+          const machineManagementStatus = scope === "machine"
+            ? providerInstallationSummary(
+              installed,
+              latestCompatibleEntry,
+              latestEntry,
+              latestCompatibility?.detail,
+            )
+            : "";
           const managementStatus = scope === "service"
             ? entry.manifest.authentication.required
               ? serviceAuthenticationLabel(
@@ -1011,12 +1029,10 @@ function ProviderManagement(
               )
                 .split(" · ")[0] ?? authenticationCopy(authPresentation).empty
               : "no sign-in"
-            : providerInstallationSummary(
-              installed,
-              latestCompatibleEntry,
-              latestEntry,
-              latestCompatibility?.detail,
-            );
+            : machine.plugin_lifecycle === "managed" &&
+                machineManagementStatus === "update available"
+            ? "Service update available"
+            : machineManagementStatus;
           const managementStatusTone: ProviderManagementStatusTone =
             scope === "service"
               ? !entry.manifest.authentication.required ||
@@ -1025,7 +1041,8 @@ function ProviderManagement(
                 : "warning"
               : managementStatus === "active"
               ? "success"
-              : managementStatus === "update available"
+              : managementStatus === "update available" ||
+                  managementStatus === "Service update available"
               ? "warning"
               : "default";
           const credentialGroup = scope === "service"

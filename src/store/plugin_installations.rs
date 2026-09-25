@@ -116,6 +116,64 @@ impl Store {
         )
     }
 
+    /// Fresh recovery observation for one already-fenced attempt. The caller
+    /// supplies the complete snapshot it inspected; the transaction compares
+    /// that snapshot under the journal lock before accepting a terminal receipt.
+    /// This never recreates the original installation authority or dispatches a
+    /// Machine effect.
+    pub(crate) async fn reconcile_plugin_install_receipt(
+        &self,
+        before: &InstallOperation,
+        receipt: &InstallReceipt,
+    ) -> Result<InstallOperation> {
+        before.validate()?;
+        ensure!(
+            before.intent.schema == 2
+                && before.phase == InstallPhase::NeedsAttention
+                && matches!(
+                    before.attention_from,
+                    Some(InstallPhase::Installing | InstallPhase::MachineAcknowledged)
+                )
+                && (before.attention_from == Some(InstallPhase::MachineAcknowledged)
+                    || before.machine_receipt.as_ref().is_none_or(|saved| {
+                        matches!(&saved.outcome, InstallOutcome::Pending { .. })
+                    }))
+                && receipt.matches(&before.intent.machine_step()?)
+                && matches!(
+                    receipt.outcome,
+                    InstallOutcome::Applied { .. } | InstallOutcome::Rejected { .. }
+                ),
+            "installation is not eligible for terminal receipt reconciliation"
+        );
+        if before.attention_from == Some(InstallPhase::MachineAcknowledged) {
+            ensure!(
+                before.machine_receipt.as_ref() == Some(receipt)
+                    && matches!(receipt.outcome, InstallOutcome::Applied { .. }),
+                "acknowledged installation recovery must retain its applied receipt"
+            );
+        } else if let Some(saved) = &before.machine_receipt {
+            ensure!(
+                !matches!(receipt.outcome, InstallOutcome::Rejected { .. })
+                    || matches!(
+                        &saved.outcome,
+                        InstallOutcome::Pending {
+                            phase: crate::machine_protocol::plugin_install::InstallPhase::Prepared
+                        }
+                    ),
+                "rejected installation receipt cannot follow staging"
+            );
+        }
+        let document = serde_json::to_string(receipt)?;
+        ensure!(
+            document.len() <= 8192,
+            "Machine install receipt exceeds budget"
+        );
+        dispatch!(
+            self,
+            reconcile_plugin_install_receipt(before, receipt, &document)
+        )
+    }
+
     pub(crate) async fn begin_plugin_install(&self, intent: &InstallIntent) -> Result<()> {
         intent.validate()?;
         let document = serde_json::to_string(intent)?;
@@ -262,6 +320,41 @@ macro_rules! implement_journal {
                     .execute(&mut *tx).await?;
                 ensure!(changed.rows_affected() == 1, "install receipt changed");
                 tx.commit().await.context("committing Machine installation receipt")?;
+                Ok(next)
+            }
+
+            async fn reconcile_plugin_install_receipt(&self, before: &InstallOperation, receipt: &InstallReceipt, document: &str) -> Result<InstallOperation> {
+                let mut tx = self.pool.begin().await?;
+                sqlx::query($durability).execute(&mut *tx).await?;
+                sqlx::query($lock).execute(&mut *tx).await?;
+                let saved = sqlx::query_as::<_, Record>("SELECT * FROM plugin_install_operations WHERE operation_id = $1")
+                    .bind(&before.intent.operation_id).fetch_one(&mut *tx).await?.decode()?;
+                ensure!(saved == *before, "install reconciliation evidence changed");
+                let (phase, problem) = match receipt.outcome {
+                    InstallOutcome::Applied { .. } => (InstallPhase::MachineAcknowledged, None),
+                    InstallOutcome::Rejected { .. } => (InstallPhase::Aborted, Some(InstallProblem::MachineRejected)),
+                    InstallOutcome::Pending { .. } | InstallOutcome::Unknown { .. } => anyhow::bail!("nonterminal receipt cannot resolve installation"),
+                };
+                let next = InstallOperation {
+                    phase,
+                    problem,
+                    attention_from: None,
+                    updated_at_ms: chrono::Utc::now().timestamp_millis().max(saved.updated_at_ms),
+                    machine_receipt: Some(receipt.clone()),
+                    ..saved
+                };
+                next.validate()?;
+                let changed = sqlx::query(
+                    "UPDATE plugin_install_operations SET phase = $2, problem = $3, attention_from = NULL, updated_at_ms = $4, \
+                     machine_receipt = $5, machine_receipt_sha256 = $6 \
+                     WHERE operation_id = $1 AND phase = 'needs_attention' AND updated_at_ms = $7"
+                ).bind(&before.intent.operation_id).bind(next.phase.as_str())
+                    .bind(next.problem.map(|p| serde_json::to_string(&p)).transpose()?)
+                    .bind(next.updated_at_ms).bind(document)
+                    .bind(format!("{:x}", Sha256::digest(document.as_bytes())))
+                    .bind(before.updated_at_ms).execute(&mut *tx).await?;
+                ensure!(changed.rows_affected() == 1, "install reconciliation changed");
+                tx.commit().await.context("committing reconciled Machine installation receipt")?;
                 Ok(next)
             }
 

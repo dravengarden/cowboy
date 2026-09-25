@@ -344,6 +344,140 @@ async fn concurrent_receipt_writers_cannot_change_the_first_terminal_observation
     assert_eq!(saved, left_result.or(right_result).unwrap());
 }
 
+#[tokio::test]
+async fn terminal_receipt_reconciliation_is_exact_and_releases_only_a_fenced_attempt() {
+    for outcome in [
+        applied(),
+        InstallOutcome::Rejected {
+            reason: InstallRejection::TargetChanged,
+        },
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let intent = machine_fixture(match outcome {
+            InstallOutcome::Applied { .. } => "recover-applied",
+            _ => "recover-rejected",
+        });
+        installing(&store, &intent).await;
+        store
+            .advance_plugin_install(
+                &intent,
+                InstallPhase::Installing,
+                InstallPhase::NeedsAttention,
+                Some(InstallProblem::UnknownMachineOutcome),
+            )
+            .await
+            .unwrap();
+        let before = store
+            .plugin_install_operation(&intent.operation_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let exact = receipt(&intent, outcome.clone());
+        let mut changed = exact.clone();
+        changed.step.plan_digest = format!("sha256:{}", "f".repeat(64));
+        assert!(
+            store
+                .reconcile_plugin_install_receipt(&before, &changed)
+                .await
+                .is_err()
+        );
+        let saved = store
+            .reconcile_plugin_install_receipt(&before, &exact)
+            .await
+            .unwrap();
+        assert_eq!(saved.machine_receipt.as_ref(), Some(&exact));
+        assert_eq!(saved.attention_from, None);
+        assert_eq!(
+            saved.phase,
+            if matches!(outcome, InstallOutcome::Applied { .. }) {
+                InstallPhase::MachineAcknowledged
+            } else {
+                InstallPhase::Aborted
+            }
+        );
+        assert!(
+            store
+                .reconcile_plugin_install_receipt(&before, &exact)
+                .await
+                .is_err(),
+            "the complete recovery snapshot is a one-shot compare-and-swap"
+        );
+    }
+}
+
+#[tokio::test]
+async fn acknowledged_install_can_resume_finalization_without_replacing_its_receipt() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let intent = machine_fixture("resume-finalization");
+    installing(&store, &intent).await;
+    let exact = receipt(&intent, applied());
+    store
+        .record_plugin_install_receipt(&intent, &exact)
+        .await
+        .unwrap();
+    let interrupted = store.recover_plugin_installs("service-test").await.unwrap();
+    let before = &interrupted[0];
+    assert_eq!(
+        before.attention_from,
+        Some(InstallPhase::MachineAcknowledged)
+    );
+    let saved = store
+        .reconcile_plugin_install_receipt(before, &exact)
+        .await
+        .unwrap();
+    assert_eq!(saved.phase, InstallPhase::MachineAcknowledged);
+
+    let mut replacement = exact;
+    replacement.outcome = InstallOutcome::Rejected {
+        reason: InstallRejection::Expired,
+    };
+    assert!(
+        store
+            .reconcile_plugin_install_receipt(before, &replacement)
+            .await
+            .is_err(),
+        "saved applied evidence cannot be replaced during finalization recovery"
+    );
+}
+
+#[tokio::test]
+async fn unknown_machine_outcome_cannot_later_be_promoted_to_applied() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let intent = machine_fixture("unknown-is-terminal");
+    installing(&store, &intent).await;
+    let uncertain = receipt(
+        &intent,
+        InstallOutcome::Unknown {
+            phase: MachinePhase::Activating,
+            reason: InstallUncertainty::Interrupted,
+        },
+    );
+    let before = store
+        .record_plugin_install_receipt(&intent, &uncertain)
+        .await
+        .unwrap();
+    assert_eq!(before.phase, InstallPhase::NeedsAttention);
+    assert!(
+        store
+            .reconcile_plugin_install_receipt(&before, &receipt(&intent, applied()))
+            .await
+            .is_err(),
+        "a durable Unknown receipt remains fenced"
+    );
+}
+
 #[test]
 fn schema_one_serialization_is_unchanged_and_cannot_be_promoted_without_a_target() {
     let legacy = fixture("retained");

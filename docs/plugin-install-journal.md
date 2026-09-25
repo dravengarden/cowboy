@@ -78,6 +78,25 @@ reservation is released only after `Completed`, `AuthenticationPending` or
 effect or release the reservation. Recording a storage failure never overwrites
 a terminal outcome or repeats a command whose COMMIT response was lost.
 
+A freshly delegated host Operator can close the specific lost-reply case with:
+
+```bash
+cowboy operator reconcile-install \
+  --machine <machine> --plugin <plugin> --operation-id <operation>
+```
+
+The private action reloads the exact fenced schema-two Service record, binds a
+new two-minute Operator authority to that complete snapshot, and asks the
+currently authenticated Machine only for the original durable step. It never
+sends `InstallPluginStep` and never derives an outcome from current inventory.
+Only the matching terminal `Applied` receipt or a matching pre-Staging
+`Rejected` receipt can advance the Service journal and release the slot.
+Pending, Unknown, missing, conflicting, offline, revoked or expired observations
+leave the original fence in place. A saved Applied receipt interrupted after
+`MachineAcknowledged` can resume only post-install finalization; it cannot be
+replaced. Agent Providers repeat the ordinary post-install authentication sync,
+falling back to `AuthenticationPending` without replaying installation.
+
 Before dispatch/HTTP startup, the Controller validates the bounded journal and
 reconstructs all unfinished slot fences. It preserves the original interruption
 phase and closed problem code across repeated restarts. Corruption, unknown
@@ -155,6 +174,6 @@ actual Machine execution and activation remain separately unchecked.
 Before writer admission, accept both actual Controller/Machine reader floors and
 connected immutable execution/lost-response/restart gates. A recovery Controller
 must pause legacy admission too: the first Machine attempt permanently fences
-that path. Remaining P4 work also includes independently authorized installation
-recovery, post-effect exact worker verification, and bounded evidence archival
-that preserves unresolved references. This bridge does not finish the refactor.
+that path. Remaining P4 work includes post-effect exact worker verification,
+independently authorized restoration, and bounded evidence archival that
+preserves unresolved references. This bridge does not finish the refactor.

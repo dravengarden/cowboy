@@ -127,4 +127,10 @@ Deno.test("a Service-managed Machine offers no Plugin lifecycle action", async (
     management.includes(`machine?.plugin_lifecycle === "managed"`),
     true,
   );
+  assertEquals(
+    management.includes("Plugin membership and updates are managed by Cowboy Service"),
+    true,
+  );
+  assertEquals(management.includes("Service update available"), true);
+  assertEquals(management.includes("data-service-managed-plugins"), true);
 });

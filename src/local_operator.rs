@@ -241,6 +241,16 @@ enum OperatorCommand {
         #[arg(long)]
         plugin: String,
     },
+    /// Query and commit the exact terminal Machine receipt for one fenced install.
+    /// This never repeats the installation or infers its outcome from inventory.
+    ReconcileInstall {
+        #[arg(long)]
+        machine: String,
+        #[arg(long)]
+        plugin: String,
+        #[arg(long)]
+        operation_id: String,
+    },
     /// Read account usage, optionally refreshing one account through its installed Plugin.
     Usage {
         #[arg(long)]
@@ -383,6 +393,30 @@ pub(crate) async fn run(args: OperatorArgs) -> Result<()> {
             None,
             None,
         ),
+        OperatorCommand::ReconcileInstall {
+            machine,
+            plugin,
+            operation_id,
+        } => {
+            ensure!(
+                crate::plugin_operation::installation::valid_operation_id(&operation_id),
+                "invalid operation ID"
+            );
+            (
+                reqwest::Method::POST,
+                vec![
+                    "machines".into(),
+                    machine,
+                    "plugins".into(),
+                    plugin,
+                    "operations".into(),
+                    operation_id.clone(),
+                    "reconcile".into(),
+                ],
+                None,
+                Some(operation_id),
+            )
+        }
         OperatorCommand::Usage { refresh } => match refresh {
             Some(provider) => (
                 reqwest::Method::POST,
