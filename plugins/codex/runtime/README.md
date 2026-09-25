@@ -28,6 +28,22 @@ The shared runtime component remains unchanged. This Provider owns the changes:
   client, which launches the exact bound `CODEX_PATH` directly. No intermediary
   executable owns or rewrites the native protocol.
 
+## Dependency audit (2026-09-25)
+
+The pin moves to ACP `1.13.1` at
+`b1b8490cd165c18626dc3fe83836cdacdef94cd3` with native Codex `0.156.1`. The two
+are a matched upstream pair: `1.13.1` exists only to pin `0.156.1`. Upstream
+still assembles JSONL frames from an accumulated string, so the owned reader
+patch is retained and applies to that exact revision unchanged at fuzz 0. The
+`session/resume` hunk stays absorbed upstream. `1.12.0` adds tool names to ACP
+tool-call events and derives file-change reports and diff statistics from turn
+diffs; `1.13.0` adds experimental session notices and ACP compaction updates and
+prefers terminal output deltas. Both are compatible with this patch.
+
+Authoritative sources:
+[ACP 1.13.1](https://github.com/agentclientprotocol/codex-acp/releases/tag/v1.13.1),
+[Codex 0.156.1](https://github.com/openai/codex/releases/tag/rust-v0.156.1).
+
 ## Dependency audit (2026-09-12)
 
 The retained baseline is ACP 1.10.0 at

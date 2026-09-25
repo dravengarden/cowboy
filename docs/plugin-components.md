@@ -131,6 +131,16 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.28.0 records provider-runtime 1.1.6. Codex advances from 0.154.0
+to 0.156.1 and Codex ACP from 1.11.0 to 1.13.1, including the adapter's exact ACP
+SDK 1.5.0 lock; Grok advances from 1.0.30 to 1.0.41. The Codex CLI release adds
+GPT-6 Sol and Luna to its model catalog, and every pinned preset model
+(`gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-6-astra`) still resolves, so the presets
+stay as published. The one Codex runtime lock entry per component id is shared, so
+`codex-deepseek` takes the same pins as `codex`; all six Agent Plugins take the
+new closure and independent patch versions, and Zed again retains its unchanged
+source, version, and historical component-release pin.
+
 Scoped release 3.27.0 records provider-runtime 1.1.5. Claude Code advances from
 2.1.278 to 2.1.280 and Claude Agent ACP from 0.79.0 to 0.81.0, including the
 adapter's exact Agent SDK 0.3.280 lock. The CLI release adds Claude Opus 5.5
