@@ -97,6 +97,7 @@ import { PluginSlot } from "../pluginHost";
 import {
   formatCompactCurrency,
   usageWidgetHasBalance,
+  type UsageBalanceWidget,
   type UsageWidgetProvider,
   usageWidgetProviders,
 } from "../usageWidget";
@@ -238,6 +239,25 @@ const USAGE_TONE_COLOR: Record<UsageTone, string> = {
   normal: "text.primary",
 };
 
+// Only facts that need attention earn space: partial pricing and blocking
+// errors appear when they exist, never as "100% priced" or "0 blocked".
+function balanceUsageSummary(provider: UsageBalanceWidget): string {
+  const fullyPriced = provider.spend24hPriceCoverage !== undefined &&
+    provider.spend24hPriceCoverage >= 99.999;
+  return [
+    `24h ${fullyPriced ? "" : "≥"}${
+      formatCompactCurrency(provider.spend24h, provider.currency)
+    }`,
+    fullyPriced
+      ? undefined
+      : `${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced`,
+    `Miss ${provider.cacheMissRate.toFixed(1)}%`,
+    provider.blockingErrors > 0
+      ? `${provider.blockingErrors.toLocaleString()} blocked`
+      : undefined,
+  ].filter((part) => part !== undefined).join(" · ");
+}
+
 function UsageProviderSummary(
   { provider, first, now }: {
     provider: UsageWidgetProvider;
@@ -256,18 +276,7 @@ function UsageProviderSummary(
     ? formatCompactCurrency(provider.balance, provider.currency)
     : `${String(provider.remaining)}%`;
   const secondary = balance
-    ? provider.spend24hPriceCoverage !== undefined &&
-        provider.spend24hPriceCoverage >= 99.999
-      ? `24h ${
-        formatCompactCurrency(provider.spend24h, provider.currency)
-      } · Miss ${
-        provider.cacheMissRate.toFixed(1)
-      }% · ${provider.blockingErrors.toLocaleString()} blocked`
-      : `24h ≥${
-        formatCompactCurrency(provider.spend24h, provider.currency)
-      } · ${provider.spend24hPriceCoverage?.toFixed(0) ?? "0"}% priced · Miss ${
-        provider.cacheMissRate.toFixed(1)
-      }% · ${provider.blockingErrors.toLocaleString()} blocked`
+    ? balanceUsageSummary(provider)
     // The countdown, not the stamp. "resets Sep 20 02:00 PM" was the widest
     // thing in the strip and still made you do the subtraction; the U panel
     // keeps the absolute form (it prints both). Falls back to the stamp when an
@@ -280,8 +289,11 @@ function UsageProviderSummary(
     <Box
       data-usage-provider={provider.kind}
       sx={{
-        width,
-        minWidth: width,
+        // Hug the content: quota segments keep one uniform width, while a
+        // balance segment grows only as far as its counters need, up to the
+        // budget the density decision reserved for it.
+        minWidth: USAGE_SEGMENT_WIDTH_PX,
+        maxWidth: width,
         px: 0.75,
         py: 0.25,
         textAlign: "left",

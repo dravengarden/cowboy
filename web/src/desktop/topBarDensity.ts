@@ -48,8 +48,10 @@ export function usageCountdown(
  *  the countdown replaces — same fact, and the absolute form still lives in the
  *  U panel, which shows both. */
 export const USAGE_SEGMENT_WIDTH_PX = 104;
-/** A balance account (DeepSeek) carries spend/cache/error counters instead. */
-export const USAGE_BALANCE_SEGMENT_WIDTH_PX = 286;
+/** The widest a balance account (DeepSeek) may grow: spend, partial-pricing,
+ *  cache-miss and blocking-error counters. It hugs shorter content and
+ *  truncates beyond this, so the budget is an upper bound, not a fixed cell. */
+export const USAGE_BALANCE_SEGMENT_WIDTH_PX = 220;
 /** Icon + visible keycap, with the word in the tooltip and the palette. */
 export const ACTION_ICON_WIDTH_PX = 62;
 
