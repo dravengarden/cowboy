@@ -6685,23 +6685,57 @@ async fn api_auth_oidc_native_cancel(
     }
 }
 
-async fn api_auth_oidc_native_complete() -> Response {
-    const PAGE: &str = r#"<!doctype html>
+/// Close the window Cowboy opened for an external sign-in, from inside it.
+///
+/// The opener cannot be relied on to do this. A Provider that serves
+/// `Cross-Origin-Opener-Policy: same-origin` — Cardea does — moves this window
+/// into a new browsing context group the moment the authorization request
+/// reaches it. That severs Cowboy's handle for the rest of the flow: `closed`
+/// reports `true` even while the window is on screen, and `close()` and any
+/// navigation through that handle are dropped without an error. Only this
+/// document can still end the window, so it closes itself and offers a link
+/// for an engine that refuses. The link stays hidden until the close has had
+/// its chance, both to avoid a flash in the ordinary case and because the iOS
+/// shell dismisses its own authentication sheet: loading Cowboy inside that
+/// sheet is a choice for the reader to make, never an automatic redirect.
+const NATIVE_COMPLETE_SCRIPT: &str = r#"
+try { window.close(); } catch (error) { /* Recovered by the link below. */ }
+setTimeout(function () { document.body.className = "stranded"; }, 700);
+"#;
+
+static NATIVE_COMPLETE_PAGE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Return to Cowboy</title>
   <style>
-    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
-    main { max-width: 30rem; padding: 2rem; text-align: center; }
-    h1 { font-size: 1.5rem; }
-    p { line-height: 1.5; opacity: .72; }
+    :root {{ color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }}
+    main {{ max-width: 30rem; padding: 2rem; text-align: center; }}
+    h1 {{ font-size: 1.5rem; }}
+    p {{ line-height: 1.5; opacity: .72; }}
+    a {{ display: none; }}
+    body.stranded a {{ display: inline-block; }}
   </style>
 </head>
-<body><main><h1>Return to Cowboy</h1><p>Cowboy will show the authorization result and close this window, or you can close it now.</p></main></body>
-</html>"#;
+<body><main><h1>Return to Cowboy</h1><p>Cowboy will show the authorization result and close this window, or you can close it now.</p><p><a href="/">Open Cowboy in this window</a></p></main><script>{NATIVE_COMPLETE_SCRIPT}</script></body>
+</html>"#
+    )
+});
+
+static NATIVE_COMPLETE_CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let digest = base64::engine::general_purpose::STANDARD
+        .encode(Sha256::digest(NATIVE_COMPLETE_SCRIPT.as_bytes()));
+    format!(
+        "default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{digest}'; \
+         base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    )
+});
+
+async fn api_auth_oidc_native_complete() -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -6709,11 +6743,8 @@ async fn api_auth_oidc_native_complete() -> Response {
         .header("referrer-policy", "no-referrer")
         .header("x-content-type-options", "nosniff")
         .header("x-frame-options", "DENY")
-        .header(
-            "content-security-policy",
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        )
-        .body(Body::from(PAGE))
+        .header("content-security-policy", NATIVE_COMPLETE_CSP.as_str())
+        .body(Body::from(NATIVE_COMPLETE_PAGE.as_str()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -21822,6 +21853,23 @@ mod product_auth_api_tests {
             Some("no-store")
         );
         assert!(completion.headers().contains_key("content-security-policy"));
+        let completion_csp = completion
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let completion_body = completion.text().await.unwrap();
+        // The window closes itself because a Provider serving
+        // Cross-Origin-Opener-Policy severs the opener's handle to it.
+        assert!(completion_body.contains("window.close()"));
+        assert!(completion_body.contains(r#"<a href="/">"#));
+        let script_digest = base64::engine::general_purpose::STANDARD
+            .encode(Sha256::digest(NATIVE_COMPLETE_SCRIPT.as_bytes()));
+        assert!(
+            completion_csp.contains(&format!("script-src 'sha256-{script_digest}'")),
+            "inline script must stay covered by its own CSP hash: {completion_csp}"
+        );
 
         handle.abort();
         let _ = std::fs::remove_dir_all(root);

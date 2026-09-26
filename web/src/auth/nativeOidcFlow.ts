@@ -262,14 +262,23 @@ export async function runNativeOidc(
 /**
  * Return the separate sign-in window to Cowboy once the flow is over.
  *
+ * Cowboy cannot count on reaching this window at all. Cardea serves
+ * `Cross-Origin-Opener-Policy: same-origin`, so the authorization request
+ * moves the window into a new browsing context group and severs this handle:
+ * `closed` answers `true` while the window is still on screen, and `close()`
+ * and navigation through the handle are dropped silently. The completion page
+ * closes itself for exactly that reason, and every `closed` check below reads
+ * that `true` and returns. What is left here still matters for a
+ * window that never reached a Provider: a cancelled or failed flow leaves it
+ * on a Cowboy page, where this handle is intact.
+ *
  * `close()` is the preferred ending, but it is not guaranteed: iOS Safari
- * silently refuses to close a script-opened window that has since navigated,
- * and this flow also severs the window's opener before the Provider sees it.
- * A refused close used to strand the user on the fixed completion page, which
- * carries no Cowboy navigation and — in a PWA window or a hidden Safari
+ * silently refuses to close a script-opened window that has since navigated.
+ * A refused close used to strand the reader on the fixed completion page,
+ * which carries no Cowboy navigation and — in a PWA window or a hidden Safari
  * toolbar — no browser navigation either. Falling back to a same-origin
- * navigation always lands them back in Cowboy. The browser itself keeps that
- * fallback honest: a window still showing the Provider is cross-origin, so the
+ * navigation lands them back in Cowboy. The browser itself keeps that fallback
+ * honest: a window still showing the Provider is cross-origin, so the
  * navigation is refused rather than interrupting a sign-in in progress.
  */
 function returnFromBrowserOidcWindow(popup: Window): void {
@@ -285,7 +294,7 @@ function returnFromBrowserOidcWindow(popup: Window): void {
     try {
       popup.location.replace(destination);
     } catch {
-      // A cross-origin window cannot be recovered; leave it to the user.
+      // A severed or cross-origin window cannot be recovered from here.
     }
   }, WINDOW_CLOSE_GRACE_MS);
 }

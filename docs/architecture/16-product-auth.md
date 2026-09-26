@@ -87,6 +87,13 @@ Cowboy uses Authorization Code flow with two independent PKCE boundaries:
   expiry, provider mismatch, Origin mismatch, or either PKCE mismatch fails
   closed. Neither raw secret, Cowboy cookie, Cardea token, nor client key is
   transferred through the authorization URL.
+- A desktop browser runs the same handoff in a script-opened window. The
+  completion page ends that window from inside itself, because Cardea serves
+  `Cross-Origin-Opener-Policy: same-origin`: reaching the provider moves the
+  window into a new browsing context group and severs the opener's handle, which
+  from then on reports the window as closed and silently drops `close()` and
+  navigation. The page also carries a plain link back to Cowboy, revealed only
+  after the self-close has had its chance, for an engine that refuses it.
 
 The provider profile and client private JWK must both be regular, non-symlink
 files inaccessible to group and others. The profile pins all trust material;
@@ -221,7 +228,7 @@ visible id is never dropped (`[A,B,C]` + `[C,A]` → `[C,B,A]`).
 | `GET` | `/api/auth/oidc/callback` | public; transaction cookie | verify Cardea response and issue Cowboy session |
 | `POST` | `/api/auth/oidc/native/exchange` | same-origin; one-time handoff + PKCE | issue Manager product/admin cookies |
 | `POST` | `/api/auth/oidc/native/poll` | same-origin; two retained secrets | poll and consume an iOS browser-shell handoff; issue product/admin cookies only in the original app window |
-| `GET` | `/api/auth/oidc/native/complete` | public | fixed no-store Safari completion page; carries no account or handoff data |
+| `GET` | `/api/auth/oidc/native/complete` | public | fixed no-store completion page that closes its own window; carries no account or handoff data |
 | `POST` | `/api/auth/logout` | cookie optional; recent proof for `all` / `provider` | revoke `current`, `all`, or current-Provider Cowboy sessions; optionally return the pinned Provider logout URL |
 | `GET` | `/api/auth/logout/complete` | public | fixed no-store RP-logout return that clears the local cookie and redirects to `/` |
 | `POST` | `/api/auth/providers/{id}/backchannel-logout` | signed Provider Logout Token | replay-safe Provider-scoped session revocation |
