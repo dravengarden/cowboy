@@ -77,7 +77,7 @@ export function DesktopContextShortcut({
         alignItems: "center",
         justifyContent: "center",
         height: 40,
-        gap: inline ? 0.45 : 0,
+        gap: inline ? 0.25 : 0,
         flexShrink: 0,
         // Top-bar hints belong beside their control, not below the bar. Inline
         // keycaps participate in the row, so they cannot cross the pane header
@@ -134,6 +134,7 @@ export function DesktopContextShortcut({
               <DesktopShortcut
                 shortcut={badge}
                 quiet={inline}
+                compact={inline}
                 availability={availability}
               />
             )

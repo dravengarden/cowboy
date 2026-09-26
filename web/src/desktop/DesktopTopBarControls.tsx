@@ -142,9 +142,8 @@ const EMPTY_CONFIG_OPTIONS: ConfigOption[] = [];
 // The region keycap, divider, Settings and Code controls that App.tsx renders
 // after this strip inside the same scroller. They are not ours to collapse, but
 // they DO consume the width we are deciding against.
-// Settings no longer carries its two-step keycap inline, so this is now about
-// the region keycap, a divider and one small icon button.
-const TOPBAR_TRAILING_WIDTH_PX = 96;
+// Settings carries its sequence as two compact keycaps (`⌘K` `,`).
+const TOPBAR_TRAILING_WIDTH_PX = 124;
 
 function optionLabel(option: ConfigOption): string {
   const name = option.name.toLowerCase();

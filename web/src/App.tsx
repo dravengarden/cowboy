@@ -4249,10 +4249,7 @@ export function App({
                                             badge={DESKTOP_SHORTCUTS.settings}
                                             shortcut={`${DESKTOP_SHORTCUTS.settings} · Settings`}
                                             placement="inline"
-                                            // A two-step sequence is too wide to
-                                            // keep on screen; it stays in the hover
-                                            // title, Shortcuts and the palette.
-                                            showBadge={false}
+                                            alwaysVisible
                                         >
                                             <IconButton
                                                 size="small"
