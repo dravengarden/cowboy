@@ -4140,6 +4140,9 @@ export function App({
                                 spacing={0.75}
                                 sx={{
                                     minWidth: 0,
+                                    // A long title must end in an ellipsis inside
+                                    // this cap, never run under the controls.
+                                    overflow: "hidden",
                                     // Desktop gives the title only the width its
                                     // text needs (up to the cap). The old 280px
                                     // flex basis left a large dead zone after a
@@ -4174,7 +4177,7 @@ export function App({
                                     <Typography
                                         variant="subtitle1"
                                         noWrap
-                                        sx={{ minWidth: 0 }}
+                                        sx={{ minWidth: 0, flex: "0 1 auto" }}
                                     >
                                         {active.title.startsWith(
                                             `${active.provider} · `,
@@ -4249,6 +4252,7 @@ export function App({
                                             alwaysVisible
                                         >
                                             <IconButton
+                                                size="small"
                                                 data-desktop-item="topbar-settings"
                                                 data-desktop-topbar-action="settings"
                                                 onClick={(): void => openSettings("settings")}

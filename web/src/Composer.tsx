@@ -211,6 +211,7 @@ import {
   desktopSessionActionSx,
   desktopSurfaceSx,
 } from "./desktop/DesktopEmbeddedControl";
+import { ACTION_ICON_WIDTH_PX } from "./desktop/topBarDensity";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
@@ -6380,12 +6381,15 @@ export function AutoScrollAndStop({
   projection = "history",
   dense = false,
   presentation = "icons",
+  collapsed = false,
 }: {
   sessionId: string;
   status: Status;
   projection?: TranscriptProjection | undefined;
   dense?: boolean;
   presentation?: "icons" | "desktop-toolbar";
+  /** Desktop toolbar at compact density: icon and keycap, word in the tooltip. */
+  collapsed?: boolean;
 }): React.JSX.Element {
   const sticky = useSticky(sessionId);
   const exploreAtTail = useExploreAtTail(sessionId);
@@ -6409,14 +6413,17 @@ export function AutoScrollAndStop({
               startIcon={<Stop fontSize="small" />}
               disabled={!busy}
               onClick={(): void => setCancelOpen(true)}
+              aria-label="Stop current turn"
               sx={desktopSessionActionSx({
                 open: cancelOpen,
-                minWidth: 80,
+                minWidth: collapsed ? ACTION_ICON_WIDTH_PX : 80,
               })}
             >
-              <Box component="span" sx={{ flex: 1, textAlign: "left" }}>
-                Stop
-              </Box>
+              {!collapsed && (
+                <Box component="span" sx={{ flex: 1, textAlign: "left" }}>
+                  Stop
+                </Box>
+              )}
               <ShortcutKeycap
                 keyLabel={`${MOD_LABEL}.`}
                 variant="global"

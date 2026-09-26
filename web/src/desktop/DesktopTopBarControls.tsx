@@ -210,7 +210,7 @@ function SessionActionLabel({
       direction="row"
       spacing={0.5}
       alignItems="center"
-      sx={{ width: "100%" }}
+      sx={density === "full" ? { width: "100%" } : undefined}
     >
       {density === "full" && (
         <Typography variant="caption" fontWeight={750}>
@@ -224,9 +224,7 @@ function SessionActionLabel({
         availability={shortcutAvailability(available, accent)}
         sx={{
           flexShrink: 0,
-          ...(density === "full"
-            ? { ml: "auto !important" }
-            : { mx: "auto !important" }),
+          ...(density === "full" && { ml: "auto !important" }),
         }}
       />
     </Stack>
@@ -2134,6 +2132,7 @@ export function DesktopTopBarControls({
           sessionId={sessionId}
           status={status}
           presentation="desktop-toolbar"
+          collapsed={density !== "full"}
         />
       </Stack>
 

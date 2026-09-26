@@ -52,8 +52,9 @@ export const USAGE_SEGMENT_WIDTH_PX = 104;
  *  cache-miss and blocking-error counters. It hugs shorter content and
  *  truncates beyond this, so the budget is an upper bound, not a fixed cell. */
 export const USAGE_BALANCE_SEGMENT_WIDTH_PX = 220;
-/** Icon + visible keycap, with the word in the tooltip and the palette. */
-export const ACTION_ICON_WIDTH_PX = 62;
+/** Icon + visible keycap, with the word in the tooltip and the palette. The
+ *  keycap sits against the icon, so the pair needs no slack between them. */
+export const ACTION_ICON_WIDTH_PX = 50;
 
 export type TopBarDensity = "full" | "compact";
 

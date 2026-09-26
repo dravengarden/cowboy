@@ -135,6 +135,10 @@ Deno.test("desktop Stop remains mounted and becomes disabled while idle", () => 
       .test(desktopStop),
   );
   assert(desktopStop.includes("desktopSessionActionSx"));
+  // Stop follows the cluster density instead of always spending its word.
+  assert(desktopStop.includes("collapsed ? ACTION_ICON_WIDTH_PX : 80"));
+  assert(desktopStop.includes('aria-label="Stop current turn"'));
+  assert(topBarSource.includes('collapsed={density !== "full"}'));
   assertEquals(desktopStop.includes("const stopButton = busy"), false);
 });
 
