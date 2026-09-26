@@ -287,10 +287,9 @@ function UsageProviderSummary(
     <Box
       data-usage-provider={provider.kind}
       sx={{
-        // Hug the content: quota segments keep one uniform width, while a
-        // balance segment grows only as far as its counters need, up to the
-        // budget the density decision reserved for it.
-        minWidth: USAGE_SEGMENT_WIDTH_PX,
+        // Every segment hugs its own text. The density decision still reserves
+        // each kind's budget, so a segment may use less but never more; past
+        // it the text truncates rather than pushing the toolbar.
         maxWidth: width,
         px: 0.75,
         py: 0.25,
@@ -1642,6 +1641,9 @@ export function DesktopTopBarControls({
       data-desktop-topbar-density={density}
       direction="row"
       alignItems="center"
+      // Segments that hug their text leave part of the reserved minimum
+      // unused; keep that slack on the title side, not inside the cluster.
+      justifyContent="flex-end"
       spacing={DESKTOP_TOPBAR_CONTROL_GAP}
       sx={{
         flex: "0 0 auto",
