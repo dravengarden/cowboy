@@ -4242,14 +4242,17 @@ export function App({
                                         </Suspense>
                                     )}
                                     {active && (
-                                        <Divider orientation="vertical" flexItem sx={{ mx: 0.75, my: 0.75 }} />
+                                        <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.75 }} />
                                     )}
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={DESKTOP_SHORTCUTS.settings}
                                             shortcut={`${DESKTOP_SHORTCUTS.settings} · Settings`}
                                             placement="inline"
-                                            alwaysVisible
+                                            // A two-step sequence is too wide to
+                                            // keep on screen; it stays in the hover
+                                            // title, Shortcuts and the palette.
+                                            showBadge={false}
                                         >
                                             <IconButton
                                                 size="small"
