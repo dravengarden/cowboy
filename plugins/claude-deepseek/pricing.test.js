@@ -13,7 +13,17 @@ function close(actual, expected, message) {
 }
 
 Deno.test("DeepSeek pricing normalizes current and compatibility model names", () => {
-  equal(pricingInternals.modelFamily("deepseek-v4-flash"), "flash", "flash");
+  equal(pricingInternals.modelFamily("deepseek-flash"), "flash", "flash");
+  equal(
+    pricingInternals.modelFamily("deepseek-flash[1m]"),
+    "flash",
+    "flash 1m",
+  );
+  equal(
+    pricingInternals.modelFamily("deepseek-v4-flash"),
+    "flash",
+    "retained flash alias",
+  );
   equal(
     pricingInternals.modelFamily("deepseek/deepseek-chat"),
     "flash",
@@ -26,7 +36,7 @@ Deno.test("DeepSeek pricing normalizes current and compatibility model names", (
 Deno.test("DeepSeek pricing values observed cache tokens and output once", () => {
   const activity = decorateActivity({
     byBillingModel: {
-      "deepseek-v4-flash": {
+      "deepseek-flash": {
         requests: 10,
         usageObservations: 10,
         inputTokens: 1_000_000,
@@ -46,11 +56,12 @@ Deno.test("DeepSeek pricing values observed cache tokens and output once", () =>
     last24Hours: { byBillingModel: {}, byAgentBillingModel: {} },
   });
   const cost = activity.cost.summary;
-  close(cost.estimatedCost, 0.9 * 0.02 + 0.1 * 1 + 0.05 * 2, "estimated");
+  close(cost.estimatedCost, 0.9 * 0.04 + 0.1 * 2 + 0.05 * 8, "estimated");
   equal(cost.reasoningTokens, 10_000, "reasoning tokens");
   equal(cost.unknownModelRequests, 2, "unknown requests");
   equal(cost.unpricedInputTokens, 100, "unpriced input");
   equal(cost.unpricedOutputTokens, 20, "unpriced output");
   equal(activity.pricing.currency, "CNY", "currency");
+  equal(activity.pricing.offPeakMultiplier, 0.5, "off-peak multiplier");
   equal(activity.last24Hours.cost.summary.requests, 0, "rolling requests");
 });

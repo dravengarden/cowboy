@@ -1442,14 +1442,14 @@ mod tests {
                 .env
                 .get("ANTHROPIC_MODEL")
                 .map(String::as_str),
-            Some("deepseek-v4-flash[1m]")
+            Some("deepseek-flash[1m]")
         );
         assert_eq!(
             claude_deepseek
                 .env
                 .get("CLAUDE_CODE_SUBAGENT_MODEL")
                 .map(String::as_str),
-            Some("deepseek-v4-flash")
+            Some("deepseek-flash")
         );
         assert_eq!(
             claude_deepseek
@@ -1544,7 +1544,7 @@ mod tests {
                 crate::plugin_runtime_args::loopback_catalog("codex-deepseek").unwrap(),
             ),
         );
-        assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
+        assert!(rendered.starts_with("model = \"deepseek-flash\""));
         assert!(rendered.contains("model_reasoning_effort = \"max\""));
         assert!(rendered.contains("approval_policy = \"never\""));
         assert!(rendered.contains("model_context_window = 680000"));
@@ -1559,8 +1559,8 @@ mod tests {
         );
         assert!(rendered.contains("[features]\nmemories = true"));
         assert!(rendered.contains("[memories]\ndisable_on_external_context = true"));
-        assert!(rendered.contains("extract_model = \"deepseek-v4-flash\""));
-        assert!(rendered.contains("consolidation_model = \"deepseek-v4-flash\""));
+        assert!(rendered.contains("extract_model = \"deepseek-flash\""));
+        assert!(rendered.contains("consolidation_model = \"deepseek-flash\""));
         assert!(rendered.contains("min_rate_limit_remaining_percent = 0"));
         assert!(rendered.contains("/nix/var/nix/profiles/columbus-components/codex-deepseek/"));
         assert!(!rendered.contains("api.openai.com"));
@@ -1684,7 +1684,7 @@ mod tests {
         assert!(!config.contains("[marketplaces.columbus]"));
         assert!(!config.contains("[plugins.\"columbus-harness@columbus\"]"));
         assert!(!config.contains("[hooks.state]"));
-        assert!(config.contains("model = \"deepseek-v4-flash\""));
+        assert!(config.contains("model = \"deepseek-flash\""));
         assert!(!config.contains("gpt-secret-sentinel"));
         assert!(!config.contains("mcp_servers.private"));
 

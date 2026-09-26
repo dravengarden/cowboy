@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.22",
+  "version": "3.1.23",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
@@ -56,9 +56,9 @@
     {
       "id": "deepseek-flash-max",
       "name": "Flash · Max",
-      "detail": "DeepSeek-V4-Flash · Max reasoning",
+      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
       "is_default": true,
-      "values": { "model": "deepseek-v4-flash[1m]", "effort": "max" }
+      "values": { "model": "deepseek-flash[1m]", "effort": "max" }
     }
   ],
   "configuration_options": [
@@ -107,7 +107,7 @@
       "turn_end": "portable_v1",
       "configuration": "anthropic_gateway_v1",
       "default_preferences": {
-        "model": "deepseek-v4-flash[1m]",
+        "model": "deepseek-flash[1m]",
         "deepseek_context": "830k",
         "deepseek_cache_protection": true,
         "effort": "max",
@@ -160,11 +160,11 @@
         "sidecar": "deepseek-gateway"
       },
       "ANTHROPIC_AUTH_TOKEN": "cowboy-local-credential-boundary",
-      "ANTHROPIC_MODEL": "deepseek-v4-flash[1m]",
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
-      "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash[1m]",
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-      "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+      "ANTHROPIC_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-flash[1m]",
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-flash",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-flash",
       "CLAUDE_CODE_EXECUTABLE": {
         "source": "component_command",
         "component": { "kind": "provider_cli", "slot": "claude" }
@@ -232,9 +232,9 @@
       },
       {
         "id": "claude-deepseek-gateway",
-        "version": "0.1.0",
-        "source": "git+ssh://git@github.com/dravengarden/columbus.git#6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781:projects/claude-deepseek",
-        "integrity": "sha256:e7eff8a3bd6de2231056f879c4a0fc568e6f6eaa96f8cdac2171f4da2b4aaa14",
+        "version": "0.1.1",
+        "source": "git+ssh://git@github.com/dravengarden/columbus.git#27352e3400e5b55c6c88d6e7ac80f788e12dfb53:projects/claude-deepseek",
+        "integrity": "sha256:0bc0b0b854d86846e8d45b0c91c48139c17beac9186545fea41f542f0a495658",
         "private": true
       }
     ],

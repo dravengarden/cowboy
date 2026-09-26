@@ -1,16 +1,18 @@
 /* DeepSeek-owned model normalization and pinned list-price valuation. */
 
 const TOKENS_PER_MILLION = 1_000_000;
+// Peak-hour list prices. DeepSeek bills off-peak hours at half these rates, but
+// the aggregates carry no time of day, so estimates are peak-priced upper bounds.
 const PRICES = {
   flash: {
-    inputCacheHitCnyPerMillion: 0.02,
-    inputCacheMissCnyPerMillion: 1.0,
-    outputCnyPerMillion: 2.0,
+    inputCacheHitCnyPerMillion: 0.04,
+    inputCacheMissCnyPerMillion: 2.0,
+    outputCnyPerMillion: 8.0,
   },
   pro: {
-    inputCacheHitCnyPerMillion: 0.025,
-    inputCacheMissCnyPerMillion: 3.0,
-    outputCnyPerMillion: 6.0,
+    inputCacheHitCnyPerMillion: 0.3,
+    inputCacheMissCnyPerMillion: 9.0,
+    outputCnyPerMillion: 27.0,
   },
 };
 
@@ -51,6 +53,7 @@ function modelFamily(model) {
   const normalized = String(model).trim().toLowerCase().split("/").at(-1) ?? "";
   if (normalized.startsWith("deepseek-v4-pro")) return "pro";
   if (
+    normalized.startsWith("deepseek-flash") ||
     normalized.startsWith("deepseek-v4-flash") ||
     normalized === "deepseek-chat" ||
     normalized === "deepseek-reasoner"
@@ -217,10 +220,13 @@ export function decorateActivity(value) {
     provider: "deepseek",
     currency: "CNY",
     unit: "per_million_tokens",
-    valuationBasis: "pinned_list_price_snapshot",
-    asOf: "2026-08-06",
-    version: "deepseek-v4-cny-2026-08-06",
+    valuationBasis: "pinned_peak_list_price_snapshot",
+    asOf: "2026-09-26",
+    version: "deepseek-v41-cny-peak-2026-09-10",
     sourceUrl: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+    offPeakMultiplier: 0.5,
+    peakHours:
+      "Mon-Fri 09:00-12:00 and 14:00-18:00 Asia/Shanghai, excluding Chinese public holidays",
     models: PRICES,
   };
   activity.cost = costView(activity);

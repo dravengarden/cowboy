@@ -1,13 +1,13 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.22",
+  "version": "3.1.23",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.1.11",
   "display": {
     "name": "Codex · DeepSeek",
     "vendor": "DeepSeek",
-    "summary": "Codex in an isolated DeepSeek runtime with V4 Flash and V4 Pro",
+    "summary": "Codex in an isolated DeepSeek runtime with V4.1 Flash and V4 Pro",
     "accent": "#4D6BFE",
     "secondary_accent": "#168B78",
     "mark_view_box": "0 0 24 24",
@@ -49,9 +49,9 @@
     {
       "id": "deepseek-flash-max",
       "name": "Flash · Max",
-      "detail": "DeepSeek-V4-Flash · Max reasoning",
+      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
       "is_default": true,
-      "values": { "model": "deepseek-v4-flash", "reasoning_effort": "max" }
+      "values": { "model": "deepseek-flash", "reasoning_effort": "max" }
     }
   ],
   "configuration_options": [
@@ -97,7 +97,7 @@
       "turn_end": "portable_v1",
       "configuration": "openai_gateway_v1",
       "default_preferences": {
-        "model": "deepseek-v4-flash",
+        "model": "deepseek-flash",
         "deepseek_context": "680k",
         "deepseek_cache_protection": true,
         "collaboration_mode": "default",
@@ -107,7 +107,7 @@
     },
     "arguments": [
       "-c",
-      "model=\"deepseek-v4-flash\"",
+      "model=\"deepseek-flash\"",
       "-c",
       "model_provider=\"deepseek-local\"",
       "-c",
@@ -148,9 +148,9 @@
       "-c",
       "memories.disable_on_external_context=true",
       "-c",
-      "memories.extract_model=\"deepseek-v4-flash\"",
+      "memories.extract_model=\"deepseek-flash\"",
       "-c",
-      "memories.consolidation_model=\"deepseek-v4-flash\"",
+      "memories.consolidation_model=\"deepseek-flash\"",
       "-c",
       "memories.min_rate_limit_remaining_percent=0"
     ],
@@ -206,9 +206,9 @@
       },
       {
         "id": "codex-deepseek-gateway",
-        "version": "0.2.0",
-        "source": "git+ssh://git@github.com/dravengarden/columbus.git#6a83e9a9b2b4ac3239cf2c66c0821b1d3e43f781:projects/codex-deepseek",
-        "integrity": "sha256:8fbdbab1e77a504dfea9ebc55628f60ce7d037b51a06dd1d5a56d12d4dd46cdd",
+        "version": "0.3.0",
+        "source": "git+ssh://git@github.com/dravengarden/columbus.git#27352e3400e5b55c6c88d6e7ac80f788e12dfb53:projects/codex-deepseek",
+        "integrity": "sha256:6019b0bf8679f876e80efcef03219c0caa84af6ee8b3fb13ea73561ea245bfc5",
         "private": true
       }
     ],

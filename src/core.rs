@@ -5416,7 +5416,7 @@ mod config_preference_tests {
         assert_eq!(
             hub.config_preferences("claude-deepseek-session"),
             Some(serde_json::json!({
-                "model": "deepseek-v4-flash[1m]",
+                "model": "deepseek-flash[1m]",
                 "deepseek_context": "830k",
                 "deepseek_cache_protection": true,
                 "effort": "max",
@@ -5440,7 +5440,7 @@ mod config_preference_tests {
         assert_eq!(
             hub.config_preferences("codex-deepseek-session"),
             Some(serde_json::json!({
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-flash",
                 "deepseek_context": "680k",
                 "deepseek_cache_protection": true,
                 "collaboration_mode": "default",

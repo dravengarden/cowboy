@@ -131,6 +131,17 @@ in that release and the active matrix. A changed Plugin source snapshot or
 binding requires a higher Plugin version. Adding/removing component or Plugin
 identities still requires an explicit migration, not an inferred exemption.
 
+Scoped release 3.29.0 records provider-runtime 1.1.7. Both DeepSeek gateways
+advance to Columbus `27352e34`: `codex-deepseek` 0.3.0 serves `deepseek-flash`
+(DeepSeek-V4.1-Flash, with image input), its retained `deepseek-v4-flash` alias
+and `deepseek-v4-pro` through DeepSeek's native Responses API and deletes the
+temporary Pro Chat adapter; `claude-deepseek` 0.1.1 only changes content-free
+telemetry. Both DeepSeek Plugins move their presets, defaults and runtime model
+names to DeepSeek's recommended `deepseek-flash`. Every other pin is unchanged,
+but the shared lock is part of every Agent Plugin's closure, so all six take the
+new closure and independent patch versions; Zed again retains its unchanged
+source, version, and historical component-release pin.
+
 Scoped release 3.28.0 records provider-runtime 1.1.6. Codex advances from 0.154.0
 to 0.156.1 and Codex ACP from 1.11.0 to 1.13.1, including the adapter's exact ACP
 SDK 1.5.0 lock; Grok advances from 1.0.30 to 1.0.41. The Codex CLI release adds

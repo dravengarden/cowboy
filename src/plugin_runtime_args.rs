@@ -1758,7 +1758,7 @@ mod tests {
             ),
             codex_deepseek_origin,
         );
-        assert!(rendered.starts_with("model = \"deepseek-v4-flash\""));
+        assert!(rendered.starts_with("model = \"deepseek-flash\""));
         assert!(rendered.contains("model_context_window = 680000"));
         assert!(rendered.contains("model_auto_compact_token_limit = 646000"));
         assert!(rendered.contains(

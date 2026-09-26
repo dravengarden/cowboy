@@ -1,6 +1,6 @@
 //! Per-session working-context budgets for the `DeepSeek` agent lanes.
 //!
-//! `DeepSeek` V4 Flash and Pro both expose a 1M provider window, but the agent
+//! `DeepSeek` Flash and V4 Pro both expose a 1M provider window, but the agent
 //! runtimes reserve and compact that space differently. Keep the public model
 //! ids unchanged and project a separate Cowboy-owned config option instead of
 //! inventing provider model aliases.
@@ -72,7 +72,10 @@ fn supported_model(behavior: &ConfigurationBehavior, model: Option<&str>) -> boo
         return false;
     }
     let model = model.unwrap_or("default").trim().to_ascii_lowercase();
+    // `deepseek-v4-flash` is DeepSeek's retained alias for `deepseek-flash`;
+    // sessions created before the rename may still name it.
     model == "default"
+        || model.starts_with("deepseek-flash")
         || model.starts_with("deepseek-v4-flash")
         || model.starts_with("deepseek-v4-pro")
 }
@@ -214,8 +217,13 @@ mod tests {
 
     #[test]
     #[cfg(feature = "full")]
-    fn current_v4_models_share_provider_specific_profiles() {
-        for model in ["deepseek-v4-flash", "deepseek-v4-pro[1m]"] {
+    fn current_and_legacy_models_share_provider_specific_profiles() {
+        for model in [
+            "deepseek-flash",
+            "deepseek-flash[1m]",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro[1m]",
+        ] {
             let claude = launch_budget(&CLAUDE, Some(model), None).unwrap();
             assert_eq!(claude.profile_id, "830k");
             assert_eq!(claude.context_window, 830_000);
