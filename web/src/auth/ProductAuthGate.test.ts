@@ -199,6 +199,25 @@ Deno.test("login page is product chrome and hides register unless accepted", asy
   assert(gate.includes("passkeyFlowCancelled(reason)"));
 });
 
+Deno.test("the unreachable page keeps retrying and acknowledges a tap", async () => {
+  const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
+  // A repeated `retry`/`activating` decision re-sets the same view, so the
+  // poll effect must re-arm on a value that changes after every settled probe.
+  assert(gate.includes("setProbeSeq((seq) => seq + 1)"));
+  assert(
+    gate.includes(
+      "}, [view, cachedIdentity, probing, probeSeq, loadStatus]);",
+    ),
+  );
+  // The tap has to change the screen, or a retry that did fire reads as dead.
+  assert(gate.includes("setProbing(true)"));
+  assert(gate.includes('{probing ? "Retrying…" : label}'));
+  assert(gate.includes("disabled={probing}"));
+  assert(gate.includes("probing={probing}"));
+  // It also restarts the backoff instead of waiting out the 15s cap.
+  assert(gate.includes("attemptsRef.current = 0;\n    void loadStatus();"));
+});
+
 Deno.test("logged-out gate never mounts product children or /ws", async () => {
   const gate = await Deno.readTextFile(new URL("ProductAuthGate.tsx", authDir));
   const readyBranch = gate.slice(

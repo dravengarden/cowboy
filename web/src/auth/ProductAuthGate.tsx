@@ -2,6 +2,7 @@ import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Stack,
   TextField,
   Typography,
@@ -117,10 +118,38 @@ export async function signOutProductSession(options: {
 }
 
 
-function ProductControllerUnavailablePage({
+function RetryButton({
   onRetry,
+  probing,
+  label,
 }: {
   onRetry: () => void;
+  probing: boolean;
+  label: string;
+}): React.JSX.Element {
+  // A probe can run for its full 10s timeout. Without a visible busy state the
+  // page is byte-identical before and after the tap, so a retry that did fire
+  // still reads as a dead button.
+  return (
+    <Button
+      variant="contained"
+      onClick={onRetry}
+      disabled={probing}
+      startIcon={probing
+        ? <CircularProgress size={16} color="inherit" />
+        : undefined}
+    >
+      {probing ? "Retrying…" : label}
+    </Button>
+  );
+}
+
+function ProductControllerUnavailablePage({
+  onRetry,
+  probing,
+}: {
+  onRetry: () => void;
+  probing: boolean;
 }): React.JSX.Element {
   return (
     <Box
@@ -148,7 +177,7 @@ function ProductControllerUnavailablePage({
           the product sync dataset protocol. The controller is still activating
           or older than this PWA. /admin remains the break-glass.
         </Typography>
-        <Button variant="contained" onClick={onRetry}>Retry</Button>
+        <RetryButton onRetry={onRetry} probing={probing} label="Retry" />
       </Stack>
     </Box>
   );
@@ -156,8 +185,10 @@ function ProductControllerUnavailablePage({
 
 function ProductAuthRetryPage({
   onRetry,
+  probing,
 }: {
   onRetry: () => void;
+  probing: boolean;
 }): React.JSX.Element {
   return (
     <Box
@@ -180,7 +211,7 @@ function ProductAuthRetryPage({
         <Alert severity="warning">
           Can&apos;t reach Cowboy. Retrying — this is not a sign-in problem.
         </Alert>
-        <Button variant="contained" onClick={onRetry}>Retry now</Button>
+        <RetryButton onRetry={onRetry} probing={probing} label="Retry now" />
       </Stack>
     </Box>
   );
@@ -337,7 +368,12 @@ export function ProductAuthGate({
   // One probe at a time: on a weak connection a newer probe would otherwise
   // supersede the older one's generation and no answer would ever be applied.
   const probeRef = useRef<Promise<void> | null>(null);
-  const [pollTick, setPollTick] = useState(0);
+  // Every settled probe bumps this. A repeated `retry` or `activating`
+  // decision re-sets the same view, which React bails out of, so without a
+  // value that always changes the poll effect below never re-runs and the
+  // promised retry loop stops after a single attempt.
+  const [probeSeq, setProbeSeq] = useState(0);
+  const [probing, setProbing] = useState(false);
   const recentAuthRef = useRef<
     {
       promise: Promise<ProductMe>;
@@ -437,8 +473,11 @@ export function ProductAuthGate({
 
   const loadStatus = useCallback((): Promise<void> => {
     if (probeRef.current) return probeRef.current;
+    setProbing(true);
     const run = runStatusProbe().finally(() => {
       if (probeRef.current === run) probeRef.current = null;
+      setProbing(false);
+      setProbeSeq((seq) => seq + 1);
     });
     probeRef.current = run;
     return run;
@@ -461,21 +500,24 @@ export function ProductAuthGate({
       globalThis.removeEventListener(PRODUCT_AUTH_LOST_EVENT, onAuthLost);
   }, [loadStatus]);
 
+  // The retry page, the activating page and an app mounted on a cached
+  // principal all keep probing until the server answers for real. Each settled
+  // probe re-arms the next one at the current backoff.
   useEffect(() => {
     if (view !== "activating" && view !== "retry" && !cachedIdentity) return;
+    if (probing) return;
     const timer = globalThis.setTimeout(() => {
       void loadStatus();
     }, nextAuthStatusBackoffMs(attemptsRef.current));
     return () => globalThis.clearTimeout(timer);
-  }, [view, cachedIdentity, pollTick, loadStatus]);
+  }, [view, cachedIdentity, probing, probeSeq, loadStatus]);
 
-  // While mounted on a cached principal, keep probing until the server answers
-  // for real. Each timer fires `loadStatus`; a `stay` outcome re-arms it.
-  useEffect(() => {
-    if (!cachedIdentity) return undefined;
-    const timer = globalThis.setInterval(() => setPollTick((tick) => tick + 1), 15_000);
-    return () => globalThis.clearInterval(timer);
-  }, [cachedIdentity]);
+  // A manual retry restarts the backoff so the next attempt is immediate
+  // instead of waiting out the 15s cap.
+  const retryNow = useCallback((): void => {
+    attemptsRef.current = 0;
+    void loadStatus();
+  }, [loadStatus]);
 
   const handleAuthed = useCallback((next: ProductMe): void => {
     const generation = ++generationRef.current;
@@ -661,11 +703,11 @@ export function ProductAuthGate({
   }
   if (view === "activating") {
     return (
-      <ProductControllerUnavailablePage onRetry={() => void loadStatus()} />
+      <ProductControllerUnavailablePage onRetry={retryNow} probing={probing} />
     );
   }
   if (view === "retry") {
-    return <ProductAuthRetryPage onRetry={() => void loadStatus()} />;
+    return <ProductAuthRetryPage onRetry={retryNow} probing={probing} />;
   }
   // First contact with no cached identity: the same skeleton the document
   // painted, so the wait for `/api/auth/status` does not change the screen.
