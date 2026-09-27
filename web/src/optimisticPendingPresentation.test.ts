@@ -141,7 +141,7 @@ Deno.test("local content paints and reveals before the durable transport barrier
   const activate = store.slice(activateStart, activateEnd);
   assert(
     activate.indexOf('qStatus.set(opId, "committing")') <
-      activate.indexOf("await qClient(sessionId).mutateDurably"),
+      activate.indexOf("await store.mutateDurably"),
   );
   assert(activate.includes("row: presented"));
   assert(activate.includes("destination: dest"));

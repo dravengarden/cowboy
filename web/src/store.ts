@@ -2029,7 +2029,7 @@ function connect(): void {
       const states = [...syncClients.keys()];
       const [restored] = await Promise.all([
         Promise.allSettled([...syncClients.values()].map((e) => e.hydrate())),
-        Promise.allSettled([...qClients.values()].map((entry) => entry.hydrate())),
+        Promise.allSettled([...qClients.keys()].map((session) => restoreQueue(session))),
         hydrateCachedQueues(),
       ]);
       // A service outbox that never adopted its baseline stays write-fenced for
@@ -3472,7 +3472,7 @@ function dispatchQueueMutation(sessionId: string, m: { name: string; id: string;
       if (!store.pending().some((mutation) => mutation.id === m.id)) return;
       qStatus.set(m.id, "failed");
       commitQueue(sessionId);
-      notify(error instanceof Error ? error.message : "Draft send could not be saved locally");
+      notify(actionErrorMessage(error, "Draft send could not be saved locally"));
     }).finally(() => draftDispatches.delete(m.id));
 }
 
@@ -3543,15 +3543,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
     });
     qClients.set(sessionId, c);
     if (didHydrate) {
-      const created = c;
-      // Restore held decisions before the outbox can be replayed: a row the
-      // user left unsent must not be resent by a reload.
-      void restoreHeld(sessionId).then((held) => created.hydrate().then(() => held)).then((held) => {
-        if (productSessionAbandoned) return;
-        forgetSettledHeld(sessionId, held);
-        commitQueue(sessionId);
-        if (socketReady) created.resend();
-      }).catch((error: unknown) => {
+      void restoreQueue(sessionId).catch((error: unknown) => {
         if (productSessionAbandoned) return;
         const code = reportSyncStorageFailure("sync_outbox_hydrate_failed", `queue:${sessionId}`, "hydrate", error);
         notify(`Local queue could not be restored; check browser storage before sending.${code}`, "warning");
@@ -3559,6 +3551,44 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
     }
   }
   return c;
+}
+
+// One restore per session queue, memoized so a user-initiated durable write can
+// await exactly the work the lazy creation already started.
+const qRestores = new Map<string, Promise<void>>();
+
+/** Restore held decisions, then this queue's durable outbox baseline. Held
+ *  first: a row the user left unsent must not be resent by a reload. */
+function restoreQueue(sessionId: string): Promise<void> {
+  const store = qClient(sessionId); // creating it may register this restore
+  const existing = qRestores.get(sessionId);
+  if (existing !== undefined) return existing;
+  const restore = restoreHeld(sessionId).catch((error: unknown) => {
+    // A lost held record must not fence this queue's writes. Its worst case is
+    // a held row that offers an explicit retry instead of staying held.
+    reportSyncStorageFailure("sync_held_restore_failed", `queue:${sessionId}`, "restore-held", error);
+    return [] as readonly string[];
+  }).then((held) => store.hydrate().then(() => held)).then((held) => {
+    if (productSessionAbandoned) return;
+    forgetSettledHeld(sessionId, held);
+    commitQueue(sessionId);
+    if (socketReady) store.resend();
+  });
+  qRestores.set(sessionId, restore);
+  return restore;
+}
+
+/** Borrow a session's queue store for a DURABLE write. The outbox rejects a
+ *  `save` issued before its own IndexedDB read completed (`outbox_loading`), so
+ *  a send tapped moments after a reload — while the queue is still restoring —
+ *  would fail with an internal storage code instead of being saved. Adopt the
+ *  baseline first; `restoreQueue` is single-flight and a no-op once complete. */
+async function durableQueue(
+  sessionId: string,
+): Promise<ReplicatedStore<QValue, typeof qMut>> {
+  const store = qClient(sessionId);
+  await restoreQueue(sessionId);
+  return store;
 }
 
 /** Eager-restore every per-session queue durable outbox cached in IndexedDB,
@@ -3571,7 +3601,7 @@ async function hydrateCachedQueues(): Promise<void> {
   const sessions = await syncDatabase.queueSessions();
   if (productSessionAbandoned) return;
   const outcomes = await Promise.allSettled(
-    sessions.map((session) => qClient(session).hydrate()),
+    sessions.map((session) => restoreQueue(session)),
   );
   outcomes.forEach((outcome, index) => {
     if (outcome.status !== "rejected") return;
@@ -3864,7 +3894,7 @@ async function qAdd(
     // A newly opened session can be authored before its queue read completes.
     // Adopt this outbox's exact delta baseline before saving; unrelated caches
     // and network readiness remain independent of this durability barrier.
-    await store.hydrate();
+    await restoreQueue(sessionId);
     await store.mutateDurably(mutator, { row }, cmid);
   } catch (error) {
     qStatus.delete(cmid);
@@ -3961,8 +3991,8 @@ export function retryQueued(sessionId: string, cmid: string): void {
  *  daemon, so nothing server-side to remove. Persist the outbox removal before
  *  reporting success so a reload cannot resurrect and resend a discarded row. */
 async function discardQueueMutationDurably(sessionId: string, cmid: string): Promise<void> {
-  const store = qClients.get(sessionId);
-  if (store === undefined) return;
+  if (!qClients.has(sessionId)) return;
+  const store = await durableQueue(sessionId);
   await discardDurableDelivery(store, cmid, () => {
     clearOptTimers(cmid);
     qStatus.set(cmid, "failed");
@@ -4391,6 +4421,7 @@ async function editPendingRow(
   text: string,
   attachments: Attachment[],
 ): Promise<void> {
+  const store = await durableQueue(sessionId);
   const source = target === "draft"
     ? findDraft(sessionId, id)
     : findQueued(sessionId, id);
@@ -4402,7 +4433,6 @@ async function editPendingRow(
     text: text.trimEnd(),
     attachments,
   };
-  const store = qClient(sessionId);
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
@@ -4429,6 +4459,7 @@ async function editPendingRow(
 }
 
 export async function requestSendQueued(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
@@ -4455,7 +4486,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   qStatus.set(opId, "committing");
   qStatus.set(echoCmid, "committing");
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "sendQueued",
       { id, row: presented },
       opId,
@@ -4479,6 +4510,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
 // next. The daemon promotes it and cancels the in-flight turn (or just sends it
 // if the session is already idle).
 export async function forcePushQueued(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const target = queuedSendTarget(serverQueue(sessionId), row);
@@ -4499,7 +4531,7 @@ export async function forcePushQueued(sessionId: string, id: string): Promise<vo
   qStatus.set(opId, "committing");
   qStatus.set(echoCmid, "committing");
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "forceQueued",
       { id, row: presented },
       opId,
@@ -4531,9 +4563,10 @@ export function editQueued(
 }
 
 // Drop one queued prompt.
-export function removeQueued(sessionId: string, id: string): Promise<void> {
-  if (findQueued(sessionId, id) === undefined) return Promise.resolve();
-  return qClient(sessionId).mutateDurably(
+export async function removeQueued(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
+  if (findQueued(sessionId, id) === undefined) return;
+  return store.mutateDurably(
     "removeQueue",
     { id },
     newCmid(),
@@ -4624,9 +4657,10 @@ export function editDraft(
 }
 
 // Drop one draft.
-export function removeDraft(sessionId: string, id: string): Promise<void> {
-  if (findDraft(sessionId, id) === undefined) return Promise.resolve();
-  return qClient(sessionId).mutateDurably(
+export async function removeDraft(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
+  if (findDraft(sessionId, id) === undefined) return;
+  return store.mutateDurably(
     "removeDraft",
     { id },
     newCmid(),
@@ -4653,6 +4687,7 @@ export function clearDrafts(sessionId: string): Promise<void> {
 // Activate a draft: the daemon submits it (send-or-queue) and removes it from
 // drafts.
 export async function activateDraft(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   const dest = destinationForPrompt(
@@ -4673,7 +4708,7 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
     revealPendingArrival({ kind: "queued", id: presented.id, cmid: opId });
   }
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "activateDraft",
       {
         id,
@@ -4726,6 +4761,7 @@ export async function scheduleDraft(
       schedule: { fire_at_ms: fireAtMs, delivery },
     });
   }
+  const store = await durableQueue(sessionId);
   const source = findDraft(sessionId, id);
   if (source === undefined) {
     return Promise.reject(new Error("Cannot schedule a draft that no longer exists"));
@@ -4739,7 +4775,7 @@ export async function scheduleDraft(
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "rescheduleDraft",
       { id, row },
       opId,
@@ -4762,6 +4798,7 @@ export async function scheduleDraft(
 
 // Strip the schedule off a draft (it stays a plain parked draft).
 export async function unscheduleDraft(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
   const source = findDraft(sessionId, id);
   if (source === undefined || source.schedule === undefined) {
     return Promise.resolve();
@@ -4776,7 +4813,7 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "unscheduleDraft",
       { id, row },
       opId,
@@ -4797,6 +4834,7 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
 
 // Move a queued prompt back to drafts.
 export async function queuedToDraft(sessionId: string, id: string): Promise<void> {
+  const store = await durableQueue(sessionId);
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
   if (row.status !== undefined && row.cmid !== undefined) {
@@ -4823,7 +4861,7 @@ export async function queuedToDraft(sessionId: string, id: string): Promise<void
     ...(presented.cmid !== undefined ? { cmid: presented.cmid } : {}),
   });
   try {
-    await qClient(sessionId).mutateDurably(
+    await store.mutateDurably(
       "returnQueuedToDraft",
       { id, row: presented },
       opId,
