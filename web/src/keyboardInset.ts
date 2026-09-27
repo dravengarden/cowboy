@@ -10,6 +10,7 @@ import {
 } from "./keyboardGeometry.ts";
 import { isMobileEditorFocusTransferPending } from "./composer/mobileComposerFocus";
 import { isNativeShell } from "./nativeShell";
+import { reportKeyboardInsetSample } from "./sheetKeyboardDiagnostics";
 
 export const KEYBOARD_INSET_CHANGED_EVENT = "cowboy:keyboard-inset-changed";
 
@@ -52,6 +53,14 @@ export function useKeyboardInset(): void {
     let lastVvHeight = -1;
     let lastVvOffset = -1;
     let pendingCoverBox = false;
+    // Field diagnostics for the iPad split-keyboard band (PITFALLS #22). The
+    // band outlives the 300ms poll and only clears on rotation, so the open
+    // question is whether apply() keeps bailing on an unreliable reading (the
+    // published value is then frozen) or keeps recomputing the SAME too-large
+    // overlap (the inputs are stably wrong). One sample per unreliable episode
+    // and a slow steady sample answer that without a per-tick log.
+    let unreliableReported = false;
+    let lastSteadySampleMs = 0;
     const apply = (updateCoverBox: boolean): void => {
       // Keyboard overlap = how much of the painted page still sits *below*
       // the visual viewport. Subtract clamped offsetTop so a Safari pan to
@@ -63,7 +72,21 @@ export function useKeyboardInset(): void {
         doc.documentElement.clientHeight,
         rootHeight,
       );
-      if (isUnreliableVisualViewport(layoutHeight, vv.height)) return;
+      if (isUnreliableVisualViewport(layoutHeight, vv.height)) {
+        // Bailing LEAVES the previously published --kb-inset in place. Report
+        // the first reading of each episode so a frozen band is visible as
+        // such; resetting the latch below keeps a flapping viewport to one
+        // sample per episode instead of one every poll tick.
+        if (!unreliableReported) {
+          unreliableReported = true;
+          reportKeyboardInsetSample("unreliable-viewport", {
+            layout_height: layoutHeight,
+            published_inset: lastInset,
+          });
+        }
+        return;
+      }
+      unreliableReported = false;
       // Cover sheets (New Session) are position:fixed against html's box,
       // which stays tall on Safari tabs. Pin them with --vv-* so Title
       // cannot pan off the top of a 100dvh cover. Do not follow
@@ -107,6 +130,7 @@ export function useKeyboardInset(): void {
       // Only write on change — the focus poll below runs apply() every 300ms, and
       // a same-value setProperty would still be a needless style touch each tick.
       if (overlap !== lastInset) {
+        const previous = lastInset;
         lastInset = overlap;
         root.style.setProperty("--kb-inset", `${String(overlap)}px`);
         globalThis.dispatchEvent(
@@ -114,6 +138,24 @@ export function useKeyboardInset(): void {
             detail: { inset: overlap },
           }),
         );
+        lastSteadySampleMs = Date.now();
+        reportKeyboardInsetSample("inset-change", {
+          layout_height: layoutHeight,
+          published_inset: overlap,
+          previous_inset: previous,
+        });
+        return;
+      }
+      // The poll re-measured and agreed. Sample that rarely: it is the only
+      // evidence that a standing band is a live recomputation rather than a
+      // value nothing is touching any more.
+      const now = Date.now();
+      if (overlap > 0 && now - lastSteadySampleMs >= 5000) {
+        lastSteadySampleMs = now;
+        reportKeyboardInsetSample("inset-steady", {
+          layout_height: layoutHeight,
+          published_inset: overlap,
+        });
       }
     };
     const flush = (): void => {
@@ -174,9 +216,19 @@ export function useKeyboardInset(): void {
       schedule();
       stopPoll();
     };
+    // Rotation re-lays out the keyboard, and on iPad it can also re-dock or
+    // re-merge a split one. useKeyboardOpen already listens to both of these;
+    // this hook listened to visualViewport alone, so it depended on that one
+    // event firing. Re-measuring is idempotent, so make the trigger symmetric.
+    const onOrientation = (): void => {
+      reportKeyboardInsetSample("orientation", { published_inset: lastInset });
+      schedule();
+    };
     vv.addEventListener("resize", schedule);
     // `scroll` fires every scroll frame and never changes the keyboard height.
     vv.addEventListener("scroll", applyScroll);
+    globalThis.addEventListener("resize", schedule);
+    globalThis.addEventListener("orientationchange", onOrientation);
     doc.addEventListener("focusin", onFocusIn);
     doc.addEventListener("focusout", onFocusOut);
     schedule();
@@ -186,6 +238,8 @@ export function useKeyboardInset(): void {
     return () => {
       vv.removeEventListener("resize", schedule);
       vv.removeEventListener("scroll", applyScroll);
+      globalThis.removeEventListener("resize", schedule);
+      globalThis.removeEventListener("orientationchange", onOrientation);
       doc.removeEventListener("focusin", onFocusIn);
       doc.removeEventListener("focusout", onFocusOut);
       clearTimers();

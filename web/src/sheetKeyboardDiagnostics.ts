@@ -87,3 +87,36 @@ export function useSheetKeyboardDiagnostics(
     };
   }, [enabled, name]);
 }
+
+/** Independent budget from the sheet sampler above: a keyboard animation can
+ *  publish several inset changes in a row, and that burst must not starve the
+ *  folder-prompt samples (or the reverse). */
+let insetReportsLeft = 60;
+
+/** Geometry behind one `--kb-inset` decision on the ordinary app surface.
+ *
+ *  The iPad split-keyboard band (PITFALLS #22) survives the 300ms re-measure
+ *  poll and only clears after a rotation, so its inputs are *stably wrong*
+ *  rather than stale. These samples are what tell the two apart: a painted box
+ *  that `interactive-widget=resizes-content` already trimmed (cover must be 0)
+ *  versus a full-height page the keyboard really does cover. Layout metrics
+ *  only, never field content. */
+export function reportKeyboardInsetSample(
+  phase: string,
+  extra: Record<string, string | number | boolean>,
+): void {
+  if (insetReportsLeft-- <= 0) return;
+  reportClientLog(
+    "info",
+    "keyboard_inset_geometry",
+    "Keyboard inset geometry",
+    {
+      ...sheetKeyboardGeometry(phase, null),
+      orientation: globalThis.screen?.orientation?.type ?? "unknown",
+      inner_width: px(globalThis.innerWidth),
+      screen_width: px(globalThis.screen?.width),
+      screen_height: px(globalThis.screen?.height),
+      ...extra,
+    },
+  );
+}

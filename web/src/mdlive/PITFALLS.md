@@ -560,6 +560,26 @@ here says otherwise.
     iPad-sized Simulator with repeated docked keyboard open/close cycles and on
     a physical iPad with split and floating layouts.
 
+    **2026-09-26, OPEN, and this time it is NOT the native shell.** The same
+    band appeared on the Agent surface on a physical iPad with a split keyboard
+    and a third-party IME (WeType). `client_runtime_identity` for that page load
+    reports `native_shell: false`, so `useKeyboardInset` was live and the band is
+    `--kb-inset` padding the session column (`App.tsx`, `pb: var(--kb-inset)`).
+    The session nav did not collapse at the same time, i.e. `useKeyboardOpen()`
+    read closed while `--kb-inset` read a full keyboard — the two hooks disagree
+    because one measures `paintedLayoutHeight(...)` and the other raw
+    `innerHeight`. Rotating to landscape and back cleared it, and the 300ms
+    re-measure poll did not, so the inputs are *stably wrong* for as long as that
+    keyboard layout stands rather than a missed settle frame. The 2026-09-17
+    `sheet_keyboard_geometry` samples only caught healthy frames
+    (874 → 496 with `inner == client == root == vv`), so the bad frame's numbers
+    are still unknown. `keyboard_inset_geometry` now samples the ordinary
+    surface on every published change, on the first unreliable reading of an
+    episode, on rotation, and every 5s while an inset stands. Do not guess a
+    clamp before reading those: the open question is specifically whether
+    `interactive-widget=resizes-content` already trimmed the painted box (cover
+    must then be 0) or the page is full height and the keyboard really covers it.
+
 23. **Fullscreen Mobile needs an explicit way to inspect behind the keyboard.**
     Keep one trailing dock slot for keyboard ownership. While the software
     keyboard is up it is `KeyboardHide`: blur the first-responder only. It must
