@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 import {
+  AuthApiError,
   nativeOidcCancelPath,
   nativeOidcEventsPath,
   nativeOidcPollPath,
@@ -12,6 +13,7 @@ import {
   nativeOidcStartUrl,
   runBrowserOidc,
   runNativeOidc,
+  SignInWindowBlockedError,
 } from "./nativeOidcFlow.ts";
 import { newPkceBinding } from "./pkce.ts";
 import { NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT } from "../openExternal.ts";
@@ -490,6 +492,49 @@ Deno.test("a sign-in window the engine refuses to close returns to Cowboy", asyn
       ["window", previousWindow],
       ["open", previousOpen],
       ["WebSocket", previousWebSocket],
+    ] as const) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete (globalThis as Record<string, unknown>)[name];
+    }
+  }
+});
+
+Deno.test("a blocked sign-in window leaves the redirect fallback available", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+  const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
+  let fetched = 0;
+
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+  Object.defineProperty(globalThis, "open", {
+    configurable: true,
+    value: () => null,
+  });
+  globalThis.fetch = (() => {
+    fetched += 1;
+    return Promise.resolve(Response.json({}));
+  }) as typeof fetch;
+
+  try {
+    const blocked = await assertRejects(
+      () => runBrowserOidc(cardea),
+      SignInWindowBlockedError,
+    );
+    // The caller distinguishes this from a Provider failure and offers the
+    // plain redirect; a bare message could not carry that.
+    assert(blocked instanceof AuthApiError);
+    assert(blocked.message.includes("continue in this window"));
+    // Nothing was started server-side, so the redirect starts a clean
+    // authorization rather than racing an abandoned one.
+    assertEquals(fetched, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [name, descriptor] of [
+      ["window", previousWindow],
+      ["open", previousOpen],
     ] as const) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete (globalThis as Record<string, unknown>)[name];

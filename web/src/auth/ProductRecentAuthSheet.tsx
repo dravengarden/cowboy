@@ -27,6 +27,7 @@ import {
   nativeOidcFlowSupported,
   runBrowserOidc,
   runNativeOidc,
+  SignInWindowBlockedError,
 } from "./nativeOidcFlow";
 import {
   passkeyCancellationMessage,
@@ -134,6 +135,9 @@ export function ProductRecentAuthSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // A blocked sign-in window is the one provider failure the reader cannot act
+  // on inside Cowboy, so it unlocks the redirect this sheet otherwise hides.
+  const [windowBlocked, setWindowBlocked] = useState(false);
   const [verifiedMe, setVerifiedMe] = useState<ProductMe | null>(null);
   const providerAbort = useRef<AbortController | null>(null);
   const passkeyAbort = useRef<AbortController | null>(null);
@@ -179,6 +183,7 @@ export function ProductRecentAuthSheet({
     setPassword("");
     setError(null);
     setNotice(null);
+    setWindowBlocked(false);
     setVerifiedMe(null);
     setMethod(
       initialMethod(
@@ -219,6 +224,7 @@ export function ProductRecentAuthSheet({
     setBusy(true);
     setError(null);
     setNotice(null);
+    setWindowBlocked(false);
     void request()
       .then((next) => {
         if (requestEpoch.current !== epoch) return;
@@ -239,6 +245,7 @@ export function ProductRecentAuthSheet({
           );
           return;
         }
+        if (reason instanceof SignInWindowBlockedError) setWindowBlocked(true);
         setError(
           reason instanceof AuthApiError
             ? reason.message
@@ -464,6 +471,26 @@ export function ProductRecentAuthSheet({
                 <Typography variant="body2" color="text.secondary">
                   After the secure redirect returns, repeat the Passkey change.
                 </Typography>
+              )}
+              {/* Nothing reached the server when the window was blocked, so the
+                plain redirect the login page uses is still available. Without
+                it a locked session has no way forward but Sign out. */}
+              {useProviderHandoff && windowBlocked && (
+                <>
+                  <Button
+                    type="button"
+                    href={selectedProvider.start_url}
+                    variant="outlined"
+                    size="large"
+                  >
+                    Continue in this window
+                  </Button>
+                  <Typography variant="body2" color="text.secondary">
+                    {purpose === "primary"
+                      ? "Cowboy reloads when the secure redirect returns; running agents are unaffected."
+                      : "After the secure redirect returns, repeat the Passkey change."}
+                  </Typography>
+                </>
               )}
               {useProviderHandoff && busy && (
                 <Button

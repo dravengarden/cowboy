@@ -300,6 +300,26 @@ function returnFromBrowserOidcWindow(popup: Window): void {
 }
 
 /**
+ * The engine refused the sign-in window even though a real tap asked for it.
+ *
+ * A synchronous `window.open` from the gesture is necessary but not sufficient:
+ * iPadOS Safari with Block Pop-ups on, and a standalone PWA that has no tab to
+ * put `about:blank` in, both answer `null`. Nothing has reached the server at
+ * that point, so the caller can still fall back to the plain full-page redirect
+ * the login page already uses on every browser without a native shell. This
+ * distinct type is what lets the caller offer that instead of a dead end.
+ */
+export class SignInWindowBlockedError extends AuthApiError {
+  constructor() {
+    super(
+      "Cowboy could not open the secure sign-in window. Allow pop-ups, or continue in this window.",
+      400,
+    );
+    this.name = "SignInWindowBlockedError";
+  }
+}
+
+/**
  * Keep browser/PWA state alive while an external Provider verifies the user.
  * The blank window is opened synchronously from the click before PKCE work so
  * iOS does not block it. Its opener is severed before any Provider navigation;
@@ -314,12 +334,7 @@ export async function runBrowserOidc(
     throw new Error("Browser authentication window is unavailable");
   }
   const popup = window.open("about:blank", "_blank");
-  if (!popup) {
-    throw new AuthApiError(
-      "Cowboy could not open the secure sign-in window. Allow pop-ups and try again.",
-      400,
-    );
-  }
+  if (!popup) throw new SignInWindowBlockedError();
   try {
     popup.opener = null;
     if (popup.opener !== null) {

@@ -465,6 +465,10 @@ Deno.test("session reauthentication is pushed and stays compact until required",
   assert(sheet.includes("resolvePrimaryReauthMethods"));
   assert(sheet.includes("scheduled Passkey check is approaching"));
   assert(sheet.includes('autoFocus={!mobile && purpose === "primary"}'));
+  assert(sheet.includes("SignInWindowBlockedError"));
+  assert(sheet.includes("setWindowBlocked(true)"));
+  assert(sheet.includes("Continue in this window"));
+  assert(sheet.includes("href={selectedProvider.start_url}"));
   assert(panel.includes("Session protection"));
   assert(panel.includes("Service settings"));
   assert(panel.includes("data-product-passkeys-panel"));
