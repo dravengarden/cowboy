@@ -45,12 +45,12 @@ contain bounded command counts, closed stages/failures and artifact hashes, not
 frames, content, passwords, cookies, keys, environment or logs. Output is private,
 atomic and create-only on both success and bounded post-setup failure.
 
-The v13 harness has a 390-second overall execution limit: seven deliberately
+The v14 harness has a 390-second overall execution limit: seven deliberately
 lost replies each require the normal 40-second product timeout, plus the existing
 110-second allowance for other work. This test-only limit does not extend any
 Controller, Machine or native timeout, or shorten any fault observation.
 
-Thirty-three checks cover (receipt schema `...code-buffer-connected-conformance/v13`,
+Thirty-four checks cover (receipt schema `...code-buffer-connected-conformance/v14`,
 requiring Machine protocol 22, Zed `1.18.0` and updated core Budget readers).
 Historical v3 receipts cover only the first eleven checks:
 
@@ -181,12 +181,16 @@ Historical v3 receipts cover only the first eleven checks:
     replacing that directory with a different object at the same path holding
     the same bytes returns `410/no-store` with no ETag and still no command;
     and an explicit inventory refresh restores reads, again with no command.
-    Historical v12 does not accept this extension. The permission matrix — a
-    remote Machine claiming local mode, and a named Machine that did not claim
-    it — is covered by source tests rather than here, because restarting the
-    Controller twice in quick succession makes the fixture Machine reconnect
-    repeatedly. See
+    Historical v12 does not accept this extension. See
     [Controller-owned identity for locally executed reads](plugin-local-root-identity.md).
+34. Retain that same Machine process and its local declaration, restart only
+    the fixture Controller without its colocation permission, and read the same
+    root and bytes. After connection readiness, a measured read must dispatch
+    exactly one `coreColocatedFile` command and no other command. The relay
+    admits the legitimate opaque Workspace identity on this named read while
+    continuing to refuse identities on Session routes and arbitrary files.
+    Historical v13 does not accept permission withdrawal. Source tests still
+    cover the complete declaration/permission matrix.
 
 The connection-replacement/restart checks deliberately leave unresolved native
 ownership. Teardown kills

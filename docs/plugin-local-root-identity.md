@@ -101,10 +101,12 @@ permission. Before it, a fixture could reach this branch merely by declaring
 local mode over TCP — which was the trust gap itself, not a property worth
 building acceptance on.
 
-The permission matrix stays in source tests rather than the connected gate:
-restarting the Controller twice in quick succession makes the fixture Machine
-reconnect repeatedly, and a flapping fixture would make the gate unreliable
-rather than more convincing.
+The v14 gate additionally retains the Machine process and local declaration,
+restarts only its fixture Controller without permission, and requires the same
+root read to dispatch exactly one Machine command. The relay permits the
+Workspace identity on that named operation; v13 classified the operation but
+refused its legitimate identity. The full declaration/permission matrix remains
+covered by source tests.
 
 Source tests use real directories, including the delete/recreate sequence that
 provably reuses an inode on the deployed filesystem. Before activation, all 32
