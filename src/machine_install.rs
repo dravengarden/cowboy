@@ -6,6 +6,25 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use clap::Parser;
 
+// Service IDs already consume 36 bytes. Compact socket basenames leave room
+// for ordinary Linux/macOS home paths without moving private runtime state.
+const MACHINE_SOCKET: &str = "run/m";
+const USAGE_SOCKET: &str = "run/u";
+const CODE_SOCKET: &str = "run/c";
+const ZED_SOCKET: &str = "run/z";
+
+fn validate_socket_paths(state: &Path) -> Result<()> {
+    // macOS has a 104-byte sun_path including its terminating NUL; Linux's
+    // larger limit must not make a generated installation nonportable.
+    for relative in [MACHINE_SOCKET, USAGE_SOCKET, CODE_SOCKET, ZED_SOCKET] {
+        anyhow::ensure!(
+            state.join(relative).as_os_str().as_encoded_bytes().len() <= 103,
+            "Machine state directory is too long for Unix sockets; choose a shorter --state-dir"
+        );
+    }
+    Ok(())
+}
+
 #[derive(Debug, Parser)]
 pub struct InstallArgs {
     #[arg(long)]
@@ -96,6 +115,7 @@ pub async fn register(
         Some(path) => path,
         None => crate::service_identity::service_state_dir(&home, &service_id)?,
     };
+    validate_socket_paths(&state_dir)?;
     bind_service_origin(&state_dir, &controller_url)?;
     let host = machine_host_binary(None);
     anyhow::ensure!(
@@ -237,6 +257,7 @@ fn prepare_install(args: &InstallArgs) -> Result<(PathBuf, PathBuf)> {
         || crate::service_identity::service_state_dir(&home, &args.service_id),
         Ok,
     )?;
+    validate_socket_paths(&state)?;
     bind_service_origin(&state, &normalize_controller_url(&args.controller_url)?)?;
     let config = home
         .join(".config/cowboy-machine/services")
@@ -317,13 +338,13 @@ fn launcher_script(args: &InstallArgs, state: &Path, token: &Path) -> String {
         "--enrollment-token-file".to_owned(),
         token.display().to_string(),
         "--socket".to_owned(),
-        state.join("run/cowboy-machine.sock").display().to_string(),
+        state.join(MACHINE_SOCKET).display().to_string(),
         "--provider-usage-socket".to_owned(),
-        state.join("run/provider-usage.sock").display().to_string(),
+        state.join(USAGE_SOCKET).display().to_string(),
         "--code-adapter-socket".to_owned(),
-        state.join("run/code-adapter.sock").display().to_string(),
+        state.join(CODE_SOCKET).display().to_string(),
         "--zed-adapter-socket".to_owned(),
-        state.join("run/zed-adapter.sock").display().to_string(),
+        state.join(ZED_SOCKET).display().to_string(),
         "--max-sessions".to_owned(),
         args.max_sessions.max(1).to_string(),
     ]);
@@ -521,8 +542,8 @@ mod tests {
         };
         let script = launcher_script(&args, Path::new("/state"), Path::new("/state/token"));
         assert!(script.contains("components/commands/cowboy-machine"));
-        assert!(script.contains("/state/run/cowboy-machine.sock"));
-        assert!(script.contains("/state/run/provider-usage.sock"));
+        assert!(script.contains("'/state/run/m'"));
+        assert!(script.contains("'/state/run/u'"));
         assert!(!script.contains("agentd"));
         assert!(script.contains("/opt/homebrew/bin"));
         assert!(script.contains("--enrollment-token-file"));
@@ -551,6 +572,40 @@ mod tests {
         };
         let script = launcher_script(&args, Path::new("/state"), Path::new("/state/token"));
         assert!(!script.contains("--machine-id"));
+    }
+
+    #[test]
+    fn service_scoped_default_sockets_fit_linux_and_macos() {
+        for home in ["/home/ubuntu", "/Users/draven", "/Users/longusername"] {
+            let state = crate::service_identity::service_state_dir(
+                Path::new(home),
+                "svc-0123456789abcdef0123456789abcdef",
+            )
+            .expect("Service state path");
+            validate_socket_paths(&state).expect("default sockets fit sun_path");
+        }
+        let too_long = PathBuf::from(format!("/{}", "x".repeat(98)));
+        assert!(validate_socket_paths(&too_long).is_err());
+        let multibyte = PathBuf::from(format!("/{}", "é".repeat(49)));
+        assert!(validate_socket_paths(&multibyte).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compact_sockets_bind_in_a_long_service_directory() {
+        use std::os::unix::net::UnixListener;
+
+        let temporary = tempfile::tempdir_in("/tmp").expect("temporary directory");
+        let prefix_bytes = temporary.path().as_os_str().as_encoded_bytes().len();
+        // Reproduce the original 110-byte Ubuntu socket path with a private
+        // temporary parent, then prove all generated replacements really bind.
+        let state = temporary.path().join("s".repeat(86 - prefix_bytes - 1));
+        std::fs::create_dir_all(state.join("run")).expect("runtime directory");
+        assert!(UnixListener::bind(state.join("run/provider-usage.sock")).is_err());
+        for relative in [MACHINE_SOCKET, USAGE_SOCKET, CODE_SOCKET, ZED_SOCKET] {
+            let listener = UnixListener::bind(state.join(relative)).expect("bind compact socket");
+            drop(listener);
+        }
     }
 
     #[test]
