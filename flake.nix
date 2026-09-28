@@ -431,12 +431,13 @@
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
               --add-flags "--desired-generation ${worker-generation}"''
         }
-        # Registration finds companions beside current_exe. Symlinks would
-        # resolve into the smaller Machine derivation without the code adapter.
+        # Registration finds companions beside the native current_exe. Keep
+        # both the native executable and its wrapper in this complete bundle.
         cp ${cowboy-machine}/bin/cowboy-machine-install \
           "$out/bin/cowboy-machine-install"
-        cp ${cowboy-machine}/bin/cowboy \
-          "$out/bin/cowboy"
+        cp ${cowboy-machine}/bin/.cowboy-wrapped "$out/bin/.cowboy-wrapped"
+        makeWrapper "$out/bin/.cowboy-wrapped" "$out/bin/cowboy" \
+          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
         ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
         ln -s ${cowboy}/bin/cowboy-codex-app-server \
