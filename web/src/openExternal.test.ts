@@ -221,6 +221,87 @@ Deno.test("bridge v2 rejects a silently failed UIKit presentation", async () => 
   }
 });
 
+for (const bridge of ["opener", "core", "internals"] as const) {
+  Deno.test(`Desktop authentication awaits ${bridge} and propagates launch failures`, async () => {
+    const root = globalThis as typeof globalThis & {
+      __TAURI__?: {
+        opener?: { openUrl: (url: string) => Promise<void> };
+        core?: {
+          invoke: (
+            command: string,
+            args: Record<string, unknown>,
+          ) => Promise<void>;
+        };
+      };
+      __TAURI_INTERNALS__?: {
+        invoke: (
+          command: string,
+          args: Record<string, unknown>,
+        ) => Promise<void>;
+      };
+    };
+    const urls: string[] = [];
+    let rejectLaunch!: (reason: Error) => void;
+    let launch = new Promise<void>((_resolve, reject) => {
+      rejectLaunch = reject;
+    });
+    const openUrl = (url: string): Promise<void> => {
+      urls.push(url);
+      return launch;
+    };
+    const invoke = (
+      command: string,
+      args: Record<string, unknown>,
+    ): Promise<void> => {
+      assertEquals(command, "plugin:opener|open_url");
+      return openUrl(String(args.url));
+    };
+    if (bridge === "internals") {
+      root.__TAURI_INTERNALS__ = { invoke };
+    } else {
+      root.__TAURI__ = bridge === "opener"
+        ? { opener: { openUrl } }
+        : { core: { invoke } };
+    }
+    try {
+      let settled = false;
+      const pending = openAuthenticationUrlConfirmed(
+        "https://example.com/authorize",
+      );
+      void pending.then(() => {
+        settled = true;
+      }, () => {
+        settled = true;
+      });
+      await Promise.resolve();
+      assertEquals(settled, false);
+      rejectLaunch(new Error("OS browser launch failed"));
+      await assertRejects(() => pending, Error, "OS browser launch failed");
+      assertEquals(urls, ["https://example.com/authorize"]);
+
+      launch = Promise.resolve();
+      await openAuthenticationUrlConfirmed("https://example.com/retry");
+      const abort = new AbortController();
+      abort.abort();
+      await assertRejects(
+        () =>
+          openAuthenticationUrlConfirmed(
+            "https://example.com/cancelled",
+            abort.signal,
+          ),
+        DOMException,
+      );
+      assertEquals(urls, [
+        "https://example.com/authorize",
+        "https://example.com/retry",
+      ]);
+    } finally {
+      delete root.__TAURI__;
+      delete root.__TAURI_INTERNALS__;
+    }
+  });
+}
+
 Deno.test("Tauri fallback passes open_url its url argument", () => {
   let command = "";
   let args: Record<string, unknown> = {};

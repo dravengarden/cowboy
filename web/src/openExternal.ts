@@ -118,6 +118,30 @@ export async function openAuthenticationUrlConfirmed(
   const resolved = safeAuthenticationUrl(url);
   if (!resolved) throw new Error("Authentication URL is invalid");
   const root = globalThis as typeof globalThis & NativeGlobals;
+  if (signal?.aborted) {
+    throw signal.reason ?? new DOMException("Cancelled", "AbortError");
+  }
+  // Desktop has the OS opener, not the mobile authentication-sheet bridge.
+  // Await its result: a rejected launch must reach the sign-in UI, never fall
+  // back to window.open (the Desktop WebView cannot create that popup).
+  if (typeof root.__cowboyOpenAuthenticationBrowser !== "function") {
+    if (root.__TAURI__?.opener?.openUrl) {
+      await root.__TAURI__.opener.openUrl(resolved);
+      return;
+    }
+    if (root.__TAURI__?.core?.invoke) {
+      await root.__TAURI__.core.invoke("plugin:opener|open_url", {
+        url: resolved,
+      });
+      return;
+    }
+    if (root.__TAURI_INTERNALS__?.invoke) {
+      await root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", {
+        url: resolved,
+      });
+      return;
+    }
+  }
   if (
     typeof root.__cowboyOpenAuthenticationBrowser !== "function" ||
     (root.__cowboyAuthenticationBrowserBridgeVersion ?? 0) < 2
@@ -125,10 +149,6 @@ export async function openAuthenticationUrlConfirmed(
     openAuthenticationUrl(resolved);
     return;
   }
-  if (signal?.aborted) {
-    throw signal.reason ?? new DOMException("Cancelled", "AbortError");
-  }
-
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     const finish = (reason?: unknown): void => {
