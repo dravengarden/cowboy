@@ -431,9 +431,11 @@
             ''makeWrapper "$out/libexec/cowboy-machine" "$out/bin/cowboy-machine" \
               --add-flags "--desired-generation ${worker-generation}"''
         }
-        ln -s ${cowboy-machine}/bin/cowboy-machine-install \
+        # Registration finds companions beside current_exe. Symlinks would
+        # resolve into the smaller Machine derivation without the code adapter.
+        cp ${cowboy-machine}/bin/cowboy-machine-install \
           "$out/bin/cowboy-machine-install"
-        ln -s ${cowboy-machine}/bin/cowboy \
+        cp ${cowboy-machine}/bin/cowboy \
           "$out/bin/cowboy"
         ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
