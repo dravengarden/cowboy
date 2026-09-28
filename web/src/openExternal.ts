@@ -42,6 +42,16 @@ export const NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT =
 export const NATIVE_APP_RESUMED_EVENT = "cowboy:native-resume";
 const NATIVE_AUTHENTICATION_BROWSER_OPEN_TIMEOUT_MS = 5_000;
 
+export class NativeAuthenticationBrowserOpenError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Cowboy could not open the system browser. Continue in this window to sign in.",
+      { cause },
+    );
+    this.name = "NativeAuthenticationBrowserOpenError";
+  }
+}
+
 /** True only for a native shell that can hand an URL to the operating system.
  * Browser/PWA links must retain native anchor navigation instead of being
  * cancelled and recreated with window.open. */
@@ -125,21 +135,27 @@ export async function openAuthenticationUrlConfirmed(
   // Await its result: a rejected launch must reach the sign-in UI, never fall
   // back to window.open (the Desktop WebView cannot create that popup).
   if (typeof root.__cowboyOpenAuthenticationBrowser !== "function") {
-    if (root.__TAURI__?.opener?.openUrl) {
-      await root.__TAURI__.opener.openUrl(resolved);
-      return;
-    }
-    if (root.__TAURI__?.core?.invoke) {
-      await root.__TAURI__.core.invoke("plugin:opener|open_url", {
-        url: resolved,
-      });
-      return;
-    }
-    if (root.__TAURI_INTERNALS__?.invoke) {
-      await root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", {
-        url: resolved,
-      });
-      return;
+    try {
+      if (root.__TAURI__?.opener?.openUrl) {
+        await root.__TAURI__.opener.openUrl(resolved);
+        return;
+      }
+      if (root.__TAURI__?.core?.invoke) {
+        await root.__TAURI__.core.invoke("plugin:opener|open_url", {
+          url: resolved,
+        });
+        return;
+      }
+      if (root.__TAURI_INTERNALS__?.invoke) {
+        await root.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", {
+          url: resolved,
+        });
+        return;
+      }
+    } catch (reason) {
+      // Tauri can reject with a string (including a URL), not an Error. Keep
+      // native details out of the UI and let callers offer ordinary navigation.
+      throw new NativeAuthenticationBrowserOpenError(reason);
     }
   }
   if (

@@ -6,6 +6,7 @@ import {
   hasNativePasskeyAuthenticationBrowser,
   NATIVE_AUTHENTICATION_BROWSER_OPEN_FAILED_EVENT,
   NATIVE_AUTHENTICATION_BROWSER_OPENED_EVENT,
+  NativeAuthenticationBrowserOpenError,
   openAuthenticationUrl,
   openAuthenticationUrlConfirmed,
   openExternalUrl,
@@ -241,7 +242,7 @@ for (const bridge of ["opener", "core", "internals"] as const) {
       };
     };
     const urls: string[] = [];
-    let rejectLaunch!: (reason: Error) => void;
+    let rejectLaunch!: (reason: unknown) => void;
     let launch = new Promise<void>((_resolve, reject) => {
       rejectLaunch = reject;
     });
@@ -275,8 +276,16 @@ for (const bridge of ["opener", "core", "internals"] as const) {
       });
       await Promise.resolve();
       assertEquals(settled, false);
-      rejectLaunch(new Error("OS browser launch failed"));
-      await assertRejects(() => pending, Error, "OS browser launch failed");
+      const nativeFailure =
+        "opener.open_url not allowed: https://private.example";
+      rejectLaunch(nativeFailure);
+      const failure = await assertRejects(
+        () => pending,
+        NativeAuthenticationBrowserOpenError,
+        "Continue in this window",
+      );
+      assertEquals(failure.cause, nativeFailure);
+      assertEquals(failure.message.includes("private.example"), false);
       assertEquals(urls, ["https://example.com/authorize"]);
 
       launch = Promise.resolve();
