@@ -602,6 +602,11 @@ real-process coverage too: [v13 check 33](releases/plugin-colocated-connected-20
 reads a permitted local Machine's root with no Machine command at all, refuses
 a replaced root, and restores reads by explicit refresh. That coverage became
 honest only once colocated execution required a permission.
+The [v14 withdrawal acceptance](releases/plugin-colocated-withdrawal-2026-09-28.md)
+retains the same Machine and local declaration, withdraws only the fixture
+Controller's permission, and requires the same read to dispatch exactly one
+Machine command. This closes the connected withdrawal gap left by v13;
+production authenticated-read acceptance remains separate.
 
 **That trust gap is now closed.** `colocated` — the switch that decides which
 of the two fences applies — was taken verbatim from the Machine's self-declared
