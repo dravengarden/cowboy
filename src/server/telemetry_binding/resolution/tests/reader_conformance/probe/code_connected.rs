@@ -249,7 +249,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
             .canonicalize()?,
     )?;
     let mut receipt = Receipt {
-        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v13",
+        schema: "dravengarden.cowboy.code-buffer-connected-conformance/v14",
         source_revision: manifest::clean_revision()?,
         artifacts: manifest::supplied_pair(input.controller, input.machine)?,
         native: [
@@ -286,7 +286,7 @@ async fn immutable_connected_code_buffers() -> Result<()> {
     // carries Machine-owned root identities on every observed connection.
     receipt.accepted = result.is_ok()
         && receipt.cleanup
-        && receipt.checks.len() == 33
+        && receipt.checks.len() == 34
         && !receipt.wire.protocols.is_empty()
         && receipt.wire.protocols.iter().all(|protocol| {
             *protocol == crate::machine_protocol::CODE_WORKSPACE_ROOT_IDENTITY_PROTOCOL_VERSION

@@ -412,7 +412,7 @@ fn command_frame(command: MachineCommand, record: &mut Record) -> Result<(), Fai
             // borrow a Workspace observation's identity. The converse is NOT
             // enforced here: a pre-fix Controller carries nothing, and must
             // reach the product check rather than be refused by the relay.
-            check(!carried || kind == "coreSwapFile")?;
+            check(!carried || matches!(kind, "coreSwapFile" | "coreColocatedFile"))?;
             record.command(request_id, kind)
         }
         MachineCommand::QueryPluginUninstallStep { request_id, step }
@@ -575,11 +575,11 @@ fn relay_core_pages_are_limited_to_the_named_fixture_and_never_raw_or_arbitrary_
     }
 }
 
-/// The relay admits a Machine-owned root identity only for the separate
-/// advertised root, and requires one for every read of that root.
+/// Only the named advertised-root reads may carry a Machine-owned identity.
 #[test]
 fn relay_root_identities_belong_only_to_the_separate_advertised_workspace() {
     let swap = format!("/fixture/{}", root_identity::ROOT);
+    let colocated = format!("/fixture/{}", colocated::ROOT);
     for (root, path, incarnation, accepted) in [
         (
             swap.as_str(),
@@ -590,6 +590,20 @@ fn relay_root_identities_belong_only_to_the_separate_advertised_workspace() {
         // A pre-fix Controller carries nothing; the relay forwards that read
         // so the product check, not the relay, records the failure.
         (swap.as_str(), root_identity::FILE, None, true),
+        (
+            colocated.as_str(),
+            colocated::FILE,
+            Some("0123456789abcdef0123456789abcdef"),
+            true,
+        ),
+        (colocated.as_str(), colocated::FILE, None, true),
+        (colocated.as_str(), colocated::FILE, Some(""), false),
+        (
+            colocated.as_str(),
+            "other.txt",
+            Some("0123456789abcdef0123456789abcdef"),
+            false,
+        ),
         // The Session-route fixture must never borrow that identity.
         (
             "/fixture",
@@ -626,7 +640,15 @@ fn relay_root_identities_belong_only_to_the_separate_advertised_workspace() {
         );
         assert_eq!(result.is_ok(), accepted, "{root} {path} {incarnation:?}");
         assert_eq!(
-            record.counts.commands.get("coreSwapFile").copied(),
+            record
+                .counts
+                .commands
+                .get(if root == colocated {
+                    "coreColocatedFile"
+                } else {
+                    "coreSwapFile"
+                })
+                .copied(),
             accepted.then_some(1)
         );
     }

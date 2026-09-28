@@ -71,8 +71,8 @@ pub(super) async fn run(
     pair.colocated_permission = true;
     pair.start_controller().await?;
     pair.http.login(password).await?;
-    pair.start_machine()?;
     let connections = pair.proxy.counts()?.connections;
+    pair.start_machine()?;
     pair.connected(connections + 1).await?;
 
     *stage = "colocated_execution";
@@ -111,15 +111,25 @@ pub(super) async fn run(
     read(pair).await?;
     check(pair.proxy.counts()?.commands == after_refresh)?;
 
-    // Withdrawing the permission and observing the executor change is NOT
-    // asserted here: restarting the Controller a second time in quick
-    // succession makes the fixture Machine reconnect repeatedly, and a flapping
-    // fixture would make this gate unreliable rather than more convincing. The
-    // permission matrix — including a remote Machine claiming local mode — is
-    // covered exhaustively by `colocated_execution_is_denied_until_a_machine_is_named`
-    // and `a_declaration_and_a_permission_are_both_required`. The relay still
-    // classifies a `coreColocatedFile` command, so an unexpected dispatch from
-    // this root would be counted above rather than silently ignored.
     checks.push("colocated_reads_execute_here_only_by_permission_and_fence_a_replaced_root");
+
+    // Retain the Machine and its local declaration. Only the Controller's
+    // explicit permission changes; a successful read must now cross the relay.
+    *stage = "colocated_permission_withdrawn";
+    let connections = pair.proxy.counts()?.connections;
+    pair.controller
+        .take()
+        .ok_or(Failure::Setup)?
+        .finish_with_reaper(true)
+        .await?;
+    pair.colocated_permission = false;
+    pair.start_controller().await?;
+    pair.connected(connections + 1).await?;
+    settle(pair).await?;
+    let mut expected = pair.proxy.counts()?.commands;
+    *expected.entry("coreColocatedFile".into()).or_default() += 1;
+    read(pair).await?;
+    check(pair.proxy.counts()?.commands == expected)?;
+    checks.push("withdrawing_colocation_permission_routes_the_same_root_to_the_retained_machine");
     Ok(())
 }
