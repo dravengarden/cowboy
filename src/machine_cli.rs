@@ -110,15 +110,19 @@ impl WorkspaceConfig {
         Arc::clone(&self.identities)
     }
 
-    /// Re-observe the roots about to be advertised. Identities are refreshed
-    /// exactly when the Machine publishes them, never as a side effect of
-    /// reading configuration, so a replaced root cannot recycle the Code
-    /// adapter or any other workspace-configuration subscriber.
-    fn observe_roots(
+    /// Capture configuration and identities together. A caller cannot mint
+    /// identities from a snapshot superseded by an intervening reload.
+    /// Object changes still never notify configuration subscribers.
+    fn advertisement(
         &self,
-        workspaces: &[MachineWorkspace],
-    ) -> Vec<crate::machine_protocol::WorkspaceRootIdentity> {
-        self.identities.lock().observe_roots(workspaces)
+    ) -> (
+        WorkspaceSnapshot,
+        Vec<crate::machine_protocol::WorkspaceRootIdentity>,
+    ) {
+        let mut identities = self.identities.lock();
+        let snapshot = self.snapshot();
+        let roots = identities.observe_roots(&snapshot.workspaces);
+        (snapshot, roots)
     }
 
     fn snapshot(&self) -> WorkspaceSnapshot {
@@ -130,11 +134,16 @@ impl WorkspaceConfig {
     }
 
     fn reload(&self) -> anyhow::Result<WorkspaceSnapshot> {
+        // Serialize loading, retirement and publication with advertisements
+        // and adapter verification. Watch delivery may coalesce A -> B -> A;
+        // the owner must still end A's original identity at B.
+        let mut identities = self.identities.lock();
         let snapshot = load_workspace_snapshot(&self.path, &self.fallback)?;
         self.updates.send_if_modified(|current| {
             if *current == snapshot {
                 false
             } else {
+                identities.retain_configuration(&current.workspaces, &snapshot.workspaces);
                 current.clone_from(&snapshot);
                 true
             }
@@ -889,7 +898,7 @@ async fn controller_loop(config: ControllerConfig) -> anyhow::Result<()> {
 }
 
 async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> {
-    let workspace_snapshot = config.workspaces.reload()?;
+    config.workspaces.reload()?;
     let mut endpoint =
         reqwest::Url::parse(&config.controller_url).context("parsing controller URL")?;
     endpoint
@@ -917,6 +926,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
     if expires_at_ms < unix_ms() {
         bail!("controller challenge already expired");
     }
+    let (workspace_snapshot, workspace_identities) = config.workspaces.advertisement();
     let mut hello = MachineHello {
         machine_id: config.machine_id.clone(),
         display_name: config.display_name.clone(),
@@ -942,9 +952,7 @@ async fn controller_connection(config: &ControllerConfig) -> anyhow::Result<()> 
         plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
             crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
         )),
-        workspace_identities: config
-            .workspaces
-            .observe_roots(&workspace_snapshot.workspaces),
+        workspace_identities,
         workspaces: workspace_snapshot.workspaces,
         workspace_revision: workspace_snapshot.revision,
         capacity: config.capacity.clone(),
@@ -1952,10 +1960,11 @@ fn handle_machine_command(
                 let components =
                     collect_inventory(&components, zed_adapter_socket.as_deref()).await;
                 let workspace_result = workspaces.reload();
-                if let Ok(snapshot) = &workspace_result {
+                if workspace_result.is_ok() {
+                    let (snapshot, workspace_identities) = workspaces.advertisement();
                     let _ = events.send(MachineEvent::Inventory {
                         components,
-                        workspace_identities: Some(workspaces.observe_roots(&snapshot.workspaces)),
+                        workspace_identities: Some(workspace_identities),
                         workspaces: Some(snapshot.workspaces.clone()),
                         workspace_revision: snapshot.revision.clone(),
                         observed_at_ms: unix_ms(),
@@ -4086,6 +4095,118 @@ mod tests {
 mod workspace_identity_tests {
     use super::{WorkspaceConfig, workspace_identity};
 
+    fn write_configuration(path: &std::path::Path, roots: &[String], revision: &str) {
+        std::fs::write(
+            path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1, "revision": revision, "workspaces": roots,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn unadvertised_configuration_aba_cannot_revive_an_original_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let kept = tempfile::tempdir().unwrap();
+        let file = root.path().join("workspaces.json");
+        let original = vec![
+            format!("main={}", root.path().display()),
+            format!("kept={}", kept.path().display()),
+        ];
+        // Removal, path replacement and logical-id replacement all terminate
+        // the binding even if neither intermediate state is advertised.
+        for replacement in [
+            vec![original[1].clone()],
+            vec![
+                format!("main={}", other.path().display()),
+                original[1].clone(),
+            ],
+            vec![
+                format!("renamed={}", root.path().display()),
+                original[1].clone(),
+            ],
+        ] {
+            write_configuration(&file, &original, "original");
+            let config = WorkspaceConfig::new(file.clone(), vec![]).unwrap();
+            let mut subscriber = config.subscribe();
+            let (snapshot, first) = config.advertisement();
+            let main = first
+                .iter()
+                .find(|entry| entry.workspace_id == "main")
+                .unwrap();
+            let stable = first
+                .iter()
+                .find(|entry| entry.workspace_id == "kept")
+                .unwrap();
+            let path = snapshot
+                .workspaces
+                .iter()
+                .find(|entry| entry.id == "main")
+                .unwrap()
+                .canonical_path
+                .clone();
+            write_configuration(&file, &replacement, "intermediate");
+            config.reload().unwrap();
+            assert!(
+                config
+                    .identities()
+                    .lock()
+                    .verify(&path, &main.incarnation)
+                    .is_err()
+            );
+            write_configuration(&file, &original, "original");
+            config.reload().unwrap();
+            // The subscriber sees precisely the original configuration again.
+            assert_eq!(*subscriber.borrow_and_update(), snapshot);
+            assert!(
+                config
+                    .identities()
+                    .lock()
+                    .verify(&path, &main.incarnation)
+                    .is_err()
+            );
+            let (_, last) = config.advertisement();
+            assert_ne!(
+                last.iter()
+                    .find(|entry| entry.workspace_id == "main")
+                    .unwrap(),
+                main
+            );
+            assert_eq!(
+                last.iter()
+                    .find(|entry| entry.workspace_id == "kept")
+                    .unwrap(),
+                stable
+            );
+            assert!(
+                config
+                    .identities()
+                    .lock()
+                    .verify(&path, &main.incarnation)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn revision_only_and_rejected_configuration_preserve_live_root_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("workspaces.json");
+        let roots = vec![format!("main={}", root.path().display())];
+        write_configuration(&file, &roots, "first");
+        let config = WorkspaceConfig::new(file.clone(), vec![]).unwrap();
+        let (_, first) = config.advertisement();
+        write_configuration(&file, &roots, "second");
+        config.reload().unwrap();
+        assert_eq!(config.advertisement().1, first);
+        std::fs::write(&file, b"invalid configuration").unwrap();
+        assert!(config.reload().is_err());
+        assert_eq!(config.advertisement().1, first);
+    }
+
     /// Every workspace-configuration subscriber restarts the Code adapter, so
     /// a replaced root object must not look like a configuration change. It
     /// changes no trusted path, and the adapter resolves each request's root
@@ -4101,15 +4222,15 @@ mod workspace_identity_tests {
         )
         .expect("configuration");
         let updates = config.subscribe();
-        let snapshot = config.reload().expect("reload");
-        let first = config.observe_roots(&snapshot.workspaces);
+        config.reload().expect("reload");
+        let (_, first) = config.advertisement();
         assert_eq!(first.len(), 1);
         assert!(!updates.has_changed().expect("channel"));
 
         std::fs::remove_dir_all(&root).expect("remove");
         std::fs::create_dir(&root).expect("recreate");
-        let snapshot = config.reload().expect("reload");
-        let second = config.observe_roots(&snapshot.workspaces);
+        config.reload().expect("reload");
+        let (_, second) = config.advertisement();
         assert_ne!(second[0].incarnation, first[0].incarnation);
         assert!(
             !updates.has_changed().expect("channel"),
@@ -4156,8 +4277,8 @@ mod workspace_identity_tests {
             vec![format!("main={}", root.display())],
         )
         .expect("configuration");
-        let snapshot = config.reload().expect("reload");
-        let advertised = config.observe_roots(&snapshot.workspaces);
+        config.reload().expect("reload");
+        let (snapshot, advertised) = config.advertisement();
         let shared: workspace_identity::SharedRootIdentities = config.identities();
         let canonical = &snapshot.workspaces[0].canonical_path;
         assert!(

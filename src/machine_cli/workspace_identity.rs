@@ -107,6 +107,28 @@ fn mint() -> anyhow::Result<String> {
 }
 
 impl RootIdentities {
+    /// Configuration admission ends identities immediately, even if a watch
+    /// subscriber never consumes the intermediate snapshot. Minting remains
+    /// exclusive to advertisement; this only drops original pinning handles.
+    pub(super) fn retain_configuration(
+        &mut self,
+        previous: &[MachineWorkspace],
+        next: &[MachineWorkspace],
+    ) {
+        self.roots.retain(|path, _| {
+            previous
+                .iter()
+                .any(|old| Path::new(&old.canonical_path) == path)
+                && previous
+                    .iter()
+                    .filter(|old| Path::new(&old.canonical_path) == path)
+                    .all(|old| {
+                        next.iter()
+                            .any(|new| new.id == old.id && new.canonical_path == old.canonical_path)
+                    })
+        });
+    }
+
     /// Refresh every advertised root and return the identities to advertise.
     /// A root that cannot be observed right now has no identity, so the
     /// Controller refuses to build a read scope for it rather than guessing.
