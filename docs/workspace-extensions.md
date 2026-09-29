@@ -35,6 +35,8 @@ executable shipped by the extension. Cowboy invokes `gh api --method GET` on
 the workspace's Machine. It never exports tokens, copies login files, starts
 login/logout, runs `gh` on the Controller for a remote workspace, or accepts
 browser-supplied argv, an endpoint, credentials or a filesystem root.
+The Nix Machine package supplies the CLI in its service PATH; the OS user's
+existing CLI login and configuration continue to own the connection.
 
 The selected repository comes from an actual Git remote. HTTPS and SSH GitHub
 remotes are normalized to host/owner/repository; hosts need an existing CLI
