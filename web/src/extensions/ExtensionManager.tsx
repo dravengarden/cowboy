@@ -18,21 +18,10 @@ import { ConfirmSheet } from "../Sheet";
 import { useStoreSelector } from "../store";
 import { createPluginInstallRequest } from "../pluginInstallation";
 import type { PluginRelease, PluginRemovalPlan } from "../admin/adminApi";
-
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    cache: "no-store",
-    credentials: "same-origin",
-    ...init,
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(
-      "The operation could not be completed. Refresh installation status before trying again.",
-    );
-  }
-  return response.json();
-}
+import {
+  changeExtensionInstallation,
+  extensionManagementJson as json,
+} from "./managementApi";
 
 /** Uses the existing exact-release installer and one-use removal plans. */
 export function ExtensionManager(
@@ -239,7 +228,7 @@ export function ExtensionManager(
                     );
                     void run(
                       () =>
-                        json(
+                        changeExtensionInstallation(
                           `/api/machines/${
                             encodeURIComponent(machineId)
                           }/plugins/${encodeURIComponent(id)}`,
@@ -302,7 +291,7 @@ export function ExtensionManager(
                 const plan = removal;
                 setRemoval(null);
                 void run(() =>
-                  json(
+                  changeExtensionInstallation(
                     `/api/machines/${
                       encodeURIComponent(plan.machine_id)
                     }/plugins/${encodeURIComponent(plan.plugin_id)}/uninstall`,
