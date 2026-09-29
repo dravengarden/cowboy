@@ -113,7 +113,10 @@ Deno.test("closing the native browser cancels the local OIDC handoff", async () 
     __cowboyCloseAuthenticationBrowser?: () => void;
   };
   const previousFetch = globalThis.fetch;
-  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const previousLocation = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "location",
+  );
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const calls: Array<{ input: string; init?: RequestInit }> = [];
   let closes = 0;
@@ -173,128 +176,167 @@ Deno.test("closing the native browser cancels the local OIDC handoff", async () 
   }
 });
 
-Deno.test("native OIDC waits on push and exchanges cookies exactly once", async () => {
-  const root = globalThis as typeof globalThis & {
-    __cowboyNativeShell?: boolean;
-    __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
-    __cowboyCloseAuthenticationBrowser?: () => void;
-  };
-  const previousFetch = globalThis.fetch;
-  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
-  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-  const previousWebSocket = Object.getOwnPropertyDescriptor(
-    globalThis,
-    "WebSocket",
-  );
-  const fetches: Array<{ input: string; init?: RequestInit }> = [];
-  const socketUrls: string[] = [];
-  const socketMessages: string[] = [];
-  const authenticationUrls: string[] = [];
-  const completionOrder: string[] = [];
-  let closes = 0;
-
-  class FakeWebSocket extends EventTarget {
-    constructor(url: string | URL) {
-      super();
-      socketUrls.push(String(url));
-      queueMicrotask(() => this.dispatchEvent(new Event("open")));
-    }
-
-    send(data: string): void {
-      socketMessages.push(data);
-      queueMicrotask(() =>
-        this.dispatchEvent(
-          new MessageEvent("message", {
-            data: JSON.stringify({ status: "ready" }),
-          }),
-        )
-      );
-    }
-
-    close(): void {}
-  }
-
-  Object.defineProperty(globalThis, "location", {
-    configurable: true,
-    value: new URL("https://cowboy.example/"),
-  });
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: globalThis,
-  });
-  Object.defineProperty(globalThis, "WebSocket", {
-    configurable: true,
-    value: FakeWebSocket,
-  });
-  root.__cowboyNativeShell = true;
-  root.__cowboyOpenAuthenticationBrowser = (url) => {
-    authenticationUrls.push(url);
-    return true;
-  };
-  root.__cowboyCloseAuthenticationBrowser = () => {
-    closes += 1;
-    completionOrder.push("close");
-    // Bridge v1 could report every dismissal as if the user closed the sheet.
-    // Once the bound ready event arrives, that late signal must not cancel the
-    // cookie exchange.
-    globalThis.dispatchEvent(
-      new Event(NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT),
+for (const transport of ["mobile", "desktop"] as const) {
+  Deno.test(`${transport} OIDC waits on push and exchanges cookies exactly once`, async () => {
+    const root = globalThis as typeof globalThis & {
+      __TAURI_INTERNALS__?: {
+        invoke: (
+          command: string,
+          args: Record<string, unknown>,
+        ) => Promise<unknown>;
+      };
+      __cowboyNativeShell?: boolean;
+      __cowboyOpenAuthenticationBrowser?: (url: string) => boolean;
+      __cowboyCloseAuthenticationBrowser?: () => void;
+    };
+    const previousFetch = globalThis.fetch;
+    const previousLocation = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "location",
     );
-  };
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const path = typeof input === "string" ? input : input.toString();
-    completionOrder.push("poll");
-    fetches.push({ input: path, init });
-    return Promise.resolve(Response.json({ account: "draven", role: "owner" }));
-  }) as typeof fetch;
+    const previousWindow = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "window",
+    );
+    const previousWebSocket = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "WebSocket",
+    );
+    const fetches: Array<{ input: string; init?: RequestInit }> = [];
+    const socketUrls: string[] = [];
+    const socketMessages: string[] = [];
+    const authenticationUrls: string[] = [];
+    const completionOrder: string[] = [];
+    let closes = 0;
 
-  try {
-    const me = await runNativeOidc(cardea);
-    assertEquals(me, { account: "draven", role: "owner" });
-    assertEquals(authenticationUrls.length, 1);
-    const authenticationUrl = new URL(authenticationUrls[0]!);
-    assertEquals(authenticationUrl.searchParams.has("code_verifier"), false);
-    assertEquals(authenticationUrl.searchParams.has("handoff_token"), false);
-    assertEquals(socketUrls, [
-      "wss://cowboy.example/api/auth/oidc/native/events",
-    ]);
-    assertEquals(socketMessages.length, 1);
-    const proofs = JSON.parse(socketMessages[0]!) as Record<string, string>;
-    assertEquals(Object.keys(proofs).sort(), ["code_verifier", "handoff_token"]);
-    assert(proofs.code_verifier !== proofs.handoff_token);
-    assertEquals(socketUrls[0]?.includes(proofs.code_verifier), false);
-    assertEquals(socketUrls[0]?.includes(proofs.handoff_token), false);
-    assertEquals(fetches.length, 1);
-    assertEquals(fetches[0]?.input, "/api/auth/oidc/native/poll");
-    assertEquals(JSON.parse(String(fetches[0]?.init?.body)), proofs);
-    assertEquals(closes, 2);
-    assertEquals(completionOrder, ["close", "poll", "close"]);
-  } finally {
-    globalThis.fetch = previousFetch;
-    delete root.__cowboyNativeShell;
-    delete root.__cowboyOpenAuthenticationBrowser;
-    delete root.__cowboyCloseAuthenticationBrowser;
-    if (previousLocation) {
-      Object.defineProperty(globalThis, "location", previousLocation);
-    } else {
-      delete (globalThis as { location?: Location }).location;
+    class FakeWebSocket extends EventTarget {
+      constructor(url: string | URL) {
+        super();
+        socketUrls.push(String(url));
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(data: string): void {
+        socketMessages.push(data);
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({ status: "ready" }),
+            }),
+          )
+        );
+      }
+
+      close(): void {}
     }
-    if (previousWindow) {
-      Object.defineProperty(globalThis, "window", previousWindow);
-    } else {
-      delete (globalThis as { window?: Window }).window;
+
+    Object.defineProperty(globalThis, "location", {
+      configurable: true,
+      value: new URL("https://cowboy.example/"),
+    });
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: globalThis,
+    });
+    Object.defineProperty(globalThis, "WebSocket", {
+      configurable: true,
+      value: FakeWebSocket,
+    });
+    root.__cowboyNativeShell = true;
+    root.__cowboyOpenAuthenticationBrowser = (url) => {
+      authenticationUrls.push(url);
+      return true;
+    };
+    root.__cowboyCloseAuthenticationBrowser = () => {
+      closes += 1;
+      completionOrder.push("close");
+      // Bridge v1 could report every dismissal as if the user closed the sheet.
+      // Once the bound ready event arrives, that late signal must not cancel the
+      // cookie exchange.
+      globalThis.dispatchEvent(
+        new Event(NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT),
+      );
+    };
+    if (transport === "desktop") {
+      delete root.__cowboyNativeShell;
+      delete root.__cowboyOpenAuthenticationBrowser;
+      delete root.__cowboyCloseAuthenticationBrowser;
+      root.__TAURI_INTERNALS__ = {
+        invoke: (command, args) => {
+          assertEquals(command, "plugin:opener|open_url");
+          authenticationUrls.push(String(args.url));
+          return Promise.resolve();
+        },
+      };
     }
-    if (previousWebSocket) {
-      Object.defineProperty(globalThis, "WebSocket", previousWebSocket);
-    } else {
-      delete (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === "string" ? input : input.toString();
+      completionOrder.push("poll");
+      fetches.push({ input: path, init });
+      return Promise.resolve(
+        Response.json({ account: "draven", role: "owner" }),
+      );
+    }) as typeof fetch;
+
+    try {
+      assertEquals(nativeOidcFlowSupported(), true);
+      const me = await runNativeOidc(cardea);
+      assertEquals(me, { account: "draven", role: "owner" });
+      assertEquals(authenticationUrls.length, 1);
+      const authenticationUrl = new URL(authenticationUrls[0]!);
+      assertEquals(authenticationUrl.searchParams.has("code_verifier"), false);
+      assertEquals(authenticationUrl.searchParams.has("handoff_token"), false);
+      assertEquals(socketUrls, [
+        "wss://cowboy.example/api/auth/oidc/native/events",
+      ]);
+      assertEquals(socketMessages.length, 1);
+      const proofs = JSON.parse(socketMessages[0]!) as Record<string, string>;
+      assertEquals(Object.keys(proofs).sort(), [
+        "code_verifier",
+        "handoff_token",
+      ]);
+      assert(proofs.code_verifier !== proofs.handoff_token);
+      assertEquals(socketUrls[0]?.includes(proofs.code_verifier), false);
+      assertEquals(socketUrls[0]?.includes(proofs.handoff_token), false);
+      assertEquals(fetches.length, 1);
+      assertEquals(fetches[0]?.input, "/api/auth/oidc/native/poll");
+      assertEquals(JSON.parse(String(fetches[0]?.init?.body)), proofs);
+      assertEquals(closes, transport === "mobile" ? 2 : 0);
+      assertEquals(
+        completionOrder,
+        transport === "mobile" ? ["close", "poll", "close"] : ["poll"],
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+      delete root.__TAURI_INTERNALS__;
+      delete root.__cowboyNativeShell;
+      delete root.__cowboyOpenAuthenticationBrowser;
+      delete root.__cowboyCloseAuthenticationBrowser;
+      if (previousLocation) {
+        Object.defineProperty(globalThis, "location", previousLocation);
+      } else {
+        delete (globalThis as { location?: Location }).location;
+      }
+      if (previousWindow) {
+        Object.defineProperty(globalThis, "window", previousWindow);
+      } else {
+        delete (globalThis as { window?: Window }).window;
+      }
+      if (previousWebSocket) {
+        Object.defineProperty(globalThis, "WebSocket", previousWebSocket);
+      } else {
+        delete (globalThis as { WebSocket?: typeof WebSocket }).WebSocket;
+      }
     }
-  }
-});
+  });
+}
 
 Deno.test("browser OIDC opens synchronously and preserves the pending SPA action", async () => {
   const previousFetch = globalThis.fetch;
-  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const previousLocation = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "location",
+  );
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
   const previousWebSocket = Object.getOwnPropertyDescriptor(
@@ -390,12 +432,14 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
     assertEquals(popupClosed, 1);
   } finally {
     globalThis.fetch = previousFetch;
-    for (const [name, descriptor] of [
-      ["location", previousLocation],
-      ["window", previousWindow],
-      ["open", previousOpen],
-      ["WebSocket", previousWebSocket],
-    ] as const) {
+    for (
+      const [name, descriptor] of [
+        ["location", previousLocation],
+        ["window", previousWindow],
+        ["open", previousOpen],
+        ["WebSocket", previousWebSocket],
+      ] as const
+    ) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete (globalThis as Record<string, unknown>)[name];
     }
@@ -404,7 +448,10 @@ Deno.test("browser OIDC opens synchronously and preserves the pending SPA action
 
 Deno.test("a sign-in window the engine refuses to close returns to Cowboy", async () => {
   const previousFetch = globalThis.fetch;
-  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+  const previousLocation = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "location",
+  );
   const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const previousOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
   const previousWebSocket = Object.getOwnPropertyDescriptor(
@@ -487,12 +534,14 @@ Deno.test("a sign-in window the engine refuses to close returns to Cowboy", asyn
     assertEquals(navigations.length, 2);
   } finally {
     globalThis.fetch = previousFetch;
-    for (const [name, descriptor] of [
-      ["location", previousLocation],
-      ["window", previousWindow],
-      ["open", previousOpen],
-      ["WebSocket", previousWebSocket],
-    ] as const) {
+    for (
+      const [name, descriptor] of [
+        ["location", previousLocation],
+        ["window", previousWindow],
+        ["open", previousOpen],
+        ["WebSocket", previousWebSocket],
+      ] as const
+    ) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete (globalThis as Record<string, unknown>)[name];
     }
@@ -532,10 +581,12 @@ Deno.test("a blocked sign-in window leaves the redirect fallback available", asy
     assertEquals(fetched, 0);
   } finally {
     globalThis.fetch = previousFetch;
-    for (const [name, descriptor] of [
-      ["window", previousWindow],
-      ["open", previousOpen],
-    ] as const) {
+    for (
+      const [name, descriptor] of [
+        ["window", previousWindow],
+        ["open", previousOpen],
+      ] as const
+    ) {
       if (descriptor) Object.defineProperty(globalThis, name, descriptor);
       else delete (globalThis as Record<string, unknown>)[name];
     }

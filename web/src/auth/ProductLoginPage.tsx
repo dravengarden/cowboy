@@ -22,6 +22,7 @@ import {
 import { corePasswordMode, passwordLoginFields } from "./coreSecurity";
 import { PluginSlot } from "../pluginHost/PluginSlot";
 import { nativeOidcFlowSupported, runNativeOidc } from "./nativeOidcFlow";
+import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { loginMethodLabel } from "./productReauthMethods";
 import { SegmentedPill } from "../SegmentedPill";
 
@@ -94,6 +95,7 @@ export function ProductLoginPage({
   const [confirm, setConfirm] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [nativeBrowserUnavailable, setNativeBrowserUnavailable] = useState(false);
   const [busy, setBusy] = useState(false);
   const [passwordVisible, setPasswordVisible] = useState(false);
   const providerAbort = useRef<AbortController | null>(null);
@@ -148,7 +150,7 @@ export function ProductLoginPage({
     ? providers.find((provider) => provider.id === method)
     : undefined;
   const useNativeProviderFlow = selectedProvider !== undefined &&
-    nativeOidcFlowSupported();
+    !nativeBrowserUnavailable && nativeOidcFlowSupported();
   const submit = (): void => {
     // A stale selection during a policy change cannot submit a disabled local
     // method, nor can Enter on an OIDC surface submit retained password fields.
@@ -190,6 +192,9 @@ export function ProductLoginPage({
       .then(onAuthed)
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
+        if (err instanceof NativeAuthenticationBrowserOpenError) {
+          setNativeBrowserUnavailable(true);
+        }
         setError(
           err instanceof Error
             ? err.message
