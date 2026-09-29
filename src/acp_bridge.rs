@@ -53,6 +53,13 @@ const CONFIG_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 // Therefore this wait must outlive one provider startup phase. A cold Codex
 // start has been observed taking 23s, well beyond the old 10s timeout.
 const INITIAL_CONFIG_TIMEOUT: Duration = Duration::from_secs(STARTUP_PHASE_TIMEOUT.as_secs() + 5);
+// Remote creation first prepares a Git workspace, then initializes the Provider
+// and its session. Keep that bounded work separate from the config-options wait.
+const REMOTE_CREATION_TIMEOUT: Duration = Duration::from_secs(
+    crate::machine_control::WORKSPACE_ADAPTER_TIMEOUT.as_secs()
+        + 2 * STARTUP_PHASE_TIMEOUT.as_secs()
+        + INITIAL_CONFIG_TIMEOUT.as_secs(),
+);
 const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(5);
@@ -158,6 +165,8 @@ impl BridgeState {
 #[derive(Clone)]
 struct Bridge {
     provider: Arc<str>,
+    machine: Arc<str>,
+    workspace: Option<Arc<str>>,
     base_url: Url,
     authentication: crate::client_auth_client::ClientAuthentication,
     http: reqwest::Client,
@@ -190,6 +199,8 @@ pub async fn serve(args: ServeAcpArgs) -> anyhow::Result<()> {
     let (command_tx, command_rx) = mpsc::unbounded_channel();
     let bridge = Bridge {
         provider: Arc::from(args.provider),
+        machine: Arc::from(args.machine),
+        workspace: args.workspace.map(Arc::from),
         base_url,
         authentication,
         http: reqwest::Client::builder()
@@ -277,7 +288,16 @@ async fn run_acp_server(
                         Ok(session_id) => {
                             bridge.attach(&session_id, false);
                             let config_options =
-                                bridge.wait_for_initial_config_options(&session_id).await;
+                                match bridge.wait_for_initial_config_options(&session_id).await {
+                                    Ok(options) => options,
+                                    Err(error) => {
+                                        bridge.state.lock().detach_session(&session_id);
+                                        responder.respond_with_error(
+                                            agent_client_protocol::util::internal_error(error),
+                                        )?;
+                                        return Ok(());
+                                    }
+                                };
                             responder.respond(
                                 NewSessionResponse::new(session_id.clone())
                                     .config_options(config_options)
@@ -520,9 +540,20 @@ impl Bridge {
             .values()
             .filter_map(|cached| cached.meta.as_ref())
             .filter(|meta| meta.provider == self.provider.as_ref())
-            .filter(|meta| cwd.is_none_or(|cwd| std::path::Path::new(&meta.cwd) == cwd))
+            .filter(|meta| {
+                if self.machine.as_ref() == "local" {
+                    cwd.is_none_or(|cwd| std::path::Path::new(&meta.cwd) == cwd)
+                } else {
+                    self.matches_remote_workspace(meta)
+                }
+            })
             .map(|meta| {
-                SessionInfo::new(meta.id.clone(), PathBuf::from(&meta.cwd))
+                let client_cwd = if self.machine.as_ref() != "local" {
+                    cwd.cloned().unwrap_or_else(|| PathBuf::from(&meta.cwd))
+                } else {
+                    PathBuf::from(&meta.cwd)
+                };
+                SessionInfo::new(meta.id.clone(), client_cwd)
                     .title(meta.title.clone())
                     .meta(status_meta(&Self::status_from_cached(
                         meta,
@@ -532,6 +563,12 @@ impl Bridge {
             .collect::<Vec<_>>();
         sessions.sort_unstable_by(|a, b| a.session_id.0.cmp(&b.session_id.0));
         sessions
+    }
+
+    fn matches_remote_workspace(&self, meta: &SessionMeta) -> bool {
+        meta.machine_id == self.machine.as_ref()
+            && self.workspace.is_some()
+            && meta.workspace_id.as_deref() == self.workspace.as_deref()
     }
 
     fn validate_session(&self, session_id: &str, cwd: Option<&PathBuf>) -> Result<(), String> {
@@ -546,6 +583,14 @@ impl Bridge {
                 "session {session_id:?} belongs to provider {:?}, not {:?}",
                 meta.provider, self.provider
             ));
+        }
+        if self.machine.as_ref() != "local" {
+            if !self.matches_remote_workspace(meta) {
+                return Err(format!(
+                    "session {session_id:?} does not belong to the selected Machine and workspace"
+                ));
+            }
+            return Ok(());
         }
         if let Some(cwd) = cwd
             && std::path::Path::new(&meta.cwd) != cwd
@@ -592,6 +637,21 @@ impl Bridge {
     }
 
     async fn create_session(&self, cwd: PathBuf) -> Result<String, String> {
+        let requested_workspace = if self.machine.as_ref() == "local" {
+            if self.workspace.is_some() {
+                return Err("--workspace requires a non-local --machine".to_owned());
+            }
+            serde_json::json!(cwd)
+        } else {
+            let workspace = self
+                .workspace
+                .as_deref()
+                .filter(|workspace| !workspace.trim().is_empty())
+                .ok_or(
+                    "remote session creation requires --workspace with a registered workspace ID",
+                )?;
+            serde_json::json!(workspace)
+        };
         self.wait_for_daemon().await?;
         let url = self
             .base_url
@@ -600,7 +660,8 @@ impl Bridge {
         let target = url_request_target(&url);
         let body = serde_json::json!({
             "provider": self.provider.as_ref(),
-            "cwd": cwd,
+            "machine_id": self.machine.as_ref(),
+            "cwd": requested_workspace,
             "origin": "api",
             "system": false
         });
@@ -728,11 +789,54 @@ impl Bridge {
     async fn wait_for_initial_config_options(
         &self,
         session_id: &str,
-    ) -> Option<Vec<SessionConfigOption>> {
+    ) -> Result<Option<Vec<SessionConfigOption>>, String> {
+        if self.machine.as_ref() != "local" {
+            return tokio::time::timeout(REMOTE_CREATION_TIMEOUT, async {
+                let mut ready_since = None;
+                loop {
+                    {
+                        let state = self.state.lock();
+                        if let Some(cached) = state.sessions.get(session_id) {
+                            let status =
+                                cached.meta.as_ref().map(|meta| meta.status).or_else(|| {
+                                    cached.events.iter().rev().find_map(|envelope| {
+                                        if let Event::Lifecycle { status, .. } = &envelope.event {
+                                            Some(*status)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                });
+                            match status {
+                                Some(Status::Crashed | Status::Exited | Status::Interrupted) => {
+                                    return Err(cached.last_detail.clone().unwrap_or_else(|| {
+                                        "remote Machine session preparation failed".to_owned()
+                                    }));
+                                }
+                                Some(Status::Running | Status::Busy) => {
+                                    if let Some(options) = state.config_options.get(session_id) {
+                                        return Ok(Some(options.clone()));
+                                    }
+                                    let since =
+                                        ready_since.get_or_insert_with(tokio::time::Instant::now);
+                                    if since.elapsed() >= INITIAL_CONFIG_TIMEOUT {
+                                        return Ok(None);
+                                    }
+                                }
+                                Some(Status::Starting) | None => ready_since = None,
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .map_err(|_| "timed out waiting for remote Machine session readiness".to_owned())?;
+        }
         let receiver = {
             let mut state = self.state.lock();
             if let Some(options) = state.config_options.get(session_id) {
-                return Some(options.clone());
+                return Ok(Some(options.clone()));
             }
             let (tx, rx) = oneshot::channel();
             state
@@ -743,15 +847,15 @@ impl Bridge {
             rx
         };
         match tokio::time::timeout(INITIAL_CONFIG_TIMEOUT, receiver).await {
-            Ok(Ok(options)) => Some(options),
-            Ok(Err(_)) => None,
+            Ok(Ok(options)) => Ok(Some(options)),
+            Ok(Err(_)) => Ok(None),
             Err(_) => {
                 tracing::warn!(
                     session = %session_id,
                     timeout_s = INITIAL_CONFIG_TIMEOUT.as_secs(),
                     "initial config options did not arrive before session/new response"
                 );
-                None
+                Ok(None)
             }
         }
     }
@@ -1701,9 +1805,219 @@ fn send_status(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn new_session_sends_explicit_machine_and_preserves_remote_rejection() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        use axum::{Json, Router, http::StatusCode, routing::post};
+        let (requests, mut received) = mpsc::unbounded_channel();
+        let app = Router::new().route(
+            "/api/sessions",
+            post(move |Json(body): Json<serde_json::Value>| {
+                let requests = requests.clone();
+                async move {
+                    requests.send(body.clone()).unwrap();
+                    if body["machine_id"] != "local" {
+                        let workspaces = [crate::machine_protocol::MachineWorkspace {
+                            id: "matrix".to_owned(),
+                            display_name: "Matrix".to_owned(),
+                            canonical_path: "/home/ubuntu/matrix".to_owned(),
+                        }];
+                        if let Err(error) = crate::server::resolve_machine_workspace(
+                            &workspaces,
+                            body["cwd"].as_str(),
+                        ) {
+                            return (StatusCode::BAD_REQUEST, error);
+                        }
+                        if body["provider"] == "async-fixture" {
+                            return (
+                                StatusCode::CREATED,
+                                r#"{"session_id":"async-created"}"#.to_owned(),
+                            );
+                        }
+                    }
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "Machine ovh is offline".to_owned(),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (command_tx, _command_rx) = mpsc::unbounded_channel();
+        let mut bridge = Bridge {
+            provider: Arc::from("grok"),
+            machine: Arc::from("ovh"),
+            workspace: None,
+            authentication: crate::client_auth_client::ClientAuthentication::new(
+                base_url.clone(),
+                Some("cow_test_fixture"),
+                None,
+                None,
+            )
+            .unwrap(),
+            base_url,
+            http: reqwest::Client::new(),
+            state: Arc::new(Mutex::new(BridgeState::default())),
+            connected_notify: Arc::new(Notify::new()),
+            command_tx,
+            next_cmid: Arc::new(AtomicU64::new(1)),
+        };
+        bridge.state.lock().connected = true;
+        assert!(
+            bridge
+                .create_session(PathBuf::from("/client/project"))
+                .await
+                .unwrap_err()
+                .contains("requires --workspace")
+        );
+        assert!(received.try_recv().is_err());
+        for machine in ["ovh", "local"] {
+            bridge.machine = Arc::from(machine);
+            bridge.workspace = (machine != "local").then(|| Arc::from("matrix"));
+            let error = bridge
+                .create_session(PathBuf::from("/workspace"))
+                .await
+                .unwrap_err();
+            assert!(error.contains("Machine ovh is offline"));
+            let request = received.recv().await.unwrap();
+            assert_eq!(request["machine_id"], machine);
+            assert_eq!(request["provider"], "grok");
+            assert_eq!(
+                request["cwd"],
+                if machine == "local" {
+                    "/workspace"
+                } else {
+                    "matrix"
+                }
+            );
+            assert!(
+                received.try_recv().is_err(),
+                "must not fall back to another Machine"
+            );
+        }
+        bridge.machine = Arc::from("ovh");
+        bridge.workspace = Some(Arc::from("/home/ubuntu/matrix"));
+        assert!(
+            bridge
+                .create_session(PathBuf::from("/client/project"))
+                .await
+                .unwrap_err()
+                .contains("unknown trusted workspace")
+        );
+        assert_eq!(received.recv().await.unwrap()["cwd"], "/home/ubuntu/matrix");
+        assert!(received.try_recv().is_err());
+
+        bridge.workspace = Some(Arc::from("matrix"));
+        let mut remote = fixture_session_meta();
+        remote.provider = "grok".to_owned();
+        remote.machine_id = "ovh".to_owned();
+        remote.workspace_id = Some("matrix".to_owned());
+        remote.cwd = "/home/ubuntu/.local/state/cowboy-machine/worktrees/session".to_owned();
+        for (id, machine, workspace, provider) in [
+            ("remote", "ovh", "matrix", "grok"),
+            ("other-machine", "hawk", "matrix", "grok"),
+            ("other-workspace", "ovh", "columbus", "grok"),
+            ("other-provider", "ovh", "matrix", "codex"),
+        ] {
+            let mut meta = remote.clone();
+            meta.id = id.to_owned();
+            meta.machine_id = machine.to_owned();
+            meta.workspace_id = Some(workspace.to_owned());
+            meta.provider = provider.to_owned();
+            bridge.state.lock().sessions.insert(
+                id.to_owned(),
+                CachedSession {
+                    meta: Some(meta),
+                    ..Default::default()
+                },
+            );
+        }
+        let client_cwd = PathBuf::from("/client/project");
+        let listed = bridge.list_sessions(Some(&client_cwd));
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].session_id.0.as_ref(), "remote");
+        assert_eq!(listed[0].cwd, client_cwd);
+        assert!(bridge.validate_session("remote", Some(&client_cwd)).is_ok());
+        for id in ["other-machine", "other-workspace", "other-provider"] {
+            assert!(bridge.validate_session(id, Some(&client_cwd)).is_err());
+        }
+
+        bridge.provider = Arc::from("async-fixture");
+        let created = bridge.create_session(client_cwd.clone()).await.unwrap();
+        assert_eq!(created, "async-created");
+        assert_eq!(received.recv().await.unwrap()["cwd"], "matrix");
+        let mut preparing = remote.clone();
+        preparing.id = created.clone();
+        preparing.status = Status::Starting;
+        bridge.state.lock().sessions.insert(
+            created.clone(),
+            CachedSession {
+                meta: Some(preparing),
+                ..Default::default()
+            },
+        );
+        let asynchronous = bridge.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let mut state = asynchronous.state.lock();
+            let cached = state.sessions.get_mut("async-created").unwrap();
+            cached.meta.as_mut().unwrap().status = Status::Crashed;
+            cached.last_detail =
+                Some("Machine ovh disconnected during workspace preparation".to_owned());
+        });
+        let error = tokio::time::timeout(
+            Duration::from_secs(1),
+            bridge.wait_for_initial_config_options(&created),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert!(error.contains("disconnected during workspace preparation"));
+        {
+            let mut state = bridge.state.lock();
+            state
+                .sessions
+                .get_mut(&created)
+                .unwrap()
+                .meta
+                .as_mut()
+                .unwrap()
+                .status = Status::Running;
+        }
+        let delayed_options = bridge.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            delayed_options
+                .state
+                .lock()
+                .config_options
+                .insert("async-created".to_owned(), Vec::new());
+        });
+        assert_eq!(
+            bridge
+                .wait_for_initial_config_options(&created)
+                .await
+                .unwrap(),
+            Some(Vec::new())
+        );
+        bridge.provider = Arc::from("grok");
+        bridge.machine = Arc::from("local");
+        bridge.workspace = None;
+        assert!(bridge.list_sessions(Some(&client_cwd)).is_empty());
+        assert!(
+            bridge
+                .validate_session("remote", Some(&client_cwd))
+                .is_err()
+        );
+        server.abort();
+    }
+
     #[test]
     fn initial_config_wait_outlives_provider_handshake() {
         assert!(INITIAL_CONFIG_TIMEOUT > STARTUP_PHASE_TIMEOUT);
+        assert!(REMOTE_CREATION_TIMEOUT > crate::machine_control::WORKSPACE_ADAPTER_TIMEOUT);
     }
 
     #[test]
@@ -1737,9 +2051,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn status_never_claims_background_idle() {
-        let meta = SessionMeta {
+    fn fixture_session_meta() -> SessionMeta {
+        SessionMeta {
             id: "sess-1".to_owned(),
             provider: "codex".to_owned(),
             provider_version: String::new(),
@@ -1764,7 +2077,12 @@ mod tests {
             next_schedule_ms: None,
             owner_user_id: None,
             owner_username: None,
-        };
+        }
+    }
+
+    #[test]
+    fn status_never_claims_background_idle() {
+        let meta = fixture_session_meta();
         let status = Bridge::status_from_cached(&meta, None);
         assert!(status.turn_running);
         assert_eq!(status.background_running, None);

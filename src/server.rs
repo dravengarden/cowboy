@@ -15054,7 +15054,7 @@ async fn api_new_session(
     }
 }
 
-fn resolve_machine_workspace<'a>(
+pub(crate) fn resolve_machine_workspace<'a>(
     workspaces: &'a [crate::machine_protocol::MachineWorkspace],
     requested_id: Option<&str>,
 ) -> Result<&'a crate::machine_protocol::MachineWorkspace, String> {

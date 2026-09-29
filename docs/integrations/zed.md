@@ -57,6 +57,22 @@ status responses never downgrade to anonymous access. `COWBOY_USER_TOKEN` and
 `--token` remain hidden, migration-only compatibility inputs for existing
 deployments; new configurations must not use them.
 
+Use `cowboy serve-acp --provider grok --machine ovh --workspace matrix` to
+create sessions on an explicit registered Machine and workspace ID. For remote
+creation, `--workspace` is required and replaces ACP's client-local `cwd` in
+the Controller request. The Controller resolves the ID through the Machine's
+trusted workspace inventory; arbitrary remote paths are rejected. The default
+remains `--machine local` and uses ACP's `cwd` for existing callers.
+Offline or unavailable targets return the Controller's error; the
+bridge never retries creation on another Machine. Loading an existing session
+preserves that session's original placement. With a remote Machine selected,
+history and loading are scoped to its registered workspace ID; the ACP client's
+directory maps to that workspace even when the remote session uses a prepared
+worktree path. Local mode retains exact-directory matching.
+Remote creation waits for workspace preparation and Provider readiness, and
+reports terminal asynchronous preparation failures as ACP errors. It still
+waits for initial config options so Zed can construct its model/effort controls.
+
 Do not override Registry agent IDs (including `codex-acp`, `claude-acp`, and
 `gemini`) unless replacing a native agent is intentional. Zed's custom-agent settings have no
 icon field, so the independent Cowboy entries use its generic sparkle icon.

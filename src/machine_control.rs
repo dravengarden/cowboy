@@ -41,7 +41,8 @@ use crate::machine_protocol::{
 
 const DEFAULT_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 // Ten sequential Git commands may each take 30 seconds on the Machine.
-const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(330);
+pub(crate) const WORKSPACE_ADAPTER_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(330);
 const PROVIDER_STATUS_ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const PROVIDER_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
 const PLUGIN_HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(45);

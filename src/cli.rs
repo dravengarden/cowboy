@@ -189,6 +189,16 @@ pub struct ServeAcpArgs {
     #[arg(long, default_value = "codex")]
     pub provider: String,
 
+    /// Place newly created sessions on this registered Machine. Existing
+    /// sessions retain their original placement when loaded.
+    #[arg(long, default_value = "local")]
+    pub machine: String,
+
+    /// Registered workspace ID for new sessions on a non-local Machine.
+    /// Required for remote creation; ACP's cwd remains a local-client path.
+    #[arg(long)]
+    pub workspace: Option<String>,
+
     /// Base URL of the already-running cowboy daemon.
     #[arg(
         long,
