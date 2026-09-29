@@ -13,4 +13,8 @@ Deno.test("diff hunk navigation indexes unified diff headers", () => {
 Deno.test("review identity separates staged and unstaged views", () => {
   assertEquals(reviewEntryKey("src/a.ts", "staged"), "staged\0src/a.ts");
   assertEquals(reviewEntryKey("src/a.ts", "unstaged"), "unstaged\0src/a.ts");
+  assertEquals(
+    reviewEntryKey("src/a.ts", "combined", "refs/remotes/origin/main"),
+    "refs/remotes/origin/main\0src/a.ts",
+  );
 });

@@ -9,13 +9,16 @@ export type ReviewTab =
     kind: "diff";
     path: string;
     scope: CodeDiffScope;
+    comparison?: string;
     pinned: boolean;
   }
   | { kind: "commit"; path: string; pinned: boolean };
 
 export function reviewTabKey(tab: ReviewTab): string {
   if (tab.kind === "source") return `source:${tab.path}`;
-  if (tab.kind === "diff") return `diff:${tab.scope}:${tab.path}`;
+  if (tab.kind === "diff") {
+    return `diff:${tab.comparison ?? tab.scope}:${tab.path}`;
+  }
   return `commit:${tab.path}`;
 }
 
@@ -148,6 +151,9 @@ export function loadReviewTabs(sessionId: string): ReviewTab[] {
           kind: "diff",
           path: candidate.path,
           scope: candidate.scope as CodeDiffScope,
+          ...(typeof candidate.comparison === "string"
+            ? { comparison: candidate.comparison }
+            : {}),
           pinned: candidate.pinned,
         }];
       }

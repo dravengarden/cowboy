@@ -8,6 +8,10 @@ export function diffHunkLines(text: string): number[] {
   return lines;
 }
 
-export function reviewEntryKey(path: string, scope: string): string {
-  return `${scope}\0${path}`;
+export function reviewEntryKey(
+  path: string,
+  scope: string,
+  comparison?: string,
+): string {
+  return `${comparison ?? scope}\0${path}`;
 }

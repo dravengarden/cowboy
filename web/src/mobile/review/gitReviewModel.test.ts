@@ -71,3 +71,34 @@ Deno.test("git review window preserves section order and intent", () => {
   );
   assertEquals(reviewQueue(sections).length, 5);
 });
+
+Deno.test("branch comparison creates one merge-base review queue", () => {
+  const sections = groupGitChanges(
+    [
+      change("committed.ts", { staged: false, unstaged: false }),
+      change("local.ts", { status: "untracked" }),
+    ],
+    "refs/remotes/origin/main",
+  );
+
+  assertEquals(sections.map((section) => section.kind), ["comparison"]);
+  assertEquals(
+    reviewQueue(sections).map((entry) => ({
+      path: entry.change.path,
+      scope: entry.scope,
+      comparison: entry.comparison,
+    })),
+    [
+      {
+        path: "committed.ts",
+        scope: "combined",
+        comparison: "refs/remotes/origin/main",
+      },
+      {
+        path: "local.ts",
+        scope: "combined",
+        comparison: "refs/remotes/origin/main",
+      },
+    ],
+  );
+});

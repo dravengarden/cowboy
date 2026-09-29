@@ -403,6 +403,7 @@ type ReviewTarget =
     kind: "diff";
     path: string;
     scope: CodeDiffScope;
+    comparison?: string;
     queue: GitReviewEntry[];
   }
   | {
@@ -584,7 +585,7 @@ export function DocumentView({
   const hunks = target.kind === "diff" ? diffHunkLines(text) : [];
   const tabKey = target.kind === "source"
     ? `source:${target.path}`
-    : `diff:${target.scope}:${target.path}`;
+    : `diff:${target.comparison ?? target.scope}:${target.path}`;
   const scrollKey = `${sessionId}:${tabKey}`;
   const outerScrollKey = `${scrollKey}:page`;
   const editorScrollKey = `${scrollKey}:editor`;
@@ -962,6 +963,7 @@ export function DocumentView({
         settings.contextLines,
         settings.showWhitespaceChanges,
         diffTarget.scope,
+        diffTarget.comparison,
         controller.signal,
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
@@ -984,7 +986,8 @@ export function DocumentView({
         if (!diffTarget) return;
         const currentIndex = diffTarget.queue.findIndex((entry) =>
           entry.change.path === diffTarget.path &&
-          entry.scope === diffTarget.scope
+          entry.scope === diffTarget.scope &&
+          entry.comparison === diffTarget.comparison
         );
         for (
           const entry of [
@@ -999,6 +1002,7 @@ export function DocumentView({
               settings.contextLines,
               settings.showWhitespaceChanges,
               entry.scope,
+              entry.comparison,
             ).catch(() => undefined);
           }
         }
@@ -1121,6 +1125,7 @@ export function DocumentView({
         settings.contextLines,
         settings.showWhitespaceChanges,
         diffTarget.scope,
+        diffTarget.comparison,
         controller.signal,
       )
       : fetchCodeFile(sessionId, target.path, controller.signal);
@@ -2164,6 +2169,9 @@ export function ReviewApp({
   );
   const [tabCloseRequest, setTabCloseRequest] = useState<TabCloseRequest>();
   const [gitQueue, setGitQueue] = useState<GitReviewEntry[]>([]);
+  const [gitComparison, setGitComparison] = useState<
+    string | null | undefined
+  >(undefined);
   const [previewAnchor, setPreviewAnchor] = useState<
     { path: string; hash: string; id: number } | undefined
   >(undefined);
@@ -2200,6 +2208,16 @@ export function ReviewApp({
     setDrawerOpen(open);
     onDrawerOpenChange(open);
   }, [onDrawerOpenChange]);
+  const changeGitComparison = useCallback(
+    (comparison: string | null): void => {
+      setGitComparison(comparison);
+      setGitQueue([]);
+      setDiffTarget(undefined);
+      setCurrentRevision(undefined);
+      if (workspace?.sessionId) invalidateDiffCache(workspace.sessionId);
+    },
+    [workspace?.sessionId],
+  );
 
   useEffect(() => {
     if (
@@ -2282,6 +2300,7 @@ export function ReviewApp({
     setChangeCount(0);
     setRepositoryContext(undefined);
     setGitQueue([]);
+    setGitComparison(undefined);
     setReviewLanguageCapabilities(undefined);
     setBufferSelection(undefined);
   }, [workspace?.sessionId]);
@@ -2331,11 +2350,19 @@ export function ReviewApp({
             invalidateDiffCache(workspace.sessionId);
             setDataRevision((value) => value + 1);
           }
-          return fetchCodeChanges(workspace.sessionId, observer.signal);
+          return fetchCodeChanges(
+            workspace.sessionId,
+            observer.signal,
+            gitComparison ?? undefined,
+          );
         })
         .then((changes) => {
           if (observer.signal.aborted || !changes) return;
-          setGitQueue(reviewQueue(groupGitChanges(changes.changes)));
+          setGitQueue(
+            reviewQueue(
+              groupGitChanges(changes.changes, gitComparison ?? undefined),
+            ),
+          );
         })
         // The ordinary tree/changes error surfaces remain authoritative.
         .catch(() => undefined);
@@ -2356,9 +2383,11 @@ export function ReviewApp({
       globalThis.removeEventListener("online", refreshManifest);
       controller?.abort();
     };
-  }, [active, manifestRefreshRequest, workspace?.sessionId]);
+  }, [active, gitComparison, manifestRefreshRequest, workspace?.sessionId]);
 
   useEffect(() => {
+    setGitComparison(undefined);
+    setGitQueue([]);
     setSourceTarget(undefined);
     setNavigationHistory([]);
     setNavigationForwardHistory([]);
@@ -2600,6 +2629,7 @@ export function ReviewApp({
       kind: "diff",
       path: entry.change.path,
       scope: entry.scope,
+      ...(entry.comparison ? { comparison: entry.comparison } : {}),
       queue,
     });
     setCloseRequest((value) => value + 1);
@@ -2626,7 +2656,8 @@ export function ReviewApp({
       return;
     }
     const entry = gitQueue.find((candidate) =>
-      candidate.change.path === tab.path && candidate.scope === tab.scope
+      candidate.change.path === tab.path && candidate.scope === tab.scope &&
+      candidate.comparison === tab.comparison
     );
     if (entry) openDiff(entry, gitQueue);
   };
@@ -2642,12 +2673,14 @@ export function ReviewApp({
       kind: "diff",
       path: entry.change.path,
       scope: entry.scope,
+      ...(entry.comparison ? { comparison: entry.comparison } : {}),
       pinned: false,
     });
     return {
       kind: "diff",
       path: entry.change.path,
       scope: entry.scope,
+      ...(entry.comparison ? { comparison: entry.comparison } : {}),
       pinned: tabs.find((tab) => reviewTabKey(tab) === key)?.pinned ?? false,
     };
   }).sort((left, right) => Number(right.pinned) - Number(left.pinned));
@@ -2674,6 +2707,7 @@ export function ReviewApp({
           kind: "diff",
           path: entry.change.path,
           scope: entry.scope,
+          ...(entry.comparison ? { comparison: entry.comparison } : {}),
           pinned: false,
         })
       ),
@@ -2777,12 +2811,14 @@ export function ReviewApp({
   const reviewIndex = target.kind === "diff"
     ? target.queue.findIndex((entry) =>
       entry.change.path === target.path && entry.scope === target.scope
+        && entry.comparison === target.comparison
     )
     : -1;
   useEffect(() => {
     if (target.kind !== "diff") return;
     const stillChanged = gitQueue.some((entry) =>
       entry.change.path === target.path && entry.scope === target.scope
+        && entry.comparison === target.comparison
     );
     if (!stillChanged) {
       setDiffTarget(undefined);
@@ -2795,7 +2831,7 @@ export function ReviewApp({
     if (entry) openDiff(entry, target.queue);
   };
   const targetReviewKey = target.kind === "diff"
-    ? reviewEntryKey(target.path, target.scope)
+    ? reviewEntryKey(target.path, target.scope, target.comparison)
     : undefined;
   const targetIsReviewed = targetReviewKey
     ? revisionMatches(reviewProgress, targetReviewKey, currentRevision)
@@ -2843,6 +2879,9 @@ export function ReviewApp({
     (currentSession ? reviewSessionProject(currentSession) : undefined);
   const currentMachineId = projectCodeContext?.machineId ??
     currentSession?.machine_id ?? "local";
+  const displayedChangeCount = gitComparison
+    ? gitQueue.length
+    : changeCount;
   const currentMachineInventory = machineInventories.find((machine) =>
     machine.id === currentMachineId
   );
@@ -3034,6 +3073,9 @@ export function ReviewApp({
             onOpenCommit={openCommit}
             reviewed={new Set(Object.keys(reviewProgress))}
             onRevision={adoptManifestRevision}
+            comparison={gitComparison}
+            onComparisonChange={changeGitComparison}
+            onChanges={setGitQueue}
             onClose={() => setCloseRequest((value) => value + 1)}
             refreshToken={dataRevision}
           />
@@ -3117,7 +3159,11 @@ export function ReviewApp({
                 {commitTarget
                   ? `Commit · ${commitTarget.commit.oid.slice(0, 8)} · `
                   : target.kind === "diff"
-                  ? target.scope === "staged"
+                  ? target.comparison
+                    ? `Compared with ${
+                      target.comparison.replace(/^refs\/(heads|remotes)\//, "")
+                    } · `
+                    : target.scope === "staged"
                     ? "Staged · "
                     : target.scope === "unstaged"
                     ? "Unstaged · "
@@ -3245,7 +3291,9 @@ export function ReviewApp({
           : (
             <DocumentView
               key={`${workspace.sessionId}:${target.kind}:${target.path}:${
-                target.kind === "diff" ? target.scope : "source"
+                target.kind === "diff"
+                  ? target.comparison ?? target.scope
+                  : "source"
               }`}
               sessionId={workspace.sessionId}
               bufferMode={bufferMode}
@@ -3534,9 +3582,11 @@ export function ReviewApp({
                     <Badge
                       variant="dot"
                       color="primary"
-                      invisible={changeCount === 0}
+                      invisible={displayedChangeCount === 0}
                       slotProps={{
-                        badge: { "aria-label": `${changeCount} changed files` },
+                        badge: {
+                          "aria-label": `${displayedChangeCount} changed files`,
+                        },
                       }}
                       sx={{
                         "& .MuiBadge-badge": {

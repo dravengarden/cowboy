@@ -31,7 +31,10 @@ pub enum CodeOperation {
         query: String,
         limit: usize,
     },
-    Changes,
+    Changes {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comparison: Option<String>,
+    },
     Repository {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         after: Option<String>,
@@ -48,6 +51,8 @@ pub enum CodeOperation {
         context: usize,
         show_whitespace: bool,
         scope: DiffScope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comparison: Option<String>,
     },
     File {
         path: String,
@@ -148,9 +153,11 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
         CodeOperation::Search { query, limit } => {
             CodeAdapterResponse::Search(provider.search(&query, limit))
         }
-        CodeOperation::Changes => {
-            CodeAdapterResponse::Changes(provider.changes().map_err(anyhow::Error::msg)?)
-        }
+        CodeOperation::Changes { comparison } => CodeAdapterResponse::Changes(
+            provider
+                .changes(comparison.as_deref())
+                .map_err(anyhow::Error::msg)?,
+        ),
         CodeOperation::Repository { after } => CodeAdapterResponse::Repository(
             provider
                 .repository(after.as_deref())
@@ -169,9 +176,16 @@ fn execute(request: CodeAdapterRequest, roots: &[PathBuf]) -> Result<CodeAdapter
             context,
             show_whitespace,
             scope,
+            comparison,
         } => CodeAdapterResponse::Diff(
             provider
-                .diff_snapshot(&path, context, show_whitespace, scope)
+                .diff_snapshot(
+                    &path,
+                    context,
+                    show_whitespace,
+                    scope,
+                    comparison.as_deref(),
+                )
                 .map_err(anyhow::Error::msg)?,
         ),
         CodeOperation::File { path, cursor } => CodeAdapterResponse::File(
