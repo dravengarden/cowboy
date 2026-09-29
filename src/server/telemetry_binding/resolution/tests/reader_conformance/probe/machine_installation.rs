@@ -151,7 +151,9 @@ async fn observe(socket: &mut Socket, case: InstallCase) -> Result<(), Failure> 
         }
         let mut other = step;
         other.operation_id = "new-operation-is-not-replay".into();
-        let expected = if case == InstallCase::Rejected {
+        // A completed staging failure never crossed the durable activation
+        // boundary. An uncertain activation must keep fencing new operations.
+        let expected = if matches!(case, InstallCase::Rejected | InstallCase::StagingFailure) {
             InstallLookup::NotFound {}
         } else {
             InstallLookup::Unavailable {

@@ -19,7 +19,16 @@ fn closed_requests_preserve_every_existing_wire_operation() {
             },
             json!({ "type": "search", "query": "文件", "limit": 25 }),
         ),
-        (CodeOperation::Changes, json!({ "type": "changes" })),
+        (
+            CodeOperation::Changes { comparison: None },
+            json!({ "type": "changes" }),
+        ),
+        (
+            CodeOperation::Changes {
+                comparison: Some("refs/remotes/origin/main".into()),
+            },
+            json!({ "type": "changes", "comparison": "refs/remotes/origin/main" }),
+        ),
         (
             CodeOperation::Repository { after: None },
             json!({ "type": "repository" }),
@@ -70,10 +79,20 @@ fn closed_requests_preserve_every_existing_wire_operation() {
         (DiffScope::Unstaged, "unstaged"),
     ] {
         cases.push((
-            CodeOperation::Diff { path: "src/lib.rs".into(), context: 7, show_whitespace: true, scope },
+            CodeOperation::Diff { path: "src/lib.rs".into(), context: 7, show_whitespace: true, scope, comparison: None },
             json!({ "type": "diff", "path": "src/lib.rs", "context": 7, "show_whitespace": true, "scope": wire_scope }),
         ));
     }
+    cases.push((
+        CodeOperation::Diff {
+            path: "src/lib.rs".into(),
+            context: 7,
+            show_whitespace: true,
+            scope: DiffScope::Combined,
+            comparison: Some("refs/heads/main".into()),
+        },
+        json!({ "type": "diff", "path": "src/lib.rs", "context": 7, "show_whitespace": true, "scope": "combined", "comparison": "refs/heads/main" }),
+    ));
     for (operation, mut expected) in cases {
         expected["root"] = json!("/workspace/项目");
         let wire = serde_json::to_value(CodeAdapterRequest {

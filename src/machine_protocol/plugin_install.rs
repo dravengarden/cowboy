@@ -135,6 +135,7 @@ impl InstallStep {
                 PluginKind::AgentProvider
                     | PluginKind::CodeIntelligence
                     | PluginKind::TelemetryBackend
+                    | PluginKind::WorkspaceExtension
             ) && self.plugin_version.len() <= 128
                 && semver::Version::parse(&self.plugin_version).is_ok(),
             "invalid installation capability or version"

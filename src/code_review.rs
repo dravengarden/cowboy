@@ -58,6 +58,16 @@ pub struct ChangeList {
     pub revision: String,
     pub changes: Vec<CodeChange>,
     pub truncated: bool,
+    pub comparison: Option<String>,
+    pub default_comparison: Option<String>,
+    pub comparisons: Vec<GitComparison>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitComparison {
+    pub reference: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,7 +218,7 @@ pub trait CodeProvider {
     fn manifest(&self) -> Result<WorktreeManifest, String>;
     fn directory(&self, relative: &str, limit: usize) -> Result<CodeTreePage, String>;
     fn search(&self, query: &str, limit: usize) -> Vec<String>;
-    fn changes(&self) -> Result<ChangeList, String>;
+    fn changes(&self, comparison: Option<&str>) -> Result<ChangeList, String>;
     fn repository(&self, after: Option<&str>) -> Result<GitRepositorySnapshot, String>;
     fn commit(&self, oid: &str) -> Result<GitCommitDetail, String>;
     fn commit_diff(&self, oid: &str, relative: &str) -> Result<DiffDocument, String>;
@@ -218,6 +228,7 @@ pub trait CodeProvider {
         context: usize,
         show_whitespace: bool,
         scope: DiffScope,
+        comparison: Option<&str>,
     ) -> Result<DiffDocument, String>;
     fn file_page(&self, relative: &str, cursor: Option<&str>) -> Result<FileDocument, String>;
 }
@@ -361,6 +372,74 @@ impl LocalCodeProvider {
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+    }
+
+    fn comparisons(&self) -> Result<(Vec<GitComparison>, Option<String>), String> {
+        let bytes = git_output(
+            &self.root,
+            &[
+                "for-each-ref",
+                "--format=%(refname)%00%(symref)%00",
+                "refs/heads",
+                "refs/remotes",
+            ],
+            1024 * 1024,
+        )?;
+        let current = self.branch().map(|branch| format!("refs/heads/{branch}"));
+        let mut fields = bytes.split(|byte| *byte == 0);
+        let mut comparisons = Vec::new();
+        while let Some(raw_reference) = fields.next() {
+            let reference = String::from_utf8_lossy(raw_reference).trim().to_owned();
+            let symref = String::from_utf8_lossy(fields.next().unwrap_or_default())
+                .trim()
+                .to_owned();
+            if reference.is_empty() || !symref.is_empty() || current.as_deref() == Some(&reference)
+            {
+                continue;
+            }
+            let label = reference
+                .strip_prefix("refs/heads/")
+                .or_else(|| reference.strip_prefix("refs/remotes/"))
+                .unwrap_or(&reference)
+                .to_owned();
+            comparisons.push(GitComparison { reference, label });
+        }
+        comparisons.sort_by(|left, right| left.label.cmp(&right.label));
+        comparisons.dedup_by(|left, right| left.reference == right.reference);
+
+        let remote_head = git_output(
+            &self.root,
+            &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+            1024,
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| comparisons.iter().any(|item| item.reference == *value));
+        let default_comparison = remote_head.or_else(|| {
+            [
+                "refs/remotes/origin/main",
+                "refs/heads/main",
+                "refs/remotes/origin/master",
+                "refs/heads/master",
+            ]
+            .into_iter()
+            .find(|candidate| comparisons.iter().any(|item| item.reference == *candidate))
+            .map(str::to_owned)
+        });
+        Ok((comparisons, default_comparison))
+    }
+
+    fn comparison_base(&self, comparison: &str) -> Result<String, String> {
+        let (comparisons, _) = self.comparisons()?;
+        if !comparisons.iter().any(|item| item.reference == comparison) {
+            return Err("comparison branch is unavailable".to_owned());
+        }
+        let bytes = git_output(&self.root, &["merge-base", comparison, "HEAD"], 128)?;
+        let oid = String::from_utf8(bytes).map_err(|_| "invalid merge base".to_owned())?;
+        let oid = oid.trim();
+        safe_oid(oid)?;
+        Ok(oid.to_owned())
     }
 
     fn repository_identity(&self) -> (String, Option<String>) {
@@ -584,14 +663,64 @@ impl CodeProvider for LocalCodeProvider {
         crate::files::search(&self.root, query, limit)
     }
 
-    fn changes(&self) -> Result<ChangeList, String> {
+    fn changes(&self, comparison: Option<&str>) -> Result<ChangeList, String> {
         ensure_git_worktree(&self.root)?;
-        let output = git_output(
+        let status = git_output(
             &self.root,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             4 * 1024 * 1024,
         )?;
-        let mut fields = output
+        let (comparisons, default_comparison) = self.comparisons()?;
+        if let Some(comparison) = comparison {
+            let base = self.comparison_base(comparison)?;
+            let output = git_output(
+                &self.root,
+                &["diff", "--name-status", "-z", "-M", &base, "--"],
+                4 * 1024 * 1024,
+            )?;
+            let mut files = parse_commit_files(&output);
+            let tracked = files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<std::collections::HashSet<_>>();
+            let mut untracked = status
+                .split(|byte| *byte == 0)
+                .filter(|field| field.starts_with(b"?? "))
+                .map(|field| String::from_utf8_lossy(&field[3..]).into_owned())
+                .filter(|path| !tracked.contains(path.as_str()))
+                .map(|path| GitCommitFile {
+                    path,
+                    old_path: None,
+                    status: ChangeStatus::Untracked,
+                })
+                .collect::<Vec<_>>();
+            files.append(&mut untracked);
+            let truncated = files.len() > MAX_CHANGES;
+            files.truncate(MAX_CHANGES);
+            let head = self.head();
+            let mut revision_input = output;
+            revision_input.extend_from_slice(&status);
+            revision_input.extend_from_slice(comparison.as_bytes());
+            return Ok(ChangeList {
+                revision: Self::worktree_revision(head.as_deref(), &revision_input),
+                head,
+                changes: files
+                    .into_iter()
+                    .map(|file| CodeChange {
+                        path: file.path,
+                        old_path: file.old_path,
+                        status: file.status,
+                        staged: false,
+                        unstaged: false,
+                    })
+                    .collect(),
+                truncated,
+                comparison: Some(comparison.to_owned()),
+                default_comparison,
+                comparisons,
+            });
+        }
+        let mut fields = status
             .split(|byte| *byte == 0)
             .filter(|field| !field.is_empty());
         let mut changes = Vec::new();
@@ -625,10 +754,13 @@ impl CodeProvider for LocalCodeProvider {
         changes.truncate(MAX_CHANGES);
         let head = self.head();
         Ok(ChangeList {
-            revision: Self::worktree_revision(head.as_deref(), &output),
+            revision: Self::worktree_revision(head.as_deref(), &status),
             head,
             changes,
             truncated,
+            comparison: None,
+            default_comparison,
+            comparisons,
         })
     }
 
@@ -732,6 +864,7 @@ impl CodeProvider for LocalCodeProvider {
         context: usize,
         show_whitespace: bool,
         scope: DiffScope,
+        comparison: Option<&str>,
     ) -> Result<DiffDocument, String> {
         let relative = safe_relative(relative)?;
         ensure_git_worktree(&self.root)?;
@@ -745,13 +878,14 @@ impl CodeProvider for LocalCodeProvider {
         if !show_whitespace {
             args.push("--ignore-all-space".to_owned());
         }
-        match scope {
-            DiffScope::Combined => args.push("HEAD".to_owned()),
-            DiffScope::Staged => {
+        match (comparison, scope) {
+            (Some(comparison), _) => args.push(self.comparison_base(comparison)?),
+            (None, DiffScope::Combined) => args.push("HEAD".to_owned()),
+            (None, DiffScope::Staged) => {
                 args.push("--cached".to_owned());
                 args.push("HEAD".to_owned());
             }
-            DiffScope::Unstaged => {}
+            (None, DiffScope::Unstaged) => {}
         }
         args.extend(["--".to_owned(), path.clone()]);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -1284,7 +1418,7 @@ mod tests {
         fs::write(dir.join("tracked.rs"), "fn new() {}\n").unwrap();
         fs::write(dir.join("new.txt"), "hello\n").unwrap();
         let provider = LocalCodeProvider::new(&dir);
-        let changes = provider.changes().unwrap();
+        let changes = provider.changes(None).unwrap();
         assert_eq!(changes.revision, provider.manifest().unwrap().revision);
         assert!(
             provider
@@ -1305,14 +1439,62 @@ mod tests {
                 && change.unstaged
         }));
         let tracked = provider
-            .diff_snapshot("tracked.rs", 3, true, DiffScope::Combined)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Combined, None)
             .unwrap();
         assert!(tracked.text.contains("-fn old() {}"));
         assert!(tracked.text.contains("+fn new() {}"));
         let untracked = provider
-            .diff_snapshot("new.txt", 3, true, DiffScope::Unstaged)
+            .diff_snapshot("new.txt", 3, true, DiffScope::Unstaged, None)
             .unwrap();
         assert!(untracked.text.contains("+hello"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn branch_comparison_includes_commits_and_worktree_changes() {
+        let dir = scratch("branch-comparison");
+        Command::new("git")
+            .args(["branch", "base"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn committed() {}\n").unwrap();
+        Command::new("git")
+            .args(["commit", "-qam", "branch work"])
+            .current_dir(&dir)
+            .status()
+            .unwrap();
+        fs::write(dir.join("tracked.rs"), "fn committed() {}\nfn dirty() {}\n").unwrap();
+        fs::write(dir.join("untracked.txt"), "new\n").unwrap();
+
+        let provider = LocalCodeProvider::new(&dir);
+        let changes = provider.changes(Some("refs/heads/base")).unwrap();
+        assert_eq!(changes.comparison.as_deref(), Some("refs/heads/base"));
+        assert!(
+            changes
+                .comparisons
+                .iter()
+                .any(|item| item.reference == "refs/heads/base")
+        );
+        assert!(changes.changes.iter().any(|change| {
+            change.path == "tracked.rs" && change.status == ChangeStatus::Modified
+        }));
+        assert!(changes.changes.iter().any(|change| {
+            change.path == "untracked.txt" && change.status == ChangeStatus::Untracked
+        }));
+
+        let diff = provider
+            .diff_snapshot(
+                "tracked.rs",
+                3,
+                true,
+                DiffScope::Combined,
+                Some("refs/heads/base"),
+            )
+            .unwrap();
+        assert!(diff.text.contains("+fn committed() {}"));
+        assert!(diff.text.contains("+fn dirty() {}"));
+        assert!(provider.changes(Some("--all")).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1427,18 +1609,18 @@ mod tests {
         fs::write(dir.join("tracked.rs"), "fn unstaged() {}\n").unwrap();
 
         let provider = LocalCodeProvider::new(&dir);
-        let change = provider.changes().unwrap().changes.remove(0);
+        let change = provider.changes(None).unwrap().changes.remove(0);
         assert!(change.staged);
         assert!(change.unstaged);
 
         let staged = provider
-            .diff_snapshot("tracked.rs", 3, true, DiffScope::Staged)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Staged, None)
             .unwrap();
         assert!(staged.text.contains("+fn staged() {}"));
         assert!(!staged.text.contains("unstaged"));
 
         let unstaged = provider
-            .diff_snapshot("tracked.rs", 3, true, DiffScope::Unstaged)
+            .diff_snapshot("tracked.rs", 3, true, DiffScope::Unstaged, None)
             .unwrap();
         assert!(unstaged.text.contains("-fn staged() {}"));
         assert!(unstaged.text.contains("+fn unstaged() {}"));

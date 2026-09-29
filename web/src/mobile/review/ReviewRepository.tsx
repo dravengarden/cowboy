@@ -174,6 +174,9 @@ export function ReviewRepository({
   onOpenCommit,
   reviewed,
   onRevision,
+  comparison,
+  onComparisonChange,
+  onChanges,
   onClose,
   refreshToken,
 }: {
@@ -184,6 +187,9 @@ export function ReviewRepository({
   onOpenCommit: (commit: GitCommitSummary) => void;
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
+  comparison: string | null | undefined;
+  onComparisonChange: (comparison: string | null) => void;
+  onChanges: (entries: GitReviewEntry[]) => void;
   onClose: () => void;
   refreshToken?: number;
 }): React.JSX.Element {
@@ -406,6 +412,9 @@ export function ReviewRepository({
               onOpenDiff={onOpenDiff}
               reviewed={reviewed}
               onRevision={onRevision}
+              {...(comparison === undefined ? {} : { comparison })}
+              onComparisonChange={onComparisonChange}
+              onChanges={onChanges}
               {...(refreshToken === undefined ? {} : { refreshToken })}
             />
           )

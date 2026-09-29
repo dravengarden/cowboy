@@ -88,6 +88,7 @@ import {
     openAppSettings,
     type SettingsProductFocus,
 } from "./appSettings";
+import { WorkspaceExtensionsButton } from "./extensions/WorkspaceExtensionsButton";
 import { ReviewSettingsContent } from "./mobile/review/ReviewSettings";
 import { AppIconSettings } from "./AppIconSettings";
 import { NotificationSettingsContent } from "./NotificationSettings";
@@ -4244,6 +4245,7 @@ export function App({
                                     {active && (
                                         <Divider orientation="vertical" flexItem sx={{ mx: 0.5, my: 0.75 }} />
                                     )}
+                                    <WorkspaceExtensionsButton context={active?.id} machineId={active?.machine_id} />
                                     <Suspense fallback={null}>
                                         <DesktopContextShortcut
                                             badge={DESKTOP_SHORTCUTS.settings}

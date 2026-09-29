@@ -22,6 +22,14 @@ export interface CodeChanges {
   revision: string;
   changes: CodeChange[];
   truncated: boolean;
+  comparison?: string;
+  defaultComparison?: string;
+  comparisons: GitComparison[];
+}
+
+export interface GitComparison {
+  reference: string;
+  label: string;
 }
 
 export interface CodeTreeEntry {
@@ -379,9 +387,13 @@ export function fetchCodeDiffPage(
 export function fetchCodeChanges(
   sessionId: string,
   signal?: AbortSignal,
+  comparison?: string,
 ): Promise<CodeChanges> {
+  const query = comparison
+    ? `?${new URLSearchParams({ comparison })}`
+    : "";
   return codeFetch(
-    `/api/code/sessions/${encodeURIComponent(sessionId)}/changes`,
+    `/api/code/sessions/${encodeURIComponent(sessionId)}/changes${query}`,
     signal,
     "no-store",
   );
@@ -430,6 +442,7 @@ export function fetchCodeDiff(
   context: number,
   showWhitespace: boolean,
   scope: CodeDiffScope,
+  comparison?: string,
   signal?: AbortSignal,
 ): Promise<CodeDocument & { added: number; removed: number }> {
   const query = new URLSearchParams({
@@ -438,6 +451,7 @@ export function fetchCodeDiff(
     showWhitespace: String(showWhitespace),
     scope,
   });
+  if (comparison) query.set("comparison", comparison);
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
     signal,

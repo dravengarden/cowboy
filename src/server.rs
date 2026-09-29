@@ -74,6 +74,7 @@ mod operator_approval;
 #[cfg(test)]
 mod persistence_tests;
 mod plugin_install;
+mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
@@ -9576,6 +9577,8 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/search", get(api_code_search))
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
+        .route("/api/code/sessions/{id}/extensions", get(workspace_extensions::inventory))
+        .route("/api/code/sessions/{id}/extensions/resources", get(workspace_extensions::resources))
         .route(
             "/api/code/sessions/{id}/repository",
             get(api_code_repository),
@@ -15609,6 +15612,14 @@ struct CodeChangesResponse {
     revision: String,
     changes: Vec<CodeChangeResponse>,
     truncated: bool,
+    comparison: Option<String>,
+    default_comparison: Option<String>,
+    comparisons: Vec<crate::code_review::GitComparison>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodeChangesQuery {
+    comparison: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -15939,6 +15950,7 @@ struct CodeDiffQuery {
     show_whitespace: bool,
     #[serde(default)]
     scope: CodeDiffScope,
+    comparison: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, Copy)]
@@ -16407,11 +16419,20 @@ async fn api_code_changes(
     State(state): State<Arc<AppState>>,
     authority: code_reads::Authority,
     Path(session_id): Path<String>,
+    Query(query): Query<CodeChangesQuery>,
 ) -> Response {
     let context_id = session_id.clone();
     code_reads::scoped(authority, &context_id, |context| async move {
         let cwd = context.cwd;
-        let result = match remote_code_request(&state, &context.scope, CodeOperation::Changes).await
+        let comparison = query.comparison;
+        let result = match remote_code_request(
+            &state,
+            &context.scope,
+            CodeOperation::Changes {
+                comparison: comparison.clone(),
+            },
+        )
+        .await
         {
             Ok(Some(crate::code_adapter::CodeAdapterResponse::Changes(changes))) => changes,
             Ok(Some(_)) | Err(_) => {
@@ -16419,7 +16440,8 @@ async fn api_code_changes(
             }
             Ok(None) => {
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd)).changes()
+                    crate::code_review::LocalCodeProvider::new(FsPath::new(&cwd))
+                        .changes(comparison.as_deref())
                 })
                 .await;
                 let Ok(Ok(changes)) = result else {
@@ -16452,6 +16474,9 @@ async fn api_code_changes(
                 })
                 .collect(),
             truncated: result.truncated,
+            comparison: result.comparison,
+            default_comparison: result.default_comparison,
+            comparisons: result.comparisons,
         })
         .into_response()
     })
@@ -16649,6 +16674,7 @@ async fn api_code_diff(
             context: query.context,
             show_whitespace: query.show_whitespace,
             scope,
+            comparison: query.comparison.clone(),
         };
         let remote_document = match remote_code_request(
             &state,
@@ -16658,6 +16684,7 @@ async fn api_code_diff(
                 context: query.context,
                 show_whitespace: query.show_whitespace,
                 scope,
+                comparison: query.comparison.clone(),
             },
         )
         .await
@@ -16680,6 +16707,7 @@ async fn api_code_diff(
                         query.context,
                         query.show_whitespace,
                         scope,
+                        query.comparison.as_deref(),
                     )
                 })
                 .await

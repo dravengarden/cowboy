@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "id": "github",
+  "version": "0.1.0",
+  "display_name": "GitHub",
+  "description": "Pull requests, issues and Actions for this repository, using its Machine’s existing GitHub CLI session.",
+  "dependencies": [],
+  "supported_platforms": [
+    {
+      "os": "linux",
+      "architecture": "x86_64"
+    }
+  ],
+  "connection": "github_cli",
+  "views": [
+    {
+      "id": "pull-requests",
+      "label": "Pull requests",
+      "endpoint": "repos/{owner}/{repo}/pulls?state={filter}&per_page=50&page={page}",
+      "items_pointer": "",
+      "detail_endpoint": "repos/{owner}/{repo}/pulls/{id}",
+      "filters": [
+        {
+          "value": "open",
+          "label": "Open"
+        },
+        {
+          "value": "closed",
+          "label": "Closed"
+        },
+        {
+          "value": "all",
+          "label": "All"
+        }
+      ],
+      "fields": {
+        "id": "/number",
+        "title": "/title",
+        "url": "/html_url",
+        "state": "/state",
+        "updated_at": "/updated_at",
+        "metadata": [
+          {
+            "label": "Author",
+            "pointer": "/user/login"
+          },
+          {
+            "label": "Head branch",
+            "pointer": "/head/ref"
+          },
+          {
+            "label": "Base branch",
+            "pointer": "/base/ref"
+          },
+          {
+            "label": "Commits",
+            "pointer": "/commits"
+          },
+          {
+            "label": "Files changed",
+            "pointer": "/changed_files"
+          }
+        ],
+        "body": "/body"
+      }
+    },
+    {
+      "id": "issues",
+      "label": "Issues",
+      "endpoint": "repos/{owner}/{repo}/issues?state={filter}&per_page=50&page={page}",
+      "items_pointer": "",
+      "detail_endpoint": "repos/{owner}/{repo}/issues/{id}",
+      "filters": [
+        {
+          "value": "open",
+          "label": "Open"
+        },
+        {
+          "value": "closed",
+          "label": "Closed"
+        },
+        {
+          "value": "all",
+          "label": "All"
+        }
+      ],
+      "fields": {
+        "id": "/number",
+        "title": "/title",
+        "url": "/html_url",
+        "state": "/state",
+        "updated_at": "/updated_at",
+        "metadata": [
+          {
+            "label": "Author",
+            "pointer": "/user/login"
+          },
+          {
+            "label": "Comments",
+            "pointer": "/comments"
+          }
+        ],
+        "body": "/body"
+      },
+      "exclude_if_present": "/pull_request"
+    },
+    {
+      "id": "actions",
+      "label": "Actions",
+      "endpoint": "repos/{owner}/{repo}/actions/runs?per_page=50&page={page}",
+      "items_pointer": "/workflow_runs",
+      "detail_endpoint": "repos/{owner}/{repo}/actions/runs/{id}",
+      "filters": [],
+      "fields": {
+        "id": "/id",
+        "title": "/display_title",
+        "url": "/html_url",
+        "state": "/status",
+        "updated_at": "/updated_at",
+        "metadata": [
+          {
+            "label": "Workflow",
+            "pointer": "/name"
+          },
+          {
+            "label": "Branch",
+            "pointer": "/head_branch"
+          },
+          {
+            "label": "Conclusion",
+            "pointer": "/conclusion"
+          },
+          {
+            "label": "Event",
+            "pointer": "/event"
+          },
+          {
+            "label": "Actor",
+            "pointer": "/actor/login"
+          }
+        ]
+      }
+    }
+  ]
+}

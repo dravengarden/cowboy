@@ -28,7 +28,8 @@ interface PluginManifest {
     | "agent_provider"
     | "authentication_provider"
     | "code_intelligence"
-    | "telemetry_backend";
+    | "telemetry_backend"
+    | "workspace_extension";
   entrypoint: string;
   components: Array<{ id: string; version: string }>;
 }

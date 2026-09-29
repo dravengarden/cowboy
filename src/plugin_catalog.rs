@@ -1138,7 +1138,7 @@ mod tests {
         let catalog = PluginCatalog::open(&fixture.0, Some(catalog_root.clone())).unwrap();
         assert!(catalog.load_external().unwrap().is_empty());
         fs::write(catalog_root.join("future.release.json"),
-            br#"{"release_schema":3,"plugin_id":"codex","plugin_version":"999.0.0","future_field":{"opaque":true}}"#).unwrap();
+            br#"{"release_schema":4,"plugin_id":"codex","plugin_version":"999.0.0","future_field":{"opaque":true}}"#).unwrap();
         assert!(catalog.load_external().unwrap().is_empty());
         assert!(catalog.resolve("codex", Some("999.0.0"), None).is_err());
         assert!(
@@ -1189,7 +1189,7 @@ mod tests {
         let fixture = ReaderFixture::new();
         let marker = fixture.0.join("release.json");
         let target = fixture.0.join("target");
-        fs::write(&target, br#"{"release_schema":3}"#).unwrap();
+        fs::write(&target, br#"{"release_schema":4}"#).unwrap();
         std::os::unix::fs::symlink(&target, &marker).unwrap();
         assert!(read_supported_release(&marker).is_err());
         fs::remove_file(&marker).unwrap();
@@ -1203,7 +1203,10 @@ mod tests {
             std::env::temp_dir().join(format!("cowboy-plugin-catalog-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let catalog = PluginCatalog::open(&root, None).unwrap();
-        assert_eq!(catalog.entries().len(), 7);
+        assert_eq!(
+            catalog.entries().len(),
+            crate::plugin::first_party_plugins().len()
+        );
         assert!(catalog.entries().iter().any(|entry| {
             entry.plugin_id == "zed" && entry.plugin_kind == PluginKind::CodeIntelligence
         }));
@@ -1423,7 +1426,7 @@ mod tests {
         assert_eq!(catalog.refresh_with_runtime(&storage).await.unwrap(), 1);
         fs::write(
             future.with_extension("release.json"),
-            br#"{"release_schema":3,"plugin_id":"google","plugin_version":"1.0.0"}"#,
+            br#"{"release_schema":4,"plugin_id":"google","plugin_version":"1.0.0"}"#,
         )
         .unwrap();
         assert_eq!(catalog.refresh_with_runtime(&storage).await.unwrap(), 1);
@@ -2469,7 +2472,7 @@ mod tests {
         fs::write(
             catalog_root.join("future.release.json"),
             serde_json::to_vec(&serde_json::json!({
-                "release_schema": 3,
+                "release_schema": cowboy_plugin_sdk::RELEASE_SCHEMA_VERSION + 1,
                 "plugin_id": passkey.plugin_id,
                 "plugin_version": passkey.plugin_version,
                 "artifact_digest": passkey.artifact_digest,

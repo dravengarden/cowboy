@@ -189,3 +189,6 @@ mod migration_policy;
 mod protocol_contract;
 #[cfg(feature = "full")]
 mod web_push;
+
+#[cfg(any(feature = "full", feature = "machine-host"))]
+mod workspace_extensions;

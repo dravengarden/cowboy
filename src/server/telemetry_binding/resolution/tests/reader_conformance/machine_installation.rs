@@ -20,14 +20,16 @@ pub(super) enum InstallCase {
     Applied,
     Rejected,
     Unknown,
+    StagingFailure,
     ChecksumCorrupt,
     FutureSchema,
     MissingAuthority,
     MissingSlot,
+    WorkspaceExtension,
 }
 
 impl InstallCase {
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 14] = [
         Self::Absent,
         Self::Prepared,
         Self::Staging,
@@ -36,10 +38,12 @@ impl InstallCase {
         Self::Applied,
         Self::Rejected,
         Self::Unknown,
+        Self::StagingFailure,
         Self::ChecksumCorrupt,
         Self::FutureSchema,
         Self::MissingAuthority,
         Self::MissingSlot,
+        Self::WorkspaceExtension,
     ];
 
     pub(super) fn marker(self) -> Option<&'static str> {
@@ -54,20 +58,22 @@ impl InstallCase {
     pub(super) fn receipt(self) -> Option<InstallReceipt> {
         let phase = match self {
             Self::Absent => return None,
-            Self::Staging | Self::Unknown => InstallPhase::Staging,
-            Self::Activating => InstallPhase::Activating,
+            Self::Staging | Self::StagingFailure => InstallPhase::Staging,
+            Self::Activating | Self::Unknown => InstallPhase::Activating,
             Self::ProjectingAuthentication => InstallPhase::ProjectingAuthentication,
             _ => InstallPhase::Prepared,
         };
         let step = self.step();
         let outcome = match self {
-            Self::Applied | Self::MissingSlot => InstallOutcome::Applied {
-                revision: revision(),
-            },
+            Self::Applied | Self::MissingSlot | Self::WorkspaceExtension => {
+                InstallOutcome::Applied {
+                    revision: revision(),
+                }
+            }
             Self::Rejected => InstallOutcome::Rejected {
                 reason: InstallRejection::Expired,
             },
-            Self::Unknown => InstallOutcome::Unknown {
+            Self::Unknown | Self::StagingFailure => InstallOutcome::Unknown {
                 phase,
                 reason: InstallUncertainty::Interrupted,
             },
@@ -88,6 +94,8 @@ impl InstallCase {
         step.expires_at_ms = 1_700_000_000_000;
         if self == Self::ProjectingAuthentication {
             step.plugin_kind = cowboy_plugin_sdk::PluginKind::AgentProvider;
+        } else if self == Self::WorkspaceExtension {
+            step.plugin_kind = cowboy_plugin_sdk::PluginKind::WorkspaceExtension;
         }
         step.envelope_digest = digest(&serde_json::to_vec(&self.desired()).unwrap());
         step
@@ -97,6 +105,8 @@ impl InstallCase {
         let step = crate::machine_protocol::plugin_install::fixture();
         let kind = if self == Self::ProjectingAuthentication {
             cowboy_plugin_sdk::PluginKind::AgentProvider
+        } else if self == Self::WorkspaceExtension {
+            cowboy_plugin_sdk::PluginKind::WorkspaceExtension
         } else {
             step.plugin_kind
         };
@@ -105,7 +115,7 @@ impl InstallCase {
         // cannot start a process or make a network request if replay regresses.
         serde_json::from_value(serde_json::json!({
             "release": {
-                "release_schema":1, "plugin_id":step.plugin_id, "plugin_version":step.plugin_version,
+                "release_schema":if self == Self::WorkspaceExtension { 3 } else { 1 }, "plugin_id":step.plugin_id, "plugin_version":step.plugin_version,
                 "plugin_kind":kind, "package_digest":digest(b"unavailable historical package"),
                 "artifact_digest":step.generation_digest, "artifact_url":"https://example.invalid/historical-plugin",
                 "publisher":"fixture", "contract_fingerprint":step.contract_fingerprint,
@@ -158,7 +168,9 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
     }
     if matches!(
         case,
-        InstallCase::Applied | InstallCase::ProjectingAuthentication
+        InstallCase::Applied
+            | InstallCase::ProjectingAuthentication
+            | InstallCase::WorkspaceExtension
     ) {
         // A retained historical result does not assert the CURRENT generation
         // is stable. A later interrupted activation keeps this slot pending.
@@ -168,7 +180,11 @@ async fn seed(root: &Path, empty: &Fixture, helper: &Path, case: InstallCase) ->
             revision: format!("installation-{}", "c".repeat(64))
                 .try_into()
                 .unwrap(),
-            previous_revision: (case == InstallCase::Applied).then(revision),
+            previous_revision: matches!(
+                case,
+                InstallCase::Applied | InstallCase::WorkspaceExtension
+            )
+            .then(revision),
             generation_digest: Some(receipt.step.generation_digest.clone()),
             effect: "install",
             operation_digest: None,

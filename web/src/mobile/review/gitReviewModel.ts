@@ -1,10 +1,15 @@
 import type { CodeChange, CodeDiffScope } from "./codeApi.ts";
 
-export type GitReviewSectionKind = "conflicts" | "unstaged" | "staged";
+export type GitReviewSectionKind =
+  | "comparison"
+  | "conflicts"
+  | "unstaged"
+  | "staged";
 
 export interface GitReviewEntry {
   change: CodeChange;
   scope: CodeDiffScope;
+  comparison?: string;
 }
 
 export interface GitReviewSection {
@@ -13,7 +18,21 @@ export interface GitReviewSection {
   entries: GitReviewEntry[];
 }
 
-export function groupGitChanges(changes: CodeChange[]): GitReviewSection[] {
+export function groupGitChanges(
+  changes: CodeChange[],
+  comparison?: string,
+): GitReviewSection[] {
+  if (comparison) {
+    return [{
+      kind: "comparison",
+      label: "Compared changes",
+      entries: changes.map((change) => ({
+        change,
+        scope: "combined",
+        comparison,
+      })),
+    }];
+  }
   const conflicts: GitReviewEntry[] = [];
   const unstaged: GitReviewEntry[] = [];
   const staged: GitReviewEntry[] = [];

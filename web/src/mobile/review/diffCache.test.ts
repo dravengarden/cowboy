@@ -31,6 +31,23 @@ Deno.test("diff cache deduplicates adjacent prefetch and foreground loads", asyn
     assertEquals(await first, await second);
     assertEquals(requests, 1);
     assertEquals(diffCacheSizeForTest(), 1);
+    await loadCodeDiff(
+      "session",
+      "src/a.ts",
+      6,
+      true,
+      "combined",
+      "refs/heads/main",
+    );
+    await loadCodeDiff(
+      "session",
+      "src/a.ts",
+      6,
+      true,
+      "combined",
+      "refs/heads/release",
+    );
+    assertEquals(requests, 3);
     for (let index = 0; index < 12; index += 1) {
       await loadCodeDiff(
         "session",
@@ -40,7 +57,7 @@ Deno.test("diff cache deduplicates adjacent prefetch and foreground loads", asyn
         "unstaged",
       );
     }
-    assertEquals(requests, 13);
+    assertEquals(requests, 15);
     assertEquals(diffCacheSizeForTest(), 12);
   } finally {
     invalidateDiffCache();

@@ -32,6 +32,8 @@ struct ComponentRelease {
     closure: Option<ComponentClosure>,
     #[serde(default, deserialize_with = "deserialize_component_additions")]
     component_additions: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_component_additions")]
+    plugin_additions: Option<Vec<String>>,
 }
 
 fn deserialize_component_additions<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
@@ -264,6 +266,29 @@ fn validate_dependency_graph(release: &ComponentRelease, graph: &ComponentClosur
 fn validate_component_identity_history(registry: &ComponentRegistry) -> Result<()> {
     for (index, release) in registry.releases.iter().enumerate() {
         let previous = index.checked_sub(1).map(|index| &registry.releases[index]);
+        if let Some(additions) = &release.plugin_additions {
+            ensure!(
+                registry.schema_version == 3
+                    && release.closure.is_some()
+                    && previous.is_some_and(|old| old.closure.is_some())
+                    && !additions.is_empty(),
+                "Plugin additions require a nonempty post-baseline migration"
+            );
+        }
+        if let Some(previous) = previous {
+            let mut expected: BTreeSet<&str> =
+                previous.plugins.keys().map(String::as_str).collect();
+            for id in release.plugin_additions.as_deref().unwrap_or_default() {
+                ensure!(
+                    expected.insert(id),
+                    "Plugin addition duplicates or reuses an identity"
+                );
+            }
+            ensure!(
+                expected == release.plugins.keys().map(String::as_str).collect(),
+                "Plugin identity change needs exact additive migration; removal is forbidden"
+            );
+        }
         if let Some(additions) = &release.component_additions {
             ensure!(
                 registry.schema_version == 3

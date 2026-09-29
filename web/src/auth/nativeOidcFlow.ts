@@ -1,6 +1,7 @@
 import {
   closeAuthenticationBrowser,
   hasNativeAuthenticationBrowser,
+  hasNativeExternalOpener,
   NATIVE_AUTHENTICATION_BROWSER_CLOSED_EVENT,
   openAuthenticationUrlConfirmed,
 } from "../openExternal";
@@ -21,12 +22,12 @@ const WINDOW_CLOSE_GRACE_MS = 400;
 
 type NativeOidcEventStatus = "ready" | "failed" | "unavailable";
 
-/** The native flow needs only a shell-installed authentication browser. The
+/** The native flow needs a shell authentication browser or Desktop OS opener. The
  * keyboard-oriented `__cowboyNativeShell` flag is iOS-specific: the Android
  * shell installs this bridge without adopting the iOS keyboard, clipboard, and
  * passkey contracts that flag also selects. */
 export function nativeOidcFlowSupported(): boolean {
-  return hasNativeAuthenticationBrowser();
+  return hasNativeAuthenticationBrowser() || hasNativeExternalOpener();
 }
 
 export function browserOidcFlowSupported(): boolean {
@@ -167,7 +168,10 @@ async function waitForNativeOidc(
         status === "unavailable" &&
         Date.now() - startedAt >= START_RACE_GRACE_MS
       ) {
-        throw new AuthApiError("External authorization is no longer active.", 401);
+        throw new AuthApiError(
+          "External authorization is no longer active.",
+          401,
+        );
       }
       if (status === "ready") {
         onReady?.();

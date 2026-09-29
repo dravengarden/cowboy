@@ -11,6 +11,7 @@ import {
 } from "@mui/material";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmSheet } from "../Sheet";
+import { NativeAuthenticationBrowserOpenError } from "../openExternal";
 import { passwordLoginFields } from "./coreSecurity";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
@@ -135,8 +136,8 @@ export function ProductRecentAuthSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // A blocked sign-in window is the one provider failure the reader cannot act
-  // on inside Cowboy, so it unlocks the redirect this sheet otherwise hides.
+  // An unavailable sign-in window or native launcher unlocks the ordinary
+  // redirect, including older Desktop shells with missing opener permissions.
   const [windowBlocked, setWindowBlocked] = useState(false);
   const [verifiedMe, setVerifiedMe] = useState<ProductMe | null>(null);
   const providerAbort = useRef<AbortController | null>(null);
@@ -245,9 +246,13 @@ export function ProductRecentAuthSheet({
           );
           return;
         }
-        if (reason instanceof SignInWindowBlockedError) setWindowBlocked(true);
+        if (
+          reason instanceof SignInWindowBlockedError ||
+          reason instanceof NativeAuthenticationBrowserOpenError
+        ) setWindowBlocked(true);
         setError(
-          reason instanceof AuthApiError
+          reason instanceof AuthApiError ||
+            reason instanceof NativeAuthenticationBrowserOpenError
             ? reason.message
             : passkeyErrorMessage(reason, fallback),
         );
@@ -472,9 +477,8 @@ export function ProductRecentAuthSheet({
                   After the secure redirect returns, repeat the Passkey change.
                 </Typography>
               )}
-              {/* Nothing reached the server when the window was blocked, so the
-                plain redirect the login page uses is still available. Without
-                it a locked session has no way forward but Sign out. */}
+              {/* A blocked popup or rejected native launch must leave the
+                ordinary same-window sign-in available to a locked session. */}
               {useProviderHandoff && windowBlocked && (
                 <>
                   <Button

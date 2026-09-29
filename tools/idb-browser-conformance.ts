@@ -11,12 +11,15 @@ if (
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
   suite !== "review-document-refresh" && suite !== "review-diff" &&
-  suite !== "review-destination" && suite !== "review-recovery"
+  suite !== "review-destination" && suite !== "review-recovery" &&
+  suite !== "workspace-extensions"
 ) {
   throw new Error("unknown suite");
 }
 const entry = suite === "idb"
   ? "runIdbBrowserConformance"
+  : suite === "workspace-extensions"
+  ? "runWorkspaceExtensionsBrowserConformance"
   : suite === "idb-outbox"
   ? "runIdbOutboxBrowserConformance"
   : suite === "provider-ui"
@@ -160,7 +163,9 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     result.ok !== true ||
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
-      (suite === "review-destination"
+      (suite === "workspace-extensions"
+        ? 3
+        : suite === "review-destination"
         ? 10
         : suite === "settings-recovery"
         ? 9

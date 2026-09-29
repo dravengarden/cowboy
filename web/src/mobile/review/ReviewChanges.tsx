@@ -12,6 +12,7 @@ import {
 } from "@mui/icons-material";
 import {
   Alert,
+  Autocomplete,
   Box,
   Chip,
   CircularProgress,
@@ -20,6 +21,7 @@ import {
   ListItemIcon,
   ListItemText,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -128,7 +130,11 @@ function GitTreeRows({
         const entry = node.entry;
         if (!entry) return null;
         const isReviewed = reviewed.has(
-          reviewEntryKey(entry.change.path, entry.scope),
+          reviewEntryKey(
+            entry.change.path,
+            entry.scope,
+            entry.comparison,
+          ),
         );
         return (
           <ListItemButton
@@ -176,6 +182,9 @@ export function ReviewChanges({
   onOpenDiff,
   reviewed,
   onRevision,
+  comparison,
+  onComparisonChange,
+  onChanges,
   drawer = false,
   onClose,
   refreshToken = 0,
@@ -184,6 +193,9 @@ export function ReviewChanges({
   onOpenDiff: (entry: GitReviewEntry, queue: GitReviewEntry[]) => void;
   reviewed: ReadonlySet<string>;
   onRevision: (revision: string) => void;
+  comparison?: string | null;
+  onComparisonChange?: (comparison: string | null) => void;
+  onChanges?: (entries: GitReviewEntry[]) => void;
   drawer?: boolean;
   onClose?: () => void;
   refreshToken?: number;
@@ -204,7 +216,13 @@ export function ReviewChanges({
   const previousRefreshToken = useRef(refreshToken);
   const reload = useRef<() => void>(() => {});
   const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
-  const sections = useMemo(() => groupGitChanges(changes), [changes]);
+  const [comparisons, setComparisons] = useState<
+    Awaited<ReturnType<typeof fetchCodeChanges>>["comparisons"]
+  >([]);
+  const sections = useMemo(
+    () => groupGitChanges(changes, comparison ?? undefined),
+    [changes, comparison],
+  );
   const queue = useMemo(() => reviewQueue(sections), [sections]);
   const sectionCounts = useMemo(
     () => new Map(sections.map((section) => [section.kind, section.entries.length])),
@@ -225,8 +243,17 @@ export function ReviewChanges({
     setLoading(true);
     setError(false);
     try {
-      const result = await fetchCodeChanges(sessionId, signal);
+      const result = await fetchCodeChanges(
+        sessionId,
+        signal,
+        comparison ?? undefined,
+      );
       settleRetry();
+      setComparisons(result.comparisons ?? []);
+      if (comparison === undefined && onComparisonChange) {
+        onComparisonChange(result.defaultComparison ?? null);
+        if (result.defaultComparison) return;
+      }
       setChanges(result.changes);
       setHead(result.head);
       setTruncated(result.truncated);
@@ -241,7 +268,17 @@ export function ReviewChanges({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [armRetry, cancelRetry, onRevision, sessionId, settleRetry]);
+  }, [
+    armRetry,
+    cancelRetry,
+    comparison,
+    onComparisonChange,
+    onRevision,
+    sessionId,
+    settleRetry,
+  ]);
+
+  useEffect(() => onChanges?.(queue), [onChanges, queue]);
 
   useEffect(() => {
     reload.current = (): void => {
@@ -297,18 +334,52 @@ export function ReviewChanges({
             Git review
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {head ? `HEAD ${head}` : "Working tree"}
+            {comparison
+              ? `${
+                comparisons.find((item) => item.reference === comparison)
+                  ?.label ?? comparison
+              } → ${head ? `HEAD ${head}` : "working tree"}`
+              : head
+              ? `HEAD ${head}`
+              : "Working tree"}
           </Typography>
         </Box>
         <Chip
           size="small"
           label={`${
             queue.filter((entry) =>
-              reviewed.has(reviewEntryKey(entry.change.path, entry.scope))
+              reviewed.has(
+                reviewEntryKey(
+                  entry.change.path,
+                  entry.scope,
+                  entry.comparison,
+                ),
+              )
             ).length
           } / ${queue.length}`}
         />
       </Stack>
+      <Autocomplete
+        size="small"
+        disableClearable
+        options={[
+          { reference: "", label: "Working tree only" },
+          ...comparisons,
+        ]}
+        value={
+          comparisons.find((item) => item.reference === comparison) ??
+            { reference: "", label: "Working tree only" }
+        }
+        isOptionEqualToValue={(option, value) =>
+          option.reference === value.reference}
+        onChange={(_, value) =>
+          onComparisonChange?.(value.reference || null)}
+        disabled={comparison === undefined}
+        renderInput={(params) => (
+          <TextField {...params} label="Compare against" />
+        )}
+        sx={{ mx: 2, mb: 1 }}
+      />
       {truncated && (
         <Alert severity="info" sx={{ mx: 1.5, mb: 1, py: 0 }}>
           Showing the first 1,000 changes
@@ -353,7 +424,9 @@ export function ReviewChanges({
             <Stack alignItems="center" spacing={1} sx={{ pt: 10 }}>
               <DescriptionOutlined color="disabled" />
               <Typography color="text.secondary">
-                Working tree is clean
+                {comparison
+                  ? "No changes from this branch"
+                  : "Working tree is clean"}
               </Typography>
             </Stack>
           )

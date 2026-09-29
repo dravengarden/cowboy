@@ -14,12 +14,22 @@ Keep this skill canonical in the Cowboy repository at
 `.agents/skills/release-cowboy-plugin`. Update and review it with the Provider
 contracts; never fork it into a user-home skill.
 
-The seven first-party Plugins live under `plugins/<id>/`. Six Agent Plugins use
+The first-party Plugins live under `plugins/<id>/`. Six Agent Plugins use
 `plugins/<id>/provider.json` payloads:
 `claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
 `codex-deepseek`; `zed` uses `contract.json` plus its isolated adapter. Each
 source builds independently even though this repository owns their common SDK
 and release tooling.
+
+Workspace extensions are data-only `workspace_extension` Plugins (payload 1,
+Plugin SDK 1.9+, outer release schema 3). GitHub is `plugins/github`; build with
+`just plugin-build github` and use the same immutable sign/verify/publish path.
+Require signed temporary lifecycle/dependency tests, bounded CLI projection and
+the generic Extensions browser gate. Verify old Catalog readers skip the exact
+new envelope before publication. New-kind installation also requires capable
+installation-journal readers; Catalog compatibility alone is not that floor.
+The user-managed CLI connection port is separate from Agent authentication and
+private executable dependencies. See `docs/workspace-extensions.md`.
 
 Telemetry backends are data-only `telemetry_backend` Plugins. The Victoria
 example is `examples/telemetry/victoria`; build it with
@@ -39,9 +49,9 @@ delivery receipts instead. See `docs/telemetry-plugins.md`.
 For Service installation journal changes, run
 `just plugin-install-reader-conformance <matrix.json> <new-receipt.json>`
 against immutable Controller active, next-transaction recovery and cold roles.
-Require all 168 schema-one/schema-two/populated/absent/corrupt/foreign-identity
+Require all 174 schema-one/schema-two/populated/absent/corrupt/foreign-identity
 checks, including two real process opens, exact Machine receipt preservation and
-saved-ID observation without replay. Bind those roles
+saved-ID observation without replay, including a workspace-extension record. Bind those roles
 to the actual host profiles and bootstrap closure separately; candidate-only
 fixtures do not establish the production reader floor. Keep new installation
 admission (including the old generic installer) paused until both actual Service
@@ -51,9 +61,10 @@ and does not authorize installing a Plugin. See `docs/plugin-install-journal.md`
 
 For Machine installation attempt changes, also run
 `just plugin-machine-install-reader-conformance <matrix.json> <new-receipt.json>`.
-Require all 72 checks across immutable Machine active, next-transaction recovery
+Require all 84 checks across immutable Machine active, next-transaction recovery
 and cold roles, including two opens, exact historical/changed-identity queries,
-pending-slot fences and missing/corrupt authority rejection. This is a reader
+pending-slot fences, retryable staging failures, uncertain activation fences,
+workspace-extension receipts and missing/corrupt authority rejection. This is a reader
 codec gate, not installation-effect or restored-generation acceptance. Keep
 Machine attempt admission disabled until the actual host reader floor and the
 corresponding Service coordinator are accepted. See
@@ -255,7 +266,7 @@ guessing from a moving branch.
 Run the Provider's complete deterministic gate inside its documented toolchain.
 In addition, require all applicable Provider gates below:
 
-- Validate generic Plugin package schema 1 and release schemas 1-2 plus the
+- Validate generic Plugin package schema 1 and release schemas 1-3 plus the
   payload-specific schema (Provider payload 2 and Agent runtime binding 2
   today); recompute
   requirements from the actual UI IR, runtime contract, authentication

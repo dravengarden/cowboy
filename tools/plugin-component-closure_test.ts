@@ -70,6 +70,31 @@ function bump(release: ComponentRelease, id: string): void {
   component.digest = digest("3");
 }
 
+Deno.test("new Plugins require an explicit additive migration without rebinding old releases", () => {
+  const releases = history();
+  const next = append(releases);
+  next.plugins.github = "0.1.0";
+  next.closure!.plugins.github = {
+    component_release: next.version,
+    components: [{ id: "cowboy.sdk", version: "1.0.0" }],
+    source_digest: digest("8"),
+  };
+  assertThrows(() => validateReleaseHistory(releases));
+  next.plugin_additions = ["github"];
+  validateReleaseHistory(releases);
+  for (
+    const additions of [[], ["github", "github"], ["github", "zed"], [
+      "missing",
+    ]]
+  ) {
+    const changed = structuredClone(releases);
+    changed.at(-1)!.plugin_additions = additions;
+    assertThrows(() => validateReleaseHistory(changed));
+  }
+  delete next.plugins.zed;
+  assertThrows(() => validateReleaseHistory(releases));
+});
+
 Deno.test("schema-2 release history is unchanged by the schema-3 migration", async () => {
   const registry = JSON.parse(
     await Deno.readTextFile("components/registry.json"),

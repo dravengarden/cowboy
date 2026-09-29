@@ -36,6 +36,7 @@ export interface ComponentRelease {
   // Explicit schema-3 additive migration. Never authorizes removal, identity
   // reuse, hidden dependencies or relabeling an existing Plugin's closure.
   component_additions?: string[];
+  plugin_additions?: string[];
 }
 
 export function assert(condition: unknown, message: string): asserts condition {
@@ -179,6 +180,17 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
       assert(exactVersion(version), `${id}: invalid plugin version ${version}`);
     }
     const previous = releases[index - 1];
+    if (release.plugin_additions !== undefined) {
+      assert(
+        previous?.closure && release.closure &&
+          Array.isArray(release.plugin_additions) &&
+          release.plugin_additions.length > 0 &&
+          release.plugin_additions.every((id) =>
+            typeof id === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)
+          ),
+        "Plugin additions require an explicit nonempty post-baseline migration",
+      );
+    }
     if (release.component_additions !== undefined) {
       assert(
         previous?.closure && release.closure &&
@@ -198,8 +210,8 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
       );
       assertSameSet(
         Object.keys(release.plugins),
-        Object.keys(previous.plugins),
-        `${release.version}: plugin set changed; add/remove requires a new plugin-contract schema`,
+        [...Object.keys(previous.plugins), ...(release.plugin_additions ?? [])],
+        `${release.version}: Plugin identities require an exact additive migration; removal is forbidden`,
       );
     }
     if (!release.closure) {
@@ -293,7 +305,7 @@ export function validateReleaseHistory(releases: ComponentRelease[]): void {
         id,
         snapshot,
       );
-      if (!previous) continue;
+      if (!previous || previous.plugins[id] === undefined) continue;
       assert(
         compareVersion(release.plugins[id]!, previous.plugins[id]!) >= 0,
         `${id}: Plugin version regressed`,

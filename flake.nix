@@ -154,6 +154,8 @@
           ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
+          ./src/workspace_extensions.rs
+          ./src/workspace_extensions
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
@@ -234,7 +236,7 @@
           "components/state-sync"
           "components/state-sync-idb"
         ];
-        depsHash = "sha256-+WYvsjFD5TSklLJiosK8SrBhyeBt8Y+/QCVvsdCnW3Y=";
+        depsHash = "sha256-kcrOzWTndZQ4zh3tHN4YNi051g74zMoDLDOmtv67n6A=";
       };
 
       # This host's pinned Nixpkgs still has the first fetchCargoVendor
@@ -262,7 +264,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-Fu/WRhyPEQmx2wloja+saK4QT/ukMSNhTRtMimWfJB0=";
+        hash = "sha256-GM0Ril04yD0ANrdzEZ/fHhRaxVfRE1vpWxhmZwIKYrE=";
         preBuild = staticCratesVendorPatch;
       };
 
@@ -330,10 +332,12 @@
         buildInputs = [ pkgs.openssl ];
         postInstall = ''
           ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
+          # User services have a closed PATH. Supply the connection tool while
+          # retaining the OS user's existing gh login and configuration.
           wrapProgram $out/bin/cowboy \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
           wrapProgram $out/bin/cowboy-machine \
-            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
         '';
         doCheck = false;
         meta = {
@@ -437,7 +441,7 @@
           "$out/bin/cowboy-machine-install"
         cp ${cowboy-machine}/bin/.cowboy-wrapped "$out/bin/.cowboy-wrapped"
         makeWrapper "$out/bin/.cowboy-wrapped" "$out/bin/cowboy" \
-          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh deno ]}
+          --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.openssh pkgs.gh deno ]}
         ln -s ${deno}/bin/deno "$out/bin/cowboy-plugin-js"
         ln -s ${cowboy}/bin/cowboy-acp-worker "$out/bin/cowboy-acp-worker"
         ln -s ${cowboy}/bin/cowboy-codex-app-server \

@@ -20,6 +20,7 @@ pub struct DiffSnapshotKey {
     pub context: usize,
     pub show_whitespace: bool,
     pub scope: DiffScope,
+    pub comparison: Option<String>,
 }
 
 #[derive(Debug)]
@@ -255,6 +256,7 @@ mod tests {
             context: 6,
             show_whitespace: true,
             scope: DiffScope::Unstaged,
+            comparison: None,
         }
     }
 

@@ -10,6 +10,7 @@ mod cli_auth;
 mod code_intelligence;
 pub mod host;
 mod telemetry;
+mod workspace_extension;
 
 pub use cli_auth::{
     CliAuthCondition, CliAuthOutcome, CliAuthProbeState, CliAuthRule, CliAuthRuleSet, CliAuthSource,
@@ -17,6 +18,7 @@ pub use cli_auth::{
 pub use code_intelligence::*;
 pub use host::*;
 pub use telemetry::*;
+pub use workspace_extension::*;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,7 +39,9 @@ pub const PLUGIN_SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MANIFEST_SCHEMA_VERSION: u16 = 1;
 pub const PACKAGE_SCHEMA_VERSION: u16 = 1;
 pub const RELEASE_SCHEMA_MIN_VERSION: u16 = 1;
-pub const RELEASE_SCHEMA_VERSION: u16 = 2;
+pub const RELEASE_SCHEMA_VERSION: u16 = 3;
+pub const HOST_RELEASE_SCHEMA_VERSION: u16 = 2;
+pub const WORKSPACE_RELEASE_SCHEMA_VERSION: u16 = 3;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_MIN_VERSION: u16 = 1;
 pub const AUTHENTICATION_PROVIDER_SCHEMA_VERSION: u16 = 2;
 pub const CODE_INTELLIGENCE_SCHEMA_MIN_VERSION: u16 = 1;
@@ -66,6 +70,7 @@ pub enum PluginKind {
     AuthenticationProvider,
     CodeIntelligence,
     TelemetryBackend,
+    WorkspaceExtension,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +123,7 @@ pub enum PluginPayload {
     AuthenticationProvider(AuthenticationProviderContract),
     CodeIntelligence(CodeIntelligenceContract),
     TelemetryBackend(TelemetryBackendContract),
+    WorkspaceExtension(WorkspaceExtensionContract),
 }
 
 /// Declarative identity-provider package consumed by Cowboy's built-in
@@ -401,6 +407,7 @@ impl PluginCompatibilityRequirements {
             PluginPayload::AuthenticationProvider(contract) => contract.schema_version,
             PluginPayload::CodeIntelligence(contract) => contract.schema_version,
             PluginPayload::TelemetryBackend(contract) => contract.schema_version,
+            PluginPayload::WorkspaceExtension(contract) => contract.schema_version,
         };
         let requirements = Self {
             plugin_sdk_version,
@@ -451,9 +458,14 @@ impl PluginCompatibilityRequirements {
                 self.host_bundle_schema.is_none(),
                 "Plugin release schema 1 cannot declare host compatibility"
             ),
-            RELEASE_SCHEMA_VERSION => ensure!(
+            HOST_RELEASE_SCHEMA_VERSION => ensure!(
                 self.host_bundle_schema.is_some(),
                 "Plugin release schema 2 requires host compatibility"
+            ),
+            WORKSPACE_RELEASE_SCHEMA_VERSION => ensure!(
+                self.plugin_kind == PluginKind::WorkspaceExtension
+                    && self.host_bundle_schema.is_none(),
+                "Plugin release schema 3 is reserved for workspace extensions"
             ),
             _ => {}
         }
@@ -593,13 +605,8 @@ impl PluginContractInventory {
         None
     }
 
-    fn schema_problem(
-        &self,
-        requirements: &PluginCompatibilityRequirements,
-        plugin_id: &str,
-        plugin_version: &str,
-    ) -> Option<PluginCompatibilityProblem> {
-        let (min_payload, max_payload, payload_label) = match requirements.plugin_kind {
+    fn payload_range(&self, kind: PluginKind) -> (u16, u16, &'static str) {
+        match kind {
             PluginKind::AgentProvider => (
                 self.min_agent_provider_schema,
                 self.max_agent_provider_schema,
@@ -617,6 +624,14 @@ impl PluginContractInventory {
             ),
             // SDK version is already attested by challenge proof v3. Derive
             // schema-one support from it without changing historical proofs.
+            PluginKind::WorkspaceExtension => (
+                1,
+                u16::from(
+                    Version::parse(&self.plugin_sdk_version)
+                        .is_ok_and(|v| v >= Version::new(1, 9, 0)),
+                ),
+                "workspace extension schema (Plugin SDK 1.9)",
+            ),
             PluginKind::TelemetryBackend => (
                 1,
                 Version::parse(&self.plugin_sdk_version).map_or(0, |version| {
@@ -628,7 +643,17 @@ impl PluginContractInventory {
                 }),
                 "telemetry payload schema (Plugin SDK 1.7/1.8)",
             ),
-        };
+        }
+    }
+
+    fn schema_problem(
+        &self,
+        requirements: &PluginCompatibilityRequirements,
+        plugin_id: &str,
+        plugin_version: &str,
+    ) -> Option<PluginCompatibilityProblem> {
+        let (min_payload, max_payload, payload_label) =
+            self.payload_range(requirements.plugin_kind);
         for (value, minimum, maximum, code, label) in [
             (
                 requirements.manifest_schema,
@@ -839,7 +864,8 @@ impl PluginPackage {
             PluginPayload::AgentProvider(provider) => Some(provider),
             PluginPayload::AuthenticationProvider(_)
             | PluginPayload::CodeIntelligence(_)
-            | PluginPayload::TelemetryBackend(_) => None,
+            | PluginPayload::TelemetryBackend(_)
+            | PluginPayload::WorkspaceExtension(_) => None,
         }
     }
 
@@ -849,7 +875,8 @@ impl PluginPackage {
             PluginPayload::AuthenticationProvider(provider) => Some(provider),
             PluginPayload::AgentProvider(_)
             | PluginPayload::CodeIntelligence(_)
-            | PluginPayload::TelemetryBackend(_) => None,
+            | PluginPayload::TelemetryBackend(_)
+            | PluginPayload::WorkspaceExtension(_) => None,
         }
     }
 
@@ -859,10 +886,13 @@ impl PluginPackage {
     /// Rejects missing required hosts, executable Authentication hosts, and
     /// renderer/capability claims inconsistent with the selected protocol.
     pub fn validate_host_contract(&self, files: Option<&BTreeMap<String, String>>) -> Result<()> {
-        if matches!(self.payload, PluginPayload::TelemetryBackend(_)) {
+        if matches!(
+            self.payload,
+            PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+        ) {
             ensure!(
                 files.is_none(),
-                "telemetry backends cannot declare executable host bundles"
+                "data-only capabilities cannot declare executable host bundles"
             );
         }
         let host = files
@@ -895,6 +925,9 @@ impl PluginPackage {
                 .collect(),
             PluginPayload::AuthenticationProvider(_) => BTreeSet::new(),
             PluginPayload::CodeIntelligence(contract) => {
+                contract.supported_platforms.iter().cloned().collect()
+            }
+            PluginPayload::WorkspaceExtension(contract) => {
                 contract.supported_platforms.iter().cloned().collect()
             }
             PluginPayload::TelemetryBackend(contract) => {
@@ -955,32 +988,7 @@ impl PluginRelease {
     /// Returns an error for identity, signature presence, platform, component,
     /// or digest mismatches.
     pub fn validate_for(&self, package: &PluginPackage) -> Result<()> {
-        ensure!(
-            (RELEASE_SCHEMA_MIN_VERSION..=RELEASE_SCHEMA_VERSION).contains(&self.release_schema),
-            "unsupported plugin release schema"
-        );
-        match self.release_schema {
-            RELEASE_SCHEMA_MIN_VERSION => ensure!(
-                self.host_bundle_digest.is_none(),
-                "plugin release schema 1 cannot bind a host bundle"
-            ),
-            RELEASE_SCHEMA_VERSION => {
-                let digest = self
-                    .host_bundle_digest
-                    .as_deref()
-                    .context("plugin release schema 2 requires a host bundle")?;
-                validate_digest(digest, "plugin host bundle digest")?;
-            }
-            _ => unreachable!("release schema interval was checked"),
-        }
-        if package.authentication_provider().is_some_and(|contract| {
-            !matches!(contract.protocol, AuthenticationProtocol::OpenIdConnect(_))
-        }) {
-            ensure!(
-                self.host_bundle_digest.is_some(),
-                "local Authentication Plugin requires a release-bound host bundle"
-            );
-        }
+        self.validate_envelope_for(package)?;
         ensure!(
             self.plugin_id == package.manifest.id,
             "plugin release id mismatch"
@@ -1044,9 +1052,47 @@ impl PluginRelease {
                 self.runtime_artifacts.is_empty(),
                 "Authentication Plugin cannot declare Machine runtime artifacts"
             ),
+            PluginPayload::WorkspaceExtension(contract) => {
+                workspace_extension::validate_release(contract, self)?;
+            }
             PluginPayload::TelemetryBackend(contract) => {
                 telemetry::validate_release(contract, self)?;
             }
+        }
+        Ok(())
+    }
+
+    fn validate_envelope_for(&self, package: &PluginPackage) -> Result<()> {
+        ensure!(
+            (RELEASE_SCHEMA_MIN_VERSION..=RELEASE_SCHEMA_VERSION).contains(&self.release_schema),
+            "unsupported plugin release schema"
+        );
+        match self.release_schema {
+            RELEASE_SCHEMA_MIN_VERSION => ensure!(
+                self.host_bundle_digest.is_none(),
+                "plugin release schema 1 cannot bind a host bundle"
+            ),
+            HOST_RELEASE_SCHEMA_VERSION => {
+                let digest = self
+                    .host_bundle_digest
+                    .as_deref()
+                    .context("plugin release schema 2 requires a host bundle")?;
+                validate_digest(digest, "plugin host bundle digest")?;
+            }
+            WORKSPACE_RELEASE_SCHEMA_VERSION => ensure!(
+                matches!(package.payload, PluginPayload::WorkspaceExtension(_))
+                    && self.host_bundle_digest.is_none(),
+                "release schema 3 is reserved for data-only workspace extensions"
+            ),
+            _ => unreachable!("release schema interval was checked"),
+        }
+        if package.authentication_provider().is_some_and(|contract| {
+            !matches!(contract.protocol, AuthenticationProtocol::OpenIdConnect(_))
+        }) {
+            ensure!(
+                self.host_bundle_digest.is_some(),
+                "local Authentication Plugin requires a release-bound host bundle"
+            );
         }
         Ok(())
     }
@@ -1170,6 +1216,21 @@ impl ReleasedPluginComponent {
 
 fn validate_payload(manifest: &PluginManifest, payload: &PluginPayload) -> Result<()> {
     match (manifest.kind, payload) {
+        (PluginKind::WorkspaceExtension, PluginPayload::WorkspaceExtension(contract)) => {
+            ensure!(
+                contract.id == manifest.id && contract.version == manifest.version,
+                "extension payload identity mismatch"
+            );
+            ensure!(
+                manifest
+                    .components
+                    .iter()
+                    .any(|c| c.id == "cowboy.plugin-sdk"
+                        && Version::parse(&c.version).is_ok_and(|v| v >= Version::new(1, 9, 0))),
+                "workspace extensions require Plugin SDK 1.9"
+            );
+            contract.validate()?;
+        }
         (PluginKind::TelemetryBackend, PluginPayload::TelemetryBackend(contract)) => {
             ensure!(
                 contract.id == manifest.id && contract.version == manifest.version,
@@ -1567,7 +1628,7 @@ mod tests {
         legacy_release.validate_for(&package).unwrap();
 
         let mut host_release = legacy_release.clone();
-        host_release.release_schema = RELEASE_SCHEMA_VERSION;
+        host_release.release_schema = HOST_RELEASE_SCHEMA_VERSION;
         host_release.host_bundle_digest = Some(format!("sha256:{}", "a".repeat(64)));
         host_release.artifact_digest = host_release.computed_artifact_digest().unwrap();
         host_release.validate_for(&package).unwrap();
@@ -1579,7 +1640,7 @@ mod tests {
         assert!(host_release.validate_for(&package).is_err());
 
         let mut missing_host = legacy_release.clone();
-        missing_host.release_schema = RELEASE_SCHEMA_VERSION;
+        missing_host.release_schema = HOST_RELEASE_SCHEMA_VERSION;
         missing_host.artifact_digest = missing_host.computed_artifact_digest().unwrap();
         assert!(missing_host.validate_for(&package).is_err());
 
@@ -1626,7 +1687,7 @@ mod tests {
             plugin_sdk_version: Some(PLUGIN_SDK_VERSION.to_owned()),
             manifest_schema: MANIFEST_SCHEMA_VERSION,
             package_schema: PACKAGE_SCHEMA_VERSION,
-            release_schema: RELEASE_SCHEMA_VERSION,
+            release_schema: HOST_RELEASE_SCHEMA_VERSION,
             plugin_kind: PluginKind::CodeIntelligence,
             payload_schema: CODE_INTELLIGENCE_SCHEMA_VERSION,
             host_bundle_schema: Some(HOST_BUNDLE_SCHEMA_VERSION),

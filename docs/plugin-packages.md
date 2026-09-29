@@ -1,6 +1,6 @@
 # Installable Plugin packages
 
-Status: Plugin package schema v1, Plugin release schemas v1-2, Agent Provider payload schema v2,
+Status: Plugin package schema v1, Plugin release schemas v1-3, Agent Provider payload schema v2,
 Agent runtime-binding schema v2, and host integration schema v2 implementation
 contract. The in-tree
 `LaunchSpec` registry remains only as a compatibility fallback for pre-package
@@ -8,6 +8,12 @@ session generations.
 
 This design implements the normative ownership rules in
 [Cowboy core requirements](requirements.md).
+
+Release schema 3 is reserved for data-only workspace extensions (payload 1,
+Plugin SDK 1.9+). It cannot bind a host bundle or executables. Earlier readers
+skip its outer envelope before decoding the new capability. GitHub is the first
+extension; [workspace extensions](workspace-extensions.md) defines its bounded
+host connection, exact runtime dependencies and generic resource UI.
 
 Telemetry payload schema 2 is the data-only `telemetry_backend` capability
 (Plugin SDK 1.8+, Machine protocol 9+) for OTLP/HTTP protobuf logs, metrics and
@@ -50,7 +56,7 @@ facts only through an explicitly scoped diagnostic surface.
 
 `claude-code`, `codex`, `gemini`, `grok`, `claude-deepseek`, and
 `codex-deepseek` are Agent Provider Plugins; `zed` is a code-intelligence
-Plugin. All seven use the same package, Catalog, signature, Machine generation,
+Plugin; `github` is a workspace extension. All use the same package, Catalog, signature, Machine generation,
 activation, rollback, and uninstall lifecycle. Private runtime artifacts are
 staged inside the owning Plugin generation and
 are never exposed as installable subcomponents. Shared-blob deduplication may be
@@ -1091,7 +1097,7 @@ direct package version, resolved URL, and SRI to match the Provider manifest.
 The Machine never falls back to a global Node, npm, ACP adapter, Provider CLI,
 or gateway.
 
-The Plugin Catalog compiles all seven first-party manifests as typed
+The Plugin Catalog compiles all first-party manifests as typed
 `unbound` entries and loads installable releases only from its trusted external
 Catalog directory. The default is `<controller-data-dir>/plugins/catalog` (the
 legacy `<controller-data-dir>/plugin-catalog` remains a read-only compatibility

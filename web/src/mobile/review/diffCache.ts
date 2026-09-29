@@ -22,8 +22,16 @@ function cacheKey(
   context: number,
   showWhitespace: boolean,
   scope: CodeDiffScope,
+  comparison?: string,
 ): string {
-  return JSON.stringify([sessionId, path, context, showWhitespace, scope]);
+  return JSON.stringify([
+    sessionId,
+    path,
+    context,
+    showWhitespace,
+    scope,
+    comparison,
+  ]);
 }
 
 function prune(now: number): void {
@@ -58,11 +66,19 @@ export function loadCodeDiff(
   context: number,
   showWhitespace: boolean,
   scope: CodeDiffScope,
+  comparison?: string,
   signal?: AbortSignal,
 ): Promise<DiffResult> {
   const now = Date.now();
   prune(now);
-  const key = cacheKey(sessionId, path, context, showWhitespace, scope);
+  const key = cacheKey(
+    sessionId,
+    path,
+    context,
+    showWhitespace,
+    scope,
+    comparison,
+  );
   let entry = cache.get(key);
   if (!entry) {
     const promise = fetchCodeDiff(
@@ -71,6 +87,7 @@ export function loadCodeDiff(
       context,
       showWhitespace,
       scope,
+      comparison,
     ).catch((error) => {
       cache.delete(key);
       throw error;

@@ -6,9 +6,9 @@ use std::process::{Command, Stdio};
 use anyhow::{Context as _, Result, bail, ensure};
 use base64::Engine as _;
 use cowboy_plugin_sdk::{
-    HOST_BUNDLE_SCHEMA, PLUGIN_RELEASE_SIGNATURE_NAMESPACE, PluginHostSpec, PluginKind,
-    PluginManifest, PluginPackage, PluginPayload, PluginRelease, PluginRuntimeArtifacts,
-    RELEASE_SCHEMA_MIN_VERSION, RELEASE_SCHEMA_VERSION,
+    HOST_BUNDLE_SCHEMA, HOST_RELEASE_SCHEMA_VERSION, PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
+    PluginHostSpec, PluginKind, PluginManifest, PluginPackage, PluginPayload, PluginRelease,
+    PluginRuntimeArtifacts, RELEASE_SCHEMA_MIN_VERSION, WORKSPACE_RELEASE_SCHEMA_VERSION,
 };
 use cowboy_provider_sdk::{PlatformTarget, StandardProviderSource, build_package};
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,9 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         PluginKind::CodeIntelligence => {
             PluginPayload::CodeIntelligence(read_json(&root.join(&manifest.entrypoint))?)
         }
+        PluginKind::WorkspaceExtension => {
+            PluginPayload::WorkspaceExtension(read_json(&root.join(&manifest.entrypoint))?)
+        }
         PluginKind::TelemetryBackend => {
             PluginPayload::TelemetryBackend(read_json(&root.join(&manifest.entrypoint))?)
         }
@@ -98,9 +101,14 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         PluginPayload::AuthenticationProvider(_) => Vec::new(),
         PluginPayload::CodeIntelligence(contract) => contract.supported_platforms.clone(),
         PluginPayload::TelemetryBackend(contract) => contract.supported_platforms.clone(),
+        PluginPayload::WorkspaceExtension(contract) => contract.supported_platforms.clone(),
     };
     let mut release = PluginRelease {
-        release_schema: RELEASE_SCHEMA_MIN_VERSION,
+        release_schema: if package.manifest.kind == PluginKind::WorkspaceExtension {
+            WORKSPACE_RELEASE_SCHEMA_VERSION
+        } else {
+            RELEASE_SCHEMA_MIN_VERSION
+        },
         plugin_id: package.manifest.id.clone(),
         plugin_version: package.manifest.version.clone(),
         plugin_kind: package.manifest.kind,
@@ -124,7 +132,7 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
     let host_bundle_bytes = if let Some(host_bundle) = host_bundle {
         let mut host_bundle_bytes = serde_json::to_vec_pretty(&host_bundle)?;
         host_bundle_bytes.push(b'\n');
-        release.release_schema = RELEASE_SCHEMA_VERSION;
+        release.release_schema = HOST_RELEASE_SCHEMA_VERSION;
         release.host_bundle_digest =
             Some(format!("sha256:{:x}", Sha256::digest(&host_bundle_bytes)));
         Some(host_bundle_bytes)
@@ -135,7 +143,10 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
         );
         None
     };
-    if matches!(package.payload, PluginPayload::TelemetryBackend(_)) {
+    if matches!(
+        package.payload,
+        PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+    ) {
         release.runtime_artifacts = release
             .supported_platforms
             .iter()
@@ -148,7 +159,10 @@ fn build(arguments: &[std::ffi::OsString]) -> Result<()> {
     }
     if package.authentication_provider().is_some()
         || host_bundle_bytes.is_some()
-        || matches!(package.payload, PluginPayload::TelemetryBackend(_))
+        || matches!(
+            package.payload,
+            PluginPayload::TelemetryBackend(_) | PluginPayload::WorkspaceExtension(_)
+        )
     {
         release.artifact_digest = release.computed_artifact_digest()?;
     }
@@ -220,7 +234,7 @@ fn bind_host(arguments: &[std::ffi::OsString]) -> Result<()> {
         "release does not match plugin package"
     );
     let digest = validate_host_bundle_identity(&package, &release, &host_bundle)?;
-    release.release_schema = RELEASE_SCHEMA_VERSION;
+    release.release_schema = HOST_RELEASE_SCHEMA_VERSION;
     release.host_bundle_digest = Some(digest);
     release.artifact_digest = release.computed_artifact_digest()?;
     write_json_atomic(&release_path, &release)
