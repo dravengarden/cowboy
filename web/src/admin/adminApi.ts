@@ -103,7 +103,8 @@ export interface PluginRelease {
     | "agent_provider"
     | "authentication_provider"
     | "code_intelligence"
-    | "telemetry_backend";
+    | "telemetry_backend"
+    | "workspace_extension";
   package_digest: string;
   artifact_digest: string | null;
   release_state: string;

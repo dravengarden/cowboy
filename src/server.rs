@@ -74,6 +74,7 @@ mod operator_approval;
 #[cfg(test)]
 mod persistence_tests;
 mod plugin_install;
+mod workspace_extensions;
 use plugin_install::api_machine_plugin_install;
 mod plugin_history;
 mod plugin_uninstall;
@@ -9576,6 +9577,8 @@ async fn serve_axum(
         .route("/api/code/sessions/{id}/search", get(api_code_search))
         .route("/api/code/sessions/{id}/manifest", get(api_code_manifest))
         .route("/api/code/sessions/{id}/changes", get(api_code_changes))
+        .route("/api/code/sessions/{id}/extensions", get(workspace_extensions::inventory))
+        .route("/api/code/sessions/{id}/extensions/resources", get(workspace_extensions::resources))
         .route(
             "/api/code/sessions/{id}/repository",
             get(api_code_repository),

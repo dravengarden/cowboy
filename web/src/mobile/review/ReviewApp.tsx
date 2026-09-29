@@ -55,6 +55,7 @@ import {
 import { importantHaptic, navigationHaptic } from "../../haptic";
 import { Markdown } from "../../Markdown";
 import { Sheet } from "../../Sheet";
+import { WorkspaceExtensionsButton } from "../../extensions/WorkspaceExtensionsButton";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
 import { sessionProjectDirectory } from "../../sessionProject";
 import {
@@ -3233,6 +3234,7 @@ export function ReviewApp({
               {targetIsReviewed ? <CheckCircle /> : <CheckCircleOutline />}
             </IconButton>
           )}
+          <WorkspaceExtensionsButton context={workspace?.sessionId} machineId={projectCodeContext?.machineId ?? currentSession?.machine_id} />
           <ReviewModeSwitcher mode={mode} onChange={activateReviewMode} />
         </Stack>
         {!workspace

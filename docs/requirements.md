@@ -72,6 +72,14 @@ Product-login integrations use the data-only `authentication_provider` kind
 and execute only through Controller-owned protocol drivers. Zed uses the
 `code_intelligence` kind and retains its isolated process and license boundary.
 
+Workspace resources use the data-only `workspace_extension` kind (Plugin SDK
+1.9+, release schema 3). They share the same exact signed Machine lifecycle.
+Their bounded resource contracts consume core-owned workspace context and
+declare any runtime Plugin dependencies by version and artifact digest. The
+first host connection borrows the Machine user's existing GitHub CLI session
+for repository-scoped reads; it creates no Provider login, credential replica
+or executable runtime. See [workspace extensions](workspace-extensions.md).
+
 Telemetry integrations use the data-only `telemetry_backend` kind. Payload
 schema 2 requires Plugin SDK 1.8+ and Machine protocol 9+ for OTLP/HTTP protobuf
 logs, metrics and traces. Retained schema 1 requires SDK 1.7+/protocol 8+ for
@@ -551,7 +559,7 @@ Plugin package schema 1, Plugin release schemas 1-2, Provider payload schema 2, 
 schema 2, UI schemas 1-2, host integration schemas 1-2, Controller contract 2,
 Provider Machine contract 4, Machine protocol 7, and Cowboy Provider SDK 3.0 in
 both Rust and TypeScript are the active contract. The Plugin Catalog embeds all
-seven independently compiled first-party manifests as
+independently compiled first-party manifests as
 typed `unbound` entries and accepts installable releases only after an external
 `.cowboy-plugin` package is paired with a complete, signed runtime envelope.
 Controller host runtimes are immutable snapshots keyed by the exact Plugin

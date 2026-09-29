@@ -13,6 +13,7 @@ pub(crate) mod auth_watch;
 mod code_navigation_conformance;
 #[cfg(test)]
 mod code_sync_conformance;
+mod extensions;
 mod installation;
 mod operations;
 mod telemetry;
@@ -238,6 +239,7 @@ fn ensure_machine_installable_kind(package: &PluginPackage) -> Result<()> {
             cowboy_plugin_sdk::PluginKind::AgentProvider
                 | cowboy_plugin_sdk::PluginKind::CodeIntelligence
                 | cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
         ),
         "Machine installer received a Controller-only Plugin kind"
     );
@@ -413,7 +415,9 @@ impl MachinePluginStore {
         )?;
         if matches!(
             plugin_package.payload,
-            PluginPayload::CodeIntelligence(_) | PluginPayload::TelemetryBackend(_)
+            PluginPayload::CodeIntelligence(_)
+                | PluginPayload::TelemetryBackend(_)
+                | PluginPayload::WorkspaceExtension(_)
         ) {
             return self
                 .install_non_agent_plugin(
@@ -549,6 +553,7 @@ impl MachinePluginStore {
                 "code-intelligence Plugin has no adapter component"
             );
         }
+        self.validate_extension_dependencies(package)?;
         let runtime_artifacts = provider_staging_projection(artifacts);
         let plugin_root = self.plugin_root(&package.manifest.id);
         let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
@@ -631,11 +636,16 @@ impl MachinePluginStore {
         let generation_name = digest_generation_name(generation_digest)?;
         let (plugin_package, _, content) =
             self.verified_plugin_generation(provider_id, generation_digest)?;
-        if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::TelemetryBackend {
+        if matches!(
+            plugin_package.manifest.kind,
+            cowboy_plugin_sdk::PluginKind::TelemetryBackend
+                | cowboy_plugin_sdk::PluginKind::WorkspaceExtension
+        ) {
+            self.validate_extension_dependencies(&plugin_package)?;
             Self::activate(&self.plugin_root(provider_id), &generation_name)?;
             return self
                 .inventory_one(provider_id)?
-                .context("reactivated telemetry Plugin is missing from inventory");
+                .context("reactivated Plugin is missing from inventory");
         }
         if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::CodeIntelligence {
             if let Some(plan) =
@@ -4918,9 +4928,9 @@ mod tests {
     #[tokio::test]
     async fn signed_provider_installs_exact_runtime_and_uninstalls_as_one_unit() {
         use cowboy_plugin_sdk::{
-            PluginArtifactFormat, PluginArtifactProbe, PluginComponentKind, PluginManifest,
-            PluginPackage, PluginPayload, PluginRelease, PluginRuntimeArtifacts,
-            RELEASE_SCHEMA_VERSION,
+            HOST_RELEASE_SCHEMA_VERSION, PluginArtifactFormat, PluginArtifactProbe,
+            PluginComponentKind, PluginManifest, PluginPackage, PluginPayload, PluginRelease,
+            PluginRuntimeArtifacts,
         };
         use cowboy_provider_sdk::{
             PlatformRuntimeArtifacts, PlatformTarget, ProviderArtifactFormat,
@@ -4993,7 +5003,7 @@ mod tests {
         .unwrap();
         let bytes = plugin_package.canonical_bytes().unwrap();
         let mut release = PluginRelease {
-            release_schema: RELEASE_SCHEMA_VERSION,
+            release_schema: HOST_RELEASE_SCHEMA_VERSION,
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
             plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,

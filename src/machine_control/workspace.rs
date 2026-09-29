@@ -271,10 +271,33 @@ impl MachineControl {
             operation,
         })
         .map_err(|_| "Workspace Code request encoding failed".to_owned())?;
+        self.workspace_adapter_request(scope, "code", request).await
+    }
+
+    pub(crate) async fn workspace_extension_request(
+        &self,
+        scope: &WorkspaceCodeScope,
+        operation: crate::workspace_extensions::Operation,
+    ) -> Result<serde_json::Value, String> {
+        let request = serde_json::to_value(crate::workspace_extensions::Request {
+            root: scope.cwd().into(),
+            operation,
+        })
+        .map_err(|_| "invalid extension request".to_owned())?;
+        self.workspace_adapter_request(scope, "workspace-extension", request)
+            .await
+    }
+
+    async fn workspace_adapter_request(
+        &self,
+        scope: &WorkspaceCodeScope,
+        adapter: &str,
+        request: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let response = self
             .adapter_request_bound(
                 scope.machine_id(),
-                "code",
+                adapter,
                 request,
                 // The Machine re-resolves its own root against this exact
                 // value before reading. The Controller supplies no default

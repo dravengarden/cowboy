@@ -2463,6 +2463,38 @@ async fn run_adapter_request(
             .context("encoding prepared workspace");
         }
         validate_adapter_workspace(&payload, &workspaces, &worktree_root)?;
+        if adapter == "workspace-extension" {
+            use std::os::unix::fs::MetadataExt as _;
+            let mut request: crate::workspace_extensions::Request =
+                serde_json::from_value(payload.clone()).context("invalid extension request")?;
+            let root = PathBuf::from(&request.root).canonicalize()?;
+            anyhow::ensure!(
+                workspace_path_allowed(&root, &workspaces, &worktree_root),
+                "extension workspace unavailable"
+            );
+            let original_path = request.root.clone();
+            let before = root.metadata()?;
+            request.root = root
+                .to_str()
+                .context("invalid extension workspace path")?
+                .to_owned();
+            let response = providers.extension_request(request).await;
+            let after = root.metadata()?;
+            anyhow::ensure!(
+                before.dev() == after.dev()
+                    && before.ino() == after.ino()
+                    && PathBuf::from(original_path).canonicalize()? == root,
+                "extension workspace changed"
+            );
+            if let Some(incarnation) = &workspace_incarnation {
+                anyhow::ensure!(
+                    verify_workspace_incarnation(&adapter, &payload, &root_identities, incarnation)
+                        .is_ok(),
+                    "extension workspace changed"
+                );
+            }
+            return serde_json::to_value(response).context("encoding extension response");
+        }
         if adapter != "code" {
             let legacy = (adapter == "zed")
                 .then_some(zed_adapter_socket.as_deref())
@@ -2547,7 +2579,7 @@ fn verify_workspace_incarnation(
     incarnation: &str,
 ) -> Result<(), workspace_identity::RootIdentityRefusal> {
     use workspace_identity::RootIdentityRefusal::Unusable;
-    if adapter != "code" {
+    if adapter != "code" && adapter != "workspace-extension" {
         return Err(Unusable(
             "workspace root identity is only carried by core Code reads",
         ));

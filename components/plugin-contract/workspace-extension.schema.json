@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cowboy.stormbird.xyz/schemas/workspace-extension-v1.json",
+  "title": "Cowboy workspace extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "display_name",
+    "description",
+    "dependencies",
+    "supported_platforms",
+    "connection",
+    "views"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "version": {
+      "$ref": "#/$defs/version"
+    },
+    "display_name": {
+      "$ref": "#/$defs/label"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/dependency"
+      }
+    },
+    "supported_platforms": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/platform"
+      },
+      "uniqueItems": true
+    },
+    "connection": {
+      "enum": [
+        "github_cli"
+      ]
+    },
+    "views": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/view"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "pointer": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^(/[A-Za-z0-9_~/-]*)?$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "endpoint": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^repos/\\{owner\\}/\\{repo\\}/[A-Za-z0-9_?=&./{}-]+$"
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plugin_id",
+        "plugin_version",
+        "artifact_digest"
+      ],
+      "properties": {
+        "plugin_id": {
+          "$ref": "#/$defs/id"
+        },
+        "plugin_version": {
+          "$ref": "#/$defs/version"
+        },
+        "artifact_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "architecture"
+      ],
+      "properties": {
+        "os": {
+          "enum": [
+            "linux",
+            "macos"
+          ]
+        },
+        "architecture": {
+          "enum": [
+            "x86_64",
+            "aarch64"
+          ]
+        }
+      }
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "url",
+        "metadata"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/pointer"
+        },
+        "title": {
+          "$ref": "#/$defs/pointer"
+        },
+        "url": {
+          "$ref": "#/$defs/pointer"
+        },
+        "body": {
+          "$ref": "#/$defs/pointer"
+        },
+        "state": {
+          "$ref": "#/$defs/pointer"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/pointer"
+        },
+        "metadata": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "label",
+              "pointer"
+            ],
+            "properties": {
+              "label": {
+                "type": "string",
+                "maxLength": 60
+              },
+              "pointer": {
+                "$ref": "#/$defs/pointer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "endpoint",
+        "detail_endpoint",
+        "items_pointer",
+        "filters",
+        "fields"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "$ref": "#/$defs/label"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "detail_endpoint": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "items_pointer": {
+          "$ref": "#/$defs/pointer"
+        },
+        "exclude_if_present": {
+          "$ref": "#/$defs/pointer"
+        },
+        "filters": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "value",
+              "label"
+            ],
+            "properties": {
+              "value": {
+                "$ref": "#/$defs/id"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 60
+              }
+            }
+          }
+        },
+        "fields": {
+          "$ref": "#/$defs/fields"
+        }
+      }
+    }
+  }
+}

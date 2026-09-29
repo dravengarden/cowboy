@@ -356,6 +356,11 @@ metadata only; they are not validation or publication commands. Normal
 `deno run --allow-read --allow-run tools/check-plugin-components.ts` validates
 the complete tree in the pinned shell (Cargo metadata inherits that shell).
 
+An explicit `plugin_additions` list permits new first-party Plugin identities in
+a post-baseline closure release. It must exactly account for the additional
+nodes; removal, identity reuse, duplicates and undeclared additions are refused.
+Existing release snapshots and component-change version rules remain immutable.
+
 ## Owned preference state
 
 `@cowboy/state-store/core` has no React dependency. v2 requires explicit typed
@@ -373,7 +378,7 @@ semantics. View cleanup neither deletes preferences nor cancels Machine work.
 build. The examples include release-ready Password and Passkey source packages;
 they are not additional Machine installations or an alternative release format.
 They join `provider-check` so a shared SDK change exercises the local-login
-migration prerequisites as well as the seven Machine Plugins.
+migration prerequisites as well as all Machine Plugins.
 
 ## Layout
 
@@ -394,6 +399,7 @@ components/
 plugins/
   <agent-provider>/plugin.json + provider.json
   zed/plugin.json + adapter/
+  github/plugin.json + contract.json
 examples/authentication/
   <authentication-provider>/plugin.json + authentication.json
 ```

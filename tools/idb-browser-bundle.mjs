@@ -11,7 +11,8 @@ if (
   suite !== "code-buffer-context" && suite !== "code-buffer-cleanup" &&
   suite !== "code-buffer-sync" && suite !== "review-code" &&
   suite !== "review-document-refresh" && suite !== "review-diff" &&
-  suite !== "review-destination" && suite !== "review-recovery"
+  suite !== "review-destination" && suite !== "review-recovery" &&
+  suite !== "workspace-extensions"
 ) {
   throw new Error("unknown suite");
 }
@@ -31,7 +32,7 @@ await build({
         suite === "code-buffer-cleanup" || suite === "code-buffer-sync" ||
         suite === "review-code" || suite === "review-document-refresh" ||
         suite === "review-diff" || suite === "review-destination" ||
-        suite === "review-recovery"
+        suite === "review-recovery" || suite === "workspace-extensions"
         ? "development"
         : "production",
     ),
@@ -67,12 +68,15 @@ await build({
     // CodeMirror's language loaders otherwise extract shared static chunks.
     // Keep the isolated runner's one served/hashed artifact, not an open file server.
     ...(suite === "review-diff" || suite === "review-document-refresh" ||
-        suite === "review-destination" || suite === "review-recovery"
+        suite === "review-destination" || suite === "review-recovery" ||
+        suite === "workspace-extensions"
       ? { rolldownOptions: { output: { codeSplitting: false } } }
       : {}),
     lib: {
       entry: new URL(
-        suite === "provider-ui"
+        suite === "workspace-extensions"
+          ? "../web/src/extensions/WorkspaceExtensionsBrowserConformance.tsx"
+          : suite === "provider-ui"
           ? "../web/src/providerUiBrowserConformance.ts"
           : suite === "provider-management"
           ? "../web/src/providerManagementBrowserConformance.ts"

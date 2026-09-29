@@ -504,7 +504,8 @@ export interface PluginCompatibilityRequirements {
     | "agent_provider"
     | "authentication_provider"
     | "code_intelligence"
-    | "telemetry_backend";
+    | "telemetry_backend"
+    | "workspace_extension";
   payload_schema: number;
   host_bundle_schema?: number;
   host_schema?: number;
@@ -661,7 +662,11 @@ export interface MachineProviderInventory {
 export interface MachinePluginInventory {
   plugin_id: string;
   plugin_version: string;
-  plugin_kind: "agent_provider" | "code_intelligence" | "telemetry_backend";
+  plugin_kind:
+    | "agent_provider"
+    | "code_intelligence"
+    | "telemetry_backend"
+    | "workspace_extension";
   generation_digest: string;
   contract_fingerprint: string;
   state: MachineProviderInventory["state"];
@@ -1012,7 +1017,12 @@ export function validateMachinePluginInventory(
       !isIdentifier(raw.plugin_id) ||
       typeof raw.plugin_version !== "string" ||
       !parseSemanticVersion(raw.plugin_version) ||
-      !["agent_provider", "code_intelligence", "telemetry_backend"].includes(
+      ![
+        "agent_provider",
+        "code_intelligence",
+        "telemetry_backend",
+        "workspace_extension",
+      ].includes(
         String(raw.plugin_kind),
       ) ||
       typeof raw.generation_digest !== "string" ||
@@ -2577,6 +2587,7 @@ export function validatePluginCompatibilityRequirements(
       "authentication_provider",
       "code_intelligence",
       "telemetry_backend",
+      "workspace_extension",
     ]
       .includes(String(input.plugin_kind)) ||
     ![
@@ -2597,7 +2608,10 @@ export function validatePluginCompatibilityRequirements(
     (input.host_bundle_schema === undefined) !==
       (input.host_schema === undefined) ||
     (input.release_schema === 1 && input.host_bundle_schema !== undefined) ||
-    (input.release_schema === 2 && input.host_bundle_schema === undefined)
+    (input.release_schema === 2 && input.host_bundle_schema === undefined) ||
+    (input.release_schema === 3 &&
+      (input.plugin_kind !== "workspace_extension" ||
+        input.host_bundle_schema !== undefined))
   ) {
     throw new Error("Invalid Plugin release compatibility requirements");
   }
@@ -2779,6 +2793,14 @@ export function genericPluginCompatibilityProblem(
       inventory.min_authentication_provider_schema,
       inventory.max_authentication_provider_schema,
       "Authentication Provider payload schema",
+    ] as const
+    : requirements.plugin_kind === "workspace_extension"
+    ? [
+      1,
+      compareProviderVersions(inventory.plugin_sdk_version, "1.9.0") >= 0
+        ? 1
+        : 0,
+      "workspace extension payload schema (Plugin SDK 1.9)",
     ] as const
     : requirements.plugin_kind === "telemetry_backend"
     ? [

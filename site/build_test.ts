@@ -77,6 +77,7 @@ Deno.test("website catalog follows every first-party Plugin manifest", async () 
     "claude-deepseek",
     "zed",
     "victoria",
+    "github",
   ];
   for (const id of currentFirstParty) {
     assert(

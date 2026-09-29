@@ -6,7 +6,11 @@ interface PluginManifest {
   version: string;
   component_release: string;
   publisher: string;
-  kind: "agent_provider" | "code_intelligence" | "telemetry_backend";
+  kind:
+    | "agent_provider"
+    | "code_intelligence"
+    | "telemetry_backend"
+    | "workspace_extension";
   entrypoint: string;
 }
 
@@ -77,6 +81,10 @@ const PLUGIN_KINDS = {
   agent_provider: { label: "Agent Provider", translation: "agent" },
   code_intelligence: { label: "Code Intelligence", translation: "code" },
   telemetry_backend: { label: "Telemetry", translation: "telemetry" },
+  workspace_extension: {
+    label: "Workspace extension",
+    translation: "extension",
+  },
 } satisfies Record<
   PluginManifest["kind"],
   { label: string; translation: string }
@@ -292,6 +300,31 @@ export async function loadSitePlugins(root: string): Promise<SitePlugin[]> {
         sourcePath,
       } as const;
 
+      if (manifest.kind === "workspace_extension") {
+        const contract = await readJson<
+          {
+            id: string;
+            version: string;
+            display_name: string;
+            description: string;
+          }
+        >(joinPath(root, sourcePath, manifest.entrypoint));
+        if (
+          contract.id !== manifest.id || contract.version !== manifest.version
+        ) throw new Error(`${manifest.id}: extension identity mismatch`);
+        return {
+          ...shared,
+          name: contract.display_name,
+          vendor: manifest.publisher,
+          summary: contract.description,
+          accentLight: "#6E56CF",
+          accentDark: "#9E8CFC",
+          secondaryAccent: "#168B78",
+          markViewBox: "0 0 24 24",
+          markPath: "M3 3h7v4h4V3h7v7h-4v4h4v7h-7v-4h-4v4H3v-7h4v-4H3Z",
+          markMode: "stroke" as const,
+        };
+      }
       if (manifest.kind !== "agent_provider") {
         const presentation = NON_AGENT_PRESENTATION[manifest.id];
         if (!presentation) {

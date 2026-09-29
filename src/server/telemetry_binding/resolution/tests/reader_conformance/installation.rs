@@ -26,6 +26,7 @@ pub(super) enum InstallCase {
     ReceiptTargetMismatch,
     ReceiptMissing,
     MachineTargetMissing,
+    WorkspaceExtension,
 }
 
 impl InstallCase {
@@ -48,6 +49,7 @@ impl InstallCase {
         match self {
             Self::Phase(phase) | Self::MachinePhase(phase) => Some(phase),
             Self::MachineRejected => Some(InstallPhase::Aborted),
+            Self::WorkspaceExtension => Some(InstallPhase::Completed),
             Self::MachinePending | Self::MachineUnknown => Some(InstallPhase::NeedsAttention),
             Self::ReceiptChecksumCorrupt
             | Self::ReceiptFutureSchema
@@ -144,6 +146,7 @@ fn cases() -> Vec<InstallCase> {
         InstallCase::ReceiptTargetMismatch,
         InstallCase::ReceiptMissing,
         InstallCase::MachineTargetMissing,
+        InstallCase::WorkspaceExtension,
     ]);
     result
 }
@@ -152,6 +155,9 @@ pub(super) fn intent(case: InstallCase) -> InstallIntent {
     let mut intent = crate::plugin_operation::installation::fixture("immutable-reader");
     intent.service_id = SERVICE.into();
     intent.machine_id = MACHINE.into();
+    if matches!(case, InstallCase::WorkspaceExtension) {
+        intent.plugin_kind = cowboy_plugin_sdk::PluginKind::WorkspaceExtension;
+    }
     intent.actor = crate::plugin_operation::Actor::Product {
         user_id: crate::product_auth::local_product_principal().user_id,
     };
@@ -394,7 +400,7 @@ async fn immutable_installation_readers() -> Result<()> {
 async fn all_install_reader_fixtures_exercise_the_exact_startup_contract() -> Result<()> {
     let empty = Fixture::build(Case::Absent).await?;
     let helper = std::env::current_exe()?; // Never executed by seed or this test.
-    assert_eq!(cases().len(), 28);
+    assert_eq!(cases().len(), 29);
     for case in cases() {
         let root = tempfile::tempdir()?;
         seed(root.path(), &empty, &helper, case).await?;

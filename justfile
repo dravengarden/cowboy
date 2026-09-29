@@ -104,6 +104,9 @@ review-destination-browser-conformance BROWSER:
 review-recovery-browser-conformance BROWSER:
     unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" review-recovery' conformance "{{BROWSER}}"
 
+workspace-extensions-browser-conformance BROWSER:
+    unshare --user --map-current-user --keep-caps --net bash -euc 'ip link set lo up; exec deno run --allow-read --allow-write --allow-env --allow-run --allow-net=127.0.0.1 tools/idb-browser-conformance.ts "$1" workspace-extensions' conformance "{{BROWSER}}"
+
 idb-conformance-check:
     deno fmt --check tools/idb-browser-conformance.ts tools/idb-browser-bundle.mjs
     deno check tools/idb-browser-conformance.ts
@@ -249,7 +252,7 @@ example-telemetry-bundle PLUGIN:
       "cowboy-plugin://{{PLUGIN}}"
 
 plugin-build-all:
-    for plugin in claude-code claude-deepseek codex codex-deepseek gemini grok zed; do just plugin-build "$plugin"; done
+    for manifest in plugins/*/plugin.json; do plugin="${manifest%/plugin.json}"; just plugin-build "${plugin##*/}"; done
 
 # Prove that one Plugin can build outside the Cowboy checkout using only its
 # own source directory, its component release pin, and the packaged SDK CLI.

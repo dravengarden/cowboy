@@ -10,6 +10,7 @@ interface PluginRelease {
   release_schema: number;
   plugin_id: string;
   plugin_version: string;
+  plugin_kind: string;
   package_digest: string;
   artifact_digest: string;
   artifact_url: string;
@@ -46,7 +47,9 @@ const release = JSON.parse(
 ) as PluginRelease;
 if (
   release.plugin_id !== pluginId ||
-  ![1, 2].includes(release.release_schema)
+  ![1, 2, 3].includes(release.release_schema) ||
+  (release.release_schema === 3 &&
+    release.plugin_kind !== "workspace_extension")
 ) {
   throw new Error("release identity or schema mismatch");
 }
@@ -56,8 +59,8 @@ if (release.package_digest !== `sha256:${packageDigest}`) {
   throw new Error("Plugin package digest mismatch");
 }
 if (
-  (release.release_schema === 1) !==
-    (release.host_bundle_digest === undefined)
+  (release.release_schema === 2) !==
+    (release.host_bundle_digest !== undefined)
 ) {
   throw new Error("Plugin release/host bundle schema mismatch");
 }
