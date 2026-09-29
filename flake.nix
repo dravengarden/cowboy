@@ -262,7 +262,7 @@
         pname = "cowboy";
         version = "0.1.0";
         src = cowboy-src;
-        hash = "sha256-pAzGd8IOXqJ9PHsljsMLCCwDx0GnVKPUwE3sLCEhhzM=";
+        hash = "sha256-GM0Ril04yD0ANrdzEZ/fHhRaxVfRE1vpWxhmZwIKYrE=";
         preBuild = staticCratesVendorPatch;
       };
 
