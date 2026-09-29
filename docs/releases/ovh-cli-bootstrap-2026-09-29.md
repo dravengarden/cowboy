@@ -56,6 +56,18 @@ The catalog inspection observed signed Grok 3.1.24 and Zed 1.20.0. Neither was
 installed on OVH. Re-read the approved catalog before installation, then use
 normal installation receipts and credential replication.
 
+The September 30 (Asia/Shanghai) readback used the official
+`cowboy operator catalog` endpoint and returned HTTP 200. Its newest ready Linux
+x86_64 releases were Grok 3.1.25, package digest
+`sha256:dc4f7e1b868ad04471fd8905c259fdd119662776f572f9f695ad68856cfc96e8`,
+and Zed 1.20.0, package digest
+`sha256:d723bf69a931181b30ad82a328767cec8e6626acf17bea64d7fbf2c3e58684c9`.
+This is catalog evidence only. OVH's new permanent Stormbird identity remains
+quarantined from peer business traffic while its daemon repair is tested;
+there is still no Cowboy Machine or installation receipt. The Falcon-specific
+qualification issue does not block independent OVH preparation, but does not
+authorize a temporary Controller tunnel or another transport bypass.
+
 Two CLI authorization attempts expired without confirmation. The independent
 acceptance browser context and its forwarding connection were closed. No
 browser cookie or Provider credential was copied. Start a fresh authorization
