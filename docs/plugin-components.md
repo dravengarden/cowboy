@@ -41,7 +41,11 @@ component dependency list. The initial kinds are:
 - `code_intelligence`: an isolated code-intelligence integration. The first is
   the separately built GPL Zed adapter and its exact private server. Schema 2
   owns both the executable graph and launch/readiness bindings; schema 1 is
-  retained for previously published legacy adapters.
+  retained for previously published legacy adapters;
+- `telemetry_backend`: a data-only exporter contract under the existing
+  explicit Controller and Machine telemetry policy;
+- `workspace_extension`: repository resource views, exact Plugin dependencies
+  and a user-managed connection capability, rendered by the common workbench.
 
 The generic Plugin identity is the repository, publication, discovery,
 installation, rollback, and uninstall boundary. A Provider package is only the
@@ -86,7 +90,7 @@ component-release pin; the active matrix is not a new identity for that Plugin.
 does not read Cowboy's component registry or assume a Cowboy checkout as its
 working directory. `just plugin-isolation-check <id>` copies the Plugin source
 into an unrelated temporary directory and builds there. `provider-check`
-exercises all seven first-party Plugins. This is the acceptance proof for moving
+exercises every first-party Plugin. This is the acceptance proof for moving
 a Plugin to its own repository and release pipeline.
 
 External publishers can use `nix build .#cowboy-plugin-pack` to obtain a
