@@ -111,5 +111,6 @@ primary phone/desktop product path.
 
 ### Integrations
 
+- [`releases/ovh-cli-bootstrap-2026-09-29.md`](releases/ovh-cli-bootstrap-2026-09-29.md) — Remote Machine CLI correction and incomplete permanent OVH enrollment
 - [`integrations/zed.md`](integrations/zed.md) — Optional stdio ACP bridge for Zed External Agents
 - [`architecture/14-zed-code-provider.md`](architecture/14-zed-code-provider.md) — Optional isolated Zed-backed code-intelligence adapter
