@@ -20,6 +20,7 @@ pub(super) enum InstallCase {
     Applied,
     Rejected,
     Unknown,
+    StagingFailure,
     ChecksumCorrupt,
     FutureSchema,
     MissingAuthority,
@@ -28,7 +29,7 @@ pub(super) enum InstallCase {
 }
 
 impl InstallCase {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Absent,
         Self::Prepared,
         Self::Staging,
@@ -37,6 +38,7 @@ impl InstallCase {
         Self::Applied,
         Self::Rejected,
         Self::Unknown,
+        Self::StagingFailure,
         Self::ChecksumCorrupt,
         Self::FutureSchema,
         Self::MissingAuthority,
@@ -56,8 +58,8 @@ impl InstallCase {
     pub(super) fn receipt(self) -> Option<InstallReceipt> {
         let phase = match self {
             Self::Absent => return None,
-            Self::Staging | Self::Unknown => InstallPhase::Staging,
-            Self::Activating => InstallPhase::Activating,
+            Self::Staging | Self::StagingFailure => InstallPhase::Staging,
+            Self::Activating | Self::Unknown => InstallPhase::Activating,
             Self::ProjectingAuthentication => InstallPhase::ProjectingAuthentication,
             _ => InstallPhase::Prepared,
         };
@@ -71,7 +73,7 @@ impl InstallCase {
             Self::Rejected => InstallOutcome::Rejected {
                 reason: InstallRejection::Expired,
             },
-            Self::Unknown => InstallOutcome::Unknown {
+            Self::Unknown | Self::StagingFailure => InstallOutcome::Unknown {
                 phase,
                 reason: InstallUncertainty::Interrupted,
             },
