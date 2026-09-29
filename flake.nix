@@ -154,6 +154,8 @@
           ./src/runtime_trace.rs
           ./src/service_identity.rs
           ./src/session_workspace.rs
+          ./src/workspace_extensions.rs
+          ./src/workspace_extensions
           ./src/workspace_roots.rs
           ./src/bin/cowboy-machine-install.rs
           ./src/bin/cowboy-machine.rs
