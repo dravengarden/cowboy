@@ -290,7 +290,10 @@ export function ReviewFileTree({
       prefetchActive.current += 1;
       void fetchCodeTree(sessionId, path, controller.signal, true)
         .then((page) => {
-          if (generation !== prefetchGeneration.current) return;
+          if (
+            controller.signal.aborted ||
+            generation !== prefetchGeneration.current
+          ) return;
           putDirectoryPage(key, { ...page, cachedAt: Date.now() });
         })
         .catch(() => {
@@ -336,6 +339,9 @@ export function ReviewFileTree({
   );
 
   const load = useCallback(async (refresh = false): Promise<void> => {
+    cancelRetry();
+    controllerRef.current?.abort();
+    controllerRef.current = null;
     if (!sessionId) {
       setRoot({
         apiVersion: 1,
@@ -351,11 +357,17 @@ export function ReviewFileTree({
     const cached = getDirectoryPage(key);
     if (cached && !refresh) {
       setRoot(cached);
+      setError(false);
+      setLoading(false);
       prefetchChildDirectories(cached);
       if (Date.now() - cached.cachedAt <= MEMORY_FRESH_MS) return;
     }
     if (refresh) {
       resetPrefetch();
+      directoryControllers.current.forEach((controller) => controller.abort());
+      directoryControllers.current.clear();
+      setDirectoryLoading(new Set());
+      setDirectoryFailed(new Set());
       for (const key of directoryCache.keys()) {
         if (key.startsWith(directoryTreeSessionPrefix(sessionId))) {
           directoryCache.delete(key);
@@ -363,10 +375,8 @@ export function ReviewFileTree({
       }
       setRevision((current) => current + 1);
     }
-    cancelRetry();
     setLoading(!cached);
     setError(false);
-    controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
     try {
@@ -374,12 +384,14 @@ export function ReviewFileTree({
         ...(await fetchCodeTree(sessionId, "", controller.signal, true)),
         cachedAt: Date.now(),
       };
+      if (controller.signal.aborted) return;
       settleRetry();
       putDirectoryPage(key, page);
       setRoot(page);
       prefetchChildDirectories(page);
     } catch (error) {
       if (
+        !controller.signal.aborted &&
         !cached &&
         !(error instanceof DOMException && error.name === "AbortError")
       ) {
@@ -423,6 +435,7 @@ export function ReviewFileTree({
     } catch {
       return false;
     }
+    if (signal.aborted) return false;
     putDirectoryPage(directoryTreeCacheKey(cacheScope, parentPath), page);
     if (parentPath) {
       setPages((current) => new Map(current).set(parentPath, page));
@@ -488,11 +501,13 @@ export function ReviewFileTree({
         ...(await fetchCodeTree(sessionId, path, controller.signal, true)),
         cachedAt: Date.now(),
       };
+      if (controller.signal.aborted) return;
       putDirectoryPage(key, page);
       setPages((current) => new Map(current).set(path, page));
       prefetchChildDirectories(page);
     } catch (error) {
       if (
+        !controller.signal.aborted &&
         !cached &&
         !(error instanceof DOMException && error.name === "AbortError")
       ) {
@@ -521,19 +536,26 @@ export function ReviewFileTree({
     sessionId,
   ]);
 
+  const refreshedDirectories = useRef(revision);
+  useEffect(() => {
+    if (refreshedDirectories.current === revision) return;
+    refreshedDirectories.current = revision;
+    // The root response alone cannot update already mounted child pages.
+    // Preserve the user's expansion and replace each page as its read settles.
+    for (const path of expanded) void loadDirectory(path);
+  }, [expanded, loadDirectory, revision]);
+
   const toggleDirectory = useCallback((path: string): void => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-        directoryControllers.current.get(path)?.abort();
-      } else {
-        next.add(path);
-        void loadDirectory(path);
-      }
-      return next;
-    });
-  }, [loadDirectory]);
+    const next = new Set(expanded);
+    if (next.has(path)) {
+      next.delete(path);
+      directoryControllers.current.get(path)?.abort();
+    } else {
+      next.add(path);
+      void loadDirectory(path);
+    }
+    setExpanded(next);
+  }, [expanded, loadDirectory]);
 
   const retryDirectory = useCallback((path: string): void => {
     void loadDirectory(path);
@@ -590,6 +612,7 @@ export function ReviewFileTree({
     searchControllerRef.current?.abort();
     const trimmed = query.trim();
     if (!sessionId || !trimmed) {
+      searchControllerRef.current = null;
       setSearchResults([]);
       setSearching(false);
       setSearchFailed(false);
@@ -601,9 +624,14 @@ export function ReviewFileTree({
     setSearchFailed(false);
     const timer = globalThis.setTimeout(() => {
       void fetchCodeSearch(sessionId, trimmed, controller.signal)
-        .then((result) => setSearchResults(result.files))
+        .then((result) => {
+          if (!controller.signal.aborted) setSearchResults(result.files);
+        })
         .catch((error) => {
-          if (!(error instanceof DOMException && error.name === "AbortError")) {
+          if (
+            !controller.signal.aborted &&
+            !(error instanceof DOMException && error.name === "AbortError")
+          ) {
             setSearchFailed(true);
           }
         })
@@ -618,7 +646,7 @@ export function ReviewFileTree({
       globalThis.clearTimeout(timer);
       controller.abort();
     };
-  }, [query, sessionId]);
+  }, [query, revision, sessionId]);
 
   return (
     <Stack sx={{ position: "relative", height: "100%", minHeight: 0 }}>
@@ -766,7 +794,6 @@ export function ReviewFileTree({
             <List disablePadding>
               {sessionId && (
                 <DirectoryRows
-                  key={`${cacheScope}:${revision}`}
                   entries={root.entries}
                   onOpenFile={onOpenFile}
                   expanded={expanded}
