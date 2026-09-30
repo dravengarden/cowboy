@@ -28,7 +28,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { NetworkIconButton } from "../../NetworkActionFeedback";
 import { mobileNativeYScrollSx } from "../../mobileNativeOverflow";
-import { type CodeChangeStatus, fetchCodeChanges } from "./codeApi";
+import {
+  type CodeChanges,
+  type CodeChangeStatus,
+  fetchCodeChanges,
+} from "./codeApi";
 import {
   type GitReviewEntry,
   groupGitChanges,
@@ -52,6 +56,7 @@ const statusLabel: Record<CodeChangeStatus, string> = {
 };
 
 const REVIEW_WINDOW_SIZE = 80;
+const NO_CHANGES: CodeChanges["changes"] = [];
 
 function ChangeIcon(
   { status }: { status: CodeChangeStatus },
@@ -200,13 +205,19 @@ export function ReviewChanges({
   onClose?: () => void;
   refreshToken?: number;
 }): React.JSX.Element {
-  const [changes, setChanges] = useState<
-    Awaited<
-      ReturnType<typeof fetchCodeChanges>
-    >["changes"]
-  >([]);
-  const [head, setHead] = useState<string>();
-  const [truncated, setTruncated] = useState(false);
+  const [snapshot, setSnapshot] = useState<{
+    sessionId: string;
+    comparison: string | null | undefined;
+    result: CodeChanges;
+  }>();
+  // A new selection must not relabel the previous branch's files or queue.
+  const result =
+    snapshot?.sessionId === sessionId && snapshot?.comparison === comparison
+      ? snapshot?.result
+      : undefined;
+  const changes = result?.changes ?? NO_CHANGES;
+  const head = result?.head;
+  const truncated = result?.truncated ?? false;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -214,18 +225,22 @@ export function ReviewChanges({
   const scrollRoot = useRef<HTMLDivElement>(null);
   const loadMoreSentinel = useRef<HTMLDivElement>(null);
   const previousRefreshToken = useRef(refreshToken);
+  const request = useRef<AbortController | undefined>(undefined);
   const reload = useRef<() => void>(() => {});
   const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
-  const [comparisons, setComparisons] = useState<
-    Awaited<ReturnType<typeof fetchCodeChanges>>["comparisons"]
-  >([]);
+  const comparisons = snapshot?.sessionId === sessionId
+    ? snapshot?.result.comparisons ?? []
+    : [];
   const sections = useMemo(
     () => groupGitChanges(changes, comparison ?? undefined),
     [changes, comparison],
   );
   const queue = useMemo(() => reviewQueue(sections), [sections]);
   const sectionCounts = useMemo(
-    () => new Map(sections.map((section) => [section.kind, section.entries.length])),
+    () =>
+      new Map(
+        sections.map((section) => [section.kind, section.entries.length]),
+      ),
     [sections],
   );
   const visibleSections = useMemo(
@@ -234,39 +249,45 @@ export function ReviewChanges({
   );
   const renderedCount = Math.min(visibleCount, queue.length);
 
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const load = useCallback(async (): Promise<void> => {
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    cancelRetry();
     if (!sessionId) {
-      setChanges([]);
+      setSnapshot(undefined);
+      setLoading(false);
+      setError(false);
       return;
     }
-    cancelRetry();
     setLoading(true);
     setError(false);
     try {
       const result = await fetchCodeChanges(
         sessionId,
-        signal,
+        controller.signal,
         comparison ?? undefined,
       );
+      if (controller.signal.aborted) return;
       settleRetry();
-      setComparisons(result.comparisons ?? []);
+      setSnapshot({ sessionId, comparison, result });
       if (comparison === undefined && onComparisonChange) {
         onComparisonChange(result.defaultComparison ?? null);
         if (result.defaultComparison) return;
       }
-      setChanges(result.changes);
-      setHead(result.head);
-      setTruncated(result.truncated);
       setVisibleCount(REVIEW_WINDOW_SIZE);
       setCollapsed(new Set());
       onRevision(result.revision);
     } catch (reason) {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+      if (
+        !controller.signal.aborted &&
+        !(reason instanceof DOMException && reason.name === "AbortError")
+      ) {
         setError(true);
         armRetry(reason);
       }
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }, [
     armRetry,
@@ -287,9 +308,8 @@ export function ReviewChanges({
   }, [load]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
+    void load();
+    return () => request.current?.abort();
   }, [load]);
 
   useEffect(() => {
@@ -396,7 +416,7 @@ export function ReviewChanges({
           ...mobileNativeYScrollSx,
         }}
       >
-        {loading
+        {loading || (!!sessionId && !result && !error)
           ? (
             <Box sx={{ display: "grid", placeItems: "center", pt: 8 }}>
               <CircularProgress size={24} />

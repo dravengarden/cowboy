@@ -203,6 +203,9 @@ export function ReviewRepository({
   const [error, setError] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
+  const loadingRef = useRef(false);
+  const request = useRef<AbortController | undefined>(undefined);
+  const pageRequest = useRef<AbortController | undefined>(undefined);
   const reload = useRef<() => void>(() => {});
   const { armRetry, cancelRetry, settleRetry } = useReviewRecovery(reload);
   const graph = useMemo(
@@ -216,44 +219,75 @@ export function ReviewRepository({
     );
     return Math.min(lanes, 5) * 9 + 12;
   }, [graph]);
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const load = useCallback(async (): Promise<void> => {
+    request.current?.abort();
+    pageRequest.current?.abort();
+    pageRequest.current = undefined;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
     if (!sessionId) return;
+    const controller = new AbortController();
+    request.current = controller;
     cancelRetry();
+    loadingRef.current = true;
     setLoading(true);
     setError(false);
     setMoreError(false);
     try {
-      const snapshot = await fetchGitRepository(sessionId, signal);
+      const snapshot = await fetchGitRepository(sessionId, controller.signal);
+      if (controller.signal.aborted) return;
       settleRetry();
       setRepository(snapshot);
       setCommits(snapshot.commits);
       setTruncated(snapshot.historyTruncated);
     } catch (reason) {
-      if (!(reason instanceof DOMException && reason.name === "AbortError")) {
+      if (
+        !controller.signal.aborted &&
+        !(reason instanceof DOMException && reason.name === "AbortError")
+      ) {
         setError(true);
         armRetry(reason);
       }
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!controller.signal.aborted) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
     }
   }, [armRetry, cancelRetry, sessionId, settleRetry]);
   const loadMore = useCallback(async (): Promise<void> => {
-    if (!sessionId || loadingMoreRef.current || !truncated) return;
+    if (
+      !sessionId || loadingRef.current || loadingMoreRef.current || !truncated
+    ) return;
     const after = historyPageCursor(commits);
     if (!after) return;
+    const controller = new AbortController();
+    pageRequest.current = controller;
     loadingMoreRef.current = true;
     setLoadingMore(true);
     setMoreError(false);
     try {
-      const page = await fetchGitRepository(sessionId, undefined, after);
-      const merged = mergeHistoryPage(commits, page.commits, page.historyTruncated);
+      const page = await fetchGitRepository(
+        sessionId,
+        controller.signal,
+        after,
+      );
+      if (controller.signal.aborted) return;
+      const merged = mergeHistoryPage(
+        commits,
+        page.commits,
+        page.historyTruncated,
+      );
       setCommits(merged.commits);
       setTruncated(merged.truncated);
     } catch {
-      setMoreError(true);
+      if (!controller.signal.aborted) setMoreError(true);
     } finally {
-      loadingMoreRef.current = false;
-      setLoadingMore(false);
+      if (pageRequest.current === controller) {
+        pageRequest.current = undefined;
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
     }
   }, [commits, sessionId, truncated]);
   useEffect(() => {
@@ -262,9 +296,12 @@ export function ReviewRepository({
     };
   }, [load]);
   useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal);
-    return () => controller.abort();
+    void load();
+    return () => {
+      request.current?.abort();
+      pageRequest.current?.abort();
+      pageRequest.current = undefined;
+    };
   }, [load, refreshToken]);
   useEffect(() => {
     if (section !== "history" || !truncated || moreError) return undefined;

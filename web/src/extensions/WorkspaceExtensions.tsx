@@ -451,7 +451,7 @@ function ResourceList(
       >
         <IconButton
           aria-label="Previous page"
-          disabled={page === 1 || !result}
+          disabled={page === 1}
           onClick={() => onPage(page - 1)}
         >
           <ChevronLeft />

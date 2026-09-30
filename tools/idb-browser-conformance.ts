@@ -164,7 +164,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
     !("tests" in result) || !Array.isArray(result.tests) ||
     result.tests.length !==
       (suite === "workspace-extensions"
-        ? 3
+        ? 5
         : suite === "review-destination"
         ? 10
         : suite === "settings-recovery"
@@ -182,7 +182,7 @@ await fetch("/report/${token}", { method: "POST", body: JSON.stringify(result) }
         : suite === "review-document-refresh"
         ? 5
         : suite === "review-recovery"
-        ? 4
+        ? 8
         : 6) ||
     !result.tests.every((test) => typeof test === "string")
   ) {

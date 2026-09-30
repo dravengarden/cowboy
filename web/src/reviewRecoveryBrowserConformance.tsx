@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { createTheme, ThemeProvider } from "@mui/material";
 import { SurfaceProvider } from "./surface/SurfaceProfile.tsx";
 import { ReviewChanges } from "./mobile/review/ReviewChanges.tsx";
+import { runReviewRequestBrowserConformance } from "./reviewRequestBrowserConformance.tsx";
 
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -162,5 +163,5 @@ export async function runReviewRecoveryBrowserConformance(): Promise<string[]> {
     Reflect.deleteProperty(document, "visibilityState");
     container.remove();
   }
-  return tests;
+  return [...tests, ...await runReviewRequestBrowserConformance()];
 }

@@ -155,6 +155,41 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
     );
     click("Next page");
     await until("pending page request", () => pending.length > 0);
+    click("Previous page");
+    await until(
+      "back from pending page",
+      () => container.textContent?.includes("First workspace") ?? false,
+    );
+    pending.splice(0).forEach((resolve) =>
+      resolve(response({
+        type: "page",
+        items: [item("STALE PAGE")],
+        nextPage: null,
+      }))
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    check(
+      !container.textContent?.includes("STALE PAGE"),
+      "returning to the previous page accepted a late response",
+    );
+    click("Next page");
+    await until("page that fails", () => pending.length > 0);
+    pending.splice(0).forEach((resolve) =>
+      resolve(new Response("unavailable", { status: 503 }))
+    );
+    await until(
+      "page error",
+      () =>
+        container.textContent?.includes("Reconnect and refresh Extensions") ??
+          false,
+    );
+    click("Previous page");
+    await until(
+      "back from failed page",
+      () => container.textContent?.includes("First workspace") ?? false,
+    );
+    click("Next page");
+    await until("page before workspace change", () => pending.length > 0);
     render("second");
     await until(
       "second workspace extensions",
@@ -183,6 +218,8 @@ export async function runWorkspaceExtensionsBrowserConformance(): Promise<
       "generic exact-release resource navigation",
       "readable detail and explicit source link",
       "late private response discarded across workspace change",
+      "previous page remains reachable while another page is pending and rejects its late response",
+      "a failed page does not trap navigation away from previously readable resources",
     ];
   } finally {
     flushSync(() => root.unmount());
